@@ -374,6 +374,9 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         (graphql::ISSUES_CACHED, None),
         (graphql::ISSUE_DETAIL_CACHED, None),
         (graphql::ISSUE_RELATIONS_CACHED, None),
+        // What a copy asks before it looks for each origin's counterpart.
+        (graphql::ORIGIN_LOOKUPS, None),
+        (graphql::ORIGIN_LOOKUPS_CACHED, None),
     ] {
         let document = query::parse_query::<String>(operation).unwrap();
         let fixture =
@@ -684,6 +687,11 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
                      "updatedAt":null,"project":null},
         "issues": page(serde_json::json!([])),
         "projects": page(serde_json::json!([])),
+        // The aliases a copy's batched origin read gives the two connections, beside the
+        // organization it carries.
+        "originIssues": page(serde_json::json!([])),
+        "originProjects": page(serde_json::json!([])),
+        "organization": {"id":"ORG"},
         "documents": page(serde_json::json!([])),
         "issueLabels": page(serde_json::json!([{"id":"L","name":"bug","color":null}])),
         "projectLabels": {"nodes":[{"id":"PL","name":"roadmap","color":null}]},
@@ -999,6 +1007,11 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
             .await
             .unwrap();
     }
+    // A copy's batched origin read: every origin's phrase under one `or`.
+    source
+        .read_ahead_origins_for_copy(&["elsewhere:ORIG-1".into(), "elsewhere:ORIG-2".into()])
+        .await
+        .unwrap();
     // Every narrow write of the slot, and the store's own `delivered_by`.
     let key = MetadataKey::new("myapp.review").unwrap();
     source
@@ -1212,34 +1225,39 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
             ),
             _ => panic!("a production document is an explicit query or mutation"),
         };
-        let query::Selection::Field(root) = &selection.items[0] else {
-            panic!("an operation has a root field")
-        };
-        seen.insert(root.name.clone());
-        let root_field = roots[root_name]
-            .fields
-            .iter()
-            .find(|field| field.name == root.name)
-            .unwrap_or_else(|| panic!("the pinned schema lacks {root_name}.{}", root.name));
-        for (argument_name, value) in &root.arguments {
-            let query::Value::Variable(variable) = value else {
-                // A literal argument is in the document, so the two checks above read it.
-                continue;
+        // Every root a document selects — a batched read selects several, each an alias.
+        for item in &selection.items {
+            let query::Selection::Field(root) = item else {
+                panic!("an operation has a root field")
             };
-            let location = format!("{}({argument_name}:)", root.name);
-            assert!(
-                declared.iter().any(|candidate| candidate.name == *variable),
-                "{location} stands on ${variable}, which nothing declares"
-            );
-            let argument = root_field
-                .arguments
+            seen.insert(root.name.clone());
+            let root_field = roots[root_name]
+                .fields
                 .iter()
-                .find(|argument| argument.name == *argument_name)
-                .unwrap_or_else(|| panic!("{root_name}.{} takes no {argument_name}", root.name));
-            let sent = body["variables"]
-                .get(variable.as_str())
-                .unwrap_or_else(|| panic!("{location} was declared and never sent"));
-            conforms(&inputs, &enums, &argument.value_type, sent, &location);
+                .find(|field| field.name == root.name)
+                .unwrap_or_else(|| panic!("the pinned schema lacks {root_name}.{}", root.name));
+            for (argument_name, value) in &root.arguments {
+                let query::Value::Variable(variable) = value else {
+                    // A literal argument is in the document, so the two checks above read it.
+                    continue;
+                };
+                let location = format!("{}({argument_name}:)", root.name);
+                assert!(
+                    declared.iter().any(|candidate| candidate.name == *variable),
+                    "{location} stands on ${variable}, which nothing declares"
+                );
+                let argument = root_field
+                    .arguments
+                    .iter()
+                    .find(|argument| argument.name == *argument_name)
+                    .unwrap_or_else(|| {
+                        panic!("{root_name}.{} takes no {argument_name}", root.name)
+                    });
+                let sent = body["variables"]
+                    .get(variable.as_str())
+                    .unwrap_or_else(|| panic!("{location} was declared and never sent"));
+                conforms(&inputs, &enums, &argument.value_type, sent, &location);
+            }
         }
     }
     // The surface, not a sample of it: every operation this source can send has to have
@@ -1282,6 +1300,7 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
         onetaskgraph_linear::graphql::COMMENT_CREATE,
         onetaskgraph_linear::graphql::COMMENT_UPDATE,
         onetaskgraph_linear::graphql::COMMENT_DELETE,
+        onetaskgraph_linear::graphql::ORIGIN_LOOKUPS,
     ] {
         let parsed = query::parse_query::<String>(document).unwrap();
         let selection = match &parsed.definitions[0] {
@@ -1293,10 +1312,12 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
             }
             _ => panic!("a production document is an explicit query or mutation"),
         };
-        let query::Selection::Field(root) = &selection.items[0] else {
-            panic!("an operation has a root field")
-        };
-        expected.insert(root.name.clone());
+        for item in &selection.items {
+            let query::Selection::Field(root) = item else {
+                panic!("an operation has a root field")
+            };
+            expected.insert(root.name.clone());
+        }
     }
     assert_eq!(
         seen, expected,
@@ -6899,4 +6920,228 @@ fn the_issue_read_carrying_the_resolution_is_exactly_both_documents() {
         inner(graphql::RESOLUTION)
     );
     assert_eq!(graphql::ISSUE_RESOLVED, composed);
+}
+
+/// An issue node as Linear lists it, recording `origin` in its metadata slot.
+fn issue_recording(id: &str, origin: &str) -> serde_json::Value {
+    serde_json::json!({"id":id,"identifier":format!("ENG-{id}"),"title":id,
+        "description":format!("Body.\n\n<!-- onetaskgraph.metadata `{{\"onetaskgraph.origin\":\"{origin}\"}}` -->"),
+        "url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Todo","type":"unstarted"},
+        "priority":0,"labels":{"nodes":[]},"project":null})
+}
+
+/// A project node as Linear lists it, recording `origin` in its metadata slot.
+fn project_recording(id: &str, origin: &str) -> serde_json::Value {
+    serde_json::json!({"id":id,"name":id,
+        "content":format!("About.\n\n<!-- onetaskgraph.metadata `{{\"onetaskgraph.origin\":\"{origin}\"}}` -->"),
+        "url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"planned"},
+        "labels":{"nodes":[]}})
+}
+
+/// What a copy's batched origin read answers: `issues` and `projects` as its two pages, each
+/// with a next page when `more` says so, and the organization `ORG-1`.
+fn origin_lookups(
+    issues: serde_json::Value,
+    projects: serde_json::Value,
+    more: bool,
+) -> serde_json::Value {
+    let page = |nodes| {
+        serde_json::json!({"nodes":nodes,"pageInfo":{"hasNextPage":more,
+            "endCursor":if more { Some("next") } else { None }}})
+    };
+    serde_json::json!({"originIssues":page(issues),"originProjects":page(projects),
+        "organization":{"id":"ORG-1"}})
+}
+
+fn by_origin(origin: &str) -> TaskQuery {
+    TaskQuery {
+        origin: Some(origin.into()),
+        ..TaskQuery::default()
+    }
+}
+
+fn first_page() -> PageRequest {
+    PageRequest {
+        cursor: None,
+        limit: 100,
+    }
+}
+
+/// The GraphQL document of one recorded request.
+fn sent_document(request: &str) -> String {
+    let body = request.split_once("\r\n\r\n").expect("a body").1;
+    serde_json::from_str::<serde_json::Value>(body).expect("JSON")["query"]
+        .as_str()
+        .expect("a document")
+        .to_owned()
+}
+
+/// A copy's batched origin read answers each origin's next lookup once — every match, an origin
+/// with none as none — and the designator for the command, so neither is sent; a second lookup
+/// of one origin, and the designator after `end_command`, are sent as they always were.
+#[tokio::test]
+async fn a_batched_origin_read_answers_each_lookup_once_and_the_designator_for_the_command() {
+    use onetaskgraph_linear::graphql;
+    let (endpoint, wire) = response_server(vec![
+        origin_lookups(
+            serde_json::json!([
+                issue_recording("I-1", "plan:t0"),
+                issue_recording("I-2", "plan:t0"),
+                // Prose carrying another origin's phrase is a candidate the confirmation drops.
+                issue_recording("I-3", "plan:other"),
+            ]),
+            serde_json::json!([project_recording("P-1", "plan:big")]),
+            false,
+        ),
+        // t0 asked a second time, on its own.
+        serde_json::json!({"issues":{"nodes":[issue_recording("I-1", "plan:t0")],
+            "pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        serde_json::json!({"organization":{"id":"ORG-1"}}),
+    ]);
+    let source = writable_source(&endpoint);
+    source
+        .read_ahead_origins_for_copy(&["plan:big".into(), "plan:t0".into(), "plan:t1".into()])
+        .await
+        .unwrap();
+    let ids = |page: onetaskgraph_plugin_api::Page<Task>| {
+        page.items
+            .into_iter()
+            .map(|task| task.id.0)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids(source
+            .query_tasks(&by_origin("plan:t0"), &first_page())
+            .await
+            .unwrap()),
+        vec!["I-1", "I-2"],
+        "every issue recording the origin"
+    );
+    assert!(
+        ids(source
+            .query_tasks(&by_origin("plan:t1"), &first_page())
+            .await
+            .unwrap())
+        .is_empty()
+    );
+    let projects = source
+        .query_projects_by_origin("plan:big", &first_page())
+        .await
+        .unwrap();
+    assert_eq!(projects.items.len(), 1);
+    assert!(
+        source
+            .query_projects_by_origin("plan:t0", &first_page())
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    let designator = source.designator().await.unwrap().expect("a designator");
+    let sent: Vec<String> = wire
+        .try_iter()
+        .map(|request| sent_document(&request))
+        .collect();
+    assert_eq!(
+        sent,
+        vec![graphql::ORIGIN_LOOKUPS.to_owned()],
+        "one request answered every lookup and the designator"
+    );
+
+    // Answered once: the same lookup again is sent.
+    assert_eq!(
+        ids(source
+            .query_tasks(&by_origin("plan:t0"), &first_page())
+            .await
+            .unwrap()),
+        vec!["I-1"]
+    );
+    // The designator is held for the command, and asked again after it.
+    assert_eq!(source.designator().await.unwrap(), Some(designator.clone()));
+    source.end_command().await.unwrap();
+    assert_eq!(source.designator().await.unwrap(), Some(designator));
+    let sent: Vec<String> = wire
+        .try_iter()
+        .map(|request| sent_document(&request))
+        .collect();
+    assert_eq!(
+        sent,
+        vec![graphql::ISSUES.to_owned(), graphql::ORGANIZATION.to_owned()]
+    );
+}
+
+/// A batched page with a next page answers no origin, found in it or not: each is sent on its
+/// own. And a write drops every answer held.
+#[tokio::test]
+async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lookup() {
+    use onetaskgraph_linear::graphql;
+    let empty = serde_json::json!({"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}});
+    let (endpoint, wire) = response_server(vec![
+        origin_lookups(
+            serde_json::json!([issue_recording("I-1", "plan:t0")]),
+            serde_json::json!([]),
+            true,
+        ),
+        empty.clone(),
+        empty.clone(),
+        serde_json::json!({"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        // A complete page, then a write, then the lookup it no longer answers.
+        origin_lookups(serde_json::json!([]), serde_json::json!([]), false),
+        serde_json::json!({"issue":issue_recording("I-9", "plan:elsewhere")}),
+        serde_json::json!({"issueDelete":{"success":true}}),
+        empty,
+    ]);
+    let source = writable_source(&endpoint);
+    source
+        .read_ahead_origins_for_copy(&["plan:t0".into(), "plan:t1".into()])
+        .await
+        .unwrap();
+    for origin in ["plan:t0", "plan:t1"] {
+        source
+            .query_tasks(&by_origin(origin), &first_page())
+            .await
+            .unwrap();
+    }
+    source
+        .query_projects_by_origin("plan:t0", &first_page())
+        .await
+        .unwrap();
+    let sent: Vec<String> = wire
+        .try_iter()
+        .map(|request| sent_document(&request))
+        .collect();
+    assert_eq!(
+        sent,
+        vec![
+            graphql::ORIGIN_LOOKUPS.to_owned(),
+            graphql::ISSUES.to_owned(),
+            graphql::ISSUES.to_owned(),
+            graphql::PROJECTS.to_owned(),
+        ],
+        "an incomplete page answers no origin"
+    );
+
+    source
+        .read_ahead_origins_for_copy(&["plan:t2".into()])
+        .await
+        .unwrap();
+    source.delete_task(&"I-9".into()).await.unwrap();
+    source
+        .query_tasks(&by_origin("plan:t2"), &first_page())
+        .await
+        .unwrap();
+    let sent: Vec<String> = wire
+        .try_iter()
+        .map(|request| sent_document(&request))
+        .collect();
+    assert_eq!(
+        sent,
+        vec![
+            graphql::ORIGIN_LOOKUPS.to_owned(),
+            graphql::ISSUE.to_owned(),
+            graphql::ISSUE_DELETE.to_owned(),
+            graphql::ISSUES.to_owned(),
+        ],
+        "a write drops what was held"
+    );
 }

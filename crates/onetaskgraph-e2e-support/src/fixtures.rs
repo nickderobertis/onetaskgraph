@@ -6676,6 +6676,88 @@ fn valid_linear_filter(value: &Value) -> bool {
 }
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The loopback Linear lives in the shared e2e harness because more than one suite drives it, and how it answers a document the Linear plugin sends is part of answering a request, beside every other answer it gives here.
+impl LinearWorkspace {
+    /// Answer each connection of a copy's batched origin read — the Linear plugin's
+    /// `graphql::ORIGIN_LOOKUPS` — with at most `rows` rows, whatever it asked for, so a page of
+    /// it has a next page; every other read pages as it asks.
+    pub fn cap_origin_lookup_page(&self, rows: usize) {
+        self.state.lock().unwrap()["_linear_origin_page_cap"] = json!(rows);
+    }
+
+    /// Hold one more issue, `row` in the shape the dataset's tasks take, after every issue held
+    /// already — as a person creating one in Linear would.
+    pub fn add_issue(&self, row: Value) {
+        let mut data = self.state.lock().unwrap();
+        data["tasks"]
+            .as_array_mut()
+            .expect("the workspace holds issues")
+            .push(row);
+    }
+}
+
+/// A copy's batched origin read: each aliased connection answered as the `issues` and
+/// `projects` listings answer the same `first` and `filter` — the cache's listings for the
+/// document the cache sends — and `organization` as its own read answers it, side by side
+/// under the aliases the document gives them.
+fn linear_origin_lookups(
+    operation: &str,
+    vars: &Value,
+    recorded: Option<&Value>,
+    data: &mut Value,
+) -> Result<Value, &'static str> {
+    use onetaskgraph_linear::graphql;
+    let (issues_document, projects_document) = if operation == graphql::ORIGIN_LOOKUPS_CACHED {
+        (graphql::ISSUES_CACHED, graphql::PROJECTS_CACHED)
+    } else {
+        (graphql::ISSUES, graphql::PROJECTS)
+    };
+    let fields = vars.as_object().ok_or("origin lookups take variables")?;
+    let expected = [
+        "issuesFirst",
+        "issuesFilter",
+        "projectsFirst",
+        "projectsFilter",
+    ];
+    if fields.len() != expected.len() || !expected.iter().all(|key| fields.contains_key(*key)) {
+        return Err("origin lookups take exactly their four variables");
+    }
+    let cap = data["_linear_origin_page_cap"].as_u64();
+    let first = |key: &str| -> Result<u64, &'static str> {
+        let asked = vars[key]
+            .as_u64()
+            .filter(|first| *first > 0)
+            .ok_or("an origin lookup's page asks for at least one row")?;
+        if asked > u64::from(onetaskgraph_linear::MAX_PAGE_SIZE) {
+            return Err("an origin lookup's page asks for more than the plugin's largest page");
+        }
+        Ok(cap.map_or(asked, |cap| asked.min(cap)))
+    };
+    let issues = linear_response(
+        &json!({"query": issues_document,
+                "variables": {"first": first("issuesFirst")?, "filter": vars["issuesFilter"]}}),
+        recorded,
+        data,
+    )?;
+    let projects = linear_response(
+        &json!({"query": projects_document,
+                "variables": {"first": first("projectsFirst")?, "filter": vars["projectsFilter"]}}),
+        recorded,
+        data,
+    )?;
+    let organization = linear_response(
+        &json!({"query": graphql::ORGANIZATION, "variables": {}}),
+        recorded,
+        data,
+    )?;
+    Ok(json!({
+        "originIssues": issues["issues"],
+        "originProjects": projects["projects"],
+        "organization": organization["organization"],
+    }))
+}
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
 fn linear_response(
     request: &Value,
     recorded: Option<&Value>,
@@ -6685,6 +6767,9 @@ fn linear_response(
         serde_json::from_value(request.clone()).map_err(|_| "invalid GraphQL request")?;
     use onetaskgraph_linear::graphql;
     let operation = request.query.as_str();
+    if operation == graphql::ORIGIN_LOOKUPS || operation == graphql::ORIGIN_LOOKUPS_CACHED {
+        return linear_origin_lookups(operation, &Value::Object(request.variables), recorded, data);
+    }
     if ![
         graphql::VIEWER,
         graphql::ORGANIZATION,

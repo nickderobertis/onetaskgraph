@@ -4,8 +4,8 @@
 //! `fixtures/documents-0.6.0.json` is every document of the plugin's `graphql` module at the tag
 //! `v0.6.0`, extracted verbatim. With the cache off — `attach_cache` never having run — every
 //! document the read and write verbs below send is one of those, byte for byte. With it on, the
-//! only documents that differ are the seven the cache sends in place of `ISSUES`, `ISSUE`,
-//! `ISSUE_DETAIL`, `ISSUE_RELATIONS`, `PROJECTS`, `PROJECT` and `PROJECT_RELATIONS`, each the one it stands in for with exactly the selections the cache's
+//! only documents that differ are the eight the cache sends in place of `ISSUES`, `ISSUE`,
+//! `ISSUE_DETAIL`, `ISSUE_RELATIONS`, `PROJECTS`, `PROJECT`, `PROJECT_RELATIONS` and `ORIGIN_LOOKUPS`, each the one it stands in for with exactly the selections the cache's
 //! token reads and nothing else — and a write's own read of its target sends the plain one,
 //! since its answer fills no entry. Beside those, with the cache on or off, the five mutations
 //! that write a long form with other members beside it each select what Linear stored in their
@@ -14,6 +14,11 @@
 //! so a metadata write answers the item its own answer holds and a follow-up write reads nothing
 //! after the write before it. And a dependency read sends one of four documents each 0.6.0's
 //! `ISSUE_RELATIONS` or `PROJECT_RELATIONS` narrowed to the one direction it reads.
+//!
+//! One document is new since 0.6.0: a copy's batched origin read, `ORIGIN_LOOKUPS`, which is
+//! 0.6.0's `ISSUES` and `PROJECTS` connections and the designator's `ORGANIZATION` selection
+//! side by side under aliases, and nothing else — and, with the cache on,
+//! `ORIGIN_LOOKUPS_CACHED`, which is it with exactly the pages the cache's listings add.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -80,6 +85,28 @@ fn released_or_widened() -> BTreeSet<String> {
         );
         allowed.insert(current.to_owned());
     }
+    // A copy's batched origin read: 0.6.0's two listings' selections and the designator's organization read,
+    // under aliases and no other selection.
+    assert_eq!(
+        graphql::ORIGIN_LOOKUPS,
+        format!(
+            "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,\
+             $projectsFilter:ProjectFilter){{ originIssues: \
+             issues(first:$issuesFirst,filter:$issuesFilter){} originProjects: \
+             projects(first:$projectsFirst,filter:$projectsFilter){} organization{} }}",
+            selected(
+                &released["ISSUES"],
+                "issues(first:$first,after:$after,filter:$filter)"
+            ),
+            selected(
+                &released["PROJECTS"],
+                "projects(first:$first,after:$after,filter:$filter)"
+            ),
+            selected(graphql::ORGANIZATION, "organization "),
+        ),
+        "the batched origin read is 0.6.0's listings and the organization read, and nothing else"
+    );
+    allowed.insert(graphql::ORIGIN_LOOKUPS.to_owned());
     for (name, current, removed) in narrowed_reads() {
         assert_eq!(
             released[name].replacen(&format!(" {removed}"), "", 1),
@@ -89,6 +116,26 @@ fn released_or_widened() -> BTreeSet<String> {
         allowed.insert(current.to_owned());
     }
     allowed
+}
+
+/// The selection set `document` gives the field `call` opens — from the brace after it to the
+/// brace that closes it.
+fn selected<'a>(document: &'a str, call: &str) -> &'a str {
+    let start = document.find(call).expect("the document makes the call") + call.len();
+    let mut depth = 0;
+    for (at, character) in document[start..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &document[start..=start + at];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("{call} opens a selection that closes")
 }
 
 /// Each dependency read this build sends in place of 0.6.0's two-direction one, by the 0.6.0
@@ -264,7 +311,7 @@ fn with_the_cache_off_every_document_is_one_0_6_0_sent_or_a_write_selecting_what
 }
 
 #[test]
-fn with_the_cache_on_only_seven_documents_differ_each_by_exactly_what_the_cache_adds() {
+fn with_the_cache_on_only_eight_documents_differ_each_by_exactly_what_the_cache_adds() {
     let released = released_or_widened();
     let cached = Cached::new(dataset());
     let sent = sent(&cached);
@@ -279,7 +326,8 @@ fn with_the_cache_on_only_seven_documents_differ_each_by_exactly_what_the_cache_
         graphql::PROJECT_RELATIONS_PAGE,
         graphql::PROJECT_INVERSE_RELATIONS_PAGE,
     ];
-    let widened: [(&str, &str, &[&str]); 7] = [
+    let both = [&task_pages[..], &project_pages[..]].concat();
+    let widened: [(&str, &str, &[&str]); 8] = [
         (graphql::ISSUES_CACHED, graphql::ISSUES, &task_pages),
         (graphql::ISSUE_CACHED, graphql::ISSUE, &task_pages),
         (
@@ -298,6 +346,11 @@ fn with_the_cache_on_only_seven_documents_differ_each_by_exactly_what_the_cache_
             graphql::PROJECT_RELATIONS_CACHED,
             graphql::PROJECT_RELATIONS,
             &[graphql::PROJECT_TOKEN_PARTS],
+        ),
+        (
+            graphql::ORIGIN_LOOKUPS_CACHED,
+            graphql::ORIGIN_LOOKUPS,
+            &both,
         ),
     ];
     for (cache, plain, added) in widened {

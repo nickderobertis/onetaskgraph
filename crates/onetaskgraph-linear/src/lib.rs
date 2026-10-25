@@ -157,8 +157,9 @@
 //! holds the figure. Each request that stays:
 //!
 //! - **One origin lookup for the whole project copy.** [`TaskSource::read_ahead_origins_for_copy`]
-//!   asks, in one request, for every Linear item an earlier copy made of the project and of each
-//!   task, and for the workspace's `organization{id}` [`TaskSource::designator`] answers from.
+//!   asks, in one request per 50 origins, for every Linear item an earlier copy made of the
+//!   project and of each task, and for the workspace's `organization{id}`
+//!   [`TaskSource::designator`] answers from; see the ruling on that read below.
 //! - **A document copy's own `documents` origin lookup**, because a first copy of a document
 //!   whose local record names no Linear item has to find one an earlier copy made rather than
 //!   make a second, and it is a command of its own. Its destination project is not read: a
@@ -359,6 +360,40 @@
 //! the run, and the report names what it created before it. Whether to run it against a
 //! workspace is the operator's decision.
 //!
+//! ## Ruling: a copy asks for every origin's counterpart in one request
+//!
+//! A copy into Linear looks for the item an earlier copy made of each thing it writes, by the
+//! `onetaskgraph.origin` each item records in its metadata slot: an issue by the task query by
+//! origin, a project by [`TaskSource::query_projects_by_origin`]. Asked one at a time, a project
+//! copy of `n` tasks sent one `projects` listing, `n` `issues` queries and an `organization`
+//! read for the designator its edges are written under — every one priced against the key's
+//! hourly allowance. So [`TaskSource::read_ahead_origins_for_copy`] sends
+//! [`graphql::ORIGIN_LOOKUPS`] first, one request per [`ORIGIN_BATCH`] origins:
+//!
+//! - **`originIssues`**, the `issues` connection narrowed to the team and project scope exactly
+//!   as one origin's own query is, and to the `or` of every origin's slot phrase — the same
+//!   phrase that query sends, so it is the union of their candidate sets. Its page is one row an
+//!   origin, at most [`MAX_PAGE_SIZE`].
+//! - **`originProjects`**, the `projects` connection narrowed to the scope alone, as the single
+//!   lookup's listing is: `ProjectFilter` has no member a slot phrase could be sent in, so every
+//!   project in scope is a candidate. Its page is the rest of one projects listing page, so the
+//!   request asks for no more rows than that page does — about 7,000 of Linear's 10,000
+//!   complexity points; see [`ORIGIN_BATCH`].
+//! - **`organization{id}`**, which [`TaskSource::designator`] then answers from for the rest of
+//!   the command, with no request of its own.
+//!
+//! Each origin's next lookup is answered from it once, every row confirmed in process exactly as
+//! that origin's own query confirms it, so the answer is the one that query would have given —
+//! every match, however many items record the origin. **An origin is never taken as having no
+//! counterpart from an incomplete answer:** a connection whose page has a next page holds no
+//! origin's answer at all, found in it or not, and each of them is sent on its own as before,
+//! paging to its end; so is an origin whose phrase cannot be sent, and one this read did not
+//! carry. What is held lives until the next mutation or [`TaskSource::end_command`], and the
+//! organization id until the end of the command. With the store's cache in front of this source
+//! it is [`graphql::ORIGIN_LOOKUPS_CACHED`], each row carrying the token parts its listing would,
+//! so a row it answers reads exactly as that listing's row does. A document copy keeps its own
+//! `documents` lookup.
+//!
 //! ## Ruling: `project` scopes a source to one project
 //!
 //! With `project` set, every issue read carries `project:{id:{eq:…}}` beside the team, a
@@ -446,6 +481,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 pub mod change_token;
+mod origins;
 
 /// The plugin kind a `linear` source's `plugin:` field names.
 pub const KIND: &str = "linear";
@@ -481,6 +517,17 @@ pub const MAX_PAGE_SIZE: u32 = 100;
 /// price at 8,880, under the `linear-cache-largest-query-complexity` guard of 9,000; a listing of
 /// more than seventy-four projects takes another request a page, which the hour budgets count.
 pub const PROJECTS_CACHED_PAGE: u32 = 74;
+
+/// The most origins one [`graphql::ORIGIN_LOOKUPS`] request asks for: a copy naming more sends
+/// one such request per this many.
+///
+/// The issues page that request asks for is one row an origin, and the projects page the rest
+/// of one projects listing page — [`MAX_PAGE_SIZE`], or [`PROJECTS_CACHED_PAGE`] while the
+/// store's cache stands in front of this source — so the request asks for no more rows than one
+/// listing page does, and a projects row is the dearer: about 7,000 of Linear's 10,000
+/// complexity points at the 70 a row a projects listing is priced at, and under 8,880 with the
+/// cache's pages at 120, however many origins it carries.
+pub const ORIGIN_BATCH: usize = 50;
 const DEFAULT_ENDPOINT: &str = "https://api.linear.app/graphql";
 
 /// Exact GraphQL query documents issued by this plugin.
@@ -507,6 +554,16 @@ pub mod graphql {
     pub const VIEWER: &str = "query { viewer { id } }";
     /// The workspace's own id, which this source's designator digests.
     pub const ORGANIZATION: &str = "query { organization { id } }";
+    /// What a copy asks before it looks for the items copied from each of up to
+    /// [`super::ORIGIN_BATCH`] origins: [`ISSUES`]'s connection narrowed to every origin's slot
+    /// phrase under one `or`, aliased `originIssues`, [`PROJECTS`]'s connection narrowed to the
+    /// source's scope, aliased `originProjects`, and [`ORGANIZATION`]'s `organization{id}` — in
+    /// one request. See the module documentation's ruling on the requests a copy sends.
+    pub const ORIGIN_LOOKUPS: &str = "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,$projectsFilter:ProjectFilter){ originIssues: issues(first:$issuesFirst,filter:$issuesFilter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id}} pageInfo{hasNextPage endCursor} } originProjects: projects(first:$projectsFirst,filter:$projectsFilter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}}} pageInfo{hasNextPage endCursor} } organization{ id } }";
+    /// [`ORIGIN_LOOKUPS`], sent in its place while the store's cache stands in front of this
+    /// source: each connection's rows carry what [`ISSUES_CACHED`]'s and [`PROJECTS_CACHED`]'s
+    /// carry, so a row it answers is pinned to the token a listing of it spells.
+    pub const ORIGIN_LOOKUPS_CACHED: &str = "query($issuesFirst:Int!,$issuesFilter:IssueFilter,$projectsFirst:Int!,$projectsFilter:ProjectFilter){ originIssues: issues(first:$issuesFirst,filter:$issuesFilter){ nodes{id identifier title description url createdAt updatedAt state{name type} priority labels{nodes{id name color}} project{id} comments(first:10){nodes{id updatedAt} pageInfo{hasNextPage}} relations(first:10){nodes{id type relatedIssue{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type issue{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } originProjects: projects(first:$projectsFirst,filter:$projectsFilter){ nodes{id name content url createdAt updatedAt status{name type} labels{nodes{id name color}} relations(first:10){nodes{id type relatedProject{id}} pageInfo{hasNextPage}} inverseRelations(first:10){nodes{id type project{id}} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor} } organization{ id } }";
     /// Fetch one issue.
     pub const ISSUE: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} } }";
     /// Fetch one project.
@@ -1465,6 +1522,9 @@ struct LinearSource {
     /// moment later answers (spike `spike-linear-stored-content`), so a follow-up write that
     /// keeps the metadata slot byte for byte reads nothing after the write before it.
     written: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Value>>,
+    /// What [`TaskSource::read_ahead_origins_for_copy`] read, until the next write or
+    /// [`TaskSource::end_command`]; see [`origins::OriginsAhead`].
+    origins_ahead: std::sync::Mutex<origins::OriginsAhead>,
 }
 
 /// One item's dependency read in one direction, as [`LinearSource::edges_versions`] keys it.
@@ -1506,6 +1566,7 @@ impl LinearSource {
             edges_versions: std::sync::Mutex::new(std::collections::HashMap::new()),
             stored: std::sync::Mutex::new(std::collections::HashMap::new()),
             written: std::sync::Mutex::new(std::collections::HashMap::new()),
+            origins_ahead: std::sync::Mutex::new(origins::OriginsAhead::default()),
         })
     }
 }
@@ -1800,6 +1861,10 @@ impl LinearSource {
         query: &str,
         variables: Value,
     ) -> Result<Result<Value, Refusal>, SourceError> {
+        // A write may change which items record an origin, so nothing read ahead outlives it.
+        if query.trim_start().starts_with("mutation") {
+            self.forget_origins_ahead(false);
+        }
         match self
             .answer_using(
                 self.client.get_or_init(reqwest::Client::new),
@@ -3176,14 +3241,22 @@ impl TaskSource for LinearSource {
     /// narrows what this source reads, never which workspace it is, so every source of one
     /// workspace designates the same tracker.
     async fn designator(&self) -> Result<Option<Designator>, SourceError> {
-        let data = self.send(graphql::ORGANIZATION, json!({})).await?;
-        let organization = str_at(
-            data.get("organization")
-                .ok_or_else(|| SourceError::Malformed {
-                    message: "missing organization".into(),
-                })?,
-            "id",
-        )?;
+        // A copy's batched origin read carries the organization id, held for the command.
+        let organization = match self.held_organization()? {
+            Some(organization) => organization,
+            None => {
+                let data = self.send(graphql::ORGANIZATION, json!({})).await?;
+                str_at(
+                    data.get("organization")
+                        .ok_or_else(|| SourceError::Malformed {
+                            message: "missing organization".into(),
+                        })?,
+                    "id",
+                )?
+                .to_owned()
+            }
+        };
+        let organization = organization.as_str();
         // An empty id names no workspace, and its digest would name one all the same.
         if organization.trim().is_empty() {
             return Err(SourceError::Malformed {
@@ -3230,6 +3303,9 @@ impl TaskSource for LinearSource {
         query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
+        if let Some(held) = self.held_origin_tasks(query, page)? {
+            return Ok(held);
+        }
         let d=self.send(self.read_document(ISSUES),json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(query)?})).await?;
         let page = connection(&d, "issues", |v| {
             map_task(v, &self.name, &self.statuses, self.spelling())
@@ -3269,6 +3345,21 @@ impl TaskSource for LinearSource {
                 .collect(),
             next: page.next,
         })
+    }
+    /// The scope's projects walked and narrowed to `origin`, as the trait's default walks them —
+    /// or, at the first page, what [`read_ahead_origins_for_copy`](Self::read_ahead_origins_for_copy)
+    /// held for it.
+    async fn query_projects_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        self.projects_by_origin(origin, page).await
+    }
+    /// One [`graphql::ORIGIN_LOOKUPS`] per [`ORIGIN_BATCH`] origins; see the ruling on the
+    /// requests a copy sends.
+    async fn read_ahead_origins_for_copy(&self, origins: &[String]) -> Result<(), SourceError> {
+        self.read_origins_ahead(origins).await
     }
     async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
         let d = self
@@ -4192,10 +4283,12 @@ impl TaskSource for LinearSource {
     /// nothing else: what this source holds across a command is its [`Vocabulary`] — the team's
     /// id, its workflow states and the workspace's project statuses — which stays valid in
     /// normal use and is read afresh when a name misses. No issue, project, document or search
-    /// answer outlives the call that read it, and no write's answer outlives the command that
-    /// wrote it, so the next command already reads each item as a person left it.
+    /// answer outlives the call that read it but what a copy's batched origin read held, and the
+    /// organization id it carried, which this drops too; and no write's answer outlives the
+    /// command that wrote it, so the next command already reads each item as a person left it.
     async fn end_command(&self) -> Result<(), SourceError> {
         self.edges_versions().clear();
+        self.forget_origins_ahead(true);
         self.written
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -4361,6 +4454,7 @@ impl LinearSource {
                 graphql::ISSUE_RELATIONS_CACHED
             }
             PROJECTS => graphql::PROJECTS_CACHED,
+            graphql::ORIGIN_LOOKUPS => graphql::ORIGIN_LOOKUPS_CACHED,
             PROJECT => graphql::PROJECT_CACHED,
             PROJECT_RELATIONS | graphql::PROJECT_DEPENDS_ON | graphql::PROJECT_DEPENDED_ON_BY => {
                 graphql::PROJECT_RELATIONS_CACHED

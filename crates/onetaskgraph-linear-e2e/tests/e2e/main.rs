@@ -26,6 +26,7 @@ mod linear_boundary;
 mod linear_budget;
 mod linear_rewrites;
 mod linear_status;
+mod origin_batch;
 mod pinning_walk;
 mod store_cost;
 mod stored_digest;
