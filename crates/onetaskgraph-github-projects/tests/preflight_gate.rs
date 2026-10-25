@@ -42,14 +42,14 @@ const TOKEN: &str = "test-token";
 /// The repository the lane writes its issues to.
 const REPOSITORY: &str = "acme/work";
 /// The run the leftover fields name, and the two fields it left.
-const LEFTOVER_RUN: u64 = 40_170_293_588;
-const LEFTOVER: &str = "otg-live-ci-40170293588-1-1792911749637960";
-const SECOND_LEFTOVER: &str = "otg-live-ci-40170293588-1-1792911749637999";
+const LEFTOVER_RUN: u64 = 4_242;
+const LEFTOVER: &str = "otg-live-ci-4242-1-1700000000000001";
+const SECOND_LEFTOVER: &str = "otg-live-ci-4242-1-1700000000000002";
 /// Fields that are not a CI run's: the board's own, a machine stamp (its machine's lock
 /// sweep's), and a name in the prefix that no stamp grammar reads.
 const KEPT_ALWAYS: [&str; 3] = [
     "Priority",
-    "otg-live-1-1-1792911749637960",
+    "otg-live-1-1-1700000000000001",
     "otg-live-ci-01-1-1",
 ];
 /// A run still going, whose stamped items a pre-flight must leave and count.

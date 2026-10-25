@@ -971,8 +971,8 @@ class Journeys(unittest.TestCase):
         # is residue. A run still going keeps its own, and so does every field that is not
         # the lane's — the origin field, `Status`, a person's, and one this query reads nothing of.
         state = Github()
-        cancelled = state.field(f'ci-40170293588-1-{NOW - DAY}')
-        state.status[RunId(40170293588)] = Status.COMPLETED
+        cancelled = state.field(f'ci-321-1-{NOW - DAY}')
+        state.status[RunId(321)] = Status.COMPLETED
         active = state.field(f'ci-999-1-{NOW}')
         state.status[RunId(999)] = Status.IN_PROGRESS
         machine = state.field(f'1-1-{NOW - 3 * DAY}')
@@ -987,7 +987,7 @@ class Journeys(unittest.TestCase):
         self.assertIn(active, [field.get('id') for field in state.fields])
         self.assertIn(machine, [field.get('id') for field in state.fields])
         self.assertEqual(state.origin_field, ORIGIN_FIELD)
-        self.assertEqual(state.status_reads, {40170293588: 1, 999: 1})
+        self.assertEqual(state.status_reads, {321: 1, 999: 1})
         document = re.search(r'pub const DELETE_FIELD_DOCUMENT: &str = "([^"]+)";', SHARED)[1]
         self.assertEqual(sum(request == Request('POST', document) for request in state.requests), 1)
         self.assertEqual(sum(method == 'POST' and target.startswith('query') for method, target in state.requests), 2)
