@@ -726,6 +726,10 @@ def test_document_copy_drives_the_binary_and_refuses_a_destination_with_no_docum
     # strings does not.
     located = Path(dumped.pop("location")["path"])
     assert located.samefile(root / "markdown" / "documents" / "D-1.md")
+    # The copy's record of itself, each a digest, which a later copy reads to write nothing to
+    # a document unchanged at both ends.
+    for key in ("onetaskgraph.copied_version", "onetaskgraph.copied_destination_version"):
+        assert dumped["metadata"].pop(key).startswith("sha256:")
     assert dumped == {
         "id": "D-1",
         "title": "Memory document",
