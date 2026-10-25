@@ -11499,6 +11499,11 @@ fn fixture_run(prefix: &str, extra: &[(&str, &str)]) -> (Fixture, Created, Creat
 /// search lagging longer than this, scaled, proves what the longer bound buys.
 const OLD_FIXTURE_BOUND: Duration = Duration::from_secs(120);
 
+/// How long each search takes on [`NeverReported`]'s clock: two to an attempt, so the wait's
+/// three-second deadline falls inside one, as it did on the live pair's stand-in when that
+/// answered every search in this long.
+const NEVER_SEARCH_ANSWERS_IN: Duration = Duration::from_millis(500);
+
 /// How long a live pair's `search-never` stand-in parks a search unanswered before it answers
 /// after all, when no read by id has come: twice the wait's deadline, so a wait kept from its
 /// deadline by a loaded host still has a whole deadline to send its read, and a wait that waits
@@ -11506,6 +11511,194 @@ const OLD_FIXTURE_BOUND: Duration = Duration::from_secs(120);
 /// hanging the journey.
 const PARKED_SEARCH_RELEASED_AFTER: Duration =
     journey::STAND_IN_FIXTURE_WAIT.bound.saturating_mul(2);
+
+/// A source a fixture wait reads as the live pair's `search-never` stand-in answers it, on
+/// tokio's clock: each search takes [`NEVER_SEARCH_ANSWERS_IN`] and leaves the run's second
+/// task out, and a read of it by its own id finds it after `reads_by_id_take` — or, for `None`,
+/// never answers. Under a paused clock nothing here takes host time, so when the wait sent its
+/// reads by id is exactly when its deadline handling sent them.
+struct NeverReported {
+    reads_by_id_take: Option<Duration>,
+    /// When, on tokio's clock, each read by its own id was sent.
+    sent_by_id: Arc<Mutex<Vec<tokio::time::Instant>>>,
+}
+
+impl NeverReported {
+    const PREFIX: &'static str = "onetaskgraph live cleanup 4242-912-";
+
+    fn title(number: usize) -> String {
+        format!("{}{number}", Self::PREFIX)
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskSource for NeverReported {
+    fn kind(&self) -> &'static str {
+        "never-reported"
+    }
+    fn capabilities(&self) -> Capabilities {
+        unreachable!("a fixture wait reads no capabilities")
+    }
+    async fn health(&self) -> Result<onetaskgraph_plugin_api::Health, SourceError> {
+        unreachable!("a fixture wait reads no health")
+    }
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        self.sent_by_id
+            .lock()
+            .unwrap()
+            .push(tokio::time::Instant::now());
+        let Some(takes) = self.reads_by_id_take else {
+            return std::future::pending().await;
+        };
+        tokio::time::sleep(takes).await;
+        Ok(Some(task(
+            &id.0,
+            &Self::title(2),
+            status(StatusCategory::Todo, "Todo"),
+        )))
+    }
+    async fn get_project(&self, _: &NativeId) -> Result<Option<Project>, SourceError> {
+        unreachable!("the search reports every project")
+    }
+    async fn query_tasks(
+        &self,
+        _: &TaskQuery,
+        _: &PageRequest,
+    ) -> Result<onetaskgraph_plugin_api::Page<Task>, SourceError> {
+        tokio::time::sleep(NEVER_SEARCH_ANSWERS_IN).await;
+        Ok(onetaskgraph_plugin_api::Page {
+            items: vec![task(
+                "T_first",
+                &Self::title(1),
+                status(StatusCategory::Todo, "Todo"),
+            )],
+            next: None,
+        })
+    }
+    async fn query_projects(
+        &self,
+        _: &ProjectQuery,
+        _: &PageRequest,
+    ) -> Result<onetaskgraph_plugin_api::Page<Project>, SourceError> {
+        tokio::time::sleep(NEVER_SEARCH_ANSWERS_IN).await;
+        Ok(onetaskgraph_plugin_api::Page {
+            items: vec![project(
+                "P_alpha",
+                &Self::title(0),
+                status(StatusCategory::Todo, "Todo"),
+            )],
+            next: None,
+        })
+    }
+    async fn labels(
+        &self,
+        _: &PageRequest,
+    ) -> Result<onetaskgraph_plugin_api::Page<Label>, SourceError> {
+        unreachable!("a fixture wait reads no labels")
+    }
+    async fn task_dependencies(
+        &self,
+        _: &NativeId,
+        _: Direction,
+        _: &PageRequest,
+    ) -> Result<onetaskgraph_plugin_api::Page<DependencyEdge>, SourceError> {
+        unreachable!("a fixture wait reads no dependencies")
+    }
+    async fn project_dependencies(
+        &self,
+        _: &NativeId,
+        _: Direction,
+        _: &PageRequest,
+    ) -> Result<onetaskgraph_plugin_api::Page<DependencyEdge>, SourceError> {
+        unreachable!("a fixture wait reads no dependencies")
+    }
+}
+
+/// [`journey::settled_fixture`] at [`journey::STAND_IN_FIXTURE_WAIT`] against
+/// [`NeverReported`], from the moment the clock reads `started`: what it said, when it said it,
+/// and when it sent each read by id, all on that clock.
+async fn never_reported_wait(
+    reads_by_id_take: Option<Duration>,
+) -> (String, Duration, Vec<Duration>) {
+    let sent_by_id = Arc::<Mutex<Vec<tokio::time::Instant>>>::default();
+    let rebuild = || -> Box<dyn TaskSource> {
+        Box::new(NeverReported {
+            reads_by_id_take,
+            sent_by_id: Arc::clone(&sent_by_id),
+        })
+    };
+    let named = |id: &str, number: usize| (NativeId(id.to_owned()), NeverReported::title(number));
+    let started = tokio::time::Instant::now();
+    let Err(said) = journey::settled_fixture(
+        &rebuild,
+        NeverReported::PREFIX,
+        &[named("T_first", 1), named("T_second", 2)],
+        &[named("P_alpha", 0)],
+        &BTreeMap::new(),
+        journey::STAND_IN_FIXTURE_WAIT,
+    )
+    .await
+    else {
+        panic!("the search never reports T_second, so the wait cannot settle");
+    };
+    let ended = started.elapsed();
+    let sent = sent_by_id
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|at| *at - started)
+        .collect();
+    (said, ended, sent)
+}
+
+/// The live pair's `search-never` wait on a clock no host can move: the deadline falls inside
+/// a search, which is given up exactly at it, and the read by id is sent at that instant —
+/// neither before the deadline nor any time after it — and its answer ends the wait.
+#[tokio::test(start_paused = true)]
+async fn a_fixture_wait_gives_up_at_its_deadline_and_reads_by_id_at_once() {
+    let wait = journey::STAND_IN_FIXTURE_WAIT;
+    let read = Duration::from_millis(100);
+    let (said, ended, sent) = never_reported_wait(Some(read)).await;
+    assert_eq!(
+        sent,
+        vec![wait.bound],
+        "the read by id was sent at {sent:?} into the wait, against its {:?} deadline",
+        wait.bound
+    );
+    assert_eq!(ended, wait.bound + read, "{said}");
+    assert!(
+        said.contains("a search still unanswered at the deadline was abandoned")
+            && said.contains(&format!(
+                "never reported the task \"{}\" (T_second), which a read by its own id finds on \
+                 the board",
+                NeverReported::title(2)
+            )),
+        "{said}"
+    );
+}
+
+/// A read by id that never answers is given exactly the wait's `diagnosis` and no longer, and
+/// the wait says so rather than waiting on it.
+#[tokio::test(start_paused = true)]
+async fn a_fixture_waits_read_by_id_is_given_its_diagnosis_and_no_longer() {
+    let wait = journey::STAND_IN_FIXTURE_WAIT;
+    let (said, ended, sent) = never_reported_wait(None).await;
+    assert_eq!(sent, vec![wait.bound], "{said}");
+    assert_eq!(
+        ended,
+        wait.bound + wait.diagnosis,
+        "the wait ended {ended:?} in, against a {:?} deadline and {:?} for its reads by id",
+        wait.bound,
+        wait.diagnosis
+    );
+    assert!(
+        said.contains(&format!(
+            "which a read by its own id did not answer within the {}s given it",
+            wait.diagnosis.as_secs_f64()
+        )),
+        "{said}"
+    );
+}
 
 /// The short wait the give-up journeys below are held to.
 /// Its bound is long enough for a loaded host to answer a search inside it, which every one of

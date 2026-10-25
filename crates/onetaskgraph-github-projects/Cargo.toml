@@ -30,4 +30,6 @@ onetaskgraph-live.workspace = true
 # The lane's artifact names and repositories, which the janitor reads too.
 onetaskgraph-github-live.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+# `test-util` for a paused clock: the fixture wait's deadline is proven on virtual time, where
+# no host's pace can move it.
+tokio = { workspace = true, features = ["test-util"] }
