@@ -189,7 +189,7 @@ fn slot(plan: &Plan, id: &str) -> Value {
     serde_json::from_str(inner[..end].trim()).expect("the slot is JSON")
 }
 
-/// Each call of `steps`: its requests, its points and its operations.
+/// `steps` as the budget's detail reads them, the shape `budget_runner` holds a recording to.
 fn breakdown(steps: &[Step]) -> Vec<Value> {
     steps
         .iter()

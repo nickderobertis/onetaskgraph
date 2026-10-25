@@ -2605,7 +2605,8 @@ impl GitHubBoard {
         item["type"] == "DraftIssue"
     }
 
-    /// The owner half of [`Self::repository`].
+    /// The login a request naming this board's repository by owner and name names it by: what
+    /// the board holds each such request to.
     fn repository_owner(&self) -> &str {
         self.repository
             .split_once('/')
