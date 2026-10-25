@@ -426,9 +426,11 @@ pub const PUBLIC_PROJECT_TITLE: &str = "Public work";
 
 /// What in `content` a public projection could not carry: every Markdown link or image whose
 /// destination is neither a URL, a bare fragment nor one of `assets` as `./<name>`, and every
-/// piece of raw HTML that could name a destination at all — a tag with any attribute, or a
-/// `style` or `script` element — since a view cannot tell what such HTML points at. Code spans
-/// and blocks hold neither, so nothing in them is one.
+/// piece of raw HTML that could name a destination at all — a tag with any attribute but an
+/// anchor's lone `id` or `name`, or a `style` or `script` element — since a view cannot tell
+/// what such HTML points at. An anchor naming only itself is carried as written, so a fragment
+/// link to it from the same view still resolves. Code spans and blocks hold neither, so nothing
+/// in them is one.
 #[must_use]
 pub fn unresolved_references(content: &str, assets: &[String]) -> Vec<String> {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
@@ -504,32 +506,113 @@ fn carried(destination: &str, assets: &[String]) -> bool {
 }
 
 /// The first tag of raw HTML that could name a destination — one carrying anything past its
-/// name, or opening a `style` or `script` element — as written; `None` when every tag is a bare
-/// name, which names nowhere.
+/// name but an anchor's lone `id` or `name`, or opening a `style` or `script` element — as
+/// written; `None` when every tag is a bare name or such an anchor, neither of which names
+/// anywhere.
 fn opaque_html(html: &str) -> Option<String> {
     let mut rest = html;
     while let Some(open) = rest.find('<') {
         let tag = &rest[open..];
-        let end = tag.find('>').map_or(tag.len(), |end| end + 1);
-        let inside = tag[1..end]
-            .trim_end_matches('>')
-            .trim_start_matches(['/', '!', '?']);
+        let body = tag[1..].trim_start_matches(['/', '!', '?']);
         // Only `<` straight before a name opens a tag: `a < b` is prose.
-        if !inside.starts_with(|character: char| character.is_ascii_alphabetic()) {
+        if !body.starts_with(|character: char| character.is_ascii_alphabetic()) {
             rest = &tag[1..];
             continue;
         }
-        let name_end = inside
+        let name_end = body
             .find(|character: char| !character.is_ascii_alphanumeric() && character != '-')
-            .unwrap_or(inside.len());
-        let (name, after) = inside.split_at(name_end);
-        let bare = after.trim().trim_end_matches('/').trim().is_empty();
-        if !bare || name.eq_ignore_ascii_case("style") || name.eq_ignore_ascii_case("script") {
+            .unwrap_or(body.len());
+        let name = &body[..name_end];
+        let attributes_at = tag.len() - body.len() + name_end;
+        let Some((attributes, length)) = attributes(&tag[attributes_at..]) else {
+            return Some(tag.to_owned());
+        };
+        let end = attributes_at + length;
+        let anchor = name.eq_ignore_ascii_case("a")
+            && !tag[1..].starts_with(['/', '!', '?'])
+            && matches!(attributes.as_slice(), [(key, Some(value))]
+                if (key.eq_ignore_ascii_case("id") || key.eq_ignore_ascii_case("name"))
+                    && anchor_name(value));
+        if !(attributes.is_empty() || anchor)
+            || name.eq_ignore_ascii_case("style")
+            || name.eq_ignore_ascii_case("script")
+        {
             return Some(tag[..end].to_owned());
         }
         rest = &tag[end..];
     }
     None
+}
+
+/// One attribute of a tag, as written: its name and, when it is given one, its value.
+type Attribute<'html> = (&'html str, Option<&'html str>);
+
+/// The attributes of a tag whose name has been read, and how many bytes of `after` they and
+/// the closing `>` span — read as HTML reads them, so a `>` inside a quoted value does not end
+/// the tag. A tag with no `>` ends with the text; one whose quoted value never closes, or with
+/// an `=` where a name belongs, is `None`, and is never carried.
+fn attributes(after: &str) -> Option<(Vec<Attribute<'_>>, usize)> {
+    let mut read = Vec::new();
+    let mut at = 0;
+    let bytes = after.as_bytes();
+    let skip = |at: &mut usize| {
+        while *at < bytes.len() && (bytes[*at].is_ascii_whitespace() || bytes[*at] == b'/') {
+            *at += 1;
+        }
+    };
+    loop {
+        skip(&mut at);
+        if at >= bytes.len() {
+            return Some((read, at));
+        }
+        if bytes[at] == b'>' {
+            return Some((read, at + 1));
+        }
+        let start = at;
+        while at < bytes.len() && !b" \t\n\r\x0c/>=".contains(&bytes[at]) {
+            at += 1;
+        }
+        let key = &after[start..at];
+        if key.is_empty() {
+            return None;
+        }
+        while at < bytes.len() && bytes[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        if at >= bytes.len() || bytes[at] != b'=' {
+            read.push((key, None));
+            continue;
+        }
+        at += 1;
+        while at < bytes.len() && bytes[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        let value = match bytes.get(at) {
+            Some(quote @ (b'"' | b'\'')) => {
+                let close = after[at + 1..].find(char::from(*quote))?;
+                let value = &after[at + 1..at + 1 + close];
+                at += close + 2;
+                value
+            }
+            _ => {
+                let start = at;
+                while at < bytes.len() && !bytes[at].is_ascii_whitespace() && bytes[at] != b'>' {
+                    at += 1;
+                }
+                &after[start..at]
+            }
+        };
+        read.push((key, Some(value)));
+    }
+}
+
+/// Whether `value` is an anchor name an in-page link can reach and nothing can load: letters,
+/// digits, `-`, `_` and `.` alone, so no entity, scheme or path hides in it.
+fn anchor_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
 }
 
 /// One public task of a private plan a project copy projects, as its canonical record read.
@@ -1838,6 +1921,22 @@ mod tests {
     }
 
     #[test]
+    fn an_anchor_naming_only_itself_is_carried() {
+        for content in [
+            "<a id=\"library-copy-seconds\"></a>\n\n| Budget | Limit |\n|---|---|\n| copy | 30 |\n\n\
+             See [the budget](#user-content-library-copy-seconds).\n",
+            "Inline <a name='step_2.b'></a> anchor and <A ID=top> another.",
+            "<a id=\"x\" />",
+        ] {
+            assert!(
+                unresolved_references(content, &[]).is_empty(),
+                "{content}: {:?}",
+                unresolved_references(content, &[])
+            );
+        }
+    }
+
+    #[test]
     fn only_urls_fragments_held_assets_and_bare_html_are_carried() {
         let content = "See [docs](https://example.org/x), [here](#part), \
                        ![shot](./shot.png), [mail](mailto:a@b.c), \
@@ -1861,6 +1960,25 @@ mod tests {
             "<div style=\"background: u\\72l('../c.png')\">c</div>",
             "<style>body { background: url(../d.png) }</style>",
             "<a ping=\"../e\">e</a>",
+            "<a id=\"f\" href=\"../f.md\">f</a>",
+            "<a href=\"../g.md\" id=\"g\">g</a>",
+            "<a name=\"h\" onclick=\"fetch('../h')\">h</a>",
+            "<a id=\"i\" style=\"background: url(../i.png)\"></a>",
+            "<a id=\"j\" ping=\"../j\"></a>",
+            "<a id='k' srcset='../k.png 2x'></a>",
+            "<a id=\"l\" src=\"../l.png\"></a>",
+            "<a id=\"m\" OnMouseOver=\"x()\"></a>",
+            "<a id=\">\" href=\"../n.md\">n</a>",
+            "<a id=\"../o.md\"></a>",
+            "<a id=\"p&#x2f;q\"></a>",
+            "<a id></a>",
+            "<a id=\"r\" id=\"s\"></a>",
+            "<a id=\"unclosed></a>",
+            "<img id=\"t\">",
+            "<form action=\"../u\"></form>",
+            "<button formaction=\"../v\">v</button>",
+            "<script id=\"w\"></script>",
+            "<style></style>",
         ] {
             // Prose comparing two things is no tag.
             assert!(unresolved_references("Keep a < b and c > d.", &[]).is_empty());

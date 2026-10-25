@@ -504,6 +504,26 @@ fn a_public_task_naming_private_material_is_refused_before_anything_is_written()
         (
             "path",
             format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "<a id=\"notes\" href=\"../notes/retry.md\">the notes</a>".to_owned(),
+        ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "<a name=\"notes\" onclick=\"fetch('../notes/f.json')\"></a>".to_owned(),
+        ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "<a id=\"notes\" style=\"background: url('../notes/g.png')\"></a>".to_owned(),
+        ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+            "<a id=\"../notes/h.md\"></a>".to_owned(),
+        ),
+        (
+            "path",
+            format!("title: Add retry\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
             "As drawn: ![the retry](./never-attached.png)".to_owned(),
         ),
     ] {
@@ -803,6 +823,38 @@ fn views_that_depend_on_each_other_are_both_landed_with_both_edges() {
     let before = store.tree();
     copy_rollout(&store);
     assert_eq!(store.tree(), before, "a repeat writes nothing");
+}
+
+#[test]
+fn a_view_carries_an_anchor_naming_only_itself_and_the_in_page_links_to_it() {
+    // What a plan-task template writes before a budget: an anchor carrying only an id, and a
+    // link to it as GitHub renders that id. Neither names a destination or loads anything.
+    const BUDGETED: &str = "<a id=\"library-copy-seconds\"></a>\n\n\
+                            | Budget | Limit |\n|---|---|\n| library copy seconds | 30 |\n\n\
+                            Held to [the budget](#user-content-library-copy-seconds), \
+                            <a name='retry_2.b'></a>and the retry below.";
+    let store = projecting_store();
+    private_rollout(&store);
+    store.record(
+        "plan",
+        "tasks",
+        "budgeted",
+        &format!("title: Budget the copy\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+        BUDGETED,
+    );
+    let landed = copy_rollout(&store);
+    let view = view_of(&store, &landed, &landed["plan:budgeted"]);
+    assert!(view.starts_with("site:"), "{view}");
+    let content = shown(&store, "task", &view)["content"]
+        .as_str()
+        .expect("the view's content")
+        .to_owned();
+    assert_eq!(
+        content.trim_end(),
+        BUDGETED,
+        "the view carries the anchors as written"
+    );
+    assert_site_neutral(&store);
 }
 
 #[test]
