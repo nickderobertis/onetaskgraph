@@ -276,7 +276,7 @@ fn smallest_page_size() -> u64 {
 /// variables its own `first:` arguments name — the bound the module documentation derives is
 /// per call, so the call's own connections are what it divides by — or [`smallest_page_size`]
 /// for a row naming no document this source declares, or one naming no page-size variable.
-fn smallest_page_size_named(name: &str) -> u64 {
+pub fn smallest_page_size_named(name: &str) -> u64 {
     let described = name
         .strip_prefix("node-count and point-cost reconciliation while ")
         .unwrap_or(name);

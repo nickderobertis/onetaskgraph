@@ -650,3 +650,96 @@ async fn a_refused_union_whose_write_the_check_cannot_decide_alone_is_that_write
         "nothing was written"
     );
 }
+
+/// A task copy of `ids` of the plan to `site`, recording no link back at `draft`, so a later
+/// copy of the same tasks exposes exactly what this one did.
+fn tasks_copied(ids: &[&str]) -> onetaskgraph_core::CopyRequest {
+    onetaskgraph_core::CopyRequest {
+        items: onetaskgraph_core::CopyItems::new(
+            ids.iter().map(|id| id.parse().unwrap()).collect(),
+        )
+        .expect("an item"),
+        scope: onetaskgraph_core::CopyScope::Tasks,
+        no_link: true,
+        ..plan_copy_request()
+    }
+}
+
+/// A check refusing only what holds both of two plain tasks.
+fn refusing_the_pair(
+    input: &onetaskgraph_core::boundary::PublicWriteInput,
+) -> onetaskgraph_core::boundary::WriteVerdict {
+    if input.metadata.iter().any(|value| value == "Alpha")
+        && input.metadata.iter().any(|value| value == "Beta")
+    {
+        onetaskgraph_core::boundary::WriteVerdict::Refuse {
+            reason: "only together".to_owned(),
+        }
+    } else {
+        onetaskgraph_core::boundary::WriteVerdict::Pass
+    }
+}
+
+#[tokio::test]
+async fn writes_that_passed_in_separate_checks_are_checked_together_before_they_are_written_together()
+ {
+    // Each task copied alone passes. Copied together in the same command, every value either
+    // exposes has passed a check — but never in one input — so the two are put to the check
+    // together, which refuses them, and nothing more is written.
+    let (store, policy, engine) = judged_engine(refusing_the_pair);
+    // Two tasks of no project and no edge, so each exposes the same alone as together.
+    for (id, title) in [("alpha", "Alpha"), ("beta", "Beta")] {
+        store.record(
+            "draft",
+            "tasks",
+            id,
+            &format!("title: {title}\nstatus: todo"),
+            PLAIN,
+        );
+    }
+    // Copied alone twice each: from the second copy on, each exposes the record of the copy
+    // before it too, and exposes exactly that again copied with the other.
+    for alone in ["draft:alpha", "draft:beta", "draft:alpha", "draft:beta"] {
+        engine
+            .copy(&tasks_copied(&[alone]))
+            .await
+            .expect("one task alone passes");
+    }
+    let before = tree(&store.folder("site"));
+    let refused = engine
+        .copy(&tasks_copied(&["draft:alpha", "draft:beta"]))
+        .await
+        .expect_err("the two together are refused");
+    assert_eq!(super::kind_of(&refused), "boundary-refused");
+    assert_eq!(
+        policy.checked.lock().unwrap().len(),
+        4 + 3,
+        "four alone, then the pair and each of it"
+    );
+    assert_eq!(
+        tree(&store.folder("site")),
+        before,
+        "nothing more was written"
+    );
+}
+
+#[tokio::test]
+async fn a_value_that_passed_on_one_surface_is_checked_again_on_another() {
+    // The same string passed as a task's prose, then named as a task's title: a check reads
+    // each surface on its own terms, so the title is put to it rather than taken as passed.
+    let store = Store::new(None, json!({}));
+    store.public_project_p();
+    let policy = std::sync::Arc::new(Counted::default());
+    let engine = super::linked_engine(&store).with_write_policy(policy.clone());
+    let mut prose = super::task_on_site("zeta", &[]);
+    prose.title = "Linked".to_owned();
+    engine.create_task(&prose).await.expect("prose passes");
+    let mut titled = super::task_on_site("Linked", &[]);
+    titled.title = "zeta".to_owned();
+    engine.create_task(&titled).await.expect("a title passes");
+    assert_eq!(
+        policy.checked.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the value moved to another surface was checked"
+    );
+}

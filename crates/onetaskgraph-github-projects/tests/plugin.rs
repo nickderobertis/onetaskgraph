@@ -1664,6 +1664,24 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                     &json!({"onetaskgraph.classification": "secret"})
                 ));
             }
+            MembersAnswer::MalformedSlot => {
+                nodes[0]["body"] = json!("prose\n\n<!-- onetaskgraph.metadata\n{not json\n-->");
+            }
+            MembersAnswer::MalformedRecordedRepositories => {
+                nodes[0]["body"] = json!(slotted(
+                    "prose",
+                    &json!({"onetaskgraph.repositories": "not a list"})
+                ));
+            }
+            MembersAnswer::InvalidOwnRepository => {
+                nodes[1]["repository"] = json!({"nameWithOwner": "not a repository"});
+            }
+            MembersAnswer::NestedProject => {
+                nodes.push(json!({"id": "I_sub", "parent": {"id": project},
+                    "body": slotted("a project under it", &json!({"onetaskgraph.item_kind":"project",
+                        "onetaskgraph.classification":"private"})),
+                    "repository": {"nameWithOwner": "acme/work"}}));
+            }
         }
         answered["members"] = json!({"subIssues": {"nodes": nodes,
             "pageInfo": {"hasNextPage": more, "endCursor": null}}});
@@ -11826,6 +11844,14 @@ enum MembersAnswer {
     NoRepository,
     /// A member whose recorded classification does not parse.
     MalformedClassification,
+    /// A member whose metadata slot does not parse.
+    MalformedSlot,
+    /// A member whose recorded repository list does not parse.
+    MalformedRecordedRepositories,
+    /// A member, recording no repository list, whose own repository is no `owner/name`.
+    InvalidOwnRepository,
+    /// A member that is itself a project.
+    NestedProject,
 }
 
 /// How a read of one document with its project answers.
@@ -22006,8 +22032,20 @@ async fn a_members_page_that_is_not_every_member_or_cannot_be_read_answers_nothi
         MembersAnswer::BodyNotText,
         MembersAnswer::NoRepository,
         MembersAnswer::MalformedClassification,
+        MembersAnswer::MalformedSlot,
+        MembersAnswer::MalformedRecordedRepositories,
+        MembersAnswer::InvalidOwnRepository,
     ] {
         let (_, classes) = members_read(answer).await;
         assert_eq!(classes, None, "{answer:?}");
     }
+}
+
+#[tokio::test]
+async fn a_project_filed_under_the_project_is_no_member_its_classification_reads() {
+    // A task or document listing never names a project filed under this one, so the page of
+    // members does not either: the two tasks alone, the nested project's own record left out.
+    let (_, classes) = members_read(MembersAnswer::NestedProject).await;
+    let classes = classes.expect("the whole page");
+    assert_eq!(classes.len(), 2, "{classes:?}");
 }
