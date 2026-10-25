@@ -84,6 +84,12 @@ struct Board {
     /// A run's status, or `None` for a read GitHub fails.
     runs: BTreeMap<u64, Option<&'static str>>,
     removal: Removal,
+    /// How many items one page of the artifact lookup answers, and how it is answered.
+    item_page: usize,
+    item_fault: Option<&'static str>,
+    item_removal: Removal,
+    issue_removal: Removal,
+    issues_deleted: Vec<String>,
     requests: Vec<String>,
 }
 
@@ -120,6 +126,11 @@ fn board(scenario: &str) -> Board {
         answer_nodes: true,
         runs: BTreeMap::from([(LEFTOVER_RUN, Some("completed"))]),
         removal: Removal::Confirmed,
+        item_page: 100,
+        item_fault: None,
+        item_removal: Removal::Confirmed,
+        issue_removal: Removal::Confirmed,
+        issues_deleted: Vec::new(),
         requests: Vec::new(),
     };
     // A run's status by scenario; `None` is a read GitHub fails.
@@ -136,12 +147,41 @@ fn board(scenario: &str) -> Board {
         // 80 of the board's own; 10 issues a completed run left, a document among them; 3 a run
         // still going left; and, under the completed run's stamp, a draft and an issue of
         // another repository, which are nobody's residue: 95 raw, 85 once the 10 are gone.
-        "items-completed" => {
+        "items-completed"
+        | "items-paged"
+        | "items-no-cursor"
+        | "items-no-page-info"
+        | "items-stuck-cursor"
+        | "items-bad-id"
+        | "item-removal-refused"
+        | "item-removal-unconfirmed"
+        | "issue-removal-refused" => {
             board.items = drafts(80);
             board.items.extend(stamped_items(LEFTOVER_RUN, 10));
             board.items.extend(stamped_items(ACTIVE_RUN, 3));
             board.items.extend(not_residue());
             board.runs.insert(ACTIVE_RUN, Some("in_progress"));
+            match scenario {
+                "items-paged" | "items-stuck-cursor" => board.item_page = 40,
+                "item-removal-refused" => board.item_removal = Removal::Refused,
+                "item-removal-unconfirmed" => board.item_removal = Removal::NamingAnother,
+                "issue-removal-refused" => board.issue_removal = Removal::Refused,
+                _ => {}
+            }
+            board.item_fault = match scenario {
+                "items-no-cursor" => Some("no-cursor"),
+                "items-no-page-info" => Some("no-page-info"),
+                "items-stuck-cursor" => Some("stuck-cursor"),
+                "items-bad-id" => {
+                    board.items.push((
+                        "PVTI_bad".to_owned(),
+                        Some((String::new(), REPOSITORY.to_owned())),
+                        format!("{ARTIFACT_PREFIX}ci-{LEFTOVER_RUN}-1-1"),
+                    ));
+                    None
+                }
+                _ => None,
+            };
         }
         // 82 of the board's own and 10 a run still going, unreadable or undecodable left: 92,
         // all counted.
@@ -206,6 +246,12 @@ fn not_residue() -> Vec<Item> {
     ]
 }
 
+/// GitHub refusing a mutation the credential may not make.
+fn refusal(mutation: &str) -> Value {
+    json!({"data":{mutation:null},
+           "errors":[{"message":"Resource not accessible by personal access token"}]})
+}
+
 fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
     let mut board = board.lock().unwrap();
     if method == "POST" && path == "/graphql" {
@@ -229,8 +275,12 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
         // The lane's own artifact lookup, which its cleanup lists the board with.
         if query.contains("node(id:$id){... on ProjectV2{items(first:100") {
             assert_eq!(body["variables"]["id"], json!("PVT_board"));
-            let nodes = board
-                .items
+            // The cursor is the offset of the page asked for.
+            let offset = body["variables"]["after"]
+                .as_str()
+                .map_or(0, |after| after.parse::<usize>().unwrap());
+            let end = (offset + board.item_page).min(board.items.len());
+            let nodes = board.items[offset..end]
                 .iter()
                 .map(|(id, issue, title)| match issue {
                     Some((issue, repository)) => json!({"id":id,
@@ -240,22 +290,49 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
                     None => json!({"id":id,"content":{"__typename":"DraftIssue"}}),
                 })
                 .collect::<Vec<_>>();
-            return (
-                200,
-                json!({"data":{"node":{"items":{"nodes":nodes,
-                    "pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
-            );
+            let more = end < board.items.len();
+            let mut items = json!({"nodes":nodes,"pageInfo":{"hasNextPage":more,
+            "endCursor":if board.item_fault == Some("stuck-cursor") && offset > 0 {
+                json!(offset.to_string())
+            } else {
+                json!(end.to_string())
+            }}});
+            match board.item_fault {
+                Some("no-cursor") => items["pageInfo"] = json!({"hasNextPage":true}),
+                Some("no-page-info") => {
+                    items.as_object_mut().unwrap().remove("pageInfo");
+                }
+                _ => {}
+            }
+            return (200, json!({"data":{"node":{"items":items}}}));
         }
         if query.contains("deleteProjectV2Item(input:$input)") {
             assert_eq!(body["variables"]["input"]["projectId"], json!("PVT_board"));
             let item = body["variables"]["input"]["itemId"].clone();
-            board.items.retain(|(id, _, _)| json!(id) != item);
-            return (
-                200,
-                json!({"data":{"deleteProjectV2Item":{"deletedItemId":item}}}),
-            );
+            return match board.item_removal {
+                Removal::Refused => (200, refusal("deleteProjectV2Item")),
+                Removal::NamingAnother => (
+                    200,
+                    json!({"data":{"deleteProjectV2Item":{"deletedItemId":"PVTI_draft_0"}}}),
+                ),
+                Removal::Confirmed => {
+                    board.items.retain(|(id, _, _)| json!(id) != item);
+                    (
+                        200,
+                        json!({"data":{"deleteProjectV2Item":{"deletedItemId":item}}}),
+                    )
+                }
+            };
         }
         if query.contains("deleteIssue(input:$input)") {
+            if board.issue_removal == Removal::Refused {
+                return (200, refusal("deleteIssue"));
+            }
+            let issue = body["variables"]["input"]["issueId"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            board.issues_deleted.push(issue);
             return (
                 200,
                 json!({"data":{"deleteIssue":{"repository":{"id":"R_scratch"}}}}),
@@ -267,11 +344,7 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
             .unwrap()
             .to_owned();
         return match board.removal {
-            Removal::Refused => (
-                200,
-                json!({"data":{"deleteProjectV2Field":null},
-                       "errors":[{"message":"Resource not accessible by personal access token"}]}),
-            ),
+            Removal::Refused => (200, refusal("deleteProjectV2Field")),
             Removal::NamingAnother => (
                 200,
                 json!({"data":{"deleteProjectV2Field":{"projectV2Field":{"id":"FIELD_0"}}}}),
@@ -385,7 +458,7 @@ fn preflight(scenario: &str) -> (bool, String, String) {
     )
 }
 
-// llmlint: ignore[tests_assert_real_behavior] This subprocess helper is driven by the three tests below, which assert on what it printed and how it exited; an ordinary test run omits its selector and starts no stand-in.
+// llmlint: ignore[tests_assert_real_behavior] This subprocess helper is driven by the tests below, which assert on what it printed and how it exited; an ordinary test run omits its selector and starts no stand-in.
 #[tokio::test]
 async fn preflight_child() {
     let Ok(scenario) = std::env::var(CHILD_VARIABLE) else {
@@ -412,6 +485,10 @@ async fn preflight_child() {
     println!(
         "requests: {}",
         serde_json::to_string(&board.requests).unwrap()
+    );
+    println!(
+        "issues deleted: {}",
+        serde_json::to_string(&board.issues_deleted).unwrap()
     );
     println!(
         "items left: {}",
@@ -443,6 +520,14 @@ fn requests(stdout: &str) -> Vec<String> {
         .lines()
         .find_map(|line| line.strip_prefix("requests: "))
         .unwrap_or_else(|| panic!("the child printed no requests: {stdout}"));
+    serde_json::from_str(line).unwrap()
+}
+
+fn issues_deleted(stdout: &str) -> Vec<String> {
+    let line = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("issues deleted: "))
+        .unwrap_or_else(|| panic!("the child printed no deleted issues: {stdout}"));
     serde_json::from_str(line).unwrap()
 }
 
@@ -569,7 +654,7 @@ fn a_field_list_it_cannot_read_whole_or_a_removal_github_does_not_confirm_fails(
             "{scenario}: {measured}"
         );
         assert_eq!(removals(&stdout), removals_sent, "{scenario}");
-        // Nothing past the failure: neither the second field nor a run read is reached.
+        // Nothing past the failure: the second field is never removed.
         assert!(
             fields_left(&stdout).contains(&SECOND_LEFTOVER.to_owned()),
             "{scenario}"
@@ -619,7 +704,70 @@ fn items_a_completed_run_left_past_the_registered_workload_are_removed_and_the_b
     }
     let count = |needle: &str| sent.iter().filter(|r| r.contains(needle)).count();
     assert_eq!(count("deleteProjectV2Item("), 10);
-    assert_eq!(count("deleteIssue("), 10);
+    // Each removed item's own issue, and no other.
+    assert_eq!(
+        issues_deleted(&stdout),
+        stamped_items(LEFTOVER_RUN, 10)
+            .into_iter()
+            .map(|(_, issue, _)| issue.unwrap().0)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_board_listed_over_several_pages_is_recovered_whole() {
+    let (succeeded, stdout, stderr) = preflight("items-paged");
+    assert!(succeeded, "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains(r#"measured: Ok("PVT_board")"#),
+        "{stdout}\n{stderr}"
+    );
+    assert_eq!(items_left(&stdout).len(), 85);
+    assert_eq!(issues_deleted(&stdout).len(), 10);
+    // 95 items at 40 a page.
+    let lookups = requests(&stdout)
+        .iter()
+        .filter(|r| r.contains("on ProjectV2{items(first:100"))
+        .count();
+    assert_eq!(lookups, 3);
+}
+
+#[test]
+fn an_item_list_it_cannot_read_whole_or_a_removal_github_does_not_confirm_stops_there() {
+    for (scenario, refusal, item_removals, issue_removals) in [
+        ("items-no-cursor", "has no advancing cursor", 0, 0),
+        ("items-stuck-cursor", "has no advancing cursor", 0, 0),
+        (
+            "items-no-page-info",
+            "did not say whether it was complete",
+            0,
+            0,
+        ),
+        ("items-bad-id", "a stamped issue without usable ids", 0, 0),
+        ("item-removal-refused", "Resource not accessible", 1, 0),
+        ("item-removal-unconfirmed", "did not confirm removing", 1, 0),
+        ("issue-removal-refused", "Resource not accessible", 1, 1),
+    ] {
+        let (succeeded, stdout, stderr) = preflight(scenario);
+        assert!(succeeded, "{scenario}: {stdout}\n{stderr}");
+        let measured = stdout
+            .lines()
+            .find(|line| line.starts_with("measured: "))
+            .unwrap_or_default();
+        assert!(
+            measured.starts_with("measured: Err(") && measured.contains(refusal),
+            "{scenario}: {measured}"
+        );
+        let sent = requests(&stdout);
+        let count = |needle: &str| sent.iter().filter(|r| r.contains(needle)).count();
+        assert_eq!(count("deleteProjectV2Item("), item_removals, "{scenario}");
+        assert_eq!(count("deleteIssue("), issue_removals, "{scenario}");
+        assert!(issues_deleted(&stdout).is_empty(), "{scenario}");
+        assert!(
+            !stderr.contains("board pre-flight removed item"),
+            "{scenario}"
+        );
+    }
 }
 
 #[test]

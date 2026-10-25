@@ -1814,12 +1814,14 @@ async fn ci_stamped_issues(
                 },
             ));
         }
-        if connection
+        // Only an explicit answer ends the walk: a list that may be incomplete authorises nothing.
+        match connection
             .pointer("/pageInfo/hasNextPage")
             .and_then(Value::as_bool)
-            != Some(true)
         {
-            return Ok(found);
+            Some(false) => return Ok(found),
+            Some(true) => {}
+            None => return Err("residue item lookup did not say whether it was complete".into()),
         }
         let next = connection
             .pointer("/pageInfo/endCursor")
