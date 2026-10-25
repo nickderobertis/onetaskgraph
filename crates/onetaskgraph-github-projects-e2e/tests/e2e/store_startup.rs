@@ -126,10 +126,8 @@ struct Spent {
     cpu: Duration,
 }
 
-/// One of the two figures a [`Spent`] holds.
 type Measure = fn(&Spent) -> Duration;
 
-/// Both, by the name the report gives each.
 const MEASURES: [(&str, Measure); 2] = [("cpu", |spent| spent.cpu), ("wall", |spent| spent.wall)];
 
 /// The CPU time, user plus system, of every child this process has waited for so far.
@@ -147,8 +145,8 @@ fn waited_children_cpu() -> Duration {
     time(usage.ru_utime) + time(usage.ru_stime)
 }
 
-/// Not read on a host without `getrusage`: [`compare_store_startup`], which judges by it, runs on
-/// Unix alone.
+/// Zero on a host without `getrusage`, so the CPU figures the ordinary test prints there are
+/// zero; [`compare_store_startup`], which judges by them, runs on Unix alone.
 #[cfg(not(unix))]
 fn waited_children_cpu() -> Duration {
     Duration::ZERO
@@ -163,7 +161,6 @@ struct Contacted(Vec<&'static str>);
 struct Host {
     plan: Plan,
     unrelated: [Double; 2],
-    /// The configuration with every source, and with the two unrelated ones left out.
     with_unrelated: String,
     without_unrelated: String,
 }
