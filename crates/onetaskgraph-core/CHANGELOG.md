@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.5](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.12.4...onetaskgraph-core-v0.12.5) - 2026-10-25
+
+### Fixed
+
+- *(copy)* carry an anchor naming no destination into a public projection ([#3769](https://github.com/nickderobertis/onetaskgraph/pull/3769))
+
 ## [0.12.4](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.12.3...onetaskgraph-core-v0.12.4) - 2026-10-25
 
 ### Fixed
