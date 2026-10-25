@@ -192,6 +192,21 @@ impl LinearSource {
         let projects = connection(&data, "originProjects", |v| {
             map_project(v, &self.statuses, self.spelling())
         })?;
+        // A connection answering more rows than its page asked for is refused, as a walk's page
+        // is: a backend that oversteps its page cannot be trusted to have answered it.
+        for (name, rows, first) in [
+            ("issues", tasks.items.len(), issues_first),
+            ("projects", projects.items.len(), projects_first),
+        ] {
+            if rows as u64 > u64::from(first) {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "the source returned {rows} {name} rows for a page of at most {first}; a \
+                         source may return fewer than it was asked for and never more"
+                    ),
+                });
+            }
+        }
         // Read as the resolution reads it: an answer naming no workspace, or none by a string id,
         // holds none here, and the resolution read on its own refuses it where it is needed.
         let organization = data

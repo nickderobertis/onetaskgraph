@@ -762,3 +762,56 @@ fn a_walk_handed_a_cursor_it_already_handed_out_is_refused_writing_nothing() {
         "a cursor it had already handed out",
     );
 }
+
+/// Copy the unlinked, edited plan of [`a_recopy_with_no_links_finds_every_counterpart_through_the_batched_read_and_updates_it`]
+/// with the batched read's `connection` answered one row more than its `first` asked for, which
+/// has to be refused naming the page before any write and leave the workspace as it was.
+fn refused_batch(connection: &'static str, first: &'static str) {
+    let copying = Copying::new(5, Vec::new());
+    copying.ok(&COPY);
+    unlink(&copying.plan);
+    for at in 0..5 {
+        write_task(&copying.plan, at, &format!("Edited {at}."));
+    }
+    let tasks = shown(&listed(&copying, "task"));
+    let projects = shown(&listed(&copying, "project"));
+    copying.workspace.bend_answers(
+        |query, _| query == graphql::COUNTERPART_LOOKUPS,
+        1,
+        move |variables, data| {
+            let first = variables[first].as_u64().expect("a page size");
+            let nodes = data[connection]["nodes"]
+                .as_array_mut()
+                .expect("a connection");
+            let row = nodes.first().cloned().expect("a row to repeat");
+            while nodes.len() as u64 <= first {
+                nodes.push(row.clone());
+            }
+        },
+    );
+    let (output, served) = copying.run(&COPY);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("rows for a page of at most"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !served
+            .iter()
+            .any(|(query, _)| query.trim_start().starts_with("mutation")),
+        "nothing is written: {served:#?}"
+    );
+    assert_eq!(shown(&listed(&copying, "task")), tasks);
+    assert_eq!(shown(&listed(&copying, "project")), projects);
+}
+
+#[test]
+fn a_batched_read_answering_more_issues_than_its_page_asked_for_is_refused_writing_nothing() {
+    refused_batch("originIssues", "issuesFirst");
+}
+
+#[test]
+fn a_batched_read_answering_more_projects_than_its_page_asked_for_is_refused_writing_nothing() {
+    refused_batch("originProjects", "projectsFirst");
+}
