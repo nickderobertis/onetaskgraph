@@ -4,7 +4,7 @@
 //! project-scoped `task list` and `document list`, `task deps` and the `project copy` itself —
 //! are each a whole process of the real binary. This harness measures those processes and
 //! nothing inside them — the wall time each ran for, and the CPU time, user plus system, it and its
-//! children spent, which `getrusage` reports for a child once it has been waited for — and
+//! children spent, which `wait4` reports for the specific child — and
 //! attributes each command's time by difference between invocations it controls:
 //!
 //! - **process start** is a `--version`, which reads no configuration and builds no source;
@@ -130,26 +130,53 @@ type Measure = fn(&Spent) -> Duration;
 
 const MEASURES: [(&str, Measure); 2] = [("cpu", |spent| spent.cpu), ("wall", |spent| spent.wall)];
 
-/// The CPU time, user plus system, of every child this process has waited for so far.
+/// Wait for this child alone, draining both pipes while it runs.
 #[cfg(unix)]
-fn waited_children_cpu() -> Duration {
-    // SAFETY: `getrusage` writes the one struct it is handed, which is zeroed and owned here.
+fn measured_output(mut child: std::process::Child) -> (Output, Duration) {
+    use std::io::Read as _;
+    use std::os::unix::process::ExitStatusExt as _;
+    let drain = |mut pipe: Box<dyn std::io::Read + Send>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes).unwrap();
+            bytes
+        })
+    };
+    let stdout = drain(Box::new(child.stdout.take().unwrap()));
+    let stderr = drain(Box::new(child.stderr.take().unwrap()));
+    let mut status = 0;
+    // SAFETY: wait4 receives this owned child's PID and writable, owned output structs.
     let usage = unsafe {
         let mut usage: libc::rusage = std::mem::zeroed();
-        assert_eq!(libc::getrusage(libc::RUSAGE_CHILDREN, &mut usage), 0);
+        loop {
+            let waited = libc::wait4(child.id() as libc::pid_t, &mut status, 0, &mut usage);
+            if waited >= 0 {
+                break;
+            }
+            assert_eq!(
+                std::io::Error::last_os_error().kind(),
+                std::io::ErrorKind::Interrupted
+            );
+        }
         usage
     };
     let time = |t: libc::timeval| {
         Duration::from_secs(t.tv_sec as u64) + Duration::from_micros(t.tv_usec as u64)
     };
-    time(usage.ru_utime) + time(usage.ru_stime)
+    (
+        Output {
+            status: std::process::ExitStatus::from_raw(status),
+            stdout: stdout.join().unwrap(),
+            stderr: stderr.join().unwrap(),
+        },
+        time(usage.ru_utime) + time(usage.ru_stime),
+    )
 }
 
-/// Zero on a host without `getrusage`, so the CPU figures the ordinary test prints there are
-/// zero; [`compare_store_startup`], which judges by them, runs on Unix alone.
+/// CPU accounting is available on Unix; other hosts still measure wall time.
 #[cfg(not(unix))]
-fn waited_children_cpu() -> Duration {
-    Duration::ZERO
+fn measured_output(child: std::process::Child) -> (Output, Duration) {
+    (child.wait_with_output().unwrap(), Duration::ZERO)
 }
 
 /// Which remote sources one process sent anything to, by the name the configuration gives them.
@@ -236,14 +263,11 @@ impl Host {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         assert_spawnable_on_windows(&command);
-        // Only this thread waits for children, so what the waited children's CPU time grows by
-        // across this wait is this process's and its own children's.
-        let cpu = waited_children_cpu();
         let started = Instant::now();
-        let output = command.spawn().unwrap().wait_with_output().unwrap();
+        let (output, cpu) = measured_output(command.spawn().unwrap());
         let spent = Spent {
             wall: started.elapsed(),
-            cpu: waited_children_cpu() - cpu,
+            cpu,
         };
         lease.wait_for_detach();
         drop(lease);
@@ -260,7 +284,6 @@ impl Host {
     }
 }
 
-/// What a command answered, refusing a run that did not succeed.
 fn answered(output: &Output, what: &str) -> Value {
     assert_eq!(
         output.status.code(),
@@ -401,7 +424,6 @@ fn attribution(
     )
 }
 
-/// The executable an environment variable of this test names, refused by name when unset.
 #[cfg(unix)]
 fn named(variable: &str) -> std::path::PathBuf {
     let path = std::path::PathBuf::from(

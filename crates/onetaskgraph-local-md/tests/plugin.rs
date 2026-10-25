@@ -637,6 +637,35 @@ async fn what_a_record_depends_on_is_read_from_its_own_file_alone() {
         .await
         .unwrap();
     assert!(held_none.items.is_empty());
+    for (name, error) in [
+        (
+            "bad-task.md",
+            source
+                .task_dependencies(
+                    &NativeId("bad-task".into()),
+                    Direction::DependsOn,
+                    &page(10),
+                )
+                .await
+                .unwrap_err(),
+        ),
+        (
+            "bad-project.md",
+            source
+                .project_dependencies(
+                    &NativeId("bad-project".into()),
+                    Direction::DependsOn,
+                    &page(10),
+                )
+                .await
+                .unwrap_err(),
+        ),
+    ] {
+        assert!(
+            matches!(error, SourceError::Malformed { ref message } if message.contains(name)),
+            "{error:?}"
+        );
+    }
     // What depends on a record can be written in any file, so that read still scans them all
     // and still fails on the one it cannot parse.
     let error = source
