@@ -1653,16 +1653,16 @@ pub async fn sweep_orphans(
     }
 }
 
-/// Reads the node id of the one nominated board, so residue can be cleared before the journey
-/// builds the source it later reads the same board through.
+/// The lane's board pre-flight: reads the nominated board's node id, removing first any
+/// board field a finished CI run left, so the board is judged as the board.
 ///
-/// This is the lane's board pre-flight. The board's measurement — how many items and fields
+/// The board's measurement — how many items and fields
 /// it holds — is judged against the registered workload, and **a field a finished CI run left
 /// is not the board's**: [`clear_finished_runs_fields`] removes each one first, by the
 /// janitor's own ownership rule, and the count judged is the board's without them. A field
 /// whose run is still going, or whose run cannot be read, is neither removed nor left out, so
 /// a board holding one is refused exactly as before.
-pub async fn nominated_project_id(
+pub async fn preflight_board(
     token: &str,
     owner: &str,
     project_number: u32,
@@ -1733,12 +1733,17 @@ pub async fn clear_finished_runs_fields(token: &str, fields: &Value) -> Result<u
         .ok_or("the board's field names were not reported")?;
     let mut stamped: BTreeMap<u64, Vec<(&str, &str)>> = BTreeMap::new();
     for node in nodes {
+        // A field of a kind neither fragment selects answers `{}`, and the lane makes none.
+        if node.as_object().is_some_and(serde_json::Map::is_empty) {
+            continue;
+        }
         let (Some(id), Some(name)) = (
             node.get("id").and_then(Value::as_str),
             node.get("name").and_then(Value::as_str),
         ) else {
-            // A field of a kind neither fragment selects answers `{}`: the lane makes none.
-            continue;
+            return Err(format!(
+                "the board answered a field without a string id and name: {node}"
+            ));
         };
         if let Some(stamp) = fielded_stamp(name).and_then(CiStamp::read) {
             stamped
@@ -4576,7 +4581,7 @@ pub async fn run(nomination: Nomination) {
         .unwrap_or_else(|error| {
             panic!("the GitHub Projects live lane cannot use this board: {error}")
         });
-    let project_id = nominated_project_id(&token, &owner, project_number)
+    let project_id = preflight_board(&token, &owner, project_number)
         .await
         .unwrap_or_else(|error| panic!("GitHub Projects live board lookup failed: {error}"));
     assert!(source.health().await.unwrap().reachable);

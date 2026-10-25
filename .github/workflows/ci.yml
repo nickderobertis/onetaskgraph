@@ -241,14 +241,10 @@ jobs:
           NX_HEAD: HEAD
         run: just gate-generated
 
-      # A run cancelled mid-session kills the live journey before its own cleanup, so the
-      # issues, board items, label and scratch board field it wrote stay on the shared board,
-      # and the next session refuses that board for its field count — which held every
-      # branch's required check red on 2026-10-25 until a person deleted one field by hand.
-      # This step runs only when this run is cancelled, on the one leg the credential reaches,
-      # and removes exactly this run attempt's own stamped artifacts through the janitor's
-      # `--cancelled-run` entry point: nothing of another run, and no session opened. Whatever
-      # it cannot reach, the hourly janitor takes once this run reads completed.
+      # A cancelled run's live journey dies before its own cleanup, and what it wrote would
+      # make the next session refuse the shared board. On cancellation, on the credentialed
+      # leg alone, this removes exactly this run attempt's stamped artifacts and opens no
+      # session; the hourly janitor takes anything left once the run reads completed.
       # scripts/check-live-janitor.sh holds this step to that shape.
       - name: Remove this run's live artifacts after a cancellation
         if: cancelled() && matrix.os == 'ubuntu-latest' && !github.event.pull_request.head.repo.fork

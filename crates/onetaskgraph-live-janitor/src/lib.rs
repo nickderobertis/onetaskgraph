@@ -7,10 +7,9 @@
 //! residue whose run is already over. Machine stamps stay the writing machine's lock sweep's.
 //!
 //! Every kind of artifact the GitHub Projects lane writes under a CI stamp is listed: its
-//! issues, their board items, its repository label, and its scratch board field. A field is
-//! what a cancelled run left on the board on 2026-10-25, and because the lane refuses a board
-//! whose field count differs from its registered workload, one leftover field turned every
-//! live journey red until a person deleted it.
+//! issues, their board items, its repository label, and its scratch board field — which
+//! matters because the lane refuses a board whose field count differs from its registered
+//! workload.
 //!
 //! [`Ownership::CancelledRun`] is the same cleanup asked by a run about itself: the step
 //! `ci.yml` runs when a live run is cancelled removes exactly that run attempt's stamps,

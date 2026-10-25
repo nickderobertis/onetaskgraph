@@ -1,16 +1,14 @@
 //! The live lane's board pre-flight against a loopback board holding a CI run's leftover field.
 //!
-//! The pre-flight is the real one — `journey::nominated_project_id`, the call the credentialed
+//! The pre-flight is the real one — `journey::preflight_board`, the call the credentialed
 //! lane makes before it writes anything — recording into a real session record, which is what
 //! makes it judge the board against the registered workload. What stands in for GitHub is a
 //! local HTTP server holding a board of the registered size, one stamped field more, and the
 //! Actions run that stamp names.
 //!
-//! On 2026-10-25 a cancelled run left `otg-live-ci-40170293588-1-<micros>` on the shared
-//! board, and every later journey refused it as "15 fields" until a person deleted it. So:
-//! a field whose run reads `completed` — a cancelled run does — is removed and the board is
-//! admitted; a field whose run is still going, or cannot be read, is left exactly where it is
-//! and counted, so that board is refused as before. No credential and no third-party API.
+//! A field whose run reads `completed` — a cancelled run does — is removed and the board is
+//! admitted; any other field is left exactly where it is and counted, so a board holding a
+//! field of a run still going is refused as before. No credential and no third-party API.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write as _};
@@ -33,9 +31,17 @@ mod journey;
 mod lane;
 
 const TOKEN: &str = "test-token";
-/// The run the leftover field names: the cancelled run of 2026-10-25.
+/// The run the leftover fields name, and the two fields it left.
 const LEFTOVER_RUN: u64 = 40_170_293_588;
 const LEFTOVER: &str = "otg-live-ci-40170293588-1-1792911749637960";
+const SECOND_LEFTOVER: &str = "otg-live-ci-40170293588-1-1792911749637999";
+/// Fields that are not a CI run's: the board's own, a machine stamp (its machine's lock
+/// sweep's), and a name in the prefix that no stamp grammar reads.
+const KEPT_ALWAYS: [&str; 3] = [
+    "Priority",
+    "otg-live-1-1-1792911749637960",
+    "otg-live-ci-01-1-1",
+];
 /// What tells a re-execution of this binary which board to stand in for.
 const CHILD_VARIABLE: &str = "ONETASKGRAPH_PREFLIGHT_GATE_CHILD";
 /// The shared measurement as the lane's accounting sends it.
@@ -45,32 +51,67 @@ static PRICED_WORKLOAD: LazyLock<String> = LazyLock::new(|| {
         .to_string()
 });
 
+/// How a removal is answered.
+#[derive(Clone, Copy, PartialEq)]
+enum Removal {
+    Confirmed,
+    Refused,
+    NamingAnother,
+}
+
 /// The board, the run statuses GitHub reports and every request the pre-flight sent.
 struct Board {
     items: u64,
-    fields: Vec<(String, String)>,
+    /// Each field as GitHub answers it under the measurement's two fragments.
+    fields: Vec<Value>,
+    more_fields: bool,
+    /// A run's status, or `None` for a read GitHub fails.
     runs: BTreeMap<u64, Option<&'static str>>,
+    removal: Removal,
     requests: Vec<String>,
 }
 
-/// What a scenario puts on the board, and what GitHub says of the leftover field's run.
+/// A board of the registered size — 60 items, 14 fields of its own, one of them of a kind
+/// the measurement selects nothing of — and two fields one CI run left.
 fn board(scenario: &str) -> Board {
-    let mut fields = (0..14)
-        .map(|n| (format!("FIELD_{n}"), format!("board field {n}")))
+    let mut fields = (0..10)
+        .map(|n| json!({"id":format!("FIELD_{n}"),"name":format!("board field {n}")}))
+        .chain(
+            KEPT_ALWAYS
+                .iter()
+                .enumerate()
+                .map(|(n, name)| json!({"id":format!("FIELD_kept_{n}"),"name":name})),
+        )
+        .chain([json!({})])
         .collect::<Vec<_>>();
-    fields.push(("FIELD_leftover".to_owned(), LEFTOVER.to_owned()));
-    let status = match scenario {
-        "completed" => Some("completed"),
-        "in-progress" => Some("in_progress"),
-        "unreadable" => None,
-        other => panic!("no scenario {other}"),
-    };
-    Board {
+    fields.push(json!({"id":"FIELD_leftover","name":LEFTOVER}));
+    fields.push(json!({"id":"FIELD_leftover_2","name":SECOND_LEFTOVER}));
+    let mut board = Board {
         items: 60,
         fields,
-        runs: BTreeMap::from([(LEFTOVER_RUN, status)]),
+        more_fields: false,
+        runs: BTreeMap::from([(LEFTOVER_RUN, Some("completed"))]),
+        removal: Removal::Confirmed,
         requests: Vec::new(),
+    };
+    // A run's status by scenario; `None` is a read GitHub fails.
+    let status = match scenario {
+        "in-progress" => Some("in_progress"),
+        "unreadable" => None,
+        // A conclusion, which a run's `status` never holds: undecodable, so nothing is shown.
+        "unknown-status" => Some("cancelled"),
+        _ => Some("completed"),
+    };
+    board.runs.insert(LEFTOVER_RUN, status);
+    match scenario {
+        "completed" | "in-progress" | "unreadable" | "unknown-status" => {}
+        "more-fields" => board.more_fields = true,
+        "malformed-field" => board.fields.push(json!({"id":"FIELD_bad","name":7})),
+        "removal-refused" => board.removal = Removal::Refused,
+        "removal-names-another" => board.removal = Removal::NamingAnother,
+        other => panic!("no scenario {other}"),
     }
+    board
 }
 
 fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -> (u16, Value) {
@@ -82,17 +123,12 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
         // The lane prices every query it sends, so what arrives is the measurement priced.
         if query == *PRICED_WORKLOAD {
             assert_eq!(body["variables"], json!({"owner":"octo-org","number":7}));
-            let nodes = board
-                .fields
-                .iter()
-                .map(|(id, name)| json!({"id":id,"name":name}))
-                .collect::<Vec<_>>();
             return (
                 200,
                 json!({"data":{"repositoryOwner":{"projectV2":{"id":"PVT_board",
                     "items":{"totalCount":board.items},
-                    "fields":{"totalCount":nodes.len(),"nodes":nodes,
-                              "pageInfo":{"hasNextPage":false}}}}}}),
+                    "fields":{"totalCount":board.fields.len(),"nodes":board.fields,
+                              "pageInfo":{"hasNextPage":board.more_fields}}}}}}),
             );
         }
         assert_eq!(query, DELETE_FIELD_DOCUMENT, "an unexpected document");
@@ -100,11 +136,24 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
             .as_str()
             .unwrap()
             .to_owned();
-        board.fields.retain(|(id, _)| *id != field);
-        return (
-            200,
-            json!({"data":{"deleteProjectV2Field":{"projectV2Field":{"id":field}}}}),
-        );
+        return match board.removal {
+            Removal::Refused => (
+                200,
+                json!({"data":{"deleteProjectV2Field":null},
+                       "errors":[{"message":"Resource not accessible by personal access token"}]}),
+            ),
+            Removal::NamingAnother => (
+                200,
+                json!({"data":{"deleteProjectV2Field":{"projectV2Field":{"id":"FIELD_0"}}}}),
+            ),
+            Removal::Confirmed => {
+                board.fields.retain(|held| held["id"] != json!(field));
+                (
+                    200,
+                    json!({"data":{"deleteProjectV2Field":{"projectV2Field":{"id":field}}}}),
+                )
+            }
+        };
     }
     board.requests.push(format!("{method} {path}"));
     // GitHub's single-run read, `GET /repos/{owner}/{repo}/actions/runs/{run_id}`, which the
@@ -227,7 +276,7 @@ async fn preflight_child() {
         reference_workload(),
     )
     .unwrap();
-    let measured = journey::nominated_project_id(TOKEN, "octo-org", 7).await;
+    let measured = journey::preflight_board(TOKEN, "octo-org", 7).await;
     let board = board.lock().unwrap();
     println!("measured: {measured:?}");
     println!(
@@ -236,7 +285,14 @@ async fn preflight_child() {
     );
     println!(
         "fields left: {}",
-        serde_json::to_string(&board.fields.iter().map(|(_, n)| n).collect::<Vec<_>>()).unwrap()
+        serde_json::to_string(
+            &board
+                .fields
+                .iter()
+                .filter_map(|field| field.get("name").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+        )
+        .unwrap()
     );
 }
 
@@ -256,60 +312,103 @@ fn requests(stdout: &str) -> Vec<String> {
     serde_json::from_str(line).unwrap()
 }
 
+fn removals(stdout: &str) -> usize {
+    requests(stdout)
+        .iter()
+        .filter(|request| *request == DELETE_FIELD_DOCUMENT)
+        .count()
+}
+
 #[test]
-fn a_field_a_completed_run_left_is_removed_and_the_board_is_admitted() {
+fn every_field_a_completed_run_left_is_removed_and_the_board_is_admitted() {
     let (succeeded, stdout, stderr) = preflight("completed");
     assert!(succeeded, "{stdout}\n{stderr}");
     assert!(
         stdout.contains(r#"measured: Ok("PVT_board")"#),
         "{stdout}\n{stderr}"
     );
-    assert!(
-        stderr.contains(&format!(
-            "board pre-flight removed field {LEFTOVER}: residue of run {LEFTOVER_RUN}, which \
-             reads completed"
-        )),
-        "{stderr}"
-    );
-    assert!(!fields_left(&stdout).contains(&LEFTOVER.to_owned()));
-    assert_eq!(fields_left(&stdout).len(), 14);
+    for leftover in [LEFTOVER, SECOND_LEFTOVER] {
+        assert!(
+            stderr.contains(&format!(
+                "board pre-flight removed field {leftover}: residue of run {LEFTOVER_RUN}, \
+                 which reads completed"
+            )),
+            "{stderr}"
+        );
+        assert!(!fields_left(&stdout).contains(&leftover.to_owned()));
+    }
+    // Every field that is not a CI run's is left untouched and never read about.
+    for kept in KEPT_ALWAYS {
+        assert!(fields_left(&stdout).contains(&kept.to_owned()), "{kept}");
+        assert!(!stderr.contains(kept), "{kept}: {stderr}");
+    }
+    // One read for the run however many fields it left, then one removal per field.
     assert_eq!(
         requests(&stdout),
         [
             PRICED_WORKLOAD.clone(),
             format!("GET /repos/{CORE_REPOSITORY}/actions/runs/{LEFTOVER_RUN}"),
             DELETE_FIELD_DOCUMENT.to_owned(),
+            DELETE_FIELD_DOCUMENT.to_owned(),
         ]
     );
 }
 
 #[test]
-fn a_field_an_active_or_unreadable_run_holds_is_kept_counted_and_refused() {
+fn a_field_no_completed_run_is_shown_to_own_is_kept_counted_and_refused() {
     for (scenario, why) in [
-        ("in-progress", "reads in_progress".to_owned()),
-        ("unreadable", "could not be read".to_owned()),
+        ("in-progress", "reads in_progress"),
+        ("unreadable", "could not be read"),
+        ("unknown-status", "answered no status this lane knows"),
     ] {
         let (succeeded, stdout, stderr) = preflight(scenario);
         assert!(succeeded, "{scenario}: {stdout}\n{stderr}");
         assert!(
             stdout.contains(
-                "measured: Err(\"initial board workload is 60 items and 15 fields; registered \
+                "measured: Err(\"initial board workload is 60 items and 16 fields; registered \
                  workload requires 51 to 90 items and 14 fields\")"
             ),
             "{scenario}: {stdout}\n{stderr}"
         );
+        for leftover in [LEFTOVER, SECOND_LEFTOVER] {
+            assert!(
+                stderr.contains(&format!(
+                    "board pre-flight kept field {leftover}: run {LEFTOVER_RUN} {why}"
+                )),
+                "{scenario}: {stderr}"
+            );
+        }
+        assert_eq!(fields_left(&stdout).len(), 15, "{scenario}");
+        assert_eq!(removals(&stdout), 0, "{scenario}");
+    }
+}
+
+#[test]
+fn a_field_list_it_cannot_read_whole_or_a_removal_github_does_not_confirm_fails() {
+    for (scenario, refusal, removals_sent) in [
+        ("more-fields", "did not come back on one page", 0),
+        ("malformed-field", "a field without a string id and name", 0),
+        ("removal-refused", "Resource not accessible", 1),
+        (
+            "removal-names-another",
+            "did not confirm removing field FIELD_leftover",
+            1,
+        ),
+    ] {
+        let (succeeded, stdout, stderr) = preflight(scenario);
+        assert!(succeeded, "{scenario}: {stdout}\n{stderr}");
+        let measured = stdout
+            .lines()
+            .find(|line| line.starts_with("measured: "))
+            .unwrap_or_default();
         assert!(
-            stderr.contains(&format!(
-                "board pre-flight kept field {LEFTOVER}: run {LEFTOVER_RUN} {why}"
-            )),
-            "{scenario}: {stderr}"
+            measured.starts_with("measured: Err(") && measured.contains(refusal),
+            "{scenario}: {measured}"
         );
-        assert!(fields_left(&stdout).contains(&LEFTOVER.to_owned()));
-        assert_eq!(fields_left(&stdout).len(), 15);
+        assert_eq!(removals(&stdout), removals_sent, "{scenario}");
+        // Nothing past the failure: neither the second field nor a run read is reached.
         assert!(
-            !requests(&stdout)
-                .iter()
-                .any(|request| request == DELETE_FIELD_DOCUMENT),
+            fields_left(&stdout).contains(&SECOND_LEFTOVER.to_owned()),
             "{scenario}"
         );
     }

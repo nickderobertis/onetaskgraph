@@ -518,7 +518,7 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   field.** `ci.yml`'s step on cancellation runs the janitor with `--cancelled-run`, which
   removes exactly that run attempt's stamps and reads no run (`scripts/check-live-janitor.sh`
   holds the step's shape; the two lane guards exempt that one step). The lane's board
-  pre-flight (`journey::nominated_project_id`) removes a stamped field whose run reads
+  pre-flight (`journey::preflight_board`) removes a stamped field whose run reads
   `completed` before it counts the board, says so, and keeps and counts any other —
   because one leftover field from a cancelled run once held every branch red.
   `tests/preflight_gate.rs` drives both against a stand-in board.
