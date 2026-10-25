@@ -40,11 +40,11 @@ struct State {
     refused_names: std::collections::BTreeSet<String>,
 }
 
-struct Workspace {
+pub(crate) struct Workspace {
     endpoint: String,
     state: Arc<Mutex<State>>,
-    held: LinearWorkspace,
-    clock: SimulatedClock,
+    pub(crate) held: LinearWorkspace,
+    pub(crate) clock: SimulatedClock,
 }
 
 impl Workspace {
@@ -96,7 +96,9 @@ impl Workspace {
         )
     }
 
-    fn counts(&self) -> (usize, usize, usize) {
+    /// How many uploads this storage was asked for, how many of them it was sent bytes for, and
+    /// how many times anything read an upload back.
+    pub(crate) fn counts(&self) -> (usize, usize, usize) {
         let state = self.state.lock().unwrap();
         (
             state.uploads.len(),
@@ -416,14 +418,14 @@ fn serve(
     answer(&mut stream, 200, &response);
 }
 
-struct Journey {
+pub(crate) struct Journey {
     config: Value,
-    sandbox: Sandbox,
-    workspace: Workspace,
+    pub(crate) sandbox: Sandbox,
+    pub(crate) workspace: Workspace,
 }
 
 impl Journey {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_clients(1)
     }
 

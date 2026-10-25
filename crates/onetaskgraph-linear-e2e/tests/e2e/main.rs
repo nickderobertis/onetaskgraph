@@ -24,6 +24,7 @@ mod linear;
 mod linear_assets;
 mod linear_boundary;
 mod linear_budget;
+mod linear_rewrites;
 mod linear_status;
 mod pinning_walk;
 mod store_cost;

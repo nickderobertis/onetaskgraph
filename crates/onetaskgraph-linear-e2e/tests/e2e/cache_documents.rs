@@ -7,10 +7,12 @@
 //! only documents that differ are the seven the cache sends in place of `ISSUES`, `ISSUE`,
 //! `ISSUE_DETAIL`, `ISSUE_RELATIONS`, `PROJECTS`, `PROJECT` and `PROJECT_RELATIONS`, each the one it stands in for with exactly the selections the cache's
 //! token reads and nothing else — and a write's own read of its target sends the plain one,
-//! since its answer fills no entry. Beside those, with the cache on or off, the eight mutations
-//! that write a long form each select what Linear stored in their own answer — `description`
-//! or `content` after the `id` 0.6.0 selected, and nothing else — which is what the store
-//! compares with what it sent. And a dependency read sends one of four documents each 0.6.0's
+//! since its answer fills no entry. Beside those, with the cache on or off, the five mutations
+//! that write a long form with other members beside it each select what Linear stored in their
+//! own answer — `description` or `content` after the `id` 0.6.0 selected, and nothing else — and
+//! the three that write it alone select the whole item, exactly what a read of it by id selects,
+//! so a metadata write answers the item its own answer holds and a follow-up write reads nothing
+//! after the write before it. And a dependency read sends one of four documents each 0.6.0's
 //! `ISSUE_RELATIONS` or `PROJECT_RELATIONS` narrowed to the one direction it reads.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,16 +31,27 @@ fn released() -> BTreeMap<String, String> {
 
 /// Each mutation that writes a long form, by its 0.6.0 name, as this build sends it and the one
 /// member it adds to 0.6.0's selection: what Linear stored, read off the write's own answer.
-fn widened_mutations() -> [(&'static str, &'static str, &'static str); 8] {
+fn widened_mutations() -> [(&'static str, &'static str, &'static str); 5] {
     [
         ("ISSUE_CREATE", graphql::ISSUE_CREATE, "description"),
-        ("ISSUE_UPDATE", graphql::ISSUE_UPDATE, "description"),
         ("ISSUE_REWRITE", graphql::ISSUE_REWRITE, "description"),
         ("PROJECT_CREATE", graphql::PROJECT_CREATE, "content"),
-        ("PROJECT_UPDATE", graphql::PROJECT_UPDATE, "content"),
         ("PROJECT_REWRITE", graphql::PROJECT_REWRITE, "content"),
         ("DOCUMENT_CREATE", graphql::DOCUMENT_CREATE, "content"),
-        ("DOCUMENT_UPDATE", graphql::DOCUMENT_UPDATE, "content"),
+    ]
+}
+
+/// Each mutation that writes a long form alone, by its 0.6.0 name, as this build sends it, and
+/// the read by id whose whole selection it selects in place of 0.6.0's `id`.
+fn whole_updates() -> [(&'static str, &'static str, &'static str); 3] {
+    [
+        ("ISSUE_UPDATE", graphql::ISSUE_UPDATE, graphql::ISSUE),
+        ("PROJECT_UPDATE", graphql::PROJECT_UPDATE, graphql::PROJECT),
+        (
+            "DOCUMENT_UPDATE",
+            graphql::DOCUMENT_UPDATE,
+            graphql::DOCUMENT,
+        ),
     ]
 }
 
@@ -52,6 +65,18 @@ fn released_or_widened() -> BTreeSet<String> {
             current.replacen(&format!("{{id {added}"), "{id", 1),
             released[name],
             "{name} is 0.6.0's with `{added}` added after its `id`, and nothing else"
+        );
+        allowed.insert(current.to_owned());
+    }
+    for (name, current, read) in whole_updates() {
+        let selection = read
+            .split_once("(id:$id){ ")
+            .and_then(|(_, rest)| rest.strip_suffix(" } }"))
+            .expect("a read by id of one item");
+        assert_eq!(
+            released[name].replacen("{id}", &format!("{{ {selection} }}"), 1),
+            current,
+            "{name} is 0.6.0's selecting what a read of the item selects, and nothing else"
         );
         allowed.insert(current.to_owned());
     }
