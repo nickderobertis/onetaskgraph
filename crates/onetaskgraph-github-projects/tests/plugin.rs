@@ -600,6 +600,8 @@ struct State {
     creation_number_is_unreadable: bool,
     /// How a read of created issues' board items answers each slot malformed, if it does.
     board_items_fault: Option<BoardItemsFault>,
+    /// How a read of one document with its project answers.
+    document_answer: DocumentAnswer,
     /// Whether `createIssue` answers with the new issue's `number`.
     ///
     /// GitHub declares `Issue.number` non-null and always answers with one, which is the
@@ -1329,6 +1331,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         drift_guarded_status_description: false,
         creation_number_is_unreadable: false,
         board_items_fault: None,
+        document_answer: DocumentAnswer::WithoutProject,
         creation_reports_number: true,
         blank_status_snapshot_id: None,
         origin_field,
@@ -1624,17 +1627,49 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     }
     let unpriced = query.replacen("rateLimit{cost} ", "", 1);
     let query = unpriced.as_str();
-    // A document with its project beside it: answered as a read of it by its id, carrying no
-    // project, so every read of the project and its members is still made on its own here.
+    // A document with its project beside it: answered as a read of it by its id, and — when a
+    // journey asks — its project as a read of that issue answers it, with the page of its
+    // members the project's own listing carries.
     if query == onetaskgraph_github_projects::graphql::DOCUMENT_IN_PROJECT {
-        let mut answered = answer(
-            state,
-            onetaskgraph_github_projects::graphql::ISSUE,
-            variables,
-        );
-        if answered["node"].is_object() {
-            answered["node"]["project"] = Value::Null;
+        let mode = state.lock().unwrap().document_answer;
+        let mut asked = variables.clone();
+        if mode == DocumentAnswer::AnotherDocument {
+            asked["id"] = json!("I_other_doc");
         }
+        let mut answered = answer(state, onetaskgraph_github_projects::graphql::ISSUE, &asked);
+        if !answered["node"].is_object() {
+            return answered;
+        }
+        let parent = answered["node"]["parent"]["id"].as_str().map(str::to_owned);
+        answered["node"]["project"] = match (mode, parent) {
+            (DocumentAnswer::WithoutProject, _) | (_, None) => Value::Null,
+            (_, Some(parent)) => {
+                let mut project = answer(
+                    state,
+                    onetaskgraph_github_projects::graphql::ISSUE,
+                    &json!({"id": parent, "first": 100, "nestedFirst": 50, "boardItems": 3,
+                            "duplicates": true}),
+                )["node"]
+                    .clone();
+                let listed = answer(
+                    state,
+                    onetaskgraph_github_projects::graphql::SUB_ISSUES,
+                    &json!({"id": parent, "memberFirst": variables["memberFirst"], "after": null,
+                            "nestedFirst": 50, "boardItems": 3, "duplicates": true}),
+                );
+                project["subIssues"] = listed["node"]["subIssues"].clone();
+                match mode {
+                    DocumentAnswer::MalformedMembers => {
+                        project["subIssues"]["nodes"] = json!("not a list");
+                    }
+                    DocumentAnswer::ForeignMember => {
+                        project["subIssues"]["nodes"][0]["parent"] = json!({"id": "I_elsewhere"});
+                    }
+                    _ => {}
+                }
+                project
+            }
+        };
         return answered;
     }
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
@@ -3266,6 +3301,9 @@ fn operation_name(query: &str) -> &str {
     // document spells.
     match root {
         "node" if query == onetaskgraph_github_projects::graphql::ISSUE => "issue",
+        "node" if query == onetaskgraph_github_projects::graphql::DOCUMENT_IN_PROJECT => {
+            "documentInProject"
+        }
         "owner" => "board",
         "node" if query.contains("subIssues(") => "projectTasks",
         "node" if query.contains("projectV2Items(") => "draft",
@@ -11726,6 +11764,21 @@ async fn write_tasks_outside_a_copy_creates_each_whole_and_takes_them_back_when_
                 .contains(&format!("GitHub then refused to take back {left}")),
         "{refused}"
     );
+}
+
+/// How a read of one document with its project answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DocumentAnswer {
+    /// The document alone, its project left out.
+    WithoutProject,
+    /// The document, its project issue and the project's members, as GitHub answers.
+    WithProject,
+    /// Another document than the one asked about.
+    AnotherDocument,
+    /// The project with a members connection whose list is not a list.
+    MalformedMembers,
+    /// The project with a member that names another parent.
+    ForeignMember,
 }
 
 /// How an answer to the read of created issues' board items comes back malformed.
@@ -21647,4 +21700,95 @@ async fn a_drafts_recorded_edges_ride_its_dependency_read_and_a_malformed_answer
             "{case}: {refused:?}"
         );
     }
+}
+
+/// A plan's project issue, two of its tasks and its design document, on a board answering the
+/// document's read as `answer` says.
+fn document_in_project(answer: DocumentAnswer) -> Fixture {
+    let fixture = board(vec![
+        Item::issue("I_plan", "a plan").body(&slotted(
+            "plan prose",
+            &json!({"onetaskgraph.item_kind":"project"}),
+        )),
+        Item::issue("I_one", "one").parent("I_plan"),
+        Item::issue("I_two", "two").parent("I_plan"),
+        design("I_doc", "notes").parent("I_plan"),
+        design("I_other_doc", "other notes").parent("I_plan"),
+    ]);
+    fixture.state.lock().unwrap().document_answer = answer;
+    fixture
+}
+
+/// The plan's tasks, as a read narrowed to its project lists them.
+async fn plan_tasks(source: &dyn TaskSource) -> usize {
+    source
+        .query_tasks(
+            &TaskQuery {
+                project: ProjectFilter::Is(id("I_plan")),
+                ..TaskQuery::default()
+            },
+            &PageRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
+        .await
+        .unwrap()
+        .items
+        .len()
+}
+
+#[tokio::test]
+async fn a_document_read_with_its_project_answers_the_project_and_its_members_without_a_read() {
+    let fixture = document_in_project(DocumentAnswer::WithProject);
+    let source = source(&fixture);
+    let document = source.get_document(&id("I_doc")).await.unwrap().unwrap();
+    assert_eq!(document.project, Some(id("I_plan")));
+    source.get_project(&id("I_plan")).await.unwrap().unwrap();
+    assert_eq!(plan_tasks(source.as_ref()).await, 2);
+    assert_eq!(
+        fixture.operations(),
+        ["documentInProject"],
+        "one request for all three"
+    );
+}
+
+#[tokio::test]
+async fn a_document_read_answering_another_document_is_refused() {
+    let fixture = document_in_project(DocumentAnswer::AnotherDocument);
+    let source = source(&fixture);
+    let refused = source
+        .get_document(&id("I_doc"))
+        .await
+        .expect_err("an answer about another issue");
+    assert!(
+        refused
+            .to_string()
+            .contains("when asked for document I_doc"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_document_read_whose_members_are_malformed_is_refused() {
+    let fixture = document_in_project(DocumentAnswer::MalformedMembers);
+    let source = source(&fixture);
+    let refused = source
+        .get_document(&id("I_doc"))
+        .await
+        .expect_err("a member list that is not a list");
+    assert!(refused.to_string().contains("subIssues.nodes"), "{refused}");
+}
+
+#[tokio::test]
+async fn a_document_read_whose_page_names_another_parent_leaves_the_members_to_their_own_read() {
+    let fixture = document_in_project(DocumentAnswer::ForeignMember);
+    let source = source(&fixture);
+    source.get_document(&id("I_doc")).await.unwrap().unwrap();
+    assert_eq!(plan_tasks(source.as_ref()).await, 2);
+    assert_eq!(
+        fixture.operations(),
+        ["documentInProject", "projectTasks"],
+        "the members are listed on their own"
+    );
 }

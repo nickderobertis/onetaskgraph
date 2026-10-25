@@ -10072,20 +10072,26 @@ impl GitHubProjectsSource {
         // Every field value, then every edge, as one ordered list sent `WRITE_BATCH` aliases to a
         // request: a request holding both kinds is the one document carrying both, so a plan's
         // values and edges cost one request where they fit in one.
-        let writes: Vec<(&str, &Value)> = fields
+        let writes: Vec<HeldWrite<'_>> = fields
             .iter()
-            .map(|input| ("field", input))
-            .chain(edges.iter().map(|input| ("block", input)))
+            .map(HeldWrite::Field)
+            .chain(edges.iter().map(HeldWrite::Edge))
             .collect();
         for chunk in writes.chunks(WRITE_BATCH) {
-            let of = |kind: &str| -> Vec<&Value> {
-                chunk
-                    .iter()
-                    .filter(|(prefix, _)| *prefix == kind)
-                    .map(|(_, input)| *input)
-                    .collect()
-            };
-            let (values, blocks) = (of("field"), of("block"));
+            let values: Vec<&Value> = chunk
+                .iter()
+                .filter_map(|write| match write {
+                    HeldWrite::Field(input) => Some(*input),
+                    HeldWrite::Edge(_) => None,
+                })
+                .collect();
+            let blocks: Vec<&Value> = chunk
+                .iter()
+                .filter_map(|write| match write {
+                    HeldWrite::Edge(input) => Some(*input),
+                    HeldWrite::Field(_) => None,
+                })
+                .collect();
             let (document, sends) = match (values.is_empty(), blocks.is_empty()) {
                 (false, false) => (graphql::WRITE_FIELDS_AND_EDGES, ["sendField", "sendBlock"]),
                 (false, true) => (graphql::WRITE_FIELD_VALUES, ["send", "send"]),
@@ -11199,6 +11205,13 @@ struct Prepared {
     // llmlint: ignore[invalid_states_unrepresentable] `finish_write` and `field_writes` take the origin as `&str`, empty for none, as they did before this change; this record only carries it to them.
     origin: String,
     origin_field: Option<String>,
+}
+
+/// One write a copy held back of the kinds sent together: a board field value, or a blocked-by
+/// edge, each its input.
+enum HeldWrite<'a> {
+    Field(&'a Value),
+    Edge(&'a Value),
 }
 
 /// Whether `error` is GitHub refusing to file an issue on a board because it is filed there
