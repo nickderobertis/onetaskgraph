@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.3](https://github.com/nickderobertis/onetaskgraph/compare/v0.12.2...v0.12.3) - 2026-10-25
+
+### Performance
+
+- *(copy)* remove redundant screening and hosted reads ([#3749](https://github.com/nickderobertis/onetaskgraph/pull/3749))
+
 ## [0.12.0](https://github.com/nickderobertis/onetaskgraph/compare/v0.11.1...v0.12.0) - 2026-10-24
 
 ### Added

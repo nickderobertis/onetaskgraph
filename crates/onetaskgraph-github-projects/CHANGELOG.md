@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.12.2...onetaskgraph-github-projects-v0.12.3) - 2026-10-25
+
+### Fixed
+
+- *(live)* never let a finished run's board residue block the live suite ([#3761](https://github.com/nickderobertis/onetaskgraph/pull/3761))
+
+### Performance
+
+- *(copy)* remove redundant screening and hosted reads ([#3749](https://github.com/nickderobertis/onetaskgraph/pull/3749))
+
 ## [0.12.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.12.1...onetaskgraph-github-projects-v0.12.2) - 2026-10-25
 
 ### Performance
