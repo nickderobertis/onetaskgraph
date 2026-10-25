@@ -320,11 +320,6 @@ impl TaskSource for HeldOff {
         self.inner.writes()
     }
 
-    async fn stored_form(&self, content: &str) -> Result<String, SourceError> {
-        self.refused()?;
-        self.noted(self.inner.stored_form(content).await)
-    }
-
     async fn stored_status(&self, kind: ItemKind, status: &Status) -> Result<Status, SourceError> {
         self.refused()?;
         self.noted(self.inner.stored_status(kind, status).await)

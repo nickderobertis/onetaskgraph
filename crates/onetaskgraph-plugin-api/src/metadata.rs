@@ -97,13 +97,25 @@ impl MetadataKey {
     /// where *that* source serves the bytes.
     pub const ASSETS_KEY: &'static str = "onetaskgraph.assets";
 
-    /// The reserved key a copy records on the **destination** item the source
-    /// [`Task::version`](crate::Task::version) it copied under — and, under `--comments`, a
-    /// token that covered the comments it carried.
+    /// The reserved key a copy records on the **destination** task, project or document what
+    /// its source item was when the copy composed it — and, under `--comments`, a token that
+    /// covered the comments it carried. It says whether the **source** changed since that copy.
     ///
-    /// Read back by the next copy of the same item, which skips it when the source's current
-    /// version is still this one and the destination is unchanged since, by
-    /// [`Self::COPIED_DESTINATION_VERSION_KEY`]. Absent when the source gave no version.
+    /// Where the source gives a change token — [`Task::version`](crate::Task::version),
+    /// [`Project::version`](crate::Project::version), [`Document::version`](crate::Document::version)
+    /// — it is that token, as the source holds it once the copy has recorded its own link
+    /// there. Where the source gives none — a folder of Markdown gives none for a project or a
+    /// document — it is `sha256:` and 64 lowercase hex digits over the item the copy composed
+    /// from the source: its content after reference and image rewriting, and its title, status,
+    /// labels, repositories, classification and metadata as the source holds them, without the
+    /// three `copied_*` keys and the copy's own links, and before a rendering's `body_digest` is
+    /// moved onto what the destination stores. A later copy compares the digest of what it
+    /// would send now with it.
+    ///
+    /// Read back by the next copy of the same item, which writes nothing to it when this still
+    /// matches the source and the destination is unchanged since, by
+    /// [`Self::COPIED_DESTINATION_VERSION_KEY`]. Reserved: refused from a caller, and never
+    /// carried to another item.
     pub const COPIED_VERSION_KEY: &'static str = "onetaskgraph.copied_version";
 
     /// The reserved key a `--comments` copy records on the destination item as the boolean
@@ -114,13 +126,17 @@ impl MetadataKey {
     /// `--comments` over an unchanged source still carries the comments.
     pub const COPIED_WITH_COMMENTS_KEY: &'static str = "onetaskgraph.copied_with_comments";
 
-    /// The reserved key a copy records on the destination item a digest of that item as the
-    /// copy left it under, computed by the engine over the item without the three `copied_*`
-    /// keys: `sha256:<hex>`.
+    /// The reserved key a copy records on the destination task, project or document a digest of
+    /// that item as the copy left it — `sha256:` and 64 lowercase hex digits, computed by the
+    /// engine over the item as a read returns it without the three `copied_*` keys, which is
+    /// over the content the destination reported storing rather than the content sent. It says
+    /// whether anybody changed the **destination** item since, its title, status and edges
+    /// included.
     ///
-    /// A later copy skips the item only when the digest of the destination as it reads it
-    /// then is still this one, so an edit of copied content at the destination — a copied
-    /// comment edited or deleted included — is restored by the next copy rather than skipped.
+    /// A later copy writes nothing to the item only when the digest of the destination as it
+    /// reads it then is still this one, so an edit at the destination — a copied comment edited
+    /// or deleted included — is restored by the next copy rather than skipped. Reserved, on the
+    /// terms of [`Self::COPIED_VERSION_KEY`].
     pub const COPIED_DESTINATION_VERSION_KEY: &'static str =
         "onetaskgraph.copied_destination_version";
 

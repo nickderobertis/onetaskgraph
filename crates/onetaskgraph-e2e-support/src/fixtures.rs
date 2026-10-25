@@ -5439,24 +5439,15 @@ pub fn linear_workspace_failing(
 pub enum LinearMarkdown {
     /// Stores it byte for byte, as every workspace does until told otherwise.
     Verbatim,
-    /// Applies every rule the Linear plugin's ruling on what Linear does to Markdown on write
-    /// declares — that plugin's own `stored_form`.
-    Declared,
-    /// Applies those, and one rewrite the ruling does not declare: a line opening `1) ` comes
-    /// back opening `1. `.
-    Undeclared,
-    /// Applies those, and leaves out every image alone on a line whose line before the blank
-    /// one setting it apart is an image alone on a line too — the reading of an answer that
-    /// blanked the second of two adjacent images in which Linear really dropped it.
-    DropsAdjacentImage,
-    /// Applies those, and ends a field with a line break wherever they leave it without one —
-    /// a rewrite the ruling declares only after a table.
-    TrailingLineBreak,
+    /// Stores it as spike `spike-linear-stored-content` measured real Linear storing it —
+    /// [`crate::linear_markdown::stored`] — and a follow-up write of what it stored as it was
+    /// sent.
+    Measured,
+    /// Stores it as [`LinearMarkdown::Measured`] does, and then turns every `* ` bullet opening a
+    /// line into `+ ` and every `+ ` into `* `: a backend that does not hold its own stored
+    /// content stable, so a follow-up write of what it stored is stored otherwise again.
+    Unstable,
 }
-
-/// The line the [`LinearMarkdown::Undeclared`] rewrite moves, as it is written and as it is
-/// stored.
-pub const LINEAR_UNDECLARED_REWRITE: (&str, &str) = ("1) ", "1. ");
 
 /// `written` as the workspace `data` stores a long form, by what it was told with
 /// [`LinearWorkspace::rewrite_markdown_on_write`].
@@ -5465,43 +5456,22 @@ fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
         return written.cloned().unwrap_or(Value::Null);
     };
     match data["_linear_markdown"].as_str() {
-        Some("declared") => json!(onetaskgraph_linear::stored_form::stored_form(text)),
-        Some("undeclared") => {
-            let (from, to) = LINEAR_UNDECLARED_REWRITE;
-            let stored = onetaskgraph_linear::stored_form::stored_form(text)
+        Some("measured") => json!(crate::linear_markdown::stored(text)),
+        Some("unstable") => {
+            let stored = crate::linear_markdown::stored(text)
                 .split('\n')
-                .map(|line| match line.strip_prefix(from) {
-                    Some(rest) => format!("{to}{rest}"),
-                    None => line.to_owned(),
+                .map(|line| {
+                    if let Some(rest) = line.strip_prefix("* ") {
+                        format!("+ {rest}")
+                    } else if let Some(rest) = line.strip_prefix("+ ") {
+                        format!("* {rest}")
+                    } else {
+                        line.to_owned()
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
             json!(stored)
-        }
-        Some("trailing-line-break") => {
-            let stored = onetaskgraph_linear::stored_form::stored_form(text);
-            json!(if stored.ends_with('\n') {
-                stored
-            } else {
-                format!("{stored}\n")
-            })
-        }
-        Some("drops-adjacent-image") => {
-            let lone_image = |line: &str| line.starts_with("![") && line.ends_with(')');
-            let stored = onetaskgraph_linear::stored_form::stored_form(text);
-            let lines: Vec<&str> = stored.split('\n').collect();
-            let kept: Vec<&str> = lines
-                .iter()
-                .enumerate()
-                .filter(|&(index, line)| {
-                    !(lone_image(line)
-                        && index >= 2
-                        && lines[index - 1].is_empty()
-                        && lone_image(lines[index - 2]))
-                })
-                .map(|(_, line)| *line)
-                .collect();
-            json!(kept.join("\n"))
         }
         _ => json!(text),
     }
@@ -5916,10 +5886,8 @@ impl LinearWorkspace {
     pub fn rewrite_markdown_on_write(&self, rewrite: LinearMarkdown) {
         self.state.lock().unwrap()["_linear_markdown"] = json!(match rewrite {
             LinearMarkdown::Verbatim => "verbatim",
-            LinearMarkdown::Declared => "declared",
-            LinearMarkdown::Undeclared => "undeclared",
-            LinearMarkdown::DropsAdjacentImage => "drops-adjacent-image",
-            LinearMarkdown::TrailingLineBreak => "trailing-line-break",
+            LinearMarkdown::Measured => "measured",
+            LinearMarkdown::Unstable => "unstable",
         });
     }
 
@@ -6457,9 +6425,16 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                 )
                 .is_ok()
         }
-        // A status write and a targeted update that read the issue back in the same request:
-        // the members a targeted update may send, at least one of them, and nothing else.
-        graphql::ISSUE_UPDATE_READ => {
+        // A narrow or a targeted issue write, which reads the issue back in the same request:
+        // no `labelIds`, which only a whole write sends, and at least one of the members a
+        // targeted update may send, and nothing else — each one it is not sent is one Linear
+        // leaves as it was.
+        graphql::ISSUE_UPDATE_READ
+            if variables
+                .pointer("/input")
+                .and_then(Value::as_object)
+                .is_some_and(|input| !input.contains_key("labelIds")) =>
+        {
             exact_linear_variable_keys(variables, &["id", "input"])
                 && variables
                     .get("id")
@@ -6497,30 +6472,6 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                     .and_then(Value::as_str)
                     .is_some_and(|id| !id.is_empty())
                 && valid_linear_write_input(variables.get("input"), &["priority"], &[])
-        }
-        // A narrow or a targeted issue write: no `labelIds`, which only a whole write sends,
-        // and at least one of the members Linear's `IssueUpdateInput` leaves optional — each
-        // one it is not sent is one Linear leaves as it was.
-        graphql::ISSUE_UPDATE
-            if variables
-                .pointer("/input")
-                .and_then(Value::as_object)
-                .is_some_and(|input| !input.contains_key("labelIds")) =>
-        {
-            exact_linear_variable_keys(variables, &["id", "input"])
-                && variables
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| !id.is_empty())
-                && variables
-                    .pointer("/input")
-                    .and_then(Value::as_object)
-                    .is_some_and(|input| !input.is_empty())
-                && valid_linear_write_input(
-                    variables.get("input"),
-                    &[],
-                    &["title", "description", "stateId", "priority"],
-                )
         }
         graphql::PROJECT_CREATE => {
             exact_linear_variable_keys(variables, &["input"])
@@ -6981,13 +6932,20 @@ fn linear_response(
             .iter_mut()
             .find(|row| row["id"] == id)
             .ok_or("update target does not exist")?;
-        row["_linear_description"] = stored.clone();
+        row["_linear_description"] = stored;
         // A project's `updatedAt` moves for its content; a document's does not, which is what
         // `spike-linear-coverage` measured Linear doing (4 of 4).
         if collection == "projects" {
             row["_updated"] = json!(stamp);
         }
-        return Ok(json!({ (root): {"success":true,(payload):{"id":id,(field):stored}} }));
+        let written = row.clone();
+        let item = if collection == "projects" {
+            linear_project(&written, data)
+        } else {
+            linear_document(&written)
+        };
+        let _ = field;
+        return Ok(json!({ (root): {"success":true,(payload):item} }));
     }
     if matches!(operation, graphql::PROJECT_CREATE | graphql::PROJECT_UPDATE) {
         return linear_write_item(data, &vars, operation == graphql::PROJECT_CREATE, true);
@@ -7456,8 +7414,20 @@ fn linear_write_item(
     } else {
         rows.push(row);
     }
-    // The write's own answer carries the long form as it is now stored, as the plugin asks.
-    let payload = json!({"id":id, (long_form_key): stored});
+    // The write's own answer carries the whole item as it is now stored — exactly what a read
+    // of it answers, as spike `spike-linear-stored-content` measured of Linear — and so the long
+    // form as it is now stored, as the plugin asks.
+    let _ = (long_form_key, stored);
+    let written = data[collection]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["id"] == json!(id)))
+        .cloned()
+        .ok_or("the written item is held")?;
+    let payload = if project {
+        linear_project(&written, data)
+    } else {
+        linear_task(&written, data)
+    };
     Ok(if project {
         if create {
             json!({"projectCreate":{"success":true,"project":payload}})
@@ -7515,7 +7485,13 @@ fn linear_write_document(
     } else {
         rows.push(row);
     }
-    let payload = json!({"success":true,"document":{"id":id,"content":stored}});
+    let _ = stored;
+    let written = data["documents"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["id"] == json!(id)))
+        .cloned()
+        .ok_or("the written document is held")?;
+    let payload = json!({"success":true,"document":linear_document(&written)});
     Ok(if create {
         json!({ "documentCreate": payload })
     } else {

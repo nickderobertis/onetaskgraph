@@ -30,9 +30,8 @@ use super::wire::{
     DocumentDir, DocumentQueryParams, EditCommentParams, HandshakePluginKind, HoldingsParams,
     HoldingsResult, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
     PROTOCOL_VERSION, PriorityParams, ProjectQueryParams, ProjectWriteParams, Request, Response,
-    ServedWriteParams, StatusParams, StoredFormParams, StoredFormResult, StoredStatusParams,
-    StoredStatusResult, TaskDetailParams, TaskQueryParams, UpdateParams,
-    after_the_first_vocabulary, knows_every_category, vocabulary,
+    ServedWriteParams, StatusParams, StoredStatusParams, StoredStatusResult, TaskDetailParams,
+    TaskQueryParams, UpdateParams, after_the_first_vocabulary, knows_every_category, vocabulary,
 };
 use crate::config::rebased;
 use crate::registry::PluginKind;
@@ -616,12 +615,6 @@ async fn dispatch(
             forget(source, MetadataRecord::Project, &params.write);
             let id = source.write_project(&params.write).await?;
             stored(source, MetadataRecord::Project, &id, json!({ "id": id }))
-        }
-        "stored_form" => {
-            let params: StoredFormParams = decode(method, params)?;
-            encode(StoredFormResult {
-                content: source.stored_form(&params.content).await?,
-            })
         }
         "stored_status" => {
             let params: StoredStatusParams = decode(method, params)?;

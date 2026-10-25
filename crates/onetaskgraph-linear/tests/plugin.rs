@@ -704,10 +704,14 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
                         "priority":2,"labels":{"nodes":[]},"project":null,
                         "relations":relations("blocks","relatedIssue","issue","IR")}},
         "projectCreate": {"success":true,"project":{"id":"P","content":null}},
-        "projectUpdate": {"success":true,"project":{"id":"P","content":null,
+        "projectUpdate": {"success":true,"project":{"id":"P","name":"project","content":null,
+                          "url":null,"createdAt":null,"updatedAt":null,"archivedAt":null,
+                          "status":{"name":"Started","type":"started"},"labels":{"nodes":[]},
                           "relations":relations("dependency","relatedProject","project","PR")}},
         "documentCreate": {"success":true,"document":{"id":"D","content":null}},
-        "documentUpdate": {"success":true,"document":{"id":"D","content":null}},
+        "documentUpdate": {"success":true,"document":{"id":"D","title":"document",
+                           "content":null,"url":null,"createdAt":null,"updatedAt":null,
+                           "archivedAt":null,"project":null}},
         "issueRelationCreate": {"success":true,"issueRelation":{"id":"R"}},
         "projectRelationCreate": {"success":true,"projectRelation":{"id":"R"}},
         "issueRelationDelete": {"success":true},
@@ -4872,7 +4876,8 @@ fn held_document(id: &str, content: &str) -> serde_json::Value {
 /// carrying the long-form field alone — `description`, `content` and `content` — which
 /// differs from what Linear holds only inside the trailing slot: every byte above it, the
 /// person's own spacing included, goes back as it was, and so does every other key. The
-/// answer is the record read back, and a key already holding the value is the read alone.
+/// answer is the record as the update's own answer selected it — nothing is read after the
+/// write — and a key already holding the value is the read alone.
 #[tokio::test]
 async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
     let key = MetadataKey::new("myapp.review").expect("a caller key");
@@ -4884,8 +4889,8 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
 
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some(held), serde_json::json!(2)),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
-        prioritised_issue("i1", Some(sent_back), serde_json::json!(2)),
+        serde_json::json!({"issueUpdate":{"success":true,
+            "issue":prioritised_issue("i1", Some(sent_back), serde_json::json!(2))["issue"]}}),
     ]);
     let task = writable_source(&endpoint)
         .set_task_metadata(&"i1".into(), &key, &value)
@@ -4901,7 +4906,7 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
         .try_iter()
         .map(|request| sent(&request))
         .collect::<Vec<_>>();
-    assert_eq!(requests.len(), 3, "{requests:?}");
+    assert_eq!(requests.len(), 2, "{requests:?}");
     assert_eq!(
         requests[1]["query"],
         onetaskgraph_linear::graphql::ISSUE_UPDATE
@@ -4913,8 +4918,8 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
 
     let (endpoint, wire) = response_server(vec![
         held_project("p1", held),
-        serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"p1","content":null}}}),
-        held_project("p1", sent_back),
+        serde_json::json!({"projectUpdate":{"success":true,
+            "project":held_project("p1", sent_back)["project"]}}),
     ]);
     let project = writable_source(&endpoint)
         .set_project_metadata(&"p1".into(), &key, &value)
@@ -4937,8 +4942,8 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
 
     let (endpoint, wire) = response_server(vec![
         held_document("d1", held),
-        serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"d1","content":null}}}),
-        held_document("d1", sent_back),
+        serde_json::json!({"documentUpdate":{"success":true,
+            "document":held_document("d1", sent_back)["document"]}}),
     ]);
     let document = writable_source(&endpoint)
         .set_document_metadata(&"d1".into(), &key, &value)
@@ -4962,8 +4967,8 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
     // A description holding no slot gains one after a blank line, and nothing above it moves.
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some("Bare prose\n"), serde_json::json!(0)),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
-        prioritised_issue("i1", Some("Bare prose\n"), serde_json::json!(0)),
+        serde_json::json!({"issueUpdate":{"success":true,
+            "issue":prioritised_issue("i1", Some("Bare prose\n"), serde_json::json!(0))["issue"]}}),
     ]);
     writable_source(&endpoint)
         .set_task_metadata(&"i1".into(), &key, &value)
@@ -6331,8 +6336,8 @@ async fn the_slot_is_written_in_the_one_spelling_linear_keeps_byte_for_byte() {
     let hostile = serde_json::json!(["a --> b <!-- c", "`tick`", "github.com/a/b", "_y_ [z]"]);
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some("Prose."), serde_json::json!(0)),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
-        prioritised_issue("i1", Some("Prose."), serde_json::json!(0)),
+        serde_json::json!({"issueUpdate":{"success":true,
+            "issue":prioritised_issue("i1", Some("Prose."), serde_json::json!(0))["issue"]}}),
     ]);
     writable_source(&endpoint)
         .set_task_metadata(&"i1".into(), &key, &hostile)
@@ -6399,8 +6404,8 @@ async fn a_slot_in_the_multi_line_spelling_written_before_still_parses() {
 
         let (endpoint, wire) = response_server(vec![
             prioritised_issue("i1", Some(old), serde_json::json!(0)),
-            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
-            prioritised_issue("i1", Some(old), serde_json::json!(0)),
+            serde_json::json!({"issueUpdate":{"success":true,
+                "issue":prioritised_issue("i1", Some(old), serde_json::json!(0))["issue"]}}),
         ]);
         writable_source(&endpoint)
             .set_task_metadata(
@@ -6454,29 +6459,27 @@ async fn a_narrow_slot_write_that_lands_elsewhere_or_vanishes_is_not_reported_wr
         "{refused:?}"
     );
 
-    // Written, and then gone: the record a metadata write answers with is a read, and a read
-    // that finds nothing is not the record the write left.
-    for (record, held, acknowledged, gone) in [
+    // Written, and answered with less than a read maps: the record a metadata write answers
+    // with is the one its own answer selected — nothing is read after the write — so an answer
+    // lacking what a read of the record maps is malformed rather than read again.
+    for (record, held, acknowledged) in [
         (
             "task",
             prioritised_issue("i1", Some("Prose."), serde_json::json!(0)),
             serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
-            serde_json::json!({"issue":null}),
         ),
         (
             "project",
             held_project("p1", "Prose."),
             serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"p1","content":null}}}),
-            serde_json::json!({"project":null}),
         ),
         (
             "document",
             held_document("d1", "Prose."),
             serde_json::json!({"documentUpdate":{"success":true,"document":{"id":"d1","content":null}}}),
-            serde_json::json!({"document":null}),
         ),
     ] {
-        let (endpoint, _) = response_server(vec![held, acknowledged, gone]);
+        let (endpoint, wire) = response_server(vec![held, acknowledged]);
         let source = writable_source(&endpoint);
         let refused = match record {
             "task" => source
@@ -6492,11 +6495,15 @@ async fn a_narrow_slot_write_that_lands_elsewhere_or_vanishes_is_not_reported_wr
                 .await
                 .map(|_| ()),
         }
-        .expect_err("the record vanished after its write");
+        .expect_err("an answer lacking what a read maps");
         assert!(
-            matches!(&refused, SourceError::Malformed { message }
-                if message.contains(&format!("{record} ")) && message.contains("could not be read back")),
+            matches!(&refused, SourceError::Malformed { .. }),
             "{record}: {refused:?}"
+        );
+        assert_eq!(
+            wire.try_iter().count(),
+            2,
+            "{record}: no read after the write"
         );
     }
 }
@@ -6655,10 +6662,15 @@ fn project_workspace() -> (String, std::sync::Arc<std::sync::Mutex<Option<String
                         .map(|input| input.keys().collect::<Vec<_>>())
                 );
                 *kept.lock().unwrap() = input["content"].as_str().map(str::to_owned);
+                // The whole project as it now stands, which is what each write selects.
+                let project = serde_json::json!({"id":"P-BIG","name":"The plan",
+                    "content":*kept.lock().unwrap(),"url":null,"createdAt":null,
+                    "updatedAt":null,"archivedAt":null,
+                    "status":{"name":"Todo","type":"planned"},"labels":{"nodes":[]}});
                 if query.contains("projectCreate(") {
-                    serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-BIG","content":null}}})
+                    serde_json::json!({"projectCreate":{"success":true,"project":project}})
                 } else {
-                    serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-BIG","content":null}}})
+                    serde_json::json!({"projectUpdate":{"success":true,"project":project}})
                 }
             } else if query.contains("project(id:$id)") {
                 serde_json::json!({"project":{"id":"P-BIG","name":"The plan",

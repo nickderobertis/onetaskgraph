@@ -1,5 +1,5 @@
 {
-  "//": "The wire shapes of docs/plugin-protocol.md §3.16, §4.9 and §4.25, added to protocol version 2 without a bump. `reference_host` is what this build's own stdio host answers, its handshake without `capabilities`, which §4.2 reconciles on its own; the other entries are a plugin declaring `stored_forms` and one written before it, each round-tripped through the engine's own wire types. Both readers are crates/onetaskgraph-core/tests/subprocess.rs and src/subprocess/wire.rs.",
+  "//": "The wire shapes of docs/plugin-protocol.md §3.16, §4.9 and §4.25, added to protocol version 2 without a bump. `reference_host` is what this build's own stdio host answers, its handshake without `capabilities`, which §4.2 reconciles on its own; `stored_form`, which §4.25 retired, is answered by neither; the other entries are a plugin declaring `stored_forms` and one written before it, each round-tripped through the engine's own wire types. Both readers are crates/onetaskgraph-core/tests/subprocess.rs and src/subprocess/wire.rs.",
   "reference_host": {
     "initialize": {
       "protocol_version": 2,
@@ -27,9 +27,6 @@
       "project_status": true,
       "stored_forms": true
     },
-    "stored_form": {
-      "content": "- one"
-    },
     "stored_status": {
       "status": {
         "category": "done",
@@ -41,9 +38,6 @@
     }
   },
   "requests": {
-    "stored_form": {
-      "content": "- one"
-    },
     "stored_status": {
       "kind": "project",
       "status": {
@@ -75,9 +69,6 @@
       "content_updates": false,
       "targeted_updates": false,
       "stored_forms": true
-    },
-    "stored_form": {
-      "content": "* one"
     },
     "stored_status": {
       "status": {

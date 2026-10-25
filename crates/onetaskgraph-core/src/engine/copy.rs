@@ -67,7 +67,7 @@ use serde_json::Value;
 use crate::cache::ExpectedWrite;
 use crate::config::Placement;
 use crate::resolve::ResolvedSource;
-use crate::template::{Sha256Digest, TemplateProvenance, body_digest};
+use crate::template::TemplateProvenance;
 use crate::{Failure, GlobalId};
 
 use super::assets;
@@ -1124,6 +1124,44 @@ struct Journal {
     /// Undone before the items they are on, in reverse: a copy created on a task this copy
     /// created goes with the task anyway, and one on a task it updated is taken back here.
     comments: Vec<CommentUndo>,
+    /// One follow-up write per destination item whose write's own answer said it stores other
+    /// content than it was sent — the latest write of each item only — sent once every link is
+    /// written; see [`Engine::follow_up`].
+    ///
+    /// Nothing here is undone of its own: each is a write of an item an entry above already
+    /// puts back.
+    follow_ups: Vec<FollowUp>,
+    /// The change token each copied item's source answered with once this copy wrote its link
+    /// there, by the item's qualified id — what a follow-up records the source as.
+    linked_versions: BTreeMap<String, String>,
+}
+
+/// One write sent again, as its own request, because the destination stores other content than
+/// it was sent: that stored content verbatim, with every fingerprint the item keeps recomputed
+/// over it — see `stored`.
+struct FollowUp {
+    /// The source the destination item is in.
+    at: SourceName,
+    /// The destination item.
+    id: NativeId,
+    /// The item copied, at its source.
+    source: GlobalId,
+    /// The item as the write that lands it again sends it: the stored content, its rendering's
+    /// provenance moved onto it where it vouched for what was sent, and the record below.
+    item: Item,
+    /// Its forward edges, as the first write sent them.
+    edges: Vec<DependencyEdge>,
+    /// The record of this copy it lands with, digested over the stored content when it is sent —
+    /// `None` for a write that records none.
+    record: Option<record::Record>,
+    /// The comments its record digests, after a `--comments` copy.
+    comments: Option<Vec<Value>>,
+    /// Whether the record's version is its source's change token, which the source's answer to
+    /// this copy's own link write moves.
+    tokened: bool,
+    /// The content the destination said it stores, which the follow-up's own answer has to
+    /// report again.
+    stored: String,
 }
 
 /// How to take back one comment write a `--comments` copy made.
@@ -1263,13 +1301,14 @@ struct Running {
     /// asked whether it could skip it — taken by the plan that lands it, so the destination is
     /// not read for it twice.
     aimed: HashMap<String, (Target, Option<Prior>)>,
-    /// Every item this copy wrote whose destination's answer says it stores the content other
-    /// than it was sent, by its source id: landed, and reported `failed` once the copy is done.
-    diverged: Vec<(GlobalId, EngineError)>,
     /// Each source project an item of this copy is filed under, read once when the copy read
     /// the destination counterparts ahead — see [`Engine::read_ahead`] — so the filing lookup's
     /// own read of it, [`Engine::linked_project`], is that read rather than a second one.
     source_projects: HashMap<GlobalId, Project>,
+    /// Each destination project a document of this copy was filed under on its own project's
+    /// link alone, unread, by the project's qualified destination id — and the source project
+    /// whose link named it, which a write refused there is answered with a stale link of.
+    trusted: HashMap<String, GlobalId>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -2109,23 +2148,12 @@ impl Engine {
                 before: task.before.clone(),
             })
             .collect();
-        let mut diverged = std::mem::take(&mut running.diverged);
         let linking = std::mem::take(&mut running.linking);
         let homes = std::mem::take(&mut running.homes);
         let recordings = self.recordings(&running);
         // The repair writes an item's content again, so what the destination stores after it is
-        // compared exactly as the first write's was.
-        for (source, error) in self.repair(request, running, journal).await? {
-            if diverged.iter().all(|(refused, _)| refused != &source) {
-                diverged.push((source, error));
-            }
-        }
-        // An item whose destination stores other than it was sent is refused: no link records it
-        // as this copy's counterpart, and it is reported `failed` with why.
-        let linking: Vec<Linking> = linking
-            .into_iter()
-            .filter(|entry| diverged.iter().all(|(source, _)| source != &entry.item))
-            .collect();
+        // read off its answer exactly as the first write's was.
+        self.repair(request, running, journal).await?;
         if !request.dry_run {
             self.record_dependents(recordings, journal).await?;
             self.record_members(homes, journal).await?;
@@ -2136,6 +2164,10 @@ impl Engine {
         let mut items = items;
         self.link(linking, &mut items, request.no_link, journal)
             .await?;
+        // Each item whose destination stores other content than it was sent is written once
+        // more, now that its source's link is written and so its change token is final; one the
+        // destination then stores otherwise again is reported `failed` with why.
+        let diverged = self.follow_up(journal).await?;
         for (source, error) in &diverged {
             for outcome in items.iter_mut().filter(|outcome| &outcome.source == source) {
                 outcome.action = CopyAction::Failed {
@@ -2165,17 +2197,15 @@ impl Engine {
     /// needs: the far end's destination id does not exist until it has been created, so
     /// the item that points at it lands first without that edge and is completed here.
     /// It runs once for the whole request rather than once per project, because a far end
-    /// may be in a project this copy has not reached yet. It answers, by source id, each item
-    /// whose destination stores other than this second write sent.
+    /// may be in a project this copy has not reached yet.
     async fn repair(
         &self,
         request: &CopyRequest,
         running: Running,
         journal: &mut Journal,
-    ) -> Result<Vec<(GlobalId, EngineError)>, EngineError> {
-        let mut diverged = Vec::new();
+    ) -> Result<(), EngineError> {
         if request.dry_run {
-            return Ok(diverged);
+            return Ok(());
         }
         let Running {
             resolvable,
@@ -2202,31 +2232,20 @@ impl Engine {
                 delivers_of(&entry.item, &entry.item.to, &resolvable, &counterparts),
                 &private,
             );
-            let (written, sent) = self
-                .write(
-                    destination,
-                    &entry.item,
-                    Some(entry.destination),
-                    entry.filed,
-                    &resolved(&edges),
-                    &resolved_entries(&delivers),
-                    entry.prior,
-                    Stamping::of(request, false),
-                    journal,
-                )
-                .await?;
-            if let Some(error) = stored::diverged(
+            self.write(
                 destination,
-                entry.item.item.level().record(),
-                &written,
-                sent.as_deref(),
+                &entry.item,
+                Some(entry.destination),
+                entry.filed,
+                &resolved(&edges),
+                &resolved_entries(&delivers),
+                entry.prior,
+                Stamping::of(request, false),
+                journal,
             )
-            .await
-            {
-                diverged.push((entry.item.source.clone(), error));
-            }
+            .await?;
         }
-        Ok(diverged)
+        Ok(())
     }
 
     /// Put the destination back the way this copy found it, then report why it failed.
@@ -2461,7 +2480,7 @@ impl Engine {
                 key: MetadataKey::copies(),
                 before: entry.held,
             });
-            match set_link(
+            match set_link_versioned(
                 source,
                 entry.level,
                 &entry.item.native,
@@ -2470,10 +2489,17 @@ impl Engine {
             )
             .await
             {
-                Ok(true) => CopyLink::Recorded,
+                Ok(Some(version)) => {
+                    if let Some(version) = version {
+                        journal
+                            .linked_versions
+                            .insert(entry.item.to_string(), version);
+                    }
+                    CopyLink::Recorded
+                }
                 // Nothing was written: the source no longer holds the item, or said it cannot
                 // hold the key.
-                Ok(false) | Err(SourceError::Refused { .. }) => {
+                Ok(None) | Err(SourceError::Refused { .. }) => {
                     journal.links.pop();
                     return Ok(CopyLink::Unrecorded);
                 }
@@ -2496,7 +2522,7 @@ impl Engine {
                 key: MetadataKey::copy_locations(),
                 before: entry.held_locations,
             });
-            match set_link(
+            match set_link_versioned(
                 source,
                 entry.level,
                 &entry.item.native,
@@ -2505,8 +2531,15 @@ impl Engine {
             )
             .await
             {
-                Ok(true) | Err(SourceError::Malformed { .. }) => {}
-                Ok(false) | Err(SourceError::Refused { .. }) => {
+                Ok(Some(version)) => {
+                    if let Some(version) = version {
+                        journal
+                            .linked_versions
+                            .insert(entry.item.to_string(), version);
+                    }
+                }
+                Err(SourceError::Malformed { .. }) => {}
+                Ok(None) | Err(SourceError::Refused { .. }) => {
                     journal.links.pop();
                 }
                 Err(error) => return Err(refused(source, error)),
@@ -3216,7 +3249,8 @@ impl Engine {
         let home_source = project.to.clone();
         let home = self.writable(&home_source)?;
         let mut project = project;
-        self.store_forms(std::slice::from_mut(&mut project)).await?;
+        self.store_statuses(std::slice::from_mut(&mut project))
+            .await?;
         let unchanged = match &project.target {
             Target::Update { id: target, .. } => {
                 let settled = self.shown_edges(
@@ -3242,8 +3276,18 @@ impl Engine {
                     &running.private,
                 );
                 let held = project.held.as_ref();
+                let covers = self.version_covers_a_copy(&project);
                 let unchanged_with = |edges: &[Option<DependencyEdge>]| {
-                    !changes(held, &project, target, &None, &resolved(edges), &[], home)
+                    !changes(
+                        held,
+                        &project,
+                        target,
+                        &None,
+                        &resolved(edges),
+                        &[],
+                        home,
+                        covers,
+                    )
                 };
                 Some(
                     (!settled.iter().any(Option::is_none) && unchanged_with(&settled))
@@ -3696,7 +3740,8 @@ impl Engine {
             };
             let (rewritten, made) = substitute(content, &table_for(&referents, counterparts));
             if made.rewritten > 0
-                && let Some(provenance) = restamped(&document.metadata, content, &rewritten)
+                && let Some(provenance) =
+                    stored::restamped(&document.metadata, &[content], &rewritten)
             {
                 document
                     .metadata
@@ -4166,40 +4211,32 @@ impl Engine {
         }
     }
 
-    /// Make each planned item's content and status what its destination will store — see
-    /// [`stored::apply`] and `TaskSource::stored_status` — so it is compared and written in
-    /// that form.
-    async fn store_forms(&self, planned: &mut [Planned]) -> Result<(), EngineError> {
+    /// Make each planned item's status what its destination will store — see
+    /// `TaskSource::stored_status` — so it is compared and written in that form. Its content is
+    /// sent as composed: what the destination stores of it is read off the write's own answer.
+    async fn store_statuses(&self, planned: &mut [Planned]) -> Result<(), EngineError> {
         for item in planned {
             let destination = self.writable(&item.to)?;
-            let preserve_status =
-                item.status_policy == StatusPolicy::PreserveDestination && item.held.is_some();
-            let (content, metadata) = match &mut item.item {
+            if item.status_policy == StatusPolicy::PreserveDestination && item.held.is_some() {
+                continue;
+            }
+            match &mut item.item {
                 Item::Task(task) => {
-                    if !preserve_status {
-                        task.status = destination
-                            .source()
-                            .stored_status(ItemKind::Task, &task.status)
-                            .await
-                            .map_err(|error| refused(destination, error))?;
-                    }
-                    (&mut task.content, &mut task.metadata)
+                    task.status = destination
+                        .source()
+                        .stored_status(ItemKind::Task, &task.status)
+                        .await
+                        .map_err(|error| refused(destination, error))?;
                 }
                 Item::Project(project) => {
-                    if !preserve_status {
-                        project.status = destination
-                            .source()
-                            .stored_status(ItemKind::Project, &project.status)
-                            .await
-                            .map_err(|error| refused(destination, error))?;
-                    }
-                    (&mut project.content, &mut project.metadata)
+                    project.status = destination
+                        .source()
+                        .stored_status(ItemKind::Project, &project.status)
+                        .await
+                        .map_err(|error| refused(destination, error))?;
                 }
-                Item::Document(document) => (&mut document.content, &mut document.metadata),
-            };
-            stored::apply(destination, content, metadata)
-                .await
-                .map_err(|error| refused(destination, error))?;
+                Item::Document(_) => {}
+            }
         }
         Ok(())
     }
@@ -4232,9 +4269,9 @@ impl Engine {
                 .await?;
         }
         // Once a document's references point where they land, and before anything is compared
-        // with the destination or written to it: every content is what its destination will
-        // store, so an unchanged item reads as unchanged and what is sent is what is kept.
-        self.store_forms(&mut planned).await?;
+        // with the destination or written to it: every status is what its destination will
+        // store, so an unchanged item reads as unchanged.
+        self.store_statuses(&mut planned).await?;
         // A task copy carries every task past one its destination cannot represent: each is
         // asked about before anything is written, and one refused is left out — reported
         // `failed` with the destination's own reason — and read by every other task as an item
@@ -4470,7 +4507,7 @@ impl Engine {
                 unresolved.push(index);
             }
             let resolvable_delivers = resolved_entries(&delivers);
-            let (outcome, prior, diverged) = self
+            let landed = self
                 .land(
                     destination,
                     request,
@@ -4483,10 +4520,15 @@ impl Engine {
                     created.get(&index).cloned(),
                     journal,
                 )
-                .await?;
-            if let Some(error) = diverged {
-                running.diverged.push((item.source.clone(), error));
-            }
+                .await;
+            let (outcome, prior) = match landed {
+                Ok(landed) => landed,
+                Err(error) => {
+                    return Err(self
+                        .stale_filing(destination, item, filed[index].as_ref(), running, error)
+                        .await);
+                }
+            };
             if let Some(id) = outcome.destination()
                 && !request.dry_run
                 && let Item::Task(_) = &item.item
@@ -6240,7 +6282,7 @@ impl Engine {
         pointing: Pointing<'_>,
         created: Option<NativeId>,
         journal: &mut Journal,
-    ) -> Result<(CopyOutcome, Option<Prior>, Option<EngineError>), EngineError> {
+    ) -> Result<(CopyOutcome, Option<Prior>), EngineError> {
         let Pointing { edges, delivers } = pointing;
         let (target, found) = match &item.target {
             Target::Update { id, found } => (Some(id.clone()), Some(found.clone())),
@@ -6294,17 +6336,14 @@ impl Engine {
         if item.skipped
             && let Some(id) = &target
         {
-            return Ok((
-                outcome(reached(Some(qualified(id.clone())), false)),
-                prior,
-                None,
-            ));
+            return Ok((outcome(reached(Some(qualified(id.clone())), false)), prior));
         }
         let edges = resolved(edges);
         let comments_move = item
             .comment_plan
             .as_ref()
             .is_some_and(|plan| !plan.steps.is_empty());
+        let covers = self.version_covers_a_copy(item);
         let changed = comments_move
             || target.as_ref().is_none_or(|id| {
                 changes(
@@ -6315,6 +6354,7 @@ impl Engine {
                     &edges,
                     delivers,
                     destination,
+                    covers,
                 )
             });
         // An item that already reads as the source does may still hold a stale record of the
@@ -6322,8 +6362,16 @@ impl Engine {
         let rerecord = !changed
             && match (&target, prior.as_ref()) {
                 (Some(id), Some(held)) => {
-                    stale_record(item, held, id, &project, &edges, delivers, destination)
-                        || self.unmarked(destination, item, held, &edges)
+                    stale_record(
+                        item,
+                        held,
+                        id,
+                        &project,
+                        &edges,
+                        delivers,
+                        destination,
+                        covers,
+                    ) || self.unmarked(destination, item, held, &edges)
                 }
                 _ => false,
             };
@@ -6331,19 +6379,11 @@ impl Engine {
             && !changed
             && !rerecord
         {
-            return Ok((
-                outcome(reached(Some(qualified(id.clone())), false)),
-                prior,
-                None,
-            ));
+            return Ok((outcome(reached(Some(qualified(id.clone())), false)), prior));
         }
         if request.dry_run {
             // Null only for a create here: nothing was created, so there is no id to report.
-            return Ok((
-                outcome(reached(target.map(qualified), changed)),
-                prior,
-                None,
-            ));
+            return Ok((outcome(reached(target.map(qualified), changed)), prior));
         }
         // A task created together with others is written once more, as the item its create
         // made, now that it can name its edges to them: it was journalled when it was created.
@@ -6351,7 +6391,7 @@ impl Engine {
             Some(_) => Stamping::Never,
             None => Stamping::of(request, rerecord),
         };
-        let (written, sent) = self
+        let written = self
             .write(
                 destination,
                 item,
@@ -6364,13 +6404,6 @@ impl Engine {
                 journal,
             )
             .await?;
-        let diverged = stored::diverged(
-            destination,
-            item.item.level().record(),
-            &written,
-            sent.as_deref(),
-        )
-        .await;
         let written = qualified(written);
         let expected = self.take_expected(&written).unwrap_or_default();
         if let Some(plan) = &item.comment_plan {
@@ -6379,7 +6412,7 @@ impl Engine {
         }
         let mut landed = outcome(reached(Some(written), changed));
         landed.expected = expected;
-        Ok((landed, prior, diverged))
+        Ok((landed, prior))
     }
 
     /// Make one destination task's comments what `plan` decided, recording how to take each
@@ -6534,7 +6567,28 @@ impl Engine {
             running.filings.insert(key, Some(filed.clone()));
             return Ok(Some(filed));
         }
-        let filed = match self.find_home(request, &qualified, running).await? {
+        // A document is filed under the project its own project's link names where it lands,
+        // without that project being read: a link a person left stale is told by the write the
+        // destination refuses — see [`Engine::stale_filing`] — and `--recreate` walks instead.
+        let document = matches!(item.item, Item::Document(_));
+        if document
+            && !request.recreate
+            && let Some(link) = self.project_link(&qualified, &item.to, running).await?
+        {
+            running.trusted.insert(link.to_string(), qualified.clone());
+            running.filings.insert(key, Some(link.native.clone()));
+            return Ok(Some(link.native));
+        }
+        let home = self.find_home(request, &qualified, running).await?;
+        if document
+            && request.recreate
+            && !request.dry_run
+            && let Some(home) = &home
+        {
+            self.relink_project(&qualified, home, running, journal)
+                .await?;
+        }
+        let filed = match home {
             Some(home) if home.source == item.to => Some(home.native),
             Some(home) => {
                 self.member_in(request.dry_run, &home, &item.to, None, running, journal)
@@ -6545,6 +6599,127 @@ impl Engine {
         };
         running.filings.insert(key, filed.clone());
         Ok(filed)
+    }
+
+    /// The source project `project`, read once per command.
+    async fn source_project(
+        &self,
+        project: &GlobalId,
+        running: &mut Running,
+    ) -> Result<Option<Project>, EngineError> {
+        if let Some(held) = running.source_projects.get(project) {
+            return Ok(Some(held.clone()));
+        }
+        let source = self.readable(&project.source)?;
+        if !source.source().capabilities().projects.is_native() {
+            return Ok(None);
+        }
+        let Some(held) = source
+            .source()
+            .get_project(&project.native)
+            .await
+            .map_err(|error| refused(source, error))?
+        else {
+            return Ok(None);
+        };
+        running
+            .source_projects
+            .insert(project.clone(), held.clone());
+        Ok(Some(held))
+    }
+
+    /// The project `project`'s own `onetaskgraph.copies` link names in `to`, when it names one.
+    async fn project_link(
+        &self,
+        project: &GlobalId,
+        to: &SourceName,
+        running: &mut Running,
+    ) -> Result<Option<GlobalId>, EngineError> {
+        Ok(self
+            .source_project(project, running)
+            .await?
+            .and_then(|held| link_of(&held.metadata, to)))
+    }
+
+    /// Point `project`'s own link where a `--recreate` copy of a document found its counterpart,
+    /// `home`, when it names somewhere else there: the link a stale one is recovered to.
+    async fn relink_project(
+        &self,
+        project: &GlobalId,
+        home: &GlobalId,
+        running: &mut Running,
+        journal: &mut Journal,
+    ) -> Result<(), EngineError> {
+        let Some(held) = self.source_project(project, running).await? else {
+            return Ok(());
+        };
+        if link_of(&held.metadata, &home.source).as_ref() == Some(home) {
+            return Ok(());
+        }
+        let source = self.readable(&project.source)?;
+        if !source.source().writes().is_supported() {
+            return Ok(());
+        }
+        let before = held.metadata.get(MetadataKey::COPIES_KEY).cloned();
+        let mut links = well_formed(before.as_ref());
+        links.insert(home.source.to_string(), Value::String(home.to_string()));
+        journal.links.push(Unlink {
+            item: project.clone(),
+            level: Level::Project,
+            key: MetadataKey::copies(),
+            before,
+        });
+        match set_link(
+            source,
+            Level::Project,
+            &project.native,
+            &MetadataKey::copies(),
+            &Value::Object(links.clone()),
+        )
+        .await
+        {
+            Ok(true) => {
+                if let Some(cached) = running.source_projects.get_mut(project) {
+                    cached
+                        .metadata
+                        .insert(MetadataKey::COPIES_KEY.to_owned(), Value::Object(links));
+                }
+                Ok(())
+            }
+            Ok(false) | Err(SourceError::Refused { .. } | SourceError::Malformed { .. }) => {
+                journal.links.pop();
+                Ok(())
+            }
+            Err(error) => Err(refused(source, error)),
+        }
+    }
+
+    /// The refusal a write of `item` owes, refused with `error` while filed under `filed`: a
+    /// stale link, when `filed` is a project this copy trusted its source project's link for
+    /// unread and the destination no longer holds it — which one read, made only now the write
+    /// was refused, says. Every other failure is answered as it came.
+    async fn stale_filing(
+        &self,
+        destination: &ResolvedSource,
+        item: &Planned,
+        filed: Option<&NativeId>,
+        running: &Running,
+        error: EngineError,
+    ) -> EngineError {
+        let Some(filed) = filed else {
+            return error;
+        };
+        let link = GlobalId::new(item.to.clone(), filed.clone());
+        let Some(project) = running.trusted.get(&link.to_string()) else {
+            return error;
+        };
+        match destination.source().get_project(filed).await {
+            Ok(None) => EngineError::StaleLink {
+                item: project.to_string(),
+                link: link.to_string(),
+            },
+            _ => error,
+        }
     }
 
     /// Whether an item copied on its own to `destination` leaves out the id of its source
@@ -7005,6 +7180,14 @@ impl Engine {
                 continue;
             }
             dependents::record(&mut task.metadata, &dependents);
+            // A follow-up of this task is sent after this write, and carries what it records.
+            if let Some(follow) = journal
+                .follow_ups
+                .iter_mut()
+                .find(|follow| follow.at == recording.at.source && follow.id == recording.at.native)
+            {
+                dependents::record(metadata_of(&mut follow.item), &dependents);
+            }
             at.source()
                 .check_status_write(
                     ItemKind::Task,
@@ -7069,6 +7252,22 @@ impl Engine {
                             .collect(),
                     ),
                 );
+            }
+            // A follow-up of this home is sent after this write, and carries the same list.
+            if let Some(follow) = journal
+                .follow_ups
+                .iter_mut()
+                .find(|follow| follow.at == home.id.source && follow.id == home.id.native)
+            {
+                let metadata = metadata_of(&mut follow.item);
+                match project.metadata.get(MetadataKey::MEMBERS_KEY) {
+                    Some(members) => {
+                        metadata.insert(MetadataKey::MEMBERS_KEY.to_owned(), members.clone());
+                    }
+                    None => {
+                        metadata.remove(MetadataKey::MEMBERS_KEY);
+                    }
+                }
             }
             let edges = prior.edges.clone();
             at.source()
@@ -7289,7 +7488,7 @@ impl Engine {
         prior: Option<Prior>,
         stamping: Stamping,
         journal: &mut Journal,
-    ) -> Result<(NativeId, Option<String>), EngineError> {
+    ) -> Result<NativeId, EngineError> {
         let created_kind = item.item.level();
         let suggested = target
             .clone()
@@ -7333,11 +7532,23 @@ impl Engine {
                     .insert(MetadataKey::EDGES_ON_RECORD_KEY.to_owned(), Value::from(1));
             }
         }
-        if let Item::Task(task) = &mut landing
-            && stamping.stamps(task, prior.as_ref())
-        {
-            let record = record_of(item, task, edges, destination.name());
-            record.stamp(&mut task.metadata);
+        // A project and a document carry the record on every write that records one: a write of
+        // either sends its whole long form, so there is no member to write on its own instead.
+        let stamped = match &landing {
+            Item::Task(task) => stamping.stamps(task, prior.as_ref()),
+            Item::Project(_) | Item::Document(_) => stamping != Stamping::Never,
+        };
+        let record = stamped.then(|| {
+            record_of(
+                item,
+                &landing,
+                edges,
+                destination.name(),
+                prior.as_ref().and_then(|prior| prior.recorded.as_ref()),
+            )
+        });
+        if let Some(record) = &record {
+            record.stamp(metadata_of(&mut landing));
         }
         // Immediately before anything is sent: a destination declared private is read again
         // for this write, whatever an earlier write read — except the write that completes a
@@ -7403,6 +7614,9 @@ impl Engine {
             Item::Project(project) => project.content.clone(),
             Item::Document(document) => document.content.clone(),
         };
+        // What a follow-up write starts from, should this write's answer say the destination
+        // stores other content than it was sent.
+        let composed = landing.clone();
         let landed = match landing {
             Item::Task(task) if carrying => destination
                 .source()
@@ -7480,7 +7694,102 @@ impl Engine {
                 id: landed.clone(),
             });
         }
-        Ok((landed, sent))
+        // Only this item's latest write is the one its follow-up answers: a repair that writes it
+        // again supersedes what the first write left to do, and one stored as sent needs none.
+        journal
+            .follow_ups
+            .retain(|follow| !(&follow.at == destination.name() && follow.id == landed));
+        if let Some(stored) =
+            stored::rewritten(destination, created_kind.record(), &landed, sent.as_deref())
+            && let Some(follow) = follow_up_of(
+                item,
+                composed,
+                &landed,
+                edges,
+                destination.name(),
+                sent.as_deref(),
+                stored,
+                record,
+            )
+        {
+            journal.follow_ups.push(follow);
+        }
+        Ok(landed)
+    }
+
+    /// Send each follow-up write `journal` holds, as its own request, and answer every item whose
+    /// follow-up was answered with other content than it sent back.
+    ///
+    /// Run once every link of the copy is written, so a record whose version is its source's
+    /// change token records the token the source answered that link write with — a source that
+    /// tokens its whole item moves it when the link lands — and a later copy of an unchanged
+    /// source finds it unchanged. A follow-up that fails fails the copy, which then undoes every
+    /// write it made; one answered with other content is landed and reported `failed`.
+    async fn follow_up(
+        &self,
+        journal: &mut Journal,
+    ) -> Result<Vec<(GlobalId, EngineError)>, EngineError> {
+        let mut diverged = Vec::new();
+        for mut follow in std::mem::take(&mut journal.follow_ups) {
+            let destination = self.writable(&follow.at)?;
+            if let Some(mut record) = follow.record.take() {
+                if follow.tokened
+                    && let Some(version) = journal.linked_versions.get(&follow.source.to_string())
+                {
+                    record.version = Some(version.clone());
+                }
+                record.digest = record::digest_of(
+                    &follow.item,
+                    &follow.edges,
+                    follow.comments.clone(),
+                    &follow.at,
+                );
+                record.stamp(metadata_of(&mut follow.item));
+            }
+            self.at_write(
+                destination,
+                &follow.source.to_string(),
+                &WriteTarget::Existing(&follow.id),
+            )
+            .await?;
+            let kind = follow.item.level().record();
+            stored::forget(destination, kind, &follow.id);
+            let target = Some(follow.id.clone());
+            match follow.item {
+                Item::Task(task) => destination
+                    .source()
+                    .write_task(&ItemWrite {
+                        target,
+                        item: *task,
+                        depends_on: follow.edges,
+                    })
+                    .await
+                    .map(drop),
+                Item::Project(project) => destination
+                    .source()
+                    .write_project(&ItemWrite {
+                        target,
+                        item: *project,
+                        depends_on: follow.edges,
+                    })
+                    .await
+                    .map(drop),
+                Item::Document(document) => destination
+                    .source()
+                    .write_document(&ItemWrite {
+                        target,
+                        item: *document,
+                        depends_on: Vec::new(),
+                    })
+                    .await
+                    .map(drop),
+            }
+            .map_err(|error| refused(destination, error))?;
+            if let Some(error) = stored::unstable(destination, kind, &follow.id, &follow.stored) {
+                diverged.push((follow.source, error));
+            }
+        }
+        Ok(diverged)
     }
 
     /// A configured source that built, for reading an item out of.
@@ -7633,6 +7942,11 @@ fn request_for(source: &ResolvedSource, cursor: Option<Cursor>) -> PageRequest {
 /// A free function over the state already read rather than a method that reads it again:
 /// the same answer is wanted where the item is landed and where a repeat copy of a project
 /// decides whether it settled, and a second read there is a second round trip for nothing.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is one part of what the write would send, and whether the source's token is \
+              trusted to say it is unchanged"
+)]
 fn changes(
     held: Option<&Prior>,
     item: &Planned,
@@ -7641,6 +7955,7 @@ fn changes(
     edges: &[DependencyEdge],
     delivers: &[TaskRef],
     destination: &ResolvedSource,
+    covers: bool,
 ) -> bool {
     let Some(held) = held else {
         return true;
@@ -7661,6 +7976,9 @@ fn changes(
         && !lands_as_held(item, held, &mut outgoing)
     {
         return true;
+    }
+    if recorded_unchanged(item, held, &outgoing, edges, destination.name(), covers) {
+        return false;
     }
     !same(&held.item, &outgoing, destination.name()) || !same_edges(&held.edges, edges)
 }
@@ -7949,22 +8267,36 @@ async fn set_link(
     key: &MetadataKey,
     value: &Value,
 ) -> Result<bool, SourceError> {
+    Ok(set_link_versioned(source, level, id, key, value)
+        .await?
+        .is_some())
+}
+
+/// [`set_link`], answering — when the source holds the item — the change token it answered the
+/// write with, `None` inside for a source that gives none.
+async fn set_link_versioned(
+    source: &ResolvedSource,
+    level: Level,
+    id: &NativeId,
+    key: &MetadataKey,
+    value: &Value,
+) -> Result<Option<Option<String>>, SourceError> {
     Ok(match level {
         Level::Task => source
             .source()
             .set_task_metadata(id, key, value)
             .await?
-            .is_some(),
+            .map(|task| task.version),
         Level::Project => source
             .source()
             .set_project_metadata(id, key, value)
             .await?
-            .is_some(),
+            .map(|project| project.version),
         Level::Document => source
             .source()
             .set_document_metadata(id, key, value)
             .await?
-            .is_some(),
+            .map(|document| document.version),
     })
 }
 
@@ -8259,25 +8591,6 @@ fn substitute(content: &str, table: &[(String, Resolution)]) -> (String, Counted
         at += character.len_utf8();
     }
     (written, counts)
-}
-
-/// The entry [`Engine::rewrite_references`] records for a document it rewrote from `read`
-/// to `written`, or `None` to carry what the document records verbatim.
-///
-/// `None` unless `read` is still the rendering its entry vouches for, because only then is
-/// the one change between it and `written` this copy's own: a hand edit is never laundered.
-pub(super) fn restamped(
-    metadata: &BTreeMap<String, Value>,
-    read: &str,
-    written: &str,
-) -> Option<TemplateProvenance> {
-    let mut provenance = TemplateProvenance::read(metadata).ok().flatten()?;
-    if provenance.body_digest.as_str() != body_digest(read) {
-        return None;
-    }
-    provenance.body_digest =
-        Sha256Digest::parse(body_digest(written)).expect("`body_digest` spells a digest");
-    Some(provenance)
 }
 
 /// The origin one item records, when it records a usable one.
@@ -8747,6 +9060,23 @@ fn reads_comments(request: &CopyRequest) -> bool {
 }
 
 impl Engine {
+    /// Whether `item`'s source token vouches for every part a copy of it writes, on the terms of
+    /// [`Self::token_covers_a_copy`] — a project's fields and forward edges, a document's
+    /// fields and assets.
+    fn version_covers_a_copy(&self, item: &Planned) -> bool {
+        match &item.item {
+            Item::Task(_) => self.token_covers_a_copy(&item.source.source, item.carried.is_some()),
+            Item::Project(_) => self.readable(&item.source.source).is_ok_and(|source| {
+                let coverage = source.source().project_version_coverage();
+                coverage.fields.reason().is_none() && coverage.forward_edges.reason().is_none()
+            }),
+            Item::Document(_) => self.readable(&item.source.source).is_ok_and(|source| {
+                let coverage = source.source().document_version_coverage();
+                coverage.fields.reason().is_none() && coverage.assets.reason().is_none()
+            }),
+        }
+    }
+
     /// Whether `source`'s token vouches for every part a copy writes of a task — its fields,
     /// its forward edges, and its comments when the copy carries them — so a copy may skip one
     /// whose token is unchanged: a part it does not cover can change with the token as it was.
@@ -8818,20 +9148,82 @@ fn skipped_counts(
     }
 }
 
-/// The record a copy of `item` leaves on its destination task, which lands as `task` with
-/// `edges`: the source's token as read, whether the comments were carried, and the digest of
-/// what lands — the comments as the copy leaves them included, when it carries them.
+/// The record a copy of `item` leaves on its destination item, which lands as `landing` with
+/// `edges`: what the source was — its token, or the digest of what this copy composed of it, its
+/// content with every image the destination already serves pointed where `recorded` says — whether
+/// the comments were carried, and the digest of what lands, the comments as the copy leaves them
+/// included when it carries them.
 fn record_of(
     item: &Planned,
-    task: &Task,
+    landing: &Item,
     edges: &[DependencyEdge],
     destination: &SourceName,
+    recorded: Option<&AssetUploads>,
 ) -> record::Record {
-    let version = match &item.item {
-        Item::Task(source) => source.version.clone(),
-        Item::Project(_) | Item::Document(_) => None,
+    let content = served_by(content_of(landing), &item.assets, recorded);
+    record::Record {
+        version: Some(source_version(item, content.as_deref())),
+        with_comments: item.carried.is_some(),
+        digest: record::digest_of(landing, edges, record_comments(item), destination),
+    }
+}
+
+/// What a copy records of `item`'s source at [`MetadataKey::COPIED_VERSION_KEY`]: its change
+/// token where its source gives one, otherwise the digest of what this copy composes of it with
+/// `content`.
+fn source_version(item: &Planned, content: Option<&str>) -> String {
+    token_of(&item.item).map_or_else(
+        || record::composed(&item.item, content).to_string(),
+        str::to_owned,
+    )
+}
+
+/// The change token `item`'s source gives it, when it gives one.
+fn token_of(item: &Item) -> Option<&str> {
+    match item {
+        Item::Task(task) => task.version.as_deref(),
+        Item::Project(project) => project.version.as_deref(),
+        Item::Document(document) => document.version.as_deref(),
+    }
+}
+
+/// The content of either kind of item.
+fn content_of(item: &Item) -> Option<&str> {
+    match item {
+        Item::Task(task) => task.content.as_deref(),
+        Item::Project(project) => project.content.as_deref(),
+        Item::Document(document) => document.content.as_deref(),
+    }
+}
+
+/// `content` with each of `assets` pointed where `recorded` says the destination serves it, when
+/// it already serves every one — otherwise as it is, since what an upload would serve the rest
+/// at is not known before it is made.
+fn served_by(
+    content: Option<&str>,
+    assets: &[AssetPayload],
+    recorded: Option<&AssetUploads>,
+) -> Option<String> {
+    let content = content?;
+    let Some(recorded) = recorded.filter(|_| !assets.is_empty()) else {
+        return Some(content.to_owned());
     };
-    let comments = item.carried.is_some().then(|| match &item.comment_plan {
+    let mut served = BTreeMap::new();
+    for payload in assets {
+        let Some(url) = recorded.reusable(&payload.name, &payload.sha256) else {
+            return Some(content.to_owned());
+        };
+        served.insert(payload.name.clone(), url.to_owned());
+    }
+    Some(onetaskgraph_plugin_api::rewrite_asset_references(
+        content, &served,
+    ))
+}
+
+/// The comments a task's record digests: the ones a `--comments` copy leaves at the destination,
+/// and none for a copy without it.
+fn record_comments(item: &Planned) -> Option<Vec<Value>> {
+    item.carried.is_some().then(|| match &item.comment_plan {
         Some(plan) => plan.after.clone(),
         None => comments::digest_entries(
             item.held
@@ -8839,12 +9231,67 @@ fn record_of(
                 .and_then(|held| held.comments.as_deref())
                 .unwrap_or_default(),
         ),
-    });
-    record::Record {
-        version,
-        with_comments: item.carried.is_some(),
-        digest: record::digest(task, edges, comments, destination),
+    })
+}
+
+/// The follow-up write a copy owes the item it landed as `id` from `composed`, whose write sent
+/// `sent` and whose answer said the destination stores `stored`: that content verbatim, its
+/// rendering's provenance moved onto it where it vouched for what was sent, the assets the write
+/// uploaded recorded as it recorded them, and `record` — `None` when the item records nothing a
+/// stored content could make untrue, so it is written once and no more.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is one fact the first write settled and the follow-up has to repeat"
+)]
+fn follow_up_of(
+    item: &Planned,
+    mut composed: Item,
+    id: &NativeId,
+    edges: &[DependencyEdge],
+    destination: &SourceName,
+    sent: Option<&str>,
+    stored: String,
+    record: Option<record::Record>,
+) -> Option<FollowUp> {
+    let before = content_of(&composed).unwrap_or_default().to_owned();
+    let sent = sent.unwrap_or_default();
+    let metadata = metadata_of(&mut composed);
+    if !item.assets.is_empty()
+        && let Some(uploads) = stored::served(&before, sent, &item.assets)
+    {
+        if uploads.0.is_empty() {
+            metadata.remove(MetadataKey::ASSETS_KEY);
+        } else {
+            metadata.insert(MetadataKey::ASSETS_KEY.to_owned(), uploads.to_value());
+        }
     }
+    let restamped = stored::restamp(metadata, &[&before, sent], &stored);
+    if record.is_none() && !restamped {
+        return None;
+    }
+    match &mut composed {
+        Item::Task(task) => task.content = Some(stored.clone()),
+        Item::Project(project) => project.content = Some(stored.clone()),
+        Item::Document(document) => document.content = Some(stored.clone()),
+    }
+    let tokened = token_of(&item.item).is_some();
+    let record = record.map(|mut record| {
+        if !tokened {
+            record.version = Some(source_version(item, Some(sent)));
+        }
+        record
+    });
+    Some(FollowUp {
+        at: destination.clone(),
+        id: id.clone(),
+        source: item.source.clone(),
+        item: composed,
+        edges: edges.to_vec(),
+        record,
+        comments: record_comments(item),
+        tokened,
+        stored,
+    })
 }
 
 /// Whether a destination task that already reads as the source does holds a record of the
@@ -8855,6 +9302,10 @@ fn record_of(
 /// A copy without `--comments` leaves any other stale record where it is rather than spend a
 /// write on it, so a repeat copy of an unchanged source costs exactly what it did before
 /// there was a record; the next copy that writes the task records it afresh.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the same facts `changes` decides from, and whether the source's token is trusted"
+)]
 fn stale_record(
     item: &Planned,
     held: &Prior,
@@ -8863,6 +9314,7 @@ fn stale_record(
     edges: &[DependencyEdge],
     delivers: &[TaskRef],
     destination: &ResolvedSource,
+    covers: bool,
 ) -> bool {
     let landing = as_written(
         destination,
@@ -8876,12 +9328,71 @@ fn stale_record(
             Some(held),
         ),
     );
-    let (Item::Task(task), Item::Task(held_task)) = (&landing, &held.item) else {
+    let (Item::Task(_), Item::Task(held_task)) = (&landing, &held.item) else {
         return false;
     };
-    let record = record_of(item, task, edges, destination.name());
+    // A record that still says both ends are as that copy left them is the record this copy
+    // would leave, whatever the destination did to the content it was sent.
+    if recorded_unchanged(item, held, &landing, edges, destination.name(), covers) {
+        return false;
+    }
+    let record = record_of(
+        item,
+        &landing,
+        edges,
+        destination.name(),
+        held.recorded.as_ref(),
+    );
     !record.held_by(&held_task.metadata)
         && (item.carried.is_some() || record::carried_comments(&held_task.metadata))
+}
+
+/// Whether the record `held` carries says neither end changed since the copy that left it: its
+/// source is still what that copy recorded — by its token where `covers` says the token vouches
+/// for every part a copy writes, otherwise by the digest of what this copy composes, `outgoing`
+/// — and the destination still digests to what it recorded; and what this copy would write
+/// beside the item's own fields — its edges, the tasks it delivers, the project it is filed
+/// under and its status as the destination writes it — is what the destination holds.
+///
+/// It is what recognises an unchanged item on a destination that rewrites the Markdown it is
+/// sent, where comparing what the copy composes with what the destination stores never could.
+fn recorded_unchanged(
+    item: &Planned,
+    held: &Prior,
+    outgoing: &Item,
+    edges: &[DependencyEdge],
+    destination: &SourceName,
+    covers: bool,
+) -> bool {
+    let version = match token_of(&item.item) {
+        Some(token) if covers => token.to_owned(),
+        Some(_) => return false,
+        None => record::composed(&item.item, content_of(outgoing)).to_string(),
+    };
+    let with_comments = item.carried.is_some();
+    let comments = if with_comments {
+        match &held.comments {
+            Some(held) => Some(comments::digest_entries(held)),
+            None => return false,
+        }
+    } else {
+        None
+    };
+    let now = record::digest_of(&held.item, &held.edges, comments, destination);
+    if !record::holds(described(&held.item).1, &version, with_comments, &now) {
+        return false;
+    }
+    same_edges(&held.edges, edges)
+        && match (&held.item, outgoing) {
+            (Item::Task(held), Item::Task(outgoing)) => {
+                targets(&held.delivers, destination) == targets(&outgoing.delivers, destination)
+                    && held.status == outgoing.status
+                    && held.project == outgoing.project
+            }
+            (Item::Project(held), Item::Project(outgoing)) => held.status == outgoing.status,
+            (Item::Document(held), Item::Document(outgoing)) => held.project == outgoing.project,
+            _ => false,
+        }
 }
 
 /// Whether the destination already reads exactly as this copy would leave it.

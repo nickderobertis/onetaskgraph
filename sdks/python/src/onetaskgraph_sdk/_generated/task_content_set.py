@@ -126,6 +126,12 @@ class WriteResult(BaseModel):
 
 
 class TaskContentSet(BaseModel):
+    content: Annotated[
+        str,
+        Field(
+            description="The content the task holds after the write: what its source's backend stores, as the\nwrite's own answer reported it, where the source reports one — a backend may normalize\nthe spelling of the Markdown it is written while keeping its rendered meaning — and\notherwise exactly the bytes sent. An answer, never stored."
+        ),
+    ]
     fallback: Annotated[
         WriteFallback | None,
         Field(

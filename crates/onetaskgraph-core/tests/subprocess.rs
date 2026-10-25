@@ -422,14 +422,13 @@ fn task_holding(content: &str) -> ItemWrite<Task> {
 #[tokio::test]
 async fn a_plugin_that_says_nothing_about_stored_forms_is_never_asked_and_its_answer_never_read() {
     // §3.16: absent means the plugin stores what it is given. The peer answers the handshake and
-    // one write, and nothing else — so a `stored_form` or `stored_status` sent to it would find
-    // no answer and fail rather than read as the identity.
+    // one write, and nothing else — so a `stored_status` sent to it would find no answer and
+    // fail rather than read as the status given.
     let silent = scripted(vec![
         writable_handshake(false),
         r#"{"id":"1","result":{"id":"I-1","stored_content":"* one"}}"#.to_owned(),
     ])
     .expect("the handshake succeeds");
-    assert_eq!(silent.stored_form("- one").await.unwrap(), "- one");
     let status = Status {
         category: StatusCategory::Done,
         name: "done".to_owned(),
@@ -444,16 +443,16 @@ async fn a_plugin_that_says_nothing_about_stored_forms_is_never_asked_and_its_an
 
 #[tokio::test]
 async fn a_plugin_declaring_stored_forms_is_asked_and_what_its_write_says_it_stores_is_kept_once() {
+    // The peer answers `stored_status` and three writes, and nothing else: the retired
+    // `stored_form` is never sent, so a request for it would find no answer and fail.
     let declaring = scripted(vec![
         writable_handshake(true),
-        r#"{"id":"1","result":{"content":"* one"}}"#.to_owned(),
-        r#"{"id":"2","result":{"status":{"category":"done","name":"Shipped"}}}"#.to_owned(),
-        r#"{"id":"3","result":{"id":"I-1","stored_content":"* one"}}"#.to_owned(),
-        r#"{"id":"4","result":{"id":"I-2"}}"#.to_owned(),
-        r#"{"id":"5","result":{"id":"I-3","stored_content":7}}"#.to_owned(),
+        r#"{"id":"1","result":{"status":{"category":"done","name":"Shipped"}}}"#.to_owned(),
+        r#"{"id":"2","result":{"id":"I-1","stored_content":"* one"}}"#.to_owned(),
+        r#"{"id":"3","result":{"id":"I-2"}}"#.to_owned(),
+        r#"{"id":"4","result":{"id":"I-3","stored_content":7}}"#.to_owned(),
     ])
     .expect("the handshake succeeds");
-    assert_eq!(declaring.stored_form("- one").await.unwrap(), "* one");
     let status = Status {
         category: StatusCategory::Done,
         name: "done".to_owned(),
@@ -536,7 +535,7 @@ fn the_reference_host_answers_the_stored_forms_golden_exactly() {
     let requests = &golden["requests"];
     let answers = served(&[
         handshake(2, hosted_settings()),
-        json!({"id":"1","method":"stored_form","params":requests["stored_form"]}),
+        json!({"id":"1","method":"stored_status","params":requests["stored_status"]}),
         json!({"id":"2","method":"stored_status","params":{
             "kind":"task","status":{"category":"done","name":"Finished"}}}),
         json!({"id":"3","method":"write_task","params":{"write":{"target":null,"item":{
@@ -549,13 +548,17 @@ fn the_reference_host_answers_the_stored_forms_golden_exactly() {
         .expect("a handshake result")
         .remove("capabilities");
     assert_eq!(initialize, expected["initialize"]);
-    assert_eq!(answers[1]["result"], expected["stored_form"]);
+    assert_eq!(
+        answers[1]["result"],
+        json!({"status": {"category": "done", "name": "done"}})
+    );
     assert_eq!(answers[2]["result"], expected["stored_status"]);
     assert_eq!(answers[3]["result"], expected["write_task"]);
 }
 
 #[test]
-fn the_reference_host_declares_stored_forms_and_answers_both_methods_as_its_plugin_does() {
+fn the_reference_host_declares_stored_forms_and_answers_stored_status_but_not_the_retired_stored_form()
+ {
     let answers = served(&[
         handshake(2, hosted_settings()),
         json!({"id":"1","method":"stored_form","params":{"content":"- one"}}),
@@ -563,8 +566,8 @@ fn the_reference_host_declares_stored_forms_and_answers_both_methods_as_its_plug
             "kind":"task","status":{"category":"done","name":"Finished"}}}),
     ]);
     assert_eq!(answers[0]["result"]["stored_forms"], json!(true));
-    // The in-memory plugin stores what it is given, so it declares the identity.
-    assert_eq!(answers[1]["result"], json!({"content": "- one"}));
+    // `stored_form` is retired (§4.25): the host no longer answers it, as no engine sends it.
+    assert!(answers[1].get("error").is_some(), "{}", answers[1]);
     assert_eq!(
         answers[2]["result"],
         json!({"status": {"category": "done", "name": "Finished"}})

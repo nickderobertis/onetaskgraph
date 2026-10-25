@@ -892,8 +892,8 @@ const PROBE: &str = "P.\n\n<!-- probe {\"site\":\"example.com\",\"list\":[1]} --
 /// comment's closing line is escaped, and the code span comes back as it was written.
 const PROBE_STORED: &str = "P.\n\n<!-- probe {\"site\":\"[example.com](<http://example.com>)\",\"list\":\\[1\\]} -->\n\n<!-- probe\n{\"k\":\"v\"}\n\\-->\n\n<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->";
 
-/// One instance of each rule the plugin's ruling on what Linear does to Markdown on write
-/// declares but the lone image, which `linear_assets`' live journey writes with real uploads: a
+/// One instance of each rewrite Linear was observed to make of Markdown on write but the lone
+/// image, which `linear_assets`' live journey writes with real uploads: a
 /// bullet the next lines run on from, a URL, two domain-like tokens, brackets, a tilde, an
 /// underscore emphasis, an escaped quote, a backslash before a letter, a line opening `-->`, a
 /// fenced block and a line after it, each set apart, the same text inside the fence and an
@@ -901,11 +901,11 @@ const PROBE_STORED: &str = "P.\n\n<!-- probe {\"site\":\"[example.com](<http://e
 /// row is one only outside a list item and which ends the content with no line break after it.
 const MARKDOWN_PROBE: &str = "- bullet\n| a | b |\n| --- | --- |\nsee https://example.com/a.\nexample.com and \"caller.live\"\n[x] done ~5 _y_\nsay \\\"hi\\\" a \\d b\n-->\n```\n- [x] _y_ example.com ~\n```\nkept `- [x] _y_ example.com ~` span\n\n\n\n| a | b |\n| --- | --- |\n";
 
-/// What that ruling declares Linear stores [`MARKDOWN_PROBE`] as — the plugin's `stored_form`
-/// of it, which its unit tests hold to this — and what the live leg asserts Linear hands back.
-/// It is byte for byte what real Linear handed back from an issue's description in CI run
-/// 39375395042, of this probe as it was then: one blank line where it now holds a run of them,
-/// and no line break after the table.
+/// What Linear stores [`MARKDOWN_PROBE`] as, and what the live leg asserts Linear hands back: byte
+/// for byte what real Linear handed back from an issue's description in CI run 39375395042, of
+/// this probe as it was then — one blank line where it now holds a run of them, and no line
+/// break after the table. The plugin predicts none of it; it reads what Linear stores off each
+/// write's own answer.
 const MARKDOWN_PROBE_STORED: &str = "* bullet\n  | a | b |\n  | --- | --- |\n  see [https://example.com/a](<https://example.com/a>).\n  [example.com](<http://example.com>) and \"[caller.live](<http://caller.live>)\"\n  \\[x\\] done \\~5 *y*\n  say \"hi\" a \\\\d b\n  \\-->\n\n```\n- [x] _y_ example.com ~\n```\n\nkept `- [x] _y_ example.com ~` span\n\n| a | b |\n| -- | -- |\n";
 
 /// What the follow-up flow rests on, against Linear itself: what Linear does to an HTML comment
@@ -1149,8 +1149,7 @@ async fn drive_follow_ups(
     );
     // And with this source's metadata slot after it: the table keeps its line break, and the
     // slot follows one blank line later, so a read hands the content back as it was written.
-    let tabled =
-        onetaskgraph_linear::stored_form::stored_form("Owners:\n\n| a | b |\n| --- | --- |");
+    let tabled = "Owners:\n\n| a | b |\n| -- | -- |\n".to_owned();
     source
         .write_document(&ItemWrite {
             target: Some(document_id.clone()),
