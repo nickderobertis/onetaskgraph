@@ -35,8 +35,12 @@ pub(super) const CALLS: [&str; 4] = [
 
 const KEY: &str = "plan.approval";
 
+/// The read that holds a guarded write to the version: the document, with its project and the
+/// project's members beside it.
+const GUARDED_READ: &str = "reading one document with its project and the project's members";
+
 /// What a guarded write sends: the read that holds it to the version, then the write.
-const GUARDED_WRITE: [&str; 2] = ["reading one issue", "updating an issue"];
+const GUARDED_WRITE: [&str; 2] = [GUARDED_READ, "updating an issue"];
 
 /// One call of the sequence: what it printed, and the requests the board answered for it.
 struct Step {
@@ -292,7 +296,7 @@ fn a_document_write_expecting_a_version_the_board_has_moved_past_unseen_is_refus
             "cache {cache}: a write expecting a version the board has moved past landed: {:?}",
             sent(&calls)
         );
-        assert_eq!(sent(&calls), ["reading one issue"], "cache {cache}");
+        assert_eq!(sent(&calls), [GUARDED_READ], "cache {cache}");
         let said = stderr(&refused);
         assert!(
             said.contains(&version) && said.contains("nothing was written"),
@@ -341,7 +345,7 @@ fn a_document_write_expecting_its_own_superseded_version_is_refused() {
     let after = plan.github.body(&document);
     let (refused, calls) = set_expecting(&plan, &id, "plan.second", &first);
     assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
-    assert_eq!(sent(&calls), ["reading one issue"]);
+    assert_eq!(sent(&calls), [GUARDED_READ]);
     assert_eq!(plan.github.body(&document), after);
     assert!(slot(&plan, &document).get("plan.second").is_none());
 }
@@ -353,7 +357,7 @@ fn a_document_write_refuses_a_version_it_cannot_order_and_a_document_the_board_l
     let before = plan.github.body(&document);
     let (refused, calls) = set_expecting(&plan, &id, KEY, "not-a-version");
     assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
-    assert_eq!(sent(&calls), ["reading one issue"]);
+    assert_eq!(sent(&calls), [GUARDED_READ]);
     assert!(
         stderr(&refused).contains("not-a-version"),
         "{}",

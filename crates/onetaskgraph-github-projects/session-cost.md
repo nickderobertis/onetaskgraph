@@ -1283,3 +1283,31 @@ requests are now two of each new document (1,000 → **600** nodes on the old on
 once (**103** and **100**). Requests go 212 → **214** — the two reconciliations, which the
 session pays once per document; the dependency reads themselves stay seven — and nodes go
 244,247 → **244,256**.
+
+## A copy's field values and edges share requests of nineteen
+
+A copy's held-back field values and blocked-by edges are one ordered list, sent nineteen aliases
+to a request — the most the board-copy feasibility spike
+(`board-copy-gaps-2026-10-24-spike-feasibility-report`) saw GitHub price at the one point every
+mutation request costs — so a request holding both kinds is `WRITE_FIELDS_AND_EDGES`, one holding
+only field values `WRITE_FIELD_VALUES` and one holding only edges `ADD_BLOCKED_BYS`, each now of
+nineteen slots where they were eleven. Closes follow, in requests of eleven as before.
+
+**`copy-cost.txt`** moves on (a): the whole copy of a project of ten tasks writes its twenty field
+values in one request where it took two, so requests go 7 → **6**; its nodes stay **18,463**,
+since a mutation counts none.
+
+## A document is read with its project and the project's members
+
+A document read by its id sends `DOCUMENT_IN_PROJECT`: the document as `ISSUE` reads it, with the
+project issue it is filed under and a page of that project's members, each without a page of
+what blocks it. A write the public boundary screens is held to who may read the document — its
+project's and every member's classification as much as its own — so the one read a guarded
+metadata write already makes, to hold the version, answers the project and its members too,
+rather than a read of each after it. It is priced at one point, as `ISSUE` is.
+
+**`session-cost.txt`** moves on three lines and its totals: four of the live journey's
+`reading one issue` requests are document reads, now `DOCUMENT_IN_PROJECT` (37 → **33**, and
+**4** of the new document at 21,404 nodes), and the session reconciles the new document's node
+count once (**5,351**). Requests go 214 → **215**, the reconciliation; nodes go 244,256 →
+**269,187**.

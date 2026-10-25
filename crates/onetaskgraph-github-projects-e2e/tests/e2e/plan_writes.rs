@@ -239,8 +239,14 @@ fn a_persons_edit_made_between_the_copys_read_and_its_write_is_kept() {
 
 /// What a request of a copy's aliased writes sent, each slot's input in the order it sent them.
 fn sent(variables: &Value, prefix: &str) -> Vec<Value> {
-    (0..onetaskgraph_github_projects::MUTATION_BATCH)
-        .filter(|slot| variables[format!("send{slot}")] == true)
+    // A request carrying both field values and edges says which of each it sends apart.
+    let send = match prefix {
+        "field" if variables.get("sendField0").is_some() => "sendField",
+        "block" if variables.get("sendBlock0").is_some() => "sendBlock",
+        _ => "send",
+    };
+    (0..onetaskgraph_github_projects::WRITE_BATCH)
+        .filter(|slot| variables[format!("{send}{slot}")] == true)
         .map(|slot| variables[format!("{prefix}{slot}")].clone())
         .collect()
 }
@@ -250,8 +256,9 @@ fn a_first_copy_files_each_item_by_its_create_and_sends_its_other_writes_togethe
     // Every item is created filed on the board and under its project by its own `createIssue`
     // — the project's alone, the eight tasks' in one aliased request — and the rest of what
     // each needs lands once all of them exist: their board items read in one request, their
-    // `Status` and origin values in aliased field writes of at most eleven, and the ten edges
-    // in one more. The document is the
+    // `Status` and origin values and their ten edges in aliased writes of at most nineteen —
+    // the eighteen values and the first edge in one, the nine edges left in the next. The
+    // document is the
     // same in its own process. Nothing is added to the board or filed under a project after its
     // create, and the board holds the plan exactly as a copy always left it.
     let plan = Plan::new(SMALL, Vec::new());
@@ -265,8 +272,7 @@ fn a_first_copy_files_each_item_by_its_create_and_sends_its_other_writes_togethe
         [
             "creating an issue",
             "creating several issues together",
-            "writing board fields of the items a copy created",
-            "writing board fields of the items a copy created",
+            "writing board fields and dependencies of the items a copy created",
             "recording several dependencies together",
             "creating an issue",
             "writing board fields of the items a copy created",
@@ -285,9 +291,7 @@ fn a_first_copy_files_each_item_by_its_create_and_sends_its_other_writes_togethe
     }
     // The project's and every task's `Status` and origin, each value its own aliased mutation:
     // a board left with GitHub's default workflows files a new item with no `Status`.
-    let mut values = sent(&written[2].1, "field");
-    assert_eq!(values.len(), 11);
-    values.extend(sent(&written[3].1, "field"));
+    let values = sent(&written[2].1, "field");
     let count = |field: &str| {
         values
             .iter()
@@ -299,11 +303,17 @@ fn a_first_copy_files_each_item_by_its_create_and_sends_its_other_writes_togethe
         (9, 9, 18),
         "{values:#?}"
     );
-    assert_eq!(sent(&written[4].1, "block").len(), 10);
-    let document_create = &written[5].1["input"];
+    assert_eq!(
+        (
+            sent(&written[2].1, "block").len(),
+            sent(&written[3].1, "block").len()
+        ),
+        (1, 9)
+    );
+    let document_create = &written[4].1["input"];
     assert_eq!(document_create["projectV2Ids"], board);
     assert_eq!(document_create["parentIssueId"], json!(at["P"]));
-    let document_fields = sent(&written[6].1, "field");
+    let document_fields = sent(&written[5].1, "field");
     assert_eq!(document_fields.len(), 1);
     assert_eq!(document_fields[0]["value"], json!({"text": "notes:D"}));
     // The board items GitHub adds after each create, read once per process, after every create
@@ -344,7 +354,7 @@ fn a_status_a_board_already_files_a_new_item_at_is_not_written_again() {
     super::plan_copy::holds_the_plan(&plan, &at, None);
     let values: Vec<Value> = mutations(&calls)
         .iter()
-        .filter(|(name, _)| name == "writing board fields of the items a copy created")
+        .filter(|(name, _)| name.starts_with("writing board fields"))
         .flat_map(|(_, variables)| sent(variables, "field"))
         .collect();
     assert_eq!(values.len(), 10, "{values:#?}");
@@ -445,7 +455,9 @@ fn a_first_copy_whose_items_github_files_by_the_last_read_lands_the_plan() {
 #[test]
 fn a_first_copy_whose_items_github_never_files_takes_back_every_item_it_created() {
     // Never filed: the copy waits one, two, four, eight and sixteen seconds, reading again after
-    // each, then refuses naming what GitHub never added, and takes back every issue it created.
+    // each, then files each still absent itself — GitHub answering that it is there already —
+    // reads once more, and still finding none refuses naming what GitHub never added, and takes
+    // back every issue it created.
     let plan = Plan::new(SMALL, Vec::new());
     plan.github.file_created_items_after(usize::MAX);
     let lease = plan.clock.lease(0);
@@ -455,7 +467,7 @@ fn a_first_copy_whose_items_github_never_files_takes_back_every_item_it_created(
     assert_ne!(output.status.code(), Some(0), "the copy was refused");
     let said = onetaskgraph_e2e_support::common::stderr(&output);
     assert!(
-        said.contains("has not added them to it after 31 seconds")
+        said.contains("after 31 seconds and adding them to it, still answers them on no item")
             && said.contains("run the copy again once GitHub has caught up"),
         "{said}"
     );
@@ -475,9 +487,8 @@ fn a_batched_create_refused_part_way_whose_cleanup_github_refuses_names_what_is_
     // copy created first, whose delete GitHub accepts, is taken back.
     let plan = Plan::new(SMALL, Vec::new());
     plan.github.fail_field_alias("create3");
-    for _ in 0..3 {
-        plan.github.refuse_once("deleteIssue(input:$input)");
-    }
+    // The three are taken back together, in one request of aliased deletes.
+    plan.github.refuse_once("deleteIssue(input:$delete");
     let lease = plan.clock.lease(0);
     let output = plan.run(&["project", "copy", "notes:P", "--to", "board", "--json"]);
     lease.wait_for_detach();

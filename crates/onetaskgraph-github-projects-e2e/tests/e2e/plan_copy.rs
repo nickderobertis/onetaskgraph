@@ -17,7 +17,9 @@ use onetaskgraph_e2e_support::{
     binary,
     clock::SimulatedClock,
     common::{Sandbox, assert_spawnable_on_windows, stderr, stdout},
-    fixtures::{GitHubBoardFields, document, github_projects_with_items},
+    fixtures::{
+        GitHubBoardFields, MEASURED_PLACEMENT_MILLIS, document, github_projects_with_items,
+    },
     images,
 };
 use onetaskgraph_github_projects::graphql;
@@ -244,6 +246,22 @@ impl Plan {
         };
         plan.author();
         plan
+    }
+
+    /// Place every issue a create files on the board as GitHub places one — with no board item
+    /// in the create's answer, and on the board only the spike's measured delay after it, on
+    /// the simulated clock — rather than at once.
+    pub fn place_as_measured(&self) {
+        let timed = self.clock.clone();
+        self.github.place_filed_issues_after(
+            MEASURED_PLACEMENT_MILLIS
+                .iter()
+                .map(|millis| std::time::Duration::from_millis(*millis))
+                .collect(),
+            move || timed.now(),
+        );
+        let placing = self.github.clone();
+        self.board.on_answered(move |at| placing.answered_at(at));
     }
 
     /// The path the folder reports for task `n`, which the document names it by.
@@ -771,6 +789,7 @@ pub(super) fn counterparts(project: &Value, document: &Value) -> Counterparts {
 /// board the copy budgets' workload states, what each cost is recorded as their telemetry.
 fn three_scenarios(items: usize) -> [BTreeMap<String, usize>; 3] {
     let plan = Plan::new(items, Vec::new());
+    plan.place_as_measured();
     let recorded = |name: &str, scenario: &Scenario| {
         if items == SMALL {
             record(name, scenario, items);
@@ -948,8 +967,9 @@ fn the_board_holds_each_request_for_the_spikes_mean_latency_of_its_kind() {
 
 /// The documents that read items of the board by their node ids — the reads a change token
 /// stands in for — rather than listing them.
-const ITEM_READS: [&str; 4] = [
+const ITEM_READS: [&str; 5] = [
     graphql::ISSUE,
+    graphql::DOCUMENT_IN_PROJECT,
     graphql::ISSUE_DETAIL,
     graphql::ISSUE_DETAILS,
     graphql::ISSUE_COPY_DETAILS,
@@ -1053,7 +1073,7 @@ fn a_recopy_with_no_token_reads_every_counterpart_in_batches_and_none_on_its_own
     assert_eq!(
         alone,
         vec![&(
-            graphql::ISSUE.to_owned(),
+            graphql::DOCUMENT_IN_PROJECT.to_owned(),
             std::collections::BTreeSet::from([at["D"].clone()])
         )],
         "an item read that is not a batch, but the document's own: {reads:?}"

@@ -1,5 +1,5 @@
 (a) a whole copy of a project of 10 tasks
-requests 7
+requests 6
 node count 18463
 
 requests per call
@@ -7,7 +7,7 @@ requests per call
     1       0  creating several issues together
     2   18400  looking up the items copied from several origins, and what creating one reads
     1      63  reading the board items of the issues a copy created
-    2       0  writing board fields of the items a copy created
+    1       0  writing board fields of the items a copy created
 
 (b) a repeat whole copy of the same project, unchanged, each item recording its origin
 requests 1

@@ -1270,6 +1270,10 @@ struct Running {
     /// the destination counterparts ahead — see [`Engine::read_ahead`] — so the filing lookup's
     /// own read of it, [`Engine::linked_project`], is that read rather than a second one.
     source_projects: HashMap<GlobalId, Project>,
+    /// Each destination the copy read ahead asked about the origin of a project, with that
+    /// origin: its answer is that destination's to hold for this command, so the filing lookup
+    /// confirms a link to that project by it rather than by a read of the project.
+    asked_origins: Vec<(SourceName, String)>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -5074,6 +5078,9 @@ impl Engine {
                 self.classify_references(item, running).await?;
             }
         }
+        // Every item is placed first, and what each lands somewhere not verified private is then
+        // put to the check together, before anything is written.
+        let mut checked = Vec::new();
         for item in planned {
             let destination = self.writable(&item.to)?;
             let target = match &item.target {
@@ -5083,6 +5090,7 @@ impl Engine {
                     project: None,
                 },
             };
+            let exposure = exposure_of(item, |far| self.withholds(&item.to, far, &running.private));
             let outbound = Outbound {
                 item: item.source.to_string(),
                 classification: item.classification.strictest(
@@ -5091,9 +5099,11 @@ impl Engine {
                         .map_or(Classification::Public, |held| classification_of(&held.item)),
                 ),
                 target,
-                exposure: &exposure_of(item, |far| self.withholds(&item.to, far, &running.private)),
+                exposure: &exposure,
             };
-            self.preflight(destination, &outbound).await?;
+            if self.placed(destination, &outbound)? {
+                checked.push((destination, outbound.item.clone(), exposure.clone()));
+            }
             // Every item, not one per destination: who can read a write depends on where in
             // the destination it lands — an issue's own repository on a board.
             if request.dry_run {
@@ -5101,7 +5111,7 @@ impl Engine {
                     .await?;
             }
         }
-        Ok(())
+        self.check_all(&checked).await
     }
 
     /// Ask, once, which tracker each source declared private is that an edge of `planned`,
@@ -5352,6 +5362,11 @@ impl Engine {
         // the copy names it: what a cache standing in front of that destination is pinned
         // from, below.
         let mut homes: Vec<(SourceName, NativeId, GlobalId, ProjectNamed)> = Vec::new();
+        // The origin each document's project records at a destination it is linked to: asked
+        // beside the document's own when that destination is asked about origins anyway, so the
+        // project a new document is filed under is answered by that one request rather than
+        // read on its own before the document is created there.
+        let mut project_origins: Vec<(SourceName, String)> = Vec::new();
         for read in reads {
             let metadata = described(&read.item).1;
             if read.item.level() == Level::Project {
@@ -5457,6 +5472,7 @@ impl Engine {
                     continue;
                 }
                 if let Some(link) = link_of(&running.source_projects[&qualified].metadata, there) {
+                    project_origins.push((there.clone(), qualified.to_string()));
                     want(there, link.native.clone());
                     homes.push((
                         there.clone(),
@@ -5485,7 +5501,13 @@ impl Engine {
                     .await;
             }
         }
-        for (name, asked) in origins {
+        for (name, mut asked) in origins {
+            for (there, origin) in &project_origins {
+                if there == &name && !asked.contains(origin) {
+                    asked.push(origin.clone());
+                    running.asked_origins.push((there.clone(), origin.clone()));
+                }
+            }
             if let Ok(there) = self.writable(&name) {
                 // Nothing is decided by it: each lookup it would have answered is made as before.
                 let _ = there.source().read_ahead_origins_for_copy(&asked).await;
@@ -6678,7 +6700,12 @@ impl Engine {
             return Ok(Some(landed.clone()));
         }
         if let Some(linked) = self
-            .linked_project(request, project, running.source_projects.get(project))
+            .linked_project(
+                request,
+                project,
+                running.source_projects.get(project),
+                &running.asked_origins,
+            )
             .await?
         {
             return Ok(Some(linked));
@@ -7115,11 +7142,18 @@ impl Engine {
     /// withheld link naming nothing is the exception: no origin there can name a private
     /// project, so the walk would only file the item under an id the destination never held,
     /// and it is refused as a copy's own stale link is, unless the caller asked to recreate.
+    ///
+    /// A destination this command already asked which of its projects record `project` as
+    /// their origin — the read ahead does, beside a document's own origin — confirms the link
+    /// by that answer: the project its link names, recording `project`, is the one the
+    /// destination answered it with, so it is not read again. Any other answer is left to the
+    /// read below.
     async fn linked_project(
         &self,
         request: &CopyRequest,
         project: &GlobalId,
         read: Option<&Project>,
+        asked_origins: &[(SourceName, String)],
     ) -> Result<Option<GlobalId>, EngineError> {
         let source = self.readable(&project.source)?;
         if !source.source().capabilities().projects.is_native() {
@@ -7144,14 +7178,29 @@ impl Engine {
                 continue;
             };
             let there = self.writable(&reachable)?;
+            let withheld = self.declared(&project.source)
+                == crate::config::SourceVisibility::Private
+                && self.declared(&reachable) != crate::config::SourceVisibility::Private;
+            let origin = project.to_string();
+            if !withheld
+                && asked_origins
+                    .iter()
+                    .any(|(asked, named)| asked == &reachable && named == &origin)
+                && let Ok(answered) = there
+                    .source()
+                    .query_projects_by_origin(&origin, &request_for(there, None))
+                    .await
+                && answered.items.iter().any(|held| {
+                    held.id == link.native && origin_of(&held.metadata).as_ref() == Some(project)
+                })
+            {
+                return Ok(Some(link));
+            }
             let named = there
                 .source()
                 .get_project(&link.native)
                 .await
                 .map_err(|error| refused(there, error))?;
-            let withheld = self.declared(&project.source)
-                == crate::config::SourceVisibility::Private
-                && self.declared(&reachable) != crate::config::SourceVisibility::Private;
             match named {
                 Some(there)
                     if origin_of(&there.metadata).as_ref() == Some(project)

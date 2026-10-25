@@ -317,11 +317,12 @@ fn filling_the_minutes_points_with_queries_alone_holds_the_next_query() {
 }
 
 #[test]
-fn an_eleven_mutation_request_with_79_creations_counted_waits_until_ten_have_left_the_minute() {
+fn a_nineteen_alias_write_with_79_creations_counted_waits_until_eighteen_have_left_the_minute() {
     // The project and its 78 tasks are 79 creates — the project's own, then seven requests of
-    // eleven and one of one — and the first request of their origin field values is eleven
-    // more: 90, ten past the minute. It is held until ten counted creations have left: the
-    // project's create and the first eleven, which left together.
+    // eleven and one of one — and the first request of their field values and edges is nineteen
+    // more: 98, eighteen past the minute. It is held until eighteen counted creations have
+    // left: the project's create and the first two requests of eleven, the second of which is
+    // the one that made room.
     let paced = Paced::new(78, json!({}));
     let (output, calls, slept) = paced.copy_project();
     success(&output);
@@ -336,12 +337,12 @@ fn an_eleven_mutation_request_with_79_creations_counted_waits_until_ten_have_lef
         .collect();
     assert_eq!(
         &counted[..10],
-        &[1, 11, 11, 11, 11, 11, 11, 11, 1, 11],
+        &[1, 11, 11, 11, 11, 11, 11, 11, 1, 19],
         "{counted:?}"
     );
-    let first_eleven = creates[1];
+    let second_eleven = creates[2];
     let held = creates[9];
-    assert_eq!(held.at, first_eleven.answered + MINUTE);
+    assert_eq!(held.at, second_eleven.answered + MINUTE);
     let wait = slept
         .iter()
         .find(|slept| slept.cause.as_deref() == Some(WINDOWS[0]))

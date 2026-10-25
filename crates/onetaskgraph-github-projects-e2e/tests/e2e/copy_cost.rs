@@ -1219,12 +1219,19 @@ fn a_create_copy_sends_no_origin_lookup_and_refuses_what_it_cannot_assert() {
         sent.iter().any(|(document, variables)| {
             (document == graphql::ADD_BLOCKED_BY
                 && variables["input"]["blockingIssueId"] == first.as_str())
-                || (document == graphql::ADD_BLOCKED_BYS
-                    && (0..onetaskgraph_github_projects::MUTATION_BATCH).any(|slot| {
-                        variables[format!("send{slot}")] == true
-                            && variables[format!("block{slot}")]["blockingIssueId"]
-                                == first.as_str()
-                    }))
+                || [
+                    (graphql::ADD_BLOCKED_BYS, "send"),
+                    (graphql::WRITE_FIELDS_AND_EDGES, "sendBlock"),
+                ]
+                .iter()
+                .any(|(batch, send)| {
+                    document == batch
+                        && (0..onetaskgraph_github_projects::WRITE_BATCH).any(|slot| {
+                            variables[format!("{send}{slot}")] == true
+                                && variables[format!("block{slot}")]["blockingIssueId"]
+                                    == first.as_str()
+                        })
+                })
         }),
         "{sent:#?}"
     );

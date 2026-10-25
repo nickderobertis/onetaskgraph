@@ -1624,6 +1624,19 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     }
     let unpriced = query.replacen("rateLimit{cost} ", "", 1);
     let query = unpriced.as_str();
+    // A document with its project beside it: answered as a read of it by its id, carrying no
+    // project, so every read of the project and its members is still made on its own here.
+    if query == onetaskgraph_github_projects::graphql::DOCUMENT_IN_PROJECT {
+        let mut answered = answer(
+            state,
+            onetaskgraph_github_projects::graphql::ISSUE,
+            variables,
+        );
+        if answered["node"].is_object() {
+            answered["node"]["project"] = Value::Null;
+        }
+        return answered;
+    }
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
         let mut result = serde_json::Map::new();
         let writes = onetaskgraph_github_projects::FIELD_WRITE_SLOTS.map(|slot| {
@@ -1721,48 +1734,58 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             }
             return Value::Object(result);
         }
-        let batches = [
+        use onetaskgraph_github_projects::{DELETE_BATCH, MUTATION_BATCH, WRITE_BATCH};
+        type Kind = (&'static str, &'static str, &'static str, &'static str);
+        let field: Kind = (
+            "field",
+            "send",
+            documents::UPDATE_FIELD,
+            "updateProjectV2ItemFieldValue",
+        );
+        let block: Kind = ("block", "send", documents::ADD_BLOCKED_BY, "addBlockedBy");
+        let batches: [(&str, Vec<Kind>, usize); 6] = [
             (
                 documents::CREATE_ISSUES,
-                "create",
-                documents::CREATE_ISSUE,
-                "createIssue",
+                vec![("create", "send", documents::CREATE_ISSUE, "createIssue")],
+                MUTATION_BATCH,
             ),
-            (
-                documents::WRITE_FIELD_VALUES,
-                "field",
-                documents::UPDATE_FIELD,
-                "updateProjectV2ItemFieldValue",
-            ),
+            (documents::WRITE_FIELD_VALUES, vec![field], WRITE_BATCH),
             (
                 documents::CLOSE_ISSUES,
-                "close",
-                documents::UPDATE_ISSUE,
-                "updateIssue",
+                vec![("close", "send", documents::UPDATE_ISSUE, "updateIssue")],
+                MUTATION_BATCH,
+            ),
+            (documents::ADD_BLOCKED_BYS, vec![block], WRITE_BATCH),
+            (
+                documents::WRITE_FIELDS_AND_EDGES,
+                vec![
+                    ("field", "sendField", field.2, field.3),
+                    ("block", "sendBlock", block.2, block.3),
+                ],
+                WRITE_BATCH,
             ),
             (
-                documents::ADD_BLOCKED_BYS,
-                "block",
-                documents::ADD_BLOCKED_BY,
-                "addBlockedBy",
+                documents::DELETE_ISSUES,
+                vec![("delete", "send", documents::DELETE_ISSUE, "deleteIssue")],
+                DELETE_BATCH,
             ),
         ];
-        if let Some((_, prefix, single, root)) =
-            batches.iter().find(|(batched, ..)| *batched == query)
-        {
+        if let Some((_, kinds, slots)) = batches.iter().find(|(batched, ..)| *batched == query) {
             let mut result = serde_json::Map::new();
-            for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
-                if variables[format!("send{slot}")] != true {
-                    continue;
+            for &(prefix, send, single, root) in kinds {
+                for slot in 0..*slots {
+                    if variables[format!("{send}{slot}")] != true {
+                        continue;
+                    }
+                    let alias = format!("{prefix}{slot}");
+                    let mut one = json!({"input": variables[&alias]});
+                    if single == documents::UPDATE_FIELD {
+                        one["readPriority"] = json!(false);
+                        one["priorityName"] = json!("Priority");
+                    }
+                    let answered = answer(state, single, &one);
+                    result.insert(alias, answered[root].clone());
                 }
-                let alias = format!("{prefix}{slot}");
-                let mut one = json!({"input": variables[&alias]});
-                if *single == documents::UPDATE_FIELD {
-                    one["readPriority"] = json!(false);
-                    one["priorityName"] = json!("Priority");
-                }
-                let answered = answer(state, single, &one);
-                result.insert(alias, answered[*root].clone());
             }
             return Value::Object(result);
         }

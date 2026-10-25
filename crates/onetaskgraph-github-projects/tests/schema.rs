@@ -319,6 +319,7 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
             Some(include_str!("fixtures/issues.json")),
         ),
         (graphql::ISSUE, None, None),
+        (graphql::DOCUMENT_IN_PROJECT, None, None),
         (graphql::BOARD_FIELDS, None, None),
         (
             graphql::ORIGIN_LOOKUP,
@@ -344,6 +345,8 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         (graphql::WRITE_FIELD_VALUES, None, None),
         (graphql::CLOSE_ISSUES, None, None),
         (graphql::ADD_BLOCKED_BYS, None, None),
+        (graphql::WRITE_FIELDS_AND_EDGES, None, None),
+        (graphql::DELETE_ISSUES, None, None),
         (
             graphql::ISSUE_DEPENDENCIES,
             Some("/data/node"),
