@@ -7,6 +7,6 @@
  */
 
 /** The version this package publishes. `package.json` must agree; see the tests. */
-export const VERSION = "0.12.3";
+export const VERSION = "0.12.4";
 export * from "./client.ts";
 export type * from "./generated/models.ts";
