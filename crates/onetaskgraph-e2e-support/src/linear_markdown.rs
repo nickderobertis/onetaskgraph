@@ -136,7 +136,7 @@ pub fn stored(content: &str) -> String {
         let rest = match (continued, ordered(rest)) {
             (Some(_), Some(digits)) => {
                 stored.push_str(&rest[..digits]);
-                stored.push_str("\\");
+                stored.push('\\');
                 &rest[digits..]
             }
             _ => rest,
@@ -519,11 +519,11 @@ fn bold_runs(line: &str) -> usize {
 /// line and opened again at the start of the next, one run per line, as Linear stores it.
 fn bold_split(content: &str) -> String {
     outside_fences(content, |lines, at| {
-        if at + 1 >= lines.len() || bold_runs(&lines[at]) % 2 == 0 {
+        if at + 1 >= lines.len() || bold_runs(&lines[at]).is_multiple_of(2) {
             return;
         }
         let next = &lines[at + 1];
-        if next.trim().is_empty() || bold_runs(next) % 2 == 0 {
+        if next.trim().is_empty() || bold_runs(next).is_multiple_of(2) {
             return;
         }
         let indent = next.len() - next.trim_start().len();

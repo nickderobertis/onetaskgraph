@@ -180,9 +180,11 @@ fn a_document_a_person_moved_under_another_project_is_put_back() {
         .into_iter()
         .flat_map(|(_, ids)| ids)
         .collect();
+    // The project its project's link names is trusted unread: the document is put back under
+    // it without the destination project being read to confirm the link.
     assert!(
-        read.contains(&at["P"]),
-        "the project its link names is read to confirm it: {read:?}"
+        !read.contains(&at["P"]),
+        "the project its link names is not read: {read:?}"
     );
     holds_the_plan(&plan, &at, None);
 }

@@ -691,7 +691,7 @@ fn a_task_linear_stores_as_sent_takes_one_content_write_and_no_read_after_it() {
     let destination = Plan::landed(&report, &plan.tasks[0]);
     assert_eq!(
         sent.writes(),
-        [destination.clone()],
+        std::slice::from_ref(&destination),
         "{:?}",
         sent.mutations()
     );
@@ -702,6 +702,9 @@ fn a_task_linear_stores_as_sent_takes_one_content_write_and_no_read_after_it() {
         sha256(item["content"].as_str().unwrap())
     );
 }
+
+/// One change a re-render follows, made and rendered by the closure.
+type Change<'a> = Box<dyn Fn() -> Sent + 'a>;
 
 /// One create or render on the Linear source: its writes and whether it read after one.
 fn rendering(plan: &Plan, arguments: &[&str]) -> Sent {
@@ -875,7 +878,7 @@ fn items_created_and_rendered_in_linear_record_what_linear_stores_and_rerender_o
         );
         // Each change re-renders it — one write and at most its one follow-up — and it reads
         // back verifiable.
-        let mut changes: Vec<(&str, Box<dyn Fn() -> Sent + '_>)> = vec![
+        let mut changes: Vec<(&str, Change<'_>)> = vec![
             (
                 "the answers",
                 Box::new(|| render(&loader_path, "two", &first)),
@@ -1025,8 +1028,7 @@ fn a_content_write_and_metadata_writes_on_copied_renderings_answer_what_linear_s
         sent.requests
             .iter()
             .skip_while(|request| !request.mutation())
-            .skip(1)
-            .next()
+            .nth(1)
             .is_none(),
         "nothing is read after the write"
     );

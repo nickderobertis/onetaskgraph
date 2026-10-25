@@ -643,7 +643,7 @@ fn refused_as_diverged(hosting: Hosting) {
             "stored: \"* build it\"",
             "did not keep the content it said it stores",
         ] {
-            assert!(message.contains(&named), "names {named:?}: {message}");
+            assert!(message.contains(named), "names {named:?}: {message}");
         }
         assert!(errors.contains(destination), "{errors}");
         let item = plan.show(kind_of(source), destination);
