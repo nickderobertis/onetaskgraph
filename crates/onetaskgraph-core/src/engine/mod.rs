@@ -1863,6 +1863,8 @@ impl Engine {
     ///
     /// [`TaskSource::end_command`]: onetaskgraph_plugin_api::TaskSource::end_command
     pub async fn end_command(&self) -> Result<(), EngineError> {
+        // What the write policy answered was this command's: the next one asks again.
+        self.boundary.forget();
         let mut first = None;
         for source in self.ready() {
             if let Err(error) = source.source().end_command().await

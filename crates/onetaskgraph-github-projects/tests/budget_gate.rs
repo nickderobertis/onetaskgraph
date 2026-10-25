@@ -685,3 +685,49 @@ async fn the_combined_design_admits_both_roles_and_keeps_the_whole_retained_buff
         }
     }
 }
+
+#[test]
+fn each_recorded_call_is_priced_by_the_smallest_page_its_own_document_binds() {
+    // The batched origin lookup binds a page of one carrier, every other copy read a page of
+    // three or more: each row of the record divides by its own document's smallest page, and
+    // a row naming no document — a REST call, or a document no longer declared — by the
+    // smallest page any document binds.
+    use onetaskgraph_github_projects::graphql;
+    let named = |document: &str| {
+        graphql::DOCUMENTS
+            .iter()
+            .find(|(declared, _)| *declared == document)
+            .map(|(_, description)| *description)
+            .expect("a declared document")
+    };
+    assert_eq!(
+        budget::smallest_page_size_named(named(graphql::ORIGIN_LOOKUPS)),
+        1
+    );
+    assert_eq!(
+        budget::smallest_page_size_named(&format!(
+            "node-count and point-cost reconciliation while {}",
+            named(graphql::ORIGIN_LOOKUPS)
+        )),
+        1,
+        "a reconciliation row is its document's"
+    );
+    assert_eq!(
+        budget::smallest_page_size_named(named(graphql::SUB_ISSUES)),
+        3
+    );
+    assert_eq!(
+        budget::smallest_page_size_named(named(graphql::ORIGIN_LOOKUP)),
+        3
+    );
+    assert_eq!(
+        budget::smallest_page_size_named("a call no document of this source describes"),
+        1,
+        "the smallest page any document binds"
+    );
+    assert_eq!(
+        budget::smallest_page_size_named(named(graphql::REPOSITORY)),
+        1,
+        "a document binding no page is priced as the least of them"
+    );
+}

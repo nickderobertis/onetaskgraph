@@ -1308,6 +1308,10 @@ struct Running {
     /// link alone, unread, by the project's qualified destination id — and the source project
     /// whose link named it, which a write refused there is answered with a stale link of.
     trusted: HashMap<GlobalId, GlobalId>,
+    /// Each destination the copy read ahead asked about the origin of a project, with that
+    /// origin: its answer is that destination's to hold for this command, so the filing lookup
+    /// confirms a link to that project by it rather than by a read of the project.
+    asked_origins: Vec<(SourceName, GlobalId)>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -1470,6 +1474,11 @@ struct Dependent {
     origin: SourceName,
     /// Its forward edges, as its source reported them.
     edges: Vec<DependencyEdge>,
+    /// Whether an earlier copy can have kept an edge of it on a private source's side: the
+    /// destination already held it, carrying a copy's record and not the mark of every edge on
+    /// its own record — the rule [`Engine::reads_recorded_for`] applies to a dependency read.
+    /// Only then are the sources that may record one asked about it.
+    asks_recorders: bool,
 }
 
 /// What one task of a source declared private records once a copy has landed: what it held,
@@ -1487,6 +1496,9 @@ struct Recording {
 struct Recordings {
     /// The destination ids of every task the copy landed somewhere not declared private.
     decided: Dependents,
+    /// Those of them an earlier copy can have recorded on a private side, which alone the
+    /// sources that may record one are asked about.
+    asked: Vec<GlobalId>,
     /// One per task of a source declared private the copy landed or a landed edge names.
     each: Vec<Recording>,
 }
@@ -2217,6 +2229,7 @@ impl Engine {
             let destination = self.writable(&entry.item.to)?;
             let edges = self.shown_edges(
                 &entry.item.to,
+                &entry.item.source,
                 mapped_edges(
                     &entry.item.edges,
                     &entry.item.source.source,
@@ -3250,6 +3263,7 @@ impl Engine {
             Target::Update { id: target, .. } => {
                 let settled = self.shown_edges(
                     &home_source,
+                    &id,
                     mapped_edges(
                         &project.edges,
                         &id.source,
@@ -3261,6 +3275,7 @@ impl Engine {
                 );
                 let first = self.shown_edges(
                     &home_source,
+                    &id,
                     mapped_edges(
                         &project.edges,
                         &id.source,
@@ -4324,6 +4339,7 @@ impl Engine {
             };
             let edges = self.shown_edges(
                 &item.to,
+                &item.source,
                 mapped_edges(
                     &item.edges,
                     &item.source.source,
@@ -4482,6 +4498,7 @@ impl Engine {
             let destination = self.writable(&item.to)?;
             let edges = self.shown_edges(
                 &item.to,
+                &item.source,
                 mapped_edges(
                     &item.edges,
                     &item.source.source,
@@ -4544,10 +4561,23 @@ impl Engine {
                     };
                     running.recorders.insert(id.to_string(), (id.clone(), held));
                 } else {
+                    // A task this copy created is never asked about: nothing earlier can have
+                    // recorded it, and an earlier copy that kept an edge of a task on a private
+                    // side took the mark off it in the same write.
+                    let asks_recorders = match item.held.as_ref().map(|held| &held.item) {
+                        Some(Item::Task(held)) => {
+                            held.metadata
+                                .contains_key(MetadataKey::COPIED_DESTINATION_VERSION_KEY)
+                                && !held.metadata.contains_key(MetadataKey::EDGES_ON_RECORD_KEY)
+                        }
+                        Some(_) => true,
+                        None => !matches!(outcome.action, CopyAction::Created { .. }),
+                    };
                     running.dependents.push(Dependent {
                         destination: id.clone(),
                         origin: item.source.source.clone(),
                         edges: item.edges.clone(),
+                        asks_recorders,
                     });
                 }
             }
@@ -4661,6 +4691,7 @@ impl Engine {
                     let item = &planned[*index];
                     let edges = resolved(&self.shown_edges(
                         &item.to,
+                        &item.source,
                         mapped_edges(
                             &item.edges,
                             &item.source.source,
@@ -4776,6 +4807,7 @@ impl Engine {
         ));
         let edges = resolved(&self.shown_edges(
             &item.to,
+            &item.source,
             mapped_edges(
                 &item.edges,
                 &item.source.source,
@@ -4925,6 +4957,26 @@ impl Engine {
             return Ok(class);
         }
         let source = self.readable(&project.source)?;
+        // Classified afresh, the project's members are read before the project is: first by
+        // the source's own classification-only read, when it holds one for this command, and
+        // otherwise by listing them, a listing that may carry the project issue itself.
+        let afresh = cached.is_none()
+            && self.boundary_active()
+            && source.source().capabilities().projects.is_native();
+        let classified = if afresh {
+            source
+                .source()
+                .member_classifications(&project.native)
+                .await
+                .map_err(|error| refused(source, error))?
+        } else {
+            None
+        };
+        let listed = if afresh && classified.is_none() {
+            Some(self.project_member_tasks(project, FOR_A_COPY).await?)
+        } else {
+            None
+        };
         let held = if source.source().capabilities().projects.is_native() {
             source
                 .source()
@@ -4961,7 +5013,18 @@ impl Engine {
             known.insert(project.clone(), class);
             return Ok(class);
         }
-        let tasks = self.project_member_tasks(project, FOR_A_COPY).await?;
+        if let Some(members) = classified {
+            let mut class = self.classify(held.classification, &held.repositories).await;
+            for (declared, repositories) in &members {
+                class = class.strictest(self.classify(*declared, repositories).await);
+            }
+            known.insert(project.clone(), class);
+            return Ok(class);
+        }
+        let tasks = match listed {
+            Some(tasks) => tasks,
+            None => self.project_member_tasks(project, FOR_A_COPY).await?,
+        };
         let class = self
             .project_class(source, project, &held, tasks.iter().map(|task| &task.item))
             .await?;
@@ -5039,9 +5102,13 @@ impl Engine {
     /// learned that source's designator and its id is the item's native id (see
     /// [`Engine::opaque_designator`]), and left out otherwise. One not resolvable yet stays
     /// `None`.
+    ///
+    /// Every edge left out is noted against `near`, the item it is an edge of, for
+    /// [`Engine::take_withheld_edges`].
     fn shown_edges(
         &self,
         destination: &SourceName,
+        near: &GlobalId,
         edges: Vec<Option<DependencyEdge>>,
         private: &[GlobalId],
     ) -> Vec<Option<DependencyEdge>> {
@@ -5056,7 +5123,19 @@ impl Engine {
                 else {
                     return Some(Some(edge));
                 };
-                let designator = self.opaque_designator(&far)?;
+                let Some(designator) = self.opaque_designator(&far) else {
+                    let reason =
+                        if self.declared(&far.source) == crate::config::SourceVisibility::Private {
+                            format!("its source {} is declared private", far.source)
+                        } else {
+                            "it is classified private".to_owned()
+                        };
+                    self.boundary.withheld(format!(
+                        "withheld {near}'s dependency on {far} from {destination}: {reason}, and \
+                         its source named no tracker an opaque reference to it could point into"
+                    ));
+                    return None;
+                };
                 edge.to = DependencyEndpoint::opaque(designator, far.native.0, edge.to.kind)
                     .expect("a far end's native id is not empty");
                 Some(Some(edge))
@@ -5111,6 +5190,9 @@ impl Engine {
                 self.classify_references(item, running).await?;
             }
         }
+        // Every item is placed first, and what each lands somewhere not verified private is then
+        // put to the check together, before anything is written.
+        let mut checked = Vec::new();
         for item in planned {
             let destination = self.writable(&item.to)?;
             let target = match &item.target {
@@ -5120,6 +5202,7 @@ impl Engine {
                     project: None,
                 },
             };
+            let exposure = exposure_of(item, |far| self.withholds(&item.to, far, &running.private));
             let outbound = Outbound {
                 item: item.source.to_string(),
                 classification: item.classification.strictest(
@@ -5128,9 +5211,11 @@ impl Engine {
                         .map_or(Classification::Public, |held| classification_of(&held.item)),
                 ),
                 target,
-                exposure: &exposure_of(item, |far| self.withholds(&item.to, far, &running.private)),
+                exposure: &exposure,
             };
-            self.preflight(destination, &outbound).await?;
+            if self.placed(destination, &outbound)? {
+                checked.push((destination, outbound.item.clone(), exposure.clone()));
+            }
             // Every item, not one per destination: who can read a write depends on where in
             // the destination it lands — an issue's own repository on a board.
             if request.dry_run {
@@ -5138,7 +5223,7 @@ impl Engine {
                     .await?;
             }
         }
-        Ok(())
+        self.check_all(&checked).await
     }
 
     /// Ask, once, which tracker each source declared private is that an edge of `planned`,
@@ -5389,6 +5474,13 @@ impl Engine {
         // the copy names it: what a cache standing in front of that destination is pinned
         // from, below.
         let mut homes: Vec<(SourceName, NativeId, GlobalId, ProjectNamed)> = Vec::new();
+        // The origin each document's project records at a destination it is linked to: asked
+        // beside the document's own when that destination is asked about origins anyway, so the
+        // project a new document is filed under is answered by that one request rather than
+        // read on its own before the document is created there.
+        let mut project_origins: Vec<(SourceName, GlobalId)> = Vec::new();
+        // Each destination a document's project is read at for a screened write's classification.
+        let mut screened_homes: Vec<SourceName> = Vec::new();
         for read in reads {
             let metadata = described(&read.item).1;
             if read.item.level() == Level::Project {
@@ -5494,6 +5586,15 @@ impl Engine {
                     continue;
                 }
                 if let Some(link) = link_of(&running.source_projects[&qualified].metadata, there) {
+                    project_origins.push((there.clone(), qualified.clone()));
+                    // A write the boundary screens there reads who may read that project, so
+                    // the project is named to the read ahead even alone: a source may carry its
+                    // members' classification beside the origins it is asked.
+                    if self.boundary_active()
+                        && self.declared(there) != crate::config::SourceVisibility::Private
+                    {
+                        screened_homes.push(there.clone());
+                    }
                     want(there, link.native.clone());
                     homes.push((
                         there.clone(),
@@ -5522,7 +5623,16 @@ impl Engine {
                     .await;
             }
         }
-        for (name, asked) in origins {
+        let asked_there: Vec<SourceName> = origins.iter().map(|(name, _)| name.clone()).collect();
+        let asked_origins_at = asked_there.clone();
+        for (name, mut asked) in origins {
+            for (there, origin) in &project_origins {
+                let spelled = origin.to_string();
+                if there == &name && !asked.contains(&spelled) {
+                    asked.push(spelled);
+                    running.asked_origins.push((there.clone(), origin.clone()));
+                }
+            }
             if let Ok(there) = self.writable(&name) {
                 // Nothing is decided by it: each lookup it would have answered is made as before.
                 let _ = there.source().read_ahead_origins_for_copy(&asked).await;
@@ -5530,12 +5640,28 @@ impl Engine {
         }
         // One counterpart of a task or a document copied on its own is read by its own read,
         // which costs what a batch of one does and carries what a write of it needs besides; a
-        // project copy reads what its cache could not answer together, however few.
+        // project copy reads what its cache could not answer together, however few, and so is a
+        // document's project a screened write there classifies the document by. Every
+        // destination asked about origins above is handed its read ahead, empty or not, since a
+        // source may hold those origins back to send with it.
         let projects = matches!(request.scope, CopyScope::Projects { .. });
-        for (name, natives) in wanted
-            .into_iter()
-            .filter(|(_, natives)| natives.len() > 1 || (projects && !natives.is_empty()))
-        {
+        for (name, natives) in &mut wanted {
+            let kept = natives.len() > 1
+                || (projects && !natives.is_empty())
+                || screened_homes.contains(name);
+            if !kept {
+                natives.clear();
+            }
+        }
+        for name in asked_there {
+            if !wanted.iter().any(|(there, _)| there == &name) {
+                wanted.push((name, Vec::new()));
+            }
+        }
+        for (name, natives) in wanted {
+            if natives.is_empty() && !asked_origins_at.contains(&name) {
+                continue;
+            }
             if let Ok(there) = self.writable(&name) {
                 // Nothing is decided by it: each read it would have answered is made as before.
                 let _ = there.source().read_ahead_for_copy(&natives).await;
@@ -6848,7 +6974,12 @@ impl Engine {
             return Ok(Some(landed.clone()));
         }
         if let Some(linked) = self
-            .linked_project(request, project, running.source_projects.get(project))
+            .linked_project(
+                request,
+                project,
+                running.source_projects.get(project),
+                &running.asked_origins,
+            )
             .await?
         {
             return Ok(Some(linked));
@@ -7105,7 +7236,17 @@ impl Engine {
             named,
             held: None,
         }));
-        Recordings { decided, each }
+        let asked = running
+            .dependents
+            .iter()
+            .filter(|dependent| dependent.asks_recorders)
+            .map(|dependent| dependent.destination.clone())
+            .collect();
+        Recordings {
+            decided,
+            asked,
+            each,
+        }
     }
 
     /// Write each of `recordings` whose task does not already record what it is to: one read
@@ -7129,7 +7270,7 @@ impl Engine {
         mut recordings: Recordings,
         journal: &mut Journal,
     ) -> Result<(), EngineError> {
-        for dependent in recordings.decided.iter() {
+        for dependent in &recordings.asked {
             for at in self.recorded_prerequisites(dependent).await? {
                 if !recordings.each.iter().any(|recording| recording.at == at) {
                     recordings.each.push(Recording {
@@ -7309,11 +7450,18 @@ impl Engine {
     /// withheld link naming nothing is the exception: no origin there can name a private
     /// project, so the walk would only file the item under an id the destination never held,
     /// and it is refused as a copy's own stale link is, unless the caller asked to recreate.
+    ///
+    /// A destination this command already asked which of its projects record `project` as
+    /// their origin — the read ahead does, beside a document's own origin — confirms the link
+    /// by that answer: the project its link names, recording `project`, is the one the
+    /// destination answered it with, so it is not read again. Any other answer is left to the
+    /// read below.
     async fn linked_project(
         &self,
         request: &CopyRequest,
         project: &GlobalId,
         read: Option<&Project>,
+        asked_origins: &[(SourceName, GlobalId)],
     ) -> Result<Option<GlobalId>, EngineError> {
         let source = self.readable(&project.source)?;
         if !source.source().capabilities().projects.is_native() {
@@ -7338,14 +7486,29 @@ impl Engine {
                 continue;
             };
             let there = self.writable(&reachable)?;
+            let withheld = self.declared(&project.source)
+                == crate::config::SourceVisibility::Private
+                && self.declared(&reachable) != crate::config::SourceVisibility::Private;
+            let origin = project.to_string();
+            if !withheld
+                && asked_origins
+                    .iter()
+                    .any(|(asked, named)| asked == &reachable && named == project)
+                && let Ok(answered) = there
+                    .source()
+                    .query_projects_by_origin(&origin, &request_for(there, None))
+                    .await
+                && answered.items.iter().any(|held| {
+                    held.id == link.native && origin_of(&held.metadata).as_ref() == Some(project)
+                })
+            {
+                return Ok(Some(link));
+            }
             let named = there
                 .source()
                 .get_project(&link.native)
                 .await
                 .map_err(|error| refused(there, error))?;
-            let withheld = self.declared(&project.source)
-                == crate::config::SourceVisibility::Private
-                && self.declared(&reachable) != crate::config::SourceVisibility::Private;
             match named {
                 Some(there)
                     if origin_of(&there.metadata).as_ref() == Some(project)

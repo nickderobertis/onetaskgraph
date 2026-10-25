@@ -161,7 +161,7 @@ budgets:
     threshold: 3
   - id: github-plan-copy-points-unchanged
     description: >-
-      An inner measure of the shared board token that no check may spend: the GraphQL primary points an unchanged re-copy of the generated 10-item plan (a 50 KB project, eight 45-49 KB tasks with 10 edges, 19 field values, a 35 KB document with a 104 KB PNG) on a 2,000-item loopback board, one `project copy` then one `document copy` spends, holding no change token or cache entry for its items, priced as the timing spike's pricing.json — a board page 2, an issue-search page 5, any other read 1, each mutation request 1, REST 0. It protects every manager's share of that token from a re-copy that changes nothing.
+      An inner measure of the shared board token that no check may spend: the GraphQL primary points an unchanged re-copy of the generated 10-item plan on a 2,000-item loopback board spends, the larger of its run with no write policy and its run screened through the released onevcs boundary commands, priced as the timing spike's pricing.json — a board page 2, an issue-search page 5, any other read 1, each mutation request 1, REST 0. It protects every manager's share of that token from a re-copy that changes nothing.
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering the seven plan-copy budgets names this one generic entry for all of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
@@ -171,7 +171,7 @@ budgets:
     threshold: 3
   - id: github-plan-copy-points-changed
     description: >-
-      An inner measure of the shared board token that no check may spend: the GraphQL primary points a re-copy of the generated 10-item plan (a 50 KB project, eight 45-49 KB tasks with 10 edges, 19 field values, a 35 KB document with a 104 KB PNG) on a 2,000-item loopback board, one `project copy` then one `document copy` spends after one task's body changed, holding no change token or cache entry for its items, priced as the timing spike's pricing.json — a board page 2, an issue-search page 5, any other read 1, each mutation request 1, REST 0. It protects every manager's share of that token from the re-copies a plan's revisions make.
+      An inner measure of the shared board token that no check may spend: the GraphQL primary points a re-copy of the generated 10-item plan on a 2,000-item loopback board spends after one task's body changed, the larger of its run with no write policy and its run screened through the released onevcs boundary commands, priced as the timing spike's pricing.json — a board page 2, an issue-search page 5, any other read 1, each mutation request 1, REST 0. It protects every manager's share of that token from the re-copies a plan's revisions make.
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering the seven plan-copy budgets names this one generic entry for all of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
@@ -181,7 +181,7 @@ budgets:
     threshold: 4
   - id: github-plan-copy-points-first
     description: >-
-      An inner measure of the shared board token that no check may spend: the GraphQL primary points a first copy of the generated 10-item plan (a 50 KB project, eight 45-49 KB tasks with 10 edges, 19 field values, a 35 KB document with a 104 KB PNG) on a 2,000-item loopback board, one `project copy` then one `document copy` spends, priced as the timing spike's pricing.json — a board page 2, an issue-search page 5, any other read 1, each mutation request 1, REST 0. It protects every manager's share of that token from filing a plan.
+      An inner measure of the shared board token that no check may spend: the GraphQL primary points a first copy of the generated 10-item plan on a 2,000-item loopback board spends with GitHub placing each created issue as the spike measured, the larger of its run with no write policy and its run screened through the released onevcs boundary commands, priced as the timing spike's pricing.json — a board page 2, an issue-search page 5, any other read 1, each mutation request 1, REST 0. It protects every manager's share of that token from filing a plan.
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering the seven plan-copy budgets names this one generic entry for all of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
@@ -191,7 +191,7 @@ budgets:
     threshold: 12
   - id: github-plan-copy-content-creations
     description: >-
-      An inner measure of the write allowance every manager on the board token shares: the writes GitHub's secondary limit may count against its 80-a-minute and 500-an-hour allowances in a first copy of the generated 10-item plan (a 50 KB project, eight 45-49 KB tasks with 10 edges, 19 field values, a 35 KB document with a 104 KB PNG) on a 2,000-item loopback board, one `project copy` then one `document copy` — every mutation, each aliased mutation and each field value of an aliased field update counted one, since whether GitHub counts an aliased request once could not be established, plus each upload. It protects that shared allowance from filing a plan.
+      An inner measure of the write allowance every manager on the board token shares: the writes GitHub's secondary limit may count — every mutation and each aliased one counted one, plus each upload — in a first copy of the generated 10-item plan on a 2,000-item loopback board, the larger of its run with no write policy and its run screened through the released onevcs boundary commands. It protects that shared allowance from filing a plan.
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering the seven plan-copy budgets names this one generic entry for all of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
@@ -201,7 +201,7 @@ budgets:
     threshold: 40
   - id: github-approval-calls-points
     description: >-
-      An inner measure of the shared board token that no check may spend: the GitHub GraphQL points the store calls approving a plan's design document on the board spend — `project show`, `task list --project`, `document list --project`, then `document metadata set --expect` carrying the version that listing reported, which reads the document once to hold that version before it writes — on a project of 8 tasks and 1 document on a loopback board holding 2,000 other items, driven through the binary and priced with the plugin's own point-cost table; each call's requests and points are its detail. It protects every manager's share of that token from what an approval spends.
+      An inner measure of the shared board token that no check may spend: the GitHub GraphQL points the four store calls approving a plan's design document on a 2,000-item loopback board spend, priced with the plugin's own point-cost table, the larger of the sequence with no write policy and the sequence screened through the released onevcs boundary commands. It protects every manager's share of that token from what an approval spends.
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] This command reports the telemetry the `approval` journey measured in the crate's test run, refusing any other recording; onebudgetspec judges the figure.

@@ -9,14 +9,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
-    DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, IssueHolding,
-    IssueRef, ItemKind, ItemWrite, Label, Location, MetadataKey, MetadataRecord, Metering,
-    NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
-    ProjectVersionCoverage, SharedClock, SourceError, SourceName, Status, StatusCategory,
-    StatusContradiction, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
-    VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget, assetless, commentless,
-    documentless, unwritable, unwritable_field, unwritable_metadata,
+    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Classification, Comment,
+    CommentBody, CommentCopy, DependencyEdge, Direction, Document, DocumentQuery,
+    DocumentVersionCoverage, IssueHolding, IssueRef, ItemKind, ItemWrite, Label, Location,
+    MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority,
+    Project, ProjectQuery, ProjectVersionCoverage, Repository, SharedClock, SourceError,
+    SourceName, Status, StatusCategory, StatusContradiction, Task, TaskDetailRead, TaskQuery,
+    TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility, WriteJournal,
+    WriteSupport, WriteTarget, assetless, commentless, documentless, unwritable, unwritable_field,
+    unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -1228,6 +1229,30 @@ pub trait TaskSource: Send + Sync {
     async fn read_ahead_origins_for_copy(&self, origins: &[String]) -> Result<(), SourceError> {
         let _ = origins;
         Ok(())
+    }
+
+    /// Who may read each member of the project `project` — every task and document filed under
+    /// it — as the classification and repositories each one's record holds, read by whatever
+    /// this source holds for this command rather than by its whole records: what a write the
+    /// public boundary screens reads of a project before it is held to it.
+    ///
+    /// `None` is no such read, and is the default: the engine then reads the members as it
+    /// always has, through [`query_tasks`](Self::query_tasks) narrowed to the project and
+    /// [`query_documents`](Self::query_documents), so every source answers exactly as before. A
+    /// source answers `Some` only with every member — a page that says there is more is no
+    /// answer, and is left to that path — and never with fewer members than those queries
+    /// would have listed. A source may hold such a page from a read it made beside another,
+    /// such as the one [`read_ahead_for_copy`](Self::read_ahead_for_copy) names the project to.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the read could not be made.
+    async fn member_classifications(
+        &self,
+        project: &NativeId,
+    ) -> Result<Option<Vec<(Classification, Vec<Repository>)>>, SourceError> {
+        let _ = project;
+        Ok(None)
     }
 
     /// How many tasks this source creates in one [`write_tasks`](Self::write_tasks): more than

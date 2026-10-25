@@ -126,6 +126,10 @@ NOT_METHODS = {
         "each origin query crosses as its own `query_tasks`, `query_projects` or "
         "`query_documents`"
     ),
+    "member_classifications": (
+        "not a message: §4.4 says the engine answers it for a hosted source by its default, "
+        "none, so a project's members cross as its own `query_tasks` and `query_documents`"
+    ),
     "create_batch_limit": (
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, one, so every task crosses as its own `write_task`"

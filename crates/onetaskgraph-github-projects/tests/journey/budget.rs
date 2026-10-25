@@ -96,12 +96,14 @@
 //! so the two differ by the page size — GitHub's own worked example returns 305,100 nodes
 //! and costs 51 points, where the node count divided by 100 would have said 3,051. What is
 //! true is the bound that follows from the same identity: summed over a call's connections,
-//! `A = Σ nodes / first ≤ nodes / min(first)`. Every `first:` this source binds is one of
-//! the three page sizes [`largest_page_sizes`] names, the smallest of which is read out of
-//! that function below rather than copied, so:
+//! `A = Σ nodes / first ≤ nodes / min(first)`, the minimum over that call's own connections.
+//! Every `first:` this source binds is one of the page sizes [`largest_page_sizes`] names, read
+//! out of that function rather than copied, and a call's document says which of them it binds,
+//! so each row is divided by the smallest page size its own document binds — and a row naming
+//! no document this source declares by the smallest of them all:
 //!
 //! ```text
-//! points(one call) ≤ 1 + ceil(nodes / (smallest page size × 100))
+//! points(one call) ≤ 1 + ceil(nodes / (smallest page size the call binds × 100))
 //! ```
 //!
 //! **Where it is unsure, it estimates high.** `ceil` rather than GitHub's "round to the
@@ -252,6 +254,9 @@ struct Row {
     requests: u64,
     nodes: u64,
     budget: Budget,
+    /// The smallest page size any `first:` of the row's own document binds — or of every
+    /// document, for a row naming none this source declares — which the row's points divide by.
+    smallest_page: u64,
 }
 
 /// The smallest page size any `first:` in this source's documents is bound to.
@@ -267,16 +272,45 @@ fn smallest_page_size() -> u64 {
         .expect("this source binds at least one page size")
 }
 
+/// The smallest page size the document the record's row `name` names binds, read off the
+/// variables its own `first:` arguments name — the bound the module documentation derives is
+/// per call, so the call's own connections are what it divides by — or [`smallest_page_size`]
+/// for a row naming no document this source declares, or one naming no page-size variable.
+pub fn smallest_page_size_named(name: &str) -> u64 {
+    let described = name
+        .strip_prefix("node-count and point-cost reconciliation while ")
+        .unwrap_or(name);
+    let Some((document, _)) = onetaskgraph_github_projects::graphql::DOCUMENTS
+        .iter()
+        .find(|(_, description)| *description == described)
+    else {
+        return smallest_page_size();
+    };
+    let sizes = largest_page_sizes();
+    document
+        .match_indices("first:$")
+        .filter_map(|(at, pattern)| {
+            let rest = &document[at + pattern.len()..];
+            let variable: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            sizes.get(&variable).copied().map(u64::from)
+        })
+        .min()
+        .unwrap_or_else(smallest_page_size)
+}
+
 /// What one row of the record costs against the GraphQL budget, in points.
 ///
-/// `1 + ceil(nodes / (smallest page size × 100))` per call, which the module documentation
-/// derives from GitHub's published formula, summed over the row's calls. The record gives
+/// `1 + ceil(nodes / (smallest page size × 100))` per call — the smallest its own document
+/// binds — which the module documentation derives from GitHub's published formula, summed over the row's calls. The record gives
 /// one node total for the whole row rather than one per call, and
 /// `Σ (1 + ceil(nᵢ/D)) ≤ k + Σ (nᵢ/D + 1) = 2k + N/D ≤ 2k + ceil(N/D)`, so the row is
 /// charged `2 × requests + ceil(nodes / D)` — an upper bound on the per-call sum however
 /// the row's nodes were distributed between its calls.
-fn points(requests: u64, nodes: u64) -> u64 {
-    let divisor = smallest_page_size().saturating_mul(100);
+fn points(requests: u64, nodes: u64, smallest_page: u64) -> u64 {
+    let divisor = smallest_page.saturating_mul(100);
     2_u64
         .saturating_mul(requests)
         .saturating_add(nodes.div_ceil(divisor))
@@ -322,6 +356,7 @@ fn rows(record: &str) -> Vec<Row> {
                 requests,
                 nodes,
                 budget: budget_of(&name),
+                smallest_page: smallest_page_size_named(&name),
             }
         })
         .collect()
@@ -339,7 +374,7 @@ pub fn estimate() -> BTreeMap<Budget, u64> {
         let cost = match row.budget {
             // Metered in requests, so a call is its own measure and the row is its count.
             Budget::Rest => row.requests,
-            Budget::Graphql => points(row.requests, row.nodes),
+            Budget::Graphql => points(row.requests, row.nodes, row.smallest_page),
         };
         *estimated.entry(row.budget).or_default() += cost;
     }

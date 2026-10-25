@@ -165,6 +165,9 @@ impl Engine {
         version: Option<&str>,
     ) -> Result<MetadataSet, EngineError> {
         let source = self.metadata_writable(id, MetadataRecord::Document)?;
+        // A write held to a version reads the document once, and who may read it is taken from
+        // that same read rather than from a second one.
+        let mut stored = None;
         if let Some(version) = version {
             let read = source
                 .source()
@@ -180,15 +183,32 @@ impl Engine {
                     found: at,
                 });
             }
+            stored = Some((read.classification, read.repositories, read.project));
         }
-        self.admit_existing(
-            source,
-            &id.to_string(),
-            &id.native,
-            Held::Document,
-            &Exposure::of_entry(key.as_str(), value),
-        )
-        .await?;
+        let exposure = Exposure::of_entry(key.as_str(), value);
+        match stored {
+            Some(stored) => {
+                self.admit_read(
+                    source,
+                    &id.to_string(),
+                    &id.native,
+                    Held::Document,
+                    stored,
+                    &exposure,
+                )
+                .await?;
+            }
+            None => {
+                self.admit_existing(
+                    source,
+                    &id.to_string(),
+                    &id.native,
+                    Held::Document,
+                    &exposure,
+                )
+                .await?;
+            }
+        }
         // The write takes what the read above left, rather than reading the document again.
         let primed = version.is_some()
             && source

@@ -600,6 +600,10 @@ struct State {
     creation_number_is_unreadable: bool,
     /// How a read of created issues' board items answers each slot malformed, if it does.
     board_items_fault: Option<BoardItemsFault>,
+    /// How a read of one document with its project answers.
+    document_answer: DocumentAnswer,
+    /// How the members page beside a batched origin lookup answers.
+    members_answer: MembersAnswer,
     /// Whether `createIssue` answers with the new issue's `number`.
     ///
     /// GitHub declares `Issue.number` non-null and always answers with one, which is the
@@ -1185,6 +1189,25 @@ impl Fixture {
             withheld.read_by_id_at.first().copied(),
         )
     }
+    /// When a proxy in front of this board first saw its withheld issue read by its own id sent.
+    fn search_withheld_sent_by_id(&self) -> Option<Instant> {
+        let state = self.state.lock().unwrap();
+        let withheld = state.search_withheld.as_ref().expect("an issue withheld");
+        withheld.sent_by_id_at.first().copied()
+    }
+    /// When a proxy in front of this board last saw a write sent before any search it held.
+    fn search_withheld_written_before(&self) -> Option<Instant> {
+        let state = self.state.lock().unwrap();
+        let withheld = state.search_withheld.as_ref().expect("an issue withheld");
+        withheld.written_before_search_at
+    }
+    /// When a proxy in front of this board parked each search past the ones it answers, and
+    /// when it released one no read by id had come for.
+    fn search_withheld_parking(&self) -> (Vec<Instant>, Vec<Instant>) {
+        let state = self.state.lock().unwrap();
+        let withheld = state.search_withheld.as_ref().expect("an issue withheld");
+        (withheld.parked_at.clone(), withheld.released_at.clone())
+    }
     /// Answer this board's next `count` requests inside the change token's settling margin.
     fn answer_unsettled(&self, count: usize) {
         self.state.lock().unwrap().unsettled_answers = count;
@@ -1329,6 +1352,8 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         drift_guarded_status_description: false,
         creation_number_is_unreadable: false,
         board_items_fault: None,
+        document_answer: DocumentAnswer::WithoutProject,
+        members_answer: MembersAnswer::Whole,
         creation_reports_number: true,
         blank_status_snapshot_id: None,
         origin_field,
@@ -1624,6 +1649,108 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     }
     let unpriced = query.replacen("rateLimit{cost} ", "", 1);
     let query = unpriced.as_str();
+    // The batched origin lookup with a page of a project's members beside it: the lookup as on
+    // its own, and the members as GitHub lists a project's sub-issues, trimmed to what the read
+    // selects — or as a journey bends them.
+    if query == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS_WITH_MEMBERS {
+        let mut answered = answer(
+            state,
+            onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS,
+            variables,
+        );
+        let held = state.lock().unwrap();
+        let project = variables["project"].as_str().expect("a project").to_owned();
+        let mut nodes: Vec<Value> = held
+            .items
+            .iter()
+            .filter(|item| item.parent.as_deref() == Some(project.as_str()))
+            .map(|item| {
+                json!({"id": item.content_id, "body": item.body.clone().unwrap_or_default(),
+                       "parent": {"id": project},
+                       "repository": item.repository.as_ref().map(|repo| json!({"nameWithOwner": repo}))})
+            })
+            .collect();
+        let mut more = false;
+        match held.members_answer {
+            MembersAnswer::Whole => {}
+            MembersAnswer::MoreThanAPage => more = true,
+            MembersAnswer::ForeignParent => nodes[0]["parent"] = json!({"id": "I_elsewhere"}),
+            MembersAnswer::BodyNotText => nodes[0]["body"] = json!(7),
+            MembersAnswer::NoRepository => nodes[0]["repository"] = Value::Null,
+            MembersAnswer::MalformedClassification => {
+                nodes[0]["body"] = json!(slotted(
+                    "prose",
+                    &json!({"onetaskgraph.classification": "secret"})
+                ));
+            }
+            MembersAnswer::MalformedSlot => {
+                nodes[0]["body"] = json!("prose\n\n<!-- onetaskgraph.metadata\n{not json\n-->");
+            }
+            MembersAnswer::MalformedRecordedRepositories => {
+                nodes[0]["body"] = json!(slotted(
+                    "prose",
+                    &json!({"onetaskgraph.repositories": "not a list"})
+                ));
+            }
+            MembersAnswer::InvalidOwnRepository => {
+                nodes[1]["repository"] = json!({"nameWithOwner": "not a repository"});
+            }
+            MembersAnswer::NestedProject => {
+                nodes.push(json!({"id": "I_sub", "parent": {"id": project},
+                    "body": slotted("a project under it", &json!({"onetaskgraph.item_kind":"project",
+                        "onetaskgraph.classification":"private"})),
+                    "repository": {"nameWithOwner": "acme/work"}}));
+            }
+        }
+        answered["members"] = json!({"subIssues": {"nodes": nodes,
+            "pageInfo": {"hasNextPage": more, "endCursor": null}}});
+        return answered;
+    }
+    // A document with its project beside it: answered as a read of it by its id, and — when a
+    // journey asks — its project as a read of that issue answers it, with the page of its
+    // members the project's own listing carries.
+    if query == onetaskgraph_github_projects::graphql::DOCUMENT_IN_PROJECT {
+        let mode = state.lock().unwrap().document_answer;
+        let mut asked = variables.clone();
+        if mode == DocumentAnswer::AnotherDocument {
+            asked["id"] = json!("I_other_doc");
+        }
+        let mut answered = answer(state, onetaskgraph_github_projects::graphql::ISSUE, &asked);
+        if !answered["node"].is_object() {
+            return answered;
+        }
+        let parent = answered["node"]["parent"]["id"].as_str().map(str::to_owned);
+        answered["node"]["project"] = match (mode, parent) {
+            (DocumentAnswer::WithoutProject, _) | (_, None) => Value::Null,
+            (_, Some(parent)) => {
+                let mut project = answer(
+                    state,
+                    onetaskgraph_github_projects::graphql::ISSUE,
+                    &json!({"id": parent, "first": 100, "nestedFirst": 50, "boardItems": 3,
+                            "duplicates": true}),
+                )["node"]
+                    .clone();
+                let listed = answer(
+                    state,
+                    onetaskgraph_github_projects::graphql::SUB_ISSUES,
+                    &json!({"id": parent, "memberFirst": variables["memberFirst"], "after": null,
+                            "nestedFirst": 50, "boardItems": 3, "duplicates": true}),
+                );
+                project["subIssues"] = listed["node"]["subIssues"].clone();
+                match mode {
+                    DocumentAnswer::MalformedMembers => {
+                        project["subIssues"]["nodes"] = json!("not a list");
+                    }
+                    DocumentAnswer::ForeignMember => {
+                        project["subIssues"]["nodes"][0]["parent"] = json!({"id": "I_elsewhere"});
+                    }
+                    _ => {}
+                }
+                project
+            }
+        };
+        return answered;
+    }
     if query == onetaskgraph_github_projects::graphql::UPDATE_FIELDS {
         let mut result = serde_json::Map::new();
         let writes = onetaskgraph_github_projects::FIELD_WRITE_SLOTS.map(|slot| {
@@ -1680,7 +1807,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 let one = json!({"owner":variables["owner"],"number":variables["number"],
                     "type":variables["type"],"filter":variables[format!("filter{slot}")],
                     "search":variables[format!("search{slot}")],
-                    "originFirst":variables["originFirst"],"itemsAfter":null,"searchAfter":null,
+                    "originFirst":variables["lookupFirst"],"itemsAfter":null,"searchAfter":null,
                     "nestedFirst":variables["nestedFirst"],"boardItems":variables["boardItems"],
                     "duplicates":variables["duplicates"]});
                 let answered = answer(state, documents::ORIGIN_LOOKUP, &one);
@@ -1721,48 +1848,58 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             }
             return Value::Object(result);
         }
-        let batches = [
+        use onetaskgraph_github_projects::{DELETE_BATCH, MUTATION_BATCH, WRITE_BATCH};
+        type Kind = (&'static str, &'static str, &'static str, &'static str);
+        let field: Kind = (
+            "field",
+            "send",
+            documents::UPDATE_FIELD,
+            "updateProjectV2ItemFieldValue",
+        );
+        let block: Kind = ("block", "send", documents::ADD_BLOCKED_BY, "addBlockedBy");
+        let batches: [(&str, Vec<Kind>, usize); 6] = [
             (
                 documents::CREATE_ISSUES,
-                "create",
-                documents::CREATE_ISSUE,
-                "createIssue",
+                vec![("create", "send", documents::CREATE_ISSUE, "createIssue")],
+                MUTATION_BATCH,
             ),
-            (
-                documents::WRITE_FIELD_VALUES,
-                "field",
-                documents::UPDATE_FIELD,
-                "updateProjectV2ItemFieldValue",
-            ),
+            (documents::WRITE_FIELD_VALUES, vec![field], WRITE_BATCH),
             (
                 documents::CLOSE_ISSUES,
-                "close",
-                documents::UPDATE_ISSUE,
-                "updateIssue",
+                vec![("close", "send", documents::UPDATE_ISSUE, "updateIssue")],
+                MUTATION_BATCH,
+            ),
+            (documents::ADD_BLOCKED_BYS, vec![block], WRITE_BATCH),
+            (
+                documents::WRITE_FIELDS_AND_EDGES,
+                vec![
+                    ("field", "sendField", field.2, field.3),
+                    ("block", "sendBlock", block.2, block.3),
+                ],
+                WRITE_BATCH,
             ),
             (
-                documents::ADD_BLOCKED_BYS,
-                "block",
-                documents::ADD_BLOCKED_BY,
-                "addBlockedBy",
+                documents::DELETE_ISSUES,
+                vec![("delete", "send", documents::DELETE_ISSUE, "deleteIssue")],
+                DELETE_BATCH,
             ),
         ];
-        if let Some((_, prefix, single, root)) =
-            batches.iter().find(|(batched, ..)| *batched == query)
-        {
+        if let Some((_, kinds, slots)) = batches.iter().find(|(batched, ..)| *batched == query) {
             let mut result = serde_json::Map::new();
-            for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
-                if variables[format!("send{slot}")] != true {
-                    continue;
+            for &(prefix, send, single, root) in kinds {
+                for slot in 0..*slots {
+                    if variables[format!("{send}{slot}")] != true {
+                        continue;
+                    }
+                    let alias = format!("{prefix}{slot}");
+                    let mut one = json!({"input": variables[&alias]});
+                    if single == documents::UPDATE_FIELD {
+                        one["readPriority"] = json!(false);
+                        one["priorityName"] = json!("Priority");
+                    }
+                    let answered = answer(state, single, &one);
+                    result.insert(alias, answered[root].clone());
                 }
-                let alias = format!("{prefix}{slot}");
-                let mut one = json!({"input": variables[&alias]});
-                if *single == documents::UPDATE_FIELD {
-                    one["readPriority"] = json!(false);
-                    one["priorityName"] = json!("Priority");
-                }
-                let answered = answer(state, single, &one);
-                result.insert(alias, answered[*root].clone());
             }
             return Value::Object(result);
         }
@@ -3065,6 +3202,21 @@ struct SearchWithheld {
     searched_at: Vec<Instant>,
     reported_at: Option<Instant>,
     read_by_id_at: Vec<Instant>,
+    /// When each read of it by its own id was sent, as a proxy in front of this board saw it:
+    /// this board answers one request at a time, so a read sent while a search the client has
+    /// already abandoned is still held back arrives here only once that search is answered.
+    sent_by_id_at: Vec<Instant>,
+    /// When a proxy in front of this board last saw a write sent before the first search it
+    /// holds back: a fixture wait writes nothing, so its own clock started after this.
+    written_before_search_at: Option<Instant>,
+    /// How many searches it holds back a proxy in front of this board answers before it parks
+    /// every later one unanswered, and how many it has seen: `None` answers them all.
+    parks_after: Option<usize>,
+    held_seen: usize,
+    /// When the proxy parked each search, and when it released one unabandoned, its client
+    /// having sent no read by id in [`PARKED_SEARCH_RELEASED_AFTER`].
+    parked_at: Vec<Instant>,
+    released_at: Vec<Instant>,
 }
 
 impl SearchWithheld {
@@ -3083,6 +3235,12 @@ impl SearchWithheld {
             searched_at: Vec::new(),
             reported_at: None,
             read_by_id_at: Vec::new(),
+            sent_by_id_at: Vec::new(),
+            written_before_search_at: None,
+            parks_after: None,
+            held_seen: 0,
+            parked_at: Vec::new(),
+            released_at: Vec::new(),
         }
     }
     /// The issue a live run titles with its stamp plus `offset`, left out of every search until
@@ -3108,6 +3266,31 @@ impl SearchWithheld {
             ..Self::run_artifact(0, searches)
         }
     }
+    /// Left out of at least the first `searches` searches that would have listed it, as well
+    /// as for as long as it is withheld: a search a loaded host sends late still misses it.
+    fn and_at_least(self, searches: usize) -> Self {
+        Self { searches, ..self }
+    }
+    /// Answered for the first `searches` searches it holds back, and every later one parked
+    /// unanswered: a wait can then end only by giving that search up at its deadline.
+    fn parking_after(self, searches: usize) -> Self {
+        Self {
+            parks_after: Some(searches),
+            ..self
+        }
+    }
+    /// Whether a search held back now is one to park rather than answer.
+    fn parks(&mut self) -> bool {
+        let Some(answered) = self.parks_after else {
+            return false;
+        };
+        self.held_seen += 1;
+        let parked = self.held_seen > answered;
+        if parked {
+            self.parked_at.push(Instant::now());
+        }
+        parked
+    }
     fn answering_searches_in(self, delay: Duration) -> Self {
         Self {
             search_answers_in: delay,
@@ -3120,12 +3303,26 @@ impl SearchWithheld {
             ..self
         }
     }
+    /// Whether a request arriving now is a search this board holds back while it leaves the
+    /// issue out.
+    fn holds(&self, query: &str) -> bool {
+        self.content_id.is_some() && self.withholding() && query.contains("search(query:$search")
+    }
+    /// Note a request a proxy in front of this board saw sent now, before this board reads it.
+    fn sent(&mut self, variables: &Value) {
+        if let Some(content_id) = self.content_id.as_deref()
+            && !self.searched_at.is_empty()
+            && variables["id"] == content_id
+        {
+            self.sent_by_id_at.push(Instant::now());
+        }
+    }
     /// Note a request arriving now, and say how long this board takes to answer it.
     fn arrived(&mut self, query: &str, variables: &Value) -> Duration {
         let Some(content_id) = self.content_id.as_deref() else {
             return Duration::ZERO;
         };
-        if self.withholding() && query.contains("search(query:$search") {
+        if self.holds(query) {
             self.searched_at.push(Instant::now());
             self.search_answers_in
         } else if !self.searched_at.is_empty() && variables["id"] == content_id {
@@ -3242,7 +3439,13 @@ fn operation_name(query: &str) -> &str {
     // document: nothing is enumerated, and every mutation's name is the one its own
     // document spells.
     match root {
+        _ if query == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS_WITH_MEMBERS => {
+            "originLookupsWithMembers"
+        }
         "node" if query == onetaskgraph_github_projects::graphql::ISSUE => "issue",
+        "node" if query == onetaskgraph_github_projects::graphql::DOCUMENT_IN_PROJECT => {
+            "documentInProject"
+        }
         "owner" => "board",
         "node" if query.contains("subIssues(") => "projectTasks",
         "node" if query.contains("projectV2Items(") => "draft",
@@ -11296,6 +11499,207 @@ fn fixture_run(prefix: &str, extra: &[(&str, &str)]) -> (Fixture, Created, Creat
 /// search lagging longer than this, scaled, proves what the longer bound buys.
 const OLD_FIXTURE_BOUND: Duration = Duration::from_secs(120);
 
+/// How long each search takes on [`NeverReported`]'s clock: two to an attempt, so the wait's
+/// three-second deadline falls inside one, as it did on the live pair's stand-in when that
+/// answered every search in this long.
+const NEVER_SEARCH_ANSWERS_IN: Duration = Duration::from_millis(500);
+
+/// How long a live pair's `search-never` stand-in parks a search unanswered before it answers
+/// after all, when no read by id has come: twice the wait's deadline, so a wait kept from its
+/// deadline by a loaded host still has a whole deadline to send its read, and a wait that waits
+/// its search out is answered, sends its read after that, and is refused for it rather than
+/// hanging the journey.
+const PARKED_SEARCH_RELEASED_AFTER: Duration =
+    journey::STAND_IN_FIXTURE_WAIT.bound.saturating_mul(2);
+
+/// A source a fixture wait reads as the live pair's `search-never` stand-in answers it, on
+/// tokio's clock: each search takes [`NEVER_SEARCH_ANSWERS_IN`] and leaves the run's second
+/// task out, and a read of it by its own id finds it after `reads_by_id_take` — or, for `None`,
+/// never answers. Under a paused clock nothing here takes host time, so when the wait sent its
+/// reads by id is exactly when its deadline handling sent them.
+struct NeverReported {
+    reads_by_id_take: Option<Duration>,
+    /// When, on tokio's clock, each read by its own id was sent.
+    sent_by_id: Arc<Mutex<Vec<tokio::time::Instant>>>,
+}
+
+impl NeverReported {
+    const PREFIX: &'static str = "onetaskgraph live cleanup 4242-912-";
+
+    fn title(number: usize) -> String {
+        format!("{}{number}", Self::PREFIX)
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskSource for NeverReported {
+    fn kind(&self) -> &'static str {
+        "never-reported"
+    }
+    fn capabilities(&self) -> Capabilities {
+        unreachable!("a fixture wait reads no capabilities")
+    }
+    async fn health(&self) -> Result<onetaskgraph_plugin_api::Health, SourceError> {
+        unreachable!("a fixture wait reads no health")
+    }
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        self.sent_by_id
+            .lock()
+            .unwrap()
+            .push(tokio::time::Instant::now());
+        let Some(takes) = self.reads_by_id_take else {
+            return std::future::pending().await;
+        };
+        tokio::time::sleep(takes).await;
+        Ok(Some(task(
+            &id.0,
+            &Self::title(2),
+            status(StatusCategory::Todo, "Todo"),
+        )))
+    }
+    async fn get_project(&self, _: &NativeId) -> Result<Option<Project>, SourceError> {
+        unreachable!("the search reports every project")
+    }
+    async fn query_tasks(
+        &self,
+        _: &TaskQuery,
+        _: &PageRequest,
+    ) -> Result<onetaskgraph_plugin_api::Page<Task>, SourceError> {
+        tokio::time::sleep(NEVER_SEARCH_ANSWERS_IN).await;
+        Ok(onetaskgraph_plugin_api::Page {
+            items: vec![task(
+                "T_first",
+                &Self::title(1),
+                status(StatusCategory::Todo, "Todo"),
+            )],
+            next: None,
+        })
+    }
+    async fn query_projects(
+        &self,
+        _: &ProjectQuery,
+        _: &PageRequest,
+    ) -> Result<onetaskgraph_plugin_api::Page<Project>, SourceError> {
+        tokio::time::sleep(NEVER_SEARCH_ANSWERS_IN).await;
+        Ok(onetaskgraph_plugin_api::Page {
+            items: vec![project(
+                "P_alpha",
+                &Self::title(0),
+                status(StatusCategory::Todo, "Todo"),
+            )],
+            next: None,
+        })
+    }
+    async fn labels(
+        &self,
+        _: &PageRequest,
+    ) -> Result<onetaskgraph_plugin_api::Page<Label>, SourceError> {
+        unreachable!("a fixture wait reads no labels")
+    }
+    async fn task_dependencies(
+        &self,
+        _: &NativeId,
+        _: Direction,
+        _: &PageRequest,
+    ) -> Result<onetaskgraph_plugin_api::Page<DependencyEdge>, SourceError> {
+        unreachable!("a fixture wait reads no dependencies")
+    }
+    async fn project_dependencies(
+        &self,
+        _: &NativeId,
+        _: Direction,
+        _: &PageRequest,
+    ) -> Result<onetaskgraph_plugin_api::Page<DependencyEdge>, SourceError> {
+        unreachable!("a fixture wait reads no dependencies")
+    }
+}
+
+/// [`journey::settled_fixture`] at [`journey::STAND_IN_FIXTURE_WAIT`] against
+/// [`NeverReported`], from the moment the clock reads `started`: what it said, when it said it,
+/// and when it sent each read by id, all on that clock.
+async fn never_reported_wait(
+    reads_by_id_take: Option<Duration>,
+) -> (String, Duration, Vec<Duration>) {
+    let sent_by_id = Arc::<Mutex<Vec<tokio::time::Instant>>>::default();
+    let rebuild = || -> Box<dyn TaskSource> {
+        Box::new(NeverReported {
+            reads_by_id_take,
+            sent_by_id: Arc::clone(&sent_by_id),
+        })
+    };
+    let named = |id: &str, number: usize| (NativeId(id.to_owned()), NeverReported::title(number));
+    let started = tokio::time::Instant::now();
+    let Err(said) = journey::settled_fixture(
+        &rebuild,
+        NeverReported::PREFIX,
+        &[named("T_first", 1), named("T_second", 2)],
+        &[named("P_alpha", 0)],
+        &BTreeMap::new(),
+        journey::STAND_IN_FIXTURE_WAIT,
+    )
+    .await
+    else {
+        panic!("the search never reports T_second, so the wait cannot settle");
+    };
+    let ended = started.elapsed();
+    let sent = sent_by_id
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|at| *at - started)
+        .collect();
+    (said, ended, sent)
+}
+
+/// The live pair's `search-never` wait on a clock no host can move: the deadline falls inside
+/// a search, which is given up exactly at it, and the read by id is sent at that instant —
+/// neither before the deadline nor any time after it — and its answer ends the wait.
+#[tokio::test(start_paused = true)]
+async fn a_fixture_wait_gives_up_at_its_deadline_and_reads_by_id_at_once() {
+    let wait = journey::STAND_IN_FIXTURE_WAIT;
+    let read = Duration::from_millis(100);
+    let (said, ended, sent) = never_reported_wait(Some(read)).await;
+    assert_eq!(
+        sent,
+        vec![wait.bound],
+        "the read by id was sent at {sent:?} into the wait, against its {:?} deadline",
+        wait.bound
+    );
+    assert_eq!(ended, wait.bound + read, "{said}");
+    assert!(
+        said.contains("a search still unanswered at the deadline was abandoned")
+            && said.contains(&format!(
+                "never reported the task \"{}\" (T_second), which a read by its own id finds on \
+                 the board",
+                NeverReported::title(2)
+            )),
+        "{said}"
+    );
+}
+
+/// A read by id that never answers is given exactly the wait's `diagnosis` and no longer, and
+/// the wait says so rather than waiting on it.
+#[tokio::test(start_paused = true)]
+async fn a_fixture_waits_read_by_id_is_given_its_diagnosis_and_no_longer() {
+    let wait = journey::STAND_IN_FIXTURE_WAIT;
+    let (said, ended, sent) = never_reported_wait(None).await;
+    assert_eq!(sent, vec![wait.bound], "{said}");
+    assert_eq!(
+        ended,
+        wait.bound + wait.diagnosis,
+        "the wait ended {ended:?} in, against a {:?} deadline and {:?} for its reads by id",
+        wait.bound,
+        wait.diagnosis
+    );
+    assert!(
+        said.contains(&format!(
+            "which a read by its own id did not answer within the {}s given it",
+            wait.diagnosis.as_secs_f64()
+        )),
+        "{said}"
+    );
+}
+
 /// The short wait the give-up journeys below are held to.
 /// Its bound is long enough for a loaded host to answer a search inside it, which every one of
 /// them but the one whose searches outlast it depends on.
@@ -11703,6 +12107,46 @@ async fn write_tasks_outside_a_copy_creates_each_whole_and_takes_them_back_when_
                 .contains(&format!("GitHub then refused to take back {left}")),
         "{refused}"
     );
+}
+
+/// How the members page beside a batched origin lookup answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MembersAnswer {
+    /// Every member, as GitHub lists them.
+    Whole,
+    /// A page saying there is more.
+    MoreThanAPage,
+    /// A member naming another parent.
+    ForeignParent,
+    /// A member whose body is not text.
+    BodyNotText,
+    /// A member, recording no repository list, whose own repository is not given.
+    NoRepository,
+    /// A member whose recorded classification does not parse.
+    MalformedClassification,
+    /// A member whose metadata slot does not parse.
+    MalformedSlot,
+    /// A member whose recorded repository list does not parse.
+    MalformedRecordedRepositories,
+    /// A member, recording no repository list, whose own repository is no `owner/name`.
+    InvalidOwnRepository,
+    /// A member, filed under the project, whose own record marks it a project, and private.
+    NestedProject,
+}
+
+/// How a read of one document with its project answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DocumentAnswer {
+    /// The document alone, its project left out.
+    WithoutProject,
+    /// The document, its project issue and the project's members, as GitHub answers.
+    WithProject,
+    /// Another document than the one asked about.
+    AnotherDocument,
+    /// The project with a members connection whose list is not a list.
+    MalformedMembers,
+    /// The project with a member that names another parent.
+    ForeignMember,
 }
 
 /// How an answer to the read of created issues' board items comes back malformed.
@@ -21217,16 +21661,18 @@ fn live_pair_fixture_child() {
     fixture.items_connection_falls_behind();
     // Each attempt of the fixture wait is two searches, tasks then projects: behind, the task is
     // left out of every search until twice the old two-minute bound after it was created, scaled
-    // as the stand-in's wait is; never, every search takes long enough that the stand-in
-    // deadline falls inside an attempt.
+    // as the stand-in's wait is, and out of the first search whenever it comes; never, it is left
+    // out of every search, and every search after the first attempt is parked unanswered.
     match scenario.as_str() {
         "search-behind" => fixture.search_withholds(
             SearchWithheld::run_artifact_for(3, 2 * OLD_FIXTURE_BOUND / journey::STAND_IN_SCALE)
+                .and_at_least(1)
                 .answering_searches_in(Duration::from_millis(100)),
         ),
         "search-never" => fixture.search_withholds(
-            SearchWithheld::run_artifact(3, usize::MAX)
-                .answering_searches_in(Duration::from_millis(500)),
+            // One attempt answered, its two searches tasks then projects, and every search after
+            // it parked: the wait's deadline falls inside a search by construction.
+            SearchWithheld::run_artifact(3, usize::MAX).parking_after(2),
         ),
         _ => {}
     }
@@ -21263,6 +21709,7 @@ fn live_pair_fixture_child() {
     let uploaded = Arc::clone(&upload_sizes);
     let rendering_reads = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let read = Arc::clone(&rendering_reads);
+    let board_state = Arc::clone(&fixture.state);
     thread::spawn(move || {
         let mut assets = BTreeMap::<String, Vec<u8>>::new();
         for stream in listener.incoming() {
@@ -21346,14 +21793,61 @@ fn live_pair_fixture_child() {
                 .unwrap();
                 stream.write_all(&body).unwrap();
             } else {
-                let mut upstream =
-                    std::net::TcpStream::connect(if path == "/graphql" { &graphql } else { &rest })
-                        .unwrap();
-                upstream.write_all(&bytes).unwrap();
-                let mut response = Vec::new();
-                upstream.read_to_end(&mut response).unwrap();
-                // The journey abandons a search still in flight at its fixture deadline.
-                let _ = stream.write_all(&response);
+                let request: Value = serde_json::from_slice(&bytes[end..]).unwrap_or_default();
+                let query = request["query"].as_str().unwrap_or_default();
+                let write = !line.starts_with("GET ")
+                    && (path != "/graphql" || query.trim_start().starts_with("mutation"));
+                let (held, parked) = board_state.lock().unwrap().search_withheld.as_mut().map_or(
+                    (false, false),
+                    |withheld| {
+                        withheld.sent(&request["variables"]);
+                        if write && withheld.searched_at.is_empty() {
+                            withheld.written_before_search_at = Some(Instant::now());
+                        }
+                        let held = withheld.holds(query);
+                        (held, held && withheld.parks())
+                    },
+                );
+                let upstream = (if path == "/graphql" { &graphql } else { &rest }).clone();
+                let forward = move || {
+                    let mut stream = stream;
+                    let mut upstream = std::net::TcpStream::connect(upstream).unwrap();
+                    upstream.write_all(&bytes).unwrap();
+                    let mut response = Vec::new();
+                    upstream.read_to_end(&mut response).unwrap();
+                    // The journey abandons a search still in flight at its fixture deadline.
+                    let _ = stream.write_all(&response);
+                };
+                // A search the board holds back is forwarded beside this loop, so a read the
+                // journey sends after abandoning it is seen here when it is sent; every other
+                // request is forwarded in turn, in the order the journey sent it. A parked one
+                // waits here, never reaching the board, until a read by id says the wait gave it
+                // up — and is then left unanswered — or the backstop answers it after all.
+                if parked {
+                    let watched = Arc::clone(&board_state);
+                    thread::spawn(move || {
+                        let parked_at = Instant::now();
+                        loop {
+                            let mut state = watched.lock().unwrap();
+                            let withheld = state.search_withheld.as_mut().unwrap();
+                            if !withheld.sent_by_id_at.is_empty() {
+                                return;
+                            }
+                            if parked_at.elapsed() >= PARKED_SEARCH_RELEASED_AFTER {
+                                withheld.released_at.push(Instant::now());
+                                drop(state);
+                                forward();
+                                return;
+                            }
+                            drop(state);
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                    });
+                } else if held {
+                    thread::spawn(forward);
+                } else {
+                    forward();
+                }
             }
         }
     });
@@ -21391,18 +21885,40 @@ fn live_pair_fixture_child() {
                 reported.is_none(),
                 "the search was meant never to report it"
             );
-            let took =
-                read_by_id.expect("the wait never read the missing task by its own id") - began;
+            let sent = fixture
+                .search_withheld_sent_by_id()
+                .expect("the wait never sent a read of the missing task by its own id");
+            let arrived =
+                read_by_id.expect("the board never read the missing task by its own id") - began;
+            let waited = sent
+                - fixture
+                    .search_withheld_written_before()
+                    .expect("the journey wrote nothing before its wait");
             println!(
-                "the wait read the missing task by id {took:?} after the search first left it out"
+                "the wait sent its read of the missing task by id {waited:?} after the journey's \
+                 last write, and the board read it {arrived:?} after the search first left it out"
             );
-            // Each attempt takes a second, so the deadline falls inside one and cuts it off; the
-            // read by id is sent inside the `diagnosis` the wait allows itself after it.
-            let diagnosis = journey::STAND_IN_FIXTURE_WAIT.diagnosis;
+            // Not early: the journey's last write before the wait was answered before the wait's
+            // own clock started, so a wait that kept its deadline sends its read by id at least
+            // the deadline after it, however a host delays it.
             assert!(
-                took >= bound - Duration::from_millis(200) && took <= bound + diagnosis,
-                "gave up {took:?} after it began, against a {bound:?} deadline and {diagnosis:?} \
-                 for the reads by id"
+                waited >= bound,
+                "gave up {waited:?} after the journey's last write, before its {bound:?} deadline"
+            );
+            // Not late, by what happened rather than when: every search after the first attempt
+            // is parked unanswered, so the wait ends only by giving one up at its deadline, and
+            // its read by id is what says it has. A search released by the backstop is one the
+            // wait went on waiting for past its deadline.
+            let (parked, released) = fixture.search_withheld_parking();
+            assert!(
+                !parked.is_empty(),
+                "the wait sent no search after its first attempt, so no deadline cut one off"
+            );
+            assert!(
+                released.is_empty(),
+                "the wait went on waiting for a search past its {bound:?} deadline: the stand-in \
+                 answered it after holding it {PARKED_SEARCH_RELEASED_AFTER:?}, and only then did \
+                 the wait send its read by id"
             );
         }
     }
@@ -21624,4 +22140,385 @@ async fn a_drafts_recorded_edges_ride_its_dependency_read_and_a_malformed_answer
             "{case}: {refused:?}"
         );
     }
+}
+
+/// A plan's project issue, two of its tasks and its design document, on a board answering the
+/// document's read as `answer` says.
+fn document_in_project(answer: DocumentAnswer) -> Fixture {
+    let fixture = board(vec![
+        Item::issue("I_plan", "a plan").body(&slotted(
+            "plan prose",
+            &json!({"onetaskgraph.item_kind":"project"}),
+        )),
+        Item::issue("I_one", "one").parent("I_plan"),
+        Item::issue("I_two", "two").parent("I_plan"),
+        design("I_doc", "notes").parent("I_plan"),
+        design("I_other_doc", "other notes").parent("I_plan"),
+    ]);
+    fixture.state.lock().unwrap().document_answer = answer;
+    fixture
+}
+
+/// The plan's tasks, as a read narrowed to its project lists them.
+async fn plan_tasks(source: &dyn TaskSource) -> usize {
+    source
+        .query_tasks(
+            &TaskQuery {
+                project: ProjectFilter::Is(id("I_plan")),
+                ..TaskQuery::default()
+            },
+            &PageRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
+        .await
+        .unwrap()
+        .items
+        .len()
+}
+
+#[tokio::test]
+async fn a_document_read_with_its_project_answers_the_project_and_its_members_without_a_read() {
+    let fixture = document_in_project(DocumentAnswer::WithProject);
+    let source = source(&fixture);
+    let document = source.get_document(&id("I_doc")).await.unwrap().unwrap();
+    assert_eq!(document.project, Some(id("I_plan")));
+    source.get_project(&id("I_plan")).await.unwrap().unwrap();
+    assert_eq!(plan_tasks(source.as_ref()).await, 2);
+    assert_eq!(
+        fixture.operations(),
+        ["documentInProject"],
+        "one request for all three"
+    );
+}
+
+#[tokio::test]
+async fn a_document_read_answering_another_document_is_refused() {
+    let fixture = document_in_project(DocumentAnswer::AnotherDocument);
+    let source = source(&fixture);
+    let refused = source
+        .get_document(&id("I_doc"))
+        .await
+        .expect_err("an answer about another issue");
+    assert!(
+        refused
+            .to_string()
+            .contains("when asked for document I_doc"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_document_read_whose_members_are_malformed_is_refused() {
+    let fixture = document_in_project(DocumentAnswer::MalformedMembers);
+    let source = source(&fixture);
+    let refused = source
+        .get_document(&id("I_doc"))
+        .await
+        .expect_err("a member list that is not a list");
+    assert!(refused.to_string().contains("subIssues.nodes"), "{refused}");
+}
+
+#[tokio::test]
+async fn a_document_read_whose_page_names_another_parent_leaves_the_members_to_their_own_read() {
+    let fixture = document_in_project(DocumentAnswer::ForeignMember);
+    let source = source(&fixture);
+    source.get_document(&id("I_doc")).await.unwrap().unwrap();
+    assert_eq!(plan_tasks(source.as_ref()).await, 2);
+    assert_eq!(
+        fixture.operations(),
+        ["documentInProject", "projectTasks"],
+        "the members are listed on their own"
+    );
+}
+
+#[tokio::test]
+async fn a_batched_origin_lookup_of_one_carrier_each_still_finds_every_duplicate_and_every_page() {
+    // The batch asks a page of one carrier of each origin. An origin with one carrier is
+    // answered by it, with no request of its own; one with two — a duplicate — and one with
+    // five each say there is more, and are left to their own lookup, which walks every page of
+    // three and finds them all.
+    let mut items = vec![
+        Item::issue("I_dup_a", "first")
+            .status("Todo")
+            .carrying("work:ENG-1"),
+        Item::issue("I_dup_b", "second")
+            .status("Todo")
+            .carrying("work:ENG-1"),
+        Item::issue("I_single", "single")
+            .status("Todo")
+            .carrying("work:ENG-2"),
+    ];
+    items.extend((0..5).map(|index| {
+        Item::issue(&format!("I_many_{index}"), "many")
+            .status("Todo")
+            .carrying("work:ENG-3")
+    }));
+    let fixture = board(items);
+    let source = source(&fixture);
+    source
+        .read_ahead_origins_for_copy(&[
+            "work:ENG-1".to_owned(),
+            "work:ENG-2".to_owned(),
+            "work:ENG-3".to_owned(),
+        ])
+        .await
+        .expect("the origins, held for the read ahead");
+    assert!(fixture.operations().is_empty(), "held until the read ahead");
+    source
+        .read_ahead_for_copy(&[])
+        .await
+        .expect("one batched lookup");
+    let batched = fixture.operations();
+    assert_eq!(batched.len(), 1, "{batched:?}");
+    let firsts: Vec<Value> = fixture
+        .state
+        .lock()
+        .unwrap()
+        .bindings
+        .iter()
+        .filter_map(|(_, variables)| variables.get("lookupFirst").cloned())
+        .collect();
+    assert_eq!(firsts, [json!(1)], "a page of one carrier each");
+
+    let single = selected_tasks(source.as_ref(), &origin_query("work:ENG-2")).await;
+    assert_eq!(single, ["I_single"]);
+    assert_eq!(fixture.operations().len(), 1, "answered by the batch alone");
+
+    let mut duplicate = selected_tasks(source.as_ref(), &origin_query("work:ENG-1")).await;
+    duplicate.sort();
+    assert_eq!(
+        duplicate,
+        ["I_dup_a", "I_dup_b"],
+        "both carriers of the duplicate"
+    );
+    assert_eq!(
+        fixture.requests("originItems"),
+        1,
+        "one page of three holds both"
+    );
+
+    let mut many = selected_tasks(source.as_ref(), &origin_query("work:ENG-3")).await;
+    many.sort();
+    assert_eq!(
+        many,
+        (0..5)
+            .map(|index| format!("I_many_{index}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        fixture.requests("originItems"),
+        3,
+        "two pages more, of three and of two"
+    );
+}
+
+/// A board of one issue carrying origin `work:ENG-2`, and a source over it holding that origin
+/// back for a read ahead that is never asked for.
+async fn origin_held_without_read_ahead() -> (Fixture, Box<dyn TaskSource>) {
+    let fixture = board(vec![
+        Item::issue("I_single", "single")
+            .status("Todo")
+            .carrying("work:ENG-2"),
+        Item::issue("I_other", "other").status("Todo"),
+    ]);
+    let source = source(&fixture);
+    source
+        .read_ahead_origins_for_copy(&["work:ENG-2".to_owned()])
+        .await
+        .expect("the origin, held for the read ahead");
+    assert!(
+        fixture.operations().is_empty(),
+        "held until something is sent"
+    );
+    (fixture, source)
+}
+
+#[tokio::test]
+async fn an_origin_held_for_a_read_ahead_that_never_comes_is_sent_before_the_next_request() {
+    let (fixture, source) = origin_held_without_read_ahead().await;
+    let other = source
+        .get_task(&id("I_other"))
+        .await
+        .expect("a read by id")
+        .expect("the issue");
+    assert_eq!(other.title, "other");
+    let sent = fixture.operations();
+    // The batched lookup is named for the board's fields it reads beside the origins.
+    assert_eq!(sent, ["boardFields", "issue"], "the held origin goes first");
+    // Its answer is held: the origin's own query is answered by it, with no request more.
+    let single = selected_tasks(source.as_ref(), &origin_query("work:ENG-2")).await;
+    assert_eq!(single, ["I_single"]);
+    assert_eq!(fixture.operations(), sent);
+}
+
+#[tokio::test]
+async fn an_origin_held_for_a_read_ahead_that_never_comes_answers_the_origins_own_query() {
+    let (fixture, source) = origin_held_without_read_ahead().await;
+    let single = selected_tasks(source.as_ref(), &origin_query("work:ENG-2")).await;
+    assert_eq!(single, ["I_single"]);
+    assert_eq!(fixture.operations(), ["boardFields"]);
+}
+
+#[tokio::test]
+async fn a_held_origin_lookup_that_is_refused_fails_the_request_it_went_ahead_of() {
+    let (fixture, source) = origin_held_without_read_ahead().await;
+    fixture.refuse("boardFields");
+    let refused = source
+        .get_task(&id("I_other"))
+        .await
+        .expect_err("the lookup sent ahead of it was refused");
+    assert!(
+        refused.to_string().contains("boardFields is refused"),
+        "{refused}"
+    );
+    assert_eq!(fixture.operations(), ["boardFields"], "nothing after it");
+}
+
+#[tokio::test]
+async fn end_command_drops_the_origins_and_the_members_a_command_held() {
+    // Held origins: after the command ends they are never sent.
+    let (fixture, held) = origin_held_without_read_ahead().await;
+    held.end_command().await.expect("a command ends");
+    held.get_task(&id("I_other"))
+        .await
+        .expect("a read by id")
+        .expect("the issue");
+    let sent = fixture.operations();
+    assert!(!sent.iter().any(|op| op == "boardFields"), "{sent:?}");
+    // Held members: a command that ends before taking them leaves none for the next.
+    let fixture = board(vec![
+        Item::issue("I_plan", "a plan")
+            .body(&slotted(
+                "plan prose",
+                &json!({"onetaskgraph.item_kind":"project"}),
+            ))
+            .carrying("work:P"),
+        Item::issue("I_one", "one").parent("I_plan"),
+    ]);
+    let source = source(&fixture);
+    source
+        .read_ahead_origins_for_copy(&["work:P".to_owned()])
+        .await
+        .expect("held for the read ahead");
+    source
+        .read_ahead_for_copy(&[id("I_plan")])
+        .await
+        .expect("one lookup carrying the members");
+    assert_eq!(fixture.operations(), ["originLookupsWithMembers"]);
+    source.end_command().await.expect("a command ends");
+    assert_eq!(
+        source
+            .member_classifications(&id("I_plan"))
+            .await
+            .expect("nothing held"),
+        None
+    );
+}
+
+/// A board holding a plan's project, carrying origin `work:P`, and two tasks under it — one
+/// recorded private, the other naming its own repository alone — answering the members page
+/// beside a batched lookup as `answer` says, with the lookup of the project's origin held back
+/// and sent by a read ahead naming the project.
+async fn members_read(
+    answer: MembersAnswer,
+) -> (
+    Fixture,
+    Box<dyn TaskSource>,
+    Option<Vec<(onetaskgraph_plugin_api::Classification, Vec<Repository>)>>,
+) {
+    let fixture = board(vec![
+        Item::issue("I_plan", "a plan")
+            .body(&slotted(
+                "plan prose",
+                &json!({"onetaskgraph.item_kind":"project"}),
+            ))
+            .carrying("work:P"),
+        Item::issue("I_one", "one").parent("I_plan").body(&slotted(
+            "one",
+            &json!({"onetaskgraph.classification":"private"}),
+        )),
+        Item::issue("I_two", "two").parent("I_plan"),
+    ]);
+    fixture.state.lock().unwrap().members_answer = answer;
+    let source = source(&fixture);
+    source
+        .read_ahead_origins_for_copy(&["work:P".to_owned()])
+        .await
+        .expect("held for the read ahead");
+    source
+        .read_ahead_for_copy(&[id("I_plan")])
+        .await
+        .expect("one lookup carrying the members");
+    let classes = source
+        .member_classifications(&id("I_plan"))
+        .await
+        .expect("held or not");
+    (fixture, source, classes)
+}
+
+#[tokio::test]
+async fn a_members_page_beside_a_lookup_answers_each_members_classification_once() {
+    let (fixture, source, classes) = members_read(MembersAnswer::Whole).await;
+    assert_eq!(
+        fixture.operations(),
+        ["originLookupsWithMembers"],
+        "one request carries the lookup and the members"
+    );
+    // Taken, not kept: asked again, the members are no longer held, so the caller lists them.
+    assert_eq!(
+        source
+            .member_classifications(&id("I_plan"))
+            .await
+            .expect("nothing held"),
+        None
+    );
+    let mut classes = classes.expect("the whole page");
+    classes.sort_by_key(|(class, _)| *class == onetaskgraph_plugin_api::Classification::Public);
+    assert_eq!(classes.len(), 2, "{classes:?}");
+    assert_eq!(
+        classes[0].0,
+        onetaskgraph_plugin_api::Classification::Private
+    );
+    assert_eq!(
+        classes[1].0,
+        onetaskgraph_plugin_api::Classification::Public
+    );
+}
+
+#[tokio::test]
+async fn a_members_page_that_is_not_every_member_or_cannot_be_read_answers_nothing() {
+    // Each leaves the members to be listed whole, as they always were.
+    for answer in [
+        MembersAnswer::MoreThanAPage,
+        MembersAnswer::ForeignParent,
+        MembersAnswer::BodyNotText,
+        MembersAnswer::NoRepository,
+        MembersAnswer::MalformedClassification,
+        MembersAnswer::MalformedSlot,
+        MembersAnswer::MalformedRecordedRepositories,
+        MembersAnswer::InvalidOwnRepository,
+    ] {
+        let (_, _, classes) = members_read(answer).await;
+        assert_eq!(classes, None, "{answer:?}");
+    }
+}
+
+#[tokio::test]
+async fn an_issue_marked_a_project_but_filed_under_the_project_is_a_member_it_classifies() {
+    // Filed under the project, it reads as one of its tasks whatever its marker says, as a
+    // task listing of the project names it: its private classification is held beside the
+    // other two members', never left out so the project could read public without it.
+    let (_, _, classes) = members_read(MembersAnswer::NestedProject).await;
+    let classes = classes.expect("the whole page");
+    assert_eq!(classes.len(), 3, "{classes:?}");
+    assert_eq!(
+        classes
+            .iter()
+            .filter(|(class, _)| *class == onetaskgraph_plugin_api::Classification::Private)
+            .count(),
+        2,
+        "{classes:?}"
+    );
 }

@@ -248,6 +248,8 @@ fn run_pair(scenario: &str) {
                     "s against a deadline of 3s, GitHub's issue search for titles \
                      onetaskgraph live cleanup ci-37616803489-2-*"
                 )
+                // The stand-in parks every search after the first attempt, so the deadline always
+                // falls inside one.
                 && said.contains("a search still unanswered at the deadline was abandoned"),
             "{said}"
         );
@@ -365,7 +367,7 @@ fn run_pair(scenario: &str) {
         // Every read document of `graphql::DOCUMENTS` is reconciled, the closed-items read of
         // `task status reconcile` and the read by issue reference of `task status complete` among
         // them.
-        assert!(said.contains("24 documents agreed"), "{said}");
+        assert!(said.contains("26 documents agreed"), "{said}");
         assert!(!outputs[1].status.success());
         assert!(
             String::from_utf8_lossy(&outputs[1].stderr)
@@ -396,7 +398,7 @@ fn run_pair(scenario: &str) {
             .take_while(|call| budget_reads.contains(&call.operation_sha256.as_str()))
             .count();
         let probes: Vec<_> = phase[rechecked..].to_vec();
-        assert_eq!(probes.len(), 27);
+        assert_eq!(probes.len(), 29);
         assert_eq!(
             probes[1].outcome,
             if scenario == "aliases" {

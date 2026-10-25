@@ -5277,3 +5277,69 @@ async fn a_rust_caller_preserves_status_then_intentionally_copies_it_with_the_sa
     let held = engine.task(&id("into:T-1")).await.unwrap();
     assert_eq!(held.items[0].item.status.category, StatusCategory::Todo);
 }
+
+/// A linking caller's write policy that finds nothing private in any write: what leaves the
+/// copy's own withholding as the only thing keeping a private id off a public write.
+struct NothingPrivate;
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for NothingPrivate {
+    async fn repository_visibility(
+        &self,
+        _repository: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        Ok(onetaskgraph_core::boundary::RepositoryVisibility::Public)
+    }
+
+    async fn check_public_write(
+        &self,
+        _input: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        Ok(onetaskgraph_core::boundary::WriteVerdict::Pass)
+    }
+}
+
+#[tokio::test]
+async fn the_edges_a_copy_withheld_are_taken_once_and_each_copy_reports_its_own() {
+    // `T-1` depends on an item of `ledger`, a source declared private: a copy into the public
+    // `into` leaves that edge out and notes it, and a Rust caller taking the notes twice gets
+    // them once — the next copy's notes are its own, not the first's again beside them.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "visibility": "public", "config": {
+            "tasks": [{"id": "T-1", "title": "Consumer",
+                       "status": {"category": "todo", "name": "Todo"}, "labels": []}],
+            "task_dependencies": [
+                {"from": {"id": "T-1", "kind": "task"},
+                 "to": {"id": "ledger:LED-1", "kind": "task"}, "kind": "blocks"},
+            ],
+        }},
+        "into": {"plugin": "in-memory", "visibility": "public", "config": {}},
+        "ledger": {"plugin": "in-memory", "visibility": "private", "config": {}},
+    }))
+    .with_write_policy(Arc::new(NothingPrivate));
+    let withheld = "withheld from:T-1's dependency on ledger:LED-1 from into: its source \
+                    ledger is declared private, and its source named no tracker an opaque \
+                    reference to it could point into";
+
+    engine.copy(&one("from:T-1")).await.expect("the copy runs");
+    assert_eq!(engine.take_withheld_edges(), vec![withheld.to_owned()]);
+    assert_eq!(
+        engine.take_withheld_edges(),
+        Vec::<String>::new(),
+        "nothing is left to take once taken"
+    );
+
+    engine
+        .copy(&one("from:T-1"))
+        .await
+        .expect("the re-copy runs");
+    assert_eq!(
+        engine.take_withheld_edges(),
+        vec![withheld.to_owned()],
+        "the re-copy reports its own withheld edge alone"
+    );
+}
