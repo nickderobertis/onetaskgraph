@@ -63,12 +63,17 @@ const PRICES: &[(&str, u64)] = &[
     // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     (graphql::CREATE_ISSUE, 1),
     // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. These are the documents a copy now reads its origins and writes its created items with, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; what a plan copy spends is the `github-plan-copy-points-*` budgets', judged by onebudgetspec.
-    (graphql::ORIGIN_LOOKUPS, 2),
+    (graphql::ORIGIN_LOOKUPS, 1),
+    // GitHub's own dry run, beside the model's: `docs/measurements/board-copy-gaps-2026-10-24/coalesced-members-dry-run`.
+    (graphql::ORIGIN_LOOKUPS_WITH_MEMBERS, 1),
     (graphql::CREATE_ISSUES, 1),
     (graphql::CREATED_BOARD_ITEMS, 1),
     (graphql::WRITE_FIELD_VALUES, 1),
     (graphql::CLOSE_ISSUES, 1),
     (graphql::ADD_BLOCKED_BYS, 1),
+    (graphql::WRITE_FIELDS_AND_EDGES, 1),
+    (graphql::DELETE_ISSUES, 1),
+    (graphql::DOCUMENT_IN_PROJECT, 1),
     // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     (graphql::ADD_TO_BOARD, 1),
     (graphql::UPDATE_ISSUE, 1),

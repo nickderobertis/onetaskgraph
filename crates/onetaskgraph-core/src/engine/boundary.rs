@@ -394,6 +394,56 @@ pub(crate) struct Boundary {
     active: bool,
     policy: Arc<dyn WritePolicy>,
     scope: Option<Vec<String>>,
+    /// What the policy has answered in this command, until [`Engine::end_command`].
+    screened: Arc<std::sync::Mutex<Screened>>,
+    /// One line per dependency edge a write left out because it names something private,
+    /// until [`Engine::take_withheld_edges`] takes them.
+    withheld: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+/// What one command has learned from the policy, so it asks nothing twice: each repository's
+/// visibility it answered, and every input a check passed whole.
+///
+/// Nothing here outlives the command — [`Engine::end_command`] empties it — and nothing is
+/// kept that the policy did not affirmatively answer: a repository it could not answer is
+/// asked again, and an unavailable or refused check passes nothing. A write is taken as passed
+/// only when one input a check passed held every value it exposes, so values that passed apart
+/// are never taken as having passed together, and an exposure that changes later in the command
+/// is screened again.
+#[derive(Default)]
+struct Screened {
+    visibility: std::collections::HashMap<Repository, RepositoryVisibility>,
+    passed: Vec<PassedInput>,
+}
+
+/// The values of one input a check passed, by surface.
+#[derive(Default)]
+struct PassedInput {
+    text: std::collections::HashSet<String>,
+    paths: std::collections::HashSet<String>,
+    metadata: std::collections::HashSet<String>,
+}
+
+impl PassedInput {
+    fn of(exposure: &Exposure) -> Self {
+        Self {
+            text: exposure.text.iter().cloned().collect(),
+            paths: exposure.paths.iter().cloned().collect(),
+            metadata: exposure.metadata.iter().cloned().collect(),
+        }
+    }
+
+    fn covers(&self, exposure: &Exposure) -> bool {
+        exposure.text.iter().all(|value| self.text.contains(value))
+            && exposure
+                .paths
+                .iter()
+                .all(|value| self.paths.contains(value))
+            && exposure
+                .metadata
+                .iter()
+                .all(|value| self.metadata.contains(value))
+    }
 }
 
 impl Default for Boundary {
@@ -402,6 +452,8 @@ impl Default for Boundary {
             active: false,
             policy: Arc::new(MissingWritePolicy),
             scope: None,
+            screened: Arc::default(),
+            withheld: Arc::default(),
         }
     }
 }
@@ -422,6 +474,39 @@ impl Boundary {
                 None => Arc::new(MissingWritePolicy),
             },
             scope: None,
+            screened: Arc::default(),
+            withheld: Arc::default(),
+        }
+    }
+
+    /// Forget everything the policy answered: what [`Engine::end_command`] does, so the next
+    /// command asks again.
+    pub(crate) fn forget(&self) {
+        if let Ok(mut screened) = self.screened.lock() {
+            *screened = Screened::default();
+        }
+    }
+
+    /// Note one edge a write left out, once however often it is shown.
+    pub(crate) fn withheld(&self, line: String) {
+        if let Ok(mut withheld) = self.withheld.lock()
+            && !withheld.contains(&line)
+        {
+            withheld.push(line);
+        }
+    }
+
+    /// Whether one input a check of this scope passed in this command held every value of
+    /// `exposure`.
+    fn passed(&self, exposure: &Exposure) -> bool {
+        self.screened
+            .lock()
+            .is_ok_and(|screened| screened.passed.iter().any(|input| input.covers(exposure)))
+    }
+
+    fn pass(&self, exposure: &Exposure) {
+        if let Ok(mut screened) = self.screened.lock() {
+            screened.passed.push(PassedInput::of(exposure));
         }
     }
 }
@@ -633,20 +718,38 @@ pub(crate) struct Outbound<'a> {
 
 impl Engine {
     /// The same engine, asking `policy` about the public boundary — which makes the boundary
-    /// active, whatever the configuration says.
+    /// active, whatever the configuration says. What an earlier policy answered is forgotten,
+    /// so none of it stands in for this one's answer.
     #[must_use]
     pub fn with_write_policy(mut self, policy: Arc<dyn WritePolicy>) -> Self {
         self.boundary.active = true;
         self.boundary.policy = policy;
+        self.boundary.forget();
         self
     }
 
     /// The same engine, deriving every check's terms from `scope`: `None` for every private
-    /// identity the policy knows of, an empty list for none.
+    /// identity the policy knows of, an empty list for none. A check passed under an earlier
+    /// scope is forgotten, because it derived other terms.
     #[must_use]
     pub fn with_term_scope(mut self, scope: Option<Vec<String>>) -> Self {
         self.boundary.scope = scope;
+        self.boundary.forget();
         self
+    }
+
+    /// Take the edges a copy left out of what it wrote because each names something private —
+    /// an item of a source declared private, or one classified private, whose source named no
+    /// tracker an opaque reference could point into — one line each, naming the item, the far
+    /// end and why, in the order they were left out. What the command line prints on standard
+    /// error after a copy; nothing is left to take afterwards.
+    #[must_use]
+    pub fn take_withheld_edges(&self) -> Vec<String> {
+        self.boundary
+            .withheld
+            .lock()
+            .map(|mut withheld| std::mem::take(&mut *withheld))
+            .unwrap_or_default()
     }
 
     /// Whether the boundary is active for this engine (see the module documentation).
@@ -935,12 +1038,25 @@ impl Engine {
             return declared;
         }
         for repository in repositories {
-            let visibility = self
+            let known = self
                 .boundary
-                .policy
-                .repository_visibility(repository)
-                .await
-                .unwrap_or(RepositoryVisibility::Unknown);
+                .screened
+                .lock()
+                .ok()
+                .and_then(|screened| screened.visibility.get(repository).copied());
+            let visibility = match known {
+                Some(visibility) => visibility,
+                None => match self.boundary.policy.repository_visibility(repository).await {
+                    Ok(visibility) => {
+                        if let Ok(mut screened) = self.boundary.screened.lock() {
+                            screened.visibility.insert(repository.clone(), visibility);
+                        }
+                        visibility
+                    }
+                    // Never held: a repository the policy could not answer is asked again.
+                    Err(_) => RepositoryVisibility::Unknown,
+                },
+            };
             if !visibility.is_public() {
                 return Classification::Private;
             }
@@ -972,6 +1088,20 @@ impl Engine {
         destination: &ResolvedSource,
         outbound: &Outbound<'_>,
     ) -> Result<(), EngineError> {
+        if self.placed(destination, outbound)? {
+            self.check(destination, &outbound.item, outbound.exposure)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// [`preflight`](Self::preflight)'s half that asks nothing: a private item refused where it
+    /// is not declared private, and whether the write still has to be put to the check.
+    pub(crate) fn placed(
+        &self,
+        destination: &ResolvedSource,
+        outbound: &Outbound<'_>,
+    ) -> Result<bool, EngineError> {
         let name = destination.name();
         let declared = self.declared(name);
         if outbound.classification == Classification::Private
@@ -983,11 +1113,76 @@ impl Engine {
                 declared,
             });
         }
-        if declared == SourceVisibility::Private || !self.boundary.active {
+        Ok(declared != SourceVisibility::Private && self.boundary.active)
+    }
+
+    /// Put every write of `writes` — each its destination, how it names its item, and what it
+    /// exposes — to the caller's check before any of them is made: one check of all of them
+    /// together, every check's arrays concatenated element by element under the one scope they
+    /// share. A union one earlier check of this command passed whole is not checked again.
+    ///
+    /// Only a union the check refuses is checked again write by write, so the refusal names the
+    /// write it is about — and those checks pass nothing, since a write passing alone says nothing
+    /// of the union; a union the check cannot decide is the first write's own unavailability. A
+    /// union it passes passes every write of it.
+    pub(crate) async fn check_all(
+        &self,
+        writes: &[(&ResolvedSource, String, Exposure)],
+    ) -> Result<(), EngineError> {
+        let Some((first, first_item, _)) = writes.first() else {
+            return Ok(());
+        };
+        if let [(destination, item, exposure)] = writes {
+            return self.check(destination, item, exposure).await;
+        }
+        let mut union = Exposure::default();
+        for (_, _, exposure) in writes {
+            union = union.and(exposure.clone());
+        }
+        // Passed already only when one check passed all of it together.
+        if self.boundary.passed(&union) {
             return Ok(());
         }
-        self.check(destination, &outbound.item, outbound.exposure)
-            .await
+        match self.verdict(&union).await {
+            WriteVerdict::Pass => {
+                self.boundary.pass(&union);
+                Ok(())
+            }
+            WriteVerdict::Refuse { reason } => {
+                // Asked only to name the write refused: a write passing here passed alone, which
+                // says nothing of the union, so nothing of it is kept as passed.
+                for (destination, item, exposure) in writes {
+                    match self.verdict(exposure).await {
+                        WriteVerdict::Pass => {}
+                        WriteVerdict::Refuse { reason } => {
+                            return Err(EngineError::BoundaryRefused {
+                                item: item.clone(),
+                                destination: destination.name().to_string(),
+                                reason,
+                            });
+                        }
+                        WriteVerdict::Unavailable { reason } => {
+                            return Err(EngineError::BoundaryUnavailable {
+                                item: item.clone(),
+                                destination: destination.name().to_string(),
+                                reason,
+                            });
+                        }
+                    }
+                }
+                // Each passed alone: the union is still refused, and it is the first write's.
+                Err(EngineError::BoundaryRefused {
+                    item: first_item.clone(),
+                    destination: first.name().to_string(),
+                    reason,
+                })
+            }
+            WriteVerdict::Unavailable { reason } => Err(EngineError::BoundaryUnavailable {
+                item: first_item.clone(),
+                destination: first.name().to_string(),
+                reason,
+            }),
+        }
     }
 
     /// The check every write makes immediately before its first mutation: a destination
@@ -1028,29 +1223,23 @@ impl Engine {
     }
 
     /// Put one write to a destination not verified private to the caller's check.
+    ///
+    /// A write every value of whose exposure a check already passed in this command is not put
+    /// to it again.
     pub(crate) async fn check(
         &self,
         destination: &ResolvedSource,
         item: &str,
         exposure: &Exposure,
     ) -> Result<(), EngineError> {
-        let input = PublicWriteInput {
-            destination: RepositoryVisibility::Public,
-            text: exposure.text.clone(),
-            paths: exposure.paths.clone(),
-            metadata: exposure.metadata.clone(),
-            scope: self.boundary.scope.clone(),
-        };
-        let verdict = self
-            .boundary
-            .policy
-            .check_public_write(&input)
-            .await
-            .unwrap_or_else(|error| WriteVerdict::Unavailable {
-                reason: error.message,
-            });
-        match verdict {
-            WriteVerdict::Pass => Ok(()),
+        if self.boundary.passed(exposure) {
+            return Ok(());
+        }
+        match self.verdict(exposure).await {
+            WriteVerdict::Pass => {
+                self.boundary.pass(exposure);
+                Ok(())
+            }
             WriteVerdict::Refuse { reason } => Err(EngineError::BoundaryRefused {
                 item: item.to_owned(),
                 destination: destination.name().to_string(),
@@ -1062,6 +1251,24 @@ impl Engine {
                 reason,
             }),
         }
+    }
+
+    /// What the caller's check says of `exposure`, a check that could not be asked unavailable.
+    async fn verdict(&self, exposure: &Exposure) -> WriteVerdict {
+        let input = PublicWriteInput {
+            destination: RepositoryVisibility::Public,
+            text: exposure.text.clone(),
+            paths: exposure.paths.clone(),
+            metadata: exposure.metadata.clone(),
+            scope: self.boundary.scope.clone(),
+        };
+        self.boundary
+            .policy
+            .check_public_write(&input)
+            .await
+            .unwrap_or_else(|error| WriteVerdict::Unavailable {
+                reason: error.message,
+            })
     }
 
     /// `classification`, held against the project `project` of `source` it is filed under —
@@ -1192,6 +1399,43 @@ impl Engine {
             name: destination.name().to_string(),
             error,
         })?;
+        self.admit_stored(destination, item, id, held, stored, exposure)
+            .await
+    }
+
+    /// [`admit_existing`](Self::admit_existing), for an item this command has just read
+    /// itself: `stored` is its classification, repositories and project as that read answered
+    /// them, so the item is not read again. What it inherits is read as there.
+    pub(crate) async fn admit_read(
+        &self,
+        destination: &ResolvedSource,
+        item: &str,
+        id: &NativeId,
+        held: Held,
+        stored: (Classification, Vec<Repository>, Option<NativeId>),
+        exposure: &Exposure,
+    ) -> Result<(), EngineError> {
+        if self.declared(destination.name()) == SourceVisibility::Private {
+            return self
+                .verify_private(destination, item, &WriteTarget::Existing(id))
+                .await;
+        }
+        if !self.boundary.active {
+            return Ok(());
+        }
+        self.admit_stored(destination, item, id, held, Some(stored), exposure)
+            .await
+    }
+
+    async fn admit_stored(
+        &self,
+        destination: &ResolvedSource,
+        item: &str,
+        id: &NativeId,
+        held: Held,
+        stored: Option<(Classification, Vec<Repository>, Option<NativeId>)>,
+        exposure: &Exposure,
+    ) -> Result<(), EngineError> {
         // An item the source does not hold is the write's own refusal to make, in its own
         // words; nothing of it can be private.
         let Some((declared, repositories, filed)) = stored else {

@@ -89,7 +89,7 @@ fn a_connection_the_board_closes_unanswered_is_replaced_and_the_copy_lands() {
     let (sandbox, board) = setup();
     // The copy's first request, the read of what the board already holds: closing it
     // unanswered applies nothing, and the binary reads the board again its other way.
-    board.drop_response_once("$originFirst:Int!");
+    board.drop_response_once("$lookupFirst:Int!");
     let copied = ok(&sandbox, COPY);
     assert_eq!(
         copied["items"].as_array().map(Vec::len),

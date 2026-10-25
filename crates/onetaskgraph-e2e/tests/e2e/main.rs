@@ -13,7 +13,7 @@
 //! against every source kind — `scripts/check-journey-matrix.sh` fails when a plugin the
 //! registry knows has no row in it.
 
-use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary};
+use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary, onevcs};
 
 // Image assets on tasks and documents: stored, listed, rendered and copied through the
 // binary against folders of Markdown and the Python asset store over a real pipe.
@@ -32,9 +32,6 @@ mod assets;
 // configuration's, so they cannot sit behind one plugin crate's edge, which AGENTS.md forbids
 // depending on the engine at any depth.
 mod boundary;
-// The released onevcs boundary commands and the onevcs home `boundary` registers its synthetic
-// identities in, used by those journeys alone.
-mod onevcs;
 // The simulated clock: its coordinator driven by real client processes over loopback, and the
 // binary attaching to it. No source and no third party; nothing waits in real time but the
 // deliberate few hundred milliseconds of computing a scenario needs to prove time holds still.

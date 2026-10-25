@@ -90,6 +90,13 @@ impl Kind {
         if query == graphql::SEARCH_ISSUES {
             return Self::SearchPage;
         }
+        // The read of where GitHub placed the issues a copy created names several ids, but
+        // selects each one's board item and status alone: 0.11's own trace of it on the real
+        // board (`docs/measurements/board-copy-speed-2026-10-18/after/tb-first-span-20261024T095836`)
+        // answered in 212 to 385 ms, an item read's time rather than a batched detail read's.
+        if query == graphql::CREATED_BOARD_ITEMS {
+            return Self::ItemRead;
+        }
         let named: std::collections::BTreeSet<&str> = request["variables"]
             .as_object()
             .into_iter()
@@ -249,6 +256,10 @@ pub(super) struct Call {
     pub kind: Kind,
     /// The virtual time the board released its answer, after holding it for its latency.
     pub answered: Duration,
+    /// The wall-clock time the request arrived, since the Unix epoch: what orders it against
+    /// what happened outside the board — a boundary command the binary ran — which the
+    /// simulated clock, standing still while the binary works, cannot.
+    pub wall: Duration,
 }
 
 #[derive(Default)]
@@ -272,6 +283,9 @@ struct State {
     /// Whether each answer is held for the spike's measured latency of its [`Kind`] rather than
     /// 200 ms, or 800 ms for an upload.
     measured: bool,
+    /// Told the virtual time each answer was released at, once it is: one per board behind a
+    /// host several share.
+    answered: Vec<Arc<dyn Fn(Duration) + Send + Sync>>,
 }
 
 pub(super) struct Board {
@@ -483,6 +497,9 @@ impl Board {
                         creating,
                         kind,
                         answered: at,
+                        wall: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default(),
                     });
                 }
             }
@@ -520,8 +537,15 @@ impl Board {
                 },
             ))));
             let answered = clock.now();
-            if let Some(call) = held.lock().unwrap().calls.last_mut() {
-                call.answered = answered;
+            let told = {
+                let mut state = held.lock().unwrap();
+                if let Some(call) = state.calls.last_mut() {
+                    call.answered = answered;
+                }
+                state.answered.clone()
+            };
+            for told in told {
+                told(answered);
             }
             // A board that closed its connection unanswered is relayed as just that.
             let after = if forwarded.as_ref().is_some_and(Vec::is_empty) || truncate {
@@ -588,6 +612,11 @@ impl Board {
     /// Refuse the GraphQL requests `refusal` matches, as many times as it says.
     pub fn refuse_graphql(&self, refusal: GraphqlRefusal) {
         self.state.lock().unwrap().graphql_refusal = Some(refusal);
+    }
+    /// Tell `answered` the virtual time each answer is released at, once it is: what a board
+    /// placing created issues some time after their create was answered keeps that time by.
+    pub fn on_answered(&self, answered: impl Fn(Duration) + Send + Sync + 'static) {
+        self.state.lock().unwrap().answered.push(Arc::new(answered));
     }
     /// Hold every answer for the spike's measured latency of its kind,
     /// [`Kind::measured_millis`], instead of 200 ms, or 800 ms for an upload.

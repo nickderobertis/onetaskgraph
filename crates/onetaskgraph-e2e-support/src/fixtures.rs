@@ -15,12 +15,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
-    net::{TcpListener, TcpStream},
+    net::TcpListener,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     thread,
+    time::Duration,
 };
 
 use crate::common::{Sandbox, SourceBoundary};
@@ -1082,6 +1083,36 @@ struct CommentCount {
     count: usize,
 }
 
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The measured delays the shared loopback board's placement model is driven with, beside that model: AGENTS.md puts every loopback server and what configures it in this shared harness, once.
+/// How long after its create was answered GitHub placed each child issue a create filed on a
+/// board with `projectV2Ids`, in milliseconds: the feasibility spike's ten samples of eight
+/// children each (`board-copy-gaps-2026-10-24-spike-feasibility-report`, its `probe-placement`
+/// runs), in the order they were measured. None of those creates' answers carried the item.
+pub const MEASURED_PLACEMENT_MILLIS: [u64; 80] = [
+    453, 453, 453, 453, 453, 453, 453, 1423, 482, 482, 482, 482, 482, 482, 482, 1622, 509, 509,
+    509, 509, 509, 509, 509, 1555, 548, 548, 548, 548, 548, 548, 548, 1553, 577, 577, 577, 577,
+    577, 577, 577, 1526, 537, 537, 537, 537, 537, 537, 537, 537, 523, 523, 523, 523, 523, 523, 523,
+    1837, 614, 614, 614, 614, 614, 614, 614, 614, 626, 626, 626, 626, 626, 626, 626, 1692, 568,
+    568, 568, 568, 568, 568, 568, 568,
+];
+
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The loopback GitHub board's own placement state, which every read of it answers from: AGENTS.md puts every loopback server in this shared harness, once, so the plan-copy journeys of the GitHub suite and any other suite driving this board read one model of GitHub's delayed placement rather than copies of it.
+/// GitHub's delayed placement of an issue `createIssue` files on a board through
+/// `projectV2Ids`: the create is answered with no board item, and the item appears on the board
+/// some time later — between 0.45 and 1.84 seconds after the answer in the feasibility spike
+/// (`board-copy-gaps-2026-10-24-spike-feasibility-report`), and never in the create's own answer.
+struct BoardPlacement {
+    /// The time on whatever clock the journey runs on.
+    now: Arc<dyn Fn() -> Duration + Send + Sync>,
+    /// The delay of each create in turn, cycled.
+    delays: Vec<Duration>,
+    /// How many delays were handed out.
+    next: usize,
+    /// Each issue waiting to be placed: its id, its delay, and when it is placed — `None` until
+    /// the create that made it has been answered.
+    waiting: Vec<(Value, Duration, Option<Duration>)>,
+}
+
 /// The board this fixture keeps, and everything a request may change on it.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 struct GitHubBoard {
@@ -1219,6 +1250,17 @@ struct GitHubBoard {
     /// How many more reads of created issues' board items answer that GitHub has not filed
     /// them yet, as it may not have in the moments after a create naming the board.
     unfiled_board_item_reads: usize,
+    /// When set, an issue a create files on this board with `projectV2Ids` is placed on it only
+    /// once its delay has passed since the create was answered, as GitHub places one: until
+    /// then it is an issue on no board, and `addProjectV2ItemById` files it at once.
+    placement: Option<BoardPlacement>,
+    /// Each member a page of a project's members beside a batched origin lookup answers short of
+    /// what the board holds — its id, the field and the value that page gives it — while every
+    /// other read of it answers the board's own record.
+    members_page_misanswers: Vec<(String, MembersPageField, Value)>,
+    /// The repository, `owner/name`, this board's issues are created in and its source is
+    /// configured with.
+    repository: String,
     /// Whether the next read of a project's sub-issues beside a copy's batch answers them with
     /// no list at all.
     omits_sub_issue_list: bool,
@@ -1347,10 +1389,14 @@ impl RepositoryAnswer {
 // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 /// A read-only handle on one fixture board's own fields.
+#[derive(Clone)]
 pub struct GitHubBoardFields {
     endpoint: String,
     board: Arc<Mutex<GitHubBoard>>,
     connections: Arc<AtomicUsize>,
+    /// The one connection [`Self::graphql`] and [`Self::own`] keep to the board, as the
+    /// product's own client keeps one, rather than a connection closed after every request.
+    client: Arc<Mutex<loopback::Upstream>>,
 }
 
 impl GitHubBoardFields {
@@ -1804,6 +1850,71 @@ impl GitHubBoardFields {
     /// has filed them: each issue on no board yet.
     pub fn file_created_items_after(&self, reads: usize) {
         self.board.lock().unwrap().unfiled_board_item_reads = reads;
+    }
+
+    /// Answer the member `id` in every page of a project's members
+    /// [`ORIGIN_LOOKUPS_WITH_MEMBERS`](onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS_WITH_MEMBERS)
+    /// carries with its `field` as `value`, while every full read of it answers what the board
+    /// holds: a trimmed page that says less about a member, or something malformed, than a read
+    /// of the same member does.
+    pub fn misanswer_in_members_page(&self, id: &str, field: MembersPageField, value: Value) {
+        self.board
+            .lock()
+            .unwrap()
+            .members_page_misanswers
+            .push((id.to_owned(), field, value));
+    }
+
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own placement state, which every read of it answers from, beside `file_created_items_after`: the board is this shared harness's, so a suite can only set it through this handle.
+    /// Place every issue a create files on the board with `projectV2Ids` only once a delay of
+    /// `delays` — each create's in turn, cycled — has passed on `now` since the create was
+    /// answered ([`Self::answered_at`]), as GitHub places one; until then the issue is on no
+    /// board, as a read of its board items answers it.
+    pub fn place_filed_issues_after(
+        &self,
+        delays: Vec<Duration>,
+        now: impl Fn() -> Duration + Send + Sync + 'static,
+    ) {
+        assert!(!delays.is_empty(), "a placement delay to hand out");
+        self.board.lock().unwrap().placement = Some(BoardPlacement {
+            now: Arc::new(now),
+            delays,
+            next: 0,
+            waiting: Vec::new(),
+        });
+    }
+
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `place_filed_issues_after` above: the time a proxy in front of this board released a create's answer, which the board's placement keeps time by.
+    /// Every create this board has answered so far was answered at `now`: each issue it is
+    /// waiting to place is placed once its delay has passed since then.
+    pub fn answered_at(&self, now: Duration) {
+        if let Some(placement) = &mut self.board.lock().unwrap().placement {
+            for (_, delay, due) in &mut placement.waiting {
+                due.get_or_insert(now + *delay);
+            }
+        }
+    }
+
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own record of the repository its issues live in, which every read of it answers from, beside `transfer`: the board is this shared harness's.
+    /// Hold every issue of this board in `repository`, `owner/name`, and create every new one
+    /// there: what a journey configuring its source with that repository sets, so no answer
+    /// names another.
+    pub fn use_repository(&self, repository: &str) {
+        let mut guard = self.board.lock().unwrap();
+        let board = &mut *guard;
+        let before = std::mem::replace(&mut board.repository, repository.to_owned());
+        for item in board.items.iter_mut().chain(board.pending.iter_mut()) {
+            if item["repo"] == json!(before) {
+                item["repo"] = json!(repository);
+            }
+        }
+    }
+
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] One request to this shared board, as the product sends one, through the harness's own `graphql_over_http`: what a journey replaying a recorded trace drives the board with.
+    /// Send this board one GraphQL request, as the product sends one, and answer its `data`:
+    /// what a journey replaying a recorded request sequence drives the board with.
+    pub fn graphql(&self, query: &str, variables: &Value) -> Value {
+        self.graphql_over_http(query, variables)
     }
 
     /// Answer the next read of a project's sub-issues beside a copy's batch with no list of
@@ -2416,41 +2527,75 @@ impl GitHubBoardFields {
     /// what a person opening that board would see.
     #[must_use]
     pub fn own(&self) -> Value {
-        graphql_over_http(
-            &self.endpoint,
+        self.graphql_over_http(
             "query($id:ID!){node(id:$id){... on ProjectV2{title shortDescription readme}}}",
             &json!({"id":"PVT-board"}),
         )["node"]
             .clone()
     }
+
+    /// One GraphQL request to this board, sent as the product itself sends one, over the
+    /// connection this handle keeps to it, and the `data` it is answered with.
+    ///
+    /// A connection that ends or is reset before the answer arrives — which a Windows host
+    /// reports as `ConnectionReset` (`os error 10054`) — is answered here rather than
+    /// panicking the journey: the request is sent again on a fresh connection when the
+    /// board never recorded it, or when it is a read, which a second sending cannot change.
+    /// A mutation the board recorded and whose answer was lost is the one case that cannot
+    /// be retried without being applied twice, and it fails naming that.
+    fn graphql_over_http(&self, query: &str, variables: &Value) -> Value {
+        const ATTEMPTS: usize = 3;
+        let address = self
+            .endpoint
+            .strip_prefix("http://")
+            .and_then(|rest| rest.split('/').next())
+            .expect("a fixture endpoint spelled http://host:port/graphql");
+        let body = json!({"query":query,"variables":variables}).to_string();
+        let request = format!(
+            "POST /graphql HTTP/1.1\r\nHost: {address}\r\nauthorization: Bearer test-token\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let mutation = query.trim_start().starts_with("mutation");
+        for _ in 0..ATTEMPTS {
+            let recorded = self.board.lock().unwrap().documents.len();
+            let response = self
+                .client
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .forward(request.as_bytes());
+            if response.is_empty() {
+                // `forward` dropped the connection that failed, and has said why on standard
+                // error; the next attempt opens another.
+                let reached = self.board.lock().unwrap().documents.len() > recorded;
+                assert!(
+                    !(reached && mutation),
+                    "the board recorded a mutation and its answer was lost: sending it again \
+                     would apply it twice ({query})"
+                );
+                continue;
+            }
+            let at = response
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .expect("HTTP header terminator")
+                + 4;
+            let answered: Value =
+                serde_json::from_slice(&response[at..]).expect("fixture response JSON");
+            return answered["data"].clone();
+        }
+        panic!("the board answered none of {ATTEMPTS} sendings of {query}")
+    }
 }
 
-/// One GraphQL request to a fixture endpoint, sent as the product itself sends one.
-fn graphql_over_http(endpoint: &str, query: &str, variables: &Value) -> Value {
+/// The connection a [`GitHubBoardFields`] keeps to the board at `endpoint`, opened by its
+/// first request.
+fn board_client(endpoint: &str) -> Arc<Mutex<loopback::Upstream>> {
     let address = endpoint
         .strip_prefix("http://")
         .and_then(|rest| rest.split('/').next())
+        .and_then(|address| address.parse().ok())
         .expect("a fixture endpoint spelled http://host:port/graphql");
-    let body = json!({"query":query,"variables":variables}).to_string();
-    let mut stream = TcpStream::connect(address).expect("fixture connection");
-    stream
-        .write_all(
-            format!(
-                "POST /graphql HTTP/1.1\r\nHost: {address}\r\nauthorization: Bearer test-token\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            )
-            .as_bytes(),
-        )
-        .expect("fixture request");
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).expect("fixture response");
-    let at = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .expect("HTTP header terminator")
-        + 4;
-    let answered: Value = serde_json::from_slice(&response[at..]).expect("fixture response JSON");
-    answered["data"].clone()
+    Arc::new(Mutex::new(loopback::Upstream::new(address)))
 }
 
 impl GitHubBoard {
@@ -2512,6 +2657,36 @@ impl GitHubBoard {
     /// Whether this item is a board draft rather than an issue.
     fn is_draft(item: &Value) -> bool {
         item["type"] == "DraftIssue"
+    }
+
+    /// The login a request naming this board's repository by owner and name names it by: what
+    /// the board holds each such request to.
+    fn repository_owner(&self) -> &str {
+        self.repository
+            .split_once('/')
+            .map_or(self.repository.as_str(), |(owner, _)| owner)
+    }
+
+    /// Place every issue whose placement delay has passed: from here on it is on the board.
+    fn settle_placements(&mut self) {
+        let Some(placement) = &mut self.placement else {
+            return;
+        };
+        let now = (placement.now)();
+        let due: Vec<Value> = placement
+            .waiting
+            .iter()
+            .filter(|(_, _, due)| due.is_some_and(|due| due <= now))
+            .map(|(id, ..)| id.clone())
+            .collect();
+        placement.waiting.retain(|(id, ..)| !due.contains(id));
+        for id in due {
+            if let Some(at) = self.pending.iter().position(|item| item["id"] == id) {
+                let mut item = self.pending.remove(at);
+                item["itemUpdatedAt"] = json!(self.tick());
+                self.items.push(item);
+            }
+        }
     }
 
     /// The next moment this board stamps anything with — a comment, an issue's `updatedAt`, a
@@ -3198,12 +3373,7 @@ pub fn github_projects_failing_a_field_write_once(sandbox: &Sandbox) -> Value {
 /// past its create landed, so the source deletes it — and this board refuses that too. The
 /// caller is owed the failure that stopped the copy, for the reason the sibling below gives.
 pub fn github_projects_failing_to_read_a_filing_and_its_cleanup(sandbox: &Sandbox) -> Value {
-    github_projects_board(
-        sandbox,
-        None,
-        &[READ_OF_FILED_ITEMS, "deleteIssue(input:$input)"],
-    )
-    .0
+    github_projects_board(sandbox, None, &[READ_OF_FILED_ITEMS, "deleteIssue(input:$"]).0
 }
 
 /// The same board, failing a field write *and* the tidy-up that would take the issue back.
@@ -3219,7 +3389,7 @@ pub fn github_projects_failing_a_field_write_and_its_cleanup(sandbox: &Sandbox) 
         None,
         &[
             "updateProjectV2ItemFieldValue(input:$",
-            "deleteIssue(input:$input)",
+            "deleteIssue(input:$",
         ],
     )
     .0
@@ -3251,6 +3421,24 @@ fn github_projects_board_lagging(sandbox: &Sandbox, lagging_reads: usize) -> Val
 /// against it, so which source sent a request is read off the token it carried.
 const GITHUB_FIXTURE_SECRETS: &str =
     "GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nGITHUB_PROJECTS_FIXTURE_TOKEN_B=test-token-b\n";
+
+/// Which of a member's two fields a page of a project's members carries beside a batched origin
+/// lookup is answered short of what the board holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MembersPageField {
+    Body,
+    Repository,
+}
+
+impl MembersPageField {
+    /// The field's key in the page's node.
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Body => "body",
+            Self::Repository => "repository",
+        }
+    }
+}
 
 /// How one alias of a batched write that landed is answered malformed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3386,6 +3574,9 @@ fn github_projects_board_at(
         omit_added_status_option: false,
         files_without_status: false,
         unfiled_board_item_reads: 0,
+        placement: None,
+        members_page_misanswers: Vec::new(),
+        repository: "nickderobertis/onetaskgraph".to_owned(),
         omits_sub_issue_list: false,
         status_snapshot_page_size: None,
         status_field_present: true,
@@ -3412,6 +3603,7 @@ fn github_projects_board_at(
     let watched = Arc::clone(&board);
     let connections = Arc::<AtomicUsize>::default();
     let hooked = GitHubBoardFields {
+        client: board_client(&endpoint),
         endpoint: endpoint.clone(),
         board: Arc::clone(&board),
         connections: Arc::clone(&connections),
@@ -3620,6 +3812,7 @@ fn github_projects_board_at(
     (
         github_projects_block_at(&endpoint),
         GitHubBoardFields {
+            client: board_client(&endpoint),
             endpoint,
             board: watched,
             connections,
@@ -3895,6 +4088,79 @@ impl GitHubBoard {
 }
 
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
+    board.lock().unwrap().settle_placements();
+    // One document with its project and the project's members: the document answered exactly
+    // as a read of it by its id is, and its parent exactly as a listing of that project's
+    // sub-issues carries it.
+    if query == onetaskgraph_github_projects::graphql::DOCUMENT_IN_PROJECT {
+        let mut answer = github_answer(
+            board,
+            onetaskgraph_github_projects::graphql::ISSUE,
+            variables,
+        );
+        let parent = answer
+            .pointer("/node/parent/id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if let Some(parent) = parent {
+            let mut asked = variables.clone();
+            asked["id"] = json!(parent);
+            asked["after"] = Value::Null;
+            // The project and a page of its members, as that listing answers them, but with no
+            // page of what blocks any of them: this read selects none.
+            let listed = github_answer(
+                board,
+                "node(id:$id){__typename ...BoardIssue subIssues(first:$memberFirst)",
+                &asked,
+            );
+            answer["node"]["project"] = listed["node"].clone();
+        } else if answer["node"].is_object() {
+            answer["node"]["project"] = Value::Null;
+        }
+        return answer;
+    }
+    // The batched origin lookup with a page of one project's members beside it: the lookup
+    // answered exactly as on its own, and the members as GitHub lists a project's sub-issues,
+    // trimmed to what the read selects of each.
+    if query == onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS_WITH_MEMBERS {
+        let mut answer = github_answer(
+            board,
+            onetaskgraph_github_projects::graphql::ORIGIN_LOOKUPS,
+            variables,
+        );
+        let held = board.lock().unwrap();
+        let project = &variables["project"];
+        let first = usize::try_from(variables["memberFirst"].as_u64().expect("memberFirst"))
+            .expect("memberFirst fits usize");
+        let children: Vec<&Value> = held
+            .items
+            .iter()
+            .chain(&held.pending)
+            .filter(|item| item["parent"] == *project)
+            .collect();
+        let nodes: Vec<Value> = children
+            .iter()
+            .take(first)
+            .map(|item| {
+                let mut node = json!({"id": item["id"], "body": item["body"], "parent": {"id": project},
+                       "repository": item["repo"].as_str().map(|repo| json!({"nameWithOwner": repo}))});
+                for (id, field, value) in &held.members_page_misanswers {
+                    if item["id"] == json!(id) {
+                        node[field.key()] = value.clone();
+                    }
+                }
+                node
+            })
+            .collect();
+        answer["members"] = if held.items.iter().any(|item| item["id"] == *project) {
+            json!({"subIssues": {"nodes": nodes,
+                "pageInfo": {"hasNextPage": children.len() > first,
+                             "endCursor": first.min(children.len()).to_string()}}})
+        } else {
+            Value::Null
+        };
+        return answer;
+    }
     board.lock().unwrap().counted_types = TimelineEvent::counted_by(query);
     if query == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY {
         let mut held = board.lock().unwrap();
@@ -3931,7 +4197,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 let held = board.lock().unwrap();
                 assert_eq!(variables["owner"], "fixture-owner");
                 assert_eq!(variables["number"], 7);
-                assert_eq!(variables["repositoryOwner"], "nickderobertis");
+                assert_eq!(variables["repositoryOwner"], held.repository_owner());
                 result.insert(
                     "boardFields".into(),
                     json!({"projectV2":{"id":"PVT-board","fields":held.fields()}}),
@@ -3944,7 +4210,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 result.insert(
                     "repository".into(),
                     json!({"id":id,"databaseId":123_456,
-                           "nameWithOwner":"nickderobertis/onetaskgraph"}),
+                           "nameWithOwner":held.repository}),
                 );
             }
             for slot in 0..onetaskgraph_github_projects::ORIGIN_BATCH {
@@ -3954,7 +4220,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 let one = json!({"type": variables["type"],
                     "filter": variables[format!("filter{slot}")],
                     "search": variables[format!("search{slot}")],
-                    "originFirst": variables["originFirst"],
+                    "originFirst": variables["lookupFirst"],
                     "itemsAfter": null, "searchAfter": null});
                 let answer = board.lock().unwrap().origin_lookup(&one);
                 result.insert(format!("o{slot}"), answer["originItems"].clone());
@@ -3986,97 +4252,98 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             }
             return Value::Object(result);
         }
-        let batches = [
+        use onetaskgraph_github_projects::{DELETE_BATCH, MUTATION_BATCH, WRITE_BATCH};
+        type Kind = (&'static str, &'static str, &'static str, &'static str);
+        let create: Kind = ("create", "send", documents::CREATE_ISSUE, "createIssue");
+        let field: Kind = (
+            "field",
+            "send",
+            documents::UPDATE_FIELD,
+            "updateProjectV2ItemFieldValue",
+        );
+        let close: Kind = ("close", "send", documents::UPDATE_ISSUE, "updateIssue");
+        let block: Kind = ("block", "send", documents::ADD_BLOCKED_BY, "addBlockedBy");
+        let delete: Kind = ("delete", "send", documents::DELETE_ISSUE, "deleteIssue");
+        let batches: [(&str, Vec<Kind>, usize); 6] = [
+            (documents::CREATE_ISSUES, vec![create], MUTATION_BATCH),
+            (documents::WRITE_FIELD_VALUES, vec![field], WRITE_BATCH),
+            (documents::CLOSE_ISSUES, vec![close], MUTATION_BATCH),
+            (documents::ADD_BLOCKED_BYS, vec![block], WRITE_BATCH),
             (
-                documents::CREATE_ISSUES,
-                "create",
-                documents::CREATE_ISSUE,
-                "createIssue",
+                documents::WRITE_FIELDS_AND_EDGES,
+                vec![
+                    ("field", "sendField", field.2, field.3),
+                    ("block", "sendBlock", block.2, block.3),
+                ],
+                WRITE_BATCH,
             ),
-            (
-                documents::WRITE_FIELD_VALUES,
-                "field",
-                documents::UPDATE_FIELD,
-                "updateProjectV2ItemFieldValue",
-            ),
-            (
-                documents::CLOSE_ISSUES,
-                "close",
-                documents::UPDATE_ISSUE,
-                "updateIssue",
-            ),
-            (
-                documents::ADD_BLOCKED_BYS,
-                "block",
-                documents::ADD_BLOCKED_BY,
-                "addBlockedBy",
-            ),
+            (documents::DELETE_ISSUES, vec![delete], DELETE_BATCH),
         ];
-        if let Some((_, prefix, single, root)) =
-            batches.iter().find(|(batched, ..)| *batched == query)
-        {
+        if let Some((_, kinds, slots)) = batches.iter().find(|(batched, ..)| *batched == query) {
             let mut result = serde_json::Map::new();
-            for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
-                if variables[format!("send{slot}")] != true {
-                    continue;
-                }
-                let alias = format!("{prefix}{slot}");
-                let failing = {
-                    let mut held = board.lock().unwrap();
-                    let field = variables[&alias]["fieldId"].as_str();
-                    let by_field = field.is_some() && held.failing_field.as_deref() == field;
-                    let failing = held.failing_alias == Some(alias.as_str()) || by_field;
-                    if by_field {
-                        held.failing_field = None;
+            for &(prefix, send, single, root) in kinds {
+                for slot in 0..*slots {
+                    if variables[format!("{send}{slot}")] != true {
+                        continue;
                     }
-                    if failing {
-                        held.failing_alias = None;
-                        held.owed_errors.push(format!(
-                            "Something went wrong while executing your query: {alias} failed"
-                        ));
-                    }
-                    failing
-                };
-                if failing {
-                    result.insert(alias, Value::Null);
-                    continue;
-                }
-                let mut one = json!({"input": variables[&alias]});
-                if *single == documents::UPDATE_FIELD {
-                    one["readPriority"] = json!(false);
-                    one["priorityName"] = json!("Priority");
-                }
-                let answer = github_answer(board, single, &one);
-                let bent = {
-                    let mut held = board.lock().unwrap();
-                    match held.bent_alias {
-                        Some((bent, answer)) if bent == alias => {
-                            held.bent_alias = None;
-                            Some(answer)
+                    let alias = format!("{prefix}{slot}");
+                    let failing = {
+                        let mut held = board.lock().unwrap();
+                        let field = variables[&alias]["fieldId"].as_str();
+                        let by_field = field.is_some() && held.failing_field.as_deref() == field;
+                        let failing = held.failing_alias == Some(alias.as_str()) || by_field;
+                        if by_field {
+                            held.failing_field = None;
                         }
-                        _ => None,
+                        if failing {
+                            held.failing_alias = None;
+                            held.owed_errors.push(format!(
+                                "Something went wrong while executing your query: {alias} failed"
+                            ));
+                        }
+                        failing
+                    };
+                    if failing {
+                        result.insert(alias, Value::Null);
+                        continue;
                     }
-                };
-                let mut answered = answer[*root].clone();
-                match bent {
-                    Some(AliasAnswer::Missing) => continue,
-                    Some(AliasAnswer::NamingAnotherBlocker) => {
-                        answered["blockingIssue"]["id"] = json!("ANOTHER-ITEM");
+                    let mut one = json!({"input": variables[&alias]});
+                    if single == documents::UPDATE_FIELD {
+                        one["readPriority"] = json!(false);
+                        one["priorityName"] = json!("Priority");
                     }
-                    Some(AliasAnswer::NamingAnother) => {
-                        for member in answered
-                            .as_object_mut()
-                            .into_iter()
-                            .flat_map(|m| m.values_mut())
-                        {
-                            if let Some(id) = member.get_mut("id") {
-                                *id = json!("ANOTHER-ITEM");
+                    let answer = github_answer(board, single, &one);
+                    let bent = {
+                        let mut held = board.lock().unwrap();
+                        match held.bent_alias {
+                            Some((bent, answer)) if bent == alias => {
+                                held.bent_alias = None;
+                                Some(answer)
+                            }
+                            _ => None,
+                        }
+                    };
+                    let mut answered = answer[root].clone();
+                    match bent {
+                        Some(AliasAnswer::Missing) => continue,
+                        Some(AliasAnswer::NamingAnotherBlocker) => {
+                            answered["blockingIssue"]["id"] = json!("ANOTHER-ITEM");
+                        }
+                        Some(AliasAnswer::NamingAnother) => {
+                            for member in answered
+                                .as_object_mut()
+                                .into_iter()
+                                .flat_map(|m| m.values_mut())
+                            {
+                                if let Some(id) = member.get_mut("id") {
+                                    *id = json!("ANOTHER-ITEM");
+                                }
                             }
                         }
+                        None => {}
                     }
-                    None => {}
+                    result.insert(alias, answered);
                 }
-                result.insert(alias, answered);
             }
             return Value::Object(result);
         }
@@ -4516,8 +4783,8 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         return json!({"node":{"__typename":"Issue","comments":comments}});
     }
     if query.contains("repository(owner:$owner,name:$name)") {
-        assert_eq!(variables["owner"], "nickderobertis");
-        return json!({"repository":{"id":"REPO-1","nameWithOwner":"nickderobertis/onetaskgraph"}});
+        assert_eq!(variables["owner"], board.repository_owner());
+        return json!({"repository":{"id":"REPO-1","nameWithOwner":board.repository}});
     }
     if query.contains("createIssue(input:$input)") {
         assert_eq!(input["repositoryId"], "REPO-1");
@@ -4528,7 +4795,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let at = board.tick();
         let mut created = json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue",
             "title":input["title"],"body":input["body"],"state":"OPEN","reason":null,
-            "parent":Value::Null,"repo":"nickderobertis/onetaskgraph","status":"Todo",
+            "parent":Value::Null,"repo":board.repository,"status":"Todo",
             "origin":"","labels":[],"updatedAt":at});
         if board.files_without_status {
             created["status"] = Value::Null;
@@ -4551,8 +4818,15 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                     &json!(["PVT-board"]),
                     "a create naming another board"
                 );
-                created["itemUpdatedAt"] = json!(at);
-                board.items.push(created);
+                if let Some(placement) = &mut board.placement {
+                    let delay = placement.delays[placement.next % placement.delays.len()];
+                    placement.next += 1;
+                    placement.waiting.push((json!(id), delay, None));
+                    board.pending.push(created);
+                } else {
+                    created["itemUpdatedAt"] = json!(at);
+                    board.items.push(created);
+                }
             }
             None => board.pending.push(created),
         }
@@ -4565,6 +4839,17 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     if query.contains("addProjectV2ItemById(input:$input)") {
         assert_eq!(input["projectId"], "PVT-board");
         let content = input["contentId"].clone();
+        // GitHub files an issue once: one its create has placed already is refused rather than
+        // answered with the item it holds.
+        if board.items.iter().any(|item| item["id"] == content) {
+            board
+                .owed_errors
+                .push("Content already exists in this project".to_owned());
+            return json!({"addProjectV2ItemById": null});
+        }
+        if let Some(placement) = &mut board.placement {
+            placement.waiting.retain(|(id, ..)| *id != content);
+        }
         let at = board
             .pending
             .iter()
@@ -4861,11 +5146,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 .expect("GraphQL memberFirst must be an unsigned integer"),
         )
         .expect("GraphQL memberFirst fits usize");
+        let parent = json!(id);
         let children = board
             .items
             .iter()
-            .filter(|item| item["parent"] == json!(id))
-            .cloned()
+            .filter(|item| item["parent"] == parent)
             .collect::<Vec<_>>();
         let end = (offset + first).min(children.len());
         // What blocks each sub-issue, when the read asks for it beside the issue: a page of
@@ -4900,13 +5185,14 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 .cloned()
                 .expect("the project read");
             node = board.as_issue(&parent);
-            let page = blocked_first.expect("nestedFirst beside the project's own blockedBy");
-            let all = board.related(&id, false);
-            let all = all.as_array().expect("related issues");
-            node["blockedBy"] = json!({
-                "nodes": all.iter().take(page).collect::<Vec<_>>(),
-                "pageInfo": {"hasNextPage": all.len() > page,
-                             "endCursor": page.min(all.len()).to_string()}});
+            if let Some(page) = blocked_first {
+                let all = board.related(&id, false);
+                let all = all.as_array().expect("related issues");
+                node["blockedBy"] = json!({
+                    "nodes": all.iter().take(page).collect::<Vec<_>>(),
+                    "pageInfo": {"hasNextPage": all.len() > page,
+                                 "endCursor": page.min(all.len()).to_string()}});
+            }
         }
         node["subIssues"] = json!({"nodes":nodes,
             "pageInfo":{"hasNextPage":end < children.len(),"endCursor":end.to_string()}});
@@ -4917,9 +5203,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     if query == onetaskgraph_github_projects::graphql::CREATION_CONTEXT {
         assert_eq!(variables["owner"], "fixture-owner");
         assert_eq!(variables["number"], 7);
-        assert_eq!(variables["repositoryOwner"], "nickderobertis");
+        assert_eq!(variables["repositoryOwner"], board.repository_owner());
         return json!({"boardFields":{"projectV2":{"id":"PVT-board","fields":board.fields()}},
-                      "repository":{"id":"REPO-1","nameWithOwner":"nickderobertis/onetaskgraph"}});
+                      "repository":{"id":"REPO-1","nameWithOwner":board.repository}});
     }
     if query.contains("boardFields:repositoryOwner") {
         assert_eq!(variables["owner"], "fixture-owner");
