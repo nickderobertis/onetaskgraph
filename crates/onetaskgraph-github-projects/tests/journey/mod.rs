@@ -1737,12 +1737,15 @@ pub async fn clear_finished_runs_fields(token: &str, fields: &Value) -> Result<u
         if node.as_object().is_some_and(serde_json::Map::is_empty) {
             continue;
         }
+        // The id goes into a removal, so it is held to what the janitor admits of one.
         let (Some(id), Some(name)) = (
-            node.get("id").and_then(Value::as_str),
+            node.get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && !id.chars().any(char::is_control)),
             node.get("name").and_then(Value::as_str),
         ) else {
             return Err(format!(
-                "the board answered a field without a string id and name: {node}"
+                "the board answered a field without a usable id and a name: {node}"
             ));
         };
         if let Some(stamp) = fielded_stamp(name).and_then(CiStamp::read) {

@@ -2786,7 +2786,6 @@ fn answer_a_session_call(
     if query.contains("query LiveBoardWorkload(") {
         assert_eq!(variables["owner"], json!("octo-org"));
         assert_eq!(variables["number"], json!(7));
-        // Every field by id and name, as the measurement's two fragments select them.
         let fields = state.fields()["nodes"]
             .as_array()
             .unwrap()

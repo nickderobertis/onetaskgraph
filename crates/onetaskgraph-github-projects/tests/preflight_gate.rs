@@ -65,6 +65,7 @@ struct Board {
     /// Each field as GitHub answers it under the measurement's two fragments.
     fields: Vec<Value>,
     more_fields: bool,
+    answer_nodes: bool,
     /// A run's status, or `None` for a read GitHub fails.
     runs: BTreeMap<u64, Option<&'static str>>,
     removal: Removal,
@@ -90,6 +91,7 @@ fn board(scenario: &str) -> Board {
         items: 60,
         fields,
         more_fields: false,
+        answer_nodes: true,
         runs: BTreeMap::from([(LEFTOVER_RUN, Some("completed"))]),
         removal: Removal::Confirmed,
         requests: Vec::new(),
@@ -107,6 +109,11 @@ fn board(scenario: &str) -> Board {
         "completed" | "in-progress" | "unreadable" | "unknown-status" => {}
         "more-fields" => board.more_fields = true,
         "malformed-field" => board.fields.push(json!({"id":"FIELD_bad","name":7})),
+        "empty-id" => board
+            .fields
+            .push(json!({"id":"","name":"otg-live-ci-1-1-1"})),
+        "control-id" => board.fields.push(json!({"id":"FIELD\nbad","name":"x"})),
+        "missing-nodes" => board.answer_nodes = false,
         "removal-refused" => board.removal = Removal::Refused,
         "removal-names-another" => board.removal = Removal::NamingAnother,
         other => panic!("no scenario {other}"),
@@ -123,12 +130,15 @@ fn answer(board: &Mutex<Board>, method: &str, path: &str, body: Option<Value>) -
         // The lane prices every query it sends, so what arrives is the measurement priced.
         if query == *PRICED_WORKLOAD {
             assert_eq!(body["variables"], json!({"owner":"octo-org","number":7}));
+            let mut fields = json!({"totalCount":board.fields.len(),"nodes":board.fields,
+                                    "pageInfo":{"hasNextPage":board.more_fields}});
+            if !board.answer_nodes {
+                fields.as_object_mut().unwrap().remove("nodes");
+            }
             return (
                 200,
                 json!({"data":{"repositoryOwner":{"projectV2":{"id":"PVT_board",
-                    "items":{"totalCount":board.items},
-                    "fields":{"totalCount":board.fields.len(),"nodes":board.fields,
-                              "pageInfo":{"hasNextPage":board.more_fields}}}}}}),
+                    "items":{"totalCount":board.items},"fields":fields}}}}),
             );
         }
         assert_eq!(query, DELETE_FIELD_DOCUMENT, "an unexpected document");
@@ -387,7 +397,14 @@ fn a_field_no_completed_run_is_shown_to_own_is_kept_counted_and_refused() {
 fn a_field_list_it_cannot_read_whole_or_a_removal_github_does_not_confirm_fails() {
     for (scenario, refusal, removals_sent) in [
         ("more-fields", "did not come back on one page", 0),
-        ("malformed-field", "a field without a string id and name", 0),
+        (
+            "malformed-field",
+            "a field without a usable id and a name",
+            0,
+        ),
+        ("empty-id", "a field without a usable id and a name", 0),
+        ("control-id", "a field without a usable id and a name", 0),
+        ("missing-nodes", "field names were not reported", 0),
         ("removal-refused", "Resource not accessible", 1),
         (
             "removal-names-another",
