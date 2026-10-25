@@ -306,6 +306,57 @@ async fn what_a_policy_answered_is_held_for_one_command_and_asked_again_after_en
     assert_eq!(tree(&store.folder("site")), before, "nothing was written");
 }
 
+#[tokio::test]
+async fn a_replaced_policy_answers_for_itself_though_the_command_has_not_ended() {
+    use std::sync::atomic::Ordering;
+    let store = Store::new(None, json!({}));
+    store.public_project_p();
+    let first = std::sync::Arc::new(Counted::default());
+    let engine = super::linked_engine(&store).with_write_policy(first.clone());
+    engine
+        .create_task(&super::task_on_site(PLAIN, &[super::OPEN]))
+        .await
+        .expect("a public repository's task");
+    // The same engine, asking a policy for which that repository is private: nothing the first
+    // answered is taken as this one's, so the same write is asked about again and refused.
+    let second = std::sync::Arc::new(Counted::default());
+    second.private.store(true, Ordering::SeqCst);
+    let engine = engine.with_write_policy(second.clone());
+    let before = tree(&store.folder("site"));
+    let refused = engine
+        .create_task(&super::task_on_site(PLAIN, &[super::OPEN]))
+        .await
+        .expect_err("a task of a repository the new policy holds private");
+    assert_eq!(super::kind_of(&refused), "not-private-destination");
+    assert_eq!(second.inspected.load(Ordering::SeqCst), 1);
+    assert_eq!(first.inspected.load(Ordering::SeqCst), 1);
+    assert_eq!(tree(&store.folder("site")), before, "nothing was written");
+}
+
+#[tokio::test]
+async fn a_check_passed_under_one_term_scope_is_asked_again_under_another() {
+    use std::sync::atomic::Ordering;
+    let store = Store::new(None, json!({}));
+    store.public_project_p();
+    let policy = std::sync::Arc::new(Counted::default());
+    let engine = super::linked_engine(&store)
+        .with_write_policy(policy.clone())
+        .with_term_scope(Some(Vec::new()));
+    engine
+        .create_task(&super::task_on_site(PLAIN, &[super::OPEN]))
+        .await
+        .expect("a public repository's task");
+    assert_eq!(policy.checked.load(Ordering::SeqCst), 1);
+    // Every registered identity's terms now apply: the pass under no terms says nothing about
+    // them, so the same text is checked again.
+    let engine = engine.with_term_scope(None);
+    engine
+        .create_task(&super::task_on_site(PLAIN, &[super::OPEN]))
+        .await
+        .expect("a public repository's task");
+    assert_eq!(policy.checked.load(Ordering::SeqCst), 2);
+}
+
 /// A linking caller's policy whose every repository is public and whose check answers what
 /// `verdict` makes of each write, recording how many titles each check it was asked carried.
 struct Judging {

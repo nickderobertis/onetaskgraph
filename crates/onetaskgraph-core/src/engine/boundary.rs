@@ -718,19 +718,23 @@ pub(crate) struct Outbound<'a> {
 
 impl Engine {
     /// The same engine, asking `policy` about the public boundary — which makes the boundary
-    /// active, whatever the configuration says.
+    /// active, whatever the configuration says. What an earlier policy answered is forgotten,
+    /// so none of it stands in for this one's answer.
     #[must_use]
     pub fn with_write_policy(mut self, policy: Arc<dyn WritePolicy>) -> Self {
         self.boundary.active = true;
         self.boundary.policy = policy;
+        self.boundary.forget();
         self
     }
 
     /// The same engine, deriving every check's terms from `scope`: `None` for every private
-    /// identity the policy knows of, an empty list for none.
+    /// identity the policy knows of, an empty list for none. A check passed under an earlier
+    /// scope is forgotten, because it derived other terms.
     #[must_use]
     pub fn with_term_scope(mut self, scope: Option<Vec<String>>) -> Self {
         self.boundary.scope = scope;
+        self.boundary.forget();
         self
     }
 
