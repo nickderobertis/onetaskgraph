@@ -21,6 +21,8 @@ mod cached;
 mod closure;
 mod comment;
 mod copy;
+// spike-host-copy-parity: the prototype fixes' switch, for the cache to read too.
+pub(crate) use copy::spike_fix;
 mod delivery;
 mod dependents;
 mod designators;

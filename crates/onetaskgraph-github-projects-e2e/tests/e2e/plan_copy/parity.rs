@@ -96,6 +96,7 @@ pub(super) fn measure(variant: &str, items: usize) -> Value {
     json!({
         "variant": variant,
         "items": items,
+        "fixes": std::env::var("SPIKE_FIXES").unwrap_or_default(),
         "tasks": TASKS,
         "scenarios": [
             figures("first", &first),

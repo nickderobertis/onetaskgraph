@@ -8828,6 +8828,12 @@ impl GitHubProjectsSource {
             Direction::DependedOnBy => None,
         }
         .filter(|(nodes, _)| recorded.is_some() || (cursor.is_none() && nodes.len() <= limit));
+        if carried.is_none() {
+            let held = self.resolved_cache()?.get(id).map(|item| {
+                (item.content_kind == ContentKind::Issue, item.blocked_by.as_ref().map(Vec::len))
+            });
+            spike_debug(&format!("dependencies {} {direction:?} limit={limit} cursor={cursor:?} held={held:?}", id.0));
+        }
         // Asked for even in the recorded phase, whose page reads nothing from the
         // connection: `__typename` is what says whether this item has a native
         // relationship at all, and that is what decides which far ends the reserved key is
@@ -13995,7 +14001,14 @@ impl TaskSource for GitHubProjectsSource {
                 {
                     continue;
                 }
-                if carried.contains_key(id) {
+                // spike-host-copy-parity, `carried-edges`: a task a listing carried without the
+                // whole of what blocks it is read in this batch, which carries that, rather than
+                // having each of its dependency reads sent on its own after it.
+                let edgeless = spike_fix("carried-edges")
+                    && carried.get(id).is_some_and(|item| {
+                        item.blocked_by.is_none() && item.content_kind == ContentKind::Issue
+                    });
+                if carried.contains_key(id) && !edgeless {
                     listed.push(id.clone());
                 } else {
                     unread.push(id.clone());
@@ -15519,4 +15532,24 @@ mod unprojectable_fields_tests {
             }
         }
     }
+}
+
+/// spike-host-copy-parity: append `line` to the file `SPIKE_DEBUG` names, when it names one.
+fn spike_debug(line: &str) {
+    if let Ok(path) = std::env::var("SPIKE_DEBUG") {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+}
+
+/// spike-host-copy-parity: whether the prototype fix `name` is switched on in `SPIKE_FIXES`, a
+/// comma-separated list (`all` for every one). Throwaway measurement code; never landed.
+fn spike_fix(name: &str) -> bool {
+    std::env::var("SPIKE_FIXES").is_ok_and(|fixes| {
+        fixes
+            .split(',')
+            .any(|fix| fix.trim() == name || fix.trim() == "all")
+    })
 }

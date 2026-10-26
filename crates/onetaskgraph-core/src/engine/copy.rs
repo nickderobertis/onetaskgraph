@@ -5518,6 +5518,7 @@ impl Engine {
             for there in &reachable {
                 if private_source
                     && self.declared(there) != crate::config::SourceVisibility::Private
+                    && !spike_fix("private-read-ahead")
                 {
                     continue;
                 }
@@ -5556,7 +5557,7 @@ impl Engine {
             }
             // A source whose cache stands in front of it has its projects pinned by a listing
             // before the filing lookup reads them, which this read would come before.
-            if self.caches(&qualified.source) {
+            if self.caches(&qualified.source) && !spike_fix("cache-document-pin") {
                 continue;
             }
             if !running.source_projects.contains_key(&qualified) {
@@ -5582,7 +5583,9 @@ impl Engine {
                 // moved has the project read by the filing lookup instead. Where a cache stands
                 // in front of the destination the project is still named, because pinning it is
                 // what answers the document's own read from that cache.
-                if link_of(&document.metadata, there).is_some() && !self.caches(there) {
+                if link_of(&document.metadata, there).is_some()
+                    && (!self.caches(there) || spike_fix("cache-document-pin"))
+                {
                     continue;
                 }
                 if let Some(link) = link_of(&running.source_projects[&qualified].metadata, there) {
@@ -5605,8 +5608,15 @@ impl Engine {
                 }
             }
         }
+        // spike-host-copy-parity, `cache-document-pin`: a copy of documents alone reads its
+        // documents and their project by the one read that carries them, as it does with no
+        // cache, rather than pinning every member of the project first.
+        let documents_alone = !matches!(request.scope, CopyScope::Projects { .. })
+            && reads.iter().all(|read| read.item.level() == Level::Document)
+            && spike_fix("cache-document-pin");
         for (there, project, origin, named) in homes {
             if self.caches(&there)
+                && !documents_alone
                 && let Ok(destination) = self.writable(&there)
             {
                 // A project the copy writes is read with its forward edges, which only a token
@@ -6230,10 +6240,15 @@ impl Engine {
                 });
             }
         }
-        if let Some(found) = self
-            .scan(destination, item.level(), &Wanted::Origin(id.to_string()))
-            .await?
-        {
+        // spike-host-copy-parity, `private-no-scan`: a withheld item's origin is recorded
+        // nowhere this destination holds, so it is not looked for there.
+        let scanned = if withheld && spike_fix("private-no-scan") {
+            None
+        } else {
+            self.scan(destination, item.level(), &Wanted::Origin(id.to_string()))
+                .await?
+        };
+        if let Some(found) = scanned {
             let held = self
                 .prior_reading(destination, item.level(), &found, comments)
                 .await?;
@@ -9869,4 +9884,14 @@ fn unrecorded_far_end(item: &Planned, unrecorded: &[GlobalId]) -> Result<(), Eng
         }
     }
     Ok(())
+}
+
+/// spike-host-copy-parity: whether the prototype fix `name` is switched on in `SPIKE_FIXES`, a
+/// comma-separated list (`all` for every one). Throwaway measurement code; never landed.
+pub(crate) fn spike_fix(name: &str) -> bool {
+    std::env::var("SPIKE_FIXES").is_ok_and(|fixes| {
+        fixes
+            .split(',')
+            .any(|fix| fix.trim() == name || fix.trim() == "all")
+    })
 }

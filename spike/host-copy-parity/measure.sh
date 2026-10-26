@@ -2,12 +2,15 @@
 # spike-host-copy-parity: one measurement of one variant of the plan copy on the loopback board.
 #
 #   spike/host-copy-parity/measure.sh <variant> [items] [--json]
+#   SPIKE_FIXES=<fix,fix|all> spike/host-copy-parity/measure.sh <variant> [items] [--json]
 #
 # <variant> is `scenario`, `host`, or `+`-joined axes: private, cache, screened, host-shape,
 # instant (see crates/onetaskgraph-github-projects-e2e/tests/e2e/plan_copy/parity.rs).
 # [items] is the board's other items, 2000 by default. Prints, for the first copy, the re-copy
 # after one task changed and the unchanged re-copy: points at the scenario's prices, writes,
 # simulated seconds and the request tally; --json prints the whole measurement instead.
+# SPIKE_FIXES switches on the prototyped fixes in the binary (see spike_fix in
+# crates/onetaskgraph-core/src/engine/copy.rs); unset, the binary behaves as main does.
 set -euo pipefail
 if [ $# -lt 1 ]; then
   echo "usage: $0 <variant> [items] [--json]" >&2
@@ -45,7 +48,8 @@ fi
 printf '%s\n' "$line" | python3 -c '
 import json, sys
 measured = json.load(sys.stdin)
-print("variant %s on a board of %s items" % (measured["variant"], measured["items"]))
+print("variant %s on a board of %s items, fixes: %s" % (
+    measured["variant"], measured["items"], measured.get("fixes") or "none"))
 for scenario in measured["scenarios"]:
     print("  %s: points=%s writes=%s simulated_seconds=%s requests=%s" % (
         scenario["scenario"], scenario["points"], scenario["writes"],

@@ -1070,7 +1070,12 @@ impl TaskSource for CachedSource {
         let unserved: Vec<NativeId> = ids
             .iter()
             .filter(|id| {
-                let task = self.servable(id, false).is_ok();
+                // spike-host-copy-parity, `carried-edges`: a task the cache holds without its
+                // forward edges is read ahead too, which carries them, rather than having its
+                // dependency read sent on its own.
+                let task = self.servable(id, false).is_ok()
+                    && !(crate::engine::spike_fix("carried-edges")
+                        && self.held_edges(id).is_none());
                 let project = self.servable_project(id).is_some()
                     && self.cache.project_coverage.forward_edges.reason().is_none()
                     && self.held_project_edges(id).is_some();
