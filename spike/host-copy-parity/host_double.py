@@ -7,6 +7,9 @@ unchanged — printing each copy's operations and points as that double names an
 
     AIO=<ai-orchestrator checkout> <its .venv>/bin/python -B spike/host-copy-parity/host_double.py \
         [--binary target/debug/onetaskgraph] [--items 2000] [--cache] [--one-edge] [--preserve]
+        [--private] [--instant] [--fixed-double] [--keep DIR]
+
+`SPIKE_FIXES` in the environment reaches the binary, as `measure.sh` passes it.
 
 The board source's owner, number and repository are read from that checkout's own
 `onetaskgraph.yaml` at run time, so nothing here names them. Throwaway measurement code.
@@ -202,6 +205,8 @@ def main() -> None:
             }
             if onevcs_home is not None:
                 environment["ONEVCS_HOME"] = str(onevcs_home)
+            if "SPIKE_FIXES" in os.environ:
+                environment["SPIKE_FIXES"] = os.environ["SPIKE_FIXES"]
 
             def run(*argv: str) -> str:
                 done = subprocess.run(
