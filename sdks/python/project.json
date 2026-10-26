@@ -73,6 +73,20 @@
         "cwd": "sdks/python"
       },
       "//": "The same tests as `test`, measured."
+    },
+    "budgets-host": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run onebudgetspec check sdks/python/budgets.yaml --label host"
+      },
+      "cache": false,
+      "inputs": [
+        "default",
+        {
+          "externalDependencies": ["@onebudgetspec/cli"]
+        }
+      ],
+      "//": "The CPU a fresh interpreter spends importing the SDK, validating once and exiting, which the host's load moves, so never cached, not a dependency of `check` and not a target `just test` selects, exactly as pool-maintenance's `budgets-host` is. measure_import.py measures it fresh, because no test spawns an interpreter to import the SDK and pytest imports it once in-process."
     }
   }
 }

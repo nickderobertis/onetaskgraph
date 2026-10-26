@@ -1,0 +1,27 @@
+# How much CPU a short-lived caller of the SDK spends starting, validating once and exiting.
+# Labelled `host`: the figure is CPU time on the machine that runs it, which a shared host's
+# load moves, so only the uncached `budgets-host` target of this project checks it, and no
+# per-change target does. An over reading there is reported, as onebudgetspec's own `over`
+# and exit status, and refuses nothing: no gate, hook, recipe or merge path runs that target.
+# A CI job that measures it would hold it strict by running the same check, as the release
+# pull request runs pool-maintenance's; none does today.
+schema_version: 1
+budgets:
+  - id: sdk-import-cpu-seconds
+    description: >-
+      An inner measure, because a person waits on the whole host recipe — which
+      ai-orchestrator's own seconds budgets measure — while the SDK's start-up is a library
+      cost every consumer pays and only this repository can hold. Median user+system CPU
+      seconds of a fresh interpreter of the SDK's own environment that imports
+      onetaskgraph_sdk, validates one committed copy report the store binary produced into
+      its CopyReport model and exits normally, teardown included, over 15 runs; detail
+      reports the interpreter-only baseline (python -c pass), import alone, the validation,
+      the teardown share (the same run ending in os._exit(0)) and the spread. Workload: one
+      fresh Python interpreter per plan-store recipe, about 60 a day on this host, against
+      the SDK as generated, with about 700 model classes across its generated modules.
+    labels: [host]
+    measure: reported
+    command: ["uv", "run", "--frozen", "python", "measure_import.py"]
+    unit: seconds
+    direction: max
+    threshold: 0.35
