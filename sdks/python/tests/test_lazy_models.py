@@ -130,6 +130,58 @@ def test_a_verb_builds_its_own_models_and_an_unused_export_builds_on_first_impor
     assert seen["copy_report_is_public"]
 
 
+DEFERRED = """
+import json, pathlib, sys
+
+binary, folder, report = sys.argv[1], pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
+
+import onetaskgraph_sdk
+from onetaskgraph_sdk._generated import client as generated
+
+def state():
+    built = generated._answers.cache_info().currsize
+    return {"asyncio": "asyncio" in sys.modules, "answers": built}
+
+onetaskgraph_sdk.CopyReport.model_validate_json(report.read_bytes())
+validated = state()
+
+# The process imports asyncio itself, as a caller of a verb does, before the SDK spawns one.
+import asyncio
+
+client = onetaskgraph_sdk.Client(binary, cwd=folder)
+asyncio.run(client.template_variables("hello.md"))
+without_answers = state()
+rendered = asyncio.run(client.template_render("hello.md", answers={"name": "Ada"}))
+print(json.dumps({
+    "validated": validated,
+    "without_answers": without_answers,
+    "with_answers": state(),
+    "body": rendered.body,
+}))
+"""
+
+
+def test_asyncio_and_the_answers_validator_wait_for_the_call_that_needs_them(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Validating a document imports no asyncio and builds no answers validator; a call does."""
+    (tmp_path / "hello.md").write_text(
+        "---\nonetaskgraph_template: 1\nvariables:\n  name:\n    description: Who\n---\n"
+        "Hello {{ name }}\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    report = Path(__file__).parents[1] / "measure_import_copy_report.json"
+    ran = fresh(DEFERRED, str(binary), str(tmp_path), str(report))
+    assert ran.returncode == 0, ran.stderr
+    seen = json.loads(ran.stdout)
+    assert seen["validated"] == {"asyncio": False, "answers": 0}
+    # A verb given no answers spawns its process and still builds no answers validator.
+    assert seen["without_answers"] == {"asyncio": True, "answers": 0}
+    assert seen["with_answers"] == {"asyncio": True, "answers": 1}
+    assert seen["body"] == "Hello Ada\n"
+
+
 LAZY_MODULES = [
     "onetaskgraph_sdk",
     "onetaskgraph_sdk._generated",
