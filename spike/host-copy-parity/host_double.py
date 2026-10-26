@@ -155,6 +155,12 @@ def main() -> None:
     parser.add_argument("--instant", action="store_true", help="place every issue at once")
     parser.add_argument("--keep", help="work in this directory and keep it")
     parser.add_argument(
+        "--reviewed",
+        action="store_true",
+        help="record review metadata as `just review-plan` does: every record before the first "
+        "copy, then the revised task and the project before the re-copy",
+    )
+    parser.add_argument(
         "--private",
         action="store_true",
         help="declare the notes source private, screening through the pinned onevcs",
@@ -248,8 +254,18 @@ def main() -> None:
                     )
                 )
 
+            def review(round_: int, ids: list[tuple[str, str]]) -> None:
+                if not args.reviewed:
+                    return
+                for kind, item in ids:
+                    value = json.dumps({"by": "planning-closeout", "key": f"{item}-{round_}",
+                                        "reviewed_at": f"2026-10-26T13:0{round_}:00+00:00"})
+                    run(kind, "metadata", "set", item, "orchestrator.plan-review", value)
+
+            review(0, [("task", f"notes:T-{n}") for n in range(1, 9)] + [("project", "notes:P")])
             copy("first")
             write_task(notes, 4, "Step 4 of the plan, its body.\nAn edit.\n", edges)
+            review(1, [("task", "notes:T-4"), ("project", "notes:P")])
             copy("changed")
             copy("unchanged")
 

@@ -2,7 +2,7 @@
 # spike-host-copy-parity: one measurement of one variant of the plan copy on the loopback board.
 #
 #   spike/host-copy-parity/measure.sh <variant> [items] [--json]
-#   SPIKE_FIXES=<fix,fix|all> spike/host-copy-parity/measure.sh <variant> [items] [--json]
+all>|all> spike/host-copy-parity/measure.sh <variant> [items] [--json]
 #
 # <variant> is `scenario`, `host`, or `+`-joined axes: private, cache, screened, host-shape,
 # instant (see crates/onetaskgraph-github-projects-e2e/tests/e2e/plan_copy/parity.rs).
@@ -10,7 +10,9 @@
 # after one task changed and the unchanged re-copy: points at the scenario's prices, writes,
 # simulated seconds and the request tally; --json prints the whole measurement instead.
 # SPIKE_FIXES switches on the prototyped fixes in the binary (see spike_fix in
-# crates/onetaskgraph-core/src/engine/copy.rs); unset, the binary behaves as main does.
+# crates/onetaskgraph-core/src/engine/copy.rs and the GitHub plugin): private-read-ahead,
+# private-no-scan, cache-document-pin, carried-edges, batch-updates, or all; unset, the
+# binary behaves as main does.
 set -euo pipefail
 if [ $# -lt 1 ]; then
   echo "usage: $0 <variant> [items] [--json]" >&2

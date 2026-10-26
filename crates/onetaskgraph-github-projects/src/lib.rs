@@ -3816,6 +3816,9 @@ pub struct GitHubProjectsSource {
     /// [`TaskSource::begin_deferred_writes`] and [`TaskSource::finish_writes`] — `None` while
     /// nothing is being held back, when every write lands whole as it is made.
     deferred: Mutex<Option<Deferred>>,
+    /// spike-host-copy-parity, `batch-updates`: each existing issue's `UpdateIssueInput` held
+    /// back while writes are, merged by issue, until `finish_writes` sends them together.
+    held_updates: Mutex<Vec<Value>>,
     clock: SharedClock,
     numeric_repositories: tokio::sync::Mutex<BTreeMap<RepositoryTarget, std::num::NonZeroU64>>,
     /// The board as this process last read it, for the length of one command — dropped by
@@ -5034,6 +5037,7 @@ impl GitHubProjectsSource {
             task_children: Mutex::new(BTreeMap::new()),
             written: Mutex::new(BTreeMap::new()),
             deferred: Mutex::new(None),
+            held_updates: Mutex::new(Vec::new()),
             clock: system_clock(),
             numeric_repositories: tokio::sync::Mutex::new(BTreeMap::new()),
             board_cache: Mutex::new(None),
@@ -10106,6 +10110,51 @@ impl GitHubProjectsSource {
         Ok(ids)
     }
 
+    /// spike-host-copy-parity, `batch-updates`: send every held issue update — one alone as
+    /// [`graphql::UPDATE_ISSUE`] sends it, several as aliased `updateIssue`s of
+    /// [`graphql::CLOSE_ISSUES`], [`MUTATION_BATCH`] to a request.
+    async fn send_held_updates(&self) -> Result<(), SourceError> {
+        let held = std::mem::take(
+            &mut *self
+                .held_updates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        if let [one] = held.as_slice() {
+            let data = self
+                .graphql(graphql::UPDATE_ISSUE, json!({"input": one}))
+                .await?;
+            if data.pointer("/updateIssue/issue/id") != Some(&one["id"]) {
+                return Err(SourceError::Malformed {
+                    message: "GitHub item update returned the wrong item".into(),
+                });
+            }
+            return Ok(());
+        }
+        for chunk in held.chunks(MUTATION_BATCH) {
+            let mut variables = serde_json::Map::new();
+            for slot in 0..MUTATION_BATCH {
+                variables.insert(
+                    format!("close{slot}"),
+                    chunk.get(slot).cloned().unwrap_or_else(|| chunk[0].clone()),
+                );
+                variables.insert(format!("send{slot}"), json!(slot < chunk.len()));
+            }
+            let data = self
+                .graphql(graphql::CLOSE_ISSUES, Value::Object(variables))
+                .await?;
+            let inputs: Vec<&Value> = chunk.iter().collect();
+            check_aliased_answers(
+                graphql::CLOSE_ISSUES,
+                &data,
+                "close",
+                &inputs,
+                &[("issue", "id")],
+            )?;
+        }
+        Ok(())
+    }
+
     /// Send everything held back since [`TaskSource::begin_deferred_writes`]: one read of the
     /// created items' board items, then their field values and edges together in requests of
     /// [`WRITE_BATCH`], then their closes in requests of [`MUTATION_BATCH`]. Anything refused
@@ -11158,6 +11207,27 @@ impl GitHubProjectsSource {
         };
         let mut input = fields;
         input[id_key] = json!(id.0);
+        // spike-host-copy-parity, `batch-updates`: while a copy holds its writes back, an
+        // existing issue's update is held too — a later one of the same issue merged over it —
+        // and sent with the others by `finish_writes`.
+        if kind == ContentKind::Issue
+            && spike_fix("batch-updates")
+            && self.deferred()?.is_some()
+        {
+            let mut held = self
+                .held_updates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match held.iter_mut().find(|held| held["id"] == input["id"]) {
+                Some(earlier) => {
+                    for (key, value) in input.as_object().into_iter().flatten() {
+                        earlier[key.as_str()] = value.clone();
+                    }
+                }
+                None => held.push(input),
+            }
+            return Ok(());
+        }
         let data = self.graphql(operation, json!({"input":input})).await?;
         let returned = data
             .pointer(pointer)
@@ -13506,6 +13576,7 @@ impl TaskSource for GitHubProjectsSource {
     }
 
     async fn finish_writes(&self) -> Result<(), SourceError> {
+        self.send_held_updates().await?;
         self.send_held_back().await
     }
 

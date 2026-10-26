@@ -80,6 +80,23 @@ fn figures(name: &str, scenario: &Scenario) -> Value {
     })
 }
 
+/// Hold the board to holding the revision: task 4's edit, and — when the plan is reviewed —
+/// the project's review record of the revision, so a write held back and never sent fails here.
+fn landed_revision(plan: &Plan, at: &super::Counterparts) {
+    let task = plan.github.body(&at["T-4"]);
+    assert!(
+        task.as_str().is_some_and(|body| body.contains("An edit made since the last copy.")),
+        "the board's T-4 lacks the revision: {task}"
+    );
+    if plan.axes.reviewed {
+        let project = plan.github.body(&at["P"]);
+        assert!(
+            project.as_str().is_some_and(|body| body.contains("notes:P-1")),
+            "the board's project lacks the revision's review record"
+        );
+    }
+}
+
 /// The first copy, the re-copy after task 4 changed and the unchanged re-copy of one variant.
 pub(super) fn measure(variant: &str, items: usize) -> Value {
     let (cache, screened, axes) = parse(variant);
@@ -91,8 +108,10 @@ pub(super) fn measure(variant: &str, items: usize) -> Value {
     plan.revise(4);
     let changed = plan.copy_timed();
     assert_eq!(counterparts(&changed.project, &changed.document), at);
+    landed_revision(&plan, &at);
     let unchanged = plan.copy_timed();
     assert_eq!(counterparts(&unchanged.project, &unchanged.document), at);
+    landed_revision(&plan, &at);
     json!({
         "variant": variant,
         "items": items,
