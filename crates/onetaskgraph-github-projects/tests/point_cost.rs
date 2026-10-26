@@ -70,6 +70,7 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::CREATED_BOARD_ITEMS, 1),
     (graphql::WRITE_FIELD_VALUES, 1),
     (graphql::CLOSE_ISSUES, 1),
+    (graphql::UPDATE_ISSUES, 1),
     (graphql::ADD_BLOCKED_BYS, 1),
     (graphql::WRITE_FIELDS_AND_EDGES, 1),
     (graphql::DELETE_ISSUES, 1),

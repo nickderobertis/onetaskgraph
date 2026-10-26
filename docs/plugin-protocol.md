@@ -2671,7 +2671,11 @@ a copy re-points, the one metadata key written before the body, is put back when
 is refused, and when putting it back is refused too, the write's own refusal — its kind
 unchanged — names that key, what it now holds and what it held, and the step that restores it.
 When the refused write was the board-field write that carries the origin itself, GitHub does
-not say which of its fields ran, so the refusal names both values the key may hold.
+not say which of its fields ran, so the refusal names both values the key may hold. Inside a
+copy, which holds its writes back until it finishes, that last `updateIssue` of each existing
+issue is held too and sent before the source's next request of any kind — so nothing it reads
+or writes after sees the issue without it — and the updates the copy makes one after another
+go as aliased `updateIssue`s of one `UPDATE_ISSUES` request, each still one write.
 
 Two facts about GitHub the write rows rest on, read off GitHub's published schema artifact
 (<https://docs.github.com/public/fpt/schema.docs.graphql>, 2026-10-01) and pinned in

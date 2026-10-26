@@ -99,6 +99,7 @@ fn rewrites(document: &str) -> bool {
         graphql::WRITE_FIELD_VALUES,
         graphql::CLEAR_FIELD,
         graphql::CLOSE_ISSUES,
+        graphql::UPDATE_ISSUES,
         graphql::DELETE_ISSUE,
     ]
     .contains(&document)
@@ -528,9 +529,9 @@ fn preserving_status_writes_bodies_without_board_status_or_issue_state_mutations
             .count();
         assert_eq!(states, 0, "copy wrote issue state: {served:#?}");
         assert!(
-            served
-                .iter()
-                .any(|(document, _)| document == graphql::UPDATE_ISSUE),
+            served.iter().any(|(document, _)| {
+                document == graphql::UPDATE_ISSUE || document == graphql::UPDATE_ISSUES
+            }),
             "body changes must land"
         );
         for (kind, source) in [("project", "plans:P"), ("task", "plans:T")] {

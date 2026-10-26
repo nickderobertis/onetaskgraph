@@ -1062,15 +1062,16 @@ impl TaskSource for CachedSource {
 
     /// Only what the cache cannot answer is read ahead: an id whose task or document entry a
     /// pin in this command vouches for is served by its own read with no request, so reading
-    /// it again ahead of that would spend a request on an answer already held. A project is
-    /// served only when the cache holds its forward edges too, which a copy reads of it next:
-    /// where the token does not cover them, its edge reads would each be a request of their
-    /// own, and reading it ahead carries them in the one request instead.
+    /// it again ahead of that would spend a request on an answer already held. A task or a
+    /// project is served only when the cache holds its forward edges too, which a copy reads of
+    /// it next: where the token does not cover them, or the entry holds none, its edge reads
+    /// would each be a request of their own, and reading it ahead carries them in the one
+    /// request instead.
     async fn read_ahead_for_copy(&self, ids: &[NativeId]) -> Result<(), SourceError> {
         let unserved: Vec<NativeId> = ids
             .iter()
             .filter(|id| {
-                let task = self.servable(id, false).is_ok();
+                let task = self.servable(id, false).is_ok() && self.held_edges(id).is_some();
                 let project = self.servable_project(id).is_some()
                     && self.cache.project_coverage.forward_edges.reason().is_none()
                     && self.held_project_edges(id).is_some();

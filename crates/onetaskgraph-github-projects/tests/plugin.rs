@@ -624,6 +624,9 @@ struct State {
     /// of what it did — a response the source must refuse to read as landed.
     answers_alias_with: Option<(&'static str, Value)>,
     blocked_by: BTreeMap<String, Vec<String>>,
+    /// How many of what blocks each issue a copy's batched read answers with, saying whether
+    /// more follow, as GitHub pages a nested connection — or `None` to answer without it.
+    copy_details_blocked_by: Option<usize>,
     /// Single-select fields a person created on the board beside its own, each as the board's
     /// field list answers it, options and all.
     scratch_fields: Vec<Value>,
@@ -1361,6 +1364,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         extra_fields: Vec::new(),
         answers_alias_with: None,
         blocked_by: BTreeMap::new(),
+        copy_details_blocked_by: None,
         scratch_fields: Vec::new(),
         refuses: BTreeSet::new(),
         refuse_after: BTreeMap::new(),
@@ -2158,7 +2162,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 .as_str()
                 .expect("every slot of a batch names an id")
                 .to_owned();
-            let node = detail_node(
+            let mut node = detail_node(
                 &mut state,
                 &id,
                 &Value::Null,
@@ -2166,6 +2170,15 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 true,
                 asked,
             );
+            if let Some(page) = state.copy_details_blocked_by
+                && node["__typename"] == "Issue"
+            {
+                let all = state.blocked_by.get(&id).cloned().unwrap_or_default();
+                let more = all.len() > page;
+                node["blockedBy"] = json!({
+                    "nodes": related_issues(&state, all.into_iter().take(page).collect()),
+                    "pageInfo": {"hasNextPage": more, "endCursor": more.then_some("c1")}});
+            }
             answered.insert(format!("i{slot}"), node);
         }
         return Value::Object(answered);
@@ -22537,4 +22550,55 @@ async fn an_issue_marked_a_project_but_filed_under_the_project_is_a_member_it_cl
         2,
         "{classes:?}"
     );
+}
+
+/// A copy's batched read that carries an issue's `blockedBy` to its end answers the dependency
+/// read of it with no request; one whose answer says the connection goes on past its first page
+/// leaves that read to GitHub, which reads it whole — so the edges are the issue's every time.
+#[tokio::test]
+async fn a_copy_reads_what_blocks_an_issue_again_only_when_its_batched_read_had_more_to_page() {
+    for (carried, read_again) in [(5, false), (1, true)] {
+        let fixture = board(vec![
+            Item::issue("I_1", "one").status("Todo"),
+            Item::issue("I_a", "a").status("Todo"),
+            Item::issue("I_b", "b").status("Todo"),
+        ]);
+        {
+            let mut state = fixture.state.lock().unwrap();
+            state
+                .blocked_by
+                .insert("I_1".to_owned(), vec!["I_a".to_owned(), "I_b".to_owned()]);
+            state.copy_details_blocked_by = Some(carried);
+        }
+        let source = configured(&fixture.endpoint, json!({}));
+        source
+            .read_ahead_for_copy(&[native("I_1"), native("I_a")])
+            .await
+            .expect("the board answers the batch");
+        let before = fixture.documents().len();
+        let edges = source
+            .task_dependencies(&native("I_1"), Direction::DependsOn, &page(10))
+            .await
+            .expect("what blocks I_1");
+        let far: BTreeSet<String> = edges
+            .items
+            .iter()
+            .map(|edge| edge.to.id().to_owned())
+            .collect();
+        assert_eq!(
+            far,
+            BTreeSet::from(["I_a".to_owned(), "I_b".to_owned()]),
+            "a page of {carried}: every edge, carried or read"
+        );
+        let sent = fixture.documents()[before..].to_vec();
+        let dependency_reads = sent
+            .iter()
+            .filter(|document| *document == onetaskgraph_github_projects::graphql::ISSUE_DEPENDS_ON)
+            .count();
+        assert_eq!(
+            dependency_reads,
+            usize::from(read_again),
+            "a page of {carried}: the dependency read was sent {dependency_reads} times"
+        );
+    }
 }

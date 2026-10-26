@@ -1247,6 +1247,9 @@ struct GitHubBoard {
     /// GitHub's default workflows, none of which sets one on an item added to it; `false`
     /// files it at `Todo`, as a board with that workflow turned on does.
     files_without_status: bool,
+    /// Whether a project's members listing answers without what blocks each member, as
+    /// ai-orchestrator's GitHub double answers it, though the read selects it.
+    members_without_blocked_by: bool,
     /// How many more reads of created issues' board items answer that GitHub has not filed
     /// them yet, as it may not have in the moments after a create naming the board.
     unfiled_board_item_reads: usize,
@@ -1844,6 +1847,12 @@ impl GitHubBoardFields {
     /// added one — or, with `false`, at `Todo`, as a board with that workflow turned on does.
     pub fn file_new_items_without_status(&self, without: bool) {
         self.board.lock().unwrap().files_without_status = without;
+    }
+
+    /// Answer every listing of a project's members without what blocks each member, as
+    /// ai-orchestrator's GitHub double answers it — or, with `false`, with it, as GitHub does.
+    pub fn list_members_without_blocked_by(&self, without: bool) {
+        self.board.lock().unwrap().members_without_blocked_by = without;
     }
 
     /// Answer the next `reads` reads of created issues' board items as GitHub answers before it
@@ -2490,6 +2499,20 @@ impl GitHubBoardFields {
             .iter()
             .find(|item| item["id"] == json!(id))
             .cloned()
+    }
+
+    /// The id of every item this board holds whose title is `title`, in the order it holds
+    /// them: what says a copy updated an item rather than adding a second beside it.
+    #[must_use]
+    pub fn items_titled(&self, title: &str) -> Vec<String> {
+        self.board
+            .lock()
+            .unwrap()
+            .items
+            .iter()
+            .filter(|item| item["title"] == json!(title))
+            .filter_map(|item| item["id"].as_str().map(str::to_owned))
+            .collect()
     }
 
     /// The ids of the issues this board records as blocking `id`, in the order they were
@@ -3201,9 +3224,16 @@ impl GitHubBoard {
             })
             .into_iter()
             .collect();
-        values.push(
-            json!({"text":item["origin"],"field":{"id":"FIELD-origin","name":"onetaskgraph.origin"}}),
-        );
+        // An origin field holding nothing — an item a copy out of a source declared private
+        // wrote — carries no node, as GitHub leaves an empty text field out.
+        if item["origin"]
+            .as_str()
+            .is_none_or(|origin| !origin.is_empty())
+        {
+            values.push(
+                json!({"text":item["origin"],"field":{"id":"FIELD-origin","name":"onetaskgraph.origin"}}),
+            );
+        }
         // An item with no `Priority` value carries no node for the field, as GitHub leaves
         // an empty single-select out of `fieldValues`.
         if let (Some(name), Some(options)) =
@@ -3573,6 +3603,7 @@ fn github_projects_board_at(
         remint_after_status_update: false,
         omit_added_status_option: false,
         files_without_status: false,
+        members_without_blocked_by: false,
         unfiled_board_item_reads: 0,
         placement: None,
         members_page_misanswers: Vec::new(),
@@ -4262,12 +4293,14 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             "updateProjectV2ItemFieldValue",
         );
         let close: Kind = ("close", "send", documents::UPDATE_ISSUE, "updateIssue");
+        let update: Kind = ("update", "send", documents::UPDATE_ISSUE, "updateIssue");
         let block: Kind = ("block", "send", documents::ADD_BLOCKED_BY, "addBlockedBy");
         let delete: Kind = ("delete", "send", documents::DELETE_ISSUE, "deleteIssue");
-        let batches: [(&str, Vec<Kind>, usize); 6] = [
+        let batches: [(&str, Vec<Kind>, usize); 7] = [
             (documents::CREATE_ISSUES, vec![create], MUTATION_BATCH),
             (documents::WRITE_FIELD_VALUES, vec![field], WRITE_BATCH),
             (documents::CLOSE_ISSUES, vec![close], MUTATION_BATCH),
+            (documents::UPDATE_ISSUES, vec![update], MUTATION_BATCH),
             (documents::ADD_BLOCKED_BYS, vec![block], WRITE_BATCH),
             (
                 documents::WRITE_FIELDS_AND_EDGES,
@@ -5163,7 +5196,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             .iter()
             .map(|item| {
                 let mut issue = board.as_issue(item);
-                if let Some(page) = blocked_first {
+                if let Some(page) = blocked_first.filter(|_| !board.members_without_blocked_by) {
                     let all = board.related(item["id"].as_str().expect("an id"), false);
                     let all = all.as_array().expect("related issues");
                     issue["blockedBy"] = json!({

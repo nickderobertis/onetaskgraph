@@ -345,6 +345,7 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         (graphql::CREATE_ISSUES, None, None),
         (graphql::WRITE_FIELD_VALUES, None, None),
         (graphql::CLOSE_ISSUES, None, None),
+        (graphql::UPDATE_ISSUES, None, None),
         (graphql::ADD_BLOCKED_BYS, None, None),
         (graphql::WRITE_FIELDS_AND_EDGES, None, None),
         (graphql::DELETE_ISSUES, None, None),
@@ -949,7 +950,7 @@ fn every_batch_document_declares_and_sends_exactly_the_slots_its_constant_counts
     // Each document by name, the document, each kind's slot prefix and include prefix, and how
     // many slots its constant counts.
     type Batch<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)], usize);
-    let batches: [Batch<'_>; 6] = [
+    let batches: [Batch<'_>; 7] = [
         (
             "CREATE_ISSUES",
             graphql::CREATE_ISSUES,
@@ -960,6 +961,12 @@ fn every_batch_document_declares_and_sends_exactly_the_slots_its_constant_counts
             "CLOSE_ISSUES",
             graphql::CLOSE_ISSUES,
             &[("close", "send")],
+            MUTATION_BATCH,
+        ),
+        (
+            "UPDATE_ISSUES",
+            graphql::UPDATE_ISSUES,
+            &[("update", "send")],
             MUTATION_BATCH,
         ),
         (

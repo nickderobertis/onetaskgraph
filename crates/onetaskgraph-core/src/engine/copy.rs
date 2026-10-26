@@ -5481,6 +5481,14 @@ impl Engine {
         let mut project_origins: Vec<(SourceName, GlobalId)> = Vec::new();
         // Each destination a document's project is read at for a screened write's classification.
         let mut screened_homes: Vec<SourceName> = Vec::new();
+        // A copy of documents alone reads each document and its project by the one read that
+        // carries them, as it does where no cache stands in front of the destination: pinning
+        // every member of the project first would spend a listing of them, and a lookup of the
+        // project by its origin, on reads this copy never makes.
+        let documents_alone = !matches!(request.scope, CopyScope::Projects { .. })
+            && reads
+                .iter()
+                .all(|read| read.item.level() == Level::Document);
         for read in reads {
             let metadata = described(&read.item).1;
             if read.item.level() == Level::Project {
@@ -5510,17 +5518,12 @@ impl Engine {
             // An item naming nothing at a destination is looked for there by its own origin, so
             // every such question is asked together, before the first of them would be — but for
             // a task whose priority that destination cannot hold, which is refused before the
-            // destination is asked anything, and for an item of a source declared private at a
-            // destination that is not: no copy records that origin there, and asking for it
-            // would send the private item's id to a destination that is not private.
-            let private_source =
-                self.declared(&read.source.source) == crate::config::SourceVisibility::Private;
+            // destination is asked anything. An item of a source declared private is asked about
+            // too: its own lookup in [`Engine::target`] asks that destination for the same
+            // origin, since a public item may already carry it (by hand, or from a release
+            // before origins were withheld), and asking it here sends the same id in one request
+            // rather than one each.
             for there in &reachable {
-                if private_source
-                    && self.declared(there) != crate::config::SourceVisibility::Private
-                {
-                    continue;
-                }
                 let refused = match (&read.item, self.writable(there)) {
                     (Item::Task(task), Ok(destination)) => {
                         holds_priority(destination, &read.source.to_string(), task.priority)
@@ -5580,9 +5583,12 @@ impl Engine {
                 // taken as filed under that project when that is where it sits — see
                 // [`Engine::filed_as_linked`] — so its project is not read with it; one a person
                 // moved has the project read by the filing lookup instead. Where a cache stands
-                // in front of the destination the project is still named, because pinning it is
-                // what answers the document's own read from that cache.
-                if link_of(&document.metadata, there).is_some() && !self.caches(there) {
+                // in front of the destination and the copy writes more than documents, the
+                // project is still named, because pinning it is what answers the document's own
+                // read from that cache.
+                if link_of(&document.metadata, there).is_some()
+                    && (!self.caches(there) || documents_alone)
+                {
                     continue;
                 }
                 if let Some(link) = link_of(&running.source_projects[&qualified].metadata, there) {
@@ -5607,6 +5613,7 @@ impl Engine {
         }
         for (there, project, origin, named) in homes {
             if self.caches(&there)
+                && !documents_alone
                 && let Ok(destination) = self.writable(&there)
             {
                 // A project the copy writes is read with its forward edges, which only a token
