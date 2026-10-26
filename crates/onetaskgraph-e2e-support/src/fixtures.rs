@@ -1247,6 +1247,9 @@ struct GitHubBoard {
     /// GitHub's default workflows, none of which sets one on an item added to it; `false`
     /// files it at `Todo`, as a board with that workflow turned on does.
     files_without_status: bool,
+    /// spike-host-copy-parity: answer a project's members listing as ai-orchestrator's Python
+    /// double does — no `blockedBy` on any member, and none of the project issue's own fields.
+    members_as_host_double: bool,
     /// How many more reads of created issues' board items answer that GitHub has not filed
     /// them yet, as it may not have in the moments after a create naming the board.
     unfiled_board_item_reads: usize,
@@ -1844,6 +1847,12 @@ impl GitHubBoardFields {
     /// added one — or, with `false`, at `Todo`, as a board with that workflow turned on does.
     pub fn file_new_items_without_status(&self, without: bool) {
         self.board.lock().unwrap().files_without_status = without;
+    }
+
+    /// spike-host-copy-parity: answer every project members listing as ai-orchestrator's
+    /// Python double does, leaving out what its query selects of edges and the project issue.
+    pub fn answer_members_as_host_double(&self, host: bool) {
+        self.board.lock().unwrap().members_as_host_double = host;
     }
 
     /// Answer the next `reads` reads of created issues' board items as GitHub answers before it
@@ -3573,6 +3582,7 @@ fn github_projects_board_at(
         remint_after_status_update: false,
         omit_added_status_option: false,
         files_without_status: false,
+        members_as_host_double: false,
         unfiled_board_item_reads: 0,
         placement: None,
         members_page_misanswers: Vec::new(),
@@ -5155,7 +5165,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let end = (offset + first).min(children.len());
         // What blocks each sub-issue, when the read asks for it beside the issue: a page of
         // `$nestedFirst`, saying whether more follow, as GitHub pages a nested connection.
-        let blocked_first = query.contains("blockedBy(first:$nestedFirst)").then(|| {
+        let blocked_first = (query.contains("blockedBy(first:$nestedFirst)")
+            && !board.members_as_host_double)
+            .then(|| {
             usize::try_from(variables["nestedFirst"].as_u64().expect("nestedFirst"))
                 .expect("nestedFirst fits usize")
         });
@@ -5177,7 +5189,8 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         // The project issue itself, with what blocks it, when the read selects it beside its
         // sub-issues.
         let mut node = json!({"__typename":"Issue"});
-        if query.contains("node(id:$id){__typename ...BoardIssue") {
+        if query.contains("node(id:$id){__typename ...BoardIssue") && !board.members_as_host_double
+        {
             let parent = board
                 .items
                 .iter()
