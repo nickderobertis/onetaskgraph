@@ -192,11 +192,14 @@ LAZY_MODULES = [
 
 @pytest.mark.parametrize("module", LAZY_MODULES)
 def test_every_export_resolves_by_name_by_star_and_in_dir(module: str) -> None:
-    """Each name in `__all__` imports by name and by `*`, is in `dir()`, and is one object."""
+    """Each name in `__all__` is in `dir()` unbuilt, imports by name and by `*`, one object."""
     program = (
-        "import importlib, json\n"
+        "import importlib, json, sys\n"
         f"module = importlib.import_module({module!r})\n"
         "exported = list(module.__all__)\n"
+        "# Discovered before anything is resolved, and discovering resolves nothing.\n"
+        "listed = dir(module)\n"
+        f"loaded = sorted(n for n in sys.modules if n.startswith({GENERATED!r}))\n"
         "named = {}\n"
         "for name in exported:\n"
         f"    exec(f'from {module} import {{name}}', named)\n"
@@ -206,7 +209,8 @@ def test_every_export_resolves_by_name_by_star_and_in_dir(module: str) -> None:
         "    'exported': exported,\n"
         "    'starred': sorted(name for name in starred if name != '__builtins__'),\n"
         "    'same': [n for n in exported if named[n] is starred[n] is getattr(module, n)],\n"
-        "    'missing_from_dir': sorted(set(exported) - set(dir(module))),\n"
+        "    'missing_from_dir': sorted(set(exported) - set(listed)),\n"
+        "    'loaded_by_dir': loaded,\n"
         "}))\n"
     )
     ran = fresh(program)
@@ -216,6 +220,7 @@ def test_every_export_resolves_by_name_by_star_and_in_dir(module: str) -> None:
     assert seen["starred"] == sorted(seen["exported"])
     assert seen["same"] == seen["exported"]
     assert seen["missing_from_dir"] == []
+    assert seen["loaded_by_dir"] == [f"{GENERATED}client", f"{GENERATED}models"]
 
 
 @pytest.mark.parametrize("module", LAZY_MODULES)
