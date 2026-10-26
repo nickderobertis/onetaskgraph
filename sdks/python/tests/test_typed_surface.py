@@ -525,16 +525,146 @@ def test_client_methods_answer_with_the_types_they_declare(binary: Path, tmp_pat
     assert refused.value.exit_code != 0
 
 
+MODEL_CLASSES: dict[str, type[BaseModel]] = {
+    "CacheCleared": CacheCleared,
+    "CacheUse": CacheUse,
+    "CommentList": CommentList,
+    "CommentWritten": CommentWritten,
+    "CopyReport": CopyReport,
+    "DeletedComment": DeletedComment,
+    "Delivered": Delivered,
+    "DeliveryOutcome": DeliveryOutcome,
+    "Document": Document,
+    "DocumentDetail": DocumentDetail,
+    "DocumentQuery": DocumentQuery,
+    "EffectiveConfig": EffectiveConfig,
+    "ExpectedWrite": ExpectedWrite,
+    "FailureDocument": FailureDocument,
+    "FieldsReport": FieldsReport,
+    "GlobalId": GlobalId,
+    "IssuesCompleted": IssuesCompleted,
+    "LinearConfig": LinearConfig,
+    "Location": Location,
+    "MetadataSet": MetadataSet,
+    "NativeId": NativeId,
+    "PageOfDocument": PageOfDocument,
+    "ProjectGraph": ProjectGraph,
+    "ProjectStatusSet": ProjectStatusSet,
+    "PublicProjections": PublicProjections,
+    "PublicWriteInput": PublicWriteInput,
+    "QueryPlan": QueryPlan,
+    "QueryResponseOfQualifiedDocument": QueryResponseOfQualifiedDocument,
+    "QueryResponseOfQualifiedEdge": QueryResponseOfQualifiedEdge,
+    "QueryResponseOfQualifiedLabel": QueryResponseOfQualifiedLabel,
+    "QueryResponseOfQualifiedProject": QueryResponseOfQualifiedProject,
+    "QueryResponseOfQualifiedTask": QueryResponseOfQualifiedTask,
+    "QueryResponseOfSearchHit": QueryResponseOfSearchHit,
+    "Regenerated": Regenerated,
+    "RenderedTemplate": RenderedTemplate,
+    "SourceCacheConfig": SourceCacheConfig,
+    "SourceFailure": SourceFailure,
+    "SourceListing": SourceListing,
+    "SourceName": SourceName,
+    "SourceRoute": SourceRoute,
+    "StatusMapping": StatusMapping,
+    "StatusNamesReport": StatusNamesReport,
+    "StatusOptionsReport": StatusOptionsReport,
+    "StatusesReconciled": StatusesReconciled,
+    "TaskAssetNames": TaskAssetNames,
+    "TaskContentSet": TaskContentSet,
+    "TaskDetail": TaskDetail,
+    "TaskDetails": TaskDetails,
+    "TaskPrioritySet": TaskPrioritySet,
+    "TaskRef": TaskRef,
+    "TaskStatusSet": TaskStatusSet,
+    "TaskUpdated": TaskUpdated,
+    "TemplateAnswers": TemplateAnswers,
+    "TemplateProvenance": TemplateProvenance,
+    "TemplateVariable": TemplateVariable,
+    "TemplateVariables": TemplateVariables,
+    "WritePolicyConfig": WritePolicyConfig,
+    "WriteVerdict": WriteVerdict,
+}
+"""Every export that is a pydantic model, read from the package root as a model class."""
+
+MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
+    "CacheCleared": ModelsCacheCleared,
+    "CacheUse": ModelsCacheUse,
+    "CommentList": ModelsCommentList,
+    "CommentWritten": ModelsCommentWritten,
+    "CopyReport": ModelsCopyReport,
+    "DeletedComment": ModelsDeletedComment,
+    "Delivered": ModelsDelivered,
+    "DeliveryOutcome": ModelsDeliveryOutcome,
+    "Document": ModelsDocument,
+    "DocumentDetail": ModelsDocumentDetail,
+    "DocumentQuery": ModelsDocumentQuery,
+    "EffectiveConfig": ModelsEffectiveConfig,
+    "ExpectedWrite": ModelsExpectedWrite,
+    "FailureDocument": ModelsFailureDocument,
+    "FieldsReport": ModelsFieldsReport,
+    "GlobalId": ModelsGlobalId,
+    "IssuesCompleted": ModelsIssuesCompleted,
+    "LinearConfig": ModelsLinearConfig,
+    "Location": ModelsLocation,
+    "MetadataSet": ModelsMetadataSet,
+    "NativeId": ModelsNativeId,
+    "PageOfDocument": ModelsPageOfDocument,
+    "ProjectGraph": ModelsProjectGraph,
+    "ProjectStatusSet": ModelsProjectStatusSet,
+    "PublicProjections": ModelsPublicProjections,
+    "PublicWriteInput": ModelsPublicWriteInput,
+    "QueryPlan": ModelsQueryPlan,
+    "QueryResponseOfQualifiedDocument": ModelsQueryResponseOfQualifiedDocument,
+    "QueryResponseOfQualifiedEdge": ModelsQueryResponseOfQualifiedEdge,
+    "QueryResponseOfQualifiedLabel": ModelsQueryResponseOfQualifiedLabel,
+    "QueryResponseOfQualifiedProject": ModelsQueryResponseOfQualifiedProject,
+    "QueryResponseOfQualifiedTask": ModelsQueryResponseOfQualifiedTask,
+    "QueryResponseOfSearchHit": ModelsQueryResponseOfSearchHit,
+    "Regenerated": ModelsRegenerated,
+    "RenderedTemplate": ModelsRenderedTemplate,
+    "SourceCacheConfig": ModelsSourceCacheConfig,
+    "SourceFailure": ModelsSourceFailure,
+    "SourceListing": ModelsSourceListing,
+    "SourceName": ModelsSourceName,
+    "SourceRoute": ModelsSourceRoute,
+    "StatusMapping": ModelsStatusMapping,
+    "StatusNamesReport": ModelsStatusNamesReport,
+    "StatusOptionsReport": ModelsStatusOptionsReport,
+    "StatusesReconciled": ModelsStatusesReconciled,
+    "TaskAssetNames": ModelsTaskAssetNames,
+    "TaskContentSet": ModelsTaskContentSet,
+    "TaskDetail": ModelsTaskDetail,
+    "TaskDetails": ModelsTaskDetails,
+    "TaskPrioritySet": ModelsTaskPrioritySet,
+    "TaskRef": ModelsTaskRef,
+    "TaskStatusSet": ModelsTaskStatusSet,
+    "TaskUpdated": ModelsTaskUpdated,
+    "TemplateAnswers": ModelsTemplateAnswers,
+    "TemplateProvenance": ModelsTemplateProvenance,
+    "TemplateVariable": ModelsTemplateVariable,
+    "TemplateVariables": ModelsTemplateVariables,
+    "WritePolicyConfig": ModelsWritePolicyConfig,
+    "WriteVerdict": ModelsWriteVerdict,
+}
+"""The same, read from `models`."""
+
+
 def test_every_model_export_is_a_model_class_to_a_checker() -> None:
-    """Annotating with each root as a class type-checks, and each is one at run time."""
-    roots: list[type[BaseModel]] = [
-        CopyReport,
-        TaskDetail,
-        QueryResponseOfQualifiedTask,
-        PageOfDocument,
-        ModelsCopyReport,
-    ]
-    assert all(issubclass(root, BaseModel) for root in roots)
+    """Both tables above name every export that is a model, and each is one to a checker.
+
+    The annotation is what the checkers read: an export a checker could not resolve to a
+    pydantic model class would fail `type[BaseModel]` in either table.
+    """
+    for module, table in ((onetaskgraph_sdk, MODEL_CLASSES), (models, MODELS_MODEL_CLASSES)):
+        exported = getattr(module, "__all__", [])
+        classes = sorted(
+            name
+            for name in exported
+            if isinstance(value := getattr(module, name), type) and issubclass(value, BaseModel)
+        )
+        assert sorted(table) == classes, f"name every model {module} exports in the table"
+        assert all(table[name] is getattr(module, name) for name in table)
 
 
 def test_a_strict_mypy_consumer_reads_this_module(tmp_path: Path) -> None:

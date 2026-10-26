@@ -20,8 +20,12 @@ BASE = json.loads(Path(__file__).with_name("exports_at_base.json").read_text(enc
 MODULES = ["onetaskgraph_sdk", "onetaskgraph_sdk._generated.models"]
 
 
-def test_the_committed_list_is_the_whole_base_inventory() -> None:
-    """The list names real identifiers for both modules, so no entry stands in for one."""
+def test_the_committed_list_names_both_modules_and_no_placeholder() -> None:
+    """Both modules are listed, each entry an exported-looking identifier, none a stand-in.
+
+    That the list is the base's whole inventory is how it was written, from the commit it
+    names; this cannot re-read that commit, which a shallow checkout may not hold.
+    """
     assert sorted(key for key in BASE if key != "base") == MODULES
     for module in MODULES:
         exports, models = BASE[module]["exports"], BASE[module]["models"]

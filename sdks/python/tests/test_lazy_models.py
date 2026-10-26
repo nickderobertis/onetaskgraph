@@ -130,7 +130,43 @@ def test_a_verb_builds_its_own_models_and_an_unused_export_builds_on_first_impor
     assert seen["copy_report_is_public"]
 
 
-@pytest.mark.parametrize("module", ["onetaskgraph_sdk", "onetaskgraph_sdk._generated.models"])
+LAZY_MODULES = [
+    "onetaskgraph_sdk",
+    "onetaskgraph_sdk._generated",
+    "onetaskgraph_sdk._generated.models",
+]
+"""Every module whose roots resolve on first use: the package, `_generated` and `models`."""
+
+
+@pytest.mark.parametrize("module", LAZY_MODULES)
+def test_every_export_resolves_by_name_by_star_and_in_dir(module: str) -> None:
+    """Each name in `__all__` imports by name and by `*`, is in `dir()`, and is one object."""
+    program = (
+        "import importlib, json\n"
+        f"module = importlib.import_module({module!r})\n"
+        "exported = list(module.__all__)\n"
+        "named = {}\n"
+        "for name in exported:\n"
+        f"    exec(f'from {module} import {{name}}', named)\n"
+        "starred = {}\n"
+        f"exec('from {module} import *', starred)\n"
+        "print(json.dumps({\n"
+        "    'exported': exported,\n"
+        "    'starred': sorted(name for name in starred if name != '__builtins__'),\n"
+        "    'same': [n for n in exported if named[n] is starred[n] is getattr(module, n)],\n"
+        "    'missing_from_dir': sorted(set(exported) - set(dir(module))),\n"
+        "}))\n"
+    )
+    ran = fresh(program)
+    assert ran.returncode == 0, ran.stderr
+    seen = json.loads(ran.stdout)
+    assert len(seen["exported"]) >= 66
+    assert seen["starred"] == sorted(seen["exported"])
+    assert seen["same"] == seen["exported"]
+    assert seen["missing_from_dir"] == []
+
+
+@pytest.mark.parametrize("module", LAZY_MODULES)
 def test_a_name_never_exported_is_still_refused(module: str) -> None:
     """An unknown name raises `AttributeError` and `ImportError` as an eager module would."""
     program = (

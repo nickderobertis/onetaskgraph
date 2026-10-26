@@ -83,7 +83,11 @@ def main() -> None:
     """Measure every figure, print them, and report the budget's figure."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--compare", type=Path, help="a src directory to measure beside")
+    # Fewer only to prove the script itself quickly; the budget's figure is taken from 15.
+    parser.add_argument("--runs", type=int, default=RUNS, help=argparse.SUPPRESS)
     arguments = parser.parse_args()
+    if arguments.runs < 2:
+        parser.error("--runs takes at least 2, the fewest an interquartile range is read from")
     if not hasattr(os, "wait4"):
         raise SystemExit("measure_import.py: this measures with os.wait4, which needs POSIX")
 
@@ -113,14 +117,14 @@ def main() -> None:
     for program, variables in runs.values():
         cpu_seconds(program, variables)
     samples: dict[str, list[float]] = {name: [] for name in runs}
-    for _ in range(RUNS):
+    for _ in range(arguments.runs):
         for name, (program, variables) in runs.items():
             samples[name].append(cpu_seconds(program, variables))
 
     medians = {name: statistics.median(values) for name, values in samples.items()}
     figure = medians["full"]
     detail = (
-        f"{RUNS} runs each of {sys.executable} (Python {sys.version.split()[0]}); "
+        f"{arguments.runs} runs each of {sys.executable} (Python {sys.version.split()[0]}); "
         f"baseline (python -c pass) {summary(samples['baseline'])}; "
         f"import alone {summary(samples['import'])}; "
         f"import, validate and exit {summary(samples['full'])}; "

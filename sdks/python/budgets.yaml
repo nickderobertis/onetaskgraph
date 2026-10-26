@@ -7,18 +7,15 @@
 # pull request runs pool-maintenance's; none does today.
 schema_version: 1
 budgets:
+  # Workload: one fresh interpreter per plan-store recipe, about 60 a day on this host, against
+  # the SDK as generated, with about 700 model classes across its generated modules.
+  # measure_import.py says what each figure in its detail is.
   - id: sdk-import-cpu-seconds
     description: >-
-      An inner measure, because a person waits on the whole host recipe — which
-      ai-orchestrator's own seconds budgets measure — while the SDK's start-up is a library
-      cost every consumer pays and only this repository can hold. Median user+system CPU
-      seconds of a fresh interpreter of the SDK's own environment that imports
-      onetaskgraph_sdk, validates one committed copy report the store binary produced into
-      its CopyReport model and exits normally, teardown included, over 15 runs; detail
-      reports the interpreter-only baseline (python -c pass), import alone, the validation,
-      the teardown share (the same run ending in os._exit(0)) and the spread. Workload: one
-      fresh Python interpreter per plan-store recipe, about 60 a day on this host, against
-      the SDK as generated, with about 700 model classes across its generated modules.
+      Median user+system CPU seconds, over 15 runs, of a fresh interpreter of the SDK's own
+      environment importing onetaskgraph_sdk, validating one copy report the binary produced
+      into CopyReport and exiting normally. It protects the start-up every SDK consumer pays,
+      which only this repository can hold.
     labels: [host]
     measure: reported
     command: ["uv", "run", "--frozen", "python", "measure_import.py"]
