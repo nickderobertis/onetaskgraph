@@ -9,13 +9,21 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PACKAGE = Path(__file__).parents[1]
+WORKSPACE = PACKAGE.parents[1]
 SCRIPT = PACKAGE / "measure_import.py"
+
+pytestmark = pytest.mark.skipif(
+    not hasattr(os, "wait4"), reason="the measurement reads a child's CPU with POSIX os.wait4"
+)
 
 
 def measure(*arguments: str, result: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -114,3 +122,62 @@ def test_fewer_than_two_runs_is_refused() -> None:
     )
     assert ran.returncode == 2
     assert "--runs takes at least 2" in ran.stderr
+
+
+def onebudgetspec(budgets: Path) -> tuple[int, dict[str, object]]:
+    """Check `budgets` through the workspace's onebudgetspec, answering its exit and result."""
+    bun = shutil.which("bun")
+    if bun is None:
+        pytest.fail(f"bun is missing; run `just bootstrap` from {WORKSPACE}")
+    environment = {
+        name: value for name, value in os.environ.items() if not name.startswith("ONEBUDGETSPEC_")
+    }
+    checked = subprocess.run(
+        [bun, "run", "onebudgetspec", "check", str(budgets), "--label", "host", "--json"],
+        cwd=WORKSPACE,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert checked.returncode in {0, 1}, f"onebudgetspec errored:\n{checked.stdout}{checked.stderr}"
+    (result,) = json.loads(checked.stdout)["results"]
+    return checked.returncode, result
+
+
+@pytest.mark.parametrize(
+    ("threshold", "verdict", "status"), [(1000, "within", 0), (0.001, "over", 1)]
+)
+def test_onebudgetspec_reads_the_report_and_compares_it_with_the_threshold(
+    tmp_path: Path, threshold: float, verdict: str, status: int
+) -> None:
+    """The figure the script writes is the actual onebudgetspec compares, with its detail."""
+    budgets = tmp_path / "budgets.yaml"
+    command = json.dumps([sys.executable, str(SCRIPT), "--runs", "2"])
+    budgets.write_text(
+        "schema_version: 1\nbudgets:\n  - id: sdk-import-cpu-seconds\n"
+        "    description: The script under test, at two runs a figure.\n"
+        f"    labels: [host]\n    measure: reported\n    command: {command}\n"
+        f"    unit: seconds\n    direction: max\n    threshold: {threshold}\n",
+        encoding="utf-8",
+    )
+    exit_status, result = onebudgetspec(budgets)
+    assert (exit_status, result["verdict"], result["error"]) == (status, verdict, None)
+    detail = str(result["detail"])
+    figure = re.search(r"import, validate and exit median ([0-9.]+) s", detail)
+    assert figure is not None, detail
+    assert abs(float(str(result["actual"])) - float(figure.group(1))) < 0.001
+
+
+def test_the_registered_budget_runs_its_own_command_through_onebudgetspec() -> None:
+    """The committed budgets.yaml resolves its command and is measured, never errored.
+
+    Whether the figure is within the threshold depends on the host's load, so the verdict is
+    either; what this holds is that the declared path reaches a figure at all.
+    """
+    exit_status, result = onebudgetspec(PACKAGE / "budgets.yaml")
+    assert result["id"] == "sdk-import-cpu-seconds"
+    assert result["error"] is None
+    assert (exit_status, result["verdict"]) in {(0, "within"), (1, "over")}
+    assert "15 runs each of" in str(result["detail"])
