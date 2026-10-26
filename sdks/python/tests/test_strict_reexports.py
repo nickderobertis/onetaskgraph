@@ -39,11 +39,12 @@ They are not a second spelling of the public set: the consumer below is built fr
 so a root renamed out from under a dependent fails here rather than at its next upgrade.
 """
 
-PUBLISHED = sorted(name for name in vars(models) if not name.startswith("_"))
-"""Every root `models.py` binds, read from the module rather than from its `__all__`.
+PUBLISHED = sorted(models._MODULES)
+"""Every root `models.py` resolves, read from the module rather than from its `__all__`.
 
-From the bindings, because `__all__` is what is under test: a consumer built from it could
-not fail when a root fell out of it, since the root would leave the consumer too.
+From its table of roots, because `__all__` is what is under test: a consumer built from it
+could not fail when a root fell out of it, since the root would leave the consumer too. The
+table rather than the module's bindings, because a root is bound there only once used.
 """
 
 CONSUMER = (
@@ -175,10 +176,10 @@ def test_every_published_name_is_the_class_its_generated_module_defines() -> Non
         )
 
 
-def test_dunder_all_names_every_root_models_binds_and_every_name_a_dependent_writes() -> None:
+def test_dunder_all_names_every_root_models_resolves_and_every_name_a_dependent_writes() -> None:
     """A root cannot fall out of the public set, nor out from under a named dependent."""
     assert sorted(models.__all__) == PUBLISHED, (
-        "models.py binds a public name its __all__ omits (or the reverse); "
+        "models.py resolves a root its __all__ omits (or the reverse); "
         "generate.py writes both from the same root list"
     )
     missing = sorted(set(CONTRACT_NAMES) - set(models.__all__))
