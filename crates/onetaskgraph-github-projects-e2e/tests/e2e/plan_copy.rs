@@ -7,10 +7,13 @@
 //! and that the board ends holding exactly the plan. Neither may depend on how many items the
 //! board has accumulated, so every scenario is driven on a board of 2,000 items and again on
 //! one of 20,000, and the two request tallies are held equal. It asserts no time and no point
-//! total against a bound: that is the copy budgets' job. What each scenario on the board of
-//! 2,000 cost is recorded here as their telemetry — `github-plan-copy-seconds-*`,
-//! `github-plan-copy-points-*` and `github-plan-copy-content-creations` — which
-//! `budget_runner::report_plan_copy` hands to onebudgetspec.
+//! total against a bound: that is the copy budgets' job. What each scenario cost is recorded
+//! here as their telemetry — `github-plan-copy-seconds-*`, `github-plan-copy-points-*` and
+//! `github-plan-copy-content-creations` — which `budget_runner::report_plan_copy` hands to
+//! onebudgetspec: the larger of three recordings at both board sizes, with no write policy,
+//! screened, and in the host's own configuration ([`HOST_CACHE`] names what of it is mirrored),
+//! whose copy out of a folder declared private is reported beside the same copy out of one
+//! declaring nothing.
 
 use super::asset_board::{Board, Call, Kind, creations};
 use onetaskgraph_e2e_support::{
@@ -185,7 +188,34 @@ pub(super) struct Plan {
     /// Which client of the clock this plan's commands attach as — its manager, when several
     /// share one loopback host.
     pub client: usize,
+    /// Whether the folder the plan is written in is declared `visibility: private`, as the
+    /// host's `authoring` source is: what the board then holds of each record names no origin.
+    pub private: bool,
+    /// The stack, in KiB, the binary's main thread is started with, when a journey holds it to
+    /// less than the host's own: on a Unix host the binary is started under `ulimit -s` of it.
+    pub main_thread_stack: Option<u32>,
 }
+
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The source of these values is ai-orchestrator's own onetaskgraph.yaml, in another repository this one may not read in a check. Its drift gate is the host's board-copy-approval journeys, run against these store figures by that repository's adopt-copy-targets work, which is the later comparison the task registering these recordings names; each mirrored value is stated below so that comparison has an exact set to hold.
+/// The host's configuration, as ai-orchestrator's `onetaskgraph.yaml` declares the two sources a
+/// plan copy reads and writes — its `authoring` folder and its `plans` board — and its
+/// `write_policy`, every value of it mirrored here:
+///
+/// - `authoring`: `visibility: private`, `plugin: local-md` — the plan's folder, `notes` here,
+///   when [`Plan::host`] is asked for a private source;
+/// - `plans`: `visibility: public`, `plugin: github-projects`, `cache: {enabled: true}` — the
+///   loopback board, its cache directory moved into the sandbox as every journey here moves
+///   it;
+/// - `write_policy`: `visibility_command: [onevcs, boundary, inspect, --input, "-"]` and
+///   `check_command: [onevcs, boundary, check, --destination, public, --input, "-"]`, run
+///   through the recorder [`OnevcsHome::recorded`] puts in front of the released onevcs.
+///
+/// Not mirrored, each because it moves no request of the plan copy these figures measure: the
+/// board's owner, number, repository and `token_env` (the loopback board's own stand in), and
+/// its `status_mapping`, whose `queued`, `done` and `cancelled` are the shipped defaults and
+/// whose `unknown` no record of the plan reads as.
+pub(super) const HOST_CACHE: &str = r#"{"enabled": true}"#;
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 /// One unrelated item of the board's own history: a project every tenth, a design document
 /// every fiftieth, a task filed under the latest project otherwise — each a copy of something
@@ -241,6 +271,23 @@ impl Plan {
             &SimulatedClock::start(1),
             0,
             None,
+            None,
+        )
+    }
+
+    /// The generated plan copied as this host copies one — see [`HOST_CACHE`]: the board's
+    /// cache on, the store screening every public write, and the plan's folder declared private
+    /// when `private` is, as the host's `authoring` source is, or declaring nothing.
+    pub fn host(items: usize, extra: Vec<Value>, private: bool) -> Self {
+        Self::hosted(
+            items,
+            extra,
+            Some(serde_json::from_str(HOST_CACHE).unwrap()),
+            true,
+            &SimulatedClock::start(1),
+            0,
+            None,
+            Some(private),
         )
     }
 
@@ -249,7 +296,7 @@ impl Plan {
     /// GitHub secondary-limit windows they share, with write screening on when `screened` is.
     pub fn managers(managers: usize, items: usize, screened: bool) -> Vec<Self> {
         let clock = SimulatedClock::start(managers);
-        let first = Self::hosted(items, Vec::new(), None, screened, &clock, 0, None);
+        let first = Self::hosted(items, Vec::new(), None, screened, &clock, 0, None, None);
         let mut plans = Vec::with_capacity(managers);
         for client in 1..managers {
             plans.push(Self::hosted(
@@ -260,6 +307,7 @@ impl Plan {
                 &clock,
                 client,
                 Some(&first.board),
+                None,
             ));
         }
         plans.insert(0, first);
@@ -267,8 +315,9 @@ impl Plan {
     }
 
     // Each argument is one independent axis of the plan a journey lays — its board, its cache,
-    // its screening, its clock, its manager and the host it shares — and every caller names all
-    // of them, so a builder would only restate this signature.
+    // its screening, its clock, its manager, the host it shares and, for the host's own
+    // configuration, whether its folder is declared private — and every caller names all of
+    // them, so a builder would only restate this signature.
     #[allow(clippy::too_many_arguments)]
     fn hosted(
         items: usize,
@@ -278,7 +327,9 @@ impl Plan {
         clock: &SimulatedClock,
         client: usize,
         host: Option<&Board>,
+        declared: Option<bool>,
     ) -> Self {
+        let private = declared == Some(true);
         let clock = clock.clone();
         let sandbox = Sandbox::new();
         let mut held: Vec<Value> = (0..items).map(background).collect();
@@ -311,8 +362,15 @@ impl Plan {
             github.use_repository(&format!("{owner}/{name}"));
             (home, record)
         });
+        let mut notes = json!({"plugin":"local-md","config":{"root":root}});
+        if declared.is_some() {
+            board_source["visibility"] = json!("public");
+        }
+        if private {
+            notes["visibility"] = json!("private");
+        }
         let mut configured: Value = serde_json::from_str(&document(&json!({
-            "notes": {"plugin":"local-md","config":{"root":root}},
+            "notes": notes,
             "board": board_source
         })))
         .unwrap();
@@ -329,6 +387,8 @@ impl Plan {
             generated: Generated::new(SEED),
             screening,
             client,
+            private,
+            main_thread_stack: None,
         };
         plan.author();
         plan
@@ -443,7 +503,18 @@ impl Plan {
 
     /// One command through the binary, attached to the clock.
     pub fn run(&self, arguments: &[&str]) -> Output {
-        let mut command = self.sandbox.subprocess(binary());
+        let mut command = match self.main_thread_stack {
+            #[cfg(unix)]
+            Some(kib) => {
+                let mut shell = self.sandbox.subprocess("sh");
+                shell
+                    .arg("-c")
+                    .arg(format!("ulimit -s {kib} && exec \"$0\" \"$@\""))
+                    .arg(binary());
+                shell
+            }
+            _ => self.sandbox.subprocess(binary()),
+        };
         if let Some((home, _)) = &self.screening {
             command.env("ONEVCS_HOME", home.path());
         }
@@ -767,23 +838,45 @@ pub(super) struct Runs<'a> {
     /// with no write policy and with write screening on.
     pub managers: Vec<&'a Scenario>,
     pub managers_screened: Vec<&'a Scenario>,
+    /// The host's configuration ([`Plan::host`]) on the board of [`SMALL`] and of [`LARGE`]:
+    /// the plan's folder declared private, and the same plan's folder declaring nothing.
+    pub host: &'a Scenario,
+    pub host_large: &'a Scenario,
+    pub host_public: &'a Scenario,
+    pub host_public_large: &'a Scenario,
 }
 
 /// Record what scenario `name` cost as the copy budgets' telemetry, for
 /// `budget_runner::report_plan_copy`, on the board their workload states: its seconds — the
-/// simulated seconds of both commands — and, apart, the real seconds their processes ran,
-/// each from the run with no write policy, as the seconds budgets state them; and its points
-/// and, for a first copy, the writes GitHub's secondary limit may count, each the larger of
-/// the run with no write policy and the run with write screening on. Every detail carries
-/// both runs, their screening calls, and the same figures on the board of [`LARGE`].
+/// simulated seconds of both commands — its points and, for a first copy, the writes GitHub's
+/// secondary limit may count, each the larger of the three recordings the budgets name — with
+/// no write policy, with write screening on, and in the host's configuration with its folder
+/// declared private — on the board of [`SMALL`] and of [`LARGE`]; and, apart, the real seconds
+/// the processes of the run with no write policy ran. Every detail carries every run, their
+/// screening calls, and the host's configuration with its folder declaring nothing beside the
+/// private one, so the two read side by side.
 fn record(name: &str, runs: &Runs<'_>) {
     let costs = [
         ("unscreened", cost(runs.small)),
         ("screened", cost(runs.small_screened)),
+        (HOST_PRIVATE, cost(runs.host)),
         ("unscreened, on a board of 20,000 items", cost(runs.large)),
         (
             "screened, on a board of 20,000 items",
             cost(runs.large_screened),
+        ),
+        (
+            "host configuration, private source, on a board of 20,000 items",
+            cost(runs.host_large),
+        ),
+    ];
+    // The same plan in the host's configuration out of a folder declaring nothing: reported
+    // beside the private recording, and not one of the three the budgets hold.
+    let compared = [
+        (HOST_PUBLIC, cost(runs.host_public)),
+        (
+            "host configuration, public source, on a board of 20,000 items",
+            cost(runs.host_public_large),
         ),
     ];
     let at_once: Vec<(String, Cost)> = runs
@@ -811,6 +904,7 @@ fn record(name: &str, runs: &Runs<'_>) {
     let of = |figure: fn(&Cost) -> &Value| -> Value {
         costs
             .iter()
+            .chain(&compared)
             .map(|(label, cost)| ((*label).to_owned(), figure(cost).clone()))
             .chain(
                 at_once
@@ -820,16 +914,19 @@ fn record(name: &str, runs: &Runs<'_>) {
             .collect::<serde_json::Map<String, Value>>()
             .into()
     };
-    let small = &costs[..2];
     let larger =
-        |figure: fn(&Cost) -> u64| small.iter().map(|(_, cost)| figure(cost)).max().unwrap();
+        |figure: fn(&Cost) -> u64| costs.iter().map(|(_, cost)| figure(cost)).max().unwrap();
+    let slowest = costs
+        .iter()
+        .map(|(_, cost)| cost.simulated)
+        .fold(0.0, f64::max);
     let directory = super::budget_runner::directory();
     std::fs::create_dir_all(&directory).unwrap();
     let mut recordings = vec![
         (
             format!("github-plan-copy-seconds-{name}"),
-            costs[0].1.simulated,
-            of(|cost| &cost.seconds),
+            slowest,
+            with_side_by_side(of(|cost| &cost.seconds), &costs, &compared),
         ),
         // The processes' own real time, which the host's load moves: reported beside the
         // simulated figure, never added to it.
@@ -841,14 +938,14 @@ fn record(name: &str, runs: &Runs<'_>) {
         (
             format!("github-plan-copy-points-{name}"),
             larger(|cost| cost.points) as f64,
-            of(|cost| &cost.points_detail),
+            with_side_by_side(of(|cost| &cost.points_detail), &costs, &compared),
         ),
     ];
     if name == SCENARIOS[0] {
         recordings.push((
             "github-plan-copy-content-creations".to_owned(),
             larger(|cost| cost.writes) as f64,
-            of(|cost| &cost.writes_detail),
+            with_side_by_side(of(|cost| &cost.writes_detail), &costs, &compared),
         ));
     }
     for (budget, value, detail) in recordings {
@@ -861,6 +958,36 @@ fn record(name: &str, runs: &Runs<'_>) {
         )
         .unwrap();
     }
+}
+
+/// The host's own case, the third recording each budget takes the larger of.
+const HOST_PRIVATE: &str = "host configuration, private source";
+
+/// The comparison the private case is reported beside, and which no budget's figure counts.
+const HOST_PUBLIC: &str = "host configuration, public source";
+
+/// `detail` with the host configuration's private and public recordings' points, writes and
+/// simulated seconds side by side at each board size, out of the recordings `costs` and
+/// `compared` that carry them.
+fn with_side_by_side(
+    mut detail: Value,
+    costs: &[(&str, Cost)],
+    compared: &[(&str, Cost)],
+) -> Value {
+    let figures = |cost: &Cost| {
+        json!({"points": cost.points, "writes": cost.writes,
+               "simulated seconds": (cost.simulated * 1000.0).round() / 1000.0})
+    };
+    let mut sides = serde_json::Map::new();
+    for (board, private, public) in [(SMALL, 2, 0), (LARGE, 5, 1)] {
+        sides.insert(
+            format!("on a board of {board} items"),
+            json!({"private source": figures(&costs[private].1),
+                   "public source": figures(&compared[public].1)}),
+        );
+    }
+    detail["host configuration, private beside public"] = Value::Object(sides);
+    detail
 }
 
 /// What a command printed, once it exited 0.
@@ -967,11 +1094,20 @@ pub(super) fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(us
     let github = &plan.github;
     let project = &at["P"];
     let item = |id: &str| github.item(id).unwrap_or_else(|| panic!("no item {id}"));
+    // A copy out of a folder declared private records no origin naming it on the board: its
+    // origin field is left empty.
+    let origin = |id: &str| {
+        if plan.private {
+            json!("")
+        } else {
+            json!(format!("notes:{id}"))
+        }
+    };
     let held = item(project);
     assert_eq!(held["title"], "Copy the plan in a fraction of the time");
     assert_eq!(held["state"], "OPEN");
     assert_eq!(held["status"], "Todo");
-    assert_eq!(held["origin"], "notes:P");
+    assert_eq!(held["origin"], origin("P"));
     assert_eq!(held["parent"], Value::Null);
     let (content, slot) = split_slot(held["body"].as_str().unwrap());
     assert_eq!(content.trim_end(), plan.generated.project.trim_end());
@@ -987,7 +1123,7 @@ pub(super) fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(us
         assert_eq!(held["title"], format!("Step {n} of the plan"));
         assert_eq!(held["state"], "OPEN");
         assert_eq!(held["status"], "Todo");
-        assert_eq!(held["origin"], format!("notes:T-{n}"));
+        assert_eq!(held["origin"], origin(&format!("T-{n}")), "T-{n}'s origin");
         assert_eq!(
             held["parent"],
             json!(project),
@@ -1022,7 +1158,7 @@ pub(super) fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(us
         )
     );
     assert_eq!(held["state"], "OPEN");
-    assert_eq!(held["origin"], "notes:D");
+    assert_eq!(held["origin"], origin("D"));
     assert_eq!(held["parent"], json!(project));
     carries_fields(plan, &at["D"], "D");
     let (content, slot) = split_slot(held["body"].as_str().unwrap());
@@ -1116,6 +1252,112 @@ pub(super) fn screened_once_before_writing(what: &str, scenario: &Scenario, titl
             }
         }
     }
+}
+
+/// The three scenarios in the host's configuration ([`Plan::host`]) on a board of `items` other
+/// items, the plan's folder declared private when `private` is: what each sent, by operation,
+/// and each as measured.
+fn host_scenarios(items: usize, private: bool) -> Measured {
+    scenarios_of(&Plan::host(items, Vec::new(), private), true)
+}
+
+/// What the plugin calls the request it sends `document` as.
+pub(super) fn operation_name(document: &str) -> &'static str {
+    graphql::DOCUMENTS
+        .iter()
+        .find(|(sent, _)| *sent == document)
+        .map(|(_, name)| *name)
+        .expect("a document of the plugin")
+}
+
+/// Hold `copy` — one scenario's two commands, the `index`th of the three — to sending what a
+/// copy in the host's configuration owes, for its folder declared private and declaring nothing
+/// alike: the first copy's origins in the project copy's one batched lookup, with no origin
+/// looked up on its own and no creation context read beside a lookup that carried it; a
+/// document copy reading its document and project by its one read, pinning no member of the
+/// project and looking up no project by its origin; no re-copy creating anything; no command
+/// reading the board's fields, which every item it writes says enough of — an item out of a
+/// folder declared private holding no origin, and its write carrying none; and no task's edges
+/// read by a request of their own, or more than once in either command.
+fn sends_what_a_host_copy_owes(what: &str, index: usize, copy: &Scenario) {
+    for phase in &copy.boundary {
+        let sent = tally(&phase.calls);
+        let mut refused: Vec<&str> = vec![
+            operation_name(graphql::ISSUE_DEPENDS_ON),
+            operation_name(graphql::ISSUE_DEPENDENCIES),
+            operation_name(graphql::BOARD_FIELDS),
+        ];
+        if index == 0 {
+            refused.extend([
+                operation_name(graphql::ORIGIN_LOOKUP),
+                operation_name(graphql::CREATION_CONTEXT),
+            ]);
+        } else {
+            refused.extend([
+                operation_name(graphql::CREATE_ISSUE),
+                operation_name(graphql::CREATE_ISSUES),
+            ]);
+        }
+        if phase.kind == "document" {
+            refused.extend([
+                operation_name(graphql::SUB_ISSUES),
+                operation_name(graphql::ORIGIN_LOOKUP),
+            ]);
+        }
+        for operation in refused {
+            assert!(
+                !sent.contains_key(operation),
+                "{what}'s {} copy sent {operation:?}: {sent:?}",
+                phase.kind
+            );
+        }
+        if index == 0 && phase.kind == "project" {
+            let batched = [
+                operation_name(graphql::ORIGIN_LOOKUPS),
+                operation_name(graphql::ORIGIN_LOOKUPS_WITH_MEMBERS),
+            ]
+            .iter()
+            .filter_map(|lookup| sent.get(*lookup))
+            .sum::<usize>();
+            assert_eq!(
+                batched, 1,
+                "{what}'s project copy asked its origins in one batched lookup: {sent:?}"
+            );
+        }
+        edges_read_once(&format!("{what}'s {} copy", phase.kind), &phase.calls, true);
+    }
+}
+
+/// Hold `calls` to reading no task's edges more than once: by a listing of its project that
+/// carries every member's — when `listings_carry` says the board answers them — by a batched
+/// read naming it, or by a dependency read of it.
+pub(super) fn edges_read_once(what: &str, calls: &[Call], listings_carry: bool) {
+    let mut reads: BTreeMap<String, usize> = BTreeMap::new();
+    let mut listings = 0;
+    for call in calls {
+        let Ok(request) = serde_json::from_slice::<Value>(&call.bytes) else {
+            continue;
+        };
+        let (Some(query), variables) = (request["query"].as_str(), &request["variables"]) else {
+            continue;
+        };
+        if query == graphql::SUB_ISSUES && listings_carry {
+            listings += 1;
+        } else if query == graphql::ISSUE_DEPENDS_ON || query == graphql::ISSUE_DEPENDENCIES {
+            *reads.entry(variables["id"].to_string()).or_default() += 1;
+        }
+    }
+    for (document, ids) in item_reads(calls) {
+        if document == graphql::ISSUE_COPY_DETAILS {
+            for id in ids {
+                *reads.entry(json!(id).to_string()).or_default() += 1;
+            }
+        }
+    }
+    assert!(
+        listings <= 1 && reads.values().all(|read| read + listings <= 1),
+        "{what} read a task's edges more than once: {listings} listings, {reads:?}"
+    );
 }
 
 /// The three scenarios on a board of `items` other items, with write screening on when
@@ -1283,6 +1525,10 @@ fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
     let (large_screened, large_screened_runs) = three_scenarios(LARGE, true);
     let managers = managers_at_once(SMALL, false);
     let managers_screened = managers_at_once(SMALL, true);
+    let (host, host_runs) = host_scenarios(SMALL, true);
+    let (host_large, host_large_runs) = host_scenarios(LARGE, true);
+    let (host_public, host_public_runs) = host_scenarios(SMALL, false);
+    let (host_public_large, host_public_large_runs) = host_scenarios(LARGE, false);
     for (index, scenario) in [
         "first copy",
         "re-copy after one task changed",
@@ -1351,6 +1597,60 @@ fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
                  alone does"
             );
         }
+        // The host's configuration sends the same requests on either board, out of a folder
+        // declared private and out of one declaring nothing, and each sends what such a copy
+        // owes. Every task's edges are read at most once by the other recordings too.
+        for (what, small, large) in [
+            ("the private host", &host, &host_large),
+            ("the public host", &host_public, &host_public_large),
+        ] {
+            assert_eq!(
+                bounded(what, &small[index]),
+                bounded(&format!("{what} {LARGE}-item"), &large[index]),
+                "{what}'s {scenario} sent different requests on a board of {SMALL} and of {LARGE}"
+            );
+        }
+        for (what, run) in [
+            ("the private host", &host_runs[index]),
+            ("the private host on 20,000 items", &host_large_runs[index]),
+            ("the public host", &host_public_runs[index]),
+            (
+                "the public host on 20,000 items",
+                &host_public_large_runs[index],
+            ),
+        ] {
+            sends_what_a_host_copy_owes(&format!("{what} {scenario}"), index, run);
+        }
+        for (what, run) in [
+            ("the", &small_runs[index]),
+            ("the screened", &small_screened_runs[index]),
+        ] {
+            for phase in &run.boundary {
+                edges_read_once(
+                    &format!("{what} {scenario}'s {}", phase.kind),
+                    &phase.calls,
+                    true,
+                );
+            }
+        }
+        // Out of a folder declared private, the copy spends no more of GitHub's allowances than
+        // the same copy out of one declaring nothing: a relation between two recordings, which
+        // the budgets' figures do not state, at both board sizes.
+        for (private, public) in [
+            (&host_runs[index], &host_public_runs[index]),
+            (&host_large_runs[index], &host_public_large_runs[index]),
+        ] {
+            let (private, public) = (cost(private), cost(public));
+            assert!(
+                private.points <= public.points && private.writes <= public.writes,
+                "the private host's {scenario} spent {} points and {} writes, the public one's {} \
+                 and {}",
+                private.points,
+                private.writes,
+                public.points,
+                public.writes
+            );
+        }
         record(
             SCENARIOS[index],
             &Runs {
@@ -1363,6 +1663,10 @@ fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
                     .iter()
                     .map(|(_, runs)| &runs[index])
                     .collect(),
+                host: &host_runs[index],
+                host_large: &host_large_runs[index],
+                host_public: &host_public_runs[index],
+                host_public_large: &host_public_large_runs[index],
             },
         );
     }
@@ -1760,11 +2064,12 @@ fn held_content(plan: &Plan, at: &Counterparts) -> BTreeMap<String, Option<Value
 
 #[test]
 fn a_recopy_reads_nothing_its_cache_holds_at_the_token_the_listing_carries() {
-    // (a): every one of the ten destination items is answered without a read naming it — the
+    // (a): every one of the project copy's items is answered without a read naming it — the
     // project and its tasks by the members listing the copy makes anyway, at the state and
-    // token GitHub answered in this command, the project's own edges with them, and the
-    // document by its cache entry at the token its listing carries — so neither the project
-    // copy nor the document copy after it sends one, and the board holds the plan as it did.
+    // token GitHub answered in this command, the project's own edges with them — and the
+    // document copy after it reads its document and project by the one read that carries
+    // them, as it does with no cache, rather than pinning every member of the project and the
+    // project by its origin first. The board holds the plan as it did.
     //
     // The plan is copied twice before the cache is filled: the first copy records each source
     // file's token from before it wrote that file's link, so the second is a real source change
@@ -1792,6 +2097,22 @@ fn a_recopy_reads_nothing_its_cache_holds_at_the_token_the_listing_carries() {
             .intersection(&plan_ids(&at))
             .cloned()
             .collect();
+        if what == "the document copy" {
+            assert_eq!(
+                item_reads(&calls),
+                vec![(
+                    graphql::DOCUMENT_IN_PROJECT.to_owned(),
+                    std::collections::BTreeSet::from([at["D"].clone()])
+                )],
+                "{what} read its document by its one read"
+            );
+            assert_eq!(
+                tally(&calls),
+                BTreeMap::from([(operation_name(graphql::DOCUMENT_IN_PROJECT).to_owned(), 1)]),
+                "{what} pinned nothing"
+            );
+            continue;
+        }
         assert!(
             named.is_empty(),
             "{what} read {named:?}, though each is answered without a read: {:?}",
@@ -2266,4 +2587,429 @@ fn a_documents_first_screened_copy_lists_its_projects_members_whole_when_the_pag
         sent.contains_key("reading a project's tasks"),
         "the members were listed whole: {sent:?}"
     );
+}
+
+/// The number of each create a copy's requests sent, every alias of an aliased one counted.
+fn created(calls: &[Call]) -> u64 {
+    calls
+        .iter()
+        .filter(|call| {
+            let name = operation(call);
+            name == operation_name(graphql::CREATE_ISSUE)
+                || name == operation_name(graphql::CREATE_ISSUES)
+        })
+        .map(|call| creations(&call.path, &call.bytes))
+        .sum()
+}
+
+#[test]
+fn a_private_plans_copy_updates_the_public_item_that_already_carries_a_withheld_origin() {
+    // A person filed T-1 on the board by hand before origins were withheld, so the item there
+    // still records `notes:T-1` as its origin. Copied out of the folder declared private, the
+    // plan's origins go in the project copy's one batched lookup, which finds that item: T-1 is
+    // written over it rather than beside it, on the first copy and on the next.
+    let by_hand = json!({"item":"ITEM-HAND-1","id":"HAND-1","type":"Issue",
+        "title":"Step 1 of the plan",
+        "body":"Filed by hand.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"notes:T-1\"}\n-->",
+        "state":"OPEN","reason":null,"parent":null,"repo":"synthco/public-widgets",
+        "status":"Todo","origin":"notes:T-1","labels":[]});
+    let plan = Plan::host(SMALL, vec![by_hand], true);
+    plan.place_as_measured();
+    for copy in ["the first copy", "the next copy"] {
+        let scenario = plan.copy_timed();
+        let at = counterparts(&scenario.project, &scenario.document);
+        assert_eq!(
+            at["T-1"], "HAND-1",
+            "{copy} found the item carrying T-1's origin"
+        );
+        assert_eq!(
+            plan.github.items_titled("Step 1 of the plan"),
+            vec!["HAND-1".to_owned()],
+            "{copy} left one item of T-1 on the board"
+        );
+        let lookups = tally(&scenario.boundary[0].calls);
+        assert!(
+            !lookups.contains_key(operation_name(graphql::ORIGIN_LOOKUP)),
+            "{copy} looked an origin up on its own: {lookups:?}"
+        );
+        // The project, seven tasks and the document on the first copy; nothing on the next.
+        let expected = if copy == "the first copy" { 9 } else { 0 };
+        assert_eq!(
+            created(&scenario.calls),
+            expected,
+            "{copy} created {:?}",
+            tally(&scenario.calls)
+        );
+        holds_the_plan(&plan, &at, None);
+    }
+}
+
+/// The stack Windows gives a process's main thread, 1 MiB, in the KiB `ulimit -s` takes: the
+/// smallest any platform this binary ships on gives it.
+const WINDOWS_MAIN_THREAD_STACK: u32 = 1024;
+
+#[test]
+fn a_private_plans_copy_runs_on_the_binarys_own_stack_whatever_its_main_thread_is_given() {
+    // The binary runs every command on a thread whose stack it sets itself, so a copy does not
+    // depend on what the platform gives the process's main thread. A copy whose stack runs
+    // deep — T-1's write over the item a person filed reads its far ends, and each read prices
+    // its document by parsing it, beneath the whole copy's futures — is started here with its
+    // main thread held to what Windows gives one, where an unoptimised build that ran its
+    // commands on the main thread overflowed it, and copies the plan, first and again.
+    let by_hand = json!({"item":"ITEM-HAND-1","id":"HAND-1","type":"Issue",
+        "title":"Step 1 of the plan",
+        "body":"Filed by hand.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"notes:T-1\"}\n-->",
+        "state":"OPEN","reason":null,"parent":null,"repo":"synthco/public-widgets",
+        "status":"Todo","origin":"notes:T-1","labels":[]});
+    let mut plan = Plan::host(SMALL, vec![by_hand], true);
+    plan.main_thread_stack = Some(WINDOWS_MAIN_THREAD_STACK);
+    plan.place_as_measured();
+    for copy in ["the first copy", "the next copy"] {
+        let scenario = plan.copy_timed();
+        let at = counterparts(&scenario.project, &scenario.document);
+        assert_eq!(
+            at["T-1"], "HAND-1",
+            "{copy} found the item carrying T-1's origin"
+        );
+        holds_the_plan(&plan, &at, None);
+    }
+}
+
+#[test]
+fn a_private_plans_copy_withholds_a_reference_outside_it_and_refuses_one_it_cannot_screen() {
+    let mut plan = Plan::host(SMALL, Vec::new(), true);
+    let task = |n: usize| plan.root.join(format!("tasks/T-{n}.md"));
+    let held = |n: usize| std::fs::read_to_string(task(n)).unwrap();
+    // T-1 depends on a task of the private folder that the plan does not carry: its id is left
+    // out of what the board is sent, and named on standard error.
+    std::fs::write(
+        plan.root.join("tasks/X.md"),
+        "---\ntitle: Outside the plan\nstatus: todo\n---\nPrivate work.\n",
+    )
+    .unwrap();
+    let original = held(1);
+    std::fs::write(
+        task(1),
+        original.replacen("status: todo\n", "status: todo\ndepends_on: [X]\n", 1),
+    )
+    .unwrap();
+    let (output, _) =
+        plan.measured_output(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+    let report = success(&output);
+    let said = stderr(&output);
+    assert!(
+        said.contains("notes:X"),
+        "the withheld edge is named: {said}"
+    );
+    let at = landed(&report, "notes:T-1");
+    assert!(
+        plan.github.blockers(&at).is_empty(),
+        "T-1 is blocked by nothing on the board"
+    );
+    assert!(
+        !plan
+            .github
+            .item(&at)
+            .unwrap()
+            .to_string()
+            .contains("notes:X"),
+        "nothing on the board names the withheld task"
+    );
+    std::fs::write(task(1), &original).unwrap();
+
+    // A reference nothing configured can classify, and content naming a private repository,
+    // are each refused before the board is sent any write.
+    plan.screening
+        .as_mut()
+        .expect("the host screens its writes")
+        .0
+        .private("synthco", "secret-gadgets");
+    let original = held(2);
+    for (refusal, rewritten) in [
+        (
+            "a reference to an unconfigured source",
+            original.replacen(
+                "status: todo\n",
+                "status: todo\ndepends_on: [{id: \"nowhere:x-1\", item: task}]\n",
+                1,
+            ),
+        ),
+        (
+            "content naming a private repository",
+            format!("{original}This also changes synthco/secret-gadgets.\n"),
+        ),
+    ] {
+        std::fs::write(task(2), rewritten).unwrap();
+        let before = plan.github.item(&landed(&report, "notes:T-2")).unwrap();
+        let (output, calls) =
+            plan.measured_output(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "{refusal} was copied: {}",
+            stdout(&output)
+        );
+        assert!(
+            calls.iter().all(|call| !call.creating),
+            "{refusal} was refused after a write: {:?}",
+            tally(&calls)
+        );
+        assert_eq!(
+            plan.github.item(&landed(&report, "notes:T-2")).unwrap(),
+            before,
+            "{refusal} left T-2 on the board as it was"
+        );
+        std::fs::write(task(2), &original).unwrap();
+    }
+}
+
+#[test]
+fn a_recopy_over_a_members_listing_without_edges_reads_them_in_its_one_batched_read() {
+    // A board answering a project's members without what blocks each — as ai-orchestrator's
+    // GitHub double answers them — with no cache, and with the host's cache, whose entries
+    // then hold no edges either: each re-copy reads every task's edges by its one batched
+    // read, none by a dependency read of its own, and the board holds the plan's ten edges.
+    for (what, plan) in [
+        ("with no cache", Plan::new(SMALL, Vec::new())),
+        ("with the host's cache", Plan::host(SMALL, Vec::new(), true)),
+    ] {
+        plan.github.list_members_without_blocked_by(true);
+        plan.place_as_measured();
+        let first = plan.copy_timed();
+        let at = counterparts(&first.project, &first.document);
+        let edited = format!(
+            "{}An edit made since the last copy.\n",
+            plan.generated.tasks[3]
+        );
+        plan.write_task(4, &edited, true);
+        for copy in ["the re-copy", "the unchanged re-copy"] {
+            let scenario = plan.copy_timed();
+            for phase in &scenario.boundary {
+                let sent = tally(&phase.calls);
+                assert!(
+                    !sent.contains_key(operation_name(graphql::ISSUE_DEPENDS_ON)),
+                    "{copy} {what} read an issue's edges on their own: {sent:?}"
+                );
+                edges_read_once(&format!("{copy} {what}"), &phase.calls, false);
+            }
+            let batched: std::collections::BTreeSet<String> = item_reads(&scenario.calls)
+                .into_iter()
+                .filter(|(document, _)| document == graphql::ISSUE_COPY_DETAILS)
+                .flat_map(|(_, ids)| ids)
+                .collect();
+            for n in 1..=TASKS {
+                assert!(
+                    batched.contains(&at[&format!("T-{n}")]),
+                    "{copy} {what} read T-{n} in its batched read: {batched:?}"
+                );
+            }
+            holds_the_plan(&plan, &at, Some((4, &edited)));
+        }
+    }
+}
+
+#[test]
+fn a_recopy_updating_two_issues_sends_both_in_one_aliased_request_counting_two_writes() {
+    let plan = Plan::new(SMALL, Vec::new());
+    plan.place_as_measured();
+    let first = plan.copy_timed();
+    let at = counterparts(&first.project, &first.document);
+    let fourth = format!(
+        "{}An edit made since the last copy.\n",
+        plan.generated.tasks[3]
+    );
+    let fifth = format!("{}Another edit.\n", plan.generated.tasks[4]);
+    plan.write_task(4, &fourth, true);
+    plan.write_task(5, &fifth, true);
+    let changed = plan.copy_timed();
+    let sent = tally(&changed.calls);
+    assert_eq!(
+        sent.get(operation_name(graphql::UPDATE_ISSUES)),
+        Some(&1),
+        "both updates went in one request: {sent:?}"
+    );
+    assert!(
+        !sent.contains_key(operation_name(graphql::UPDATE_ISSUE)),
+        "no update went on its own: {sent:?}"
+    );
+    for (n, content) in [(4, &fourth), (5, &fifth)] {
+        let held = plan.github.body(&at[&format!("T-{n}")]);
+        let (body, _) = split_slot(held.as_str().unwrap());
+        assert_eq!(
+            body.trim_end(),
+            content.trim_end(),
+            "T-{n} carries its edit"
+        );
+    }
+    let writes = cost(&changed).writes_detail;
+    assert_eq!(
+        writes["writes by mutation"][operation_name(graphql::UPDATE_ISSUES)],
+        2,
+        "each update in the aliased request counts one write: {writes}"
+    );
+    assert_eq!(writes["writes"], 2, "{writes}");
+}
+
+/// Write the plan's document as the host renders its design document: from a template, through
+/// `document create`, its answers kept beside it in the folder, naming the first task by the
+/// location its folder reports — in its table and in a reference-style link the text uses twice
+/// — and every other task by its title alone.
+fn render_host_design_document(plan: &Plan) {
+    std::fs::remove_file(plan.root.join("documents/D.md")).unwrap();
+    std::fs::remove_dir_all(plan.root.join("documents/D.assets")).unwrap();
+    let template = plan
+        .sandbox
+        .subdirectory("templates")
+        .join("design-doc.md.j2");
+    std::fs::write(
+        &template,
+        "---\nonetaskgraph_template: 1\nvariables:\n  what:\n    description: What it delivers\n    type: text\n  tasks:\n    description: The planned tasks\n    type: text\n---\n## What\n\n{{ what }}\n\nThe first step is [where it starts][1], and [the rest follow it][1].\n\n## Planned tasks\n\n![Where the copy spends its time](./diagram.png)\n\n{{ tasks }}\n",
+    )
+    .unwrap();
+    let mut tasks = String::from("| Task | Where it lives |\n| --- | --- |\n");
+    tasks.push_str(&format!("| Step 1 of the plan | {} |\n", plan.task_path(1)));
+    for n in 2..=TASKS {
+        tasks.push_str(&format!(
+            "| Step {n} of the plan | Step {n} of the plan |\n"
+        ));
+    }
+    tasks.push_str(&format!("\n[1]: {}\n", plan.task_path(1)));
+    let answers = plan.sandbox.subdirectory("answers").join("design-doc.json");
+    std::fs::write(
+        &answers,
+        json!({"what": plan.generated.document, "tasks": tasks}).to_string(),
+    )
+    .unwrap();
+    let png = plan.sandbox.subdirectory("assets").join("diagram.png");
+    std::fs::write(&png, &plan.generated.png).unwrap();
+    let area = format!(
+        "--metadata=plan.area={}",
+        json!(plan.generated.fields["D"][0])
+    );
+    let output = plan.run(&[
+        "document",
+        "create",
+        "notes",
+        "--project",
+        "P",
+        "--title",
+        "Design of the plan copy",
+        "--template",
+        template.to_str().unwrap(),
+        "--answers",
+        answers.to_str().unwrap(),
+        "--no-interactive",
+        "--asset",
+        png.to_str().unwrap(),
+        &area,
+    ]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let created = stdout(&output).trim().to_owned();
+    let native = created
+        .strip_prefix("notes:")
+        .unwrap_or(&created)
+        .to_owned();
+    let documents = plan.root.join("documents");
+    std::fs::rename(
+        documents.join(format!("{native}.md")),
+        documents.join("D.md"),
+    )
+    .unwrap();
+    std::fs::rename(
+        documents.join(format!("{native}.assets")),
+        documents.join("D.assets"),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_private_design_documents_copy_reads_no_more_of_the_board_than_a_public_ones() {
+    // The host's design document, rendered and copied in the host's configuration over a
+    // members listing that carries no edges, out of the folder declared private and out of one
+    // declaring nothing: no copy of it, first or again, reads an issue on its own or the
+    // board's fields more than the public one does.
+    let documents = |private: bool| {
+        let plan = Plan::host(SMALL, Vec::new(), private);
+        plan.github.list_members_without_blocked_by(true);
+        render_host_design_document(&plan);
+        plan.place_as_measured();
+        let mut phases = Vec::new();
+        for _ in SCENARIOS {
+            let scenario = plan.copy_timed();
+            phases.push(tally(&scenario.boundary[1].calls));
+        }
+        phases
+    };
+    let private = documents(true);
+    let public = documents(false);
+    for ((scenario, private), public) in SCENARIOS.iter().zip(&private).zip(&public) {
+        for read in [
+            operation_name(graphql::ISSUE),
+            operation_name(graphql::BOARD_FIELDS),
+        ] {
+            assert!(
+                private.get(read).unwrap_or(&0) <= public.get(read).unwrap_or(&0),
+                "the private {scenario} document copy sent {read:?} beyond the public one's: \
+                 {private:?} against {public:?}"
+            );
+            assert!(
+                !private.contains_key(read),
+                "the private {scenario} document copy sent {read:?}: {private:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_recopy_whose_aliased_update_fails_part_way_leaves_both_issues_as_they_were() {
+    // Two tasks change, so the re-copy sends both updates in one aliased request; GitHub runs
+    // the first and refuses the second, or answers the second naming another issue. Either way
+    // the copy is refused, and the update that did land is written back: both issues read as
+    // they did before the copy.
+    use onetaskgraph_e2e_support::fixtures::AliasAnswer;
+    for (what, refused) in [("refused", true), ("answered naming another issue", false)] {
+        let plan = Plan::new(SMALL, Vec::new());
+        let first = plan.copy_timed();
+        let at = counterparts(&first.project, &first.document);
+        let held = |n: usize| plan.github.body(&at[&format!("T-{n}")]);
+        let before = (held(4), held(5));
+        plan.write_task(4, &format!("{}An edit.\n", plan.generated.tasks[3]), true);
+        plan.write_task(
+            5,
+            &format!("{}Another edit.\n", plan.generated.tasks[4]),
+            true,
+        );
+        if refused {
+            plan.github.fail_field_alias("update1");
+        } else {
+            plan.github
+                .bend_batch_alias("update1", AliasAnswer::NamingAnother);
+        }
+        let (output, calls) =
+            plan.measured_output(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+        assert_ne!(output.status.code(), Some(0), "{what}: {}", stdout(&output));
+        let updates: Vec<String> = calls
+            .iter()
+            .map(operation)
+            .filter(|sent| {
+                sent == operation_name(graphql::UPDATE_ISSUES)
+                    || sent == operation_name(graphql::UPDATE_ISSUE)
+            })
+            .collect();
+        assert_eq!(
+            updates.first().map(String::as_str),
+            Some(operation_name(graphql::UPDATE_ISSUES)),
+            "{what}: the two updates went together: {:?}",
+            tally(&calls)
+        );
+        assert!(
+            updates.len() > 1,
+            "{what}: what landed was written back after the refusal: {updates:?}"
+        );
+        assert_eq!(
+            (held(4), held(5)),
+            before,
+            "{what}: both issues are as they were before the copy"
+        );
+    }
 }

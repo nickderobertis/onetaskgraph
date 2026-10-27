@@ -134,6 +134,7 @@ fn batched(query: &str) -> bool {
         graphql::CREATE_ISSUES,
         graphql::WRITE_FIELD_VALUES,
         graphql::CLOSE_ISSUES,
+        graphql::UPDATE_ISSUES,
         graphql::ADD_BLOCKED_BYS,
     ]
     .contains(&query)

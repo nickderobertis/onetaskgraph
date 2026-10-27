@@ -66,10 +66,54 @@ const EXIT_USAGE: u8 = 2;
 /// command was asked to do happened, and part of what follows from it did not.
 const EXIT_PARTIAL: u8 = 4;
 
+/// The stack the thread every command runs on is given: 8 MiB, what a Linux host gives a
+/// process's main thread. Windows gives a main thread 1 MiB, and an unoptimised build's copy
+/// nests the whole engine's futures beneath a GraphQL document being parsed, which overflowed
+/// it — so the commands run on a thread of their own, with the same stack on every platform.
+const COMMAND_STACK: usize = 8 << 20;
+
 /// One thread is enough: the concurrency the engine needs is several sources waiting on
-/// I/O at once, which one thread interleaves, not several sources computing at once.
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> ExitCode {
+/// I/O at once, which one thread interleaves, not several sources computing at once. It is
+/// not the process's main thread, so that its stack is [`COMMAND_STACK`] wherever it runs.
+fn main() -> ExitCode {
+    let started = std::thread::Builder::new()
+        .name("onetaskgraph".into())
+        .stack_size(COMMAND_STACK)
+        .spawn(|| {
+            match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime.block_on(command()),
+                Err(error) => fail(
+                    &format!(
+                        "could not start the runtime every command runs on: {error}; \
+                         check the process may create the timers and sockets it needs"
+                    ),
+                    EXIT_FAILURE,
+                ),
+            }
+        });
+    let commands = match started {
+        Ok(commands) => commands,
+        Err(error) => {
+            return fail(
+                &format!(
+                    "could not start the thread every command runs on: {error}; \
+                     free some memory or raise the process's thread limit and run it again"
+                ),
+                EXIT_FAILURE,
+            );
+        }
+    };
+    // A panic has already been reported by the hook on the thread that panicked; it carries
+    // on here, so the process exits as a panicking one does.
+    commands
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+async fn command() -> ExitCode {
     let cli = Cli::parse();
     if let Command::PluginServe { source } = &cli.command {
         let input = io::BufReader::new(io::stdin().lock());

@@ -624,6 +624,9 @@ struct State {
     /// of what it did — a response the source must refuse to read as landed.
     answers_alias_with: Option<(&'static str, Value)>,
     blocked_by: BTreeMap<String, Vec<String>>,
+    /// How many of what blocks each issue a copy's batched read answers with, saying whether
+    /// more follow, as GitHub pages a nested connection — or `None` to answer without it.
+    copy_details_blocked_by: Option<usize>,
     /// Single-select fields a person created on the board beside its own, each as the board's
     /// field list answers it, options and all.
     scratch_fields: Vec<Value>,
@@ -1361,6 +1364,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         extra_fields: Vec::new(),
         answers_alias_with: None,
         blocked_by: BTreeMap::new(),
+        copy_details_blocked_by: None,
         scratch_fields: Vec::new(),
         refuses: BTreeSet::new(),
         refuse_after: BTreeMap::new(),
@@ -1857,7 +1861,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             "updateProjectV2ItemFieldValue",
         );
         let block: Kind = ("block", "send", documents::ADD_BLOCKED_BY, "addBlockedBy");
-        let batches: [(&str, Vec<Kind>, usize); 6] = [
+        let batches: [(&str, Vec<Kind>, usize); 7] = [
             (
                 documents::CREATE_ISSUES,
                 vec![("create", "send", documents::CREATE_ISSUE, "createIssue")],
@@ -1867,6 +1871,11 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             (
                 documents::CLOSE_ISSUES,
                 vec![("close", "send", documents::UPDATE_ISSUE, "updateIssue")],
+                MUTATION_BATCH,
+            ),
+            (
+                documents::UPDATE_ISSUES,
+                vec![("update", "send", documents::UPDATE_ISSUE, "updateIssue")],
                 MUTATION_BATCH,
             ),
             (documents::ADD_BLOCKED_BYS, vec![block], WRITE_BATCH),
@@ -2158,7 +2167,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 .as_str()
                 .expect("every slot of a batch names an id")
                 .to_owned();
-            let node = detail_node(
+            let mut node = detail_node(
                 &mut state,
                 &id,
                 &Value::Null,
@@ -2166,6 +2175,15 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 true,
                 asked,
             );
+            if let Some(page) = state.copy_details_blocked_by
+                && node["__typename"] == "Issue"
+            {
+                let all = state.blocked_by.get(&id).cloned().unwrap_or_default();
+                let more = all.len() > page;
+                node["blockedBy"] = json!({
+                    "nodes": related_issues(&state, all.into_iter().take(page).collect()),
+                    "pageInfo": {"hasNextPage": more, "endCursor": more.then_some("c1")}});
+            }
             answered.insert(format!("i{slot}"), node);
         }
         return Value::Object(answered);
@@ -22536,5 +22554,195 @@ async fn an_issue_marked_a_project_but_filed_under_the_project_is_a_member_it_cl
             .count(),
         2,
         "{classes:?}"
+    );
+}
+
+/// A copy's batched read that carries an issue's `blockedBy` to its end answers the dependency
+/// read of it with no request; one whose answer says the connection goes on past its first page
+/// leaves that read to GitHub, which reads it whole — so the edges are the issue's every time.
+#[tokio::test]
+async fn a_copy_reads_what_blocks_an_issue_again_only_when_its_batched_read_had_more_to_page() {
+    for (carried, read_again) in [(5, false), (1, true)] {
+        let fixture = board(vec![
+            Item::issue("I_1", "one").status("Todo"),
+            Item::issue("I_a", "a").status("Todo"),
+            Item::issue("I_b", "b").status("Todo"),
+        ]);
+        {
+            let mut state = fixture.state.lock().unwrap();
+            state
+                .blocked_by
+                .insert("I_1".to_owned(), vec!["I_a".to_owned(), "I_b".to_owned()]);
+            state.copy_details_blocked_by = Some(carried);
+        }
+        let source = configured(&fixture.endpoint, json!({}));
+        source
+            .read_ahead_for_copy(&[native("I_1"), native("I_a")])
+            .await
+            .expect("the board answers the batch");
+        let before = fixture.documents().len();
+        let edges = source
+            .task_dependencies(&native("I_1"), Direction::DependsOn, &page(10))
+            .await
+            .expect("what blocks I_1");
+        let far: BTreeSet<String> = edges
+            .items
+            .iter()
+            .map(|edge| edge.to.id().to_owned())
+            .collect();
+        assert_eq!(
+            far,
+            BTreeSet::from(["I_a".to_owned(), "I_b".to_owned()]),
+            "a page of {carried}: every edge, carried or read"
+        );
+        let sent = fixture.documents()[before..].to_vec();
+        let dependency_reads = sent
+            .iter()
+            .filter(|document| *document == onetaskgraph_github_projects::graphql::ISSUE_DEPENDS_ON)
+            .count();
+        assert_eq!(
+            dependency_reads,
+            usize::from(read_again),
+            "a page of {carried}: the dependency read was sent {dependency_reads} times"
+        );
+    }
+}
+
+/// The board ids `1..=count`, as `I_<n>`, each an issue at `Todo` titled "before", with every
+/// one's blockers carried whole by a copy's batched read, read ahead before writes are held.
+async fn read_ahead_issues(count: usize) -> (Fixture, Box<dyn TaskSource>, Vec<NativeId>) {
+    let ids: Vec<NativeId> = (1..=count).map(|n| native(&format!("I_{n}"))).collect();
+    let fixture = board(
+        ids.iter()
+            .map(|id| Item::issue(&id.0, "before").status("Todo"))
+            .collect(),
+    );
+    fixture.state.lock().unwrap().copy_details_blocked_by = Some(5);
+    let source = source(&fixture);
+    source
+        .read_ahead_for_copy(&ids)
+        .await
+        .expect("the board answers the batch");
+    source.begin_deferred_writes();
+    (fixture, source, ids)
+}
+
+/// A `target` makes this an update of an issue the board already holds, which a source holds
+/// back until `finish_writes`; a title alone keeps every other kind of write out of it.
+fn retitled(id: &NativeId, title: &str) -> ItemWrite<Task> {
+    ItemWrite {
+        target: Some(id.clone()),
+        item: task(&id.0, title, status(StatusCategory::Todo, "Todo")),
+        depends_on: vec![],
+    }
+}
+
+/// Named rather than compared as text, so a failure says which update document carried each
+/// write instead of printing two whole GraphQL documents.
+fn updates_among(documents: &[String]) -> Vec<&'static str> {
+    use onetaskgraph_github_projects::graphql;
+    documents
+        .iter()
+        .filter_map(|document| {
+            [
+                ("UPDATE_ISSUE", graphql::UPDATE_ISSUE),
+                ("UPDATE_ISSUES", graphql::UPDATE_ISSUES),
+            ]
+            .into_iter()
+            .find(|(_, sent)| sent == document)
+            .map(|(name, _)| name)
+        })
+        .collect()
+}
+
+/// While a copy holds its writes back, its updates of existing issues are held too and go
+/// together, `MUTATION_BATCH` to a request — one update more goes in a second — and every one
+/// lands, each counted one write of its own.
+#[tokio::test]
+async fn a_copys_updates_of_existing_issues_go_together_a_batch_to_a_request() {
+    let count = onetaskgraph_github_projects::MUTATION_BATCH + 1;
+    let (fixture, source, ids) = read_ahead_issues(count).await;
+    let before = fixture.documents().len();
+    for id in &ids {
+        source
+            .write_task(&retitled(id, "after"))
+            .await
+            .expect("a held update");
+    }
+    assert_eq!(
+        fixture.documents()[before..].to_vec(),
+        Vec::<String>::new(),
+        "nothing is sent while the updates are held"
+    );
+    source.finish_writes().await.expect("the held updates land");
+    assert_eq!(
+        updates_among(&fixture.documents()[before..]),
+        ["UPDATE_ISSUES", "UPDATE_ISSUES"],
+        "{count} updates in two requests"
+    );
+    for id in &ids {
+        assert_eq!(fixture.item(&id.0).title, "after", "{} was updated", id.0);
+    }
+    let writes: usize = fixture
+        .state
+        .lock()
+        .unwrap()
+        .bindings
+        .iter()
+        .filter(|(operation, _)| operation == "updateIssue")
+        .count();
+    assert_eq!(writes, count, "each update one write of its own");
+}
+
+/// A held update goes out before the next request of any kind, so nothing this source reads
+/// after it sees the issue without it — and a second update of an issue already held lands
+/// after the first, the issue ending as the second left it.
+#[tokio::test]
+async fn a_held_update_goes_out_before_the_next_request_and_a_second_lands_after_it() {
+    let (fixture, source, ids) = read_ahead_issues(3).await;
+    source
+        .write_task(&retitled(&ids[0], "first"))
+        .await
+        .unwrap();
+    source
+        .write_task(&retitled(&ids[1], "first"))
+        .await
+        .unwrap();
+    let before = fixture.documents().len();
+    // Nothing read ahead answers it, so it is a request of its own.
+    let read = source.get_task(&native("I_9")).await.unwrap();
+    assert!(read.is_none(), "the board holds no I_9");
+    let sent = fixture.documents()[before..].to_vec();
+    assert_eq!(
+        updates_among(&sent),
+        ["UPDATE_ISSUES"],
+        "the updates went first"
+    );
+    assert_eq!(
+        sent.first().map(String::as_str),
+        Some(onetaskgraph_github_projects::graphql::UPDATE_ISSUES),
+        "before the read"
+    );
+    assert_eq!(fixture.item("I_1").title, "first");
+
+    let before = fixture.documents().len();
+    source
+        .write_task(&retitled(&ids[0], "second"))
+        .await
+        .unwrap();
+    source
+        .write_task(&retitled(&ids[0], "third"))
+        .await
+        .unwrap();
+    source.finish_writes().await.unwrap();
+    assert_eq!(
+        updates_among(&fixture.documents()[before..]),
+        ["UPDATE_ISSUE", "UPDATE_ISSUE"],
+        "each update of the one issue went on its own, in the order it was made"
+    );
+    assert_eq!(
+        fixture.item("I_1").title,
+        "third",
+        "the later update landed last"
     );
 }

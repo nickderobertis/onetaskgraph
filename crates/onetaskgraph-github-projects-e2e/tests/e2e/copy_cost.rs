@@ -215,6 +215,7 @@ fn per_node(document: &str) -> bool {
         graphql::ISSUE_BOARD_ITEMS,
         graphql::ISSUE_DEPENDENCIES,
         graphql::UPDATE_ISSUE,
+        graphql::UPDATE_ISSUES,
         graphql::UPDATE_DRAFT,
         graphql::UPDATE_FIELD,
         graphql::UPDATE_FIELDS,

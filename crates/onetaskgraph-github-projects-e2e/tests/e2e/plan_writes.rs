@@ -13,18 +13,42 @@
 use super::asset_board::{Call, Kind};
 use super::plan_copy::{Counterparts, Plan, SMALL, TASKS, counterparts, operation};
 use onetaskgraph_e2e_support::fixtures::AliasAnswer;
+use onetaskgraph_github_projects::graphql;
 use serde_json::{Value, json};
 
-/// Every mutation among `calls`: the plugin's name for it and its variables.
+/// Every mutation among `calls`: the plugin's name for it and its variables — each issue an
+/// aliased update of several sent apart, under that request's name, its own alias's input
+/// as the `input` an update of one carries.
 fn mutations(calls: &[Call]) -> Vec<(String, Value)> {
     calls
         .iter()
         .filter(|call| matches!(call.kind, Kind::Mutation | Kind::AliasedMutations))
-        .map(|call| {
+        .flat_map(|call| {
             let request: Value = serde_json::from_slice(&call.bytes).unwrap();
-            (operation(call), request["variables"].clone())
+            let variables = request["variables"].clone();
+            if request["query"] != graphql::UPDATE_ISSUES {
+                return vec![(operation(call), variables)];
+            }
+            (0..onetaskgraph_github_projects::MUTATION_BATCH)
+                .filter(|slot| variables[format!("send{slot}")] == true)
+                .map(|slot| {
+                    (
+                        operation(call),
+                        json!({"input": variables[format!("update{slot}")]}),
+                    )
+                })
+                .collect()
         })
         .collect()
+}
+
+/// Both spellings count, because a copy holding its updates sends one alone through
+/// `UPDATE_ISSUE` and two or more through `UPDATE_ISSUES`; which a write took is the aliased
+/// batch's concern, not these assertions'.
+fn updates(name: &str) -> bool {
+    [graphql::UPDATE_ISSUE, graphql::UPDATE_ISSUES]
+        .iter()
+        .any(|document| super::plan_copy::operation_name(document) == name)
 }
 
 /// The mutations among `calls` naming the item `content` (its issue) or `card` (its board
@@ -127,7 +151,8 @@ fn a_recopy_writes_each_changed_member_alone_and_an_unchanged_item_not_at_all() 
     assert_eq!(everything(&plan, &at), before);
 
     // Four tasks change one member each — T-1 its body, T-2 its title, T-3 its state, from
-    // open to closed, and T-5 its priority — and each is written as that member alone.
+    // open to closed, and T-5 its priority — and each is written as that member alone, the
+    // issue updates the copy makes one after another sent together.
     plan.edit_task(1, "\n---\n", "\n---\nA new opening line.\n");
     plan.edit_task(
         2,
@@ -143,12 +168,12 @@ fn a_recopy_writes_each_changed_member_alone_and_an_unchanged_item_not_at_all() 
     let of = |n: usize| naming(&written, &task(n), &card(&task(n)));
     let body = of(1);
     assert_eq!(body.len(), 1, "{body:#?}");
-    assert_eq!(body[0].0, "updating an issue");
+    assert!(updates(&body[0].0), "{body:#?}");
     assert_eq!(members(&body[0].1), ["body"]);
 
     let title = of(2);
     assert_eq!(title.len(), 1, "{title:#?}");
-    assert_eq!(title[0].0, "updating an issue");
+    assert!(updates(&title[0].0), "{title:#?}");
     assert_eq!(members(&title[0].1), ["title"]);
     assert_eq!(title[0].1["input"]["title"], "The second step, renamed");
 
@@ -161,7 +186,7 @@ fn a_recopy_writes_each_changed_member_alone_and_an_unchanged_item_not_at_all() 
         state[0].1["input"]["value"],
         json!({"singleSelectOptionId": "OPT-done"})
     );
-    assert_eq!(state[1].0, "updating an issue");
+    assert!(updates(&state[1].0), "{state:#?}");
     assert_eq!(members(&state[1].1), ["stateInput"]);
 
     let priority = of(5);
@@ -662,11 +687,12 @@ fn refused_after_landing(plan: &Plan, alias: &'static str) {
 }
 
 #[test]
-fn with_its_cache_on_an_unchanged_recopy_writes_nothing_and_its_document_copy_reads_no_plan_item() {
+fn with_its_cache_on_an_unchanged_recopy_writes_nothing_and_its_document_copy_reads_its_document_alone()
+ {
     // A plan copy whose source has not changed since the last one: the project copy finds
-    // every item as the source says it should be and writes nothing, so every token its reads
-    // left in the cache stays the board's token, and the document copy that follows it is
-    // answered by those entries — it reads no item of the plan by id.
+    // every item as the source says it should be and writes nothing, and the document copy
+    // that follows it reads its document and project by the one read that carries them, as it
+    // does with no cache — no member of the project and no project by its origin is read.
     let plan = Plan::configured(SMALL, Vec::new(), Some(json!({"enabled": true})));
     let (project, document, _) = plan.copy();
     let at = counterparts(&project, &document);
@@ -687,16 +713,21 @@ fn with_its_cache_on_an_unchanged_recopy_writes_nothing_and_its_document_copy_re
         Vec::new(),
         "the document copy writes nothing"
     );
-    let plan_ids = super::plan_copy::plan_ids(&at);
-    let read: Vec<(String, std::collections::BTreeSet<String>)> =
-        super::plan_copy::item_reads(&document_calls)
-            .into_iter()
-            .filter(|(_, ids)| ids.iter().any(|id| plan_ids.contains(id)))
-            .collect();
     assert_eq!(
-        read,
-        Vec::new(),
-        "the document copy read an item of the plan by id"
+        super::plan_copy::item_reads(&document_calls),
+        vec![(
+            graphql::DOCUMENT_IN_PROJECT.to_owned(),
+            std::collections::BTreeSet::from([at["D"].clone()])
+        )],
+        "the document copy read its document alone"
+    );
+    assert_eq!(
+        super::plan_copy::tally(&document_calls),
+        std::collections::BTreeMap::from([(
+            super::plan_copy::operation_name(graphql::DOCUMENT_IN_PROJECT).to_owned(),
+            1
+        )]),
+        "the document copy sent nothing else"
     );
 }
 
