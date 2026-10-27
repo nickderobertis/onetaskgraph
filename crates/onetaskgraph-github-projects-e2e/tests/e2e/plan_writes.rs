@@ -42,8 +42,9 @@ fn mutations(calls: &[Call]) -> Vec<(String, Value)> {
         .collect()
 }
 
-/// Whether the mutation the plugin calls `name` updates issues: one alone, or several in one
-/// aliased request.
+/// Both spellings count, because a copy holding its updates sends one alone through
+/// `UPDATE_ISSUE` and two or more through `UPDATE_ISSUES`; which a write took is the aliased
+/// batch's concern, not these assertions'.
 fn updates(name: &str) -> bool {
     [graphql::UPDATE_ISSUE, graphql::UPDATE_ISSUES]
         .iter()

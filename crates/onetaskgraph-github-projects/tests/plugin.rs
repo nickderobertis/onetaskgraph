@@ -22627,7 +22627,8 @@ async fn read_ahead_issues(count: usize) -> (Fixture, Box<dyn TaskSource>, Vec<N
     (fixture, source, ids)
 }
 
-/// `id` retitled `title`, as a copy writes over the issue it found.
+/// A `target` makes this an update of an issue the board already holds, which a source holds
+/// back until `finish_writes`; a title alone keeps every other kind of write out of it.
 fn retitled(id: &NativeId, title: &str) -> ItemWrite<Task> {
     ItemWrite {
         target: Some(id.clone()),
@@ -22636,7 +22637,8 @@ fn retitled(id: &NativeId, title: &str) -> ItemWrite<Task> {
     }
 }
 
-/// The documents among `documents` that update issues, by the constant each is.
+/// Named rather than compared as text, so a failure says which update document carried each
+/// write instead of printing two whole GraphQL documents.
 fn updates_among(documents: &[String]) -> Vec<&'static str> {
     use onetaskgraph_github_projects::graphql;
     documents
