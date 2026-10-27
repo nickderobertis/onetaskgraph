@@ -64,6 +64,10 @@ def cpu_seconds(program: str, environment: dict[str, str]) -> float:
     )
     assert process.stderr is not None
     error = process.stderr.read()
+    # Spelled as a platform check rather than `hasattr`, so a type checker reading this file
+    # for Windows narrows `os.wait4` away instead of reporting it missing there.
+    if sys.platform == "win32":
+        raise SystemExit("measure_import.py: this measures with os.wait4, which needs POSIX")
     _, status, usage = os.wait4(process.pid, 0)
     process.returncode = os.waitstatus_to_exitcode(status)
     if process.returncode != 0:
@@ -90,7 +94,7 @@ def main() -> None:
     arguments = parser.parse_args()
     if arguments.runs < 2:
         parser.error("--runs takes at least 2, the fewest an interquartile range is read from")
-    if not hasattr(os, "wait4"):
+    if sys.platform == "win32":
         raise SystemExit("measure_import.py: this measures with os.wait4, which needs POSIX")
 
     environment = {
