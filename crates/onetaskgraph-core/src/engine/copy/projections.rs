@@ -1627,6 +1627,13 @@ impl Engine {
             .map_err(|error| refused(at, error))?;
         self.at_write(at, &home.to_string(), &WriteTarget::Existing(&home.native))
             .await?;
+        // A follow-up of this home is sent after this write, and carries the map too.
+        journal.carry_into_follow_up(
+            &home.source,
+            &home.native,
+            described(&prior.item).1,
+            &project.metadata,
+        );
         let edges = prior.edges.clone();
         journal.record(Undo::Updated {
             at: home.source.clone(),

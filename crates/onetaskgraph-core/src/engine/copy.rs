@@ -1218,6 +1218,40 @@ impl Journal {
         }
         self.entries.push(entry);
     }
+
+    /// Carry what a later write of the destination item `id` in `at` changed of its metadata —
+    /// from `before`, the item as that write read it, to `after`, as it sent it — into the
+    /// follow-up still owed that item, if one is.
+    ///
+    /// A follow-up is composed from the write that landed the item, so without this it would
+    /// send that write's metadata again and take back every key a write since recorded: the
+    /// home's `onetaskgraph.members`, a task's dependents, a private home's
+    /// `onetaskgraph.public_projections`. Only the keys that write changed are carried, so
+    /// everything the follow-up itself restamps over the stored content stays as it composed it.
+    fn carry_into_follow_up(
+        &mut self,
+        at: &SourceName,
+        id: &NativeId,
+        before: &BTreeMap<String, Value>,
+        after: &BTreeMap<String, Value>,
+    ) {
+        let Some(follow) = self
+            .follow_ups
+            .iter_mut()
+            .find(|follow| &follow.at == at && &follow.id == id)
+        else {
+            return;
+        };
+        let metadata = metadata_of(&mut follow.item);
+        for (key, value) in after {
+            if before.get(key) != Some(value) {
+                metadata.insert(key.clone(), value.clone());
+            }
+        }
+        for key in before.keys().filter(|key| !after.contains_key(*key)) {
+            metadata.remove(key);
+        }
+    }
 }
 
 /// What one copy invocation carries from the item it lands to the next.
@@ -7334,13 +7368,12 @@ impl Engine {
             }
             dependents::record(&mut task.metadata, &dependents);
             // A follow-up of this task is sent after this write, and carries what it records.
-            if let Some(follow) = journal
-                .follow_ups
-                .iter_mut()
-                .find(|follow| follow.at == recording.at.source && follow.id == recording.at.native)
-            {
-                dependents::record(metadata_of(&mut follow.item), &dependents);
-            }
+            journal.carry_into_follow_up(
+                &recording.at.source,
+                &recording.at.native,
+                described(&prior.item).1,
+                &task.metadata,
+            );
             at.source()
                 .check_status_write(
                     ItemKind::Task,
@@ -7407,21 +7440,12 @@ impl Engine {
                 );
             }
             // A follow-up of this home is sent after this write, and carries the same list.
-            if let Some(follow) = journal
-                .follow_ups
-                .iter_mut()
-                .find(|follow| follow.at == home.id.source && follow.id == home.id.native)
-            {
-                let metadata = metadata_of(&mut follow.item);
-                match project.metadata.get(MetadataKey::MEMBERS_KEY) {
-                    Some(members) => {
-                        metadata.insert(MetadataKey::MEMBERS_KEY.to_owned(), members.clone());
-                    }
-                    None => {
-                        metadata.remove(MetadataKey::MEMBERS_KEY);
-                    }
-                }
-            }
+            journal.carry_into_follow_up(
+                &home.id.source,
+                &home.id.native,
+                described(&prior.item).1,
+                &project.metadata,
+            );
             let edges = prior.edges.clone();
             at.source()
                 .check_status_write(
