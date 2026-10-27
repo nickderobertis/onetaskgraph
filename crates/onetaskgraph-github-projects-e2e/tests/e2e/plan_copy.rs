@@ -191,6 +191,9 @@ pub(super) struct Plan {
     /// Whether the folder the plan is written in is declared `visibility: private`, as the
     /// host's `authoring` source is: what the board then holds of each record names no origin.
     pub private: bool,
+    /// The stack, in KiB, the binary's main thread is started with, when a journey holds it to
+    /// less than the host's own: on a Unix host the binary is started under `ulimit -s` of it.
+    pub main_thread_stack: Option<u32>,
 }
 
 // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The source of these values is ai-orchestrator's own onetaskgraph.yaml, in another repository this one may not read in a check. Its drift gate is the host's board-copy-approval journeys, run against these store figures by that repository's adopt-copy-targets work, which is the later comparison the task registering these recordings names; each mirrored value is stated below so that comparison has an exact set to hold.
@@ -385,6 +388,7 @@ impl Plan {
             screening,
             client,
             private,
+            main_thread_stack: None,
         };
         plan.author();
         plan
@@ -499,7 +503,18 @@ impl Plan {
 
     /// One command through the binary, attached to the clock.
     pub fn run(&self, arguments: &[&str]) -> Output {
-        let mut command = self.sandbox.subprocess(binary());
+        let mut command = match self.main_thread_stack {
+            #[cfg(unix)]
+            Some(kib) => {
+                let mut shell = self.sandbox.subprocess("sh");
+                shell
+                    .arg("-c")
+                    .arg(format!("ulimit -s {kib} && exec \"$0\" \"$@\""))
+                    .arg(binary());
+                shell
+            }
+            _ => self.sandbox.subprocess(binary()),
+        };
         if let Some((home, _)) = &self.screening {
             command.env("ONEVCS_HOME", home.path());
         }
@@ -2624,6 +2639,34 @@ fn a_private_plans_copy_updates_the_public_item_that_already_carries_a_withheld_
             expected,
             "{copy} created {:?}",
             tally(&scenario.calls)
+        );
+        holds_the_plan(&plan, &at, None);
+    }
+}
+
+/// The stack Windows gives a process's main thread, 1 MiB, in the KiB `ulimit -s` takes.
+const WINDOWS_MAIN_THREAD_STACK: u32 = 1024;
+
+#[test]
+fn a_private_plans_copy_runs_within_the_main_thread_stack_windows_gives_the_binary() {
+    // The deepest copy this suite drives: T-1's write over the item a person filed reads its
+    // far ends, and each read prices its document by parsing it, beneath the whole copy's
+    // futures. Started with Windows' 1 MiB main-thread stack, rather than the 8 MiB a Linux
+    // host gives, the binary still copies the plan, first and again.
+    let by_hand = json!({"item":"ITEM-HAND-1","id":"HAND-1","type":"Issue",
+        "title":"Step 1 of the plan",
+        "body":"Filed by hand.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"notes:T-1\"}\n-->",
+        "state":"OPEN","reason":null,"parent":null,"repo":"synthco/public-widgets",
+        "status":"Todo","origin":"notes:T-1","labels":[]});
+    let mut plan = Plan::host(SMALL, vec![by_hand], true);
+    plan.main_thread_stack = Some(WINDOWS_MAIN_THREAD_STACK);
+    plan.place_as_measured();
+    for copy in ["the first copy", "the next copy"] {
+        let scenario = plan.copy_timed();
+        let at = counterparts(&scenario.project, &scenario.document);
+        assert_eq!(
+            at["T-1"], "HAND-1",
+            "{copy} found the item carrying T-1's origin"
         );
         holds_the_plan(&plan, &at, None);
     }
