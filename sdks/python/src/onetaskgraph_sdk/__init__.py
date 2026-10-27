@@ -7,6 +7,7 @@ touches it: a process that runs two verbs builds the models of those two, not th
 
 from typing import TYPE_CHECKING
 
+from . import client as client
 from ._generated import models as _models
 from .client import Client as Client
 from .client import OnetaskgraphError as OnetaskgraphError
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
 # Not `import *` at run time: it reads every name `__all__` lists, which would build every
 # model. `__all__ += <module>.__all__` is the spelling a type checker follows, so a strict
 # one reads every root as re-exported from here.
-__all__ = ["Client", "OnetaskgraphError"]
+__all__ = ["Client", "OnetaskgraphError", "client"]
 __all__ += _models.__all__
 
 #: The version this package publishes. `pyproject.toml`, the Cargo workspace and the

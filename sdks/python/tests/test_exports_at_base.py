@@ -3,8 +3,8 @@
 `exports_at_base.json` beside this file was written from the commit it names, before the
 change: for `onetaskgraph_sdk._generated.models` its `__all__`, and for `onetaskgraph_sdk`,
 which had no `__all__` then, every public name `from onetaskgraph_sdk import *` bound — its
-star-import set, less the `client` submodule, which is a module rather than an export and
-stays importable as one. `models` lists the names that were pydantic model classes there.
+star-import set, including the public `client` submodule. `models` lists the names that
+were pydantic model classes there.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def test_the_committed_list_names_both_modules_and_no_placeholder() -> None:
     for module in MODULES:
         exports, models = BASE[module]["exports"], BASE[module]["models"]
         assert len(exports) >= 66, f"{module} lists only {len(exports)} names"
-        assert all(name.isidentifier() and name[0].isupper() for name in exports), exports
+        assert all(name.isidentifier() and not name.startswith("_") for name in exports), exports
         assert exports == sorted(set(exports))
         assert set(models) < set(exports)
 
@@ -51,3 +51,16 @@ def test_every_base_export_is_still_exported_from_the_same_module(module: str) -
             assert isinstance(value, type) and issubclass(value, BaseModel), (
                 f"{module}.{name} was a pydantic model and is now {value!r}"
             )
+
+
+@pytest.mark.parametrize("module", ["onetaskgraph_sdk", "onetaskgraph_sdk._generated"])
+def test_client_keeps_its_original_module_identity(module: str) -> None:
+    """The original star-imported client remains the importable client submodule."""
+    package = importlib.import_module(module)
+    client = importlib.import_module(f"{module}.client")
+    namespace: dict[str, object] = {}
+    exec(f"from {module} import *", namespace)
+    assert namespace["client"] is client
+    assert package.client is client
+    assert "client" in package.__all__
+    assert "client" in dir(package)

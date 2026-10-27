@@ -48,9 +48,16 @@ table rather than the module's bindings, because a root is bound there only once
 """
 
 CONSUMER = (
-    "from onetaskgraph_sdk import (\n"
+    "from types import ModuleType\n"
+    + "from onetaskgraph_sdk import client\n"
+    + "from onetaskgraph_sdk._generated import client as generated_client\n"
+    + "from onetaskgraph_sdk import (\n"
     + "".join(f"    {name},\n" for name in PUBLISHED)
     + ")\n\n"
+    + "original_module: ModuleType = client\n"
+    + "generated_module: ModuleType = generated_client\n"
+    + "generated_type: type[generated_client.GeneratedClient] = generated_client.GeneratedClient\n"
+    + "original_client: type[client.Client] = client.Client\n"
     + "".join(f"model_{index}: type[{name}] = {name}\n" for index, name in enumerate(PUBLISHED))
 )
 """A consumer that imports every published name from the package root and annotates with it.

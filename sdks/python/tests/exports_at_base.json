@@ -69,7 +69,8 @@
       "UpdatedField",
       "VariableType",
       "WritePolicyConfig",
-      "WriteVerdict"
+      "WriteVerdict",
+      "client"
     ],
     "models": [
       "CacheCleared",

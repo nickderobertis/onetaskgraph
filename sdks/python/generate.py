@@ -1178,6 +1178,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "from typing import TYPE_CHECKING\n"
         "\n"
         "from . import models as _models\n"
+        "from . import client as client\n"
         "from .client import GeneratedClient as GeneratedClient\n"
         "\n"
         "if TYPE_CHECKING:\n"
@@ -1185,7 +1186,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "\n"
         # Not `import *` at run time: it reads every name `__all__` lists, which would build
         # every model the lazy `models` module exists to leave unbuilt.
-        '__all__ = ["GeneratedClient"]\n'
+        '__all__ = ["GeneratedClient", "client"]\n'
         "__all__ += _models.__all__\n"
         "\n"
         "if not TYPE_CHECKING:\n"

@@ -2,13 +2,14 @@
 
 from typing import TYPE_CHECKING
 
+from . import client as client
 from . import models as _models
 from .client import GeneratedClient as GeneratedClient
 
 if TYPE_CHECKING:
     from .models import *  # noqa: F403  # Schema roots define the public set.
 
-__all__ = ["GeneratedClient"]
+__all__ = ["GeneratedClient", "client"]
 __all__ += _models.__all__
 
 if not TYPE_CHECKING:
