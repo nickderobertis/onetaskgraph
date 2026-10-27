@@ -105,3 +105,39 @@ def test_direct_checks_remain_strict_for_ci(tmp_path: Path) -> None:
     assert ran.returncode == 1, ran.stdout + ran.stderr
     assert "over" in ran.stdout
     assert "warning:" not in ran.stderr
+
+
+@pytest.mark.parametrize(
+    ("strict_value", "strict_broken", "variable_broken", "status", "warning"),
+    [
+        (2, False, False, 1, False),
+        (2, False, True, 3, False),
+        (0, True, False, 3, False),
+        (0, False, False, 0, True),
+    ],
+)
+def test_mixed_budgets_preserve_errors_and_strict_failures(
+    tmp_path: Path,
+    strict_value: int,
+    strict_broken: bool,
+    variable_broken: bool,
+    status: int,
+    warning: bool,
+) -> None:
+    """Both passes run, and a variable over cannot hide a strict failure or either error."""
+    strict = tmp_path / "strict.yaml"
+    variable = tmp_path / "variable.yaml"
+    write_budgets(strict, variable=False, value=strict_value, broken=strict_broken)
+    write_budgets(variable, variable=True, value=2, broken=variable_broken)
+    combined = yaml.safe_load(strict.read_text(encoding="utf-8"))
+    other = yaml.safe_load(variable.read_text(encoding="utf-8"))["budgets"][0]
+    other["id"] = "variable-fixture"
+    combined["budgets"].append(other)
+    budgets = tmp_path / "budgets.yaml"
+    budgets.write_text(yaml.safe_dump(combined), encoding="utf-8")
+
+    ran = run_target(budgets)
+    assert ran.returncode == status, ran.stdout + ran.stderr
+    assert ("warning:" in ran.stderr) is warning, ran.stdout + ran.stderr
+    assert "budget fixture:" in ran.stdout
+    assert "budget variable-fixture:" in ran.stdout

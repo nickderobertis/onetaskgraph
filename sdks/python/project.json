@@ -100,7 +100,7 @@
           "externalDependencies": ["@onebudgetspec/cli"]
         }
       ],
-      "//": "The CPU a fresh interpreter spends importing the SDK, validating once and exiting, which the host's load moves, so never cached, not a dependency of `check` and not a target `just test` selects, exactly as pool-maintenance's `budgets-host` is. measure_import.py measures it fresh. The host-variable pass warns on over readings; other host budgets and measurement errors fail. Direct onebudgetspec checks stay strict."
+      "//": "CPU time varies with host load, so an over host-variable reading warns here. Other host budgets and measurement errors fail; direct onebudgetspec checks remain strict."
     }
   }
 }
