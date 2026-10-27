@@ -2911,3 +2911,57 @@ fn a_private_design_documents_copy_reads_no_more_of_the_board_than_a_public_ones
         }
     }
 }
+
+#[test]
+fn a_recopy_whose_aliased_update_fails_part_way_leaves_both_issues_as_they_were() {
+    // Two tasks change, so the re-copy sends both updates in one aliased request; GitHub runs
+    // the first and refuses the second, or answers the second naming another issue. Either way
+    // the copy is refused, and the update that did land is written back: both issues read as
+    // they did before the copy.
+    use onetaskgraph_e2e_support::fixtures::AliasAnswer;
+    for (what, refused) in [("refused", true), ("answered naming another issue", false)] {
+        let plan = Plan::new(SMALL, Vec::new());
+        let first = plan.copy_timed();
+        let at = counterparts(&first.project, &first.document);
+        let held = |n: usize| plan.github.body(&at[&format!("T-{n}")]);
+        let before = (held(4), held(5));
+        plan.write_task(4, &format!("{}An edit.\n", plan.generated.tasks[3]), true);
+        plan.write_task(
+            5,
+            &format!("{}Another edit.\n", plan.generated.tasks[4]),
+            true,
+        );
+        if refused {
+            plan.github.fail_field_alias("update1");
+        } else {
+            plan.github
+                .bend_batch_alias("update1", AliasAnswer::NamingAnother);
+        }
+        let (output, calls) =
+            plan.measured_output(&["project", "copy", "notes:P", "--to", "board", "--json"]);
+        assert_ne!(output.status.code(), Some(0), "{what}: {}", stdout(&output));
+        let updates: Vec<String> = calls
+            .iter()
+            .map(operation)
+            .filter(|sent| {
+                sent == operation_name(graphql::UPDATE_ISSUES)
+                    || sent == operation_name(graphql::UPDATE_ISSUE)
+            })
+            .collect();
+        assert_eq!(
+            updates.first().map(String::as_str),
+            Some(operation_name(graphql::UPDATE_ISSUES)),
+            "{what}: the two updates went together: {:?}",
+            tally(&calls)
+        );
+        assert!(
+            updates.len() > 1,
+            "{what}: what landed was written back after the refusal: {updates:?}"
+        );
+        assert_eq!(
+            (held(4), held(5)),
+            before,
+            "{what}: both issues are as they were before the copy"
+        );
+    }
+}

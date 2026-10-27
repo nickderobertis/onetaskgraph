@@ -1861,7 +1861,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             "updateProjectV2ItemFieldValue",
         );
         let block: Kind = ("block", "send", documents::ADD_BLOCKED_BY, "addBlockedBy");
-        let batches: [(&str, Vec<Kind>, usize); 6] = [
+        let batches: [(&str, Vec<Kind>, usize); 7] = [
             (
                 documents::CREATE_ISSUES,
                 vec![("create", "send", documents::CREATE_ISSUE, "createIssue")],
@@ -1871,6 +1871,11 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
             (
                 documents::CLOSE_ISSUES,
                 vec![("close", "send", documents::UPDATE_ISSUE, "updateIssue")],
+                MUTATION_BATCH,
+            ),
+            (
+                documents::UPDATE_ISSUES,
+                vec![("update", "send", documents::UPDATE_ISSUE, "updateIssue")],
                 MUTATION_BATCH,
             ),
             (documents::ADD_BLOCKED_BYS, vec![block], WRITE_BATCH),
@@ -22601,4 +22606,141 @@ async fn a_copy_reads_what_blocks_an_issue_again_only_when_its_batched_read_had_
             "a page of {carried}: the dependency read was sent {dependency_reads} times"
         );
     }
+}
+
+/// The board ids `1..=count`, as `I_<n>`, each an issue at `Todo` titled "before", with every
+/// one's blockers carried whole by a copy's batched read, read ahead before writes are held.
+async fn read_ahead_issues(count: usize) -> (Fixture, Box<dyn TaskSource>, Vec<NativeId>) {
+    let ids: Vec<NativeId> = (1..=count).map(|n| native(&format!("I_{n}"))).collect();
+    let fixture = board(
+        ids.iter()
+            .map(|id| Item::issue(&id.0, "before").status("Todo"))
+            .collect(),
+    );
+    fixture.state.lock().unwrap().copy_details_blocked_by = Some(5);
+    let source = source(&fixture);
+    source
+        .read_ahead_for_copy(&ids)
+        .await
+        .expect("the board answers the batch");
+    source.begin_deferred_writes();
+    (fixture, source, ids)
+}
+
+/// `id` retitled `title`, as a copy writes over the issue it found.
+fn retitled(id: &NativeId, title: &str) -> ItemWrite<Task> {
+    ItemWrite {
+        target: Some(id.clone()),
+        item: task(&id.0, title, status(StatusCategory::Todo, "Todo")),
+        depends_on: vec![],
+    }
+}
+
+/// The documents among `documents` that update issues, by the constant each is.
+fn updates_among(documents: &[String]) -> Vec<&'static str> {
+    use onetaskgraph_github_projects::graphql;
+    documents
+        .iter()
+        .filter_map(|document| {
+            [
+                ("UPDATE_ISSUE", graphql::UPDATE_ISSUE),
+                ("UPDATE_ISSUES", graphql::UPDATE_ISSUES),
+            ]
+            .into_iter()
+            .find(|(_, sent)| sent == document)
+            .map(|(name, _)| name)
+        })
+        .collect()
+}
+
+/// While a copy holds its writes back, its updates of existing issues are held too and go
+/// together, `MUTATION_BATCH` to a request — one update more goes in a second — and every one
+/// lands, each counted one write of its own.
+#[tokio::test]
+async fn a_copys_updates_of_existing_issues_go_together_a_batch_to_a_request() {
+    let count = onetaskgraph_github_projects::MUTATION_BATCH + 1;
+    let (fixture, source, ids) = read_ahead_issues(count).await;
+    let before = fixture.documents().len();
+    for id in &ids {
+        source
+            .write_task(&retitled(id, "after"))
+            .await
+            .expect("a held update");
+    }
+    assert_eq!(
+        fixture.documents()[before..].to_vec(),
+        Vec::<String>::new(),
+        "nothing is sent while the updates are held"
+    );
+    source.finish_writes().await.expect("the held updates land");
+    assert_eq!(
+        updates_among(&fixture.documents()[before..]),
+        ["UPDATE_ISSUES", "UPDATE_ISSUES"],
+        "{count} updates in two requests"
+    );
+    for id in &ids {
+        assert_eq!(fixture.item(&id.0).title, "after", "{} was updated", id.0);
+    }
+    let writes: usize = fixture
+        .state
+        .lock()
+        .unwrap()
+        .bindings
+        .iter()
+        .filter(|(operation, _)| operation == "updateIssue")
+        .count();
+    assert_eq!(writes, count, "each update one write of its own");
+}
+
+/// A held update goes out before the next request of any kind, so nothing this source reads
+/// after it sees the issue without it — and a second update of an issue already held lands
+/// after the first, the issue ending as the second left it.
+#[tokio::test]
+async fn a_held_update_goes_out_before_the_next_request_and_a_second_lands_after_it() {
+    let (fixture, source, ids) = read_ahead_issues(3).await;
+    source
+        .write_task(&retitled(&ids[0], "first"))
+        .await
+        .unwrap();
+    source
+        .write_task(&retitled(&ids[1], "first"))
+        .await
+        .unwrap();
+    let before = fixture.documents().len();
+    // Nothing read ahead answers it, so it is a request of its own.
+    let read = source.get_task(&native("I_9")).await.unwrap();
+    assert!(read.is_none(), "the board holds no I_9");
+    let sent = fixture.documents()[before..].to_vec();
+    assert_eq!(
+        updates_among(&sent),
+        ["UPDATE_ISSUES"],
+        "the updates went first"
+    );
+    assert_eq!(
+        sent.first().map(String::as_str),
+        Some(onetaskgraph_github_projects::graphql::UPDATE_ISSUES),
+        "before the read"
+    );
+    assert_eq!(fixture.item("I_1").title, "first");
+
+    let before = fixture.documents().len();
+    source
+        .write_task(&retitled(&ids[0], "second"))
+        .await
+        .unwrap();
+    source
+        .write_task(&retitled(&ids[0], "third"))
+        .await
+        .unwrap();
+    source.finish_writes().await.unwrap();
+    assert_eq!(
+        updates_among(&fixture.documents()[before..]),
+        ["UPDATE_ISSUE", "UPDATE_ISSUE"],
+        "each update of the one issue went on its own, in the order it was made"
+    );
+    assert_eq!(
+        fixture.item("I_1").title,
+        "third",
+        "the later update landed last"
+    );
 }

@@ -3825,7 +3825,7 @@ pub struct GitHubProjectsSource {
     /// Each existing issue's update held back while writes are, in the order it was made: sent
     /// together by [`Self::send_held_updates`] before any other request goes out, so nothing
     /// this source sends or reads ever sees the board without them.
-    held_updates: Mutex<Vec<Value>>,
+    held_updates: Mutex<Vec<HeldUpdate>>,
     clock: SharedClock,
     numeric_repositories: tokio::sync::Mutex<BTreeMap<RepositoryTarget, std::num::NonZeroU64>>,
     /// The board as this process last read it, for the length of one command — dropped by
@@ -10119,13 +10119,13 @@ impl GitHubProjectsSource {
         Ok(ids)
     }
 
-    /// Hold back the update of an existing issue, `input` as [`graphql::UPDATE_ISSUE`] would
-    /// send it, while writes are being held back — so the updates a copy makes one after
+    /// Hold back the update of the existing issue `issue` — `members`, what its own
+    /// [`graphql::UPDATE_ISSUE`] would send beside its id — while writes are being held back — so the updates a copy makes one after
     /// another go to GitHub as one request. Whatever this source held of the issue is dropped
     /// as the mutation itself would drop it. Answers whether it was held: never while a write
     /// the store's cache expects runs, which records each mutation's own answer, and never for
     /// an issue an update is already held for, which that one is sent ahead of.
-    fn hold_update(&self, input: &Value) -> Result<bool, SourceError> {
+    fn hold_update(&self, issue: &NativeId, members: &Value) -> Result<bool, SourceError> {
         if self.expected.journaling() || self.deferred()?.is_none() {
             return Ok(false);
         }
@@ -10136,10 +10136,10 @@ impl GitHubProjectsSource {
                 message: "issue updates held back were left inconsistent; run the command again"
                     .into(),
             })?;
-        if held.iter().any(|earlier| earlier["id"] == input["id"]) {
+        if held.iter().any(|earlier| earlier.issue == *issue) {
             return Ok(false);
         }
-        let named = |value: &str| input["id"].as_str() == Some(value);
+        let named = |value: &str| issue.0 == value;
         self.resolved_cache()?
             .retain(|id, item| !named(&id.0) && !named(&item.item_id));
         self.read_ahead()?.retain(|id, item| {
@@ -10147,7 +10147,7 @@ impl GitHubProjectsSource {
         });
         self.carried()?
             .retain(|id, item| !named(&id.0) && !named(&item.item_id));
-        held.push(input.clone());
+        held.push(HeldUpdate::new(issue, members));
         Ok(true)
     }
 
@@ -10163,14 +10163,14 @@ impl GitHubProjectsSource {
         })?);
         if let [one] = held.as_slice() {
             let data = self
-                .graphql(graphql::UPDATE_ISSUE, json!({"input": one}))
+                .graphql(graphql::UPDATE_ISSUE, json!({"input": one.input}))
                 .await?;
             let returned =
                 data.pointer("/updateIssue/issue")
                     .ok_or_else(|| SourceError::Malformed {
                         message: "GitHub item update returned no item".into(),
                     })?;
-            if returned.get("id") != Some(&one["id"]) {
+            if returned.get("id").and_then(Value::as_str) != Some(one.issue.0.as_str()) {
                 return Err(SourceError::Malformed {
                     message: "GitHub item update returned the wrong item".into(),
                 });
@@ -10182,14 +10182,14 @@ impl GitHubProjectsSource {
             for slot in 0..MUTATION_BATCH {
                 variables.insert(
                     format!("update{slot}"),
-                    chunk.get(slot).unwrap_or(&chunk[0]).clone(),
+                    chunk.get(slot).unwrap_or(&chunk[0]).input.clone(),
                 );
                 variables.insert(format!("send{slot}"), json!(slot < chunk.len()));
             }
             let data = self
                 .graphql(graphql::UPDATE_ISSUES, Value::Object(variables))
                 .await?;
-            let inputs: Vec<&Value> = chunk.iter().collect();
+            let inputs: Vec<&Value> = chunk.iter().map(|held| &held.input).collect();
             check_aliased_answers(
                 graphql::UPDATE_ISSUES,
                 &data,
@@ -11251,11 +11251,11 @@ impl GitHubProjectsSource {
             ),
             ContentKind::Issue => (graphql::UPDATE_ISSUE, "id", "/updateIssue/issue"),
         };
-        let mut input = fields;
-        input[id_key] = json!(id.0);
-        if kind == ContentKind::Issue && self.hold_update(&input)? {
+        if kind == ContentKind::Issue && self.hold_update(id, &fields)? {
             return Ok(());
         }
+        let mut input = fields;
+        input[id_key] = json!(id.0);
         let data = self.graphql(operation, json!({"input":input})).await?;
         let returned = data
             .pointer(pointer)
@@ -11617,6 +11617,26 @@ impl WriteDestination {
         match self {
             Self::Existing(item) => Some(item),
             Self::New(_) => None,
+        }
+    }
+}
+
+/// One existing issue's update held back by [`GitHubProjectsSource::hold_update`]: the issue,
+/// and the `UpdateIssueInput` its own [`graphql::UPDATE_ISSUE`] would have sent — the members
+/// it writes beside that issue's id, which only [`Self::new`] sets.
+struct HeldUpdate {
+    issue: NativeId,
+    input: Value,
+}
+
+impl HeldUpdate {
+    /// The update writing `members` — an `UpdateIssueInput` without its id — to `issue`.
+    fn new(issue: &NativeId, members: &Value) -> Self {
+        let mut input = members.clone();
+        input["id"] = json!(issue.0);
+        Self {
+            issue: issue.clone(),
+            input,
         }
     }
 }

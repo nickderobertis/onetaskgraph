@@ -5519,11 +5519,21 @@ impl Engine {
             // every such question is asked together, before the first of them would be — but for
             // a task whose priority that destination cannot hold, which is refused before the
             // destination is asked anything. An item of a source declared private is asked about
-            // too: its own lookup in [`Engine::target`] asks that destination for the same
-            // origin, since a public item may already carry it (by hand, or from a release
-            // before origins were withheld), and asking it here sends the same id in one request
-            // rather than one each.
+            // at the copy's own destination too: its own lookup in [`Engine::target`] asks that
+            // destination for the same origin, since a public item there may already carry it (by
+            // hand, or from a release before origins were withheld), and asking it here sends the
+            // same id in one request rather than one each. It is never asked of a source that is
+            // not private and that the copy reaches only by a route: what a private copy sends
+            // there is a neutral view, which nothing there may name the private item to.
+            let private_source =
+                self.declared(&read.source.source) == crate::config::SourceVisibility::Private;
             for there in &reachable {
+                if private_source
+                    && there != &request.destination
+                    && self.declared(there) != crate::config::SourceVisibility::Private
+                {
+                    continue;
+                }
                 let refused = match (&read.item, self.writable(there)) {
                     (Item::Task(task), Ok(destination)) => {
                         holds_priority(destination, &read.source.to_string(), task.priority)

@@ -1851,6 +1851,7 @@ impl GitHubBoardFields {
 
     /// Answer every listing of a project's members without what blocks each member, as
     /// ai-orchestrator's GitHub double answers it — or, with `false`, with it, as GitHub does.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's members listing, which its request loop reads from its private state: like `file_new_items_without_status` above, it can only be a method of this handle, and the board lives in this shared harness for the reason `GitHubBoard` records.
     pub fn list_members_without_blocked_by(&self, without: bool) {
         self.board.lock().unwrap().members_without_blocked_by = without;
     }
@@ -2503,6 +2504,7 @@ impl GitHubBoardFields {
 
     /// The id of every item this board holds whose title is `title`, in the order it holds
     /// them: what says a copy updated an item rather than adding a second beside it.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A read of the loopback board's private state beside `item` and `blockers`, which only this handle can make; the board lives in this shared harness for the reason `GitHubBoard` records.
     #[must_use]
     pub fn items_titled(&self, title: &str) -> Vec<String> {
         self.board
@@ -4293,6 +4295,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             "updateProjectV2ItemFieldValue",
         );
         let close: Kind = ("close", "send", documents::UPDATE_ISSUE, "updateIssue");
+        // llmlint: ignore[code_lands_in_the_domain_that_owns_it] One row of the loopback board's own table of the aliased writes it answers, beside the close batch it mirrors; the board lives in this shared harness for the reason `GitHubBoard` records.
         let update: Kind = ("update", "send", documents::UPDATE_ISSUE, "updateIssue");
         let block: Kind = ("block", "send", documents::ADD_BLOCKED_BY, "addBlockedBy");
         let delete: Kind = ("delete", "send", documents::DELETE_ISSUE, "deleteIssue");
