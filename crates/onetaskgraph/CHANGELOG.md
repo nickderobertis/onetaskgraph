@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.7](https://github.com/nickderobertis/onetaskgraph/compare/v0.12.6...v0.12.7) - 2026-10-27
+
+### Performance
+
+- *(copy)* batch a private source's origin lookups and reuse carried dependency edges ([#3775](https://github.com/nickderobertis/onetaskgraph/pull/3775))
+
 ## [0.12.3](https://github.com/nickderobertis/onetaskgraph/compare/v0.12.2...v0.12.3) - 2026-10-25
 
 ### Performance
