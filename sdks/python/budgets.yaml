@@ -1,10 +1,5 @@
-# How much CPU a short-lived caller of the SDK spends starting, validating once and exiting.
-# Labelled `host`: the figure is CPU time on the machine that runs it, which a shared host's
-# load moves, so only the uncached `budgets-host` target of this project checks it, and no
-# per-change target does. An over reading there is reported, as onebudgetspec's own `over`
-# and exit status, and refuses nothing: no gate, hook, recipe or merge path runs that target.
-# A CI job that measures it would hold it strict by running the same check, as the release
-# pull request runs pool-maintenance's; none does today.
+# The CPU measurement varies with developer-host load: budgets-host warns on its over
+# verdict, while direct onebudgetspec checks (including CI) retain the strict threshold.
 schema_version: 1
 budgets:
   # Workload: one fresh interpreter per plan-store recipe, about 60 a day on this host, against
@@ -16,7 +11,7 @@ budgets:
       environment importing onetaskgraph_sdk, validating one copy report the binary produced
       into CopyReport and exiting normally. It protects the start-up every SDK consumer pays,
       which only this repository can hold.
-    labels: [host]
+    labels: [host, host-variable]
     measure: reported
     command: ["uv", "run", "--frozen", "python", "measure_import.py"]
     unit: seconds
