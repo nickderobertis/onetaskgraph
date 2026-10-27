@@ -10162,20 +10162,14 @@ impl GitHubProjectsSource {
             }
         })?);
         if let [one] = held.as_slice() {
-            let data = self
-                .graphql(graphql::UPDATE_ISSUE, json!({"input": one.input}))
-                .await?;
-            let returned =
-                data.pointer("/updateIssue/issue")
-                    .ok_or_else(|| SourceError::Malformed {
-                        message: "GitHub item update returned no item".into(),
-                    })?;
-            if returned.get("id").and_then(Value::as_str) != Some(one.issue.0.as_str()) {
-                return Err(SourceError::Malformed {
-                    message: "GitHub item update returned the wrong item".into(),
-                });
-            }
-            return Ok(());
+            return self
+                .send_update(
+                    graphql::UPDATE_ISSUE,
+                    "/updateIssue/issue",
+                    &one.issue,
+                    one.input.clone(),
+                )
+                .await;
         }
         for chunk in held.chunks(MUTATION_BATCH) {
             let mut variables = serde_json::Map::new();
@@ -11256,6 +11250,18 @@ impl GitHubProjectsSource {
         }
         let mut input = fields;
         input[id_key] = json!(id.0);
+        self.send_update(operation, pointer, id, input).await
+    }
+
+    /// Send one item's update, `input`, as `operation`, and hold GitHub's answer at `pointer`
+    /// to naming that item, `id`.
+    async fn send_update(
+        &self,
+        operation: &str,
+        pointer: &str,
+        id: &NativeId,
+        input: Value,
+    ) -> Result<(), SourceError> {
         let data = self.graphql(operation, json!({"input":input})).await?;
         let returned = data
             .pointer(pointer)

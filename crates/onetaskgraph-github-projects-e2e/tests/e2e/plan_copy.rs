@@ -193,6 +193,7 @@ pub(super) struct Plan {
     pub private: bool,
 }
 
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The source of these values is ai-orchestrator's own onetaskgraph.yaml, in another repository this one may not read in a check. Its drift gate is the host's board-copy-approval journeys, run against these store figures by that repository's adopt-copy-targets work, which is the later comparison the task registering these recordings names; each mirrored value is stated below so that comparison has an exact set to hold.
 /// The host's configuration, as ai-orchestrator's `onetaskgraph.yaml` declares the two sources a
 /// plan copy reads and writes — its `authoring` folder and its `plans` board — and its
 /// `write_policy`, every value of it mirrored here:
@@ -211,6 +212,7 @@ pub(super) struct Plan {
 /// its `status_mapping`, whose `queued`, `done` and `cancelled` are the shipped defaults and
 /// whose `unknown` no record of the plan reads as.
 pub(super) const HOST_CACHE: &str = r#"{"enabled": true}"#;
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 /// One unrelated item of the board's own history: a project every tenth, a design document
 /// every fiftieth, a task filed under the latest project otherwise — each a copy of something
@@ -943,10 +945,10 @@ fn record(name: &str, runs: &Runs<'_>) {
     }
 }
 
-/// What the recording of the host's configuration with its folder declared private is called.
+/// The host's own case, the third recording each budget takes the larger of.
 const HOST_PRIVATE: &str = "host configuration, private source";
 
-/// What the recording of the same configuration with its folder declaring nothing is called.
+/// The comparison the private case is reported beside, and which no budget's figure counts.
 const HOST_PUBLIC: &str = "host configuration, public source";
 
 /// `detail` with the host configuration's private and public recordings' points, writes and
