@@ -1,0 +1,25 @@
+{
+  "items": [
+    {
+      "source": "plan:goal",
+      "action": "created",
+      "destination": "into:goal",
+      "via": "created",
+      "link": "recorded"
+    },
+    {
+      "source": "plan:load",
+      "action": "created",
+      "destination": "into:load",
+      "via": "created",
+      "link": "recorded"
+    },
+    {
+      "source": "plan:parse",
+      "action": "created",
+      "destination": "into:parse",
+      "via": "created",
+      "link": "unrecorded"
+    }
+  ]
+}
