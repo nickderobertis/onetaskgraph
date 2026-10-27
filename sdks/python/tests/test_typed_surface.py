@@ -91,6 +91,7 @@ from onetaskgraph_sdk import (
     VariableType,
     WritePolicyConfig,
     WriteVerdict,
+    client,
 )
 from onetaskgraph_sdk._generated import models
 from onetaskgraph_sdk._generated.models import (
@@ -317,6 +318,7 @@ def test_this_file_imports_every_name_the_module_exports(module: object) -> None
 
 
 FROM_ROOT: dict[str, object] = {
+    "client": client,
     "CacheCleared": CacheCleared,
     "CacheUse": CacheUse,
     "Classification": Classification,
@@ -465,6 +467,7 @@ def test_every_spelling_of_an_export_is_one_object() -> None:
     assert sorted(FROM_MODELS) == imported_from("onetaskgraph_sdk._generated.models")
     for name, value in FROM_ROOT.items():
         assert getattr(onetaskgraph_sdk, name) is value, name
+    assert client is sys.modules["onetaskgraph_sdk.client"]
     for name, value in FROM_MODELS.items():
         assert getattr(models, name) is value is FROM_ROOT[name], name
 
