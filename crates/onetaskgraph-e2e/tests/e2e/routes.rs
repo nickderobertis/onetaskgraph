@@ -3796,3 +3796,66 @@ fn a_routed_member_project_its_mapping_names_no_status_for_is_refused_before_lin
         assert_eq!(linear_mutations(&workspace, 0), Vec::<String>::new());
     }
 }
+
+#[test]
+fn a_linear_home_linear_rewrites_keeps_the_members_recorded_before_its_last_write() {
+    // The home lands in a Linear workspace that stores Markdown as real Linear does, so the copy
+    // writes it once more after every other write of it; the write before that one records the
+    // home's member in `annex`, and the last one has to carry it.
+    let sandbox = Sandbox::new();
+    let root = mixed_plan(&sandbox);
+    std::fs::write(
+        root.join("projects").join("goal.md"),
+        "---\ntitle: One goal\nstatus: todo\n---\nThe goal:\n\n- the library\n- the app.\n",
+    )
+    .expect("the home");
+    let (mut linear, workspace) =
+        crate::fixtures::linear_workspace(&sandbox, crate::fixtures::dataset());
+    linear["status_mapping"] = crate::fixtures::linear_default_mapping();
+    workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::Measured);
+    sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+    sandbox.project_document(&document(&json!({
+        PLAN: {"plugin": "local-md", "config": {"root": root}},
+        LINEAR: {
+            "plugin": "linear",
+            "config": linear,
+            "routes": [{"repositories": ["github.com/widgetco/*"], "to": "annex"}],
+        },
+        "annex": {"plugin": "local-md", "config": {"root": sandbox.subdirectory("annex")}},
+    })));
+
+    let report = answer(
+        &sandbox,
+        &["project", "copy", &format!("{PLAN}:goal"), "--to", LINEAR],
+    );
+    let home = landed(&report, "plan:goal");
+    assert_eq!(source_of(&home), LINEAR, "{report:#}");
+    let (_, last) = workspace
+        .served()
+        .into_iter()
+        .rev()
+        .find(|(query, _)| query.contains("projectUpdate"))
+        .expect("the copy wrote the home again");
+    assert!(
+        last.to_string().contains("onetaskgraph.members"),
+        "the home's last write carries its members: {last:#}"
+    );
+    let held = answer(&sandbox, &["project", "show", &home]);
+    let item = &held["items"][0]["item"];
+    assert!(
+        item["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("* the library")),
+        "Linear rewrote the home, so the copy followed it up: {item:#}"
+    );
+    let members = &item["metadata"]["onetaskgraph.members"];
+    let member = members[0]
+        .as_str()
+        .unwrap_or_else(|| panic!("the home names its member: {item:#}"));
+    assert_eq!(source_of(member), "annex", "{members:#}");
+    assert_eq!(
+        item["metadata"]["onetaskgraph.origin"], "plan:goal",
+        "{item:#}"
+    );
+    assert_eq!(landed(&report, "plan:app").split(':').next(), Some("annex"));
+}

@@ -3026,3 +3026,123 @@ fn a_status_the_check_refuses_for_the_view_lands_canonically_and_says_it_reached
     );
     assert_eq!(tree(&store.folder("site")), site, "the view is as it was");
 }
+
+/// Assert the last project write `workspace` was sent carries the home's projection map.
+fn assert_last_home_write_carries_the_map(workspace: &crate::fixtures::LinearWorkspace) {
+    let (_, variables) = workspace
+        .served()
+        .into_iter()
+        .rev()
+        .find(|(document, _)| document.contains("projectUpdate"))
+        .expect("the copy wrote the home");
+    assert!(
+        variables
+            .to_string()
+            .contains("onetaskgraph.public_projections"),
+        "the home's last write carries its projections: {variables:#}"
+    );
+}
+
+#[test]
+fn a_private_linear_home_that_linear_rewrites_keeps_every_key_the_copy_recorded_on_it() {
+    // Issue 3781: `ledger` is a private Linear workspace that stores Markdown as real Linear
+    // does, so the home's content comes back rewritten and the copy writes the home once more
+    // after every other write of it. The writes before that one record the home's views, and
+    // the last one has to carry them, beside every key the copy itself records.
+    let mut handle = None;
+    let store = Store::laid(Some(registered), |sandbox| {
+        let (mut config, workspace) =
+            crate::fixtures::linear_workspace(sandbox, crate::fixtures::dataset());
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::Measured);
+        handle = Some(workspace);
+        sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+        json!({
+            "ledger": {
+                "plugin": "linear",
+                "config": config,
+                "visibility": "private",
+                "routes": [{"repositories": ["github.com/openco/*"], "to": "site"}],
+            },
+        })
+    });
+    let workspace = handle.expect("the workspace");
+    private_rollout(&store);
+    // A home Linear rewrites: its `- ` bullets are stored as `* `.
+    store.record(
+        "plan",
+        "projects",
+        "rollout",
+        "title: Quietharbor rollout\nstatus: todo\nmetadata: {team.owner: rollout-lead}",
+        "The private plan:\n\n- what runs\n- in what order, and why.",
+    );
+    let landed = landed_ids(&store.ok(&[
+        "project",
+        "copy",
+        "plan:rollout",
+        "--to",
+        "ledger",
+        "--json",
+    ]));
+    let home = &landed["plan:rollout"];
+    assert!(home.starts_with("ledger:"), "{landed:?}");
+    assert_last_home_write_carries_the_map(&workspace);
+
+    let project = shown(&store, "project", home);
+    assert!(
+        project["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("* what runs")),
+        "Linear rewrote the home, so the copy followed it up: {project:#}"
+    );
+    let metadata = &project["metadata"];
+    let map = &metadata["onetaskgraph.public_projections"];
+    let entries = map["tasks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the home keeps its public projections: {metadata:#}"));
+    let mut recorded: Vec<&str> = entries
+        .iter()
+        .filter_map(|entry| entry["task"].as_str())
+        .collect();
+    recorded.sort_unstable();
+    let mut public = vec![
+        landed["plan:widget"].as_str(),
+        landed["plan:guide"].as_str(),
+    ];
+    public.sort_unstable();
+    assert_eq!(recorded, public, "{map:#}");
+    for entry in entries {
+        let view = entry["projection"].as_str().expect("a view");
+        assert!(view.starts_with("site:"), "{view}");
+        shown(&store, "task", view);
+    }
+    assert_eq!(
+        map["projects"][0]["source"], "site",
+        "the public project's allocation, recorded by an earlier write, is kept: {map:#}"
+    );
+    // Every key the copy wrote before the follow-up is there beside the map.
+    assert_eq!(metadata["team.owner"], "rollout-lead", "{metadata:#}");
+    for key in [
+        "onetaskgraph.origin",
+        "onetaskgraph.copied_version",
+        "onetaskgraph.copied_destination_version",
+    ] {
+        assert!(metadata.get(key).is_some(), "{key}: {metadata:#}");
+    }
+    assert_eq!(
+        metadata["onetaskgraph.origin"], "plan:rollout",
+        "{metadata:#}"
+    );
+
+    // A repeat copy of the unchanged plan finds the home as the copy left it.
+    let again = landed_ids(&store.ok(&[
+        "project",
+        "copy",
+        "plan:rollout",
+        "--to",
+        "ledger",
+        "--json",
+    ]));
+    assert_eq!(&again["plan:rollout"], home);
+    assert_eq!(shown(&store, "project", home)["metadata"], *metadata);
+}
