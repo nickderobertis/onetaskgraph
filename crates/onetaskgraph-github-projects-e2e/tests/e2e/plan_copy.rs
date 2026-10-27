@@ -2644,15 +2644,18 @@ fn a_private_plans_copy_updates_the_public_item_that_already_carries_a_withheld_
     }
 }
 
-/// The stack Windows gives a process's main thread, 1 MiB, in the KiB `ulimit -s` takes.
+/// The stack Windows gives a process's main thread, 1 MiB, in the KiB `ulimit -s` takes: the
+/// smallest any platform this binary ships on gives it.
 const WINDOWS_MAIN_THREAD_STACK: u32 = 1024;
 
 #[test]
-fn a_private_plans_copy_runs_within_the_main_thread_stack_windows_gives_the_binary() {
-    // The deepest copy this suite drives: T-1's write over the item a person filed reads its
-    // far ends, and each read prices its document by parsing it, beneath the whole copy's
-    // futures. Started with Windows' 1 MiB main-thread stack, rather than the 8 MiB a Linux
-    // host gives, the binary still copies the plan, first and again.
+fn a_private_plans_copy_runs_on_the_binarys_own_stack_whatever_its_main_thread_is_given() {
+    // The binary runs every command on a thread whose stack it sets itself, so a copy does not
+    // depend on what the platform gives the process's main thread. A copy whose stack runs
+    // deep — T-1's write over the item a person filed reads its far ends, and each read prices
+    // its document by parsing it, beneath the whole copy's futures — is started here with its
+    // main thread held to what Windows gives one, where an unoptimised build that ran its
+    // commands on the main thread overflowed it, and copies the plan, first and again.
     let by_hand = json!({"item":"ITEM-HAND-1","id":"HAND-1","type":"Issue",
         "title":"Step 1 of the plan",
         "body":"Filed by hand.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"notes:T-1\"}\n-->",

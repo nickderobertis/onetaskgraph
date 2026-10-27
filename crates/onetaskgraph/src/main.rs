@@ -76,17 +76,36 @@ const COMMAND_STACK: usize = 8 << 20;
 /// I/O at once, which one thread interleaves, not several sources computing at once. It is
 /// not the process's main thread, so that its stack is [`COMMAND_STACK`] wherever it runs.
 fn main() -> ExitCode {
-    let commands = std::thread::Builder::new()
+    let started = std::thread::Builder::new()
         .name("onetaskgraph".into())
         .stack_size(COMMAND_STACK)
         .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+            match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .expect("a single-threaded runtime builds")
-                .block_on(command())
-        })
-        .expect("the command thread starts");
+            {
+                Ok(runtime) => runtime.block_on(command()),
+                Err(error) => fail(
+                    &format!(
+                        "could not start the runtime every command runs on: {error}; \
+                         check the process may create the timers and sockets it needs"
+                    ),
+                    EXIT_FAILURE,
+                ),
+            }
+        });
+    let commands = match started {
+        Ok(commands) => commands,
+        Err(error) => {
+            return fail(
+                &format!(
+                    "could not start the thread every command runs on: {error}; \
+                     free some memory or raise the process's thread limit and run it again"
+                ),
+                EXIT_FAILURE,
+            );
+        }
+    };
     // A panic has already been reported by the hook on the thread that panicked; it carries
     // on here, so the process exits as a panicking one does.
     commands
@@ -94,7 +113,6 @@ fn main() -> ExitCode {
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
-/// The command the arguments name, run to completion.
 async fn command() -> ExitCode {
     let cli = Cli::parse();
     if let Command::PluginServe { source } = &cli.command {
