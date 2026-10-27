@@ -62,6 +62,7 @@ def test_the_figure_and_every_share_reach_the_file_onebudgetspec_names(tmp_path:
         "teardown",
         "os._exit(0)",
         "spread",
+        "load average",
     ):
         assert share in detail, f"the detail does not name {share!r}: {detail}"
     assert f"import, validate and exit median {reported['value']:.3f} s" in detail

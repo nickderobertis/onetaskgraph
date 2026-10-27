@@ -20,6 +20,8 @@ statistics for it and leaves the reported figure the environment's own.
 
 The CPU is the child's own, read from `os.wait4`, so it counts nothing of this process and
 nothing of a sibling: which is why this measures on POSIX alone, where the budget's host is.
+The detail ends with the host's load average when the runs finished, so a reading taken on a
+busy host says so beside it.
 """
 
 from __future__ import annotations
@@ -131,7 +133,8 @@ def main() -> None:
         f"validation {figure - medians['import']:.3f} s (figure less import alone); "
         f"teardown {figure - medians['abrupt']:.3f} s "
         f"(figure less the same run ending in os._exit(0), {summary(samples['abrupt'])}); "
-        f"spread {min(samples['full']):.3f}-{max(samples['full']):.3f} s"
+        f"spread {min(samples['full']):.3f}-{max(samples['full']):.3f} s; "
+        "load average {:.2f} {:.2f} {:.2f} at the end".format(*os.getloadavg())
     )
     if "compared" in samples:
         detail += f"; --compare {arguments.compare}: {summary(samples['compared'])}"
