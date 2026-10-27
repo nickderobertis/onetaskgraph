@@ -11632,6 +11632,7 @@ impl WriteDestination {
 /// it writes beside that issue's id, which only [`Self::new`] sets.
 struct HeldUpdate {
     issue: NativeId,
+    // llmlint: ignore[invalid_states_unrepresentable] The members are exactly what `update_content` would have sent at once, which every one of its callers builds as GraphQL variables; holding them back changes when they are sent, not what they may be, and only `new` builds one, fixing the issue's id. Typing `UpdateIssueInput` would retype every caller of `update_content`, a change of its own.
     input: Value,
 }
 

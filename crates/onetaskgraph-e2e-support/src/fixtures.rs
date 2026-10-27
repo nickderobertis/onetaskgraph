@@ -2502,9 +2502,9 @@ impl GitHubBoardFields {
             .cloned()
     }
 
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] A read of the loopback board's private state beside `item` and `blockers`, which only this handle can make; the board lives in this shared harness for the reason `GitHubBoard` records.
     /// The id of every item this board holds whose title is `title`, in the order it holds
     /// them: what says a copy updated an item rather than adding a second beside it.
-    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A read of the loopback board's private state beside `item` and `blockers`, which only this handle can make; the board lives in this shared harness for the reason `GitHubBoard` records.
     #[must_use]
     pub fn items_titled(&self, title: &str) -> Vec<String> {
         self.board
@@ -2516,6 +2516,7 @@ impl GitHubBoardFields {
             .filter_map(|item| item["id"].as_str().map(str::to_owned))
             .collect()
     }
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     /// The ids of the issues this board records as blocking `id`, in the order they were
     /// recorded.
@@ -4295,7 +4296,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             "updateProjectV2ItemFieldValue",
         );
         let close: Kind = ("close", "send", documents::UPDATE_ISSUE, "updateIssue");
-        // llmlint: ignore[code_lands_in_the_domain_that_owns_it] One row of the loopback board's own table of the aliased writes it answers, beside the close batch it mirrors; the board lives in this shared harness for the reason `GitHubBoard` records.
+        // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The kind of write the aliased update batch carries, beside the close batch's it mirrors, in the loopback board's own table; the board lives in this shared harness for the reason `GitHubBoard` records.
         let update: Kind = ("update", "send", documents::UPDATE_ISSUE, "updateIssue");
         let block: Kind = ("block", "send", documents::ADD_BLOCKED_BY, "addBlockedBy");
         let delete: Kind = ("delete", "send", documents::DELETE_ISSUE, "deleteIssue");
@@ -4303,6 +4304,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             (documents::CREATE_ISSUES, vec![create], MUTATION_BATCH),
             (documents::WRITE_FIELD_VALUES, vec![field], WRITE_BATCH),
             (documents::CLOSE_ISSUES, vec![close], MUTATION_BATCH),
+            // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The row answering the aliased update batch, beside the close batch it mirrors, in the loopback board's own table; the board lives in this shared harness for the reason `GitHubBoard` records.
             (documents::UPDATE_ISSUES, vec![update], MUTATION_BATCH),
             (documents::ADD_BLOCKED_BYS, vec![block], WRITE_BATCH),
             (
