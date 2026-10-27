@@ -3027,7 +3027,8 @@ fn a_status_the_check_refuses_for_the_view_lands_canonically_and_says_it_reached
     assert_eq!(tree(&store.folder("site")), site, "the view is as it was");
 }
 
-/// Assert the last project write `workspace` was sent carries the home's projection map.
+/// The last `projectUpdate` is the copy's follow-up of the home, the write issue 3781 saw drop
+/// the map, so it is asserted on as sent rather than only as read back.
 fn assert_last_home_write_carries_the_map(workspace: &crate::fixtures::LinearWorkspace) {
     let (_, variables) = workspace
         .served()
