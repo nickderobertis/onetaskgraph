@@ -517,6 +517,35 @@ fn locate_lists_every_carrier_across_pages_and_finds_a_copy_back_by_its_origin()
         assert_eq!(item["destination"], to, "{to}: {item:#}");
     }
     assert_eq!(*store.ledger.lock().unwrap(), 0, "Linear was never asked");
+
+    // For a person: no route, nothing found, no carrier and no repository each said in words,
+    // and a lookup not made not mentioned at all.
+    let text = |extra: &[&str]| {
+        let mut arguments = vec!["task", "locate", "drafts:plain", "--to", "mirror"];
+        arguments.extend(extra);
+        let ran = store.run(&arguments);
+        assert_eq!(ran.output.status.code(), Some(0), "{}", stderr(&ran.output));
+        stdout(&ran.output)
+    };
+    let looked = text(&[]);
+    for expected in [
+        "mirror by no route",
+        "none: a copy would create one",
+        "carriers:",
+        "creates in:",
+        "no repository",
+    ] {
+        assert!(looked.contains(expected), "{expected} in:\n{looked}");
+    }
+    let placed = text(&["--no-counterpart"]);
+    assert!(
+        placed.contains("mirror by no route") && placed.contains("no repository"),
+        "{placed}"
+    );
+    assert!(
+        !placed.contains("counterpart:") && !placed.contains("carriers:"),
+        "{placed}"
+    );
 }
 
 #[test]

@@ -910,6 +910,15 @@ mod tests {
         ) -> Result<Page<onetaskgraph_plugin_api::DependencyEdge>, SourceError> {
             self.next().map(|()| Page::last(Vec::new()))
         }
+        async fn creation_repository(
+            &self,
+            _target: &onetaskgraph_plugin_api::WriteTarget<'_>,
+        ) -> Result<Option<onetaskgraph_plugin_api::Repository>, SourceError> {
+            self.next()?;
+            onetaskgraph_plugin_api::Repository::try_from("github.com/example-org/store".to_owned())
+                .map(Some)
+                .map_err(|message| SourceError::Malformed { message })
+        }
     }
 
     fn limited(seconds: Option<u64>) -> Option<SourceError> {
@@ -1017,6 +1026,48 @@ mod tests {
                 calls.load(Atomic::SeqCst),
                 2,
                 "the call at the reset was sent"
+            );
+        });
+    }
+
+    #[test]
+    fn where_a_create_would_file_is_forwarded_held_off_and_starts_a_hold() {
+        let (source, calls, clock) = held(vec![None, limited(Some(30))]);
+        let target = onetaskgraph_plugin_api::WriteTarget::New {
+            repositories: &[],
+            project: None,
+        };
+        block_on(async {
+            let answered = source.creation_repository(&target).await.unwrap();
+            assert_eq!(
+                answered.map(|repository| repository.as_str().to_owned()),
+                Some("github.com/example-org/store".to_owned()),
+                "forwarded to the source"
+            );
+            // A rate limit it answers holds the source off, and it is held off itself.
+            assert!(matches!(
+                source.creation_repository(&target).await,
+                Err(SourceError::RateLimited {
+                    retry_after_seconds: Some(30),
+                    ..
+                })
+            ));
+            clock.advance(1_000);
+            assert!(matches!(
+                source.creation_repository(&target).await,
+                Err(SourceError::RateLimited {
+                    retry_after_seconds: Some(29),
+                    ..
+                })
+            ));
+            assert!(matches!(
+                source.get_task(&NativeId::from("T-1")).await,
+                Err(SourceError::RateLimited { .. })
+            ));
+            assert_eq!(
+                calls.load(Atomic::SeqCst),
+                2,
+                "nothing sent during the hold"
             );
         });
     }

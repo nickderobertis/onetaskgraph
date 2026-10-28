@@ -919,6 +919,15 @@ impl Wanted {
     }
 }
 
+/// How far a walk of the destination for what is [`Wanted`] reads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Walk {
+    /// To the first item found — what a copy needs to pick its counterpart.
+    First,
+    /// To the last page, for every item found — what `task locate` lists as carriers.
+    Every,
+}
+
 /// Whether `terms` holds a letter or a digit — a word a search that indexes words can find.
 fn has_words(terms: &str) -> bool {
     terms.chars().any(char::is_alphanumeric)
@@ -6322,7 +6331,9 @@ impl Engine {
         let wanted = Wanted::Origin(id.to_string());
         let scanned = match carriers {
             Some(carriers) => {
-                *carriers = self.walk(destination, item.level(), &wanted, true).await?;
+                *carriers = self
+                    .walk(destination, item.level(), &wanted, Walk::Every)
+                    .await?;
                 carriers.first().cloned()
             }
             None => self.scan(destination, item.level(), &wanted).await?,
@@ -6374,20 +6385,20 @@ impl Engine {
         wanted: &Wanted,
     ) -> Result<Option<NativeId>, EngineError> {
         Ok(self
-            .walk(destination, kind, wanted, false)
+            .walk(destination, kind, wanted, Walk::First)
             .await?
             .into_iter()
             .next())
     }
 
-    /// Walk the destination one page at a time for every item `wanted` finds, in listing
-    /// order — stopping at the first unless `every` asks for all of them, read to the last page.
+    /// Walk the destination one page at a time for the items `wanted` finds, in listing order,
+    /// as far as `walk` says: to the first, or to the last page for every one.
     async fn walk(
         &self,
         destination: &ResolvedSource,
         kind: Level,
         wanted: &Wanted,
-        every: bool,
+        walk: Walk,
     ) -> Result<Vec<NativeId>, EngineError> {
         let mut found = Vec::new();
         let mut cursor: Option<Cursor> = None;
@@ -6407,7 +6418,7 @@ impl Engine {
                     for task in &page.items {
                         if wanted.found(&task.title, &task.metadata) {
                             found.push(task.id.clone());
-                            if !every {
+                            if walk == Walk::First {
                                 return Ok(found);
                             }
                         }
@@ -6437,7 +6448,7 @@ impl Engine {
                     for project in &page.items {
                         if wanted.found(&project.title, &project.metadata) {
                             found.push(project.id.clone());
-                            if !every {
+                            if walk == Walk::First {
                                 return Ok(found);
                             }
                         }
@@ -6465,7 +6476,7 @@ impl Engine {
                     for document in &page.items {
                         if wanted.found(&document.title, &document.metadata) {
                             found.push(document.id.clone());
-                            if !every {
+                            if walk == Walk::First {
                                 return Ok(found);
                             }
                         }

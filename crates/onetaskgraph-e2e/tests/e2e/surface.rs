@@ -302,7 +302,6 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
     assert_eq!(bundle["version"], 48);
-    // Version 48: what `task locate` answers, and every source `sources route` can reach.
     assert!(bundle["roots"]["LocateReport"].is_object());
     assert_eq!(
         bundle["roots"]["SourceRoute"]["properties"]["reachable"]["type"], "array",

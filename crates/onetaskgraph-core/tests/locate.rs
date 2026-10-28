@@ -109,7 +109,7 @@ async fn several_tasks_are_answered_in_the_order_named_and_nothing_meters_spends
 }
 
 #[tokio::test]
-async fn naming_no_task_answers_none_and_a_project_or_a_document_is_refused_by_kind() {
+async fn naming_no_task_answers_none_and_a_project_a_missing_id_and_two_targets_are_refused() {
     let engine = engine();
     let report = engine
         .locate(&locating(&[], LocateLookup::Counterpart))

@@ -16,14 +16,15 @@ use crate::fixtures::{GitHubBoardFields, github_projects_with_items};
 const OWNER: &str = "nickderobertis";
 
 /// A folder of Markdown `plan` and the fixture board `board`, holding the project issue `GOAL-1`
-/// in the repository `planning`, copied from `plan:goal`.
+/// in the repository `planning`, copied from `plan:goal` — with the board's local cache on when
+/// `cached` says so.
 struct Setup {
     sandbox: Sandbox,
     board: GitHubBoardFields,
 }
 
 impl Setup {
-    fn new() -> Self {
+    fn new(cached: bool) -> Self {
         let sandbox = Sandbox::new();
         let (config, board) = github_projects_with_items(
             &sandbox,
@@ -36,10 +37,14 @@ impl Setup {
             })],
         );
         let root = sandbox.subdirectory("plan");
+        let mut board_source = json!({"plugin": "github-projects", "config": config});
+        if cached {
+            board_source["cache"] = json!({"enabled": true, "dir": sandbox.subdirectory("cache")});
+        }
         sandbox.project_document(
             &json!({"sources": {
                 "plan": {"plugin": "local-md", "config": {"root": root}},
-                "board": {"plugin": "github-projects", "config": config},
+                "board": board_source,
             }})
             .to_string(),
         );
@@ -127,8 +132,9 @@ fn created_in(served: &[(String, Value)]) -> Vec<String> {
 
 #[test]
 fn locate_names_the_repository_the_copy_after_it_creates_each_issue_in() {
-    for no_counterpart in [false, true] {
-        let setup = Setup::new();
+    // With the board's cache on too: the answer reaches the board through the store's cache.
+    for (no_counterpart, cached) in [(false, false), (true, false), (false, true)] {
+        let setup = Setup::new(cached);
         setup.record(
             "tasks",
             "one",
