@@ -20,6 +20,7 @@ use onetaskgraph_plugin_api::{
     NewComment, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository,
     SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
     TaskQuery, TaskRef, TaskSource, TaskUpdate, TextFields, TextQuery, UpdatedField, WriteSupport,
+    WriteTarget,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -6218,6 +6219,126 @@ async fn a_repository_under_another_owner_than_the_parents_is_refused_before_any
         .await
         .expect("a project has no parent to agree with");
     assert_eq!(created_in(&fixture), ["contoso/work"]);
+}
+
+#[tokio::test]
+async fn creation_repository_answers_where_the_create_then_files_the_issue() {
+    // The configured repository is acme/work; the project issue sits in acme/tooling.
+    let fixture = board(vec![
+        Item::issue("I_plan", "Plan")
+            .sub_issues(1)
+            .in_repository("acme/tooling"),
+    ]);
+    let source = source(&fixture);
+    let plan = NativeId("I_plan".to_owned());
+    for (parent, repositories, expected) in [
+        (None, &["acme/other"][..], "acme/other"),
+        (None, &["acme/tooling", "acme/other"][..], "acme/work"),
+        (Some("I_plan"), &[][..], "acme/tooling"),
+        (
+            Some("I_plan"),
+            &["acme/work", "acme/other"][..],
+            "acme/tooling",
+        ),
+    ] {
+        let named: Vec<Repository> = repositories.iter().map(|slug| repo(slug)).collect();
+        let answered = source
+            .creation_repository(&WriteTarget::New {
+                repositories: &named,
+                project: parent.map(|_| &plan),
+            })
+            .await
+            .expect("the create would be made");
+        assert_eq!(
+            answered,
+            Some(repo(expected)),
+            "{parent:?} {repositories:?}"
+        );
+        source
+            .write_task(&task_under(parent, "Located", repositories))
+            .await
+            .expect("the create");
+        assert_eq!(
+            created_in(&fixture).last().map(String::as_str),
+            Some(expected),
+            "the create filed it where creation_repository said: {parent:?} {repositories:?}"
+        );
+    }
+
+    // A target the create would refuse is refused the same way, and nothing is created.
+    let before = created_in(&fixture).len();
+    let contoso = [repo("contoso/work")];
+    let asked = source
+        .creation_repository(&WriteTarget::New {
+            repositories: &contoso,
+            project: Some(&plan),
+        })
+        .await
+        .expect_err("a sub-issue under another owner than its parent's");
+    let created = source
+        .write_task(&task_under(Some("I_plan"), "Elsewhere", &["contoso/work"]))
+        .await
+        .expect_err("the create refuses it too");
+    assert!(
+        matches!(
+            (&asked, &created),
+            (SourceError::Refused { .. }, SourceError::Refused { .. })
+        ),
+        "{asked:?} / {created:?}"
+    );
+    for message in [refusal(asked), refusal(created)] {
+        assert!(
+            message.contains("contoso/work") && message.contains("acme/tooling"),
+            "{message}"
+        );
+    }
+    let missing = NativeId("I_missing".to_owned());
+    let unheld = source
+        .creation_repository(&WriteTarget::New {
+            repositories: &[],
+            project: Some(&missing),
+        })
+        .await
+        .expect_err("a parent the board does not hold");
+    assert!(matches!(unheld, SourceError::Refused { .. }), "{unheld:?}");
+    assert_eq!(created_in(&fixture).len(), before, "nothing was created");
+
+    // An existing issue is never moved, so it names no repository a create would choose.
+    assert_eq!(
+        source
+            .creation_repository(&WriteTarget::Existing(&plan))
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn creation_repository_without_a_configured_repository_is_refused_as_the_create_is() {
+    let fixture = board(vec![]);
+    let source = configured(&fixture.endpoint, json!({"repository": null}));
+    let tooling = [repo("acme/tooling")];
+    let asked = refusal(
+        source
+            .creation_repository(&WriteTarget::New {
+                repositories: &tooling,
+                project: None,
+            })
+            .await
+            .expect_err("no repository to fall back to"),
+    );
+    let created = refusal(
+        source
+            .write_task(&task_under(None, "Placed", &["acme/tooling"]))
+            .await
+            .expect_err("the create refuses it"),
+    );
+    assert_eq!(asked, created);
+    assert!(
+        fixture.seen().is_empty(),
+        "nothing was sent: {:?}",
+        fixture.seen()
+    );
 }
 
 #[tokio::test]

@@ -392,7 +392,7 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
                 "github.com/someone/x"
             ]
         ),
-        json!({"source": BOARD, "destination": LINEAR, "route": 2}),
+        json!({"source": BOARD, "destination": LINEAR, "route": 2, "reachable": [BOARD, LINEAR]}),
         "the overlapping entry answers only what the earlier ones do not"
     );
     assert_eq!(
@@ -406,7 +406,7 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
                 "github.com/widgetco/api"
             ]
         ),
-        json!({"source": BOARD, "destination": LINEAR, "route": 0})
+        json!({"source": BOARD, "destination": LINEAR, "route": 0, "reachable": [BOARD, LINEAR]})
     );
     assert_eq!(
         answer(
@@ -419,7 +419,7 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
                 "github.com/nickderobertis/lib"
             ]
         ),
-        json!({"source": BOARD, "destination": LINEAR, "route": 1}),
+        json!({"source": BOARD, "destination": LINEAR, "route": 1, "reachable": [BOARD, LINEAR]}),
         "the first entry that matches wins"
     );
     assert_eq!(
@@ -435,12 +435,12 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
                 "gitlab.com/other/x"
             ]
         ),
-        json!({"source": BOARD, "destination": BOARD, "route": null}),
+        json!({"source": BOARD, "destination": BOARD, "route": null, "reachable": [BOARD, LINEAR]}),
         "an entry matches only when every repository does"
     );
     assert_eq!(
         answer(&sandbox, &["sources", "route", BOARD]),
-        json!({"source": BOARD, "destination": BOARD, "route": null}),
+        json!({"source": BOARD, "destination": BOARD, "route": null, "reachable": [BOARD, LINEAR]}),
         "an item with no repositories stays"
     );
     let human = ok(&sandbox, &["sources", "route", BOARD]);
@@ -458,6 +458,7 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
             "github.com/widgetco/api",
         ],
     );
+    let board_then = format!("{BOARD},");
     let fields: Vec<Vec<&str>> = matched
         .lines()
         .map(|line| line.split_whitespace().collect())
@@ -468,6 +469,7 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
             vec!["source:", BOARD],
             vec!["destination:", LINEAR],
             vec!["route:", "0"],
+            vec!["reachable:", board_then.as_str(), LINEAR],
         ],
         "the human answer names the matched entry's index:\n{matched}"
     );
@@ -485,6 +487,58 @@ fn sources_route_answers_from_configuration_alone_and_refuses_by_name() {
     assert!(
         malformed.contains("widgetco/api"),
         "a malformed origin is refused by name:\n{malformed}"
+    );
+}
+
+#[test]
+fn sources_route_names_every_source_a_source_can_reach_whatever_the_item() {
+    // `notes` routes to `team`, then `archive`, then `team` again; `team` routes nowhere.
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&document(&json!({
+        NOTES: {
+            "plugin": "local-md",
+            "config": {"root": sandbox.subdirectory(NOTES)},
+            "routes": [
+                {"repositories": ["github.com/widgetco/*"], "to": TEAM},
+                {"repositories": ["github.com/gadgetco/*"], "to": "archive"},
+                {"repositories": ["gitlab.com/widgetco/*"], "to": TEAM},
+            ],
+        },
+        TEAM: {"plugin": "local-md", "config": {"root": sandbox.subdirectory(TEAM)}},
+        "archive": {
+            "plugin": "local-md",
+            "config": {"root": sandbox.subdirectory("archive")},
+            "visibility": "private",
+        },
+    })));
+    // The same set however the item reads: no repository, one each entry matches, and private.
+    for extra in [
+        &[][..],
+        &["--repository", "github.com/widgetco/api"],
+        &["--repository", "github.com/gadgetco/api"],
+        &["--classification", "private"],
+    ] {
+        let mut arguments = vec!["sources", "route", NOTES];
+        arguments.extend(extra);
+        assert_eq!(
+            answer(&sandbox, &arguments)["reachable"],
+            json!([NOTES, TEAM, "archive"]),
+            "{extra:?}: itself first, then each target in written order, each once"
+        );
+    }
+    // A source with no routes reaches itself alone.
+    let answered = answer(&sandbox, &["sources", "route", TEAM]);
+    assert_eq!(
+        answered,
+        json!({"source": TEAM, "destination": TEAM, "route": null, "reachable": [TEAM]})
+    );
+    let human = ok(&sandbox, &["sources", "route", NOTES]);
+    assert!(
+        human
+            .lines()
+            .any(|line| line.split_whitespace().collect::<Vec<_>>()
+                == ["reachable:", "notes,", "team,", "archive"]),
+        "the human answer names the reachable sources in order:\n{human}"
     );
 }
 
@@ -1364,7 +1418,7 @@ fn routes_set_by_flags_alone_route_a_lookup_and_a_copy_and_config_show_names_the
             "--repository",
             "github.com/widgetco/api"
         ]),
-        json!({"source": NOTES, "destination": TEAM, "route": 0})
+        json!({"source": NOTES, "destination": TEAM, "route": 0, "reachable": [NOTES, TEAM]})
     );
     let copied = with(&["task", "copy", "plan:pets", "--to", NOTES]);
     assert_eq!(source_of(&landed(&copied, "plan:pets")), TEAM, "{copied:#}");
@@ -1438,7 +1492,7 @@ fn routes_set_by_flags_alone_route_a_lookup_and_a_copy_and_config_show_names_the
     );
     assert_eq!(
         serde_json::from_str::<Value>(&stdout(&output)).expect("JSON"),
-        json!({"source": NOTES, "destination": TEAM, "route": 0})
+        json!({"source": NOTES, "destination": TEAM, "route": 0, "reachable": [NOTES, TEAM]})
     );
 
     // And a document's routes are shown whole, attributed to the document.
@@ -1564,11 +1618,11 @@ fn routes_a_flag_sets_replace_the_documents_rather_than_merging_into_them() {
     };
     assert_eq!(
         with("github.com/nickderobertis/lib"),
-        json!({"source": NOTES, "destination": TEAM, "route": 0})
+        json!({"source": NOTES, "destination": TEAM, "route": 0, "reachable": [NOTES, TEAM]})
     );
     assert_eq!(
         with("github.com/widgetco/api"),
-        json!({"source": NOTES, "destination": NOTES, "route": null}),
+        json!({"source": NOTES, "destination": NOTES, "route": null, "reachable": [NOTES, TEAM]}),
         "the document's widgetco entry is gone, not kept beside the flag's"
     );
 }

@@ -24,7 +24,9 @@ The executable is resolved in this order: the constructor's explicit `binaryPath
 Every invocation requests JSON. The SDK parses stdout and validates it against runtime
 schemas generated from `onetaskgraph schema` before returning it. Query responses retain
 their `plan` and typed `errors`; exit code 4 therefore resolves to the validated partial
-response instead of discarding the successful sources.
+response instead of discarding the successful sources. Any other failure rejects with an
+`OnetaskgraphExecutionError` carrying the exit code, standard error and — when the binary wrote
+one — its failure document as `failure`, so a caller branches on `failure.kind`.
 
 Every invocation also passes `--no-interactive`, so no call ever waits on a prompt: a
 template variable nothing answers takes its default, and a required one left unanswered is

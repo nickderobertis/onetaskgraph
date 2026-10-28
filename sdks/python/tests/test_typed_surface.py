@@ -44,6 +44,7 @@ from onetaskgraph_sdk import (
     IssuesCompleted,
     ItemType,
     LinearConfig,
+    LocateReport,
     Location,
     MetadataSet,
     NativeId,
@@ -153,6 +154,9 @@ from onetaskgraph_sdk._generated.models import (
 )
 from onetaskgraph_sdk._generated.models import (
     LinearConfig as ModelsLinearConfig,
+)
+from onetaskgraph_sdk._generated.models import (
+    LocateReport as ModelsLocateReport,
 )
 from onetaskgraph_sdk._generated.models import (
     Location as ModelsLocation,
@@ -340,6 +344,7 @@ FROM_ROOT: dict[str, object] = {
     "IssuesCompleted": IssuesCompleted,
     "ItemType": ItemType,
     "LinearConfig": LinearConfig,
+    "LocateReport": LocateReport,
     "Location": Location,
     "MetadataSet": MetadataSet,
     "NativeId": NativeId,
@@ -411,6 +416,7 @@ FROM_MODELS: dict[str, object] = {
     "IssuesCompleted": ModelsIssuesCompleted,
     "ItemType": ModelsItemType,
     "LinearConfig": ModelsLinearConfig,
+    "LocateReport": ModelsLocateReport,
     "Location": ModelsLocation,
     "MetadataSet": ModelsMetadataSet,
     "NativeId": ModelsNativeId,
@@ -547,6 +553,7 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "GlobalId": GlobalId,
     "IssuesCompleted": IssuesCompleted,
     "LinearConfig": LinearConfig,
+    "LocateReport": LocateReport,
     "Location": Location,
     "MetadataSet": MetadataSet,
     "NativeId": NativeId,
@@ -609,6 +616,7 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "GlobalId": ModelsGlobalId,
     "IssuesCompleted": ModelsIssuesCompleted,
     "LinearConfig": ModelsLinearConfig,
+    "LocateReport": ModelsLocateReport,
     "Location": ModelsLocation,
     "MetadataSet": ModelsMetadataSet,
     "NativeId": ModelsNativeId,

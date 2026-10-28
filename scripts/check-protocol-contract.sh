@@ -154,6 +154,10 @@ NOT_METHODS = {
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, knowing no location, and reads the item where it needs one"
     ),
+    "creation_repository": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does"
+    ),
     "check_status_write": (
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, and the plugin's own write refuses a status it has no name for"
@@ -175,12 +179,12 @@ NOT_METHODS = {
     "set_task_rendering_with_assets": NOT_CARRIED_REASON,
     "set_document_rendering_with_assets": NOT_CARRIED_REASON,
     "write_task_with_assets": (
-        "not a message of its own: §4.9a says it crosses as `write_task` carrying the "
-        "`assets` member"
+        "not a message of its own: the paragraph after §4's method table says it crosses as "
+        "`write_task` carrying the `assets` member §4.9a specifies"
     ),
     "write_document_with_assets": (
-        "not a message of its own: §4.9a says it crosses as `write_document` carrying the "
-        "`assets` member"
+        "not a message of its own: the paragraph after §4's method table says it crosses as "
+        "`write_document` carrying the `assets` member §4.9a specifies"
     ),
     "task_assets": (
         "not carried: the paragraph after §4's method table says a source over this protocol "
@@ -603,6 +607,31 @@ for message, batched in sorted(PER_ITEM_METHODS.items()):
             f"`TaskSource::{batched}`. Restore that row, or drop the entry here."
         )
 
+
+
+# A reason that cites a section ("§4.9 says …") is a claim about the document, so it is held
+# to it: that section has to name the method. Otherwise the paragraph a reason stands on could
+# be deleted or moved and this check would go on exempting the method on its word alone.
+for method, why in sorted(NOT_METHODS.items()):
+    cited = re.search(r"§(\d+\.\d+[a-z]?) says", why)
+    if cited is None:
+        continue
+    headings = [line for line in document.splitlines() if line.startswith(f"### {cited.group(1)} ")]
+    if len(headings) != 1:
+        failures.append(
+            f"NOT_METHODS exempts `TaskSource::{method}` because §{cited.group(1)} says how it "
+            f"crosses, but docs/plugin-protocol.md has {len(headings)} sections numbered "
+            f"{cited.group(1)}. Cite the section that says it, or restore that section."
+        )
+        continue
+    if f"`TaskSource::{method}`" not in section(headings[0]) and f"`{method}`" not in section(
+        headings[0]
+    ):
+        failures.append(
+            f"NOT_METHODS exempts `TaskSource::{method}` because {headings[0].lstrip('# ')!r} "
+            f"says how it crosses, but that section never names it. Say there how a hosted "
+            f"source answers it, or cite the section that does."
+        )
 
 
 def signature(method):

@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from .issues_completed import IssuesCompleted as IssuesCompleted
     from .item_type import ItemType as ItemType
     from .linear_config import LinearConfig as LinearConfig
+    from .locate_report import LocateReport as LocateReport
     from .location import Location as Location
     from .metadata_set import MetadataSet as MetadataSet
     from .native_id import NativeId as NativeId
@@ -102,6 +103,7 @@ __all__ = [
     "IssuesCompleted",
     "ItemType",
     "LinearConfig",
+    "LocateReport",
     "Location",
     "MetadataSet",
     "NativeId",
@@ -171,6 +173,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "IssuesCompleted": ("issues_completed", "IssuesCompleted"),
     "ItemType": ("item_type", "ItemType"),
     "LinearConfig": ("linear_config", "LinearConfig"),
+    "LocateReport": ("locate_report", "LocateReport"),
     "Location": ("location", "Location"),
     "MetadataSet": ("metadata_set", "MetadataSet"),
     "NativeId": ("native_id", "NativeId"),

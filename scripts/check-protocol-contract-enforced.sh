@@ -175,3 +175,13 @@ run_case "a holding variant the section does not declare" \
   "restore the reconciliation of \`Completion\` against §4.24's bullets in $GUARD"
 names "a holding variant the section does not declare" \
   'completion `withdrawn`'
+
+# A NOT_METHODS reason citing a section ("§4.9 says …") is held to that section naming the
+# method; were that reading to stop, the paragraph an exemption stands on could be deleted and
+# the method would stay exempt on the reason's word alone.
+run_case "an exemption's cited paragraph gone" \
+  's/^`TaskSource::creation_repository` by the trait.s default, none, so `task locate` reports$/the repository a create files in by the trait'"'"'s default, none, so `task locate` reports/' \
+  refuse \
+  "restore the reconciliation of each NOT_METHODS reason against the section it cites in $GUARD"
+names "an exemption's cited paragraph gone" \
+  'exempts `TaskSource::creation_repository` because'
