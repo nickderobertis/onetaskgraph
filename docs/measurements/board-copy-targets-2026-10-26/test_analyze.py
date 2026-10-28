@@ -271,7 +271,8 @@ def captures(root: Path) -> Path:
                 "budget": "github-plan-copy-points-unchanged",
                 "value": 1,
                 "detail": json.dumps(
-                    {"unscreened": sent, "unscreened, on a board of 20,000 items": sent}
+                    {name: sent for name in analyze.CONFIGURATIONS}
+                    | {"host configuration, private beside public": {"points": 1}}
                 ),
             }
         )
@@ -885,7 +886,8 @@ def test_the_board_size_pairs_compare_requests_by_operation_at_both_sizes(measur
     record["detail"] = json.dumps(detail)
     path.write_text(json.dumps(record))
     run(measured, "--write")
-    (pair,) = json.loads((root / "summary.json").read_text())["board_size_pairs"]
+    pairs = json.loads((root / "summary.json").read_text())["board_size_pairs"]
+    (pair,) = [p for p in pairs if p["recording"] == "unscreened"]
     assert pair["same"] is False
     assert pair["walk_pages"] == [0, 1]
     assert "**differ**" in measured[1].read_text()
@@ -1237,3 +1239,34 @@ def test_the_executable_names_a_damaged_capture_and_exits_non_zero(measured):
         "requests.jsonl:1: not JSON" in damaged.stderr
         and "take the capture again" in damaged.stderr
     )
+
+
+@pytest.mark.parametrize(
+    ("drop", "why"),
+    [
+        ("screened, on a board of 20,000 items", "has no 'screened' on both boards"),
+        (
+            "host configuration, public source",
+            "has no 'host configuration, public source' on both",
+        ),
+    ],
+)
+def test_a_points_recording_missing_a_configuration_is_refused(measured, drop, why):
+    path = measured[0] / "loopback" / "github-plan-copy-points-unchanged.json"
+    record = json.loads(path.read_text())
+    detail = json.loads(record["detail"])
+    del detail[drop]
+    path.write_text(json.dumps(record | {"detail": json.dumps(detail)}))
+    with pytest.raises(SystemExit, match=why):
+        run(measured)
+
+
+def test_a_points_recording_whose_configuration_carries_no_requests_is_refused(
+    measured,
+):
+    path = measured[0] / "loopback" / "github-plan-copy-points-unchanged.json"
+    record = json.loads(path.read_text())
+    detail = json.loads(record["detail"]) | {"screened": {"points": 1}}
+    path.write_text(json.dumps(record | {"detail": json.dumps(detail)}))
+    with pytest.raises(SystemExit, match="screened: no requests by operation"):
+        run(measured)

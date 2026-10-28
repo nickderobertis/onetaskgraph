@@ -1150,8 +1150,13 @@ def loopback(captures: Path) -> list[Loopback]:
                 path, None, "a loopback recording without its budget or its detail"
             )
         recordings = {}
+        compared = record["budget"].startswith(POINTS_BUDGET)
         for name, value in detail.items():
             if not isinstance(value, dict) or "requests by operation" not in value:
+                # A points recording's every compared configuration is evidence; anything else
+                # in a detail (another budget's figures, a side-by-side summary) is not read.
+                if compared and name in CONFIGURATIONS:
+                    raise refuse(path, None, f"{name}: no requests by operation")
                 continue
             sent, points = value["requests by operation"], value.get("points")
             if not isinstance(sent, dict) or not all(
@@ -1179,6 +1184,8 @@ SIZES = (
         "host configuration, public source, on a board of 20,000 items",
     ),
 )
+POINTS_BUDGET = "github-plan-copy-points-"
+CONFIGURATIONS = {name for pair in SIZES for name in pair}
 # What the plugin calls a page of a whole-board walk or of an issue search, in the loopback
 # recordings' operation names.
 WALK_WORDS = ("page of the board", "board's items", "search")
@@ -1205,12 +1212,15 @@ def size_pairs(recordings: list[Loopback]) -> list[SizePair]:
     whether the two sent the same requests by operation, their points, and the walk pages."""
     pairs = []
     for record in recordings:
-        if not record.budget.startswith("github-plan-copy-points-"):
+        if not record.budget.startswith(POINTS_BUDGET):
             continue
         for small, large in SIZES:
             a, b = record.recordings.get(small), record.recordings.get(large)
             if a is None or b is None:
-                continue
+                raise SystemExit(
+                    f"analyze.py: the loopback recording {record.budget} has no {small!r} on both "
+                    "boards; record the board-size journey again at the measured tag"
+                )
             pairs.append(
                 SizePair(
                     budget=record.budget,
