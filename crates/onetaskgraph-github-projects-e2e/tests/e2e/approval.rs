@@ -586,6 +586,7 @@ pub(super) fn spike_approval(screened: bool) -> Value {
     let (plan, project, document) = lay();
     plan.github.use_canonical_issue_urls();
     let review_setup = plan.board.calls();
+    let create_screened_before = plan.boundary_calls().len();
     let (created, mut calls) = plan.measured(&[
         "task",
         "create",
@@ -602,6 +603,7 @@ pub(super) fn spike_approval(screened: bool) -> Value {
     let (_, priority_calls) =
         plan.measured(&["task", "update", task, "--priority", "high", "--json"]);
     calls.extend(priority_calls);
+    let create_screening = plan.boundary_calls()[create_screened_before..].to_vec();
     let review_url = created["items"][0]["item"]["url"].clone();
     assert!(
         review_url
@@ -627,6 +629,7 @@ pub(super) fn spike_approval(screened: bool) -> Value {
     );
     let approved = approve(&plan, &project, &document);
     assert_eq!(slot(&plan, &document)[KEY], json!("approved"));
+    let resolve_screened_before = plan.boundary_calls().len();
     let (_, resolved) = plan.measured(&[
         "task",
         "update",
@@ -642,13 +645,13 @@ pub(super) fn spike_approval(screened: bool) -> Value {
             what: "review create",
             report: created,
             calls,
-            screening: Vec::new(),
+            screening: create_screening,
         },
         Step {
             what: "review resolve",
             report: Value::Null,
             calls: resolved,
-            screening: Vec::new(),
+            screening: plan.boundary_calls()[resolve_screened_before..].to_vec(),
         },
     ];
     let price = |steps: &[Step]| {
