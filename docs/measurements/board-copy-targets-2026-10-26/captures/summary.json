@@ -12,7 +12,10 @@
     3
    ],
    "same": true,
-   "walk_pages": 0
+   "walk_pages": [
+    0,
+    0
+   ]
   },
   {
    "budget": "github-plan-copy-points-changed",
@@ -26,7 +29,10 @@
     3
    ],
    "same": true,
-   "walk_pages": 0
+   "walk_pages": [
+    0,
+    0
+   ]
   },
   {
    "budget": "github-plan-copy-points-changed",
@@ -40,7 +46,10 @@
     3
    ],
    "same": true,
-   "walk_pages": 0
+   "walk_pages": [
+    0,
+    0
+   ]
   },
   {
    "budget": "github-plan-copy-points-changed",
@@ -54,7 +63,10 @@
     3
    ],
    "same": true,
-   "walk_pages": 0
+   "walk_pages": [
+    0,
+    0
+   ]
   },
   {
    "budget": "github-plan-copy-points-first",
@@ -68,7 +80,10 @@
     14
    ],
    "same": true,
-   "walk_pages": 0
+   "walk_pages": [
+    0,
+    0
+   ]
   },
   {
    "budget": "github-plan-copy-points-first",
@@ -82,7 +97,10 @@
     14
    ],
    "same": true,
-   "walk_pages": 0
+   "walk_pages": [
+    0,
+    0
+   ]
   },
   {
    "budget": "github-plan-copy-points-first",
@@ -96,7 +114,10 @@
     13
    ],
    "same": true,
-   "walk_pages": 0
+   "walk_pages": [
+    0,
+    0
+   ]
   },
   {
    "budget": "github-plan-copy-points-first",
@@ -110,7 +131,10 @@
     14
    ],
    "same": true,
-   "walk_pages": 0
+   "walk_pages": [
+    0,
+    0
+   ]
   },
   {
    "budget": "github-plan-copy-points-unchanged",
@@ -124,7 +148,10 @@
     2
    ],
    "same": true,
-   "walk_pages": 0
+   "walk_pages": [
+    0,
+    0
+   ]
   },
   {
    "budget": "github-plan-copy-points-unchanged",
@@ -138,7 +165,10 @@
     2
    ],
    "same": true,
-   "walk_pages": 0
+   "walk_pages": [
+    0,
+    0
+   ]
   },
   {
    "budget": "github-plan-copy-points-unchanged",
@@ -152,7 +182,10 @@
     2
    ],
    "same": true,
-   "walk_pages": 0
+   "walk_pages": [
+    0,
+    0
+   ]
   },
   {
    "budget": "github-plan-copy-points-unchanged",
@@ -166,7 +199,10 @@
     2
    ],
    "same": true,
-   "walk_pages": 0
+   "walk_pages": [
+    0,
+    0
+   ]
   }
  ],
  "mutation_rises": {

@@ -45,6 +45,36 @@ class Verdict(str, Enum):
     OVER = "over"
 
 
+class Operation(str, Enum):
+    """The four operations the user's targets name."""
+
+    FIRST = "first"
+    CHANGED1 = "changed1"
+    UNCHANGED = "unchanged"
+    APPROVE = "approve"
+
+
+class RequestKind(str, Enum):
+    QUERY = "query"
+    MUTATION = "mutation"
+    REST = "rest"
+    TUNNEL = "tunnel"
+    OTHER = "other"
+
+
+class HostKind(str, Enum):
+    STORE = "store"
+    SUBPROCESS = "subprocess"
+    INTERPRETER = "interpreter"
+    STEP = "step"
+    OTHER = "other"
+
+
+class GateKind(str, Enum):
+    READING = "reading"
+    PAUSE = "pause"
+
+
 @dataclass(frozen=True)
 class Figures:
     """One operation's seconds, GraphQL points and writes; a figure not stated is `None`."""
@@ -60,24 +90,24 @@ class Figures:
 @dataclass(frozen=True)
 class Scenario:
     name: str
-    operation: str
+    operation: Operation
     label: str
 
 
 # The user's targets, as the brief states them. Seconds warn on this host; points and writes
 # are strict.
-TARGETS: dict[str, Figures] = {
-    "first": Figures(seconds=32, points=12, writes=40),
-    "changed1": Figures(seconds=8, points=4),
-    "unchanged": Figures(seconds=7, points=3),
-    "approve": Figures(seconds=7, points=5),
+TARGETS: dict[Operation, Figures] = {
+    Operation.FIRST: Figures(seconds=32, points=12, writes=40),
+    Operation.CHANGED1: Figures(seconds=8, points=4),
+    Operation.UNCHANGED: Figures(seconds=7, points=3),
+    Operation.APPROVE: Figures(seconds=7, points=5),
 }
 # The brief's before figures: the host journey's copies on the loopback board at onetaskgraph
 # 0.12.3. The brief gives none for an approval or for writes.
-BEFORE: dict[str, Figures] = {
-    "first": Figures(seconds=51, points=25),
-    "changed1": Figures(seconds=20.8, points=18),
-    "unchanged": Figures(seconds=17.4, points=14),
+BEFORE: dict[Operation, Figures] = {
+    Operation.FIRST: Figures(seconds=51, points=25),
+    Operation.CHANGED1: Figures(seconds=20.8, points=18),
+    Operation.UNCHANGED: Figures(seconds=17.4, points=14),
 }
 # The same operations measured on GitHub at onetaskgraph 0.11.0 on 2026-10-24
 # (`board-copy-speed-2026-10-18.md`, combined table).
@@ -91,17 +121,25 @@ EARLIER: dict[str, Figures] = {
     "host-approve": Figures(seconds=16.4, points=7, writes=1),
 }
 ROWS = (
-    Scenario("bare-first", "first", "bare store: first copy"),
+    Scenario("bare-first", Operation.FIRST, "bare store: first copy"),
     Scenario(
-        "bare-changed1", "changed1", "bare store: re-copy, one task's body changed"
+        "bare-changed1",
+        Operation.CHANGED1,
+        "bare store: re-copy, one task's body changed",
     ),
-    Scenario("bare-unchanged", "unchanged", "bare store: unchanged re-copy"),
-    Scenario("host-first", "first", "host `just copy-plan`: first copy"),
+    Scenario("bare-unchanged", Operation.UNCHANGED, "bare store: unchanged re-copy"),
+    Scenario("host-first", Operation.FIRST, "host `just copy-plan`: first copy"),
     Scenario(
-        "host-changed1", "changed1", "host `just copy-plan`: one task's body changed"
+        "host-changed1",
+        Operation.CHANGED1,
+        "host `just copy-plan`: one task's body changed",
     ),
-    Scenario("host-unchanged", "unchanged", "host `just copy-plan`: unchanged re-copy"),
-    Scenario("host-approve", "approve", "host `just approve-design`"),
+    Scenario(
+        "host-unchanged",
+        Operation.UNCHANGED,
+        "host `just copy-plan`: unchanged re-copy",
+    ),
+    Scenario("host-approve", Operation.APPROVE, "host `just approve-design`"),
 )
 # The reference-size arithmetic of the timing spike (`board-copy-speed-2026-10-18.md`): every
 # walk page the test board answered is replaced by the pages the same walk takes on a board of
@@ -212,7 +250,7 @@ class Request:
     ms: float
     host: str
     path: str
-    kind: str
+    kind: RequestKind
     op: str
     mutations: int | None
     limits: dict[str, object]
@@ -246,7 +284,7 @@ class HostEvent:
     """One event of the host's own audit: an interpreter's start or exit, a store invocation, a
     host subprocess, or a named host step."""
 
-    kind: str
+    kind: HostKind
     start: float
     end: float
     argv: tuple[str, ...] = ()
@@ -262,12 +300,15 @@ class ScreenCall:
 
 
 def requests_of(path: Path) -> list[Request]:
+    if not path.exists():
+        raise refuse(path, None, "no request log")
     out = []
     for number, r in lines(path):
         start, end = interval(path, number, r)
-        if r.get("kind") not in (*sanitize.REQUEST_KINDS, "other") or not text(
-            r.get("op")
-        ):
+        if r.get("kind") not in (
+            *sanitize.REQUEST_KINDS,
+            RequestKind.OTHER.value,
+        ) or not text(r.get("op")):
             raise refuse(path, number, "a request with no known kind or operation")
         if (
             not count(r.get("seq"))
@@ -289,7 +330,7 @@ def requests_of(path: Path) -> list[Request]:
                 float(r["ms"]),
                 r["host"],
                 r["path"],
-                r["kind"],
+                RequestKind(r["kind"]),
                 r["op"],
                 r.get("mutations"),
                 r["limits"],
@@ -301,15 +342,21 @@ def requests_of(path: Path) -> list[Request]:
 def host_of(path: Path) -> list[HostEvent]:
     out = []
     for number, r in lines(path):
-        kind = r.get("kind")
-        start, end = interval(path, number, r, end_required=kind != "interpreter")
-        if kind not in (*sanitize.HOST_KINDS, "other"):
+        if r.get("kind") not in (*sanitize.HOST_KINDS, HostKind.OTHER.value):
             raise refuse(path, number, "a host event of no known kind")
-        if kind == "store" and not words(r.get("argv")):
+        kind = HostKind(r["kind"])
+        start, end = interval(
+            path, number, r, end_required=kind is not HostKind.INTERPRETER
+        )
+        if "argv" in r and not words(r["argv"]):
+            raise refuse(
+                path, number, "a host event whose command line is not a list of words"
+            )
+        if kind is HostKind.STORE and not words(r.get("argv")):
             raise refuse(path, number, "a store invocation without its command line")
-        if kind == "subprocess" and not text(r.get("program")):
+        if kind is HostKind.SUBPROCESS and not text(r.get("program")):
             raise refuse(path, number, "a host subprocess without its program")
-        if kind in ("step", "interpreter") and not text(r.get("name")):
+        if kind in (HostKind.STEP, HostKind.INTERPRETER) and not text(r.get("name")):
             raise refuse(
                 path, number, "a host step or interpreter event without its name"
             )
@@ -387,7 +434,7 @@ class Reading:
 
 @dataclass(frozen=True)
 class GateEvent:
-    event: str
+    event: GateKind
     proceed: bool
     seconds: float
 
@@ -479,7 +526,9 @@ def quota_of(path: Path) -> Quota:
         seconds = float(event["seconds"]) if event["event"] == "pause" else 0.0
         gate.append(
             GateEvent(
-                event["event"], all(verdicts.values()) if verdicts else False, seconds
+                GateKind(event["event"]),
+                all(verdicts.values()) if verdicts else False,
+                seconds,
             )
         )
     return Quota(
@@ -497,10 +546,33 @@ class Condition:
     layer: str
 
 
+# What each declared setting `config show` reports may hold, by the end of its key.
+CONDITION_VALUES: dict[str, Callable[[object], bool]] = {
+    "plugin": lambda v: isinstance(v, str) and bool(re.fullmatch(r"[a-z-]+", v)),
+    "visibility": lambda v: v in ("public", "private", "unknown"),
+    "enabled": lambda v: isinstance(v, bool),
+    "visibility_command": lambda v: v in ("set", "unset"),
+    "check_command": lambda v: v in ("set", "unset"),
+}
+CONDITION_KEY = re.compile(
+    r"sources\.[a-z-]+\.(plugin|visibility|cache\.enabled)|write_policy\.(visibility|check)_command"
+)
+
+
 def conditions_of(path: Path) -> dict[str, Condition]:
     raw = document(path)
     out = {}
     for key, v in raw.items():
+        if not CONDITION_KEY.fullmatch(key):
+            raise refuse(
+                path, None, f"the condition {key} is not one this measurement declares"
+            )
+        if isinstance(v, dict) and not CONDITION_VALUES[key.rsplit(".", 1)[-1]](
+            v.get("value")
+        ):
+            raise refuse(
+                path, None, f"the condition {key} holds a value it cannot hold"
+            )
         if (
             not isinstance(v, dict)
             or not text(v.get("layer"))
@@ -636,7 +708,7 @@ class Points:
 def price(request: Request, prices: dict[str, int], capture: str) -> int:
     """One GraphQL request's primary points: a query its own dry-run price, a mutation request
     `MUTATION_PRICE` (which the dry run cannot price)."""
-    if request.kind == "mutation":
+    if request.kind is RequestKind.MUTATION:
         return MUTATION_PRICE
     key = f"{capture}/{request.seq}"
     if key not in prices:
@@ -662,7 +734,7 @@ def slope(readings: list[Reading]) -> tuple[float, float]:
 def points_of(capture: Capture, prices: dict[str, int]) -> Points:
     graphql = [r for r in capture.requests if r.graphql and not r.refused]
     figure = sum(price(r, prices, capture.name) for r in graphql)
-    mutations = sum(1 for r in graphql if r.kind == "mutation")
+    mutations = sum(1 for r in graphql if r.kind is RequestKind.MUTATION)
     points = Points(figure, len(graphql) - mutations, mutations, figure + mutations * 4)
     counter = counter_of(capture.quota.burn_before, capture.quota.burn_after)
     if counter is None:
@@ -700,11 +772,11 @@ class Writes:
 
 def writes_of(requests: tuple[Request, ...]) -> Writes:
     sent = [r for r in requests if not r.refused]
-    mutations = [r for r in sent if r.kind == "mutation"]
+    mutations = [r for r in sent if r.kind is RequestKind.MUTATION]
     uploads = sum(1 for r in sent if r.op == UPLOAD)
     carried = sum(r.carried for r in mutations)
     return Writes(
-        requests=sum(1 for r in sent if r.kind != "tunnel"),
+        requests=sum(1 for r in sent if r.kind is not RequestKind.TUNNEL),
         issues_created=sum(r.carried for r in mutations if r.op in CREATES),
         mutation_requests=len(mutations),
         mutations=carried,
@@ -725,7 +797,9 @@ class KindFigures:
         self.requests += 1
         self.points += points
         self.writes += (
-            request.carried if request.kind == "mutation" else int(request.op == UPLOAD)
+            request.carried
+            if request.kind is RequestKind.MUTATION
+            else int(request.op == UPLOAD)
         )
 
 
@@ -733,7 +807,7 @@ def kinds_of(capture: Capture, prices: dict[str, int]) -> dict[str, KindFigures]
     """Every request kind a row sent."""
     out: dict[str, KindFigures] = defaultdict(KindFigures)
     for r in capture.requests:
-        if r.kind != "tunnel" and not r.refused:
+        if r.kind is not RequestKind.TUNNEL and not r.refused:
             out[r.op].add(r, price(r, prices, capture.name) if r.graphql else 0)
     return dict(sorted(out.items()))
 
@@ -785,18 +859,17 @@ def store_label(argv: tuple[str, ...]) -> str:
     return "store invocation: " + " ".join(named[:2] or ["(unnamed)"])
 
 
-# Each kind of host event that is a cause of its own: its priority and how it is named.
-HOST_CAUSES: dict[str, tuple[str, Callable[[HostEvent], str]]] = {
-    "store": ("store", lambda h: store_label(h.argv)),
-    "subprocess": ("subprocess", lambda h: f"host subprocess: {h.program}"),
-    "step": ("step", lambda h: f"host step: {h.name}"),
+HOST_CAUSES: dict[HostKind, tuple[str, Callable[[HostEvent], str]]] = {
+    HostKind.STORE: ("store", lambda h: store_label(h.argv)),
+    HostKind.SUBPROCESS: ("subprocess", lambda h: f"host subprocess: {h.program}"),
+    HostKind.STEP: ("step", lambda h: f"host step: {h.name}"),
 }
 
 
 def network_label(request: Request) -> str:
     if request.graphql:
         return "network round trips: GitHub GraphQL"
-    if request.kind == "tunnel":
+    if request.kind is RequestKind.TUNNEL:
         return "network round trips: tunnelled HTTPS (the image upload's storage and its check)"
     return "network round trips: GitHub REST and uploads"
 
@@ -833,12 +906,16 @@ def intervals_of(capture: Capture) -> tuple[list[Interval], float, float]:
         (
             h.start
             for h in capture.host
-            if h.kind == "interpreter" and h.name == "start"
+            if h.kind is HostKind.INTERPRETER and h.name == "start"
         ),
         default=start,
     )
     last = max(
-        (h.start for h in capture.host if h.kind == "interpreter" and h.name == "exit"),
+        (
+            h.start
+            for h in capture.host
+            if h.kind is HostKind.INTERPRETER and h.name == "exit"
+        ),
         default=end,
     )
     first_event = min(
@@ -929,12 +1006,12 @@ def owners_of(capture: Capture, prices: dict[str, int]) -> dict[Sender, KindFigu
     """Each request kind's points and writes by who sent it: a request made inside the store's
     own `project copy` or `document copy` is the store's; one inside any other store invocation
     the host recipe made is the host's (it chose to make that call)."""
-    calls = [h for h in capture.host if h.kind == "store"] or [
-        HostEvent("store", s.start, s.end, s.argv) for s in capture.steps
+    calls = [h for h in capture.host if h.kind is HostKind.STORE] or [
+        HostEvent(HostKind.STORE, s.start, s.end, s.argv) for s in capture.steps
     ]
     out: dict[Sender, KindFigures] = defaultdict(KindFigures)
     for r in capture.requests:
-        if r.kind == "tunnel" or r.refused:
+        if r.kind is RequestKind.TUNNEL or r.refused:
             continue
         inside = [c for c in calls if c.start <= r.start <= c.end]
         verb = (
@@ -1109,7 +1186,11 @@ class SizePair:
     same: bool  # the same requests by operation at both sizes
     requests: tuple[int, int]
     points: tuple[int | None, int | None]
-    walk_pages: int
+    walk_pages: tuple[int, int]
+
+
+def walk_pages(sent: dict[str, int]) -> int:
+    return sum(n for op, n in sent.items() if any(w in op for w in WALK_WORDS))
 
 
 def size_pairs(recordings: list[Loopback]) -> list[SizePair]:
@@ -1130,11 +1211,7 @@ def size_pairs(recordings: list[Loopback]) -> list[SizePair]:
                     same=a.sent == b.sent,
                     requests=(sum(a.sent.values()), sum(b.sent.values())),
                     points=(a.points, b.points),
-                    walk_pages=sum(
-                        n
-                        for op, n in {**a.sent, **b.sent}.items()
-                        if any(w in op for w in WALK_WORDS)
-                    ),
+                    walk_pages=(walk_pages(a.sent), walk_pages(b.sent)),
                 )
             )
     return pairs
@@ -1326,8 +1403,8 @@ def quota_table(rows: list[Row]) -> str:
     body = []
     for row in rows:
         q = row.capture.quota
-        readings = [e for e in q.gate if e.event == "reading"]
-        pauses = [e for e in q.gate if e.event == "pause"]
+        readings = [e for e in q.gate if e.event is GateKind.READING]
+        pauses = [e for e in q.gate if e.event is GateKind.PAUSE]
         least = q.before["graphql"]
         body.append(
             [
@@ -1430,7 +1507,7 @@ def size_table(pairs: list[SizePair]) -> str:
             f"{p.requests[0]} / {p.requests[1]}",
             "same" if p.same else "**differ**",
             f"{fmt(p.points[0])} / {fmt(p.points[1])}",
-            str(p.walk_pages),
+            f"{p.walk_pages[0]} / {p.walk_pages[1]}",
         ]
         for p in pairs
     ]
@@ -1440,7 +1517,7 @@ def size_table(pairs: list[SizePair]) -> str:
         "requests at 2,000 / 20,000 items",
         "requests by operation",
         "points at 2,000 / 20,000",
-        "walk pages",
+        "walk pages at 2,000 / 20,000",
     ]
     return table(head, body)
 
@@ -1610,10 +1687,12 @@ def spend_table(captures: Path, priced: int) -> str:
         requests = [r for r in requests_of(path / "requests.jsonl") if not r.refused]
         q = quota_of(path / "quota.json")
         figures = Counter(
-            queries=sum(1 for r in requests if r.kind == "query"),
-            mutation_requests=sum(1 for r in requests if r.kind == "mutation"),
-            rest=sum(1 for r in requests if r.kind == "rest"),
-            tunnels=sum(1 for r in requests if r.kind == "tunnel"),
+            queries=sum(1 for r in requests if r.kind is RequestKind.QUERY),
+            mutation_requests=sum(
+                1 for r in requests if r.kind is RequestKind.MUTATION
+            ),
+            rest=sum(1 for r in requests if r.kind is RequestKind.REST),
+            tunnels=sum(1 for r in requests if r.kind is RequestKind.TUNNEL),
             screening=len(screen_of(path / "screen.jsonl")),
             rate_limit_reads=len(q.before["graphql (rateLimit)"].readings)
             + len(q.after["graphql (rateLimit)"].readings)
@@ -1638,7 +1717,6 @@ def spend_table(captures: Path, priced: int) -> str:
     return table(head, body) + "\n\n" + note
 
 
-# Every table the report carries, by the name of its block.
 TABLES: dict[str, Callable[[list[Row], list[SizePair], Path, int], str]] = {
     "targets": lambda rows, pairs, captures, priced: targets_table(rows),
     "over": lambda rows, pairs, captures, priced: over_table(rows),

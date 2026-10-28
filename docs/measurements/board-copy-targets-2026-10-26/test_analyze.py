@@ -1,4 +1,5 @@
 # llmlint: ignore-file[new_code_lands_in_a_project] The report's own recomputation and its tests, run by hand beside the measurement record whose command the report names; docs/measurements is no Nx project, and making it one is a change to the project graph and its four guarded selections, outside this measurement.
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] The raw records these fixtures write are the proxy's, the runner's and the host audit's shapes, and every one is passed through the real harness/sanitize.write, so the analyzer is held to the sanitizer's output here; this suite sits outside every gate only because docs/measurements is no Nx project, as the new_code_lands_in_a_project note states.
 """The analyzer's parser and reconciliation, driven through its own command line.
 
     python3 -m pytest docs/measurements/board-copy-targets-2026-10-26/test_analyze.py
@@ -743,7 +744,7 @@ def test_a_gate_whose_last_reading_refused_is_reported_paused(measured):
         (
             "host.jsonl",
             '{"kind": "store", "argv": [1], "start": 0, "end": 1}',
-            "store invocation without its",
+            "command line is not a list of words",
         ),
         (
             "host.jsonl",
@@ -880,7 +881,7 @@ def test_the_board_size_pairs_compare_requests_by_operation_at_both_sizes(measur
     run(measured, "--write")
     (pair,) = json.loads((root / "summary.json").read_text())["board_size_pairs"]
     assert pair["same"] is False
-    assert pair["walk_pages"] == 1
+    assert pair["walk_pages"] == [0, 1]
     assert "**differ**" in measured[1].read_text()
 
 
@@ -905,7 +906,7 @@ def test_the_committed_loopback_recordings_still_carry_every_pair_the_report_com
         for scenario in ("first", "changed", "unchanged")
         for recording, _ in analyze.SIZES
     }
-    assert all(p.same and p.walk_pages == 0 for p in pairs)
+    assert all(p.same and p.walk_pages == (0, 0) for p in pairs)
 
 
 def test_mutation_rises_that_are_not_whole_numbers_are_refused(measured):
@@ -1037,3 +1038,90 @@ def test_a_cleanup_is_reported_with_what_it_deleted(measured):
         "| `cleanup-20261028T070000` | 0 | 0 | 0 | 0 | 10 (bare) | 0 |"
         in measured[1].read_text()
     )
+
+
+def test_a_mutation_recorded_without_its_count_is_one_write(measured):
+    retake(
+        measured,
+        "bare-changed1",
+        {1: 1},
+        requests=[
+            graphql(1, "SUB_ISSUES", 1.0, 2.0),
+            graphql(2, "UPDATE_ISSUE", 2.0, 2.5, kind="mutation"),
+        ],
+        steps=[store_step("project-copy", 0.5, 3.0)],
+    )
+    run(measured, "--write")
+    assert summary(measured)["bare-changed1"]["writes"]["writes"] == 1
+
+
+def test_search_pages_and_board_pages_are_each_replaced_by_their_own_reference_pages(
+    measured,
+):
+    retake(
+        measured,
+        "bare-unchanged",
+        {1: 2, 2: 5},
+        requests=[graphql(1, "BOARD", 1.0, 2.0), graphql(2, "SEARCH_ISSUES", 2.0, 4.0)],
+        steps=[store_step("project-copy", 0.5, 5.0)],
+    )
+    run(measured, "--write")
+    # 4.5 s measured, less 3 s of pages, plus 20 x 6.95 s and 10 x 6.79 s.
+    expected = "| bare store: unchanged re-copy | 1 BOARD + 1 SEARCH_ISSUES | **208.4 s** | 7 |"
+    assert expected in measured[1].read_text()
+
+
+def test_a_first_copy_over_its_writes_target_is_marked_over(measured):
+    creates = [
+        graphql(n, "CREATE_ISSUES", float(n), n + 0.5, kind="mutation", mutations=11)
+        for n in range(1, 5)
+    ]
+    retake(
+        measured,
+        "host-first",
+        {},
+        requests=creates,
+        steps=[store_step("copy-plan", 0.0, 6.0)],
+        host=host_events(),
+    )
+    run(measured, "--write")
+    row = summary(measured)["host-first"]
+    assert row["writes"]["writes"] == 44
+    assert row["verdicts"]["writes"] == "over"
+    assert (
+        "Over its target: host `just copy-plan`: first copy: writes."
+        in measured[1].read_text()
+    )
+
+
+@pytest.mark.parametrize(
+    ("conditions", "why"),
+    [
+        (
+            {"sources.x.cache.enabled": {"value": "false", "layer": "file"}},
+            "holds a value it cannot hold",
+        ),
+        (
+            {"sources.x.visibility": {"value": "secret", "layer": "file"}},
+            "holds a value it cannot hold",
+        ),
+        (
+            {"page_size": {"value": "50", "layer": "default"}},
+            "is not one this measurement declares",
+        ),
+    ],
+)
+def test_a_condition_the_store_could_not_have_reported_is_refused(
+    measured, conditions, why
+):
+    (measured[0] / "bare-unchanged-20261028T050000" / "conditions.json").write_text(
+        json.dumps(conditions)
+    )
+    with pytest.raises(SystemExit, match=why):
+        run(measured)
+
+
+def test_a_capture_without_its_request_log_is_refused(measured):
+    (measured[0] / "bare-unchanged-20261028T050000" / "requests.jsonl").unlink()
+    with pytest.raises(SystemExit, match="no request log"):
+        run(measured)
