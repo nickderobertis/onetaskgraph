@@ -588,6 +588,11 @@ def main() -> None:
         action="store_true",
         help="print the seven rows' scenarios in the order `all` takes them",
     )
+    parser.add_argument(
+        "--print",
+        choices=("cache", "host-commit"),
+        help="print the cache directory or the host commit this measurement uses, for measure.sh",
+    )
     parser.add_argument("--no-sanitize", action="store_true")
     parser.add_argument(
         "--only",
@@ -597,6 +602,9 @@ def main() -> None:
     args = parser.parse_args()
     if args.list:
         print("\n".join((*BARE, *HOST)))
+        return
+    if args.print:
+        print(CACHE if args.print == "cache" else HOST_COMMIT)
         return
     if args.scenario is None:
         parser.error("name a scenario, or pass --list")

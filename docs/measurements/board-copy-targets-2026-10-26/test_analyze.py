@@ -443,6 +443,11 @@ def test_a_price_that_is_not_a_whole_number_of_points_is_refused(measured, bad):
         ("start", "soon", "not a finite number"),
         ("kind", "carrier-pigeon", "no known kind"),
         ("mutations", -2, "not a whole number"),
+        ("ms", -5.0, "without its sequence, duration or limits"),
+        ("seq", "first", "without its sequence, duration or limits"),
+        ("limits", None, "without its sequence, duration or limits"),
+        ("host", 7, "without its host or path"),
+        ("path", None, "without its host or path"),
     ],
 )
 def test_a_capture_record_the_sanitizer_could_not_have_written_is_refused_by_line(
@@ -972,7 +977,21 @@ def quota_with(measured: tuple[Path, Path], change) -> None:
             lambda q: q["gate"].append(
                 {"event": "reading", "verdicts": {"graphql": "yes"}}
             ),
+            "a gate reading whose verdicts are not yes or no",
+        ),
+        (
+            lambda q: q["gate"].append({"event": "reading", "verdicts": {}}),
             "a gate reading without its verdicts",
+        ),
+        (
+            lambda q: q["gate"].append(
+                {"event": "pause", "seconds": 5, "verdicts": [1]}
+            ),
+            "a gate pause whose verdicts are not yes or no",
+        ),
+        (
+            lambda q: q["burn-before"].reverse(),
+            "`burn-before` readings out of the order they were taken",
         ),
         (
             lambda q: q["gate"].append({"event": "pause", "seconds": -5}),
@@ -1125,3 +1144,52 @@ def test_a_capture_without_its_request_log_is_refused(measured):
     (measured[0] / "bare-unchanged-20261028T050000" / "requests.jsonl").unlink()
     with pytest.raises(SystemExit, match="no request log"):
         run(measured)
+
+
+def test_a_capture_document_that_is_not_json_is_refused(measured):
+    (measured[0] / "bare-unchanged-20261028T050000" / "versions.json").write_text(
+        "{not json"
+    )
+    with pytest.raises(SystemExit, match="versions.json: not JSON"):
+        run(measured)
+
+
+def test_a_counter_read_once_on_each_side_gives_no_background_rate(measured):
+    retake(
+        measured,
+        "bare-changed1",
+        {1: 1},
+        requests=[graphql(1, "SUB_ISSUES", 4.0, 5.0)],
+        steps=[store_step("project-copy", 3.0, 6.0)],
+        burn=([reading(2.0, 100)], [reading(12.0, 104)]),
+    )
+    run(measured, "--write")
+    points = summary(measured)["bare-changed1"]["points"]
+    assert (
+        points["delta"],
+        points["background_rate"],
+        points["background"],
+        points["residual"],
+    ) == (4, 0.0, 0.0, 3.0)
+
+
+def test_host_events_without_an_interpreter_start_or_exit_time_from_the_step_itself(
+    measured,
+):
+    events = [e for e in host_events() if e["kind"] != "interpreter"]
+    retake(
+        measured,
+        "host-unchanged",
+        {1: 1},
+        requests=[graphql(1, "SUB_ISSUES", 3.0, 4.0)],
+        steps=[store_step("copy-plan", 0.0, 6.0)],
+        host=events,
+    )
+    run(measured, "--write")
+    shares = summary(measured)["host-unchanged"]["attribution"]
+    # With no interpreter events the recipe's own launch and exit are unseen: everything before the
+    # first host event is start-up, everything after the last is the host's own Python.
+    assert "recipe launch: just, plan-store.sh and uv run" not in shares
+    assert shares["interpreter and SDK start-up"] == 1.5
+    assert shares["host Python outside the named steps"] == 1.5
+    assert round(sum(shares.values()), 2) == 6.0

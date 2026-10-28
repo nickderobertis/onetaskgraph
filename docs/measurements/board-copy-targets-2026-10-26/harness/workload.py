@@ -13,8 +13,9 @@ store from the answers (see `run.py`), because approval reads its template prove
 
 `python3 workload.py --root DIR --plan ID --out DIR [--variant N]` writes the folder and
 the document's answers. `--variant N` with `--rewrite` instead replaces only the content of
-every record already in the folder, keeping each front matter (and with it every link a
-copy recorded), which is the "every body changed" re-copy.
+the project and every task already in the folder, keeping each front matter (and with it every
+link a copy recorded) and the rendered document as it is; this measurement's one-change re-copy
+uses `rewrite_one`, which replaces one task's content alone.
 """
 
 from __future__ import annotations

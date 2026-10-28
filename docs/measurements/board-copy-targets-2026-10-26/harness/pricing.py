@@ -31,9 +31,10 @@ from collections import defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-CACHE = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / (
-    "board-copy-targets-2026-10-26"
-)
+sys.path.insert(0, str(HERE))
+
+from run import CACHE  # the one definition of where raw runs live
+
 OUT = Path(os.environ.get("SPIKE_LOGS") or HERE.parent / "captures") / "pricing.json"
 
 
