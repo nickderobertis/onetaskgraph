@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -1193,3 +1194,46 @@ def test_host_events_without_an_interpreter_start_or_exit_time_from_the_step_its
     assert shares["interpreter and SDK start-up"] == 1.5
     assert shares["host Python outside the named steps"] == 1.5
     assert round(sum(shares.values()), 2) == 6.0
+
+
+def analyzer(*args: str) -> subprocess.CompletedProcess:
+    """The analyzer run as the report says to run it: its own executable, a fresh interpreter."""
+    return subprocess.run(
+        [sys.executable, str(HERE / "analyze.py"), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_the_executable_reconciles_quietly_and_exits_one_on_drift(measured):
+    root, path = measured
+    stale = analyzer("--captures", str(root), "--report", str(path))
+    assert stale.returncode == 1 and stale.stdout == ""
+    assert "differs from its captures in: targets" in stale.stderr
+    written = analyzer("--captures", str(root), "--report", str(path), "--write")
+    assert (written.returncode, written.stdout, written.stderr) == (0, "", "")
+    checked = analyzer("--captures", str(root), "--report", str(path))
+    assert (checked.returncode, checked.stdout, checked.stderr) == (0, "", "")
+
+
+def test_the_executable_refuses_an_unknown_argument_with_its_usage(measured):
+    refused = analyzer("--captures", str(measured[0]), "--rewrite")
+    assert refused.returncode == 2
+    assert (
+        "usage: analyze.py" in refused.stderr
+        and "unrecognized arguments: --rewrite" in refused.stderr
+    )
+
+
+def test_the_executable_names_a_damaged_capture_and_exits_non_zero(measured):
+    root, path = measured
+    (root / "bare-unchanged-20261028T050000" / "requests.jsonl").write_text(
+        "{not json\n"
+    )
+    damaged = analyzer("--captures", str(root), "--report", str(path))
+    assert damaged.returncode == 1
+    assert (
+        "requests.jsonl:1: not JSON" in damaged.stderr
+        and "take the capture again" in damaged.stderr
+    )
