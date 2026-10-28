@@ -151,14 +151,25 @@ async fn naming_no_task_answers_none_and_a_project_a_missing_id_and_two_targets_
     assert_eq!(several, EngineError::TargetNativeNeedsOne { count: 2 });
 }
 
-/// An `in-memory` source whose every project read — or, with `documents`, document read —
-/// fails as unreachable.
-struct ProbeUnreachable {
-    inner: Box<dyn TaskSource>,
-    documents: bool,
+/// What a [`Faulty`] source fails as unreachable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fault {
+    /// Every project read.
+    Projects,
+    /// Every document read.
+    Documents,
+    /// Every page of a task listing after the first.
+    LaterTaskPages,
 }
 
-impl ProbeUnreachable {
+/// An `in-memory` source that fails what its [`Fault`] names, and answers everything else.
+struct Faulty {
+    inner: Box<dyn TaskSource>,
+    fault: Fault,
+    pages: std::sync::atomic::AtomicUsize,
+}
+
+impl Faulty {
     fn unreachable(what: &str) -> SourceError {
         SourceError::Unavailable {
             message: format!("the {what} could not be reached"),
@@ -167,7 +178,7 @@ impl ProbeUnreachable {
 }
 
 #[async_trait::async_trait]
-impl TaskSource for ProbeUnreachable {
+impl TaskSource for Faulty {
     fn kind(&self) -> &'static str {
         self.inner.kind()
     }
@@ -184,13 +195,13 @@ impl TaskSource for ProbeUnreachable {
         self.inner.get_task(id).await
     }
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
-        if self.documents {
-            return self.inner.get_project(id).await;
+        if self.fault == Fault::Projects {
+            return Err(Self::unreachable("projects"));
         }
-        Err(Self::unreachable("projects"))
+        self.inner.get_project(id).await
     }
     async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
-        if self.documents {
+        if self.fault == Fault::Documents {
             return Err(Self::unreachable("documents"));
         }
         self.inner.get_document(id).await
@@ -200,6 +211,10 @@ impl TaskSource for ProbeUnreachable {
         query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
+        let asked = self.pages.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.fault == Fault::LaterTaskPages && asked > 0 {
+            return Err(Self::unreachable("later pages"));
+        }
         self.inner.query_tasks(query, page).await
     }
     async fn query_projects(
@@ -230,37 +245,55 @@ impl TaskSource for ProbeUnreachable {
     }
 }
 
+/// An engine over `from` holding `T-1` and `T-2`, and `into` holding two items copied from
+/// `from:T-2`, served one a page — the source named by `faulty` failing as `fault` says.
+fn faulty_engine(faulty: &str, fault: Fault) -> Engine {
+    let build = |name: &str, config: Value| {
+        let built = onetaskgraph_in_memory::Plugin
+            .build(&SourceName::new(name).unwrap(), &config, &NoSecrets)
+            .expect("the in-memory plugin builds");
+        let source: Box<dyn TaskSource> = if name == faulty {
+            Box::new(Faulty {
+                inner: built,
+                fault,
+                pages: std::sync::atomic::AtomicUsize::new(0),
+            })
+        } else {
+            built
+        };
+        ConfiguredSource::Ready(ResolvedSource::adopt(
+            SourceName::new(name).unwrap(),
+            source,
+        ))
+    };
+    let carrier = |native: &str| task(native, json!({"onetaskgraph.origin": "from:T-2"}));
+    Engine::new(
+        vec![
+            build(
+                "from",
+                json!({"tasks": [task("T-1", json!({})), task("T-2", json!({}))],
+                       "capabilities": {"documents": "native"}}),
+            ),
+            build(
+                "into",
+                json!({"tasks": [carrier("D-1"), carrier("D-2")],
+                       "capabilities": {"max_page_size": 1}}),
+            ),
+        ],
+        vec![
+            SourceName::new("from").unwrap(),
+            SourceName::new("into").unwrap(),
+        ],
+    )
+}
+
 #[tokio::test]
 async fn an_id_naming_no_task_whose_project_or_document_read_fails_is_refused_by_that_failure() {
-    for (documents, what) in [(false, "projects"), (true, "documents")] {
-        let built = |name: &str| {
-            onetaskgraph_in_memory::Plugin
-                .build(
-                    &SourceName::new(name).unwrap(),
-                    &json!({"tasks": [task("T-1", json!({}))],
-                            "capabilities": {"documents": "native"}}),
-                    &NoSecrets,
-                )
-                .expect("the in-memory plugin builds")
-        };
-        let unreachable = ConfiguredSource::Ready(ResolvedSource::adopt(
-            SourceName::new("from").unwrap(),
-            Box::new(ProbeUnreachable {
-                inner: built("from"),
-                documents,
-            }),
-        ));
-        let into = ConfiguredSource::Ready(ResolvedSource::adopt(
-            SourceName::new("into").unwrap(),
-            built("into"),
-        ));
-        let engine = Engine::new(
-            vec![unreachable, into],
-            vec![
-                SourceName::new("from").unwrap(),
-                SourceName::new("into").unwrap(),
-            ],
-        );
+    for (fault, what) in [
+        (Fault::Projects, "projects"),
+        (Fault::Documents, "documents"),
+    ] {
+        let engine = faulty_engine("from", fault);
         let refused = engine
             .locate(&locating(&["from:X-1"], LocateLookup::NoCounterpart))
             .await
@@ -281,4 +314,35 @@ async fn an_id_naming_no_task_whose_project_or_document_read_fails_is_refused_by
             .expect("a task is read without the probe");
         assert_eq!(located.items.len(), 1);
     }
+}
+
+#[tokio::test]
+async fn every_carrier_is_read_or_the_locate_fails_never_answering_part_of_them() {
+    let engine = engine_paged();
+    let located = engine
+        .locate(&locating(&["from:T-2"], LocateLookup::Counterpart))
+        .await
+        .expect("both pages read");
+    assert_eq!(
+        located.items[0].carriers,
+        Some(vec![id("into:D-1"), id("into:D-2")]),
+        "one a page, both"
+    );
+    // A later page that fails, after the first found the counterpart, fails the locate.
+    let engine = faulty_engine("into", Fault::LaterTaskPages);
+    let refused = engine
+        .locate(&locating(&["from:T-2"], LocateLookup::Counterpart))
+        .await
+        .expect_err("a carrier list it could not finish is no answer");
+    assert!(
+        refused
+            .to_string()
+            .contains("the later pages could not be reached"),
+        "{refused}"
+    );
+}
+
+/// [`faulty_engine`] with nothing failing.
+fn engine_paged() -> Engine {
+    faulty_engine("nothing", Fault::Projects)
 }
