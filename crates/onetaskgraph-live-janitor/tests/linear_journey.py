@@ -88,6 +88,7 @@ class Document:
 
     @classmethod
     def recorded(cls, record: dict[str, Any]) -> 'Document':
+        # Any is confined to nested JSON fixture decoding; schema.rs validates this recorded shape.
         project = record['project']
         return cls(DocumentId(record['id']), record['title'],
                    Team(**record['team']) if record['team'] else None,
@@ -112,6 +113,7 @@ class Response:
 
     @classmethod
     def recorded(cls, record: dict[str, Any]) -> 'Response':
+        # Any accommodates the heterogeneous JSON tree validated upstream by schema.rs.
         page = record['data']['documents']
         return cls(DocumentData(DocumentPage([Document.recorded(node) for node in page['nodes']],
                                              PageInfo(**page['pageInfo']))))
@@ -162,6 +164,7 @@ class Workspace:
         self.malformed = malformed
 
     def answer(self, request: Request) -> dict[str, Any]:
+        # Any admits deliberately malformed wire payloads as well as schema-checked success records.
         self.requests.append(request)
         if 'documentDelete(' in request['query']:
             # read_request validated delete variables before this operation discriminator.
