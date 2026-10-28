@@ -1,6 +1,11 @@
-import { cdJourneyReadSet } from "../test-inputs.mjs";
+import {
+  cdJourneyReadSet,
+  policyJourneyReadSet,
+  cdJourneyFiles,
+  policyJourneyFiles,
+} from "../test-inputs.mjs";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 import { graph, graphReadSet } from "../workflow-graph.mjs";
 import { definitions, refusals } from "./workflow-definitions.mjs";
@@ -80,8 +85,7 @@ test("a job behind one of today's required contexts going missing is refused", (
   }, /required context visual-docs/);
 });
 
-// Graph-only checks stay narrow; the mixed test target also declares every release
-// journey input, including the sources its real publication/build commands consume.
+// Each executable target declares only the external read set its journeys consume.
 function inputProblems(project, target) {
   const expand = (inputs) =>
     inputs.flatMap((input) =>
@@ -91,7 +95,16 @@ function inputProblems(project, target) {
     );
   const graph = graphReadSet().filter((path) => !path.startsWith(".github/"));
   assert.ok(graph.length > 0, "the graph reads no outside file, so this proves nothing");
-  const outside = [...new Set([...graph, ...(target === "test" ? cdJourneyReadSet : [])])];
+  const outside = [
+    ...new Set([
+      ...graph,
+      ...(target === "cd-journeys"
+        ? cdJourneyReadSet
+        : target === "policy-tests"
+          ? policyJourneyReadSet
+          : []),
+    ]),
+  ];
   const inputs = expand(project.targets[target].inputs ?? ["default"]);
   return [
     ...outside
@@ -106,15 +119,41 @@ function inputProblems(project, target) {
 
 test("each target is keyed on the combined read set of the tests it runs", () => {
   const project = JSON.parse(readFileSync(new URL("../project.json", import.meta.url), "utf8"));
-  for (const target of ["ci-contexts", "test"])
+  for (const target of ["ci-contexts", "policy-tests", "cd-journeys"])
     assert.deepEqual(inputProblems(project, target), []);
 });
 
-test("a release journey read omitted from its target's inputs is refused", () => {
-  for (const path of cdJourneyReadSet) {
-    const project = JSON.parse(readFileSync(new URL("../project.json", import.meta.url), "utf8"));
-    for (const [name, inputs] of Object.entries(project.namedInputs))
-      project.namedInputs[name] = inputs.filter((input) => input !== `{workspaceRoot}/${path}`);
-    assert.ok(inputProblems(project, "test").includes(`test is not keyed on ${path}`), path);
+test("an undeclared read in either journey target is refused", () => {
+  const graph = graphReadSet().filter((path) => !path.startsWith(".github/"));
+  for (const [target, reads] of [
+    ["policy-tests", policyJourneyReadSet],
+    ["cd-journeys", cdJourneyReadSet],
+  ]) {
+    for (const path of new Set([...graph, ...reads])) {
+      const project = JSON.parse(readFileSync(new URL("../project.json", import.meta.url), "utf8"));
+      for (const [name, inputs] of Object.entries(project.namedInputs))
+        project.namedInputs[name] = inputs.filter((input) => input !== `{workspaceRoot}/${path}`);
+      assert.ok(
+        inputProblems(project, target).includes(`${target} is not keyed on ${path}`),
+        `${target}: ${path}`,
+      );
+    }
   }
+});
+
+test("the aggregate runs every journey exactly once through its owning target", () => {
+  const project = JSON.parse(readFileSync(new URL("../project.json", import.meta.url), "utf8"));
+  assert.equal(project.targets.test.executor, "nx:noop");
+  for (const [target, files] of [
+    ["policy-tests", policyJourneyFiles],
+    ["cd-journeys", cdJourneyFiles],
+  ]) {
+    assert.ok(project.targets.test.dependsOn.includes(target));
+    assert.equal(project.targets[target].options.command, `node --test ${files.join(" ")}`);
+  }
+  const files = [...policyJourneyFiles, ...cdJourneyFiles];
+  const actual = readdirSync(new URL("./", import.meta.url))
+    .filter((file) => file.endsWith(".test.mjs"))
+    .map((file) => `.github/tests/${file}`);
+  assert.deepEqual(files.sort(), actual.sort());
 });
