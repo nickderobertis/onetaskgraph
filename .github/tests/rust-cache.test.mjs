@@ -81,6 +81,28 @@ test("removing, moving or disabling cleanup in any Rust cache job is refused", (
   assert.ok(checked > 0, "must exercise real cache jobs");
 });
 
+// Validate the upstream declarations this journey interprets; a changed action
+// contract must fail explicitly rather than silently exercising different inputs.
+function actionManifest(text) {
+  const manifest = parse(text);
+  const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  assert.ok(
+    record(manifest) && record(manifest.inputs) && record(manifest.runs),
+    "invalid action manifest",
+  );
+  for (const [name, input] of Object.entries(manifest.inputs)) {
+    assert.match(name, /^[a-z][a-z0-9-]*$/);
+    assert.ok(record(input), `invalid input declaration: ${name}`);
+    assert.ok(
+      input.default === undefined ||
+        typeof input.default === "string" ||
+        typeof input.default === "boolean",
+      `invalid input default: ${name}`,
+    );
+  }
+  return manifest;
+}
+
 // Run the distributed action unchanged against a loopback cache miss. Rustup and
 // both compilers are real; the remote cache service alone is replaced by a loopback peer.
 test("the real cache action ignores floating stable but tracks the pin and lockfile", async () => {
@@ -94,7 +116,7 @@ test("the real cache action ignores floating stable but tracks the pin and lockf
   });
   try {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const setup = parse(
+    const setup = actionManifest(
       command("curl", [
         "--fail",
         "--silent",
@@ -103,10 +125,29 @@ test("the real cache action ignores floating stable but tracks the pin and lockf
         "https://raw.githubusercontent.com/actions-rust-lang/setup-rust-toolchain/v1/action.yml",
       ]),
     );
+    assert.ok(Array.isArray(setup.runs.steps), "setup action must declare steps");
+    for (const step of setup.runs.steps) {
+      assert.ok(
+        step !== null && typeof step === "object" && !Array.isArray(step),
+        "invalid setup step",
+      );
+      for (const field of ["uses", "name", "run"])
+        assert.ok(
+          step[field] === undefined || typeof step[field] === "string",
+          `invalid step ${field}`,
+        );
+    }
     const cacheStep = setup.runs.steps.find((step) =>
       step.uses?.startsWith("Swatinem/rust-cache@"),
     );
     assert.ok(cacheStep, "setup action must declare its cache action");
+    assert.match(cacheStep.uses, /^Swatinem\/rust-cache@[0-9a-f]{40}$/);
+    assert.ok(
+      cacheStep.with !== null &&
+        typeof cacheStep.with === "object" &&
+        !Array.isArray(cacheStep.with),
+      "invalid forwarded cache inputs",
+    );
     const revision = cacheStep.uses.split("@")[1];
     const action = join(scratch, "action");
     command("git", ["init", "-q", action]);
@@ -119,14 +160,21 @@ test("the real cache action ignores floating stable but tracks the pin and lockf
       revision,
     ]);
     command("git", ["-C", action, "checkout", "-q", "FETCH_HEAD"]);
-    const manifest = parse(readFileSync(join(action, "action.yml"), "utf8"));
-    const pin = read("rust-toolchain.toml").match(/^channel = "([^"]+)"/m)[1];
+    const manifest = actionManifest(readFileSync(join(action, "action.yml"), "utf8"));
+    assert.equal(manifest.runs.using, "node24");
+    assert.equal(typeof manifest.runs.main, "string");
+    assert.match(manifest.runs.main, /^dist\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.js$/);
+    const pinMatch = read("rust-toolchain.toml").match(/^channel = "([0-9]+\.[0-9]+\.[0-9]+)"$/m);
+    assert.ok(pinMatch, "journey requires an explicit pinned Rust release");
+    const pin = pinMatch[1];
     const other = "1.99.0";
     assert.notEqual(pin, other);
     const rustupHome = join(scratch, "rustup");
     const toolchains = join(rustupHome, "toolchains");
     mkdirSync(toolchains, { recursive: true });
-    const host = command("rustc", ["-vV"]).match(/^host: (.+)$/m)[1];
+    const hostMatch = command("rustc", ["-vV"]).match(/^host: ([A-Za-z0-9_-]+)$/m);
+    assert.ok(hostMatch, "rustc must report a valid host triple");
+    const host = hostMatch[1];
     for (const version of [pin, other]) {
       // Reuse an installed compiler where available; otherwise install into this
       // test's disposable rustup home, never into the contributor's toolchains.
@@ -187,7 +235,16 @@ test("the real cache action ignores floating stable but tracks the pin and lockf
     // Resolve the composite action's input forwarding using the same defaults
     // these jobs use (none supplies a toolchain/cache override).
     for (const [name, expression] of Object.entries(cacheStep.with)) {
+      assert.ok(Object.hasOwn(manifest.inputs, name), `unknown cache input: ${name}`);
+      assert.equal(typeof expression, "string");
+      assert.match(
+        expression,
+        /^\$\{\{\s*inputs\.[a-z-]+(?:\s*\|\|\s*inputs\.[a-z-]+)*\s*\}\}$/,
+        "unsupported forwarding expression",
+      );
       const references = [...expression.matchAll(/inputs\.([a-z-]+)/g)];
+      for (const [, input] of references)
+        assert.ok(Object.hasOwn(setup.inputs, input), `unknown setup input: ${input}`);
       assert.ok(references.length, `unsupported cache input: ${expression}`);
       const value =
         references.map(([, input]) => setup.inputs[input]?.default ?? "").find(Boolean) ?? "";
@@ -198,7 +255,11 @@ test("the real cache action ignores floating stable but tracks the pin and lockf
     const environmentStep = setup.runs.steps.find(
       (step) => step.name === "Setting Environment Variables",
     );
-    assert.ok(environmentStep);
+    assert.ok(
+      environmentStep && typeof environmentStep.run === "string",
+      "setup action must declare its environment script",
+    );
+    assert.equal(typeof setup.inputs.rustflags?.default, "string");
     command("bash", ["-e", "-c", environmentStep.run], {
       cwd: workspace,
       env: { ...env, _srt_NEW_RUSTFLAGS: setup.inputs.rustflags.default },
