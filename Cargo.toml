@@ -68,8 +68,10 @@ github-graphql-node-count = "0.0.1"
 # tests/e2e/budget_commands.rs fails when the two pins part.
 onebudgetspec-core = "=0.1.5"
 # Which image syntax in a content is inside code, and so is no asset reference: CommonMark's
-# code spans and code blocks, read by a parser rather than restated.
-pulldown-cmark = { version = "0.13.4", default-features = false }
+# code spans and code blocks, read by a parser rather than restated. No earlier floor than
+# 0.13.5: every 0.13 release before it is RUSTSEC-2026-0414, and a published crate's
+# requirement is what a consumer resolves.
+pulldown-cmark = { version = "0.13.5", default-features = false }
 # The Linear budgets' runner checks a budget id against onebudgetspec's own exported pattern.
 regex = "1.13.1"
 schemars = { version = "1.2.2", features = ["chrono04"] }
