@@ -96,7 +96,11 @@ def run(
             "repository { nameWithOwner } } } }",
             {"id": issue_id},
         )
-        node = (body.get("data") or {}).get("node")
+        if body.get("errors") or not isinstance(body.get("data"), dict):
+            # An unanswered read says nothing about whether the issue is still there.
+            outcome["failed"] += 1
+            continue
+        node = body["data"].get("node")
         if not node:
             outcome["gone"] += 1
             continue

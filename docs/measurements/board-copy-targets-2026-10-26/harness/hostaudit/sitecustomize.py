@@ -123,7 +123,7 @@ def _patch_asyncio(module) -> None:
     async def create_subprocess_exec(program, *args, **kwargs):
         start = time.time()
         process = await original(program, *args, **kwargs)
-        argv = _store_argv([program, *args])
+        argv = _program_and_args([program, *args])
         if argv is None:
             return process
         done = []
@@ -175,7 +175,7 @@ class _Finder(importlib.abc.MetaPathFinder):
         return spec
 
 
-def _store_argv(args) -> tuple[str, list[str]] | None:
+def _program_and_args(args) -> tuple[str, list[str]] | None:
     """Every subprocess, as its program's name and (for the store alone) its arguments."""
     argv = args if isinstance(args, (list, tuple)) else [args]
     if not argv:
@@ -207,7 +207,7 @@ if LOG:
     _wait = subprocess.Popen.wait
 
     def _popen_init(self, args, *rest, **kwargs):
-        self._spike_store = _store_argv(args)
+        self._spike_store = _program_and_args(args)
         self._spike_start = time.time()
         _init(self, args, *rest, **kwargs)
 

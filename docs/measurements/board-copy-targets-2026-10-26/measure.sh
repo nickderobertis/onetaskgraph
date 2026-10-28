@@ -48,7 +48,9 @@ log="$cache/measure-$(date -u +%Y%m%dT%H%M%S).log"
 quiet() {
     if ! "$@" >>"$log" 2>&1; then
         tail -n 30 "$log" >&2
-        echo "measure.sh: '$*' failed; its whole output is in $log" >&2
+        echo "measure.sh: '$*' failed; its whole output is in $log. Fix the cause it names, move a" \
+            "failed row's capture to captures/superseded/, run \`measure.sh cleanup\` if it created" \
+            "issues, and take that scenario again" >&2
         exit 1
     fi
 }

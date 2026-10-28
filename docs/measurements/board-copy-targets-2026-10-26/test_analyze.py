@@ -28,22 +28,7 @@ import analyze
 
 RESET = 1_800_000_000
 OTHER_RESET = 1_799_999_000
-BLOCKS = (
-    "targets",
-    "over",
-    "detail",
-    "owners",
-    "seconds",
-    "burn",
-    "quota",
-    "conditions",
-    "workload",
-    "board-size",
-    "reference-size",
-    "writes",
-    "spend",
-    "probes",
-)
+BLOCKS = tuple(analyze.TABLES)
 
 
 def graphql(
@@ -667,9 +652,7 @@ def test_rounded_shares_still_sum_to_the_rounded_total():
     assert any(key.startswith("1 further causes under 0.005 s each (d)") for key in out)
 
 
-def test_a_figure_over_its_target_is_marked_over_and_a_mutation_price_flip_is_named(
-    measured,
-):
+def test_a_figure_over_its_target_is_marked_over(measured):
     many = [graphql(n, "ISSUE", 3.0, 3.1) for n in range(1, 7)]
     many.append(graphql(7, "UPDATE_ISSUE", 3.2, 3.3, kind="mutation", mutations=1))
     retake(
@@ -689,6 +672,195 @@ def test_a_figure_over_its_target_is_marked_over_and_a_mutation_price_flip_is_na
         in measured[1].read_text()
     )
     assert summary(measured)["host-changed1"]["verdicts"]["points"] == "within"
+
+
+def test_a_row_within_its_points_target_that_a_five_point_mutation_would_put_over_is_named(
+    measured,
+):
+    # Four queries and one mutation request: 5 points, the approval's target; 9 at five a mutation.
+    reads = [graphql(n, "ISSUE", 3.0, 3.1) for n in range(1, 5)]
+    reads.append(graphql(5, "UPDATE_ISSUE", 3.2, 3.3, kind="mutation", mutations=1))
+    retake(
+        measured,
+        "host-approve",
+        dict.fromkeys(range(1, 5), 1),
+        requests=reads,
+        steps=[store_step("approve-design", 0.0, 6.0)],
+        host=host_events(),
+    )
+    run(measured, "--write")
+    row = summary(measured)["host-approve"]
+    assert (row["points"]["figure"], row["points"]["at_five"]) == (5, 9)
+    assert row["verdicts"]["points"] == "within"
+    text = measured[1].read_text()
+    assert "| 9 — **would flip to over** |" in text
+    # An unchanged re-copy sends no mutation, so its verdict cannot move.
+    assert "| 1 — no flip |" in text
+
+
+def test_a_gate_whose_last_reading_refused_is_reported_paused(measured):
+    low = {
+        "event": "reading",
+        "at": 0.0,
+        "buckets": buckets(1000),
+        "verdicts": {"core": {"proceed": True}, "graphql": {"proceed": False}},
+    }
+    retake(
+        measured,
+        "host-approve",
+        {1: 1},
+        requests=[graphql(1, "SUB_ISSUES", 3.0, 4.0)],
+        steps=[store_step("approve-design", 0.0, 6.0)],
+        host=host_events(),
+        events=[low],
+    )
+    run(measured, "--write")
+    text = measured[1].read_text()
+    assert "| paused | none |" in text
+
+
+@pytest.mark.parametrize(
+    ("file", "line", "why"),
+    [
+        ("requests.jsonl", "{not json", "requests.jsonl:1: not JSON"),
+        ("requests.jsonl", "[1, 2]", "requests.jsonl:1: not a JSON object"),
+        ("steps.jsonl", "", "steps.jsonl: no timed step"),
+        (
+            "steps.jsonl",
+            '{"argv": "copy", "start": 0, "end": 1, "returncode": 0}',
+            "without its command line",
+        ),
+        (
+            "screen.jsonl",
+            '{"name": "guess", "start": 0, "end": 1}',
+            "neither an inspect nor a check",
+        ),
+        (
+            "host.jsonl",
+            '{"kind": "store", "start": 0, "end": 1}',
+            "store invocation without its command line",
+        ),
+        (
+            "host.jsonl",
+            '{"kind": "store", "argv": [1], "start": 0, "end": 1}',
+            "store invocation without its",
+        ),
+        (
+            "host.jsonl",
+            '{"kind": "subprocess", "start": 0, "end": 1}',
+            "subprocess without its program",
+        ),
+        ("host.jsonl", '{"kind": "step", "start": 0, "end": 1}', "without its name"),
+        ("host.jsonl", '{"kind": "seance", "start": 0, "end": 1}', "no known kind"),
+    ],
+)
+def test_a_record_file_the_sanitizer_could_not_have_written_is_refused(
+    measured, file, line, why
+):
+    (measured[0] / "host-first-20261028T050000" / file).write_text(line + "\n")
+    with pytest.raises(SystemExit, match=why):
+        run(measured)
+
+
+@pytest.mark.parametrize(
+    ("file", "value", "why"),
+    [
+        (
+            "quota.json",
+            {"quota-before": {"buckets": {}}},
+            "does not carry every bucket",
+        ),
+        ("quota.json", "not an object", "not a JSON object"),
+        (
+            "conditions.json",
+            {"sources.x.plugin": "local-md"},
+            "without its value and layer",
+        ),
+        ("versions.json", {"store": 12}, "a version that is not a string"),
+        ("cache-after.json", {"files": -1, "bytes": 0}, "without its files and bytes"),
+        ("workload.json", {"project": [10]}, "is not its bytes and characters"),
+    ],
+)
+def test_a_capture_document_the_sanitizer_could_not_have_written_is_refused(
+    measured, file, value, why
+):
+    (measured[0] / "bare-unchanged-20261028T050000" / file).write_text(
+        json.dumps(value)
+    )
+    with pytest.raises(SystemExit, match=why):
+        run(measured)
+
+
+def probe() -> dict:
+    return {
+        "idle_background": {"readings": [reading(0.0, 10), reading(3.0, 13)]},
+        "onevcs_inspect": {
+            "inspects": 3,
+            "before": [{"core_used": 1, "graphql_used": 5}],
+            "after": [{"core_used": 4, "graphql_used": 5}],
+        },
+    }
+
+
+def test_the_probes_give_the_background_rate_and_what_one_inspect_spends(measured):
+    (measured[0] / "probes").mkdir()
+    (measured[0] / "probes" / "background-and-onevcs.json").write_text(
+        json.dumps(probe())
+    )
+    run(measured, "--write")
+    text = measured[1].read_text()
+    assert (
+        f"| idle background, counter resetting {RESET} | 2 reads over 3.0 s | 3 points | 1.00 points/s |"
+        in text
+    )
+    assert "| 1 REST request and 0 GraphQL points per inspect |" in text
+
+
+@pytest.mark.parametrize(
+    ("change", "why"),
+    [
+        (lambda p: p.pop("onevcs_inspect"), "without its `before` readings"),
+        (
+            lambda p: p["onevcs_inspect"].update(inspects=0),
+            "positive count of inspects",
+        ),
+        (
+            lambda p: p["idle_background"].update(
+                readings=[{"at": "now", "used": 1, "reset": 1}]
+            ),
+            "without timed readings",
+        ),
+    ],
+)
+def test_a_malformed_probe_is_refused(measured, change, why):
+    malformed = probe()
+    change(malformed)
+    (measured[0] / "probes").mkdir()
+    (measured[0] / "probes" / "background-and-onevcs.json").write_text(
+        json.dumps(malformed)
+    )
+    with pytest.raises(SystemExit, match=why):
+        run(measured)
+
+
+def test_a_pricing_file_whose_prices_are_not_an_object_is_refused(measured):
+    (measured[0] / "pricing.json").write_text(json.dumps({"requests": [1, 2]}))
+    with pytest.raises(
+        SystemExit, match="`requests` or `mutation_rises` is not an object"
+    ):
+        run(measured)
+
+
+def test_a_loopback_recording_whose_operations_are_not_counts_is_refused(measured):
+    path = measured[0] / "loopback" / "github-plan-copy-points-unchanged.json"
+    bad = {"unscreened": {"requests by operation": {"reading": "one"}, "points": 1}}
+    path.write_text(
+        json.dumps(
+            {"budget": "github-plan-copy-points-unchanged", "detail": json.dumps(bad)}
+        )
+    )
+    with pytest.raises(SystemExit, match="requests by operation that are not counts"):
+        run(measured)
 
 
 def test_the_board_size_pairs_compare_requests_by_operation_at_both_sizes(measured):

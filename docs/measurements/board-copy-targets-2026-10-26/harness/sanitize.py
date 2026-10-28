@@ -26,6 +26,11 @@ NODE_ID = re.compile(
 )
 ISSUE_URL = re.compile(r"https?://github\.com/[^\s\"']+")
 LIMIT_FIELDS = ("limit", "remaining", "used", "reset")
+# The kinds a sanitized record may carry; anything else is written as `other`. `analyze.py` reads
+# these, so the two cannot name them differently.
+REQUEST_KINDS = ("query", "mutation", "rest", "tunnel")
+HOST_KINDS = ("store", "subprocess", "interpreter", "step")
+SCREEN_NAMES = ("inspect", "check")
 SPAN_ATTRS = ("op", "kind", "attempt", "limiter", "operation")
 STORE_VERBS = {
     "project",
@@ -100,9 +105,7 @@ def request(record: dict) -> dict:
         if re.fullmatch(r"[a-z0-9.-]+", record["host"])
         else "other",
         "path": rest_path(record["host"], record["path"], record["kind"]),
-        "kind": record["kind"]
-        if record["kind"] in ("query", "mutation", "rest", "tunnel")
-        else "other",
+        "kind": record["kind"] if record["kind"] in REQUEST_KINDS else "other",
         "op": operation(record),
         "req_bytes": int(record["req_bytes"]),
         "resp_bytes": int(record["resp_bytes"]),
@@ -162,9 +165,7 @@ def argv(words: list[str]) -> list[str]:
 
 def host(record: dict) -> dict:
     out = {
-        "kind": record["kind"]
-        if record["kind"] in ("store", "subprocess", "interpreter", "step")
-        else "other",
+        "kind": record["kind"] if record["kind"] in HOST_KINDS else "other",
         "start": round(record["start"], 3),
         "end": round(record.get("end", record["start"]), 3),
     }
@@ -235,7 +236,7 @@ def write(run: Path, out: Path) -> Path:
             [
                 {
                     "kind": "screen",
-                    "name": r["name"] if r["name"] in ("inspect", "check") else "other",
+                    "name": r["name"] if r["name"] in SCREEN_NAMES else "other",
                     "start": round(float(r["start"]), 3),
                     "end": round(float(r["end"]), 3),
                     "returncode": int(r["returncode"]),

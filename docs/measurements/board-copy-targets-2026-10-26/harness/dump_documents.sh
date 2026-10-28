@@ -16,7 +16,11 @@ checkout="$1"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 crate="$checkout/crates/onetaskgraph-github-projects"
 names=$(grep -oE '^    pub const [A-Z_]+: &str' "$crate/src/lib.rs" | awk '{print $3}' | tr -d ':' \
-    | grep -vE '^(KIND|DESIGN_TITLE_PREFIX|PRIORITY_FIELD)$')
+    | grep -vE '^(KIND|DESIGN_TITLE_PREFIX|PRIORITY_FIELD)$' || true)
+if [ -z "$names" ]; then
+    echo "dump_documents.sh: no \`pub const NAME: &str\` document found in $crate/src/lib.rs; name a checkout of the measured tag, or update the pattern if the plugin moved its documents" >&2
+    exit 1
+fi
 mkdir -p "$crate/examples"
 trap 'rm -rf "$crate/examples"' EXIT
 {

@@ -6,12 +6,15 @@
 
 Each table of the report sits between `<!-- analyze:begin NAME -->` and `<!-- analyze:end NAME -->`.
 The default run recomputes every one from `captures/` and exits 1, naming the table, when the
-report's copy differs from what the captures say; `--write` puts the recomputed tables in place.
-Both write `captures/summary.json`, every figure the tables are made from.
+report's copy differs from what the captures say; `--write` puts the recomputed tables in place,
+and exits 1 when the report has no place for one or names one that does not exist. Both write
+`captures/summary.json`, every figure the tables are made from.
 
 A row is the latest capture of its scenario (`captures/<scenario>-<UTC stamp>/`); a capture moved
-to `captures/superseded/` is never read as a row. The targets and the before figures are the
-brief's, stated once below, and no figure here is compared against anything else.
+to `captures/superseded/` is never read as a row. Every capture is parsed into typed records and
+refused, naming its file and line, when it is not what `harness/sanitize.py` writes. The targets
+and the before figures are the brief's, stated once below, and no figure here is compared against
+anything else.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Callable
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "harness"))
@@ -116,6 +120,7 @@ UPLOAD = sanitize.operation(
         "path": "/user-attachments/assets",
     }
 )
+CREATES = ("CREATE_ISSUE", "CREATE_ISSUES")
 
 
 class CaptureError(SystemExit):
@@ -127,23 +132,6 @@ def refuse(path: Path, number: int | None, why: str) -> CaptureError:
     return CaptureError(
         f"analyze.py: {where}: {why}; take the capture again with measure.sh"
     )
-
-
-def lines(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    out = []
-    for number, line in enumerate(path.read_text().splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError as error:
-            raise refuse(path, number, f"not JSON ({error})") from error
-        if not isinstance(record, dict):
-            raise refuse(path, number, "not a JSON object")
-        out.append(record)
-    return out
 
 
 def finite(value: object) -> bool:
@@ -158,24 +146,123 @@ def count(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
-REQUEST_KINDS = {"query", "mutation", "rest", "tunnel", "other"}
-HOST_KINDS = {"store", "subprocess", "interpreter", "step", "other"}
+def text(value: object) -> bool:
+    return isinstance(value, str)
 
 
-def timed(path: Path, records: list[dict]) -> list[dict]:
-    """`records`, each held to a finite `start` no later than its finite `end`."""
-    for number, r in enumerate(records, 1):
-        if not finite(r.get("start")) or not finite(r.get("end", r.get("start"))):
-            raise refuse(path, number, "a start or end that is not a finite number")
-        if r.get("end", r["start"]) < r["start"]:
-            raise refuse(path, number, "an end before its start")
-    return records
+def words(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(w, str) for w in value)
 
 
-def requests_of(path: Path) -> list[dict]:
-    records = timed(path, lines(path))
-    for number, r in enumerate(records, 1):
-        if r.get("kind") not in REQUEST_KINDS or not isinstance(r.get("op"), str):
+def document(path: Path) -> dict:
+    """One capture's JSON object, or a refusal naming the file."""
+    try:
+        value = json.loads(path.read_text())
+    except ValueError as error:
+        raise refuse(path, None, f"not JSON ({error})") from error
+    if not isinstance(value, dict):
+        raise refuse(path, None, "not a JSON object")
+    return value
+
+
+def lines(path: Path) -> list[tuple[int, dict]]:
+    """Each JSON object of a JSON-lines capture with its line number."""
+    if not path.exists():
+        return []
+    out = []
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError as error:
+            raise refuse(path, number, f"not JSON ({error})") from error
+        if not isinstance(record, dict):
+            raise refuse(path, number, "not a JSON object")
+        out.append((number, record))
+    return out
+
+
+def interval(
+    path: Path, number: int, record: dict, end_required: bool = True
+) -> tuple[float, float]:
+    start, end = (
+        record.get("start"),
+        record.get("end", None if end_required else record.get("start")),
+    )
+    if not finite(start) or not finite(end):
+        raise refuse(path, number, "a start or end that is not a finite number")
+    if end < start:
+        raise refuse(path, number, "an end before its start")
+    return float(start), float(end)
+
+
+@dataclass(frozen=True)
+class Request:
+    """One request the proxy recorded, as sanitized."""
+
+    seq: int
+    start: float
+    end: float
+    ms: float
+    host: str
+    path: str
+    kind: str
+    op: str
+    mutations: int | None
+    limits: dict[str, object]
+
+    @property
+    def refused(self) -> bool:
+        return self.host == "refused"
+
+    @property
+    def graphql(self) -> bool:
+        return self.path == "/graphql"
+
+    @property
+    def carried(self) -> int:
+        """How many mutations it carried: an aliased one's count, else one."""
+        return 1 if self.mutations is None else self.mutations
+
+
+@dataclass(frozen=True)
+class Step:
+    """One timed command of a row."""
+
+    argv: tuple[str, ...]
+    start: float
+    end: float
+    returncode: int
+
+
+@dataclass(frozen=True)
+class HostEvent:
+    """One event of the host's own audit: an interpreter's start or exit, a store invocation, a
+    host subprocess, or a named host step."""
+
+    kind: str
+    start: float
+    end: float
+    argv: tuple[str, ...] = ()
+    program: str = ""
+    name: str = ""
+
+
+@dataclass(frozen=True)
+class ScreenCall:
+    name: str
+    start: float
+    end: float
+
+
+def requests_of(path: Path) -> list[Request]:
+    out = []
+    for number, r in lines(path):
+        start, end = interval(path, number, r)
+        if r.get("kind") not in (*sanitize.REQUEST_KINDS, "other") or not text(
+            r.get("op")
+        ):
             raise refuse(path, number, "a request with no known kind or operation")
         if (
             not count(r.get("seq"))
@@ -185,46 +272,300 @@ def requests_of(path: Path) -> list[dict]:
             raise refuse(
                 path, number, "a request without its sequence, duration or limits"
             )
-        if not isinstance(r.get("host"), str) or not isinstance(r.get("path"), str):
+        if not text(r.get("host")) or not text(r.get("path")):
             raise refuse(path, number, "a request without its host or path")
         if "mutations" in r and not count(r["mutations"]):
             raise refuse(path, number, "a mutation count that is not a whole number")
-    return records
+        out.append(
+            Request(
+                r["seq"],
+                start,
+                end,
+                float(r["ms"]),
+                r["host"],
+                r["path"],
+                r["kind"],
+                r["op"],
+                r.get("mutations"),
+                r["limits"],
+            )
+        )
+    return out
 
 
-def host_of(path: Path) -> list[dict]:
-    records = timed(path, lines(path))
-    for number, r in enumerate(records, 1):
-        if r.get("kind") not in HOST_KINDS:
+def host_of(path: Path) -> list[HostEvent]:
+    out = []
+    for number, r in lines(path):
+        kind = r.get("kind")
+        start, end = interval(path, number, r, end_required=kind != "interpreter")
+        if kind not in (*sanitize.HOST_KINDS, "other"):
             raise refuse(path, number, "a host event of no known kind")
-        if r["kind"] == "store" and not isinstance(r.get("argv"), list):
+        if kind == "store" and not words(r.get("argv")):
             raise refuse(path, number, "a store invocation without its command line")
-    return records
+        if kind == "subprocess" and not text(r.get("program")):
+            raise refuse(path, number, "a host subprocess without its program")
+        if kind in ("step", "interpreter") and not text(r.get("name")):
+            raise refuse(
+                path, number, "a host step or interpreter event without its name"
+            )
+        out.append(
+            HostEvent(
+                kind,
+                start,
+                end,
+                tuple(r.get("argv", ())),
+                r.get("program", ""),
+                r.get("name", ""),
+            )
+        )
+    return out
 
 
-def steps_of(path: Path) -> list[dict]:
-    records = timed(path, lines(path))
-    if not records:
-        raise refuse(path, None, "no timed step")
-    for number, r in enumerate(records, 1):
-        if not isinstance(r.get("argv"), list) or not isinstance(
-            r.get("returncode"), int
-        ):
+def steps_of(path: Path) -> list[Step]:
+    out = []
+    for number, r in lines(path):
+        start, end = interval(path, number, r)
+        if not words(r.get("argv")) or not isinstance(r.get("returncode"), int):
             raise refuse(path, number, "a step without its command line or exit status")
-    return records
+        out.append(Step(tuple(r["argv"]), start, end, r["returncode"]))
+    if not out:
+        raise refuse(path, None, "no timed step")
+    return out
 
 
-def prices_of(path: Path) -> dict[str, int]:
-    pricing = json.loads(path.read_text()) if path.exists() else {}
-    requests = pricing.get("requests", {})
-    if not isinstance(requests, dict):
-        raise refuse(path, None, "`requests` is not an object")
+def screen_of(path: Path) -> list[ScreenCall]:
+    out = []
+    for number, r in lines(path):
+        start, end = interval(path, number, r)
+        if r.get("name") not in (*sanitize.SCREEN_NAMES, "other"):
+            raise refuse(
+                path, number, "a screening call that is neither an inspect nor a check"
+            )
+        out.append(ScreenCall(r["name"], start, end))
+    return out
+
+
+def prices_of(path: Path) -> tuple[dict[str, int], dict[str, list[int]]]:
+    """Every query's dry-run price by `<capture>/<seq>`, and every run's observed mutation rises."""
+    pricing = document(path) if path.exists() else {}
+    requests, rises = pricing.get("requests", {}), pricing.get("mutation_rises", {})
+    if not isinstance(requests, dict) or not isinstance(rises, dict):
+        raise refuse(path, None, "`requests` or `mutation_rises` is not an object")
     for key, value in requests.items():
         if not count(value):
             raise refuse(
                 path, None, f"the price of {key} is not a whole number of points"
             )
-    return dict(requests)
+    for key, value in rises.items():
+        if not isinstance(value, list) or not all(isinstance(v, int) for v in value):
+            raise refuse(
+                path, None, f"the mutation rises of {key} are not whole numbers"
+            )
+    return dict(requests), dict(rises)
+
+
+@dataclass(frozen=True)
+class Bucket:
+    limit: int
+    used: int
+    remaining: int
+    reset: int
+    readings: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class Reading:
+    at: float
+    used: int
+    reset: int
+
+
+@dataclass(frozen=True)
+class GateEvent:
+    event: str
+    proceed: bool
+    seconds: float
+
+
+@dataclass(frozen=True)
+class Quota:
+    """The allowance around a row: the gate's events, both readings, and the idle samples."""
+
+    before: dict[str, Bucket]
+    after: dict[str, Bucket]
+    gate: tuple[GateEvent, ...]
+    burn_before: tuple[Reading, ...]
+    burn_after: tuple[Reading, ...]
+
+
+BUCKETS = ("core", "graphql", "graphql (GET /rate_limit)", "graphql (rateLimit)")
+
+
+def quota_of(path: Path) -> Quota:
+    q = document(path)
+
+    def buckets(name: str) -> dict[str, Bucket]:
+        raw = (q.get(name) or {}).get("buckets")
+        if not isinstance(raw, dict) or any(b not in raw for b in BUCKETS):
+            raise refuse(
+                path, None, f"`{name}` does not carry every bucket {', '.join(BUCKETS)}"
+            )
+        out = {}
+        for b, v in raw.items():
+            if not isinstance(v, dict) or not all(
+                count(v.get(k)) for k in ("limit", "used", "remaining", "reset")
+            ):
+                raise refuse(
+                    path,
+                    None,
+                    f"`{name}` bucket {b} without its limit, used, remaining and reset",
+                )
+            readings = v.get("readings", [])
+            if not isinstance(readings, list) or not all(count(r) for r in readings):
+                raise refuse(
+                    path,
+                    None,
+                    f"`{name}` bucket {b} with readings that are not whole numbers",
+                )
+            out[b] = Bucket(
+                v["limit"], v["used"], v["remaining"], v["reset"], tuple(readings)
+            )
+        if not out["graphql"].limit:
+            raise refuse(path, None, f"`{name}` reports a GraphQL limit of 0")
+        return out
+
+    def burn(name: str) -> tuple[Reading, ...]:
+        raw = q.get(name, [])
+        if not isinstance(raw, list) or not all(
+            isinstance(r, dict)
+            and finite(r.get("at"))
+            and count(r.get("used"))
+            and count(r.get("reset"))
+            for r in raw
+        ):
+            raise refuse(path, None, f"`{name}` is not a list of timed readings")
+        return tuple(Reading(float(r["at"]), r["used"], r["reset"]) for r in raw)
+
+    gate = []
+    for event in q.get("gate", []):
+        if not isinstance(event, dict) or event.get("event") not in (
+            "reading",
+            "pause",
+        ):
+            raise refuse(
+                path, None, "a gate event that is neither a reading nor a pause"
+            )
+        verdicts = event.get("verdicts", {})
+        if event["event"] == "reading" and (
+            not isinstance(verdicts, dict)
+            or not all(isinstance(v, bool) for v in verdicts.values())
+        ):
+            raise refuse(path, None, "a gate reading without its verdicts")
+        if event["event"] == "pause" and not finite(event.get("seconds")):
+            raise refuse(path, None, "a gate pause without its seconds")
+        gate.append(
+            GateEvent(
+                event["event"],
+                all(verdicts.values()) if verdicts else False,
+                float(event.get("seconds", 0.0)),
+            )
+        )
+    return Quota(
+        buckets("quota-before"),
+        buckets("quota-after"),
+        tuple(gate),
+        burn("burn-before"),
+        burn("burn-after"),
+    )
+
+
+@dataclass(frozen=True)
+class Condition:
+    value: object
+    layer: str
+
+
+def conditions_of(path: Path) -> dict[str, Condition]:
+    raw = document(path)
+    out = {}
+    for key, v in raw.items():
+        if (
+            not isinstance(v, dict)
+            or not text(v.get("layer"))
+            or not isinstance(v.get("value"), (str, bool))
+        ):
+            raise refuse(path, None, f"the condition {key} without its value and layer")
+        out[key] = Condition(v["value"], v["layer"])
+    return out
+
+
+def strings_of(path: Path) -> dict[str, str]:
+    raw = document(path)
+    if not all(text(v) for v in raw.values()):
+        raise refuse(path, None, "a version that is not a string")
+    return dict(raw)
+
+
+@dataclass(frozen=True)
+class CacheState:
+    files: int
+    bytes: int
+
+
+def cache_of(path: Path) -> CacheState:
+    raw = document(path)
+    if not count(raw.get("files")) or not count(raw.get("bytes")):
+        raise refuse(path, None, "a cache state without its files and bytes")
+    return CacheState(raw["files"], raw["bytes"])
+
+
+def workload_of(path: Path) -> dict[str, tuple[int, int]]:
+    raw = document(path)
+    out = {}
+    for label, sizes in raw.items():
+        if (
+            not isinstance(sizes, list)
+            or len(sizes) != 2
+            or not all(count(s) for s in sizes)
+        ):
+            raise refuse(
+                path, None, f"the size of {label} is not its bytes and characters"
+            )
+        out[label] = (sizes[0], sizes[1])
+    return out
+
+
+@dataclass(frozen=True)
+class Capture:
+    """One row's sanitized capture, parsed."""
+
+    name: str
+    requests: tuple[Request, ...]
+    steps: tuple[Step, ...]
+    host: tuple[HostEvent, ...]
+    screen: tuple[ScreenCall, ...]
+    quota: Quota
+    versions: dict[str, str]
+    conditions: dict[str, Condition]
+    cache_before: CacheState
+    cache_after: CacheState
+    workload: dict[str, tuple[int, int]]
+
+
+def load(path: Path) -> Capture:
+    return Capture(
+        name=path.name,
+        requests=tuple(requests_of(path / "requests.jsonl")),
+        steps=tuple(steps_of(path / "steps.jsonl")),
+        host=tuple(host_of(path / "host.jsonl")),
+        screen=tuple(screen_of(path / "screen.jsonl")),
+        quota=quota_of(path / "quota.json"),
+        versions=strings_of(path / "versions.json"),
+        conditions=conditions_of(path / "conditions.json"),
+        cache_before=cache_of(path / "cache-before.json"),
+        cache_after=cache_of(path / "cache-after.json"),
+        workload=workload_of(path / "workload.json"),
+    )
 
 
 def latest_captures(captures: Path) -> dict[str, Path]:
@@ -237,6 +578,23 @@ def latest_captures(captures: Path) -> dict[str, Path]:
     return found
 
 
+def every_capture(captures: Path) -> list[tuple[Path, bool]]:
+    """Every capture directory, rows and superseded alike, in the order they were taken, each with
+    whether it was superseded."""
+    named = [
+        (p, False)
+        for p in captures.iterdir()
+        if p.is_dir() and re.fullmatch(r".+-\d{8}T\d{6}", p.name)
+    ]
+    superseded = captures / "superseded"
+    named += (
+        [(p, True) for p in superseded.iterdir() if p.is_dir()]
+        if superseded.exists()
+        else []
+    )
+    return sorted(named, key=lambda entry: entry[0].name.rsplit("-", 1)[-1])
+
+
 @dataclass
 class Points:
     """A row's GraphQL primary points: GitHub's own price of every GraphQL request it sent, with
@@ -246,138 +604,134 @@ class Points:
     queries: int
     mutation_requests: int
     at_five: int
-    counter: int | None
-    before_used: int | None
-    after_used: int | None
-    delta: int | None
-    background_rate: float | None
-    background: float | None
-    residual: float | None
+    counter: int | None = None
+    before_used: int | None = None
+    after_used: int | None = None
+    delta: int | None = None
+    background_rate: float | None = None
+    background: float | None = None
+    residual: float | None = None
 
 
-def price(request: dict, prices: dict[str, int], capture: str) -> int:
+def price(request: Request, prices: dict[str, int], capture: str) -> int:
     """One GraphQL request's primary points: a query its own dry-run price, a mutation request
     `MUTATION_PRICE` (which the dry run cannot price)."""
-    if request["kind"] == "mutation":
+    if request.kind == "mutation":
         return MUTATION_PRICE
-    key = f"{capture}/{request['seq']}"
+    key = f"{capture}/{request.seq}"
     if key not in prices:
         raise SystemExit(
-            f"analyze.py: no dry-run price for {key} ({request['op']}); run harness/pricing.py"
+            f"analyze.py: no dry-run price for {key} ({request.op}); run harness/pricing.py"
         )
     return prices[key]
 
 
-def counter_of(before: list[dict], after: list[dict]) -> int | None:
+def counter_of(before: tuple[Reading, ...], after: tuple[Reading, ...]) -> int | None:
     """The counter (by its reset) both idle samples read, the later-resetting if two did."""
-    shared = {r["reset"] for r in before} & {r["reset"] for r in after}
+    shared = {r.reset for r in before} & {r.reset for r in after}
     return max(shared) if shared else None
 
 
-def slope(readings: list[dict]) -> tuple[float, float]:
+def slope(readings: list[Reading]) -> tuple[float, float]:
     """The rise of `used` across one counter's readings, and the seconds it took."""
     if len(readings) < 2:
         return 0.0, 0.0
-    return float(readings[-1]["used"] - readings[0]["used"]), readings[-1][
-        "at"
-    ] - readings[0]["at"]
+    return float(readings[-1].used - readings[0].used), readings[-1].at - readings[0].at
 
 
-def points_of(
-    quota: dict, requests: list[dict], prices: dict[str, int], capture: str
-) -> Points:
-    graphql = [
-        r for r in requests if r["path"] == "/graphql" and r["host"] != "refused"
-    ]
-    figure = sum(price(r, prices, capture) for r in graphql)
-    mutations = sum(1 for r in graphql if r["kind"] == "mutation")
-    before, after = quota.get("burn-before", []), quota.get("burn-after", [])
-    counter = counter_of(before, after)
+def points_of(capture: Capture, prices: dict[str, int]) -> Points:
+    graphql = [r for r in capture.requests if r.graphql and not r.refused]
+    figure = sum(price(r, prices, capture.name) for r in graphql)
+    mutations = sum(1 for r in graphql if r.kind == "mutation")
+    points = Points(figure, len(graphql) - mutations, mutations, figure + mutations * 4)
+    counter = counter_of(capture.quota.burn_before, capture.quota.burn_after)
     if counter is None:
-        return Points(
-            figure,
-            len(graphql) - mutations,
-            mutations,
-            figure + mutations * 4,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-    b = [r for r in before if r["reset"] == counter]
-    a = [r for r in after if r["reset"] == counter]
+        return points
+    b = [r for r in capture.quota.burn_before if r.reset == counter]
+    a = [r for r in capture.quota.burn_after if r.reset == counter]
     rise_b, time_b = slope(b)
     rise_a, time_a = slope(a)
     rate = (rise_b + rise_a) / (time_b + time_a) if time_b + time_a else 0.0
-    delta = a[0]["used"] - b[-1]["used"]
-    background = rate * (a[0]["at"] - b[-1]["at"])
-    return Points(
-        figure=figure,
-        queries=len(graphql) - mutations,
-        mutation_requests=mutations,
-        at_five=figure + mutations * 4,
-        counter=counter,
-        before_used=b[-1]["used"],
-        after_used=a[0]["used"],
-        delta=delta,
-        background_rate=round(rate, 3),
-        background=round(background, 1),
-        residual=round(delta - figure - background, 1),
+    delta = a[0].used - b[-1].used
+    background = rate * (a[0].at - b[-1].at)
+    points.counter, points.before_used, points.after_used, points.delta = (
+        counter,
+        b[-1].used,
+        a[0].used,
+        delta,
     )
+    points.background_rate = round(rate, 3)
+    points.background = round(background, 1)
+    points.residual = round(delta - figure - background, 1)
+    return points
 
 
-def writes_of(requests: list[dict]) -> dict[str, int]:
+@dataclass(frozen=True)
+class Writes:
     """Individual mutations (each aliased one counted) plus uploads, and the requests carrying them."""
-    sent = [r for r in requests if r["host"] != "refused"]
-    mutations = [r for r in sent if r["kind"] == "mutation"]
-    uploads = [r for r in sent if r["op"] == UPLOAD]
-    carried = sum(r.get("mutations", 1) for r in mutations)
-    created = sum(
-        r.get("mutations", 1)
-        for r in mutations
-        if r["op"] in ("CREATE_ISSUE", "CREATE_ISSUES")
-    )
-    return {
-        "requests": len([r for r in sent if r["kind"] != "tunnel"]),
-        "issues_created": created,
-        "mutation_requests": len(mutations),
-        "mutations": carried,
-        "uploads": len(uploads),
-        "writes": carried + len(uploads),
-    }
+
+    requests: int
+    issues_created: int
+    mutation_requests: int
+    mutations: int
+    uploads: int
+    writes: int
 
 
-def kinds_of(
-    requests: list[dict], prices: dict[str, int], capture: str
-) -> dict[str, dict[str, int]]:
-    """Every request kind a row sent: how many, the points and the writes they carried."""
-    out: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"requests": 0, "points": 0, "writes": 0}
+def writes_of(requests: tuple[Request, ...]) -> Writes:
+    sent = [r for r in requests if not r.refused]
+    mutations = [r for r in sent if r.kind == "mutation"]
+    uploads = sum(1 for r in sent if r.op == UPLOAD)
+    carried = sum(r.carried for r in mutations)
+    return Writes(
+        requests=sum(1 for r in sent if r.kind != "tunnel"),
+        issues_created=sum(r.carried for r in mutations if r.op in CREATES),
+        mutation_requests=len(mutations),
+        mutations=carried,
+        uploads=uploads,
+        writes=carried + uploads,
     )
-    for r in requests:
-        if r["kind"] == "tunnel" or r["host"] == "refused":
-            continue
-        entry = out[r["op"]]
-        entry["requests"] += 1
-        if r["path"] == "/graphql":
-            entry["points"] += price(r, prices, capture)
-        if r["kind"] == "mutation":
-            entry["writes"] += r.get("mutations", 1)
-        if r["op"] == UPLOAD:
-            entry["writes"] += 1
+
+
+@dataclass
+class KindFigures:
+    """How many requests of one kind, and the points and writes they carried."""
+
+    requests: int = 0
+    points: int = 0
+    writes: int = 0
+
+    def add(self, request: Request, points: int) -> None:
+        self.requests += 1
+        self.points += points
+        self.writes += (
+            request.carried if request.kind == "mutation" else int(request.op == UPLOAD)
+        )
+
+
+def kinds_of(capture: Capture, prices: dict[str, int]) -> dict[str, KindFigures]:
+    """Every request kind a row sent."""
+    out: dict[str, KindFigures] = defaultdict(KindFigures)
+    for r in capture.requests:
+        if r.kind != "tunnel" and not r.refused:
+            out[r.op].add(r, price(r, prices, capture.name) if r.graphql else 0)
     return dict(sorted(out.items()))
 
 
-def screening_of(screen: list[dict]) -> dict[str, float]:
-    counts = Counter(r["name"] for r in screen)
-    return {
-        "inspect": counts.get("inspect", 0),
-        "check": counts.get("check", 0),
-        "seconds": round(sum(r["end"] - r["start"] for r in screen), 3),
-    }
+@dataclass(frozen=True)
+class Screening:
+    inspect: int
+    check: int
+    seconds: float
+
+
+def screening_of(screen: tuple[ScreenCall, ...]) -> Screening:
+    counts = Counter(r.name for r in screen)
+    return Screening(
+        counts.get("inspect", 0),
+        counts.get("check", 0),
+        round(sum(r.end - r.start for r in screen), 3),
+    )
 
 
 # Causes in the order an instant is given to them when several are under way at once: a
@@ -391,9 +745,10 @@ PRIORITY = (
     "python",
     "launch",
 )
+RANK = {name: index for index, name in enumerate(PRIORITY)}
 
 
-@dataclass
+@dataclass(frozen=True)
 class Interval:
     start: float
     end: float
@@ -401,95 +756,91 @@ class Interval:
     label: str
 
 
-def store_label(argv: list[str]) -> str:
-    words = [
+def store_label(argv: tuple[str, ...]) -> str:
+    named = [
         w
         for w in argv
         if not w.startswith("<") and not w.startswith("--") and ":" not in w
     ]
-    return "store invocation: " + " ".join(words[:2] or ["(unnamed)"])
+    return "store invocation: " + " ".join(named[:2] or ["(unnamed)"])
 
 
 # Each kind of host event that is a cause of its own: its priority and how it is named.
-HOST_CAUSES = {
-    "store": ("store", lambda h: store_label(h["argv"])),
-    "subprocess": ("subprocess", lambda h: f"host subprocess: {h['program']}"),
-    "step": ("step", lambda h: f"host step: {h['name']}"),
+HOST_CAUSES: dict[str, tuple[str, Callable[[HostEvent], str]]] = {
+    "store": ("store", lambda h: store_label(h.argv)),
+    "subprocess": ("subprocess", lambda h: f"host subprocess: {h.program}"),
+    "step": ("step", lambda h: f"host step: {h.name}"),
 }
 
 
-def intervals_of(capture: dict) -> tuple[list[Interval], float, float]:
+def network_label(request: Request) -> str:
+    if request.graphql:
+        return "network round trips: GitHub GraphQL"
+    if request.kind == "tunnel":
+        return "network round trips: tunnelled HTTPS (the image upload's storage and its check)"
+    return "network round trips: GitHub REST and uploads"
+
+
+def intervals_of(capture: Capture) -> tuple[list[Interval], float, float]:
     """Every cause's interval in a row, with the row's measured start and end."""
-    steps = capture["steps"]
-    start, end = min(s["start"] for s in steps), max(s["end"] for s in steps)
-    rank = {name: index for index, name in enumerate(PRIORITY)}
-    out: list[Interval] = []
-    for r in capture["screen"]:
-        out.append(
+    start, end = min(s.start for s in capture.steps), max(s.end for s in capture.steps)
+    out = [
+        Interval(
+            r.start,
+            r.end,
+            RANK["write screening"],
+            f"write screening: onevcs boundary {r.name}",
+        )
+        for r in capture.screen
+    ]
+    out += [
+        Interval(r.start, r.end, RANK["network"], network_label(r))
+        for r in capture.requests
+        if not r.refused
+    ]
+    if not capture.host:
+        out += [
             Interval(
-                r["start"],
-                r["end"],
-                rank["write screening"],
-                f"write screening: onevcs boundary {r['name']}",
+                s.start,
+                s.end,
+                RANK["store"],
+                "store invocation: " + " ".join(s.argv[:2]),
             )
-        )
-    for r in capture["requests"]:
-        if r["host"] == "refused":
-            continue
-        label = (
-            "network round trips: GitHub GraphQL"
-            if r["path"] == "/graphql"
-            else (
-                "network round trips: tunnelled HTTPS (the image upload's storage and its check)"
-                if r["kind"] == "tunnel"
-                else "network round trips: GitHub REST and uploads"
-            )
-        )
-        out.append(Interval(r["start"], r["end"], rank["network"], label))
-    host = capture["host"]
-    if host:
-        interpreters = [h for h in host if h["kind"] == "interpreter"]
-        first = min(
-            (h["start"] for h in interpreters if h["name"] == "start"), default=start
-        )
-        last = max(
-            (h["start"] for h in interpreters if h["name"] == "exit"), default=end
-        )
-        events = [h for h in host if h["kind"] in ("store", "subprocess", "step")]
-        first_event = min((h["start"] for h in events), default=first)
-        out.append(
-            Interval(
-                start,
-                first,
-                rank["launch"],
-                "recipe launch: just, plan-store.sh and uv run",
-            )
-        )
-        out.append(
-            Interval(first, first_event, rank["launch"], "interpreter and SDK start-up")
-        )
-        out.append(
-            Interval(
-                first_event, last, rank["python"], "host Python outside the named steps"
-            )
-        )
-        out.append(
-            Interval(last, end, rank["launch"], "interpreter exit and recipe teardown")
-        )
-        for h in host:
-            if h["kind"] in HOST_CAUSES:
-                cause, label = HOST_CAUSES[h["kind"]]
-                out.append(Interval(h["start"], h["end"], rank[cause], label(h)))
-    else:
-        for s in steps:
-            out.append(
-                Interval(
-                    s["start"],
-                    s["end"],
-                    rank["store"],
-                    "store invocation: " + " ".join(s["argv"][:2]),
-                )
-            )
+            for s in capture.steps
+        ]
+        return out, start, end
+    first = min(
+        (
+            h.start
+            for h in capture.host
+            if h.kind == "interpreter" and h.name == "start"
+        ),
+        default=start,
+    )
+    last = max(
+        (h.start for h in capture.host if h.kind == "interpreter" and h.name == "exit"),
+        default=end,
+    )
+    first_event = min(
+        (h.start for h in capture.host if h.kind in HOST_CAUSES), default=first
+    )
+    out += [
+        Interval(
+            start,
+            first,
+            RANK["launch"],
+            "recipe launch: just, plan-store.sh and uv run",
+        ),
+        Interval(first, first_event, RANK["launch"], "interpreter and SDK start-up"),
+        Interval(
+            first_event, last, RANK["python"], "host Python outside the named steps"
+        ),
+        Interval(last, end, RANK["launch"], "interpreter exit and recipe teardown"),
+    ]
+    for h in capture.host:
+        if h.kind in HOST_CAUSES:
+            cause, label = HOST_CAUSES[h.kind]
+            out.append(Interval(h.start, h.end, RANK[cause], label(h)))
     return out, start, end
 
 
@@ -509,8 +860,7 @@ def attribute(intervals: list[Interval], start: float, end: float) -> dict[str, 
         middle = (a + b) / 2
         live = [i for i in intervals if i.start <= middle < i.end]
         if live:
-            chosen = min(live, key=lambda i: (i.priority, -i.start))
-            shares[chosen.label] += b - a
+            shares[min(live, key=lambda i: (i.priority, -i.start)).label] += b - a
         else:
             shares["unattributed"] += b - a
     return dict(shares)
@@ -542,138 +892,52 @@ def rounded(
     return out
 
 
-@dataclass
-class Row:
-    scenario: str
-    operation: str
-    label: str
-    capture: str
-    seconds: float
-    points: Points
-    writes: dict[str, int]
-    kinds: dict[str, dict[str, int]]
-    screening: dict[str, float]
-    attribution: dict[str, float]
-    owners: dict[str, dict[str, int]]
-    versions: dict
-    conditions: dict
-    cache: dict
-    workload: dict
-    quota: dict
-    walk_pages: dict[str, int]
-    walk_ms: float
-    refused: int
-    returncodes: list[int]
-    verdicts: dict[str, Verdict] = field(default_factory=dict)
-
-
-def load(path: Path) -> dict:
-    def optional(name: str) -> dict:
-        target = path / name
-        return json.loads(target.read_text()) if target.exists() else {}
-
-    return {
-        "requests": requests_of(path / "requests.jsonl"),
-        "steps": steps_of(path / "steps.jsonl"),
-        "host": host_of(path / "host.jsonl"),
-        "screen": timed(path / "screen.jsonl", lines(path / "screen.jsonl")),
-        "quota": optional("quota.json"),
-        "versions": optional("versions.json"),
-        "conditions": optional("conditions.json"),
-        "cache-before": optional("cache-before.json"),
-        "cache-after": optional("cache-after.json"),
-        "workload": optional("workload.json"),
-    }
-
-
-def owners_of(
-    capture: dict, prices: dict[str, int], name: str
-) -> dict[str, dict[str, int]]:
+def owners_of(capture: Capture, prices: dict[str, int]) -> dict[str, KindFigures]:
     """Each request kind's points and writes by who sent it: a request made inside the store's
     own `project copy` or `document copy` is the store's; one inside any other store invocation
     the host recipe made is the host's (it chose to make that call)."""
-    calls = capture["host"] or [
-        {"kind": "store", "argv": s["argv"], "start": s["start"], "end": s["end"]}
-        for s in capture["steps"]
+    calls = [h for h in capture.host if h.kind == "store"] or [
+        HostEvent("store", s.start, s.end, s.argv) for s in capture.steps
     ]
-    stores = [c for c in calls if c["kind"] == "store"]
-    out: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"points": 0, "writes": 0, "requests": 0}
-    )
-    for r in capture["requests"]:
-        if r["kind"] == "tunnel" or r["host"] == "refused":
+    out: dict[str, KindFigures] = defaultdict(KindFigures)
+    for r in capture.requests:
+        if r.kind == "tunnel" or r.refused:
             continue
-        inside = [c for c in stores if c["start"] <= r["start"] <= c["end"]]
+        inside = [c for c in calls if c.start <= r.start <= c.end]
         verb = (
-            store_label(inside[-1]["argv"]).removeprefix("store invocation: ")
+            store_label(inside[-1].argv).removeprefix("store invocation: ")
             if inside
             else "(no store invocation)"
         )
         owner = "store" if tuple(verb.split()[:2]) in COPY_VERBS else "host"
-        key = f"{owner} | {verb} | {r['op']}"
-        out[key]["requests"] += 1
-        if r["path"] == "/graphql":
-            out[key]["points"] += price(r, prices, name)
-        if r["kind"] == "mutation":
-            out[key]["writes"] += r.get("mutations", 1)
-        if r["op"] == UPLOAD:
-            out[key]["writes"] += 1
+        out[f"{owner} | {verb} | {r.op}"].add(
+            r, price(r, prices, capture.name) if r.graphql else 0
+        )
     return dict(sorted(out.items()))
 
 
-def row_of(
-    scenario: str, operation: str, label: str, path: Path, prices: dict[str, int]
-) -> Row:
-    capture = load(path)
-    steps = capture["steps"]
-    seconds = round(sum(s["end"] - s["start"] for s in steps), 3)
-    intervals, start, end = intervals_of(capture)
-    # A bare row's two commands are timed back to back; the gap between them is the harness's.
-    total = seconds
-    shares = attribute(intervals, start, end)
-    if len(steps) > 1:
-        gaps = sum(b["start"] - a["end"] for a, b in zip(steps, steps[1:]))
-        shares["unattributed"] = shares.get("unattributed", 0.0) - gaps
-        if abs(shares["unattributed"]) < 1e-6:
-            del shares["unattributed"]
-    walk = Counter(r["op"] for r in capture["requests"] if r["op"] in WALK_PAGE_SECONDS)
-    row = Row(
-        scenario=scenario,
-        operation=operation,
-        label=label,
-        capture=path.name,
-        seconds=seconds,
-        points=points_of(capture["quota"], capture["requests"], prices, path.name),
-        writes=writes_of(capture["requests"]),
-        kinds=kinds_of(capture["requests"], prices, path.name),
-        screening=screening_of(capture["screen"]),
-        attribution=rounded(shares, total),
-        owners=owners_of(capture, prices, path.name),
-        versions=capture["versions"],
-        conditions=capture["conditions"],
-        cache={"before": capture["cache-before"], "after": capture["cache-after"]},
-        workload=capture["workload"],
-        quota=capture["quota"],
-        walk_pages={op: walk.get(op, 0) for op in WALK_PAGE_SECONDS},
-        walk_ms=sum(
-            r["ms"] for r in capture["requests"] if r["op"] in WALK_PAGE_SECONDS
-        ),
-        refused=sum(1 for r in capture["requests"] if r["host"] == "refused"),
-        returncodes=[s["returncode"] for s in steps],
-    )
-    target = TARGETS[operation]
-    measured = Figures(
-        seconds=row.seconds, points=row.points.figure, writes=row.writes["writes"]
-    )
-    row.verdicts = {
-        name: verdict(measured.of(name), target.of(name))
-        for name in ("seconds", "points", "writes")
-        if target.of(name) is not None
-    }
-    row.verdicts["points at 5 per mutation"] = verdict(
-        row.points.at_five, target.points
-    )
-    return row
+@dataclass
+class Row:
+    scenario: Scenario
+    capture: Capture
+    seconds: float
+    points: Points
+    writes: Writes
+    kinds: dict[str, KindFigures]
+    screening: Screening
+    attribution: dict[str, float]
+    owners: dict[str, KindFigures]
+    walk_pages: dict[str, int]
+    walk_ms: float
+    verdicts: dict[str, Verdict] = field(default_factory=dict)
+
+    @property
+    def label(self) -> str:
+        return self.scenario.label
+
+    @property
+    def target(self) -> Figures:
+        return TARGETS[self.scenario.operation]
 
 
 def verdict(figure: float | None, bar: float | None) -> Verdict:
@@ -682,6 +946,45 @@ def verdict(figure: float | None, bar: float | None) -> Verdict:
         if figure is not None and bar is not None and figure <= bar
         else Verdict.OVER
     )
+
+
+def row_of(scenario: Scenario, path: Path, prices: dict[str, int]) -> Row:
+    capture = load(path)
+    seconds = round(sum(s.end - s.start for s in capture.steps), 3)
+    intervals, start, end = intervals_of(capture)
+    shares = attribute(intervals, start, end)
+    # A bare row's two commands are timed back to back; the gap between them is the harness's.
+    gaps = sum(b.start - a.end for a, b in zip(capture.steps, capture.steps[1:]))
+    if gaps:
+        shares["unattributed"] = shares.get("unattributed", 0.0) - gaps
+        if abs(shares["unattributed"]) < 1e-6:
+            del shares["unattributed"]
+    walk = Counter(r.op for r in capture.requests if r.op in WALK_PAGE_SECONDS)
+    row = Row(
+        scenario=scenario,
+        capture=capture,
+        seconds=seconds,
+        points=points_of(capture, prices),
+        writes=writes_of(capture.requests),
+        kinds=kinds_of(capture, prices),
+        screening=screening_of(capture.screen),
+        attribution=rounded(shares, seconds),
+        owners=owners_of(capture, prices),
+        walk_pages={op: walk.get(op, 0) for op in WALK_PAGE_SECONDS},
+        walk_ms=sum(r.ms for r in capture.requests if r.op in WALK_PAGE_SECONDS),
+    )
+    measured = Figures(
+        seconds=row.seconds, points=row.points.figure, writes=row.writes.writes
+    )
+    row.verdicts = {
+        name: verdict(measured.of(name), row.target.of(name))
+        for name in ("seconds", "points", "writes")
+        if row.target.of(name) is not None
+    }
+    row.verdicts["points at 5 per mutation"] = verdict(
+        row.points.at_five, row.target.points
+    )
+    return row
 
 
 def reference_seconds(row: Row) -> float:
@@ -697,26 +1000,53 @@ def reference_seconds(row: Row) -> float:
     return round(row.seconds - row.walk_ms / 1000 + extra, 1)
 
 
-def loopback(captures: Path) -> list[dict]:
-    """Each loopback telemetry recording of the adopted release: per scenario and board size, the
-    requests by operation its detail carries."""
+@dataclass(frozen=True)
+class Recording:
+    """One configuration of one loopback budget recording: what it sent, by operation."""
+
+    sent: dict[str, int]
+    points: int | None
+
+
+@dataclass(frozen=True)
+class Loopback:
+    """One loopback telemetry recording of the adopted release, by configuration."""
+
+    budget: str
+    recordings: dict[str, Recording]
+
+
+def loopback(captures: Path) -> list[Loopback]:
     out = []
     for path in sorted((captures / "loopback").glob("*.json")):
-        record = json.loads(path.read_text())
+        record = document(path)
         detail = record.get("detail")
-        detail = json.loads(detail) if isinstance(detail, str) else detail
-        if not isinstance(record.get("budget"), str) or not isinstance(detail, dict):
+        if isinstance(detail, str):
+            try:
+                detail = json.loads(detail)
+            except ValueError as error:
+                raise refuse(
+                    path, None, f"a detail that is not JSON ({error})"
+                ) from error
+        if not text(record.get("budget")) or not isinstance(detail, dict):
             raise refuse(
                 path, None, "a loopback recording without its budget or its detail"
             )
-        out.append(
-            {
-                "file": path.name,
-                "budget": record.get("budget"),
-                "value": record.get("value"),
-                "detail": detail,
-            }
-        )
+        recordings = {}
+        for name, value in detail.items():
+            if not isinstance(value, dict) or "requests by operation" not in value:
+                continue
+            sent, points = value["requests by operation"], value.get("points")
+            if not isinstance(sent, dict) or not all(
+                text(k) and count(v) for k, v in sent.items()
+            ):
+                raise refuse(
+                    path, None, f"{name}: requests by operation that are not counts"
+                )
+            if points is not None and not count(points):
+                raise refuse(path, None, f"{name}: points that are not a whole number")
+            recordings[name] = Recording(dict(sent), points)
+        out.append(Loopback(record["budget"], recordings))
     return out
 
 
@@ -749,30 +1079,27 @@ class SizePair:
     walk_pages: int
 
 
-def size_pairs(recordings: list[dict]) -> list[SizePair]:
+def size_pairs(recordings: list[Loopback]) -> list[SizePair]:
     """Every loopback points recording on the board of 2,000 items beside its twin on 20,000:
     whether the two sent the same requests by operation, their points, and the walk pages."""
     pairs = []
     for record in recordings:
-        if not record["budget"].startswith("github-plan-copy-points-"):
+        if not record.budget.startswith("github-plan-copy-points-"):
             continue
         for small, large in SIZES:
-            a, b = record["detail"].get(small), record["detail"].get(large)
-            if not isinstance(a, dict) or not isinstance(b, dict):
+            a, b = record.recordings.get(small), record.recordings.get(large)
+            if a is None or b is None:
                 continue
-            sent_small = a.get("requests by operation", {})
-            sent_large = b.get("requests by operation", {})
             pairs.append(
                 SizePair(
-                    budget=record["budget"],
+                    budget=record.budget,
                     recording=small,
-                    same=sent_small == sent_large
-                    and a.get("points") == b.get("points"),
-                    requests=(sum(sent_small.values()), sum(sent_large.values())),
-                    points=(a.get("points"), b.get("points")),
+                    same=a == b,
+                    requests=(sum(a.sent.values()), sum(b.sent.values())),
+                    points=(a.points, b.points),
                     walk_pages=sum(
                         n
-                        for op, n in {**sent_small, **sent_large}.items()
+                        for op, n in {**a.sent, **b.sent}.items()
                         if any(w in op for w in WALK_WORDS)
                     ),
                 )
@@ -796,19 +1123,16 @@ def table(head: list[str], rows: list[list[str]]) -> str:
 def targets_table(rows: list[Row]) -> str:
     body = []
     for row in rows:
-        target, before, earlier = (
-            TARGETS[row.operation],
-            BEFORE.get(row.operation, Figures()),
-            EARLIER[row.scenario],
-        )
-        cells = [row.label]
+        before = BEFORE.get(row.scenario.operation, Figures())
+        earlier = EARLIER[row.scenario.name]
         values = {
             "seconds": f"{row.seconds:.1f}",
             "points": str(row.points.figure),
-            "writes": str(row.writes["writes"]),
+            "writes": str(row.writes.writes),
         }
+        cells = [row.label]
         for name in ("seconds", "points", "writes"):
-            bar = target.of(name)
+            bar = row.target.of(name)
             mark = (
                 f"target {fmt(bar)}: **{row.verdicts[name].value}**"
                 if bar is not None
@@ -822,72 +1146,70 @@ def targets_table(rows: list[Row]) -> str:
             cells.append(
                 f"**{values[name]}** — {mark}; before {was}; GitHub at 0.11.0 {fmt(earlier.of(name))}"
             )
-        flip = row.verdicts.get("points at 5 per mutation")
+        flips = (
+            row.verdicts["points at 5 per mutation"] is Verdict.OVER
+            and row.verdicts["points"] is Verdict.WITHIN
+        )
         cells.append(
-            f"{row.points.at_five} — {'**would flip to over**' if flip is Verdict.OVER and row.verdicts['points'] is Verdict.WITHIN else 'no flip'}"
+            f"{row.points.at_five} — {'**would flip to over**' if flips else 'no flip'}"
         )
         body.append(cells)
-    return table(
-        [
-            "row",
-            "elapsed seconds",
-            "GraphQL points",
-            "writes (mutations + uploads)",
-            "points if each mutation request cost 5",
-        ],
-        body,
-    )
+    head = [
+        "row",
+        "elapsed seconds",
+        "GraphQL points",
+        "writes (mutations + uploads)",
+        "points if each mutation request cost 5",
+    ]
+    return table(head, body)
 
 
 def detail_table(rows: list[Row]) -> str:
     body = []
     for row in rows:
-        w = row.writes
+        w, s, p = row.writes, row.screening, row.points
+        kinds = ", ".join(
+            f"`{op}` {k.requests}×/{k.points} pt"
+            + (f"/{k.writes} w" if k.writes else "")
+            for op, k in row.kinds.items()
+        )
         body.append(
             [
                 row.label,
-                f"`{row.capture}`",
-                str(w["requests"]),
-                ", ".join(
-                    f"`{op}` {k['requests']}×/{k['points']} pt"
-                    + (f"/{k['writes']} w" if k["writes"] else "")
-                    for op, k in row.kinds.items()
-                ),
-                f"{row.points.queries} queries at their dry-run price + {row.points.mutation_requests} mutation requests at {MUTATION_PRICE} = {row.points.figure}",
-                f"{w['mutation_requests']} requests carrying {w['mutations']} mutations + {w['uploads']} upload(s) = {w['writes']}; {w['issues_created']} issues created",
-                f"{row.screening['inspect']} inspect + {row.screening['check']} check ({row.screening['seconds']:.2f} s)",
-                f"{row.cache['before'].get('files', 0)} → {row.cache['after'].get('files', 0)} files",
+                f"`{row.capture.name}`",
+                str(w.requests),
+                kinds,
+                f"{p.queries} queries at their dry-run price + {p.mutation_requests} mutation requests at {MUTATION_PRICE} = {p.figure}",
+                f"{w.mutation_requests} requests carrying {w.mutations} mutations + {w.uploads} upload(s) = {w.writes}; {w.issues_created} issues created",
+                f"{s.inspect} inspect + {s.check} check ({s.seconds:.2f} s)",
+                f"{row.capture.cache_before.files} → {row.capture.cache_after.files} files",
             ]
         )
-    return table(
-        [
-            "row",
-            "capture",
-            "requests",
-            "request kinds (requests/points/writes)",
-            "points",
-            "writes",
-            "screening calls",
-            "store cache",
-        ],
-        body,
-    )
+    head = [
+        "row",
+        "capture",
+        "requests",
+        "request kinds (requests/points/writes)",
+        "points",
+        "writes",
+        "screening calls",
+        "store cache",
+    ]
+    return table(head, body)
 
 
 def seconds_table(rows: list[Row]) -> str:
-    body = []
-    for row in rows:
-        shares = "; ".join(
-            f"{label} {value:.2f} s" for label, value in row.attribution.items()
-        )
-        body.append(
-            [
-                row.label,
-                f"{row.seconds:.2f} s",
-                shares,
-                f"{sum(row.attribution.values()):.2f} s",
-            ]
-        )
+    body = [
+        [
+            row.label,
+            f"{row.seconds:.2f} s",
+            "; ".join(
+                f"{label} {value:.2f} s" for label, value in row.attribution.items()
+            ),
+            f"{sum(row.attribution.values()):.2f} s",
+        ]
+        for row in rows
+    ]
     return table(["row", "measured", "attributed to", "sum of shares"], body)
 
 
@@ -902,9 +1224,9 @@ def owners_table(rows: list[Row]) -> str:
                     owner,
                     verb,
                     f"`{op}`",
-                    str(value["requests"]),
-                    str(value["points"]),
-                    str(value["writes"]),
+                    str(value.requests),
+                    str(value.points),
+                    str(value.writes),
                 ]
             )
     return table(
@@ -918,7 +1240,7 @@ def over_table(rows: list[Row]) -> str:
         f"{row.label}: {name}"
         for row in rows
         for name in ("points", "writes")
-        if row.verdicts.get(name) == "over"
+        if row.verdicts.get(name) is Verdict.OVER
     ]
     return (
         "Over its target: " + "; ".join(over) + "."
@@ -955,115 +1277,110 @@ def burn_table(rows: list[Row]) -> str:
                 f"{pt.residual:+.1f}",
             ]
         )
-    return table(
-        [
-            "row",
-            "GraphQL `rateLimit` used, last idle read before → first after",
-            "rise",
-            "idle background burn bracketing the row",
-            "background expected over the row",
-            "the row's own priced points",
-            "residual (rise − own − background)",
-        ],
-        body,
-    )
+    head = [
+        "row",
+        "GraphQL `rateLimit` used, last idle read before → first after",
+        "rise",
+        "idle background burn bracketing the row",
+        "background expected over the row",
+        "the row's own priced points",
+        "residual (rise − own − background)",
+    ]
+    return table(head, body)
 
 
 def quota_table(rows: list[Row]) -> str:
     body = []
     for row in rows:
-        q = row.quota
-        gate = [e for e in q.get("gate", []) if e["event"] == "reading"][-1:]
-        pauses = [e for e in q.get("gate", []) if e["event"] == "pause"]
-        before = q["quota-before"]["buckets"]
-        after = q["quota-after"]["buckets"]
-        rl_b, rl_a = before["graphql (rateLimit)"], after["graphql (rateLimit)"]
-        least = before["graphql"]
+        q = row.capture.quota
+        readings = [e for e in q.gate if e.event == "reading"]
+        pauses = [e for e in q.gate if e.event == "pause"]
+        least = q.before["graphql"]
         body.append(
             [
                 row.label,
-                f"{least['remaining']} / {least['limit']} ({least['remaining'] / least['limit']:.0%})",
-                f"remaining {', '.join(map(str, rl_b['readings']))}",
-                f"remaining {', '.join(map(str, rl_a['readings']))}",
-                f"{before['graphql (GET /rate_limit)']['remaining']} → {after['graphql (GET /rate_limit)']['remaining']}",
-                f"{before['core']['remaining']} → {after['core']['remaining']}",
-                "proceed (≥ 40%)"
-                if gate and all(gate[0]["verdicts"].values())
-                else "paused",
-                f"{len(pauses)} pause(s), {sum(p['seconds'] for p in pauses):.0f} s"
+                f"{least.remaining} / {least.limit} ({least.remaining / least.limit:.0%})",
+                f"remaining {', '.join(map(str, q.before['graphql (rateLimit)'].readings))}",
+                f"remaining {', '.join(map(str, q.after['graphql (rateLimit)'].readings))}",
+                f"{q.before['graphql (GET /rate_limit)'].remaining} → {q.after['graphql (GET /rate_limit)'].remaining}",
+                f"{q.before['core'].remaining} → {q.after['core'].remaining}",
+                "proceed (≥ 40%)" if readings and readings[-1].proceed else "paused",
+                f"{len(pauses)} pause(s), {sum(p.seconds for p in pauses):.0f} s"
                 if pauses
                 else "none",
             ]
         )
-    return table(
-        [
-            "row",
-            "gate figure (least reading)",
-            "GraphQL `rateLimit` before (three reads)",
-            "GraphQL `rateLimit` after (three reads)",
-            "`GET /rate_limit` graphql before → after",
-            "REST core before → after",
-            "gate",
-            "pauses",
-        ],
-        body,
-    )
+    head = [
+        "row",
+        "gate figure (least reading)",
+        "GraphQL `rateLimit` before (three reads)",
+        "GraphQL `rateLimit` after (three reads)",
+        "`GET /rate_limit` graphql before → after",
+        "REST core before → after",
+        "gate",
+        "pauses",
+    ]
+    return table(head, body)
+
+
+def declared_value(
+    conditions: dict[str, Condition], key: str, default: object
+) -> object:
+    return conditions[key].value if key in conditions else default
 
 
 def conditions_table(rows: list[Row]) -> str:
     body = []
     for row in rows:
-        c = row.conditions
+        c = row.capture.conditions
         sources = sorted({k.split(".")[1] for k in c if k.startswith("sources.")})
         declared = "; ".join(
-            f"`{s}` {c.get(f'sources.{s}.plugin', {}).get('value', '?')}, {c.get(f'sources.{s}.visibility', {}).get('value', 'undeclared')}"
+            f"`{s}` {declared_value(c, f'sources.{s}.plugin', '?')}, {declared_value(c, f'sources.{s}.visibility', 'undeclared')}"
             + (
                 ", cache on"
-                if c.get(f"sources.{s}.cache.enabled", {}).get("value")
+                if declared_value(c, f"sources.{s}.cache.enabled", False)
                 else ""
             )
             for s in sources
         )
-        layers = sorted({v["layer"] for v in c.values()})
         policy = ", ".join(
-            f"`{k.split('.')[1]}` {v['value']} ({v['layer']})"
+            f"`{k.split('.')[1]}` {v.value} ({v.layer})"
             for k, v in sorted(c.items())
             if k.startswith("write_policy.")
         )
-        v = row.versions
+        v = row.capture.versions
+        versions = f"{v.get('store')}; {v.get('engine')}; {v.get('sdk')}; {v.get('onevcs')}; host `{v.get('host_commit')}`; harness `{v.get('harness_commit')}`"
         body.append(
             [
                 row.label,
                 declared,
                 policy,
-                ", ".join(layers),
-                f"{v.get('store')}; {v.get('engine')}; {v.get('sdk')}; {v.get('onevcs')}; host `{v.get('host_commit')}`; harness `{v.get('harness_commit')}`",
+                ", ".join(sorted({x.layer for x in c.values()})),
+                versions,
             ]
         )
-    return table(
-        [
-            "row",
-            "sources (plugin, visibility, cache)",
-            "write_policy",
-            "configuration layers present",
-            "versions",
-        ],
-        body,
-    )
+    head = [
+        "row",
+        "sources (plugin, visibility, cache)",
+        "write_policy",
+        "configuration layers present",
+        "versions",
+    ]
+    return table(head, body)
 
 
 def workload_table(rows: list[Row]) -> str:
     body = []
     for row in rows:
-        w = row.workload
+        w = row.capture.workload
         tasks = [w[k][0] for k in sorted(w) if k.startswith("task")]
         body.append(
             [
                 row.label,
-                f"{w.get('project', [0])[0]:,}",
+                f"{w.get('project', (0, 0))[0]:,}",
                 f"{min(tasks):,}–{max(tasks):,} ({len(tasks)})" if tasks else "—",
-                f"{w.get('document', [0])[0]:,}",
-                f"{w.get('image', [0])[0]:,}",
+                f"{w.get('document', (0, 0))[0]:,}",
+                f"{w.get('image', (0, 0))[0]:,}",
             ]
         )
     return table(
@@ -1084,17 +1401,15 @@ def size_table(pairs: list[SizePair]) -> str:
         ]
         for p in pairs
     ]
-    return table(
-        [
-            "loopback recording",
-            "configuration",
-            "requests at 2,000 / 20,000 items",
-            "requests by operation",
-            "points at 2,000 / 20,000",
-            "walk pages",
-        ],
-        body,
-    )
+    head = [
+        "loopback recording",
+        "configuration",
+        "requests at 2,000 / 20,000 items",
+        "requests by operation",
+        "points at 2,000 / 20,000",
+        "walk pages",
+    ]
+    return table(head, body)
 
 
 def reference_table(rows: list[Row]) -> str:
@@ -1125,52 +1440,50 @@ def reference_table(rows: list[Row]) -> str:
     )
 
 
+@dataclass(frozen=True)
+class Cleanup:
+    deleted: int
+    only: str
+
+
+def cleanup_of(path: Path) -> Cleanup | None:
+    if not path.exists():
+        return None
+    raw = document(path)
+    if not count(raw.get("deleted")) or not text(raw.get("only", "all")):
+        raise refuse(
+            path, None, "a cleanup outcome without its deleted count and its scope"
+        )
+    return Cleanup(raw["deleted"], raw.get("only", "all"))
+
+
 def writes_table(captures: Path) -> str:
     body = []
-    named = [
-        p
-        for p in captures.iterdir()
-        if p.is_dir() and re.fullmatch(r".+-\d{8}T\d{6}", p.name)
-    ]
-    superseded = captures / "superseded"
-    named += (
-        [p for p in superseded.iterdir() if p.is_dir()] if superseded.exists() else []
-    )
-    for path in sorted(named, key=lambda p: p.name.rsplit("-", 1)[-1]):
-        requests = lines(path / "requests.jsonl")
+    for path, superseded in every_capture(captures):
+        requests = tuple(requests_of(path / "requests.jsonl"))
         w = writes_of(requests)
-        cleanup = (
-            json.loads((path / "cleanup.json").read_text())
-            if (path / "cleanup.json").exists()
-            else {}
-        )
-        refused = sum(1 for r in requests if r["host"] == "refused")
+        cleanup = cleanup_of(path / "cleanup.json")
         body.append(
             [
-                f"`{path.name}`"
-                + (" (superseded)" if path.parent == superseded else ""),
-                str(w["mutation_requests"]),
-                str(w["mutations"]),
-                str(w["uploads"]),
-                str(w["issues_created"]),
-                f"{cleanup['deleted']} ({cleanup.get('only', 'all')})"
-                if cleanup
-                else "—",
-                str(refused),
+                f"`{path.name}`" + (" (superseded)" if superseded else ""),
+                str(w.mutation_requests),
+                str(w.mutations),
+                str(w.uploads),
+                str(w.issues_created),
+                f"{cleanup.deleted} ({cleanup.only})" if cleanup else "—",
+                str(sum(1 for r in requests if r.refused)),
             ]
         )
-    return table(
-        [
-            "capture",
-            "mutation requests",
-            "mutations",
-            "uploads",
-            "issues created",
-            "issues deleted by cleanup",
-            "requests the guard refused",
-        ],
-        body,
-    )
+    head = [
+        "capture",
+        "mutation requests",
+        "mutations",
+        "uploads",
+        "issues created",
+        "issues deleted by cleanup",
+        "requests the guard refused",
+    ]
+    return table(head, body)
 
 
 def probes_table(captures: Path) -> str:
@@ -1178,192 +1491,173 @@ def probes_table(captures: Path) -> str:
     path = captures / "probes" / "background-and-onevcs.json"
     if not path.exists():
         return "No probe was recorded."
-    probe = json.loads(path.read_text())
-    readings = probe.get("idle_background", {}).get("readings", [])
-    inspect = probe.get("onevcs_inspect", {})
-    if not readings or not all(
-        finite(r.get("at")) and count(r.get("used")) for r in readings
-    ):
-        raise refuse(path, None, "an idle-background probe without timed readings")
+    probe = document(path)
+    background, inspect = probe.get("idle_background"), probe.get("onevcs_inspect")
+    raw = background.get("readings") if isinstance(background, dict) else None
     if (
-        not count(inspect.get("inspects"))
-        or not inspect["inspects"]
-        or not inspect.get("before")
-        or not inspect.get("after")
+        not isinstance(raw, list)
+        or not raw
+        or not all(
+            isinstance(r, dict)
+            and finite(r.get("at"))
+            and count(r.get("used"))
+            and count(r.get("reset"))
+            for r in raw
+        )
     ):
         raise refuse(
-            path,
-            None,
-            "an onevcs probe without its inspects and its readings either side",
+            path, None, "an idle-background probe without timed readings on a counter"
         )
+    readings = [Reading(float(r["at"]), r["used"], r["reset"]) for r in raw]
+
+    def sides(name: str) -> list[dict]:
+        value = inspect.get(name) if isinstance(inspect, dict) else None
+        if (
+            not isinstance(value, list)
+            or not value
+            or not all(
+                isinstance(r, dict)
+                and count(r.get("core_used"))
+                and count(r.get("graphql_used"))
+                for r in value
+            )
+        ):
+            raise refuse(
+                path,
+                None,
+                f"an onevcs probe without its `{name}` readings of both buckets",
+            )
+        return value
+
+    before, after = sides("before"), sides("after")
+    inspects = inspect.get("inspects")
+    if not count(inspects) or not inspects:
+        raise refuse(path, None, "an onevcs probe without a positive count of inspects")
     body = []
-    for reset in sorted({r["reset"] for r in readings}):
-        on = [r for r in readings if r["reset"] == reset]
+    for reset in sorted({r.reset for r in readings}):
+        on = [r for r in readings if r.reset == reset]
         rise, seconds = slope(on)
+        rate = f"{rise / seconds:.2f} points/s" if seconds else "—"
         body.append(
             [
                 f"idle background, counter resetting {reset}",
                 f"{len(on)} reads over {seconds:.1f} s",
                 f"{rise:g} points",
-                f"{rise / seconds:.2f} points/s" if seconds else "—",
+                rate,
             ]
         )
-    core = inspect["after"][0]["core_used"] - inspect["before"][-1]["core_used"]
-    graphql = (
-        inspect["after"][0]["graphql_used"] - inspect["before"][-1]["graphql_used"]
-    )
+    core = after[0]["core_used"] - before[-1]["core_used"]
+    graphql = after[0]["graphql_used"] - before[-1]["graphql_used"]
     body.append(
         [
-            f"{inspect['inspects']} × `onevcs boundary inspect`",
+            f"{inspects} × `onevcs boundary inspect`",
             "`GET /rate_limit` last read before → first after",
             f"REST core {core:+d}, GraphQL {graphql:+d}",
-            f"{core / inspect['inspects']:g} REST request and {graphql / inspect['inspects']:g} GraphQL points per inspect",
+            f"{core / inspects:g} REST request and {graphql / inspects:g} GraphQL points per inspect",
         ]
     )
     return table(["probe", "readings", "rise", "rate"], body)
 
 
+SPEND = (
+    "queries",
+    "mutation_requests",
+    "rest",
+    "tunnels",
+    "screening",
+    "rate_limit_reads",
+    "rest_rate_limit_reads",
+)
+
+
 def spend_table(captures: Path, priced: int) -> str:
     """What every capture sent, and the quota reads around it, with the total."""
-    named = [
-        p
-        for p in captures.iterdir()
-        if p.is_dir() and re.fullmatch(r".+-\d{8}T\d{6}", p.name)
-    ]
-    superseded = captures / "superseded"
-    named += (
-        [p for p in superseded.iterdir() if p.is_dir()] if superseded.exists() else []
-    )
     body, totals = [], Counter()
-    for path in sorted(named, key=lambda p: p.name.rsplit("-", 1)[-1]):
-        requests = [r for r in lines(path / "requests.jsonl") if r["host"] != "refused"]
-        q = (
-            json.loads((path / "quota.json").read_text())
-            if (path / "quota.json").exists()
-            else {}
-        )
+    for path, _ in every_capture(captures):
+        requests = [r for r in requests_of(path / "requests.jsonl") if not r.refused]
+        q = quota_of(path / "quota.json")
         figures = Counter(
-            queries=sum(1 for r in requests if r["kind"] == "query"),
-            mutation_requests=sum(1 for r in requests if r["kind"] == "mutation"),
-            rest=sum(1 for r in requests if r["kind"] == "rest"),
-            tunnels=sum(1 for r in requests if r["kind"] == "tunnel"),
-            screening=len(lines(path / "screen.jsonl")),
-            rate_limit_reads=sum(
-                len(
-                    q.get(k, {})
-                    .get("buckets", {})
-                    .get("graphql (rateLimit)", {})
-                    .get("readings", [])
-                )
-                for k in ("quota-before", "quota-after")
-            )
-            + len(q.get("burn-before", []))
-            + len(q.get("burn-after", [])),
-            rest_rate_limit_reads=sum(
-                1 for k in ("quota-before", "quota-after") if k in q
-            ),
+            queries=sum(1 for r in requests if r.kind == "query"),
+            mutation_requests=sum(1 for r in requests if r.kind == "mutation"),
+            rest=sum(1 for r in requests if r.kind == "rest"),
+            tunnels=sum(1 for r in requests if r.kind == "tunnel"),
+            screening=len(screen_of(path / "screen.jsonl")),
+            rate_limit_reads=len(q.before["graphql (rateLimit)"].readings)
+            + len(q.after["graphql (rateLimit)"].readings)
+            + len(q.burn_before)
+            + len(q.burn_after),
+            rest_rate_limit_reads=2,
         )
         totals += figures
-        body.append(
-            [f"`{path.name}`"]
-            + [
-                str(figures[k])
-                for k in (
-                    "queries",
-                    "mutation_requests",
-                    "rest",
-                    "tunnels",
-                    "screening",
-                    "rate_limit_reads",
-                    "rest_rate_limit_reads",
-                )
-            ]
-        )
-    body.append(
-        ["**total**"]
-        + [
-            f"**{totals[k]}**"
-            for k in (
-                "queries",
-                "mutation_requests",
-                "rest",
-                "tunnels",
-                "screening",
-                "rate_limit_reads",
-                "rest_rate_limit_reads",
-            )
-        ]
-    )
-    table_text = table(
-        [
-            "capture",
-            "GraphQL queries",
-            "mutation requests",
-            "REST requests",
-            "tunnels (onevcs and the upload's storage)",
-            "onevcs calls",
-            "GraphQL `rateLimit` reads (free)",
-            "`GET /rate_limit` reads (free)",
-        ],
-        body,
-    )
-    return (
-        table_text
-        + f"\n\nBeside these, `harness/pricing.py` sent {priced} dry-run pricings, one per GraphQL query of every run it read."
-    )
+        body.append([f"`{path.name}`"] + [str(figures[k]) for k in SPEND])
+    body.append(["**total**"] + [f"**{totals[k]}**" for k in SPEND])
+    head = [
+        "capture",
+        "GraphQL queries",
+        "mutation requests",
+        "REST requests",
+        "tunnels (onevcs and the upload's storage)",
+        "onevcs calls",
+        "GraphQL `rateLimit` reads (free)",
+        "`GET /rate_limit` reads (free)",
+    ]
+    note = f"Beside these, `harness/pricing.py` sent {priced} dry-run pricings, one per GraphQL query of every run it read."
+    return table(head, body) + "\n\n" + note
+
+
+# Every table the report carries, by the name of its block.
+TABLES: dict[str, Callable[[list[Row], list[SizePair], Path, int], str]] = {
+    "targets": lambda rows, pairs, captures, priced: targets_table(rows),
+    "over": lambda rows, pairs, captures, priced: over_table(rows),
+    "detail": lambda rows, pairs, captures, priced: detail_table(rows),
+    "owners": lambda rows, pairs, captures, priced: owners_table(rows),
+    "seconds": lambda rows, pairs, captures, priced: seconds_table(rows),
+    "burn": lambda rows, pairs, captures, priced: burn_table(rows),
+    "quota": lambda rows, pairs, captures, priced: quota_table(rows),
+    "conditions": lambda rows, pairs, captures, priced: conditions_table(rows),
+    "workload": lambda rows, pairs, captures, priced: workload_table(rows),
+    "board-size": lambda rows, pairs, captures, priced: size_table(pairs),
+    "reference-size": lambda rows, pairs, captures, priced: reference_table(rows),
+    "writes": lambda rows, pairs, captures, priced: writes_table(captures),
+    "spend": lambda rows, pairs, captures, priced: spend_table(captures, priced),
+    "probes": lambda rows, pairs, captures, priced: probes_table(captures),
+}
 
 
 def tables(captures: Path) -> tuple[dict[str, str], dict]:
-    pricing_path = captures / "pricing.json"
-    pricing = json.loads(pricing_path.read_text()) if pricing_path.exists() else {}
-    prices = prices_of(pricing_path)
+    prices, rises = prices_of(captures / "pricing.json")
     latest = latest_captures(captures)
     missing = [s.name for s in ROWS if s.name not in latest]
     if missing:
         raise SystemExit(
             f"analyze.py: no capture of {', '.join(missing)} under {captures}; take them with measure.sh"
         )
-    rows = [row_of(s.name, s.operation, s.label, latest[s.name], prices) for s in ROWS]
+    rows = [row_of(s, latest[s.name], prices) for s in ROWS]
     pairs = size_pairs(loopback(captures))
     out = {
-        "targets": targets_table(rows),
-        "over": over_table(rows),
-        "detail": detail_table(rows),
-        "owners": owners_table(rows),
-        "seconds": seconds_table(rows),
-        "burn": burn_table(rows),
-        "quota": quota_table(rows),
-        "conditions": conditions_table(rows),
-        "workload": workload_table(rows),
-        "board-size": size_table(pairs),
-        "reference-size": reference_table(rows),
-        "writes": writes_table(captures),
-        "spend": spend_table(captures, len(prices)),
-        "probes": probes_table(captures),
+        name: make(rows, pairs, captures, len(prices)) for name, make in TABLES.items()
     }
     summary = {
         "rows": [
             {
-                "scenario": r.scenario,
-                "capture": r.capture,
+                "scenario": r.scenario.name,
+                "capture": r.capture.name,
                 "seconds": r.seconds,
-                "points": r.points.__dict__,
-                "writes": r.writes,
-                "kinds": r.kinds,
-                "screening": r.screening,
+                "points": asdict(r.points),
+                "writes": asdict(r.writes),
+                "kinds": {op: asdict(k) for op, k in r.kinds.items()},
+                "screening": asdict(r.screening),
                 "attribution": r.attribution,
-                "owners": r.owners,
-                "verdicts": r.verdicts,
+                "owners": {key: asdict(k) for key, k in r.owners.items()},
+                "verdicts": {name: v.value for name, v in r.verdicts.items()},
                 "walk_pages": r.walk_pages,
-                "refused": r.refused,
-                "returncodes": r.returncodes,
+                "refused": sum(1 for q in r.capture.requests if q.refused),
+                "returncodes": [s.returncode for s in r.capture.steps],
             }
             for r in rows
         ],
         "board_size_pairs": [asdict(p) for p in pairs],
-        "mutation_rises": {
-            k: v for k, v in pricing.get("mutation_rises", {}).items() if v
-        },
+        "mutation_rises": {k: v for k, v in rises.items() if v},
     }
     return out, summary
 
