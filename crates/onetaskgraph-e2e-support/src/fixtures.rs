@@ -1545,6 +1545,14 @@ impl GitHubBoardFields {
             .and_then(|card| card["status"].as_str().map(str::to_owned))
     }
 
+    /// Every item this server holds — on a board, or created and filed on none — as it holds
+    /// them, in the order it came to.
+    #[must_use]
+    pub fn issues(&self) -> Vec<Value> {
+        let board = self.board.lock().unwrap();
+        board.items.iter().chain(&board.pending).cloned().collect()
+    }
+
     /// The `owner/name` of the repository the issue `id` lives in, or `None` for a draft or an
     /// id this board does not hold.
     #[must_use]
