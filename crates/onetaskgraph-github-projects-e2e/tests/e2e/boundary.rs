@@ -691,7 +691,16 @@ fn a_routed_copy_whose_home_members_cannot_be_recorded_is_undone_on_both_sides()
         "away",
         "title: Away\nstatus: todo\nproject: goal\nrepositories: [github.com/openco/openwidget]",
     );
-    setup.record("tasks", "home", "title: Home\nstatus: todo\nproject: goal");
+    // A task naming no repository would follow the one voter into the vault, home and all, so
+    // this one names the board's own repository: the voters disagree and the home stays on the
+    // board with a member in the vault.
+    setup.record(
+        "tasks",
+        "home",
+        &format!(
+            "title: Home\nstatus: todo\nproject: goal\nrepositories: [github.com/{CONFIGURED}]"
+        ),
+    );
     // The home project's write and its task's read private; the board is made public before
     // the write recording the home's member project in the vault.
     setup.board.make_public_after_visibility_reads(2);

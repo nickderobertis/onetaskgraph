@@ -3,6 +3,9 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
+import Ajv2020 from "ajv/dist/2020.js";
+import { runtimeSchemas } from "../src/generated/schemas.ts";
+import type { PublicProjections } from "../src/index.ts";
 import { OnetaskgraphClient, OnetaskgraphExecutionError } from "../src/index.ts";
 
 // The public boundary through the SDK: every write's `termScope` reaches the store's check
@@ -174,4 +177,95 @@ test("a classification or a term scope of the wrong shape is refused before anyt
   expect(checked()).toBe(before);
   const listed = await client.taskList({ sources: ["site"], search: "Bad" });
   expect(listed.items).toEqual([]);
+});
+
+// Public projections through the SDK: a private plan copied into a private destination that
+// routes `openco` work to a public folder records, on the private project alone, the map from
+// each canonical task to its public view — in exactly the shape the generated model declares.
+const OPENCO_PUBLIC = `
+const input = require("node:fs").readFileSync(0, "utf8");
+console.log(JSON.stringify({ visibility: input.includes("openco") ? "public" : "private" }));
+`;
+
+test("a project copy records its public projections in the shape the generated model declares", async () => {
+  const at = mkdtempSync(resolve(tmpdir(), "onetaskgraph-projections-"));
+  try {
+    for (const folder of ["plan/projects", "plan/tasks", "vault", "site"]) {
+      mkdirSync(resolve(at, folder), { recursive: true });
+    }
+    writeFileSync(
+      resolve(at, "plan/projects/rollout.md"),
+      "---\ntitle: Quietharbor rollout\nstatus: todo\n---\nThe private plan.\n",
+    );
+    writeFileSync(
+      resolve(at, "plan/tasks/producer.md"),
+      "---\ntitle: Harden the ingest\nstatus: todo\nproject: rollout\n" +
+        "repositories: [github.com/hiddenco/quietharbor]\n---\nPrivate work.\n",
+    );
+    writeFileSync(
+      resolve(at, "plan/tasks/widget.md"),
+      "---\ntitle: Add retry to the widget\nstatus: todo\nproject: rollout\n" +
+        "repositories: [github.com/openco/widget]\ndepends_on: [producer]\n---\nGeneric.\n",
+    );
+    writeFileSync(
+      resolve(at, "onetaskgraph.yaml"),
+      JSON.stringify({
+        write_policy: {
+          visibility_command: [process.execPath, "-e", OPENCO_PUBLIC],
+          check_command: [process.execPath, "-e", CHECK],
+        },
+        sources: {
+          plan: { plugin: "local-md", config: { root: "plan" }, visibility: "private" },
+          vault: {
+            plugin: "local-md",
+            config: { root: "vault" },
+            visibility: "private",
+            routes: [{ repositories: ["github.com/openco/*"], to: "site" }],
+          },
+          site: { plugin: "local-md", config: { root: "site" }, visibility: "public" },
+        },
+      }),
+    );
+    const projecting = new OnetaskgraphClient({
+      binaryPath: binary,
+      cwd: at,
+      env: { BOUNDARY_RECORD: resolve(at, "checked.jsonl") },
+    });
+    const report = await projecting.projectCopy("plan:rollout", "vault");
+    const landed = new Map<string, string>();
+    for (const outcome of report.items) {
+      const destination: unknown = Reflect.get(outcome, "destination");
+      if (typeof destination === "string") landed.set(String(outcome.source), destination);
+    }
+    const home = landed.get("plan:rollout");
+    const widget = landed.get("plan:widget");
+    if (home === undefined || widget === undefined) throw new Error("the plan did not land");
+    const shown = await projecting.projectShow(home);
+    const recorded: unknown = shown.items[0]?.item.metadata?.["onetaskgraph.public_projections"];
+    const validate = new Ajv2020({ strict: false }).compile<PublicProjections>(
+      runtimeSchemas.PublicProjections,
+    );
+    if (!validate(recorded)) throw new Error(`not the declared shape: ${JSON.stringify(recorded)}`);
+    expect(recorded.schema_version).toBe(1);
+    expect(recorded.tasks.map((entry) => String(entry.task))).toEqual([widget]);
+    const view = String(recorded.tasks[0]?.projection);
+    expect(view.startsWith("site:pt-")).toBe(true);
+    // A shape the engine refuses, the declared schema refuses too.
+    expect(validate({ ...recorded, extra: true })).toBe(false);
+    expect(validate({ ...recorded, schema_version: 2 })).toBe(false);
+    // The store owns each task's visibility; a canonical status reaches the view alone.
+    const producer = await projecting.taskShow(String(landed.get("plan:producer")));
+    expect(producer.items[0]?.item.classification).toBe("private");
+    const status = await projecting.taskStatusSet(widget, "done");
+    expect(String(status.projection)).toBe(view);
+    const mirrored = await projecting.taskShow(view);
+    expect(mirrored.items[0]?.item.status.category).toBe("done");
+    // So does a targeted update naming the status, which answers the view too.
+    const updated = await projecting.taskUpdate(widget, { status: "in-progress" });
+    expect(String(updated.projection)).toBe(view);
+    const again = await projecting.taskShow(view);
+    expect(again.items[0]?.item.status.category).toBe("in-progress");
+  } finally {
+    rmSync(at, { recursive: true, force: true });
+  }
 });

@@ -14,14 +14,14 @@
 use onetaskgraph_core::config::SourceRoute;
 use onetaskgraph_core::{
     CommentList, CompleteAction, CopyAction, CopyReport, DeletedComment, Delivered,
-    DeliveryOutcome, GlobalId, IssuesCompleted, MetadataSet, Predicate, Qualified, QualifiedEdge,
-    QueryPlan, ReconcileOutcome, Regenerated, SearchHit, SourceListing, SourceState,
-    StatusesReconciled, TaskContentSet, TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated,
-    TemplateVariables,
+    DeliveryOutcome, GlobalId, IssuesCompleted, MetadataSet, Predicate, ProjectStatusSet,
+    Qualified, QualifiedEdge, QueryPlan, ReconcileOutcome, Regenerated, SearchHit, SourceListing,
+    SourceState, StatusesReconciled, TaskContentSet, TaskDetails, TaskPrioritySet, TaskStatusSet,
+    TaskUpdated, TemplateVariables,
 };
 use onetaskgraph_plugin_api::{
-    Asset, Capabilities, Comment, Document, Label, Location, MetadataKey, Priority, Project,
-    Support, Task, TaskRef,
+    Asset, Capabilities, Comment, Document, ItemKind, Label, Location, MetadataKey, Priority,
+    Project, Support, Task, TaskRef,
 };
 use onetaskgraph_status_options::{FieldOutcome, FieldsReport, StatusOptionsReport};
 use serde::Serialize;
@@ -264,6 +264,16 @@ pub fn status_set(set: &TaskStatusSet) -> String {
     rendered
 }
 
+/// What `project status set` did: one line naming the project and the status it now reads.
+pub fn project_status_set(set: &ProjectStatusSet) -> String {
+    format!(
+        "project {} now reads {} ({})\n",
+        set.id,
+        wire(&set.status.category),
+        set.status.name
+    )
+}
+
 /// What `task status reconcile` did: one line per item brought in line — its card's option
 /// before, the status its closure implies, and what became of it — then a closing count; or,
 /// for a source whose status is its closure, answered `None`, that nothing could need
@@ -290,7 +300,8 @@ pub fn statuses_reconciled(source: &str, reconciled: Option<&StatusesReconciled>
             }
         };
         let mut line = format!(
-            "{}: {} -> {} ({}): {action}",
+            "{}{}: {} -> {} ({}): {action}",
+            project_prefix(item.kind),
             item.source,
             item.from.as_deref().unwrap_or("no option"),
             item.to.name,
@@ -308,6 +319,15 @@ pub fn statuses_reconciled(source: &str, reconciled: Option<&StatusesReconciled>
     rendered
 }
 
+/// `project ` before a project item's qualified id, and nothing before a task's, whose line
+/// reads as it always has.
+fn project_prefix(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Project => "project ",
+        ItemKind::Task => "",
+    }
+}
+
 /// What `task status complete` did: one line per issue and source, a line naming the sources
 /// that hold no items by issue reference, then a closing count.
 pub fn issues_completed(completed: &IssuesCompleted) -> String {
@@ -315,7 +335,7 @@ pub fn issues_completed(completed: &IssuesCompleted) -> String {
     for item in &completed.items {
         let mut line = format!("{} in {}: {}", item.issue, item.source, wire(&item.action));
         if let Some(task) = &item.task {
-            line.push_str(&format!(" {task}"));
+            line.push_str(&format!(" {}{task}", project_prefix(item.kind)));
         }
         if let Some(to) = &item.to {
             line.push_str(&format!(

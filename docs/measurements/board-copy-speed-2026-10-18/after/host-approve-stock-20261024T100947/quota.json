@@ -1,0 +1,123 @@
+{
+ "gate": [
+  {
+   "at": 1792836587.6240327,
+   "buckets": {
+    "core": {
+     "limit": 5000,
+     "remaining": 4801,
+     "reset": 1792839486,
+     "used": 199
+    },
+    "graphql": {
+     "limit": 5000,
+     "remaining": 3961,
+     "reset": 1792837608,
+     "used": 1039
+    },
+    "graphql (GET /rate_limit)": {
+     "limit": 5000,
+     "remaining": 4963,
+     "reset": 1792839905,
+     "used": 37
+    },
+    "graphql (last headers)": {
+     "limit": 5000,
+     "remaining": 3963,
+     "reset": 1792837608,
+     "used": 1037
+    },
+    "graphql (rateLimit)": {
+     "limit": 5000,
+     "readings": [
+      4963,
+      3961,
+      4963
+     ],
+     "remaining": 3961,
+     "reset": 1792837608,
+     "used": 1039
+    }
+   },
+   "event": "reading",
+   "verdicts": {
+    "core": true,
+    "graphql": true
+   }
+  }
+ ],
+ "quota-after": {
+  "at": 1792836607.382524,
+  "buckets": {
+   "core": {
+    "limit": 5000,
+    "remaining": 4793,
+    "reset": 1792839486,
+    "used": 207
+   },
+   "graphql": {
+    "limit": 5000,
+    "remaining": 3956,
+    "reset": 1792837608,
+    "used": 1044
+   },
+   "graphql (GET /rate_limit)": {
+    "limit": 5000,
+    "remaining": 4961,
+    "reset": 1792839905,
+    "used": 39
+   },
+   "graphql (rateLimit)": {
+    "limit": 5000,
+    "readings": [
+     3956,
+     4961,
+     3956
+    ],
+    "remaining": 3956,
+    "reset": 1792837608,
+    "used": 1044
+   }
+  }
+ },
+ "quota-before": {
+  "at": 1792836587.6240327,
+  "buckets": {
+   "core": {
+    "limit": 5000,
+    "remaining": 4801,
+    "reset": 1792839486,
+    "used": 199
+   },
+   "graphql": {
+    "limit": 5000,
+    "remaining": 3961,
+    "reset": 1792837608,
+    "used": 1039
+   },
+   "graphql (GET /rate_limit)": {
+    "limit": 5000,
+    "remaining": 4963,
+    "reset": 1792839905,
+    "used": 37
+   },
+   "graphql (last headers)": {
+    "limit": 5000,
+    "remaining": 3963,
+    "reset": 1792837608,
+    "used": 1037
+   },
+   "graphql (rateLimit)": {
+    "limit": 5000,
+    "readings": [
+     4963,
+     3961,
+     4963
+    ],
+    "remaining": 3961,
+    "reset": 1792837608,
+    "used": 1039
+   }
+  }
+ }
+}

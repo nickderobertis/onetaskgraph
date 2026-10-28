@@ -18,6 +18,7 @@ import type {
   NativeId,
   Priority,
   ProjectGraph,
+  ProjectStatusSet,
   QueryResponseOfQualifiedDocument,
   QueryResponseOfQualifiedEdge,
   QueryResponseOfQualifiedLabel,
@@ -32,6 +33,7 @@ import type {
   StatusesReconciled,
   StatusNamesReport,
   StatusOptionsReport,
+  TaskAssetNames,
   TaskContentSet,
   TaskDetail,
   TaskDetails,
@@ -82,6 +84,10 @@ export type WriteOptions = { termScope?: string[] };
 // task's ids and current values from the source's local cache instead of reading it. Not a
 // precondition — see `docs/plugin-protocol.md`.
 export type ExpectOptions = { expect?: string };
+/** Status ownership on copy updates. Creates always carry the source status. */
+export const statusPolicies = ["source", "preserve-destination"] as const;
+export type StatusPolicy = (typeof statusPolicies)[number];
+export type StatusCopyOptions = { statusPolicy?: StatusPolicy };
 export type CopyOptions = WriteOptions & {
   matchBy?: string;
   recreate?: boolean;
@@ -108,7 +114,10 @@ export type CopyQueryOptions = {
 };
 // `create` asserts the destination holds no counterpart of any task named, so each is created
 // without the correspondence lookup. Only `task copy` takes it, and the query narrowing.
-export type TaskCopyOptions = CopyOptions & CopyQueryOptions & ExpectOptions & { create?: boolean };
+export type TaskCopyOptions = StatusCopyOptions &
+  CopyOptions &
+  CopyQueryOptions &
+  ExpectOptions & { create?: boolean; targetTask?: string };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
 export type CommentBodyOptions = ({ body: string } | { bodyFile: string }) &
@@ -145,7 +154,8 @@ export type CreateOptions = TemplateSourceOptions &
     labels?: string[];
     repositories?: string[];
     metadata?: Record<string, JsonValue>;
-    // Who may read it. Its repositories and its project tighten it, and nothing loosens it.
+    // Who may read it. Its repositories tighten it, and so does a document's project; a task's
+    // project never does, and nothing loosens it.
     classification?: Classification;
   };
 // The image files a create or a render stores with a task or a document, each under its base
@@ -260,6 +270,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "project graph": "ProjectGraph",
   "project copy": "CopyReport",
   "project metadata set": "MetadataSet",
+  // One project's status set on its own, as its source reads it back.
+  "project status set": "ProjectStatusSet",
   // A created project as `project show` answers with it.
   "project create": "QueryResponseOfQualifiedProject",
   "project render": "Regenerated",
@@ -276,6 +288,7 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task create": "TaskDetail",
   "task render": "Regenerated",
   "task answers": "TemplateAnswers",
+  "task assets": "TaskAssetNames",
   "document create": "DocumentDetail",
   "document render": "Regenerated",
   "document answers": "TemplateAnswers",
@@ -302,7 +315,8 @@ export const commandAlternateRoots: Readonly<
 // set`, for the same reason. `sources fields` sets up one board and answers for it whole, or
 // fails, and `sources route` reads configuration alone. `project graph` prints a graph or
 // nothing, and a graph lacking a private source it could not ask names it in `unanswered` and
-// exits 0, so it never exits 4. A template verb reads no source at all. Of the verbs that create and regenerate from
+// exits 0, so it never exits 4. `task assets` reads one task from one source and
+// writes its assets whole or fails. A template verb reads no source at all. Of the verbs that create and regenerate from
 // one, `task create` alone keeps what it delivers in step, so it alone can exit 4.
 const partialResponseCommands = new Set(
   Object.keys(commandResponseRoots).filter(
@@ -320,6 +334,7 @@ const partialResponseCommands = new Set(
       !command.startsWith("template ") &&
       !command.endsWith(" render") &&
       !command.endsWith(" answers") &&
+      command !== "task assets" &&
       command !== "project create" &&
       command !== "document create",
   ),
@@ -828,16 +843,42 @@ export function taskCopyFlags(options: TaskCopyOptions): string[] {
   return [
     ...copyFlags("taskCopy", options),
     ...(options.create ? ["--create"] : []),
+    ...(options.targetTask === undefined
+      ? []
+      : ["--target-task", stringOption("taskCopy", "targetTask", options.targetTask)]),
     ...expectFlags("taskCopy", options),
   ];
 }
 
-function copyFlags(method: string, options: CopyOptions & CopyQueryOptions): string[] {
+export function projectCopyFlags(
+  options: CopyOptions &
+    StatusCopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean },
+): string[] {
+  const args = copyFlags("projectCopy", options);
+  if (options.noTasks) args.push("--no-tasks");
+  for (const member of options.members ?? []) args.push("--member", member);
+  if (options.membersOnly !== undefined && typeof options.membersOnly !== "boolean") {
+    throw new TypeError("projectCopy: membersOnly must be a boolean");
+  }
+  if (options.membersOnly === true) args.push("--members-only");
+  return args;
+}
+
+function copyFlags(
+  method: string,
+  options: CopyOptions & CopyQueryOptions & StatusCopyOptions,
+): string[] {
   const args: string[] = [...termScopeFlags(method, options)];
   for (const flag of ["noLink", "comments"] as const) {
     if (options[flag] !== undefined && typeof options[flag] !== "boolean") {
       throw new TypeError(`${method}: ${flag} must be a boolean`);
     }
+  }
+  if (options.statusPolicy !== undefined) {
+    if (!statusPolicies.some((policy) => policy === options.statusPolicy)) {
+      throw new TypeError(`${method}: statusPolicy must be ${statusPolicies.join(" or ")}`);
+    }
+    args.push("--status-policy", options.statusPolicy);
   }
   if (options.matchBy !== undefined) args.push("--match-by", options.matchBy);
   if (options.recreate) args.push("--recreate");
@@ -1175,11 +1216,12 @@ export class OnetaskgraphClient {
   projectCopy(
     id: string,
     to: string,
-    options: CopyOptions & { noTasks?: boolean; members?: string[] } = {},
+    // `membersOnly` copies the named `members` into the project the destination already holds,
+    // leaving that project unread and unwritten; it is refused without a member.
+    options: CopyOptions &
+      StatusCopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean } = {},
   ): Promise<CopyReport> {
-    const args = [id, "--to", to, ...copyFlags("projectCopy", options)];
-    if (options.noTasks) args.push("--no-tasks");
-    for (const member of options.members ?? []) args.push("--member", member);
+    const args = [id, "--to", to, ...projectCopyFlags(options)];
     return this.run("project copy", args);
   }
   projectMetadataSet(
@@ -1193,6 +1235,19 @@ export class OnetaskgraphClient {
       key,
       value,
       ...termScopeFlags("projectMetadataSet", options),
+    ]);
+  }
+  // Set one project's status and nothing else about it; a project delivers no task, so nothing
+  // is kept in step after it.
+  projectStatusSet(
+    id: string,
+    category: StatusCategory,
+    options: WriteOptions = {},
+  ): Promise<ProjectStatusSet> {
+    return this.run("project status set", [
+      id,
+      category,
+      ...termScopeFlags("projectStatusSet", options),
     ]);
   }
   documentList(
@@ -1314,6 +1369,11 @@ export class OnetaskgraphClient {
   }
   taskAnswers(id: string): Promise<TemplateAnswers> {
     return this.run("task answers", [id]);
+  }
+  // Write every image asset one task holds into `outputDir`, each under the name its content
+  // references it by, and answer with the names written.
+  taskAssets(id: string, outputDir: string): Promise<TaskAssetNames> {
+    return this.run("task assets", [id, "--output-dir", outputDir]);
   }
   // Create — or, with `id` naming one the source holds, replace — a project, its description
   // rendered from a template or given as it is; it answers as `projectShow` does.

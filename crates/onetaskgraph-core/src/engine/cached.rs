@@ -104,6 +104,12 @@ impl Engine {
         Ok(CopyExpecting(Some(self)))
     }
 
+    /// Whether the copy running now expects a version of its one target, so its read is the
+    /// cache's to answer and nothing is read ahead of it.
+    pub(crate) fn expects_copy(&self) -> bool {
+        self.held_copy_expect().is_some()
+    }
+
     fn held_copy_expect(&self) -> std::sync::MutexGuard<'_, Option<String>> {
         self.copy_expect
             .lock()

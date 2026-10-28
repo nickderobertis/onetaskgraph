@@ -109,6 +109,51 @@ NOT_METHODS = {
         "`get_task_details`, which crosses as `get_task_detail` or `get_task` and "
         "`task_comments`"
     ),
+    "query_projects_by_origin": (
+        "not a message: §4.4 says the engine answers it for a hosted source as "
+        "`query_projects` with no filter, every page walked and narrowed to that origin"
+    ),
+    "query_documents_by_origin": (
+        "not a message: §4.4 says the engine answers it for a hosted source as "
+        "`query_documents` with no filter, every page walked and narrowed to that origin"
+    ),
+    "read_ahead_for_copy": (
+        "not a message: §4.4 says the engine reads nothing ahead for a hosted source, so "
+        "each counterpart crosses as its own `get_task`, `get_project` or `get_document`"
+    ),
+    "read_ahead_origins_for_copy": (
+        "not a message: §4.4 says the engine reads nothing ahead for a hosted source, so "
+        "each origin query crosses as its own `query_tasks`, `query_projects` or "
+        "`query_documents`"
+    ),
+    "member_classifications": (
+        "not a message: §4.4 says the engine answers it for a hosted source by its default, "
+        "none, so a project's members cross as its own `query_tasks` and `query_documents`"
+    ),
+    "create_batch_limit": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, one, so every task crosses as its own `write_task`"
+    ),
+    "write_tasks": (
+        "not a message: §4.9 says the engine never asks it of a hosted source, whose "
+        "`create_batch_limit` is one, so every task crosses as its own `write_task`"
+    ),
+    "begin_deferred_writes": (
+        "not a message: §4.9 says a hosted source holds nothing back, so every `write_task` "
+        "and `write_project` lands whole before it answers"
+    ),
+    "finish_writes": (
+        "not a message: §4.9 says a hosted source holds nothing back, so there is nothing "
+        "for it to send"
+    ),
+    "status_as_written": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, with the status it would write"
+    ),
+    "written_location": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, knowing no location, and reads the item where it needs one"
+    ),
     "check_status_write": (
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, and the plugin's own write refuses a status it has no name for"
@@ -156,6 +201,14 @@ NOT_METHODS = {
     "visibility": (
         "not carried: the paragraph after §4's method table says a source over this protocol "
         "answers `unknown`, which is never private"
+    ),
+    "designator": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "answers none, so only its configuration's `public_alias` designates it"
+    ),
+    "stored_content": (
+        "not a message: the paragraph after §4's method table says it crosses as the "
+        "`stored_content` member of a content write's result, which §4.9 specifies"
     ),
     "version_coverage": CACHE_ONLY_REASON,
     "project_version_coverage": CACHE_ONLY_REASON,
@@ -214,6 +267,7 @@ METHOD_SECTIONS = {
     "write_comment_copy": "### 4.16a `write_comment_copy`",
     "set_task_status": "### 4.17 `set_task_status` and `set_delivered_by`",
     "set_delivered_by": "### 4.17 `set_task_status` and `set_delivered_by`",
+    "set_project_status": "### 4.17a `set_project_status`",
     "set_task_metadata": (
         "### 4.18 `set_task_metadata`, `set_project_metadata` and `set_document_metadata`"
     ),
@@ -229,6 +283,7 @@ METHOD_SECTIONS = {
     "end_command": "### 4.22 `end_command`",
     "status_contradictions": "### 4.23 `status_contradictions`",
     "issue_holdings": "### 4.24 `issue_holdings`",
+    "stored_status": "### 4.25 `stored_status`",
 }
 
 ENUM_SECTIONS = {
@@ -245,6 +300,7 @@ ENUM_SECTIONS = {
     "Priority": "### 4.13b A task's `priority`",
     "Classification": "### 4.13c A record's `classification`",
     "ClosedAs": "### 4.23 `status_contradictions`",
+    "ContradictedItem": "### 4.23 `status_contradictions`",
 }
 
 # Values a section spells although the enum declaring them is specified elsewhere, each with
@@ -1040,7 +1096,28 @@ def struct_fields(struct, text, visibility):
             f"could not read the `{struct}` struct whose payload docs/plugin-protocol.md shows.",
             "restore it, or teach PAYLOAD_EXAMPLES in this script where it lives now.",
         )
-    fields = set(re.findall(r"^    %s (\w+):" % visibility, declaration.group(1), re.MULTILINE))
+    fields = set()
+    # A `#[serde(flatten)]` field is not a member of the wire object: what crosses is the
+    # member its externally tagged enum names, one per variant (`task` or `project` for a
+    # contradiction's `item`). So the field stands for those variant names, read from the
+    # enum's own declaration — never for its Rust name, which no peer ever sends.
+    for attributes, name, kind in re.findall(
+        r"((?:^    #\[[^\n]*\n)*)^    %s (\w+): ([^\n]*?),?$" % visibility,
+        declaration.group(1),
+        re.MULTILINE,
+    ):
+        if "#[serde(flatten)]" not in attributes:
+            fields.add(name)
+            continue
+        enum = re.search(r"pub enum %s \{(.*?)\n\}" % re.escape(kind), text, re.DOTALL)
+        variants = re.findall(r"^    ([A-Z]\w*)\(", enum.group(1), re.MULTILINE) if enum else []
+        if not variants:
+            refuse(
+                f"could not read the variants of `{kind}`, which `{struct}::{name}` flattens "
+                f"into its wire object.",
+                "declare the enum beside the struct, or teach this script the shape it has.",
+            )
+        fields.update(re.sub(r"(?<!^)(?=[A-Z])", "-", variant).lower() for variant in variants)
     if not fields:
         refuse(
             f"read no fields from `{struct}`.",
@@ -1079,6 +1156,30 @@ PAYLOAD_EXAMPLES = (
         "comment.rs",
     ),
     ("### 4.9b `check_task_write`", "check_task_write", "params", (), "CheckWriteParams", "wire"),
+    (
+        "### 4.25 `stored_status`",
+        "stored_status",
+        "params",
+        (),
+        "StoredStatusParams",
+        "wire",
+    ),
+    (
+        "### 4.25 `stored_status`",
+        "stored_status",
+        "result",
+        (),
+        "StoredStatusResult",
+        "wire",
+    ),
+    (
+        "### 4.25 `stored_status`",
+        "stored_status",
+        "params",
+        ("status",),
+        "Status",
+        "work.rs",
+    ),
     (
         "### 4.23 `status_contradictions`",
         "status_contradictions",

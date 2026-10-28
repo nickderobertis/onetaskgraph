@@ -8,8 +8,8 @@
 //! reported as having nothing to do.
 
 use onetaskgraph_plugin_api::{
-    Completion, HeldTask, IssueHolding, IssueRef, SourceError, SourceName, Status, StatusCategory,
-    StatusContradiction,
+    Completion, HeldTask, IssueHolding, IssueRef, ItemKind, SourceError, SourceName, Status,
+    StatusCategory, StatusContradiction,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,8 @@ pub struct StatusesReconciled {
 pub struct StatusReconciled {
     /// The item, by its qualified id.
     pub source: GlobalId,
+    /// What the item is: `task`, or `project` for a project's own card — a plan's home.
+    pub kind: ItemKind,
     /// The option its card sat at, or `null` for a card with none.
     pub from: Option<String>,
     /// The status its closure implies, which its card was moved to.
@@ -93,20 +95,23 @@ impl IssuesCompleted {
 
 /// What one source holds for one issue reference, and what moving it to `done` came to.
 ///
-/// Its members are flat — `issue`, `source`, `task`, `from`, `to`, `action`, `reason`, `error`
-/// — because a landing's record of its closures and the read API consume exactly that shape;
+/// Its members are flat — `issue`, `source`, `task`, `kind`, `from`, `to`, `action`, `reason`,
+/// `error` — because a landing's record of its closures and the read API consume exactly that shape;
 /// [`Engine::complete_issues`] is the one writer, and it fills them together from one
 /// [`Completion`].
-// llmlint: ignore[invalid_states_unrepresentable] The contract for `IssueCompleted` names these eight flat members and their types, and a landing's closure record and the read API consume them, so folding them into tagged variants is a contract change only the contract's owner may make. `Engine::complete_issues` is the one constructor, and each arm of `completion` there fills the members its action owns and no other.
+// llmlint: ignore[invalid_states_unrepresentable] The contract for `IssueCompleted` names these nine flat members and their types, and a landing's closure record and the read API consume them, so folding them into tagged variants is a contract change only the contract's owner may make. `Engine::complete_issues` is the one constructor, and each arm of `completion` there fills the members its action owns and no other.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct IssueCompleted {
     /// The issue, as `owner/name#N`.
     pub issue: IssueRef,
     /// The source asked.
     pub source: SourceName,
-    /// The task that source holds for the issue, by its qualified id — `null` when it holds
-    /// none.
+    /// The item that source holds for the issue, by its qualified id whichever its kind —
+    /// `null` when it holds none.
     pub task: Option<GlobalId>,
+    /// What the held item is: `task`, or `project` for a project's own card — a plan's home.
+    /// `task` when nothing is held, and for a reference the source could not be asked about.
+    pub kind: ItemKind,
     /// The option the task's card sat at, or `null`.
     pub from: Option<String>,
     /// The status the task reads at once written, would read under a dry run, or already
@@ -121,7 +126,7 @@ pub struct IssueCompleted {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<Failure>,
     /// Every task the written task delivers, kept in step with it exactly as `task status set`
-    /// keeps them — left out when it delivers none.
+    /// keeps them — left out when it delivers none, which a project never does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(!skip_serializing_if)]
     pub delivered: Vec<Delivered>,
@@ -177,13 +182,15 @@ impl Engine {
         // each task once, so no card is written twice in one run.
         let mut seen = std::collections::BTreeSet::new();
         for contradiction in &contradictions {
-            if !seen.insert(contradiction.task.id.clone()) {
+            let kind = contradiction.item.kind();
+            if !seen.insert((kind.marker(), contradiction.item.id().clone())) {
                 return Err(source_failed(
                     built,
                     SourceError::Malformed {
                         message: format!(
-                            "status_contradictions answered task {} more than once",
-                            contradiction.task.id
+                            "status_contradictions answered {} {} more than once",
+                            kind.marker(),
+                            contradiction.item.id()
                         ),
                     },
                 ));
@@ -204,18 +211,20 @@ impl Engine {
         dry_run: bool,
     ) -> StatusReconciled {
         let StatusContradiction {
-            task,
+            item,
             option,
             closed_as,
             to,
         } = contradiction;
-        let id = GlobalId::new(source.name().clone(), task.id.clone());
+        let kind = item.kind();
+        let id = GlobalId::new(source.name().clone(), item.id().clone());
         let planned = Status {
             category: closed_as.category(),
             name: to,
         };
         let entry = |outcome, to| StatusReconciled {
             source: id.clone(),
+            kind,
             from: option.clone(),
             to,
             outcome,
@@ -227,8 +236,9 @@ impl Engine {
             .write_category(
                 source,
                 &id,
-                task.classification,
-                &task.repositories,
+                kind,
+                item.classification(),
+                item.repositories(),
                 closed_as.category(),
             )
             .await;
@@ -346,6 +356,7 @@ impl Engine {
             issue: holding.issue.clone(),
             source: source.name().clone(),
             task: task.map(named),
+            kind: task.map_or(ItemKind::Task, |task| task.kind),
             from: task.and_then(|task| task.option.clone()),
             to: None,
             action,
@@ -382,12 +393,18 @@ impl Engine {
                     .write_category(
                         source,
                         &id,
+                        task.kind,
                         task.classification,
                         &task.repositories,
                         StatusCategory::Done,
                     )
                     .await
                 {
+                    // A project delivers no task, so there is nothing to keep in step with it.
+                    Ok(status) if task.kind == ItemKind::Project => IssueCompleted {
+                        to: Some(status),
+                        ..entry(Some(task), CompleteAction::Updated)
+                    },
                     Ok(status) => {
                         let delivers = targets(&task.delivers, &id.source);
                         let delivered = self
@@ -415,14 +432,15 @@ impl Engine {
         }
     }
 
-    /// One task's status written through its source's own status write, after the public
-    /// boundary has admitted it, answering the status as the source reads it back — which has
-    /// to be the category written, or the source is refused as malformed rather than reported
-    /// as having written it.
+    /// One item's status written through its source's own status write for its kind, after the
+    /// public boundary has admitted it, answering the status as the source reads it back — which
+    /// has to be the category written, or the source is refused as malformed rather than
+    /// reported as having written it.
     async fn write_category(
         &self,
         source: &ResolvedSource,
         id: &GlobalId,
+        kind: ItemKind,
         classification: onetaskgraph_plugin_api::Classification,
         repositories: &[onetaskgraph_plugin_api::Repository],
         category: StatusCategory,
@@ -436,12 +454,20 @@ impl Engine {
             &Exposure::metadata([category_word(category)]),
         )
         .await?;
-        let written = source
-            .source()
-            .set_task_status(&id.native, category)
-            .await
-            .map_err(|error| source_failed(source, error))?
-            .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
+        let written = match kind {
+            ItemKind::Task => source.source().set_task_status(&id.native, category).await,
+            ItemKind::Project => {
+                source
+                    .source()
+                    .set_project_status(&id.native, category)
+                    .await
+            }
+        }
+        .map_err(|error| source_failed(source, error))?
+        .ok_or_else(|| match kind {
+            ItemKind::Task => EngineError::NoSuchTask { id: id.to_string() },
+            ItemKind::Project => EngineError::NoSuchProject { id: id.to_string() },
+        })?;
         if written.category != category {
             return Err(source_failed(
                 source,
@@ -459,8 +485,9 @@ impl Engine {
 }
 
 /// A source's holdings, held to what `issue_holdings` promises: one per reference it was asked
-/// about, in the order asked, each about that very reference. Anything else is a malformed
-/// answer, refused for the whole source rather than read as some references holding nothing.
+/// about, in the order asked, each about that very reference, and no project naming a task it
+/// delivers — a project delivers none. Anything else is a malformed answer, refused for the
+/// whole source rather than read as some references holding nothing.
 fn answered_each(
     asked: &[IssueRef],
     holdings: Vec<IssueHolding>,
@@ -483,6 +510,23 @@ fn answered_each(
                 ),
             });
         }
+        let held = match &holding.completion {
+            Completion::Absent => None,
+            Completion::Skipped { task, .. }
+            | Completion::Unchanged { task }
+            | Completion::Due { task, .. } => Some(task),
+        };
+        if let Some(project) =
+            held.filter(|held| held.kind == ItemKind::Project && !held.delivers.is_empty())
+        {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "issue_holdings answered project {} for {issue} as delivering tasks, and a \
+                     project delivers none",
+                    project.id
+                ),
+            });
+        }
     }
     Ok(holdings)
 }
@@ -493,6 +537,7 @@ fn failed_completion(issue: &IssueRef, source: &SourceName, error: &EngineError)
         issue: issue.clone(),
         source: source.clone(),
         task: None,
+        kind: ItemKind::Task,
         from: None,
         to: None,
         action: CompleteAction::Failed,

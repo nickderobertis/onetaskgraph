@@ -70,7 +70,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `Project`, `Document`, `Location`, `Label`, `Status`, `StatusCategory`, `Priority`,
   `TaskRef`,
   `Repository`,
-  `DependencyEdge`, `DependencyEndpoint`, `ItemKind`, `DependencyKind`,
+  `DependencyEdge`, `DependencyEndpoint`, `Designator`, `EndpointRefusal`, `ItemKind`,
+  `DependencyKind`,
   `Direction`, `NativeId`, `SourceName`, `Classification`; the destination-reality types
   `Visibility` and `WriteTarget`; the query and paging types `TaskQuery`,
   `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,
@@ -83,8 +84,9 @@ silence. See the note on `Health` below for the one difference it carries delibe
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
-  and `AssetsWritten`; the clock types `Clock` and `SharedClock`; the closure types `IssueRef`,
-  `IssueHolding`, `HeldTask`, `Completion`, `ClosedAs` and `StatusContradiction`; the local-cache types
+  and `AssetsWritten`; the clock types `Clock`, `SharedClock` and `WaitCause`; the closure types `IssueRef`,
+  `IssueHolding`, `HeldTask`, `Completion`, `ClosedAs`, `StatusContradiction` and
+  `ContradictedItem`; the local-cache types
   `Coverage`, `VersionCoverage`, `ProjectVersionCoverage`, `DocumentVersionCoverage`,
   `WriteJournal`, `JournalEntry`, `RequestKind`, `PartOutcome`,
   `Shown` and `WholeTask`; and `SourceError`.
@@ -455,9 +457,19 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   of the third outcome.** The share it may never touch is `RETAINED_BUFFER` in
   `onetaskgraph-live` — twenty per cent of each budget's **whole allowance**, one constant
   for every lane, and nothing lowers it — and `affordable` there is the arithmetic. What
-  belongs to a lane is the *read*: the GitHub Projects journey makes exactly one,
-  `GET /rate_limit`, which GitHub documents as not counting against the REST rate limit and
-  which answers both of its budgets, before it does anything else. The estimate it decides
+  belongs to a lane is the *read*: before it does anything else the GitHub Projects journey
+  reads `GET /rate_limit` — which GitHub documents as not counting against the REST rate limit
+  and which answers both of its budgets — GraphQL's own `rateLimit` object, and that object's
+  answer's headers. **Before the buffer, the 40% rule:** a budget is the least of every reading
+  of it (`onetaskgraph_live::pace`), and one under `PAUSE_BELOW` — forty per cent of its limit —
+  is a reason to *pause* until its reset, not to decline, unless the burn rate since its window
+  began says it resets before the session would exhaust it — then it goes on with no wait and
+  no retained-buffer refusal at that decision, the buffer deciding only at or above forty per
+  cent; it is read again after the wait,
+  every pause is on the session's report, and every recheck below — the cleanup's included —
+  applies the same rule. The
+  product's own copy keeps its rate-limit backoff and never pauses this way.
+  `tests/pause_gate.rs` drives admission, recheck and cleanup on a virtual clock. The estimate it decides
   on is derived offline from that plugin's own per-call record of the session and a cost
   model stated once in `tests/journey/budget.rs`, so it needs no credential and moves with
   the session rather than with an edit; node count is **not** that estimate and cannot stand
@@ -474,7 +486,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   limit, or answered without an allowance the session could read, declines the same way; one
   refused for anything else and carrying no figures says nothing about the budget, so it
   goes on and fails as itself — a journey that cannot reach its host is a defect, not a
-  decline. The free read stays first, and no call is added. `tests/recheck_gate.rs` drives
+  decline. The free read stays first; each recheck reads the budgets again, the same three
+  ways, before it decides on the least of them — unless the session's own last answer already
+  declines it, which no lower reading could undo, and then it reads nothing more. `tests/recheck_gate.rs` drives
   all of that against a loopback stand-in. `scripts/check-budget-decline.sh`, a command in that plugin's `test`
   target, follows a decline on each reading through to the conclusion the required check
   reads, because a test that asserts a panic passes and the half worth proving is that the
@@ -501,14 +515,26 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   point has ended without it (`wait_for_current_main` in that suite's `tests/live.rs`).
   **The scheduled janitor is cleanup, not a test lane.**
   `.github/workflows/live-janitor.yml` runs hourly or by human dispatch, never from a
-  project's `test` or `coverage` target. It enumerates issues, their board #1 items and
-  labels in the scratch repository, and removes only exact CI-stamped artifacts whose
-  run in this repository reads back as `completed` immediately before each delete batch.
+  project's `test` or `coverage` target. It enumerates issues, their board #1 items,
+  labels in the scratch repository and board #1's fields, and removes only exact CI-stamped
+  artifacts whose run in this repository reads back as `completed` — a cancelled run
+  included — immediately before each delete batch.
   A re-run in progress protects every attempt; failed, missing or undecodable reads
   protect the artifacts. A batch contains only artifacts listed before that read.
   There is no waiting period: that read alone decides, so a finished run's artifacts go
   on the next pass whatever their age, rather than filling the board the live lane
   refuses when it is too full for a day.
+  **A cancelled run cleans up after itself, and a pre-flight never refuses a finished run's
+  residue.** `ci.yml`'s step on cancellation runs the janitor with `--cancelled-run`, which
+  removes exactly that run attempt's stamps and reads no run (`scripts/check-live-janitor.sh`
+  holds the step's shape; the two lane guards exempt that one step). The lane's board
+  pre-flight (`journey::preflight_board`) removes a stamped field whose run reads
+  `completed` before it counts the board — and, when the board holds more items than the
+  registered workload, such a run's issues in the lane's repository and their items — says so, and keeps and counts
+  any other, because one leftover field from a cancelled run once held every branch red.
+  Within the workload's items it lists nothing, so an ordinary session's requests are as
+  they were.
+  `tests/preflight_gate.rs` drives both against a stand-in board.
   Machine stamps remain the owning machine's lock sweep's. Cleanup never touches
   `onetaskgraph.origin`, draft items or other repositories' items; shared-board
   enumeration skips non-scratch issues before inspecting their titles. Only scratch
@@ -1028,9 +1054,9 @@ them do; this is the inventory of what is owed, not a status board.
     terms are derived, a malformed third identity making only an unscoped check unavailable.
 88. A mixed project goes, with every task and document in it, wholly to the private source a
     `classification: private` route names, over any repository route; with none reachable it is
-    refused whole; a private member is refused by a project held public; an explicit `public`
-    never loosens an inherited classification; and a project stays private after its private
-    members are removed.
+    refused whole; a private member is refused by a project held public; a task's classification
+    is its own, never tightened by its project, while a project and its documents stay private
+    by what they hold; and a project stays private after its private members are removed.
 89. A copy out of a private source into a public one records no origin naming it, and keeps
     its correspondence on the private side; a copy's dependency edges and `delivers` entries,
     and a delivered task's `delivered_by`, leave out every id naming an item of a private
@@ -1161,6 +1187,64 @@ them do; this is the inventory of what is owed, not a status board.
     written as one outside the copy; every check precedes the first write; any other refusal,
     and a project copy holding such a task, writes nothing; and a ticket write onto a board
     refused part way leaves no item behind and no issue closed behind an unwritten card.
+112. A plan copied onto a GitHub board — `project copy` then `document copy` of a generated
+    10-item plan, first, after one task's body changed and unchanged — sends no page of the
+    board's items or of its issue search and the same requests, by operation, at 2,000 and
+    20,000 items, and leaves the board holding exactly the plan; a task taken out of it is
+    reported orphaned and left as it was. Its counterparts are read in aliased batches of at
+    most `COPY_DETAIL_BATCH` and never one by one, and with the cache on only those no listed
+    token answers are read, an edited one before it is written.
+113. `task list --project`, `document list --project`, `project show` and `document show` on a
+    board read the project's own records, and `project list --origin` lists exactly the
+    projects copied from that origin in `project list`'s rows and JSON; each sends no page of
+    the board and the same requests at 2,000 and 20,000 items.
+114. A plan task, a project description and a design document rendered in a folder of Markdown
+    and copied to a Linear source, and each created and re-rendered in Linear itself, read back
+    through the binary as content whose SHA-256 is the `body_digest` their
+    `onetaskgraph.template` records, against a loopback storing every long form as spike
+    `spike-linear-stored-content` measured Linear storing it: the content is sent as composed,
+    what Linear stored is read off the write's own answer, and each item Linear rewrote takes
+    exactly one follow-up write and no read after either write. A code span and a fenced block
+    come back byte for byte, a hand edit's provenance is carried unrestamped, a repeat copy of
+    the unchanged plan writes nothing — the copy record recognising each project, task and
+    document — a re-render with the same template, answers and assets over unedited content
+    writes nothing, an edit at either end is written back alone, and a backend storing its own
+    stored content otherwise on the follow-up refuses each item as `stored-content-diverged` —
+    naming its id, the line and both texts — on a create, an update and a render alike.
+115. A routed project copy places its home by the tasks naming repositories and the project's
+    own: a task naming none follows the home; voters that disagree keep it in the named source,
+    or, while the boundary is active and the plan holds private work, send it to the one
+    private source its private voters route to — refused naming each when they route to two,
+    and refused when an existing home sits somewhere not private — with every task canonically
+    beside that private home and the public work seen only through journey 118's views, a view
+    the check refuses refusing the whole copy before anything is written. A copy that would
+    create a second project of a plan in a source takes over the member already there, found by
+    either link alone.
+116. `project copy --member … --members-only` lands the named tasks under the project a folder of
+    Markdown or a GitHub board already holds, reported as `--member` reports them, sending
+    nothing that compares or rewrites that project; one with no counterpart is refused before
+    any write, naming the `project copy` that creates it.
+117. Approving a plan on a board — `project show`, `task list --project`, `document list
+    --project`, then `document metadata set --expect` the version that listing reported — lists
+    each kind in one request of one point with every record and its order intact, carries the
+    document whole as `document show` would, writes the approval behind one read and waits on the
+    clock for nothing; a document write expecting a version the board has moved past — a person's
+    edit nothing has read included, with the cache on or off — is refused, writing nothing.
+
+118. A private plan copied to a private destination routing its public work to a public folder
+    or a GitHub board stand-in lands every task and edge there, and one neutral view per public
+    task where it routes — an opaque `Public work` project, each view only its screened title,
+    content, repositories, status and edges to other views — with the map at
+    `onetaskgraph.public_projections` on the private project alone; no request, file, link or
+    metadata at the public side names the private plan; a repeat writes nothing, a copy
+    interrupted before it recorded a view finds it again by its opaque id — and on a board or in
+    Linear, which issue their own ids, a view by what it says and the public project by the
+    allocation recorded privately before it was created, never an unrelated `Public work` beside
+    it, a project left behind resumed into rather than made twice — a view edited by hand
+    is put back and changes nothing of the plan, and `task status set` mirrors the category alone.
+119. A view naming private material in its title or content, or linking a local path, a private
+    plan copied to a public home, and a projection map naming a private source are each refused,
+    writing nothing.
 
 ## The public boundary
 
@@ -1174,9 +1258,13 @@ store opts in.
 
 - **No production dependency on onevcs.** The command adapter speaks onevcs's versioned
   boundary schema, pinned at `engine/boundary/onevcs-boundary-schema-v1.json`; the release the
-  journeys drive is pinned once, as `ONEVCS_CLI` in `crates/onetaskgraph-e2e/tests/e2e/onevcs.rs`,
+  journeys drive is pinned once, as `ONEVCS_CLI` in `crates/onetaskgraph-e2e-support/src/onevcs.rs`,
   and provided by `uv`. Moving it means re-pinning that schema, which the reconciliation journey
   refuses to let drift.
+- **A task owns its classification; projections are the copy domain's.** A task is classified
+  by its own declaration and repositories, never its project (`boundary.rs`); the
+  `onetaskgraph.public_projections` map has one definition, `PublicProjections` in
+  `engine/copy/projections.rs`, published as a schema root both SDKs generate from.
 - **Destination reality is the plugin's own read** (`TaskSource::visibility`), never the
   policy's. A GitHub source reads twice per write and holds nothing between writes; the
   `visibility-write-requests` budget holds a 102-write plan copy to 204. A Linear source is
@@ -1219,6 +1307,15 @@ two or more hops does not, permanently**, because only one origin is ever record
 every hop overwrites it. Chasing the chain further would need the intermediate stores
 configured and reachable, which would put a third party's availability inside a copy; a
 durable lineage id would identify only records written after it landed.
+
+**A recorded location answers before either key, and only beside its link.** A referent whose
+`onetaskgraph.copy_locations` entry names exactly the record its `onetaskgraph.copies` link names
+at the destination is pointed at that entry's location and the destination is not read for it;
+any other referent is resolved as below. The entry is written by a copy that knows the location
+without asking (the counterpart's read, or `TaskSource::written_location` after a create), so a
+plan copy's document copy reads none of the plan's tasks. A document whose counterpart already
+sits under the project its project's link names is taken as filed there without that project
+being read; a document a person moved elsewhere fails that test and is put back as before.
 
 **Where the correspondence is not confident, no record is chosen and the text is left
 byte-for-byte.** Two triggers: more than one destination record matching a referent's two
@@ -1474,6 +1571,25 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   three scripts that need it again with a relative entry first on PATH — and refuses to run
   at all when the host cannot reproduce the defect, because a simulation that did not take
   would look exactly like a pass.
+- **A loopback board keeps its connections alive, and a proxy in front of one forwards
+  through `loopback::Upstream`.** Answering every request `Connection: close` cost a TCP
+  connection per request — one run of the GitHub Projects suite opened about 37,000 and held
+  up to about 16,700 loopback sockets in `TIME_WAIT` on Linux, against about 12,400 and 6,500
+  kept alive. On the Windows runner, where `TIME_WAIT` lasts 120 seconds by default and
+  listeners and ephemeral ports share one 16,384-port range, a late request of that suite
+  failed `error sending request` against a board that was listening (run 39500544982). The
+  binary did not print the socket error beneath that message. Keeping connections alive did
+  not end it: with that in place, run 39531470241 failed the same way in `visibility_cost`,
+  whose proxy then opened a connection to the board per request — 256 for its copy — and
+  whose read of the board's answer was reset (`os error 10054`) while the board was serving.
+  That proxy now keeps one board connection per connection of its own (`loopback::serve_each`,
+  four for the same copy), so no loopback board here is sent a connection per request. **The
+  cause is not established.** A failed request now names every cause beneath it, down to the
+  socket error, and a loopback server or proxy says on standard error — shown beside the
+  failing test — each accept, read or write it could not complete, so the next failure says
+  which. `crates/onetaskgraph-e2e-support/src/loopback.rs` serves persistent HTTP/1.1 and
+  closes a connection only once its client has, or asked to; a proxy that forwards and then
+  reads to the end of the board's answer waits forever on it.
 - **Suppress narrowly.** A diagnostic is an error or a suppression at that one site with a
   stated reason. `notignored` posts every suppression a PR adds, so they are read.
 - **`gh-secrets.json` is tracked and load-bearing.** It declares the repository secrets

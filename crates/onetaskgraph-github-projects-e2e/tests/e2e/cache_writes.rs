@@ -93,7 +93,7 @@ fn a_project_or_document_metadata_write_or_render_removes_its_entry_and_the_next
         (
             "project",
             "board:P-1".to_owned(),
-            "projects-v2",
+            "projects-v4",
             [
                 "project",
                 "metadata",
@@ -109,7 +109,7 @@ fn a_project_or_document_metadata_write_or_render_removes_its_entry_and_the_next
         (
             "document",
             "board:D-1".to_owned(),
-            "documents-v2",
+            "documents-v4",
             [
                 "document",
                 "metadata",
@@ -125,7 +125,7 @@ fn a_project_or_document_metadata_write_or_render_removes_its_entry_and_the_next
         (
             "project",
             rendered_project.clone(),
-            "projects-v2",
+            "projects-v4",
             vec![
                 "project".to_owned(),
                 "render".to_owned(),
@@ -139,7 +139,7 @@ fn a_project_or_document_metadata_write_or_render_removes_its_entry_and_the_next
         (
             "document",
             rendered_document.clone(),
-            "documents-v2",
+            "documents-v4",
             vec![
                 "document".to_owned(),
                 "render".to_owned(),
@@ -222,7 +222,7 @@ fn a_copy_that_cannot_finish_takes_the_entries_of_what_it_writes_back_out_of_ser
     assert_ne!(failed.status.code(), Some(0), "the copy could not finish");
     let native = project.strip_prefix("board:").unwrap();
     assert!(
-        !entry_path(&cached, "projects-v2", native).exists(),
+        !entry_path(&cached, "projects-v4", native).exists(),
         "the project the copy wrote and wrote back is out of service"
     );
     let (current, sent) = show(&cached, "project", &project, Some(&held));
@@ -238,7 +238,7 @@ fn an_entry_this_build_cannot_read_as_its_own_is_a_miss_and_the_read_succeeds() 
     let cached = Cached::new();
     let (first, _) = show(&cached, "project", "board:P-1", None);
     let held = version(&first);
-    let path = entry_path(&cached, "projects-v2", "P-1");
+    let path = entry_path(&cached, "projects-v4", "P-1");
     let entry: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let mut other_schema = entry.clone();
     let next = onetaskgraph_core::cache::KIND_ENTRY_SCHEMA + 1;
@@ -249,7 +249,7 @@ fn an_entry_this_build_cannot_read_as_its_own_is_a_miss_and_the_read_succeeds() 
     // entry, never another's.
     let (document, _) = show(&cached, "document", "board:D-1", None);
     let mut other_kind: Value =
-        serde_json::from_slice(&std::fs::read(entry_path(&cached, "documents-v2", "D-1")).unwrap())
+        serde_json::from_slice(&std::fs::read(entry_path(&cached, "documents-v4", "D-1")).unwrap())
             .unwrap();
     other_kind["document"]["id"] = json!("P-1");
     other_kind["document"]["version"] = json!(held);
@@ -292,7 +292,7 @@ fn an_entry_this_build_cannot_read_as_its_own_is_a_miss_and_the_read_succeeds() 
         b"a newer release's entry",
         "nor written or cleared"
     );
-    assert!(kind_entries(&cached.default_dir(), "projects-v2").is_empty());
+    assert!(kind_entries(&cached.default_dir(), "projects-v4").is_empty());
 }
 
 #[test]
@@ -300,7 +300,7 @@ fn two_processes_writing_one_project_entry_never_leave_a_reader_part_of_it() {
     let cached = Cached::new();
     let (first, _) = show(&cached, "project", "board:P-1", None);
     let held = version(&first);
-    let path = entry_path(&cached, "projects-v2", "P-1");
+    let path = entry_path(&cached, "projects-v4", "P-1");
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let reader = {
         let stop = stop.clone();
@@ -347,7 +347,7 @@ fn two_processes_writing_one_project_entry_never_leave_a_reader_part_of_it() {
             .any(|file| file.file_name().to_string_lossy().starts_with(".staged"))
     };
     assert!(
-        !staged(&cached.default_dir().join("projects-v2")),
+        !staged(&cached.default_dir().join("projects-v4")),
         "no staging file is left behind"
     );
 }
@@ -436,7 +436,7 @@ fn a_pin_reaches_the_cache_through_both_sdks_and_a_rust_caller() {
             && sent
                 .iter()
                 .all(|document| document
-                    == onetaskgraph_github_projects::graphql::ISSUE_DEPENDENCIES),
+                    == onetaskgraph_github_projects::graphql::ISSUE_DEPENDS_ON),
         "the project's own fields are the entry's; its forward edges are read, and only they: \
          {sent:?}"
     );
@@ -457,4 +457,43 @@ fn a_pin_reaches_the_cache_through_both_sdks_and_a_rust_caller() {
         detail.response.items[0].item.version.as_deref(),
         Some(pin.as_str())
     );
+}
+
+#[test]
+fn a_project_status_write_takes_the_projects_entry_out_of_service_whether_or_not_it_lands() {
+    let cached = Cached::new();
+    let status = |shown: &Value| shown["items"][0]["item"]["status"].clone();
+
+    // Refused part way: its entry is taken out of service before anything is sent, so the read
+    // pinned to the token held before is the board's, answering what the board still holds.
+    let held = filled(&cached, "project", "board:P-1");
+    let (before, _) = show(&cached, "project", "board:P-1", Some(&held));
+    cached
+        .board
+        .refuse_once("updateProjectV2ItemFieldValue(input:$input)");
+    let output = cached.run_with(&["project", "status", "set", "board:P-1", "done"], None);
+    assert_eq!(output.status.code(), Some(1), "the refused write exits 1");
+    assert!(
+        !entry_path(&cached, "projects-v4", "P-1").exists(),
+        "a refused project status write leaves no entry to serve"
+    );
+    let (current, sent) = show(&cached, "project", "board:P-1", Some(&held));
+    assert!(
+        !sent.is_empty(),
+        "the read after the refusal is the board's"
+    );
+    assert_eq!(status(&current), status(&before), "{current}");
+
+    // Landed: the next read pinned to the token held before is the board's, answering the
+    // status the write left — never the entry's.
+    let held = filled(&cached, "project", "board:P-1");
+    let (written, _) = cached.ok(&["project", "status", "set", "board:P-1", "done", "--json"]);
+    assert_eq!(written["status"]["category"], "done", "{written}");
+    assert!(
+        !entry_path(&cached, "projects-v4", "P-1").exists(),
+        "a project status write takes its entry out of service"
+    );
+    let (current, sent) = show(&cached, "project", "board:P-1", Some(&held));
+    assert!(!sent.is_empty(), "the read after the write is the board's");
+    assert_eq!(status(&current), written["status"], "{current}");
 }

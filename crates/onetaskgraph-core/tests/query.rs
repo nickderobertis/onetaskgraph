@@ -856,6 +856,151 @@ async fn a_source_that_never_advances_its_cursor_is_reported_rather_than_walked_
     assert!(calls.load(Ordering::Relaxed) <= 3, "the walk stopped early");
 }
 
+/// A source that answers a listing by copy origin with every project it holds.
+///
+/// No correct plugin does this either: the method states it answers the projects copied from
+/// that origin and none other. The engine checks the origin again over what came back, so a
+/// source answering wider than it was asked cannot widen the caller's answer.
+struct WiderByOrigin;
+
+impl WiderByOrigin {
+    /// Its three projects: one copied from `plan:P-1`, one from another origin, one from none.
+    fn projects() -> Vec<Project> {
+        [
+            ("P-1", Some("plan:P-1")),
+            ("P-2", Some("plan:P-2")),
+            ("P-3", None),
+        ]
+        .into_iter()
+        .map(|(id, origin)| {
+            serde_json::from_value(json!({
+                "id": id,
+                "title": id,
+                "status": {"category": "todo", "name": "Todo"},
+                "labels": [],
+                "metadata": origin
+                    .map(|origin| json!({ TaskQuery::ORIGIN_KEY: origin }))
+                    .unwrap_or_else(|| json!({})),
+            }))
+            .expect("a project")
+        })
+        .collect()
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskSource for WiderByOrigin {
+    fn kind(&self) -> &'static str {
+        "wider-by-origin"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            filter_by_origin: Support::Native,
+            ..Stuck {
+                calls: Arc::new(AtomicU32::new(0)),
+            }
+            .capabilities()
+        }
+    }
+
+    async fn health(&self) -> Result<Health, SourceError> {
+        Ok(Health {
+            reachable: true,
+            detail: None,
+        })
+    }
+
+    async fn get_task(&self, _id: &NativeId) -> Result<Option<Task>, SourceError> {
+        Ok(None)
+    }
+
+    async fn get_project(&self, _id: &NativeId) -> Result<Option<Project>, SourceError> {
+        Ok(None)
+    }
+
+    async fn query_tasks(
+        &self,
+        _query: &TaskQuery,
+        _page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+
+    async fn query_projects(
+        &self,
+        _query: &ProjectQuery,
+        _page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        Ok(Page::last(Self::projects()))
+    }
+
+    async fn query_projects_by_origin(
+        &self,
+        _origin: &str,
+        _page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        Ok(Page::last(Self::projects()))
+    }
+
+    async fn labels(&self, _page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+
+    async fn task_dependencies(
+        &self,
+        _id: &NativeId,
+        _direction: Direction,
+        _page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+
+    async fn project_dependencies(
+        &self,
+        _id: &NativeId,
+        _direction: Direction,
+        _page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        Ok(Page::last(Vec::new()))
+    }
+}
+
+#[tokio::test]
+async fn a_listing_by_origin_keeps_only_that_origins_projects_whatever_the_source_answers() {
+    let engine = Engine::new(
+        vec![ConfiguredSource::Ready(ResolvedSource::adopt(
+            name("wide"),
+            Box::new(WiderByOrigin),
+        ))],
+        vec![name("wide")],
+    );
+    let origin = GlobalId::new(name("plan"), NativeId("P-1".to_owned()));
+
+    let copies = engine
+        .projects_by_origin(
+            &ProjectRequest {
+                sources: Vec::new(),
+                filters: Filters::default(),
+                paging: page(10),
+            },
+            &origin,
+        )
+        .await
+        .expect("the listing runs");
+
+    assert_eq!(
+        ids(&copies.items),
+        ["wide:P-1"],
+        "only the project copied from that origin is listed"
+    );
+    assert_eq!(
+        entry(&copies.plan, "wide").pushed_down,
+        [Predicate::Origin],
+        "the origin was still asked of the source"
+    );
+}
+
 /// A forward-only source whose forward edges answer every cursor with the cursor they
 /// were given.
 ///

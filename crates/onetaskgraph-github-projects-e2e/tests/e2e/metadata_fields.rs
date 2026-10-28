@@ -118,11 +118,33 @@ fn operations(served: &[(String, Value)]) -> usize {
                     .chain(&FIELD_CLEAR_SLOTS)
                     .filter(|slot| variables[slot.include] == true)
                     .count()
+            } else if batched(query) {
+                sent_slots(variables).len()
             } else {
                 1
             }
         })
         .sum()
+}
+
+/// Whether `query` is one of a copy's aliased writes, whose `$send<n>` says which of its slots
+/// it sent.
+fn batched(query: &str) -> bool {
+    [
+        graphql::CREATE_ISSUES,
+        graphql::WRITE_FIELD_VALUES,
+        graphql::CLOSE_ISSUES,
+        graphql::UPDATE_ISSUES,
+        graphql::ADD_BLOCKED_BYS,
+    ]
+    .contains(&query)
+}
+
+/// The slots of one aliased write it sent, by number.
+fn sent_slots(variables: &Value) -> Vec<usize> {
+    (0..onetaskgraph_github_projects::MUTATION_BATCH)
+        .filter(|slot| variables[format!("send{slot}")] == true)
+        .collect()
 }
 
 /// The modelled primary GraphQL points the requests spend.
@@ -158,6 +180,13 @@ fn host_writes(board: &GitHubBoardFields, served: &[(String, Value)]) -> Vec<Opt
                     writes.push(None);
                 }
             }
+        } else if query == graphql::WRITE_FIELD_VALUES {
+            for slot in sent_slots(variables) {
+                let value = &variables[format!("field{slot}")];
+                if value["fieldId"] == host {
+                    writes.push(value["value"]["text"].as_str().map(str::to_owned));
+                }
+            }
         } else if variables["input"]["fieldId"] == host {
             writes.push(
                 variables["input"]["value"]["text"]
@@ -179,18 +208,15 @@ fn a_copied_follow_up_lands_its_host_on_the_board_and_keeps_it_in_step() {
         host_writes(&setup.board, &first),
         [Some("build-7".to_owned())]
     );
-    // It rides the one ordered field write a copy already sends.
+    // It rides the one ordered field write a copy already sends, once the issue its create
+    // filed on the board is there to write it on.
     assert_eq!(
         first
             .iter()
             .filter(|(query, _)| query.trim_start().starts_with("mutation"))
             .map(|(query, _)| query.as_str())
             .collect::<Vec<_>>(),
-        [
-            graphql::CREATE_ISSUE,
-            graphql::ADD_TO_BOARD,
-            graphql::UPDATE_FIELDS
-        ]
+        [graphql::CREATE_ISSUE, graphql::WRITE_FIELD_VALUES]
     );
 
     // An unchanged re-copy sends the field nothing; a moved host is written; a removed one

@@ -1,0 +1,26 @@
+{
+  "data": {
+    "node": {
+      "__typename": "Issue",
+      "blocking": {
+        "nodes": [
+          {
+            "id": "I_dependent",
+            "title": "Dependent work",
+            "body": "",
+            "parent": {
+              "id": "I_plan"
+            },
+            "subIssuesSummary": {
+              "total": 0
+            }
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        }
+      }
+    }
+  }
+}

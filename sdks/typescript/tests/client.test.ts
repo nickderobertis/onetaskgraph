@@ -27,7 +27,9 @@ import {
   OnetaskgraphClient,
   OnetaskgraphExecutionError,
   OnetaskgraphValidationError,
+  projectCopyFlags,
   projectGraphDirections,
+  statusPolicies,
   taskCopyFlags,
   taskUpdateFlags,
   taskUpdateOptionFlags,
@@ -335,6 +337,23 @@ test("copy drives the real binary and reports what it did to each item", async (
     const again = await copyClient.taskCopy(["from:T-1"], "into");
     expect(again.items[0]?.action).toBe("unchanged");
 
+    const targeted = await copyClient.taskCopy(["from:T-1"], "into", {
+      targetTask: "into:T-1",
+    });
+    expect(targeted.items[0]).toMatchObject({
+      action: "unchanged",
+      destination: "into:T-1",
+      via: "target-task",
+    });
+    await expect(
+      copyClient.taskCopy(["from:T-1"], "into", { targetTask: "into:missing" }),
+    ).rejects.toThrow("into:missing");
+    expect((await copyClient.taskShow("into:T-1")).items[0]?.item.title).toBe("Alpha engine");
+    // Deliberately bypass the static type to prove validation of an invalid runtime value.
+    expect(() => taskCopyFlags({ targetTask: 7 } as unknown as { targetTask: string })).toThrow(
+      "targetTask",
+    );
+
     // A person deletes the origin key, so neither rule can find the counterpart; the
     // caller-named escape re-establishes it rather than creating a second item.
     writeFileSync(
@@ -396,6 +415,24 @@ test("copy drives the real binary and reports what it did to each item", async (
     await expect(
       copyClient.projectCopy("from:P-1", "into", { members: ["from:T-9"] }),
     ).rejects.toThrow("from:T-9 is not a task of from:P-1");
+    // Members only: the project already there is left exactly as it is, though its source moved.
+    const projectFile = resolve(copyRoot, "from/projects/P-1.md");
+    writeFileSync(
+      projectFile,
+      readFileSync(projectFile, "utf8").replace("title: Engine", "title: Engine, renamed"),
+    );
+    const held = readFileSync(resolve(copyRoot, "into/projects/P-1.md"), "utf8");
+    const only = await copyClient.projectCopy("from:P-1", "into", {
+      members: ["from:T-1"],
+      membersOnly: true,
+    });
+    expect(only.items.map((item) => [item.source, item.action])).toEqual([
+      ["from:T-1", "unchanged"],
+    ]);
+    expect(readFileSync(resolve(copyRoot, "into/projects/P-1.md"), "utf8")).toBe(held);
+    await expect(copyClient.projectCopy("from:P-1", "into", { membersOnly: true })).rejects.toThrow(
+      "--member",
+    );
 
     // A destination with no write side is refused, naming the source and its plugin.
     writeFileSync(
@@ -919,6 +956,8 @@ test("taskCopy sends exactly the flags the binary's task copy reports, no more a
         statuses: ["backlog"],
         termScope: ["github.com/example-org/widget"],
         expect: "gh2|v",
+        statusPolicy: "preserve-destination",
+        targetTask: "work:T-2",
       }),
       ...taskCopyFlags({ termScope: [] }),
     ].filter((argument) => argument.startsWith("--")),
@@ -1063,6 +1102,85 @@ test("task status set answers when a delivered task could not be kept in step", 
     expect(shown.items[0]?.item.delivers).toEqual(["nowhere:T-9"]);
   } finally {
     rmSync(statusRoot, { recursive: true, force: true });
+  }
+});
+
+// A folder of Markdown `work` holding project `P-1`, beside `closures`, a stdio peer answering
+// both closure methods with a plan's home project `home` and a task `t1` (closure_source.ts).
+function closureFolder(): string {
+  const closureRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-closure-"));
+  mkdirSync(resolve(closureRoot, "work/projects"), { recursive: true });
+  writeFileSync(
+    resolve(closureRoot, "work/projects/P-1.md"),
+    "---\ntitle: Engine\nstatus: todo\n---\nPlan.\n",
+  );
+  writeFileSync(
+    resolve(closureRoot, "onetaskgraph.yaml"),
+    JSON.stringify({
+      sources: {
+        work: { plugin: "local-md", config: { root: resolve(closureRoot, "work") } },
+        closures: {
+          plugin: "subprocess",
+          // Absolute, because the engine spawns a plugin with a cleared environment and so no
+          // PATH to resolve a bare name against.
+          config: {
+            command: process.execPath,
+            args: [resolve(import.meta.dir, "closure_source.ts")],
+          },
+        },
+      },
+    }),
+  );
+  return closureRoot;
+}
+
+test("a reconcile and a completion name each item's kind through the real binary", async () => {
+  const closureRoot = closureFolder();
+  try {
+    const closureClient = new OnetaskgraphClient({ binaryPath: binary, cwd: closureRoot });
+    const reconciled = await closureClient.taskStatusReconcile("closures");
+    expect(
+      reconciled.items.map((item) => [item.source, item.kind, item.to.name, item.action]),
+    ).toEqual([
+      ["closures:home", "project", "Done", "updated"],
+      ["closures:t1", "task", "Cancelled", "updated"],
+    ]);
+    const completed = await closureClient.taskStatusComplete(
+      ["acme/plan#1", "acme/plan#2", "acme/plan#3"],
+      { sources: ["closures"] },
+    );
+    expect(completed.items.map((item) => [item.issue, item.task, item.kind, item.action])).toEqual([
+      ["acme/plan#1", "closures:home", "project", "updated"],
+      ["acme/plan#2", "closures:t1", "task", "updated"],
+      ["acme/plan#3", null, "task", "absent"],
+    ]);
+    expect(completed.items[0]?.delivered ?? []).toEqual([]);
+  } finally {
+    rmSync(closureRoot, { recursive: true, force: true });
+  }
+});
+
+test("a project's status is set through the real binary, read back, and refused by name", async () => {
+  const closureRoot = closureFolder();
+  try {
+    const closureClient = new OnetaskgraphClient({ binaryPath: binary, cwd: closureRoot });
+    const answer = await closureClient.projectStatusSet("work:P-1", "done");
+    expect(answer).toEqual({ id: "work:P-1", status: { category: "done", name: "done" } });
+    expect(readFileSync(resolve(closureRoot, "work/projects/P-1.md"), "utf8")).toBe(
+      "---\ntitle: Engine\nstatus: done\n---\nPlan.\n",
+    );
+    const shown = await closureClient.projectShow("work:P-1");
+    expect(shown.items[0]?.item.status.category).toBe("done");
+
+    const hosted = await closureClient.projectStatusSet("closures:home", "cancelled");
+    expect(hosted.status).toEqual({ category: "cancelled", name: "Cancelled" });
+
+    const refused = closureClient.projectStatusSet("work:P-404", "done");
+    await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(refused).rejects.toMatchObject({ exitCode: 1 });
+    await expect(refused).rejects.toThrow("no project with the id work:P-404");
+  } finally {
+    rmSync(closureRoot, { recursive: true, force: true });
   }
 });
 
@@ -1305,7 +1423,13 @@ test("a project graph answers without a private source it cannot authenticate to
       mkdirSync(resolve(root, folder), { recursive: true });
     }
     writeFileSync(resolve(root, "work/projects/P-1.md"), "---\ntitle: Engine\n---\n");
-    writeFileSync(resolve(root, "work/tasks/T-1.md"), "---\ntitle: Ship\nproject: P-1\n---\n");
+    // Landed by a copy that kept its edge on the private side: only such a task's read asks the
+    // private source what it records of it.
+    writeFileSync(
+      resolve(root, "work/tasks/T-1.md"),
+      "---\ntitle: Ship\nproject: P-1\nmetadata:\n" +
+        "  onetaskgraph.copied_destination_version: sha256:00\n---\n",
+    );
     writeFileSync(
       resolve(root, "vault/tasks/V-1.md"),
       "---\ntitle: Approve\nmetadata:\n  onetaskgraph.depended_on_by:\n" +
@@ -1360,7 +1484,12 @@ test("a task's content is replaced from a file through the real binary, and noth
     const body = resolve(contentRoot, "body.md");
     writeFileSync(body, "The new body.\n\nWith a second paragraph.");
 
-    expect(await contentClient.taskContentSet("work:T-1", body)).toEqual({ id: "work:T-1" });
+    // The answer carries the content the task then holds: the bytes sent, from a source that
+    // reports nothing else of what it stores.
+    expect(await contentClient.taskContentSet("work:T-1", body)).toEqual({
+      id: "work:T-1",
+      content: "The new body.\n\nWith a second paragraph.",
+    });
     const after = (await contentClient.taskShow("work:T-1")).items[0]?.item;
     expect(after?.content).toBe("The new body.\n\nWith a second paragraph.");
     // The task's change token moves with its content; nothing else does.
@@ -1826,5 +1955,144 @@ test("a copy with comments carries them, and a repeat by query skips the unchang
     ).toThrow(TypeError);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("projectCopy flags agree with the binary help and validate membersOnly", () => {
+  const flags = (verb: string[]) => {
+    const help = spawnSync(binary, [...verb, "--help"], { encoding: "utf8" });
+    expect(help.status, help.stderr).toBe(0);
+    return new Set(
+      [...help.stdout.matchAll(/^\s+(?:-[a-zA-Z], )?(--[a-z][a-z-]*)/gm)].flatMap((found) =>
+        found[1] === undefined ? [] : [found[1]],
+      ),
+    );
+  };
+  const global = flags(["config", "show"]);
+  const own = [...flags(["project", "copy"])]
+    .filter((flag) => !global.has(flag) && flag !== "--to")
+    .sort();
+  const sent = projectCopyFlags({
+    matchBy: "title",
+    recreate: true,
+    dryRun: true,
+    noLink: true,
+    comments: true,
+    noTasks: true,
+    members: ["from:T-1"],
+    membersOnly: true,
+    termScope: ["github.com/example/project"],
+    statusPolicy: "preserve-destination",
+  });
+  const all = new Set(
+    [...sent, ...projectCopyFlags({ termScope: [] })].filter((flag) => flag.startsWith("--")),
+  );
+  expect([...all].sort()).toEqual(own);
+  expect(projectCopyFlags({ membersOnly: false })).not.toContain("--members-only");
+  // Untyped JavaScript callers can pass a string despite this TypeScript declaration.
+  expect(() =>
+    client.projectCopy("from:P-1", "into", {
+      members: ["from:T-1"],
+      membersOnly: "false" as unknown as boolean,
+    }),
+  ).toThrow("membersOnly must be a boolean");
+});
+
+test("taskAssets rejects a partial exit even beside valid asset names", async () => {
+  const fixtures = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-assets-partial-"));
+  try {
+    const partial = new OnetaskgraphClient({
+      binaryPath: executableFixture(
+        fixtures,
+        "assets-partial",
+        '["diagram.png"]',
+        "store failed",
+        4,
+      ),
+    });
+    const refused = partial.taskAssets("notes:T-1", resolve(fixtures, "out"));
+    await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(refused).rejects.toMatchObject({ exitCode: 4, stderr: "store failed" });
+  } finally {
+    rmSync(fixtures, { recursive: true, force: true });
+  }
+});
+
+test("both SDK copy verbs preserve destination status on updates and default to source", async () => {
+  const policyRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-policy-"));
+  try {
+    for (const folder of ["from/tasks", "from/projects", "into"]) {
+      mkdirSync(resolve(policyRoot, folder), { recursive: true });
+    }
+    for (const kind of ["task", "project"]) {
+      writeFileSync(
+        resolve(policyRoot, `from/${kind}s/one.md`),
+        "---\ntitle: One\nstatus: todo\n---\noriginal body\n",
+      );
+    }
+    writeFileSync(
+      resolve(policyRoot, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          from: { plugin: "local-md", config: { root: "from" } },
+          into: { plugin: "local-md", config: { root: "into" } },
+        },
+      }),
+    );
+    const policyClient = new OnetaskgraphClient({
+      binaryPath: binary,
+      cwd: policyRoot,
+      env: { ...process.env, HOME: policyRoot, XDG_CONFIG_HOME: policyRoot },
+    });
+    for (const kind of ["task", "project"] as const) {
+      const copy = (statusPolicy?: "source" | "preserve-destination") =>
+        kind === "task"
+          ? policyClient.taskCopy(
+              ["from:one"],
+              "into",
+              statusPolicy === undefined ? {} : { statusPolicy },
+            )
+          : policyClient.projectCopy(
+              "from:one",
+              "into",
+              statusPolicy === undefined ? {} : { statusPolicy },
+            );
+      await copy("preserve-destination");
+      const destination = resolve(policyRoot, `into/${kind}s/one.md`);
+      expect(readFileSync(destination, "utf8")).toContain("status: todo");
+      writeFileSync(
+        destination,
+        readFileSync(destination, "utf8").replace("status: todo", "status: done"),
+      );
+      const source = resolve(policyRoot, `from/${kind}s/one.md`);
+      writeFileSync(source, `${readFileSync(source, "utf8")}\nrevised body\n`);
+      await copy("preserve-destination");
+      expect(readFileSync(destination, "utf8")).toContain("status: done");
+      expect(readFileSync(destination, "utf8")).toContain("revised body");
+      await copy();
+      expect(readFileSync(destination, "utf8")).toContain("status: todo");
+    }
+    await expect(
+      policyClient.taskCopy(["from:missing"], "into", { statusPolicy: "preserve-destination" }),
+    ).rejects.toThrow();
+    // A runtime caller can arrive without TypeScript's union check.
+    expect(() => taskCopyFlags({ statusPolicy: "guess" as "source" })).toThrow("statusPolicy");
+  } finally {
+    rmSync(policyRoot, { recursive: true, force: true });
+  }
+});
+
+test("copy status policy choices agree with both CLI verbs", () => {
+  for (const verb of ["task", "project"]) {
+    const help = spawnSync(binary, [verb, "copy", "--help"], { encoding: "utf8" });
+    expect(help.status, help.stderr).toBe(0);
+    const block = help.stdout.split("--status-policy <STATUS_POLICY>")[1]?.split(/\n +--/)[0];
+    expect(block).toBeDefined();
+    const choices = [...(block ?? "").matchAll(/^ +- ([a-z-]+):/gm)].map((match) => match[1]);
+    expect(choices).toEqual([...statusPolicies]);
+    for (const statusPolicy of statusPolicies) {
+      expect(taskCopyFlags({ statusPolicy })).toEqual(["--status-policy", statusPolicy]);
+      expect(projectCopyFlags({ statusPolicy })).toEqual(["--status-policy", statusPolicy]);
+    }
   }
 });

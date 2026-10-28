@@ -1,0 +1,2 @@
+{"argv": ["task", "list", "--project", "plans:<id>", "--json"], "end": 1792835992.533, "program": "onetaskgraph", "returncode": 0, "start": 1792835990.123, "step": "task-list-project"}
+{"argv": ["document", "list", "--project", "plans:<id>", "--json"], "end": 1792835994.301, "program": "onetaskgraph", "returncode": 0, "start": 1792835992.542, "step": "document-list-project"}

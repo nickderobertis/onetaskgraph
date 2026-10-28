@@ -11,6 +11,7 @@
 
 use onetaskgraph_e2e_support::{common, fixtures};
 
+mod approval;
 mod boundary;
 mod cache;
 mod cache_assets;
@@ -18,6 +19,7 @@ mod cache_budget;
 mod cache_kinds;
 mod cache_writes;
 mod closed_status;
+mod connections;
 mod copy_cost;
 mod copy_recopy;
 mod copy_status;
@@ -25,9 +27,18 @@ mod copy_unsettled;
 mod fields;
 mod github_status_by_kind;
 mod graph;
+mod member_copy;
 mod metadata_fields;
+mod plan_copy;
+mod plan_locations;
+mod plan_pacing;
+mod plan_reads;
+mod plan_writes;
+mod project_status;
 mod status_complete;
 mod status_reconcile;
+mod store_cost;
+mod store_startup;
 mod write_order;
 mod write_rollback;
 

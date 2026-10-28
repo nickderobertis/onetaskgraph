@@ -47,7 +47,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["help", "project", "deps"], &["--pin", "--direction"]),
     (&["help", "task", "comment", "add"], &["--expect"]),
     (&["help", "task", "priority", "set"], &["--expect"]),
-    (&["help", "task", "copy"], &["--expect"]),
+    (&["help", "task", "copy"], &["--expect", "--target-task"]),
     (
         &["help", "sources", "route"],
         &["<SOURCE>", "--repository", "--json"],
@@ -181,6 +181,10 @@ const SURFACE: &[(&[&str], &[&str])] = &[
         ],
     ),
     (&["help", "task", "answers"], &["<ID>", "--json"]),
+    (
+        &["help", "task", "assets"],
+        &["<SOURCE:ID>", "--output-dir", "--json"],
+    ),
     (&["help", "document"], &["create", "render", "answers"]),
     (
         &["help", "document", "create"],
@@ -297,7 +301,47 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 41);
+    assert_eq!(bundle["version"], 47);
+    // Version 47: the `content` a `task content set` answers the task then holds.
+    // Version 45: the opaque dependency endpoint, and a dependency read's `unanswered` naming a
+    // designator no configured source is.
+    assert!(
+        bundle["roots"]["QueryResponseOfQualifiedEdge"]["$defs"]
+            .get("UnresolvedDesignator")
+            .is_some(),
+        "{:#}",
+        bundle["roots"]["QueryResponseOfQualifiedEdge"]["$defs"]
+    );
+    // Version 46: the projection map a private destination project records, and the view a
+    // task's status set mirrored its category to.
+    assert_eq!(
+        bundle["roots"]["PublicProjections"]["required"],
+        serde_json::json!(["schema_version", "tasks"])
+    );
+    for root in ["TaskStatusSet", "TaskUpdated"] {
+        assert!(
+            bundle["roots"][root]["properties"]["projection"].is_object(),
+            "{root}"
+        );
+    }
+    // Version 42: each closure item's `kind`, the project item a holding or a contradiction can
+    // carry, and what `project status set` answers with.
+    for root in ["IssueCompleted", "StatusReconciled"] {
+        assert!(
+            bundle["roots"][root].to_string().contains("\"kind\""),
+            "{root} names each item's kind"
+        );
+    }
+    assert!(bundle["roots"]["HeldTask"]["properties"]["kind"].is_object());
+    for root in ["ProjectStatusSet", "ContradictedItem"] {
+        assert!(bundle["roots"][root].is_object(), "{root} is a root");
+    }
+    assert!(
+        bundle["commands"]
+            .as_array()
+            .is_some_and(|commands| commands.contains(&serde_json::json!("project status set"))),
+        "project status set writes machine output"
+    );
     // Version 41: the two capabilities `task status reconcile` and `task status complete` are
     // asked through, and the documents both verbs answer with.
     for member in ["reconcile_status", "complete_by_issue"] {
@@ -379,12 +423,14 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task create",
             "task render",
             "task answers",
+            "task assets",
             "project list",
             "project show",
             "project deps",
             "project graph",
             "project copy",
             "project metadata set",
+            "project status set",
             "project create",
             "project render",
             "project answers",
@@ -933,11 +979,13 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         ItemKind::METADATA_KEY,
         MetadataKey::TEMPLATE_KEY,
         MetadataKey::COPIES_KEY,
+        MetadataKey::COPY_LOCATIONS_KEY,
         MetadataKey::MEMBERS_KEY,
         MetadataKey::MEMBER_OF_KEY,
         MetadataKey::COPIED_VERSION_KEY,
         MetadataKey::COPIED_WITH_COMMENTS_KEY,
         MetadataKey::COPIED_DESTINATION_VERSION_KEY,
+        MetadataKey::EDGES_ON_RECORD_KEY,
         onetaskgraph_core::GlobalId::ORIGIN_KEY,
     ]
     .into_iter()
@@ -962,7 +1010,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
     assert_eq!(listed, spelled, "the keys docs/metadata.md lists");
     let words = [
         "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-        "eleven", "twelve", "thirteen",
+        "eleven", "twelve", "thirteen", "fourteen", "fifteen",
     ];
     assert!(
         bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),
@@ -1301,7 +1349,7 @@ fn the_readme_names_every_word_of_the_copy_reports_via_and_link() {
                 .to_owned()
         })
         .collect();
-    assert_eq!(via.len(), 5, "{via:?}");
+    assert_eq!(via.len(), 6, "{via:?}");
     assert_eq!(link.len(), 4, "{link:?}");
 
     let readme = std::fs::read_to_string(
@@ -1309,7 +1357,7 @@ fn the_readme_names_every_word_of_the_copy_reports_via_and_link() {
     )
     .expect("README.md is readable");
     let start = readme
-        .find("`via` is one field with five words")
+        .find("`via` is one field with six words")
         .expect("the README's paragraph on `via` and `link`");
     let paragraph = &readme[start..start + readme[start..].find("\n<!--").unwrap()];
     let named: std::collections::BTreeSet<&str> = paragraph.split('`').skip(1).step_by(2).collect();

@@ -1,0 +1,30 @@
+{
+  "data": {
+    "node": {
+      "__typename": "Issue",
+      "blockedBy": {
+        "nodes": [
+          {
+            "id": "I_blocker",
+            "title": "Blocking work",
+            "body": "<!-- onetaskgraph.metadata\n{\"onetaskgraph.item_kind\":\"project\"}\n-->",
+            "parent": null,
+            "subIssuesSummary": {
+              "total": 0
+            }
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        }
+      },
+      "body": "Plan step.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.depends_on\":[{\"id\":\"elsewhere:T-9\",\"kind\":\"task\"}]}\n-->"
+    },
+    "board": {
+      "projectV2": {
+        "id": "PVT_board"
+      }
+    }
+  }
+}

@@ -119,7 +119,7 @@ impl GitHubProjectsSource {
         }
         base.set_query(None);
         let bytes = self
-            .asset_request(self.client.get(base), name, AssetOperation::Repository)
+            .asset_request(self.client()?.get(base), name, AssetOperation::Repository)
             .await?;
         let value: Value =
             serde_json::from_slice(&bytes).map_err(|error| SourceError::Refused {
@@ -171,7 +171,7 @@ impl GitHubProjectsSource {
                     .map_err(|message| SourceError::Refused { message })?;
                 let id = self.numeric_repository(&target, &asset.name).await?;
                 let request = self
-                    .client
+                    .client()?
                     .post(self.upload_endpoint()?)
                     .query(&[
                         ("name", asset.name.as_str().to_owned()),
@@ -195,7 +195,7 @@ impl GitHubProjectsSource {
                 })?;
                 let verified = self.attachment_url(&asset.name, url)?;
                 self.asset_request(
-                    self.client.get(verified),
+                    self.client()?.get(verified),
                     &asset.name,
                     AssetOperation::Verification,
                 )
@@ -252,7 +252,7 @@ impl GitHubProjectsSource {
             return Ok(None);
         };
         let url = self.attachment_url(name, &upload.url)?;
-        self.asset_request(self.client.get(url), name, AssetOperation::Read)
+        self.asset_request(self.client()?.get(url), name, AssetOperation::Read)
             .await
             .map(Some)
     }
@@ -285,19 +285,20 @@ impl GitHubProjectsSource {
         let mut waited = Duration::ZERO;
         let mut waits = 0;
         let mut backoff = self.pacing.retry_backoff;
+        let charge = if mutation {
+            crate::pacing::Charge::upload()
+        } else {
+            crate::pacing::Charge::default()
+        };
         loop {
-            if mutation {
-                self.clock.sleep(self.reserve_mutation_slot()).await;
-            }
+            let ticket = self.pace(charge, mutation).await;
             let response = self
-                .asset_client
+                .asset_client()?
                 .execute(request.try_clone().ok_or_else(|| SourceError::Refused {
                     message: format!("GitHub asset {name} {stage} cannot be retried"),
                 })?)
                 .await;
-            if mutation {
-                self.finish_mutation();
-            }
+            self.paced(ticket, mutation);
             let response = match response {
                 Ok(response) => response,
                 Err(error) => {
@@ -316,7 +317,7 @@ impl GitHubProjectsSource {
                     return Err(SourceError::Unavailable {
                         message: format!(
                             "GitHub asset {name} {stage} request failed: {}",
-                            super::with_causes(&error)
+                            super::transport_error(&error)
                         ),
                     });
                 }
@@ -347,7 +348,13 @@ impl GitHubProjectsSource {
                 .get("x-ratelimit-remaining")
                 .and_then(|value| value.to_str().ok())
                 == Some("0");
-            let hint = whole_seconds(response.headers().get("retry-after")).or_else(|| {
+            let retry_after = whole_seconds(response.headers().get("retry-after"));
+            let hinted_by = if retry_after.is_some() || !exhausted {
+                crate::Hint::RetryAfter
+            } else {
+                crate::Hint::PrimaryReset
+            };
+            let hint = retry_after.or_else(|| {
                 exhausted
                     .then(|| whole_seconds(response.headers().get("x-ratelimit-reset")))
                     .flatten()
@@ -395,8 +402,12 @@ impl GitHubProjectsSource {
                     ),
             );
             if let Some(limiter) = limiter {
-                let limited = Limited { limiter, hint };
-                let wait = hint.map_or(backoff, |hint| Duration::from_secs(hint).max(backoff));
+                let limited = Limited {
+                    limiter,
+                    hint,
+                    hinted_by,
+                };
+                let (wait, cause) = limited.wait(backoff);
                 if wait.is_zero() || wait > self.pacing.retry_budget.saturating_sub(waited) {
                     return Err(limited.exhausted(
                         &format!("asset {name} {stage}"),
@@ -406,7 +417,7 @@ impl GitHubProjectsSource {
                         self.pacing.retry_budget,
                     ));
                 }
-                self.clock.sleep(wait).await;
+                self.clock.sleep_because(wait, cause).await;
                 waited += wait;
                 waits += 1;
                 backoff = backoff.saturating_mul(2);

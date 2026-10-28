@@ -49,6 +49,8 @@ RESPONSE_ROOTS = {
     "project_graph": "ProjectGraph",
     "project_copy": "CopyReport",
     "project_metadata_set": "MetadataSet",
+    # One project's status set on its own, as its source reads it back.
+    "project_status_set": "ProjectStatusSet",
     "document_list": "QueryResponseOfQualifiedDocument",
     # The document response with the image assets it holds beside it.
     "document_show": "DocumentDetail",
@@ -70,6 +72,7 @@ RESPONSE_ROOTS = {
     "task_create": "TaskDetail",
     "task_render": "Regenerated",
     "task_answers": "TemplateAnswers",
+    "task_assets": "TaskAssetNames",
     # A created project as `project show` answers with it.
     "project_create": "QueryResponseOfQualifiedProject",
     "project_render": "Regenerated",
@@ -130,6 +133,9 @@ CONTRACT_ROOTS = {
     "RepositoryVisibility",
     "PublicWriteInput",
     "WriteVerdict",
+    # The map a private destination project records from each canonical task to its public
+    # projection, which a caller reading a coordination project models by name.
+    "PublicProjections",
     # The local cache of a remote source: a source's `cache` setting, how a read used the
     # cache, and what a write made with `expect` came to — named, because a caller branches on
     # each.
@@ -166,6 +172,7 @@ OPTION_TYPES = {
     "classification": "choices",
     "commented_since": "str",
     "origin": "GlobalId | str",
+    "target_task": "GlobalId | str",
     "dry_run": "bool",
     "default_sources": "list[str] | tuple[str, ...]",
     "delivers": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
@@ -186,6 +193,7 @@ OPTION_TYPES = {
     "match_by": "str",
     "member": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
     "members": "bool",
+    "members_only": "bool",
     "metadata": "list[str] | tuple[str, ...]",
     "no_delivers": "bool",
     "no_depends_on": "bool",
@@ -193,6 +201,7 @@ OPTION_TYPES = {
     "no_tasks": "bool",
     "not_label": "list[str] | tuple[str, ...]",
     "page": "str",
+    "output_dir": "str",
     "page_size": "int",
     # A version of the task a read is pinned to, as a read of it reported.
     "pin": "VersionToken",
@@ -208,6 +217,7 @@ OPTION_TYPES = {
     "source": "list[str] | tuple[str, ...]",
     "status": "choice_list",
     "status_name": "str",
+    "status_policy": "choices",
     "template": "str",
     "template_loader": "str",
     # The repositories a write's public-boundary check derives private terms from: a list
@@ -233,6 +243,7 @@ OPTION_PLACEHOLDERS = {
     "classification": "CLASSIFICATION",
     "commented_since": "RFC3339",
     "origin": "SOURCE:ID",
+    "target_task": "QUALIFIED-ID",
     "dry_run": None,
     "default_sources": "NAMES",
     "delivers": "ID",
@@ -251,6 +262,7 @@ OPTION_PLACEHOLDERS = {
     "match_by": "KEY",
     "member": "TASK-ID",
     "members": None,
+    "members_only": None,
     "metadata": "KEY=JSON",
     "no_delivers": None,
     "no_depends_on": None,
@@ -258,6 +270,7 @@ OPTION_PLACEHOLDERS = {
     "no_tasks": None,
     "not_label": "L",
     "page": "TOKEN",
+    "output_dir": "DIR",
     "page_size": "N",
     "pin": "VERSION",
     "priority": "PRIORITY",
@@ -272,6 +285,7 @@ OPTION_PLACEHOLDERS = {
     "source": "S",
     "status": "S",
     "status_name": "NAME",
+    "status_policy": "STATUS_POLICY",
     "template": "FILE",
     "template_loader": "FILE",
     "term_scope": "REPOSITORY",
@@ -520,7 +534,7 @@ def documented_minimum(schema: JsonValue, field: str) -> int:
 def generate_models(bundle: SchemaBundle, destination: Path) -> None:
     """Generate Pydantic models directly from every response schema in the bundle."""
     destination.mkdir(parents=True, exist_ok=True)
-    exports: list[str] = []
+    exports: dict[str, tuple[str, str]] = {}
     roots = sorted(response_roots() | CONTRACT_ROOTS)
     for root in roots:
         schema = bundle["roots"][root]
@@ -616,20 +630,67 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
         for generic, titled in (("QueryResponseOf", "QueryResponse"), ("PageOf", "Page")):
             if root.startswith(generic):
                 generated_name = titled
-        exports.append(f"from .{module} import {generated_name} as {root}")
-    (destination / "models.py").write_text(
+        exports[root] = (module, generated_name)
+    (destination / "models.py").write_text(lazy_models(exports), encoding="utf-8")
+
+
+def lazy_models(exports: dict[str, tuple[str, str]]) -> str:
+    """The `models` module: every root, imported from its own module only when first used.
+
+    Importing all of them eagerly built about 700 classes whichever few a caller touched,
+    which was most of a short-lived process's start-up and much of its exit. So a type
+    checker reads each root through an import it alone sees, and the interpreter resolves
+    a root through `__getattr__` on first access, importing that root's module and no
+    other, and binds it here so every later access is the same class at the cost of a
+    dictionary read. `__getattr__` is hidden from the checker too: a module that declares
+    one tells a checker every name exists, which would accept an import of a name this
+    package never exported.
+    """
+    return (
+        '"""Every schema root, each imported from its generated module when first used."""\n'
+        "\n"
         "# ruff: noqa: F401, I001  # Generated public re-exports are used by consumers.\n"
-        + "\n".join(exports)
-        + "\n\n"
+        "import importlib\n"
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "if TYPE_CHECKING:\n"
+        + "".join(
+            f"    from .{module} import {name} as {root}\n"
+            for root, (module, name) in exports.items()
+        )
+        + "\n"
         + "# Every root is named here rather than left to the `import X as X` form alone: a\n"
         + "# root whose generated class carries another name — every `QueryResponseOf…`, and\n"
         + "# `PageOfDocument` — is aliased, and a strict type checker reads an aliased name as\n"
         + "# private to this module rather than as a re-export. This list is what makes the\n"
-        + "# whole set public to one, here and through the package's own `import *`.\n"
+        + "# whole set public to one, here and through the package root's own `__all__`.\n"
         + "__all__ = [\n"
-        + "".join(f'    "{root}",\n' for root in roots)
-        + "]\n",
-        encoding="utf-8",
+        + "".join(f'    "{root}",\n' for root in exports)
+        + "]\n"
+        + "\n"
+        + "_MODULES: dict[str, tuple[str, str]] = {\n"
+        + "".join(
+            f'    "{root}": ("{module}", "{name}"),\n' for root, (module, name) in exports.items()
+        )
+        + "}\n"
+        + '"""Each root\'s module, and its class\'s name there, by its published name."""\n'
+        + "\n"
+        + "if not TYPE_CHECKING:\n"
+        + "\n"
+        + "    def __getattr__(name: str) -> object:\n"
+        + '        """Import the module defining `name`, alone, and bind the root here."""\n'
+        + "        try:\n"
+        + "            module, attribute = _MODULES[name]\n"
+        + "        except KeyError:\n"
+        + '            message = f"module {__name__!r} has no attribute {name!r}"\n'
+        + "            raise AttributeError(message) from None\n"
+        + '        value = getattr(importlib.import_module(f".{module}", __package__), attribute)\n'
+        + "        globals()[name] = value\n"
+        + "        return value\n"
+        + "\n"
+        + "    def __dir__() -> list[str]:\n"
+        + '        """Every name bound here and every root, imported or not."""\n'
+        + "        return sorted({*globals(), *__all__})\n"
     )
 
 
@@ -750,7 +811,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id",)
         case ("task", "comment", "edit" | "delete"):
             return ("id", "comment_id")
-        case ("task", "status", "set"):
+        case ("task" | "project", "status", "set"):
             return ("id", "category")
         case ("task", "priority", "set"):
             return ("id", "priority")
@@ -772,6 +833,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("source",)
         case ("task" | "project" | "document", "render" | "answers"):
             return ("id",)
+        case ("task", "assets"):
+            return ("id",)
         case _:
             return ()
 
@@ -789,6 +852,7 @@ REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("project", "create"): ("id", "title"),
     # A reconcile has no source to bring in line without `--source`.
     ("task", "status", "reconcile"): ("source",),
+    ("task", "assets"): ("output_dir",),
 }
 
 # The commands that read a body from standard input when `--body-file` is absent, which
@@ -856,19 +920,26 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "",
         "import json",
         "from collections.abc import Mapping",
-        "from typing import Literal",
+        "from functools import cache",
+        "from typing import TYPE_CHECKING, Literal",
         "",
         "from pydantic import JsonValue, TypeAdapter",
         "",
-        "from .models import (",
+        # The models are read through `models` when a method runs, so importing this module
+        # imports none of them: each is built when the first method answering with it is
+        # called. The names below exist for the annotations alone, which are never evaluated.
+        "from . import models as _models",
+        "",
+        "if TYPE_CHECKING:",
+        "    from .models import (",
         *[
-            f"    {root},"
+            f"        {root},"
             for root in sorted(
                 response_roots()
                 | {"GlobalId", "NativeId", "Priority", "SourceName", "StatusCategory"}
             )
         ],
-        ")",
+        "    )",
         "",
         "POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {",
         *[
@@ -891,7 +962,11 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "write expecting one, hand it back to the binary as it came.",
         '"""',
         "",
-        "_ANSWERS = TypeAdapter(dict[str, JsonValue])",
+        "",
+        "@cache",
+        "def _answers() -> TypeAdapter[dict[str, JsonValue]]:",
+        '    """The validator of an answers mapping, built the first time a call passes one."""',
+        "    return TypeAdapter(dict[str, JsonValue])",
         "",
         "",
         "def _answers_document(method: str, answers: Mapping[str, JsonValue]) -> str:",
@@ -907,7 +982,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         '        message = f"{method}: answers are a {kind}, not a mapping"',
         "        raise TypeError(message)",
         "    try:",
-        "        checked = _ANSWERS.validate_python(dict(answers), strict=True)",
+        "        checked = _answers().validate_python(dict(answers), strict=True)",
         "        return json.dumps(checked, allow_nan=False)",
         "    except ValueError as error:",
         '        message = f"{method}: answers are not a JSON mapping: {error}"',
@@ -1092,16 +1167,54 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
                 f"    async def {name}(self, {', '.join(parameters)}) -> {return_type}:",
                 f'        """Run ``onetaskgraph {" ".join(command)}``."""',
                 "        return await self._invoke("
-                f"{list(command)!r}, {return_type}, {', '.join(passed)})",
+                f"{list(command)!r}, {lazy_type(return_type)}, {', '.join(passed)})",
                 "",
             ]
         )
     (destination / "client.py").write_text("\n".join(lines), encoding="utf-8")
     (destination / "__init__.py").write_text(
+        '"""The generated client and models; each model is imported when first used."""\n'
+        "\n"
+        "from typing import TYPE_CHECKING\n"
+        "\n"
+        "from . import models as _models\n"
+        "from . import client as client\n"
         "from .client import GeneratedClient as GeneratedClient\n"
-        "from .models import *  # noqa: F403  # Schema roots define the public set.\n",
+        "\n"
+        "if TYPE_CHECKING:\n"
+        "    from .models import *  # noqa: F403  # Schema roots define the public set.\n"
+        "\n"
+        # Not `import *` at run time: it reads every name `__all__` lists, which would build
+        # every model the lazy `models` module exists to leave unbuilt.
+        '__all__ = ["GeneratedClient", "client"]\n'
+        "__all__ += _models.__all__\n"
+        "\n"
+        "if not TYPE_CHECKING:\n"
+        "\n"
+        "    def __getattr__(name: str) -> object:\n"
+        '        """Resolve a schema root through `models`, which imports its module alone."""\n'
+        "        try:\n"
+        "            value = getattr(_models, name)\n"
+        "        except AttributeError:\n"
+        '            message = f"module {__name__!r} has no attribute {name!r}"\n'
+        "            raise AttributeError(message) from None\n"
+        "        globals()[name] = value\n"
+        "        return value\n"
+        "\n"
+        "    def __dir__() -> list[str]:\n"
+        '        """Every name bound here and every root, imported or not."""\n'
+        "        return sorted({*globals(), *__all__})\n",
         encoding="utf-8",
     )
+
+
+def lazy_type(annotation: str) -> str:
+    """A method's return type as the run-time expression `_invoke` validates against.
+
+    Every root in it is read through `_models`, so the module defining it is imported when
+    the method is first called rather than when the client is.
+    """
+    return re.sub(r"\b([A-Z]\w*)", r"_models.\1", annotation)
 
 
 def enum_defaults(lines: list[str]) -> list[str]:

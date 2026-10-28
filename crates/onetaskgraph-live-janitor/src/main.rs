@@ -1,4 +1,11 @@
-//! The entry point `.github/workflows/live-janitor.yml` runs.
+//! The entry point `.github/workflows/live-janitor.yml` runs, and — given `--cancelled-run`
+//! first — the one `.github/workflows/ci.yml` runs when a live run is cancelled.
+//!
+//! `--cancelled-run` removes exactly the artifacts stamped with the run and attempt GitHub
+//! Actions names in `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT` (with `GITHUB_ACTIONS=true`),
+//! every kind of them, and nothing of another run. It reads no run's status and so needs no
+//! `GITHUB_TOKEN`; every other bound — the nominations, the allowance read, the read and
+//! write limits and the pacing — is the scheduled pass's.
 //!
 //! Exit status, one per way an invocation can end:
 //!
@@ -14,8 +21,13 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use onetaskgraph_github_live::{BOARD_NUMBER, BOARD_OWNER, SCRATCH_REPOSITORY};
-use onetaskgraph_live_janitor::{Config, Outcome, Report, VirtualClock, run, run_with_clock};
+use onetaskgraph_github_live::{
+    BOARD_NUMBER, BOARD_OWNER, GITHUB_ACTIONS_VARIABLE, RUN_ATTEMPT_VARIABLE, RUN_ID_VARIABLE,
+    SCRATCH_REPOSITORY, ci_run,
+};
+use onetaskgraph_live_janitor::{
+    Config, Outcome, Ownership, Report, VirtualClock, run, run_with_clock,
+};
 
 /// Why an invocation did not complete.
 enum Failure {
@@ -53,11 +65,32 @@ fn configure() -> Result<(Config, ClockMode), Failure> {
         }
     }
     let write_token = variable("GH_PROJECTS_TOKEN")?;
-    let actions_token = variable("GITHUB_TOKEN")?;
+    let mut arguments: Vec<_> = std::env::args().skip(1).collect();
+    let ownership = if arguments
+        .first()
+        .is_some_and(|first| first == "--cancelled-run")
+    {
+        arguments.remove(0);
+        let read = |name| std::env::var(name).ok();
+        let run = ci_run(
+            read(GITHUB_ACTIONS_VARIABLE).as_deref(),
+            read(RUN_ID_VARIABLE).as_deref(),
+            read(RUN_ATTEMPT_VARIABLE).as_deref(),
+        )
+        .map_err(Failure::Configuration)?
+        .ok_or_else(|| {
+            Failure::Configuration(format!(
+                "--cancelled-run cleans up after a GitHub Actions run, and \
+                 {GITHUB_ACTIONS_VARIABLE} is not true"
+            ))
+        })?;
+        Ownership::CancelledRun(run)
+    } else {
+        Ownership::completed_runs(&variable("GITHUB_TOKEN")?).map_err(Failure::Configuration)?
+    };
     // Explicit loopback-only test boundary: no offline journey can send a token to a host.
-    let arguments: Vec<_> = std::env::args().skip(1).collect();
     if arguments.is_empty() {
-        return Config::github(&write_token, &actions_token)
+        return Config::github(&write_token, ownership)
             .map(|config| (config, ClockMode::Real))
             .map_err(Failure::Configuration);
     }
@@ -65,10 +98,10 @@ fn configure() -> Result<(Config, ClockMode), Failure> {
         || arguments[0] != "--loopback"
     {
         return Err(Failure::Configuration(
-            "expected --loopback URL [--virtual-clock]".into(),
+            "expected [--cancelled-run] [--loopback URL [--virtual-clock]]".into(),
         ));
     }
-    Config::loopback(&arguments[1], &write_token, &actions_token)
+    Config::loopback(&arguments[1], &write_token, ownership)
         .map(|config| {
             let mode = if arguments.len() == 3 {
                 ClockMode::Virtual

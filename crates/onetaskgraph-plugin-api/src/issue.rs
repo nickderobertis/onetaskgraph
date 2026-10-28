@@ -13,7 +13,9 @@ use std::str::FromStr;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 
-use crate::{Classification, NativeId, Repository, StatusCategory, Task, TaskRef};
+use crate::{
+    Classification, ItemKind, NativeId, Project, Repository, StatusCategory, Task, TaskRef,
+};
 
 /// The pattern every [`IssueRef`] is spelled in: `owner/name#N`, the number at most nineteen
 /// digits — every such number fits the `u64` it is read into.
@@ -149,16 +151,24 @@ pub struct IssueHolding {
     pub completion: Completion,
 }
 
-/// The task one source holds for an issue, as far as moving it to `done` needs it.
+/// The item one source holds for an issue — a task, or a project such as a plan's home card —
+/// as far as moving it to `done` needs it.
 ///
-/// It carries of the task exactly what the write and the rules around it need — which task, the
-/// card it sits at, the tasks it delivers, and what decides where its id may be written — rather
-/// than the whole task, because the read that answers it is priced per issue and a whole task
-/// is not what a landing's closure needs.
+/// It carries of the item exactly what the write and the rules around it need — which item and
+/// of which kind, the card it sits at, the tasks it delivers, and what decides where its id may
+/// be written — rather than the whole item, because the read that answers it is priced per issue
+/// and a whole item is not what a landing's closure needs.
+// llmlint: ignore[names_match_behavior] The contract this change lands names the struct `HeldTask` — the engine and the read API that build against the release name it so, and its wire member is `task` — and widening what it holds to a project is a change to that contract's breadth that only its owner may answer with a rename; its documentation and `kind` say what it holds.
+// llmlint: ignore[invalid_states_unrepresentable] The wire form must stay one flat object in which an absent `kind` reads as a task, so a plugin built against 0.8.0 is read unchanged; a tagged split of `delivers` into a task variant would make that absent tag unreadable. The engine's one reader, `answered_each` in `onetaskgraph-core`'s `engine/closure.rs`, refuses as malformed a held project that names a delivered task, so the combination never reaches a write.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HeldTask {
-    /// The task, by this source's own id for it.
+    /// The item, by this source's own id for it.
     pub id: NativeId,
+    /// Which kind of item it is. Defaulted to `task` and left out of the wire while it is one,
+    /// so a plugin written before a project could be held answers exactly what it answered.
+    #[serde(default = "task_kind", skip_serializing_if = "is_task")]
+    #[schemars(!skip_serializing_if)]
+    pub kind: ItemKind,
     /// The name of the option the task's card sits at, as the source spells it, when it sits
     /// at one.
     #[serde(default)]
@@ -169,9 +179,23 @@ pub struct HeldTask {
     /// The repositories the task names.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repositories: Vec<Repository>,
-    /// The tasks it delivers, which a write of it to `done` keeps in step.
+    /// The tasks it delivers, which a write of it to `done` keeps in step — always empty for a
+    /// project, which delivers none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub delivers: Vec<TaskRef>,
+}
+
+/// The kind a [`HeldTask`] that does not say is: a task, as every holding was before a project
+/// could be held.
+const fn task_kind() -> ItemKind {
+    ItemKind::Task
+}
+
+/// Whether `kind` is the one a [`HeldTask`] leaves unsaid.
+// The signature is the one `skip_serializing_if` calls with.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_task(kind: &ItemKind) -> bool {
+    *kind == ItemKind::Task
 }
 
 /// What moving one issue's item to `done` comes to at one source — the task it holds riding on
@@ -229,14 +253,64 @@ impl ClosedAs {
 /// — one entry of [`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct StatusContradiction {
-    /// The task, as it reads now.
-    pub task: Task,
+    /// The item as it reads now: `task` or `project`, named by its kind.
+    #[serde(flatten)]
+    pub item: ContradictedItem,
     /// The option its card sits at, or `None` for a card with no option.
     #[serde(default)]
     pub option: Option<String>,
     /// What its closure reads as.
     pub closed_as: ClosedAs,
-    /// The name of the option the source's mapping gives that category, which its card is
-    /// moved to.
+    /// The name of the option the source's mapping gives that category for the item's kind,
+    /// which its card is moved to.
     pub to: String,
+}
+
+/// The item a [`StatusContradiction`] is about, under the member naming its kind — `task`, as
+/// every contradiction was before a project could be one, or `project`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ContradictedItem {
+    /// A task, as `get_task` reads it.
+    Task(Task),
+    /// A project, as `get_project` reads it.
+    Project(Project),
+}
+
+impl ContradictedItem {
+    /// Which kind of item it is.
+    #[must_use]
+    pub const fn kind(&self) -> ItemKind {
+        match self {
+            Self::Task(_) => ItemKind::Task,
+            Self::Project(_) => ItemKind::Project,
+        }
+    }
+
+    /// The item's own id at its source.
+    #[must_use]
+    pub const fn id(&self) -> &NativeId {
+        match self {
+            Self::Task(task) => &task.id,
+            Self::Project(project) => &project.id,
+        }
+    }
+
+    /// The item's declared classification.
+    #[must_use]
+    pub const fn classification(&self) -> Classification {
+        match self {
+            Self::Task(task) => task.classification,
+            Self::Project(project) => project.classification,
+        }
+    }
+
+    /// The repositories the item names.
+    #[must_use]
+    pub fn repositories(&self) -> &[Repository] {
+        match self {
+            Self::Task(task) => &task.repositories,
+            Self::Project(project) => &project.repositories,
+        }
+    }
 }

@@ -85,6 +85,28 @@ impl Plan {
         .unwrap();
         bytes
     }
+    /// [`Self::author`] again over a record a copy already linked, keeping the link that copy
+    /// recorded in its front matter, so the next copy follows it to the record it updates — or
+    /// [`Self::author`] alone, for a record not written yet.
+    fn reauthor(&self, kind: &str, id: &str, sizes: &[usize], seed: u64) -> Vec<Vec<u8>> {
+        let path = self.root.join(format!("{kind}s/{id}.md"));
+        let Ok(linked) = std::fs::read_to_string(&path) else {
+            return self.author(kind, id, false, sizes, seed);
+        };
+        let metadata = linked
+            .strip_prefix("---\n")
+            .and_then(|front| front.split_once("\n---\n"))
+            .and_then(|(front, _)| front.find("metadata:").map(|at| front[at..].to_owned()))
+            .unwrap_or_default();
+        let bytes = self.author(kind, id, false, sizes, seed);
+        let written = std::fs::read_to_string(&path).unwrap();
+        let (front, body) = written
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("---\n"))
+            .unwrap();
+        std::fs::write(&path, format!("---\n{front}{metadata}\n---\n{body}")).unwrap();
+        bytes
+    }
     fn spawn(&self, kind: &str, id: &str) -> Child {
         self.sandbox
             .subprocess(binary())
@@ -258,14 +280,23 @@ fn task_and_document_assets_are_uploaded_verified_reused_and_replaced() {
         new_requests += uploads(calls).len() + attachment_reads(calls);
         records.push(plan.assert_record(&report, &format!("notes:{id}"), bytes));
     }
+    // Two copies' requests through the proxy, two processes apart, reach the board behind it
+    // over the one connection the proxy keeps to it.
+    assert_eq!(
+        plan.github.connections(),
+        1,
+        "the proxy opened a connection to the board per request rather than keeping one"
+    );
+    // A copy creating a record reads the repository's numeric id beside the board's fields, in
+    // the one read that finds nothing copied there yet, so it sends no repository read at all.
     assert_eq!(
         plan.board
             .calls()
             .iter()
             .filter(|call| call.path.starts_with("/repos/"))
             .count(),
-        2,
-        "one repository read per fresh binary instance"
+        0,
+        "no repository read where a create's own context read carried its id"
     );
     record(
         "github-asset-requests-per-new-asset",
@@ -301,6 +332,16 @@ fn task_and_document_assets_are_uploaded_verified_reused_and_replaced() {
         let calls = plan.board.calls();
         assert_eq!(uploads(&calls[before..]).len(), 1);
         assert_eq!(attachment_reads(&calls[before..]), 1);
+        // One repository read per fresh binary instance updating a record with a new image:
+        // nothing it read before the upload carried the repository's numeric id.
+        assert_eq!(
+            calls[before..]
+                .iter()
+                .filter(|call| call.path.starts_with("/repos/"))
+                .count(),
+            1,
+            "one repository read per fresh binary instance"
+        );
         let changed = plan.assert_record(&report, &format!("notes:{id}"), &bytes);
         assert_ne!(changed["shot-0.png"], records[position]["shot-0.png"]);
         for index in 1..bytes.len() {
@@ -352,7 +393,14 @@ fn refused_uploads_and_broken_verified_urls_never_write_an_issue_body() {
     ] {
         let clock = SimulatedClock::start(1);
         let plan = Plan::new(&clock, 0, None);
-        plan.author("document", "D", false, &[480_000], 1);
+        // The repository's numeric id is read on its own only by a write that read nothing else
+        // carrying it — an update of a record already on the board — so that stage is driven
+        // by one: the document copied first without its image, then with it.
+        if stage == Stage::Repository {
+            plan.author("document", "D", false, &[], 1);
+            plan.copy("document", "D");
+        }
+        plan.reauthor("document", "D", &[480_000], 1);
         plan.board.refuse(Refusal {
             stage,
             status,
@@ -360,6 +408,7 @@ fn refused_uploads_and_broken_verified_urls_never_write_an_issue_body() {
             body: "refused".into(),
             remaining: usize::MAX,
         });
+        let before = plan.board.calls().len();
         let output = plan.spawn("document", "D").wait_with_output().unwrap();
         assert!(!output.status.success());
         let message = format!("{}{}", stdout(&output), stderr(&output));
@@ -375,12 +424,15 @@ fn refused_uploads_and_broken_verified_urls_never_write_an_issue_body() {
         } else if stage == Stage::Read {
             assert!(message.contains("/user-attachments/assets/1"), "{message}");
         }
+        // Nothing of the refused copy's content reached an issue: no create, and no update
+        // carrying its image — the one an update's undo sends puts the body back as it was.
         assert!(
-            !plan
-                .github
-                .documents()
-                .iter()
-                .any(|query| query.contains("createIssue(input:"))
+            !plan.board.calls()[before..].iter().any(|call| {
+                let sent = String::from_utf8_lossy(&call.bytes);
+                sent.contains("createIssue(input:")
+                    || (sent.contains("updateIssue(input:") && sent.contains("shot-0"))
+            }),
+            "{stage:?} {status}: an issue body was written"
         );
     }
 }
@@ -399,7 +451,13 @@ fn asset_requests_take_mutation_slots_and_each_limiter_recovers_or_exhausts_its_
                 for persistent in [false, true] {
                     let clock = SimulatedClock::start(1);
                     let plan = Plan::new(&clock, 0, None);
-                    plan.author("document", "D", false, &[480_000, 480_000], 1);
+                    // The repository's own read is made only by an update — see
+                    // `refused_uploads_and_broken_verified_urls_never_write_an_issue_body`.
+                    if stage == Stage::Repository {
+                        plan.author("document", "D", false, &[], 1);
+                        plan.copy("document", "D");
+                    }
+                    plan.reauthor("document", "D", &[480_000, 480_000], 1);
                     let headers = match (primary, hint) {
                         (true, Hint::Server) => format!(
                             "x-ratelimit-remaining: 0\r\nx-ratelimit-reset: {}\r\n",
@@ -480,12 +538,15 @@ fn asset_requests_take_mutation_slots_and_each_limiter_recovers_or_exhausts_its_
                             "past retry budget: {:?}",
                             clock.now()
                         );
-                        assert!(
-                            !plan
-                                .github
+                        // Nothing past the setup's own create — for the repository stage,
+                        // the copy that made the document this one updates — created anything.
+                        assert_eq!(
+                            plan.github
                                 .documents()
                                 .iter()
-                                .any(|query| query.contains("createIssue(input:"))
+                                .filter(|query| query.contains("createIssue(input:"))
+                                .count(),
+                            usize::from(stage == Stage::Repository)
                         );
                     } else {
                         let report = success(&output);
@@ -494,12 +555,17 @@ fn asset_requests_take_mutation_slots_and_each_limiter_recovers_or_exhausts_its_
                             "notes:D",
                             &[images::png(1, 480_000), images::png(2, 480_000)],
                         );
-                        let creating: Vec<_> = calls.iter().filter(|call| call.creating).collect();
-                        for pair in creating.windows(2) {
-                            assert!(
-                                pair[1].at.saturating_sub(pair[0].at) >= Duration::from_millis(750)
-                            );
-                        }
+                        // Pacing is by GitHub's windows, and a copy of one document is nowhere
+                        // near filling one: every wait the binary made was answering the
+                        // refusal, none was pacing.
+                        assert!(
+                            clock.slept().iter().all(|slept| matches!(
+                                slept.cause.as_deref(),
+                                Some("retry-after" | "primary-reset" | "backoff")
+                            )),
+                            "{:?}",
+                            clock.slept()
+                        );
                         let last_upload = uploads(&calls).last().unwrap().at;
                         let read = calls
                             .iter()
@@ -1882,4 +1948,70 @@ fn names_its_cause(message: &str) -> bool {
         .split_once("error sending request for url (")
         .and_then(|(_, rest)| rest.split_once("): "))
         .is_some_and(|(_, cause)| !cause.trim().is_empty())
+}
+
+#[test]
+fn task_assets_writes_each_uploaded_image_a_board_task_holds_under_its_reference_name() {
+    let clock = SimulatedClock::start(1);
+    let plan = Plan::new(&clock, 0, None);
+    let bytes = plan.author("task", "T", false, &[60_000, 120_000], 70);
+    plan.author("task", "U", false, &[], 0);
+    let landed = |report: &Value| {
+        report["items"][0]["destination"]
+            .as_str()
+            .expect("a copied task")
+            .to_owned()
+    };
+    let pictured = landed(&plan.copy("task", "T"));
+    let plain = landed(&plan.copy("task", "U"));
+    let assets = |id: &str, out: &std::path::Path| {
+        plan.sandbox
+            .command()
+            .args(["task", "assets", id, "--output-dir"])
+            .arg(out)
+            .arg("--json")
+            .envs(plan.clock.client_env(plan.client))
+            .assert()
+            .get_output()
+            .clone()
+    };
+    let written = |out: &std::path::Path| {
+        let mut names: Vec<String> = std::fs::read_dir(out)
+            .expect("the output directory")
+            .map(|entry| {
+                entry
+                    .expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        names
+    };
+
+    let out = plan.sandbox.subdirectory("out");
+    let listed = success(&assets(&pictured, &out));
+    assert_eq!(listed, json!(["shot-0.png", "shot-1.png"]));
+    assert_eq!(written(&out), ["shot-0.png", "shot-1.png"]);
+    for (index, expected) in bytes.iter().enumerate() {
+        let read = std::fs::read(out.join(format!("shot-{index}.png"))).expect("written");
+        assert!(
+            &read == expected,
+            "shot-{index}.png is not the uploaded image byte for byte"
+        );
+    }
+
+    let empty = plan.sandbox.subdirectory("empty");
+    assert_eq!(success(&assets(&plain, &empty)), json!([]));
+    assert!(written(&empty).is_empty());
+
+    let missing = assets("board:no-such-item", &empty);
+    assert_eq!(missing.status.code(), Some(1), "{}", stderr(&missing));
+    assert!(
+        stderr(&missing).contains("board:no-such-item"),
+        "{}",
+        stderr(&missing)
+    );
+    assert!(written(&empty).is_empty());
 }

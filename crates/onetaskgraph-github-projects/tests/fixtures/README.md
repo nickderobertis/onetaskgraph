@@ -21,6 +21,11 @@ now on those issues' own connections, which is where GitHub would have derived t
 `dependencies.json` follows the published `Issue.blockedBy: IssueConnection` and
 `Issue.blocking: IssueConnection` shapes, which provide both dependency directions, with
 each far end carrying the fields that say which kind of item it is.
+`dependencies-depends-on.json` and `dependencies-depended-on-by.json` are that answer as each
+one-direction read receives it: `blockedBy` with the issue's `body`, whose metadata slot
+records a far end in another source, and this board's own id under the aliased `board` root;
+and `blocking` alone, holding one dependent filed under a project so its far-end keys are
+checked too.
 
 `issues.json` and `sub-issues.json` are the same board reached the two ways a read that is
 *not* about the whole board reaches it: a board-scoped issue search
@@ -167,12 +172,26 @@ identifier is kept: the user id in the sentence is not part of the wording.
 
 `the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact` in
 `../schema.rs` reconciles it against `SECONDARY_WORDINGS`, `PRIMARY_WORDINGS`,
-`CONTENT_CREATION_PER_MINUTE` and `CONTENT_CREATION_PER_HOUR` **both ways**, so neither a
+`CONTENT_CREATION_PER_MINUTE`, `CONTENT_CREATION_PER_HOUR`, `SECONDARY_POINTS_PER_MINUTE`,
+`SECONDARY_POINTS_PER_MUTATION` and `SECONDARY_POINTS_PER_QUERY` **both ways**, so neither a
 wording this source quietly starts matching on nor one it quietly stops matching on can
 land without moving the pin — and moving the pin means going back to those pages and
-recording what they say now. `MIN_MUTATION_INTERVAL_MS` is derived from the per-minute
-ceiling rather than written out beside it, so the pacing this source runs at is gated by
-the same pin.
+recording what they say now. The per-minute, per-hour and points ceilings are the windows
+this source paces under (see `src/pacing.rs`), and `MIN_MUTATION_INTERVAL_MS`, the spacing
+`pacing.min_mutation_interval_ms` may still ask for, is derived from the per-minute ceiling
+rather than written out beside it, so both are gated by the same pin.
+
+### The `secondary_points` block
+
+GitHub's third documented secondary limit on its GraphQL API, read on 2026-10-19 from
+<https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api>:
+*"No more than 2,000 points per minute are allowed for the GraphQL API endpoint"*, a GraphQL
+request without a mutation counting 1 point and one with a mutation 5. It is
+documentation-derived and carries no captured response. This source charges every GraphQL
+request it sends against that window — an aliased request of several mutations is one request
+and 5 points, while each of its mutations is one content creation against the two
+`content_creation` windows, because whether GitHub counts an aliased request's creations once
+could not be established without spending the shared token.
 
 ### The `allowance` block
 

@@ -42,14 +42,15 @@ pub use cache::{
     RequestKind, Shown, VersionCoverage, WholeTask, WriteJournal,
 };
 pub use capability::{Capabilities, DependencySupport, Support};
-pub use clock::{Clock, SIMULATED_CLOCK_VARIABLE, SharedClock, system_clock};
+pub use clock::{Clock, SIMULATED_CLOCK_VARIABLE, SharedClock, WaitCause, system_clock};
 pub use comment::{
     Comment, CommentBody, CommentCopy, CommentOrigin, NewComment, TaskDetailRead, commentless,
 };
 pub use error::SourceError;
 pub use id::{NativeId, SOURCE_NAME_PATTERN, SourceName};
 pub use issue::{
-    ClosedAs, Completion, HeldTask, ISSUE_REF_PATTERN, IssueHolding, IssueRef, StatusContradiction,
+    ClosedAs, Completion, ContradictedItem, HeldTask, ISSUE_REF_PATTERN, IssueHolding, IssueRef,
+    StatusContradiction,
 };
 pub use metadata::{MetadataKey, MetadataRecord, unwritable_metadata};
 pub use metering::{Metered, Metering};
@@ -62,8 +63,8 @@ pub use status_mapping::{StatusMapping, StatusName, StatusNames, UnmappedStatus}
 pub use update::{TaskUpdate, TaskUpdateOutcome, UpdatedField};
 pub use visibility::{Visibility, WriteTarget};
 pub use work::{
-    Classification, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
-    ItemKind, Label, Location, Priority, Project, Repository, Status, StatusCategory, Task,
-    TaskRef,
+    Classification, DependencyEdge, DependencyEndpoint, DependencyKind, Designator, Direction,
+    Document, EndpointRefusal, ItemKind, Label, Location, Priority, Project, Repository, Status,
+    StatusCategory, Task, TaskRef,
 };
 pub use write::{ItemWrite, WriteSupport, documentless, unwritable, unwritable_field};

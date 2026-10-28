@@ -211,7 +211,10 @@ is to give the task a `title:` or keep its heading.
 A status write, a priority write, a content write, and the `delivered_by:` write a copy makes,
 replace the file the way a metadata write does — through a staging file beside it and a
 rename, described under the next heading — so a reader listing or reading the folder while one
-lands sees the task as it was or as it is now, never part of it.
+lands sees the task as it was or as it is now, never part of it. So does every other write of a
+task, project or document file: a create, a copy over one, a render, and a comment added,
+edited, deleted or copied in. A write that fails part-way leaves the file as it was, or none for
+a create, and no staging file behind.
 
 ## Setting one metadata key on its own
 

@@ -30,6 +30,7 @@ impl MetadataKey {
     /// `onetaskgraph.repositories`, `onetaskgraph.depends_on`, `onetaskgraph.delivers`,
     /// `onetaskgraph.delivered_by`, `onetaskgraph.item_kind`, `onetaskgraph.template`
     /// ([`Self::TEMPLATE_KEY`]), `onetaskgraph.copies` ([`Self::COPIES_KEY`]),
+    /// `onetaskgraph.copy_locations` ([`Self::COPY_LOCATIONS_KEY`]),
     /// `onetaskgraph.members` ([`Self::MEMBERS_KEY`]), `onetaskgraph.member_of`
     /// ([`Self::MEMBER_OF_KEY`]) and `onetaskgraph.assets` ([`Self::ASSETS_KEY`]) — and so
     /// does any key it reserves later, which is why the whole namespace is refused rather than
@@ -56,6 +57,17 @@ impl MetadataKey {
     /// [`Self::copies`] is how it names the key there. A plugin only puts it where its
     /// metadata lives.
     pub const COPIES_KEY: &'static str = "onetaskgraph.copies";
+
+    /// The reserved key a copied item records, beside [`Self::COPIES_KEY`], where each
+    /// counterpart it links to is: a JSON object mapping a destination source name to
+    /// `{"id": <the qualified id the link names>, "location": <that counterpart's Location>}`.
+    ///
+    /// An entry says something only while its `id` is what [`Self::COPIES_KEY`] names for the
+    /// same destination: a location whose link moved, or that no link stands beside, is
+    /// ignored. So [`Self::COPIES_KEY`] is unchanged by it, and a reader that knows only that
+    /// key reads exactly what it did. Written like that key, through the narrow metadata write,
+    /// and [`Self::copy_locations`] is how it names the key there.
+    pub const COPY_LOCATIONS_KEY: &'static str = "onetaskgraph.copy_locations";
 
     /// The reserved key a **home** project records its member projects under: a JSON list of
     /// qualified project ids, each in a different source from the home and from the others,
@@ -85,13 +97,25 @@ impl MetadataKey {
     /// where *that* source serves the bytes.
     pub const ASSETS_KEY: &'static str = "onetaskgraph.assets";
 
-    /// The reserved key a copy records on the **destination** item the source
-    /// [`Task::version`](crate::Task::version) it copied under — and, under `--comments`, a
-    /// token that covered the comments it carried.
+    /// The reserved key a copy records on the **destination** task, project or document what
+    /// its source item was when the copy composed it — and, under `--comments`, a token that
+    /// covered the comments it carried. It says whether the **source** changed since that copy.
     ///
-    /// Read back by the next copy of the same item, which skips it when the source's current
-    /// version is still this one and the destination is unchanged since, by
-    /// [`Self::COPIED_DESTINATION_VERSION_KEY`]. Absent when the source gave no version.
+    /// Where the source gives a change token — [`Task::version`](crate::Task::version),
+    /// [`Project::version`](crate::Project::version), [`Document::version`](crate::Document::version)
+    /// — it is that token, as the source holds it once the copy has recorded its own link
+    /// there. Where the source gives none — a folder of Markdown gives none for a project or a
+    /// document — it is `sha256:` and 64 lowercase hex digits over the item the copy composed
+    /// from the source: its content after reference and image rewriting, and its title, status,
+    /// labels, repositories, classification and metadata as the source holds them, without the
+    /// three `copied_*` keys and the copy's own links, and before a rendering's `body_digest` is
+    /// moved onto what the destination stores. A later copy compares the digest of what it
+    /// would send now with it.
+    ///
+    /// Read back by the next copy of the same item, which writes nothing to it when this still
+    /// matches the source and the destination is unchanged since, by
+    /// [`Self::COPIED_DESTINATION_VERSION_KEY`]. Reserved: refused from a caller, and never
+    /// carried to another item.
     pub const COPIED_VERSION_KEY: &'static str = "onetaskgraph.copied_version";
 
     /// The reserved key a `--comments` copy records on the destination item as the boolean
@@ -102,15 +126,27 @@ impl MetadataKey {
     /// `--comments` over an unchanged source still carries the comments.
     pub const COPIED_WITH_COMMENTS_KEY: &'static str = "onetaskgraph.copied_with_comments";
 
-    /// The reserved key a copy records on the destination item a digest of that item as the
-    /// copy left it under, computed by the engine over the item without the three `copied_*`
-    /// keys: `sha256:<hex>`.
+    /// The reserved key a copy records on the destination task, project or document a digest of
+    /// that item as the copy left it — `sha256:` and 64 lowercase hex digits, computed by the
+    /// engine over the item as a read returns it without the three `copied_*` keys, which is
+    /// over the content the destination reported storing rather than the content sent. It says
+    /// whether anybody changed the **destination** item since, its title, status and edges
+    /// included.
     ///
-    /// A later copy skips the item only when the digest of the destination as it reads it
-    /// then is still this one, so an edit of copied content at the destination — a copied
-    /// comment edited or deleted included — is restored by the next copy rather than skipped.
+    /// A later copy writes nothing to the item only when the digest of the destination as it
+    /// reads it then is still this one, so an edit at the destination — a copied comment edited
+    /// or deleted included — is restored by the next copy rather than skipped. Reserved, on the
+    /// terms of [`Self::COPIED_VERSION_KEY`].
     pub const COPIED_DESTINATION_VERSION_KEY: &'static str =
         "onetaskgraph.copied_destination_version";
+
+    /// The reserved key a copy onto a destination not declared private marks a task it lands
+    /// with, as the integer `1`, once every edge that task depends on is on its own record —
+    /// none withheld and kept on a private source's side instead.
+    ///
+    /// A dependency read of a task carrying it never asks a private source what it records
+    /// of that task. Nothing but a copy writes it.
+    pub const EDGES_ON_RECORD_KEY: &'static str = "onetaskgraph.edges_on_record";
 
     /// [`Self::COPIES_KEY`], as the one reserved key a narrow metadata write may carry.
     ///
@@ -130,6 +166,22 @@ impl MetadataKey {
     #[must_use]
     pub fn is_copies(&self) -> bool {
         self.0 == Self::COPIES_KEY
+    }
+
+    /// [`Self::COPY_LOCATIONS_KEY`], as the other reserved key a narrow metadata write may
+    /// carry: the copy writes it beside [`Self::copies`], and nothing a person types reaches it.
+    #[must_use]
+    // llmlint: ignore[invalid_states_unrepresentable] The same seam as `copies` above, for the
+    // same reason: a key type of its own would change the three narrow metadata writes every
+    // plugin implements, and `new`, deserialization, the command line and both SDKs refuse it.
+    pub fn copy_locations() -> Self {
+        Self(Self::COPY_LOCATIONS_KEY.to_owned())
+    }
+
+    /// Whether this is [`Self::COPY_LOCATIONS_KEY`].
+    #[must_use]
+    pub fn is_copy_locations(&self) -> bool {
+        self.0 == Self::COPY_LOCATIONS_KEY
     }
 
     /// One key, once it is established it is a caller's own dotted key.

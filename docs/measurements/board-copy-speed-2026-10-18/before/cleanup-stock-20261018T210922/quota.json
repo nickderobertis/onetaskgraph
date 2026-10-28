@@ -1,0 +1,70 @@
+{
+ "quota-after": {
+  "at": 1792358284.2725434,
+  "buckets": {
+   "core": {
+    "limit": 5000,
+    "remaining": 4943,
+    "reset": 1792361562,
+    "used": 57
+   },
+   "graphql": {
+    "limit": 5000,
+    "remaining": 4642,
+    "reset": 1792361720,
+    "used": 358
+   },
+   "graphql (GET /rate_limit)": {
+    "limit": 5000,
+    "remaining": 4988,
+    "reset": 1792361782,
+    "used": 12
+   },
+   "graphql (rateLimit)": {
+    "limit": 5000,
+    "readings": [
+     4642,
+     4642,
+     4988
+    ],
+    "remaining": 4642,
+    "reset": 1792361720,
+    "used": 358
+   }
+  }
+ },
+ "quota-before": {
+  "at": 1792358123.0014105,
+  "buckets": {
+   "core": {
+    "limit": 5000,
+    "remaining": 4969,
+    "reset": 1792361562,
+    "used": 31
+   },
+   "graphql": {
+    "limit": 5000,
+    "remaining": 4998,
+    "reset": 1792361720,
+    "used": 2
+   },
+   "graphql (GET /rate_limit)": {
+    "limit": 5000,
+    "remaining": 5000,
+    "reset": 1792361723,
+    "used": 0
+   },
+   "graphql (rateLimit)": {
+    "limit": 5000,
+    "readings": [
+     4998,
+     4998,
+     4998
+    ],
+    "remaining": 4998,
+    "reset": 1792361720,
+    "used": 2
+   }
+  }
+ }
+}

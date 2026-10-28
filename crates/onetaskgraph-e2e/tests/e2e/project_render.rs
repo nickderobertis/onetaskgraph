@@ -1075,14 +1075,20 @@ fn a_rendered_project_with_ten_kilobytes_of_metadata_copies_into_a_board_and_lin
             .unwrap_or_else(|| panic!("a destination in {destination}: {out}"))
             .to_owned();
         let copy = plan.project(&landed);
-        assert_eq!(copy["content"], authored["content"], "{destination}");
+        // Linear keeps no line break after the content's last line, and the copy sends what
+        // it keeps, recording the digest of that; the board keeps what it is sent.
+        let (content, mut provenance) = (
+            authored["content"].as_str().unwrap(),
+            authored["metadata"]["onetaskgraph.template"].clone(),
+        );
+        provenance["body_digest"] = json!(sha256(content));
+        assert_eq!(copy["content"], content, "{destination}");
         assert_eq!(
             copy["metadata"]["onepipeline.budgets"], answers,
             "{destination} holds the whole value, never cut short"
         );
         assert_eq!(
-            copy["metadata"]["onetaskgraph.template"],
-            authored["metadata"]["onetaskgraph.template"],
+            copy["metadata"]["onetaskgraph.template"], provenance,
             "{destination} carries the provenance"
         );
         let refused = plan.exits(&["project", "answers", &landed], 1);

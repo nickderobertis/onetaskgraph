@@ -271,7 +271,41 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 41
+    assert emitted_bundle["version"] == 47
+    # Version 47 adds `content` to `TaskContentSet`: the content the task then holds.
+    # Version 45 adds the opaque dependency endpoint, `{designator, id, kind}`, and lets a
+    # dependency read name a designator no configured source is.
+    assert "designator" in {
+        key
+        for variant in emitted_bundle["roots"]["DependencyEdge"]["$defs"]["DependencyEndpoint"][
+            "oneOf"
+        ]
+        if isinstance(variant, dict)
+        for key in variant.get("properties", {})
+    }
+    # Version 46 publishes `PublicProjections`, the map a private destination project records
+    # from each canonical task to its public view, and `TaskStatusSet.projection`.
+    assert "PublicProjections" in bundle["roots"]
+    for root in ("TaskStatusSet", "TaskUpdated"):
+        assert "projection" in emitted_bundle["roots"][root]["properties"], root
+        assert "projection" not in emitted_bundle["roots"][root].get("required", []), root
+    # Version 44 lets copy report an explicitly selected destination task.
+    assert "target-task" in {
+        variant["const"]
+        for variant in emitted_bundle["roots"]["CopyReport"]["$defs"]["CopyVia"]["oneOf"]
+    }
+    # Version 43 publishes the names returned after exporting a task's held images.
+    assert "TaskAssetNames" in emitted_bundle["roots"]
+    assert "task assets" in emitted_bundle["commands"]
+    # Version 42 published each closure item's `kind`, the project item a held issue can name,
+    # and what `project status set` answers with.
+    for root in ("IssueCompleted", "StatusReconciled"):
+        schema = json.dumps(emitted_bundle["roots"][root])
+        assert '"kind"' in schema, root
+    assert "kind" in emitted_bundle["roots"]["HeldTask"]["properties"]
+    assert "kind" not in emitted_bundle["roots"]["HeldTask"].get("required", [])
+    for root in ("ProjectStatusSet", "ContradictedItem"):
+        assert root in emitted_bundle["roots"], root
     # Version 41 published the two capabilities `task status reconcile` and `task status
     # complete` are asked through, and the documents both verbs answer with.
     for member in ("reconcile_status", "complete_by_issue"):
@@ -453,7 +487,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # which rule found where it landed, and what became of the link it records at
     # `onetaskgraph.copies` — on the three actions that land an item, and not on an orphan.
     for root, words in (
-        ("CopyVia", {"link", "origin", "scan", "match"}),
+        ("CopyVia", {"target-task", "link", "origin", "scan", "match"}),
         # Version 36 added `skipped`, the link a `--no-link` copy leaves unwritten.
         ("CopyLink", {"recorded", "unchanged", "unrecorded", "skipped"}),
     ):

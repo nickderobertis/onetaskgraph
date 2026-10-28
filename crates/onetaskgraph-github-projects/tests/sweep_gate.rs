@@ -426,6 +426,7 @@ static STANDIN: LazyLock<Arc<Mutex<Board>>> = LazyLock::new(|| {
         rest_host: host,
         source: None,
         settle: std::time::Duration::ZERO,
+        fixture_wait: journey::STAND_IN_FIXTURE_WAIT,
     });
     board
 });

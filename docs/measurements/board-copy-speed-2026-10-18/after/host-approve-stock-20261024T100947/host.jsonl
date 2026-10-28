@@ -1,0 +1,22 @@
+{"argv": ["document", "list", "--project", "<value>", "--source", "plans", "--json", "--no-interactive"], "end": 1792836592.266, "kind": "store", "returncode": 0, "start": 1792836590.79}
+{"end": 1792836592.267, "kind": "step", "name": "design_approval.one_document", "start": 1792836592.267}
+{"argv": ["project", "show", "plans:<id>", "--json", "--no-interactive"], "end": 1792836593.183, "kind": "store", "returncode": 0, "start": 1792836592.268}
+{"end": 1792836593.184, "kind": "step", "name": "plan_store.project_record", "start": 1792836592.267}
+{"end": 1792836593.184, "kind": "step", "name": "spike_plan.current_visual_report", "start": 1792836593.184}
+{"argv": ["task", "list", "--project", "<value>", "--source", "plans", "--json", "--no-interactive"], "end": 1792836594.869, "kind": "store", "returncode": 0, "start": 1792836593.185}
+{"end": 1792836594.871, "kind": "step", "name": "plan_store.plan_listing", "start": 1792836593.184}
+{"end": 1792836594.871, "kind": "step", "name": "design_chain.chosen", "start": 1792836594.871}
+{"end": 1792836594.872, "kind": "step", "name": "design_chain.plan_repository", "start": 1792836593.184}
+{"end": 1792836594.896, "kind": "step", "name": "design_approval.resolved_loader", "start": 1792836594.872}
+{"end": 1792836594.896, "kind": "step", "name": "design_approval.resolved_digest", "start": 1792836594.872}
+{"argv": ["config", "show", "--json", "--no-interactive"], "end": 1792836594.914, "kind": "store", "returncode": 0, "start": 1792836594.897}
+{"argv": ["project", "list", "--source", "authoring", "--json", "--no-interactive"], "end": 1792836595.016, "kind": "store", "returncode": 0, "start": 1792836594.917}
+{"end": 1792836595.017, "kind": "step", "name": "plan_store.read_projects", "start": 1792836594.916}
+{"argv": ["document", "list", "--project", "bcs-host", "--source", "authoring", "--json", "--no-interactive"], "end": 1792836595.068, "kind": "store", "returncode": 0, "start": 1792836595.017}
+{"end": 1792836595.069, "kind": "step", "name": "design_approval.body_digest", "start": 1792836594.896}
+{"end": 1792836595.069, "kind": "step", "name": "design_approval.asset_digests", "start": 1792836595.069}
+{"end": 1792836595.069, "kind": "step", "name": "design_approval.approval_key", "start": 1792836594.896}
+{"end": 1792836595.069, "kind": "step", "name": "design_approval.planned_rows", "start": 1792836595.069}
+{"end": 1792836595.069, "kind": "step", "name": "design_approval.ungraphed", "start": 1792836595.069}
+{"argv": ["document", "metadata", "set", "plans:<id>", "<value>", "<source>:<id>", "--json", "--no-interactive"], "end": 1792836605.503, "kind": "store", "returncode": 0, "start": 1792836595.07}
+{"end": 1792836605.503, "kind": "step", "name": "design_approval.approve", "start": 1792836590.789}

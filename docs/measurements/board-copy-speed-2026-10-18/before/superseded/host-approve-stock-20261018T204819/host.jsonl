@@ -1,0 +1,16 @@
+{"argv": ["document", "list", "--project", "<value>", "--source", "plans", "--json", "--no-interactive"], "end": 1792356502.064, "kind": "store", "returncode": 0, "start": 1792356500.475}
+{"end": 1792356502.065, "kind": "step", "name": "design_approval.one_document", "start": 1792356502.065}
+{"argv": ["project", "show", "plans:<id>", "--json", "--no-interactive"], "end": 1792356503.106, "kind": "store", "returncode": 0, "start": 1792356502.066}
+{"end": 1792356503.107, "kind": "step", "name": "plan_store.project_record", "start": 1792356502.066}
+{"argv": ["project", "list", "--source", "authoring", "--json", "--no-interactive"], "end": 1792356503.166, "kind": "store", "returncode": 0, "start": 1792356503.108}
+{"end": 1792356503.167, "kind": "step", "name": "plan_store.read_projects", "start": 1792356503.107}
+{"end": 1792356503.167, "kind": "step", "name": "spike_plan.current_visual_report", "start": 1792356502.065}
+{"argv": ["project", "list", "--source", "plans", "--json", "--no-interactive"], "end": 1792356508.543, "kind": "store", "returncode": 0, "start": 1792356503.167}
+{"end": 1792356508.545, "kind": "step", "name": "plan_store.read_projects", "start": 1792356503.167}
+{"argv": ["task", "list", "--project", "<value>", "--source", "plans", "--json", "--no-interactive"], "end": 1792356510.135, "kind": "store", "returncode": 0, "start": 1792356508.545}
+{"end": 1792356510.138, "kind": "step", "name": "plan_store.plan_listing", "start": 1792356503.167}
+{"end": 1792356510.139, "kind": "step", "name": "design_chain.chosen", "start": 1792356510.139}
+{"end": 1792356510.139, "kind": "step", "name": "design_chain.plan_repository", "start": 1792356503.167}
+{"end": 1792356510.171, "kind": "step", "name": "design_approval.resolved_loader", "start": 1792356510.139}
+{"end": 1792356510.171, "kind": "step", "name": "design_approval.resolved_digest", "start": 1792356510.139}
+{"end": 1792356510.171, "kind": "step", "name": "design_approval.approve", "start": 1792356500.475}

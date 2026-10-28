@@ -14,7 +14,9 @@ use onetaskgraph_core::{
     EngineError, GlobalId, TaskCreate,
 };
 use onetaskgraph_plugin_api::{
-    AssetName, AssetPayload, AssetUploads, NativeId, SecretResolver, SourceName, asset_sha256,
+    Asset, AssetName, AssetPayload, AssetUploads, Capabilities, DependencyEdge, Direction, Health,
+    Label, NativeId, Page, PageRequest, Project, ProjectQuery, SecretResolver, SourceError,
+    SourceName, Task, TaskQuery, TaskSource, asset_sha256,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -69,6 +71,7 @@ fn copy_of(items: &[GlobalId], scope: CopyScope) -> CopyRequest {
         items: CopyItems::new(items.to_vec()).expect("at least one item"),
         scope,
         destination: SourceName::new("into").expect("a name"),
+        target_task: None,
         match_by: None,
         recreate: false,
         create: false,
@@ -76,6 +79,7 @@ fn copy_of(items: &[GlobalId], scope: CopyScope) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
     }
 }
@@ -718,4 +722,322 @@ async fn a_regenerate_on_a_serving_source_stores_its_assets_and_points_its_refer
         held.metadata["onetaskgraph.template"]["body_digest"],
         json!(onetaskgraph_plugin_api::body_digest(&content))
     );
+}
+
+/// Create a task called `title` in `notes` whose content references every one of `assets`,
+/// holding each.
+async fn holding(engine: &Engine, title: &str, assets: &[(&str, &[u8])]) -> GlobalId {
+    let content: String = assets
+        .iter()
+        .map(|(file, _)| format!("![{file}](./{file})\n"))
+        .collect();
+    engine
+        .create_task(&TaskCreate {
+            source: SourceName::new("notes").expect("a name"),
+            project: NativeId::from("launch"),
+            title: title.to_owned(),
+            body: Body::plain(&content),
+            status: None,
+            labels: Vec::new(),
+            repositories: Vec::new(),
+            depends_on: Vec::new(),
+            delivers: Vec::new(),
+            metadata: Default::default(),
+            assets: assets
+                .iter()
+                .map(|(file, bytes)| AssetPayload::of(name(file), bytes.to_vec()))
+                .collect(),
+            classification: Default::default(),
+        })
+        .await
+        .expect("the task is created")
+        .task
+        .id
+}
+
+#[tokio::test]
+async fn task_assets_answers_every_asset_a_task_holds_with_its_bytes_and_none_for_one_holding_none()
+{
+    let root = tempfile::tempdir().expect("a folder");
+    let engine = engine(root.path(), json!({}));
+    let diagram = vec![1_u8, 2, 3, 250];
+    let photo = vec![9_u8; 4096];
+    let pictured = holding(
+        &engine,
+        "Pictured",
+        &[("diagram.png", &diagram), ("photo.jpg", &photo)],
+    )
+    .await;
+    let plain = holding(&engine, "Plain", &[]).await;
+
+    let held = engine
+        .task_assets(&pictured)
+        .await
+        .expect("its assets read");
+    // Compared by digest, so a mismatch prints two lines rather than every byte.
+    let read: Vec<(String, String)> = held
+        .iter()
+        .map(|asset| (asset.name.to_string(), asset_sha256(&asset.bytes)))
+        .collect();
+    assert_eq!(
+        read,
+        vec![
+            ("diagram.png".to_owned(), asset_sha256(&diagram)),
+            ("photo.jpg".to_owned(), asset_sha256(&photo))
+        ]
+    );
+    assert_eq!(
+        engine.task_assets(&plain).await.expect("its assets read"),
+        Vec::new()
+    );
+    // A source that keeps no assets answers none for a task it holds.
+    let config = Config::from_document(json!({"sources": {"memory": {
+        "plugin": "in-memory",
+        "config": {"tasks": [{"id": "T-1", "title": "Kept", "content": null,
+                               "status": {"category": "todo", "name": "todo"}, "labels": []}]},
+    }}}))
+    .expect("a valid configuration");
+    let memory = Engine::build(&config, &NoSecrets);
+    assert_eq!(
+        memory
+            .task_assets(&GlobalId::new(
+                SourceName::new("memory").expect("a name"),
+                NativeId::from("T-1")
+            ))
+            .await
+            .expect("its assets read"),
+        Vec::new()
+    );
+}
+
+#[tokio::test]
+async fn task_assets_refuses_a_missing_task_and_an_unreadable_source_naming_the_id_and_the_reason()
+{
+    let root = tempfile::tempdir().expect("a folder");
+    let engine = engine(root.path(), json!({}));
+    let missing = GlobalId::new(
+        SourceName::new("notes").expect("a name"),
+        NativeId::from("nowhere"),
+    );
+    let error = engine
+        .task_assets(&missing)
+        .await
+        .expect_err("no such task");
+    assert_eq!(error.id, missing);
+    assert!(
+        matches!(&error.error, EngineError::NoSuchTask { id } if id == "notes:nowhere"),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("notes:nowhere"), "{error}");
+
+    let unknown: GlobalId = "unknown:T-1".parse().expect("a qualified id");
+    let error = engine
+        .task_assets(&unknown)
+        .await
+        .expect_err("an unknown source");
+    assert!(error.to_string().contains("unknown:T-1"), "{error}");
+    assert!(matches!(error.error, EngineError::UnknownSource { .. }));
+
+    // The task's asset directory replaced by a file: its source can no longer list them.
+    let broken = holding(&engine, "Broken", &[("shot.png", &[5, 6, 7])]).await;
+    let directory = root.path().join("tasks/broken.assets");
+    std::fs::remove_dir_all(&directory).expect("the asset directory");
+    std::fs::write(&directory, "not a directory").expect("a file in its place");
+    let error = engine
+        .task_assets(&broken)
+        .await
+        .expect_err("an unreadable asset directory");
+    assert_eq!(error.id, broken);
+    assert!(
+        matches!(&error.error, EngineError::SourceFailed { name, .. } if name == "notes"),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    assert!(message.contains("notes:broken"), "{message}");
+    assert!(message.contains("broken.assets"), "{message}");
+
+    // A source that could not be built at all: its root is not there.
+    let config = Config::from_document(json!({"sources": {"gone": {
+        "plugin": "local-md", "config": {"root": root.path().join("absent")},
+    }}}))
+    .expect("a valid configuration");
+    let gone = GlobalId::new(
+        SourceName::new("gone").expect("a name"),
+        NativeId::from("T-1"),
+    );
+    let error = Engine::build(&config, &NoSecrets)
+        .task_assets(&gone)
+        .await
+        .expect_err("an unbuilt source");
+    assert!(
+        matches!(&error.error, EngineError::SourceUnavailable { name, .. } if name == "gone"),
+        "{error:?}"
+    );
+    let message = error.to_string();
+    assert!(message.contains("gone:T-1"), "{message}");
+    assert!(message.contains("cannot canonicalize root"), "{message}");
+}
+
+/// A source losing an asset between listing and fetching it. The engine is driven through
+/// its public API; this peer supplies the two contradictory answers a real store may give
+/// when an image disappears during a read.
+struct LosingAsset {
+    inner: Box<dyn TaskSource>,
+    unavailable: bool,
+}
+
+#[async_trait::async_trait]
+impl TaskSource for LosingAsset {
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+    async fn health(&self) -> Result<Health, SourceError> {
+        self.inner.health().await
+    }
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        self.inner.get_task(id).await
+    }
+    async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+        self.inner.get_project(id).await
+    }
+    async fn query_tasks(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        self.inner.query_tasks(query, page).await
+    }
+    async fn query_projects(
+        &self,
+        query: &ProjectQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        self.inner.query_projects(query, page).await
+    }
+    async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        self.inner.labels(page).await
+    }
+    async fn task_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.task_dependencies(id, direction, page).await
+    }
+    async fn project_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.project_dependencies(id, direction, page).await
+    }
+
+    async fn task_assets(&self, _id: &NativeId) -> Result<Vec<Asset>, SourceError> {
+        Ok(vec![Asset {
+            name: name("shot.png"),
+            sha256: asset_sha256(b"image"),
+            content_type: name("shot.png").content_type(),
+            path: None,
+        }])
+    }
+    async fn task_asset(
+        &self,
+        _id: &NativeId,
+        _name: &AssetName,
+    ) -> Result<Option<Vec<u8>>, SourceError> {
+        if self.unavailable {
+            Err(SourceError::Unavailable {
+                message: "image store disconnected".to_owned(),
+            })
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+#[tokio::test]
+async fn task_assets_refuses_an_image_that_disappears_or_cannot_be_fetched_after_listing() {
+    for unavailable in [false, true] {
+        let source = SourceName::new("remote").expect("a source name");
+        let inner = onetaskgraph_core::plugin_for("in-memory")
+            .expect("registered")
+            .build(
+                &source,
+                &json!({"tasks": [{"id": "T-1", "title": "Pictured",
+                "status": {"category": "todo", "name": "Todo"}, "labels": []}]}),
+                &NoSecrets,
+            )
+            .expect("a source");
+        let engine = Engine::new(
+            vec![onetaskgraph_core::ConfiguredSource::Ready(
+                onetaskgraph_core::ResolvedSource::adopt(
+                    source.clone(),
+                    Box::new(LosingAsset { inner, unavailable }),
+                ),
+            )],
+            vec![source],
+        );
+        let id: GlobalId = "remote:T-1".parse().expect("an id");
+        let error = engine
+            .task_assets(&id)
+            .await
+            .expect_err("the image cannot be read");
+        let message = error.to_string();
+        assert!(message.contains("remote:T-1"), "{message}");
+        assert!(
+            message.contains(if unavailable {
+                "image store disconnected"
+            } else {
+                "shot.png but holds no bytes"
+            }),
+            "{message}"
+        );
+        assert!(matches!(error.error, EngineError::SourceFailed { .. }));
+    }
+}
+
+#[tokio::test]
+async fn task_assets_returns_unreferenced_images_after_references_in_name_order() {
+    let root = tempfile::tempdir().expect("a folder");
+    let engine = engine(root.path(), json!({}));
+    let id = holding(&engine, "Pictured", &[("shot.png", b"shot")]).await;
+    let directory = root.path().join("tasks/pictured.assets");
+    std::fs::write(directory.join("z.png"), b"last").expect("an unreferenced image");
+    std::fs::write(directory.join("a.png"), b"first").expect("an unreferenced image");
+    let held = engine.task_assets(&id).await.expect("all held images");
+    assert_eq!(
+        held.iter()
+            .map(|asset| (asset.name.as_str(), asset.bytes.as_slice()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("shot.png", b"shot".as_slice()),
+            ("a.png", b"first".as_slice()),
+            ("z.png", b"last".as_slice())
+        ]
+    );
+}
+
+#[tokio::test]
+async fn task_assets_preserves_a_task_read_failure_and_its_qualified_id() {
+    let root = tempfile::tempdir().expect("a folder");
+    let engine = engine(root.path(), json!({}));
+    let id = holding(&engine, "Broken", &[]).await;
+    std::fs::write(
+        root.path().join("tasks/broken.md"),
+        "---\ntitle: [unterminated\n---\n",
+    )
+    .expect("a damaged task file");
+    let error = engine
+        .task_assets(&id)
+        .await
+        .expect_err("the task cannot be read");
+    let message = error.to_string();
+    assert!(message.contains("notes:broken"), "{message}");
+    assert!(message.contains("broken.md"), "{message}");
+    assert!(matches!(error.error, EngineError::SourceFailed { .. }));
 }

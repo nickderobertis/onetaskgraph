@@ -41,12 +41,16 @@ use onetaskgraph_plugin_api::{
 };
 use serde_json::{Value, json};
 
-use onetaskgraph_live::artifact::{Run, Sweep, now_micros};
+use onetaskgraph_github_live::{
+    BOARD_WORKLOAD_DOCUMENT, CORE_REPOSITORY, DELETE_FIELD_DOCUMENT, RESIDUE_ITEMS_DOCUMENT,
+    RunStatus, fielded_stamp,
+};
+use onetaskgraph_live::artifact::{CiStamp, Run, Sweep, now_micros};
 use onetaskgraph_live::{Credential, Session};
 
 use crate::lane::{
-    ARTIFACT_PREFIX, Admission, LiveSecret, Own, Writer, admit, is_orphan_label, is_orphan_title,
-    live_write_config, rest_outcome, run_then_cleanup,
+    ARTIFACT_PREFIX, Admission, LiveSecret, Own, Writer, admit, artifact_stamp, is_orphan_label,
+    is_orphan_title, live_write_config, rest_outcome, run_then_cleanup,
 };
 
 /// Everything this run costs GitHub, this lane's own calls and the source's alike.
@@ -82,6 +86,10 @@ pub struct Endpoints {
     /// plugin gives none until the change is more than `change_token::SETTLED` behind the
     /// server's `Date`. Nothing for a stand-in whose `Date` is already well past every change.
     pub settle: std::time::Duration,
+    /// How long the journey waits for GitHub's issue search to report the fixture it wrote:
+    /// [`FIXTURE_WAIT`] for GitHub, and [`STAND_IN_FIXTURE_WAIT`], the same wait scaled down,
+    /// for a stand-in.
+    pub fixture_wait: FixtureWait,
 }
 
 impl Endpoints {
@@ -95,6 +103,7 @@ impl Endpoints {
                 .to_std()
                 .expect("a positive margin")
                 + std::time::Duration::from_secs(2),
+            fixture_wait: FIXTURE_WAIT,
         }
     }
     /// Only explicit loopback URLs may replace GitHub in entry-point regressions.
@@ -151,6 +160,7 @@ impl Endpoints {
             ),
             // The double supplies a Date past SETTLED; the token itself still checks 60 seconds.
             settle: std::time::Duration::ZERO,
+            fixture_wait: STAND_IN_FIXTURE_WAIT,
         })
     }
 
@@ -769,6 +779,23 @@ pub fn dry_run_variables(document: &str) -> Value {
         bind(&format!("name{slot}"), json!("docs"));
         bind(&format!("number{slot}"), json!(1));
     }
+    // A copy's batched read of several origins asks every one of its slots, and its read of the
+    // board items it created reads every one of its slots, so the probe prices each at the
+    // worst case the offline bound computes; so does the batch's read of a project's children.
+    for slot in 0..onetaskgraph_github_projects::ORIGIN_BATCH {
+        bind(
+            &format!("filter{slot}"),
+            json!(format!("{ORIGIN_FIELD}:\"node-count-reconciliation\"")),
+        );
+        bind(&format!("search{slot}"), json!("repo:github/docs is:issue"));
+        bind(&format!("ask{slot}"), json!(true));
+    }
+    for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
+        bind(&format!("read{slot}"), json!(true));
+    }
+    bind("statusName", json!("Status"));
+    bind("project", json!("node-count-reconciliation"));
+    bind("children", json!(true));
     bind("statusField", json!("Status"));
     bind("comments", json!(true));
     bind("search", json!("repo:github/docs is:issue"));
@@ -1640,38 +1667,372 @@ pub async fn sweep_orphans(
     }
 }
 
-/// Reads the node id of the one nominated board, so residue can be cleared before the journey
-/// builds the source it later reads the same board through.
-async fn nominated_project_id(
+/// The lane's board pre-flight: reads the nominated board's node id, removing first any
+/// board field a finished CI run left, so the board is judged as the board.
+///
+/// The board's measurement — how many items and fields
+/// it holds — is judged against the registered workload, and **a field a finished CI run left
+/// is not the board's**: [`clear_finished_runs_fields`] removes each one first, by the
+/// janitor's own ownership rule, and the count judged is the board's without them. A field
+/// whose run is still going, or whose run cannot be read, is neither removed nor left out, so
+/// a board holding one is refused exactly as before.
+pub async fn preflight_board(
     token: &str,
     owner: &str,
     project_number: u32,
+    repository: &str,
 ) -> Result<String, String> {
     let response = graphql_variables(
         token,
-        "query LiveBoardWorkload($owner:String!,$number:Int!){repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id items(first:1){totalCount} fields(first:1){totalCount}}}}}",
+        BOARD_WORKLOAD_DOCUMENT,
         "nominated board lookup",
         json!({"owner":owner,"number":project_number}),
     )
     .await?;
-    quota::observe_initial_board(
-        response
-            .pointer("/data/repositoryOwner/projectV2/items/totalCount")
-            .and_then(Value::as_u64),
-        response
-            .pointer("/data/repositoryOwner/projectV2/fields/totalCount")
-            .and_then(Value::as_u64),
-    )?;
-    response
-        .pointer("/data/repositoryOwner/projectV2/id")
+    let board = response.pointer("/data/repositoryOwner/projectV2");
+    let project_id = board
+        .and_then(|board| board.get("id"))
         .and_then(Value::as_str)
-        .map(str::to_owned)
         .ok_or_else(|| {
             format!(
                 "GH_PROJECTS_OWNER={owner} with GH_PROJECTS_NUMBER={project_number} names no \
                  project this credential can see"
             )
-        })
+        })?;
+    // The id goes into every later request, so it is held to what the janitor admits of one.
+    if project_id.is_empty() || project_id.chars().any(char::is_control) {
+        return Err(format!(
+            "the nominated board answered an unusable id: {project_id:?}"
+        ));
+    }
+    let project_id = project_id.to_owned();
+    // The whole measurement is read before anything is removed, so a board that cannot be
+    // judged is refused with nothing written.
+    // A board answering no fields at all is one whose field count was not reported, and
+    // says so in the words the workload's own refusal uses.
+    let fields = board
+        .and_then(|board| board.get("fields"))
+        .ok_or("initial board field count was not reported")?;
+    let field_total = fields
+        .get("totalCount")
+        .and_then(Value::as_u64)
+        .ok_or("initial board field count was not reported")?;
+    let item_total = board
+        .and_then(|board| board.pointer("/items/totalCount"))
+        .and_then(Value::as_u64)
+        .ok_or("initial board item count was not reported")?;
+    let removed_fields = clear_finished_runs_fields(token, fields).await?;
+    // Items are listed only when they are what would refuse the board: within the registered
+    // workload a finished run's items cost the journey nothing, and listing them every
+    // session would cost every session a walk of the board.
+    let removed_items =
+        if item_total > onetaskgraph_github_live::quota::reference_workload().initial_items {
+            clear_finished_runs_items(token, &project_id, repository).await?
+        } else {
+            0
+        };
+    quota::observe_initial_board(
+        Some(item_total.saturating_sub(removed_items)),
+        Some(field_total.saturating_sub(removed_fields)),
+    )?;
+    Ok(project_id)
+}
+
+/// Whether the Actions run a CI stamp names reads `completed`, read from GitHub now — or why
+/// nothing shows that it does: a run still going, a read that failed, or a status
+/// [`RunStatus`] does not declare. The janitor's ownership rule, the lane's one spelling of it.
+async fn owning_run_completed(token: &str, run: u64) -> Result<(), String> {
+    let (owner, repo) = CORE_REPOSITORY
+        .split_once('/')
+        .expect("the core repository is spelled owner/name");
+    let run_id = run.to_string();
+    let read = rest(
+        token,
+        Method::Get,
+        "/repos/{owner}/{repo}/actions/runs/{run_id}",
+        &[("owner", owner), ("repo", repo), ("run_id", &run_id)],
+        "",
+        None,
+        "residue owner run read",
+    )
+    .await;
+    match (&read, read.as_ref().ok().and_then(RunStatus::read)) {
+        (_, Some(RunStatus::Completed)) => Ok(()),
+        (_, Some(status)) => Err(format!("reads {}", status.spelling())),
+        (Err(error), None) => Err(format!("could not be read ({error})")),
+        (Ok(value), None) => Err(format!("answered no status this lane knows ({value})")),
+    }
+}
+
+/// A board item the pre-flight may remove: its id, the issue behind it, and its title.
+struct ResidueItem {
+    item: String,
+    issue: String,
+    title: String,
+}
+
+/// Every CI-stamped issue on the board in `repository`, the one this lane writes its issues
+/// to, walked to exhaustion; any other item — a draft, a pull request, an issue of another
+/// repository, whatever its title says — is nobody's residue to read.
+async fn ci_stamped_issues(
+    token: &str,
+    project_id: &str,
+    repository: &str,
+) -> Result<Vec<(u64, ResidueItem)>, String> {
+    let mut after = Value::Null;
+    let mut found = Vec::new();
+    for _ in 0..100 {
+        let response = graphql_variables(
+            token,
+            RESIDUE_ITEMS_DOCUMENT,
+            "residue item lookup",
+            json!({"id":project_id,"after":after}),
+        )
+        .await?;
+        let connection = response
+            .pointer("/data/node/items")
+            .ok_or("residue item lookup returned no items connection")?;
+        for node in connection
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or("residue item lookup nodes is not an array")?
+        {
+            // As the janitor reads a page: `null` content is an item this credential cannot
+            // see, which is nobody's residue to read; a missing field is a page that did not
+            // answer the query, and refuses.
+            let content = node.get("content").ok_or_else(|| {
+                format!("residue item lookup answered an item without content: {node}")
+            })?;
+            if content.is_null() {
+                continue;
+            }
+            let kind = content
+                .get("__typename")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!("residue item lookup answered content without its type: {node}")
+                })?;
+            if kind != "Issue" {
+                continue;
+            }
+            let owner = content
+                .pointer("/repository/nameWithOwner")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!("residue item lookup answered an issue without its repository: {node}")
+                })?;
+            if owner != repository {
+                continue;
+            }
+            let Some(run) = content
+                .get("title")
+                .and_then(Value::as_str)
+                .and_then(artifact_stamp)
+                .and_then(CiStamp::read)
+                .map(|stamp| stamp.run().run_id())
+            else {
+                continue;
+            };
+            // Both ids go into removals, so each is held to what the janitor admits of one.
+            let usable = |value: Option<&Value>| {
+                value
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty() && !id.chars().any(char::is_control))
+                    .map(str::to_owned)
+            };
+            let (Some(item), Some(issue)) = (usable(node.get("id")), usable(content.get("id")))
+            else {
+                return Err(format!(
+                    "the board answered a stamped issue without usable ids: {node}"
+                ));
+            };
+            found.push((
+                run,
+                ResidueItem {
+                    item,
+                    issue,
+                    title: content["title"].as_str().unwrap_or_default().to_owned(),
+                },
+            ));
+        }
+        // Only an explicit answer ends the walk: a list that may be incomplete authorises nothing.
+        match connection
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+        {
+            Some(false) => return Ok(found),
+            Some(true) => {}
+            None => return Err("residue item lookup did not say whether it was complete".into()),
+        }
+        let next = connection
+            .pointer("/pageInfo/endCursor")
+            .and_then(Value::as_str)
+            .filter(|next| !next.is_empty() && after.as_str() != Some(next))
+            .ok_or("residue item lookup has no advancing cursor")?;
+        after = Value::String(next.to_owned());
+    }
+    Err("residue item lookup did not end within 100 pages".to_owned())
+}
+
+/// Removes every board item a CI stamp names whose run reads `completed` — and the issue
+/// behind it — and says which; answers how many items it removed.
+///
+/// The same rule as [`clear_finished_runs_fields`], over the janitor's candidates: an issue in
+/// the repository this lane writes to, whose title carries a CI stamp. Each is taken off the
+/// board and then deleted, as the lane's own cleanup takes its artifacts. An item whose run is
+/// still going or cannot be read is left on the board, said to be kept, and counted.
+///
+/// # Errors
+///
+/// The board could not be listed, or GitHub refused or did not confirm a removal.
+pub async fn clear_finished_runs_items(
+    token: &str,
+    project_id: &str,
+    repository: &str,
+) -> Result<u64, String> {
+    let mut stamped: BTreeMap<u64, Vec<ResidueItem>> = BTreeMap::new();
+    for (run, item) in ci_stamped_issues(token, project_id, repository).await? {
+        stamped.entry(run).or_default().push(item);
+    }
+    let mut removed = 0;
+    for (run, items) in stamped {
+        if let Err(why) = owning_run_completed(token, run).await {
+            for item in items {
+                say(&format!(
+                    "board pre-flight kept item {}: run {run} {why}, so nothing shows it is \
+                     residue, and it is counted",
+                    item.title
+                ));
+            }
+            continue;
+        }
+        for item in items {
+            let answer = graphql_variables(
+                token,
+                "mutation($input:DeleteProjectV2ItemInput!){deleteProjectV2Item(input:$input){deletedItemId}}",
+                "residue item removal",
+                json!({"input":{"projectId":project_id,"itemId":item.item}}),
+            )
+            .await?;
+            if answer
+                .pointer("/data/deleteProjectV2Item/deletedItemId")
+                .and_then(Value::as_str)
+                != Some(item.item.as_str())
+            {
+                return Err(format!(
+                    "residue item removal: GitHub did not confirm removing {}: {answer}",
+                    item.title
+                ));
+            }
+            delete_issue(token, &item.issue).await?;
+            removed += 1;
+            say(&format!(
+                "board pre-flight removed item {} and its issue: residue of run {run}, which \
+                 reads completed, so it is not counted",
+                item.title
+            ));
+        }
+    }
+    Ok(removed)
+}
+
+/// Removes every board field a CI stamp names whose run reads `completed`, and says which.
+///
+/// The janitor's rule, applied before the lane measures the board: the stamp's run is read
+/// from GitHub (`GET /repos/{owner}/{repo}/actions/runs/{run_id}` of [`CORE_REPOSITORY`],
+/// which a cancelled run answers `completed` exactly as a succeeded or a failed one does), and
+/// only a completed run's field goes. One still going — this run's earlier attempt included,
+/// since a re-run reads in progress — or one whose read fails or says something
+/// [`RunStatus`] does not declare, keeps its field and is said to. A machine-stamped field is
+/// its machine's lock sweep's and is never read here. Answers how many fields it removed.
+///
+/// # Errors
+///
+/// The field list did not answer what the measurement selected, or GitHub refused or did not
+/// confirm a removal.
+pub async fn clear_finished_runs_fields(token: &str, fields: &Value) -> Result<u64, String> {
+    if fields
+        .pointer("/pageInfo/hasNextPage")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        return Err(
+            "the board's fields did not come back on one page, so a field a finished run \
+             left cannot be told from the board's own"
+                .to_owned(),
+        );
+    }
+    let nodes = fields
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or("the board's field names were not reported")?;
+    let mut stamped: BTreeMap<u64, Vec<(&str, &str)>> = BTreeMap::new();
+    for node in nodes {
+        // A field of a kind neither fragment selects answers `{}`, and the lane makes none.
+        if node.as_object().is_some_and(serde_json::Map::is_empty) {
+            continue;
+        }
+        // The id goes into a removal, so it is held to what the janitor admits of one.
+        let (Some(id), Some(name)) = (
+            node.get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && !id.chars().any(char::is_control)),
+            node.get("name").and_then(Value::as_str),
+        ) else {
+            return Err(format!(
+                "the board answered a field without a usable id and a name: {node}"
+            ));
+        };
+        if let Some(stamp) = fielded_stamp(name).and_then(CiStamp::read) {
+            stamped
+                .entry(stamp.run().run_id())
+                .or_default()
+                .push((id, name));
+        }
+    }
+    let mut removed = 0;
+    for (run, fields) in stamped {
+        if let Err(why) = owning_run_completed(token, run).await {
+            for (_, name) in fields {
+                say(&format!(
+                    "board pre-flight kept field {name}: run {run} {why}, so nothing shows it \
+                     is residue, and it is counted"
+                ));
+            }
+            continue;
+        }
+        for (id, name) in fields {
+            delete_board_field(token, id, "residue field removal").await?;
+            removed += 1;
+            say(&format!(
+                "board pre-flight removed field {name}: residue of run {run}, which reads \
+                 completed, so it is not counted"
+            ));
+        }
+    }
+    Ok(removed)
+}
+
+/// Removes one board field, refusing unless GitHub's answer names that field.
+async fn delete_board_field(token: &str, field: &str, what: &str) -> Result<(), String> {
+    let answer = graphql_variables(
+        token,
+        DELETE_FIELD_DOCUMENT,
+        what,
+        json!({"input": {"fieldId": field}}),
+    )
+    .await?;
+    if answer
+        .pointer("/data/deleteProjectV2Field/projectV2Field/id")
+        .and_then(Value::as_str)
+        == Some(field)
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "{what}: GitHub did not confirm removing field {field}: {answer}"
+        ))
+    }
 }
 
 fn named_type(value: &Value) -> Option<&str> {
@@ -1941,16 +2302,16 @@ pub fn contract_schema_documents() -> Vec<String> {
 /// real call, and this is where `budget::recheck` reads its headers: a session the account
 /// cannot afford is declined there, on that one call, rather than reported here as a schema
 /// that drifted because GitHub refused to answer it.
-async fn verify_contract_schema(
+async fn verify_contract_schema<Recheck: std::future::Future<Output = ()>>(
     token: &str,
-    after_the_first_call: impl FnOnce(),
+    after_the_first_call: impl FnOnce() -> Recheck,
 ) -> Result<(), String> {
     let mut answered = serde_json::Map::new();
     let mut after_the_first_call = Some(after_the_first_call);
     for document in contract_schema_documents() {
         let response = graphql(token, &document, "contract schema introspection").await;
         if let Some(recheck) = after_the_first_call.take() {
-            recheck();
+            recheck().await;
         }
         let response = response?;
         let data = response
@@ -2552,11 +2913,119 @@ pub struct Settled {
     pub projects: Vec<String>,
 }
 
-/// Waits until one source reports the whole of a run's fixture, and hands that source back.
+/// How long [`settled_fixture`] waits for GitHub's issue search to report a run's fixture, and
+/// how often it asks while it does.
+///
+/// `bound` is a deadline on the monotonic clock, counted from the moment the wait begins: no
+/// sleep runs past it, and a search still in flight when it passes is abandoned rather than
+/// awaited. Once it has passed, the reads by id that say what became of each missing item get
+/// `diagnosis` more, and nothing else — so the whole wait ends within `bound + diagnosis`.
+///
+/// Between attempts it sleeps `first` while less than `steady_for` has elapsed, and after that
+/// twice the sleep before, up to `longest`. The journey waits [`FIXTURE_WAIT`]; a stand-in
+/// board waits [`STAND_IN_FIXTURE_WAIT`], the same wait scaled down.
+#[derive(Clone, Copy, Debug)]
+pub struct FixtureWait {
+    pub bound: std::time::Duration,
+    pub first: std::time::Duration,
+    pub steady_for: std::time::Duration,
+    pub longest: std::time::Duration,
+    pub diagnosis: std::time::Duration,
+}
+
+impl FixtureWait {
+    /// This wait with every duration `by` times shorter.
+    pub const fn scaled(self, by: u32) -> Self {
+        Self {
+            bound: self.bound.checked_div(by).expect("a nonzero scale"),
+            first: self.first.checked_div(by).expect("a nonzero scale"),
+            steady_for: self.steady_for.checked_div(by).expect("a nonzero scale"),
+            longest: self.longest.checked_div(by).expect("a nonzero scale"),
+            diagnosis: self.diagnosis.checked_div(by).expect("a nonzero scale"),
+        }
+    }
+
+    /// The sleep after an attempt that ended `elapsed` into the wait, `previous` being the
+    /// sleep before it, if there was one — before the deadline caps it.
+    pub fn sleep_after(
+        self,
+        elapsed: std::time::Duration,
+        previous: Option<std::time::Duration>,
+    ) -> std::time::Duration {
+        match previous {
+            Some(previous) if elapsed >= self.steady_for => (previous * 2).min(self.longest),
+            _ => self.first,
+        }
+    }
+
+    /// Every sleep of a wait whose every search answers at once, in order: the most attempts
+    /// it can make, since time a search takes only leaves less for the rest.
+    pub fn sleeps(self) -> Vec<std::time::Duration> {
+        let mut sleeps = Vec::new();
+        let mut elapsed = std::time::Duration::ZERO;
+        while elapsed < self.bound {
+            let sleep = self
+                .sleep_after(elapsed, sleeps.last().copied())
+                .min(self.bound - elapsed);
+            sleeps.push(sleep);
+            elapsed += sleep;
+        }
+        sleeps
+    }
+}
+
+/// The journey's own fixture wait: ten minutes, asking every two seconds for the first
+/// thirty and then backing off to every thirty, which is 37 attempts at most — fewer than the
+/// sixty a two-minute wait at two-second intervals spent.
+///
+/// **The bound is a margin chosen above what GitHub was measured to take, not a measurement.**
+/// Every converging run prints when the search reported each item, and those have taken
+/// seconds. A search can also leave an item it has certainly written out for minutes — the
+/// board's own item listing and a delete by its id finding it meanwhile — and how long such
+/// a lag lasts is unmeasured, which is why the margin is wide rather than what sizes it.
+/// GitHub publishes no bound on the index's lag; a run that outlasts this one fails saying,
+/// by a read of each missing item by its own id, whether the index or the write is at fault.
+pub const FIXTURE_WAIT: FixtureWait = FixtureWait {
+    bound: std::time::Duration::from_secs(600),
+    first: std::time::Duration::from_secs(2),
+    steady_for: std::time::Duration::from_secs(30),
+    longest: std::time::Duration::from_secs(30),
+    // At most five reads by id, each one request that GitHub answers in well under a second.
+    diagnosis: std::time::Duration::from_secs(30),
+};
+
+/// How many times faster a stand-in board's fixture wait runs than [`FIXTURE_WAIT`].
+pub const STAND_IN_SCALE: u32 = 200;
+
+/// [`FIXTURE_WAIT`], every duration of its schedule [`STAND_IN_SCALE`] times shorter, for a
+/// stand-in board: a search lag of `d` on GitHub is one of `d / STAND_IN_SCALE` there. The
+/// reads by id are given what a loopback read takes on a loaded host, which is latency rather
+/// than lag and does not scale: a stand-in answering one request at a time reads one only once
+/// the search the wait abandoned is answered, and a host running several instrumented suites
+/// at once delays that by more than the half second the search itself is held.
+pub const STAND_IN_FIXTURE_WAIT: FixtureWait = FixtureWait {
+    diagnosis: std::time::Duration::from_secs(2),
+    ..FIXTURE_WAIT.scaled(STAND_IN_SCALE)
+};
+
+/// Waits until one source reports every item of a run's fixture, and hands that source back.
 ///
 /// GitHub decides when a created issue appears on the board and when its issue search
 /// reports one — the search is an index and is documented as eventually consistent — so a
 /// run reads its own fixture by waiting for it rather than by racing it.
+///
+/// **What it waits on is the read the journey asserts next: one title search for the run's
+/// prefix, for tasks and for projects.** That is the `search_title` capability itself, and
+/// GitHub offers no search that is not its index, so no lag-free path can stand in for it.
+/// What GitHub does offer without the lag is a read of an item by its own id, and the wait
+/// spends that only once it has given up: each item the search never reported is read by its
+/// id, so the failure says whether the index was behind on an item that is certainly there or
+/// the item never landed at all. [`FixtureWait`] says how long each half may take.
+///
+/// It waits for each item by its title, not for a count: a count can be met by another item
+/// taking a missing one's place, and is no help to a reader asking which one never came. An
+/// item the search reports beyond the fixture does not hold the wait, and the journey's own
+/// assertion on the answer names it.
 ///
 /// **Each attempt asks through a source built afresh, and that is the whole of what makes
 /// this a wait.** A source reads the board once and answers every later question from that
@@ -2573,11 +3042,16 @@ pub struct Settled {
 /// confirmed complete rather than one taken before the fixture had settled.
 pub async fn settled_fixture(
     rebuilt: &dyn Fn() -> Box<dyn TaskSource>,
-    // Narrowed to one run's own titles, so what is counted is that run's fixture however
+    // Narrowed to one run's own titles, so what is waited on is that run's fixture however
     // much else the nominated board holds.
     prefix: &str,
-    tasks_expected: usize,
-    projects_expected: usize,
+    // The tasks and projects the run created: each one's id and title.
+    tasks_expected: &[(NativeId, String)],
+    projects_expected: &[(NativeId, String)],
+    // When the write of each item, by title, was answered: what a converging run measures
+    // each item's first report against. An item missing here is reported without that figure.
+    written: &BTreeMap<String, tokio::time::Instant>,
+    wait: FixtureWait,
 ) -> Result<Settled, String> {
     let ours = || {
         Some(TextQuery {
@@ -2585,50 +3059,192 @@ pub async fn settled_fixture(
             fields: TextFields::Title,
         })
     };
-    let mut last_read = (Vec::new(), Vec::new());
+    let missing = |expected: &[(NativeId, String)], reported: &[String]| {
+        expected
+            .iter()
+            .filter(|(_, title)| !reported.contains(title))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let started = tokio::time::Instant::now();
+    let deadline = started + wait.bound;
+    let mut previous = None;
+    // The last answer both searches gave whole, and whether one was abandoned at the deadline.
+    let mut last = None;
+    let mut cut_off = false;
+    // When each item was first reported, from the start of the wait, and how many attempts
+    // it took: what a passing run prints, so the bound can be checked against what GitHub took.
+    let mut first_reported = BTreeMap::new();
+    let mut attempts = 0_usize;
     let mut source = rebuilt();
-    // Two minutes at two-second intervals, against an index whose lag is usually seconds:
-    // patience costs nothing on a run that is going to pass, and the two requests an
-    // attempt makes are spent only by a run that is already failing.
-    for attempt in 0..60 {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            source = rebuilt();
-        }
+    loop {
         let reader = source.as_ref();
-        let tasks = task_titles(
-            reader,
-            &TaskQuery {
-                text: ours(),
-                ..Default::default()
-            },
-            "fixture settling task read",
-        )
-        .await?;
-        let projects = project_titles(
-            reader,
-            &ProjectQuery {
-                text: ours(),
-                ..Default::default()
-            },
-            "fixture settling project read",
-        )
-        .await?;
-        if tasks.len() == tasks_expected && projects.len() == projects_expected {
+        let read = tokio::time::timeout_at(deadline, async {
+            let tasks = task_titles(
+                reader,
+                &TaskQuery {
+                    text: ours(),
+                    ..Default::default()
+                },
+                "fixture settling task read",
+            )
+            .await?;
+            let projects = project_titles(
+                reader,
+                &ProjectQuery {
+                    text: ours(),
+                    ..Default::default()
+                },
+                "fixture settling project read",
+            )
+            .await?;
+            Ok::<_, String>((tasks, projects))
+        })
+        .await;
+        let Ok(read) = read else {
+            cut_off = true;
+            break;
+        };
+        let (tasks, projects) = read?;
+        attempts += 1;
+        let answered_at = started.elapsed();
+        for (_, title) in tasks_expected.iter().chain(projects_expected) {
+            if tasks.contains(title) || projects.contains(title) {
+                first_reported.entry(title.clone()).or_insert(answered_at);
+            }
+        }
+        if missing(tasks_expected, &tasks).is_empty()
+            && missing(projects_expected, &projects).is_empty()
+        {
+            say(&format!(
+                "the live fixture converged: GitHub's issue search for titles {prefix}* reported \
+                 all {} of its items at attempt {attempts}, {:.1}s after the wait began, at {}; \
+                 each was first reported at {}; and this long after its own write was answered: \
+                 {}",
+                first_reported.len(),
+                answered_at.as_secs_f64(),
+                chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+                reported_at(&first_reported),
+                after_write(started, &first_reported, written)
+            ));
             return Ok(Settled {
                 source,
                 tasks,
                 projects,
             });
         }
-        last_read = (tasks, projects);
+        last = Some((tasks, projects));
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+        let sleep = wait.sleep_after(now - started, previous);
+        previous = Some(sleep);
+        tokio::time::sleep_until((now + sleep).min(deadline)).await;
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        source = rebuilt();
     }
-    let (tasks, projects) = last_read;
+    let waited = started.elapsed();
+    let answered = last.is_some();
+    let (tasks, projects) = last.unwrap_or_default();
+    let reader = rebuilt();
+    let diagnosed_by = tokio::time::Instant::now() + wait.diagnosis;
+    let mut unreported = Vec::new();
+    for (kind, (id, title)) in missing(tasks_expected, &tasks)
+        .into_iter()
+        .map(|item| ("task", item))
+        .chain(
+            missing(projects_expected, &projects)
+                .into_iter()
+                .map(|item| ("project", item)),
+        )
+    {
+        let held = tokio::time::timeout_at(diagnosed_by, async {
+            match kind {
+                "task" => reader.get_task(&id).await.map(|held| held.is_some()),
+                _ => reader.get_project(&id).await.map(|held| held.is_some()),
+            }
+        })
+        .await;
+        unreported.push(by_its_id(kind, &id, &title, held, wait.diagnosis));
+    }
     Err(format!(
-        "the live fixture never became readable: the board never reported all \
-         {tasks_expected} tasks and all {projects_expected} projects titled {prefix}*; the \
-         last read of it reported the tasks {tasks:?} and the projects {projects:?}"
+        "the live fixture never became readable: after waiting {:.1}s against a deadline of \
+         {}s, GitHub's issue search for titles {prefix}* never reported {}; {}{}",
+        waited.as_secs_f64(),
+        wait.bound.as_secs_f64(),
+        unreported.join(", nor "),
+        if cut_off {
+            "a search still unanswered at the deadline was abandoned, and "
+        } else {
+            ""
+        },
+        if answered {
+            format!(
+                "the last search it answered, attempt {attempts}, reported the tasks {tasks:?} \
+                 and the projects {projects:?}; each item reported was first reported at {}",
+                reported_at(&first_reported)
+            )
+        } else {
+            "no search answered in full before it, so every item is named".to_owned()
+        },
     ))
+}
+
+/// Each title a fixture wait saw reported, with how long after its own write was answered the
+/// search answer that first reported it arrived — an upper bound on the item's lag, coarse by
+/// the time between attempts.
+fn after_write(
+    started: tokio::time::Instant,
+    first_reported: &BTreeMap<String, std::time::Duration>,
+    written: &BTreeMap<String, tokio::time::Instant>,
+) -> String {
+    first_reported
+        .iter()
+        .map(|(title, at)| match written.get(title) {
+            Some(written) => format!(
+                "{title:?} {:.1}s",
+                (started + *at).duration_since(*written).as_secs_f64()
+            ),
+            None => format!("{title:?} (its write was not recorded)"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Each title a fixture wait saw reported, with how far into the wait it first was.
+fn reported_at(first_reported: &BTreeMap<String, std::time::Duration>) -> String {
+    first_reported
+        .iter()
+        .map(|(title, at)| format!("{title:?} {:.1}s", at.as_secs_f64()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// One item a fixture wait gave up on, with what a read of it by its own id — which GitHub
+/// answers without the search's lag — said of it.
+fn by_its_id(
+    kind: &str,
+    id: &NativeId,
+    title: &str,
+    held: Result<Result<bool, SourceError>, tokio::time::error::Elapsed>,
+    within: std::time::Duration,
+) -> String {
+    let read = match held {
+        Err(_) => format!(
+            "which a read by its own id did not answer within the {}s given it",
+            within.as_secs_f64()
+        ),
+        Ok(Ok(true)) => {
+            "which a read by its own id finds on the board, so the index was behind on it"
+                .to_owned()
+        }
+        Ok(Ok(false)) => "which a read by its own id does not find on the board either".to_owned(),
+        Ok(Err(error)) => format!("which a read by its own id could not answer: {error}"),
+    };
+    format!("the {kind} {title:?} ({}), {read}", id.0)
 }
 
 /// Drives every field of the source's declared `Capabilities` against the real board.
@@ -2687,6 +3303,8 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live project write of {alpha:?} failed: {error}"))?;
+    let mut written = BTreeMap::new();
+    written.insert(alpha.clone(), tokio::time::Instant::now());
     await_on_board(rebuilt, &alpha_id, ItemKind::Project, &prefix, BOARD_WAIT).await?;
     let beta_id = writer
         .write_project(&ItemWrite {
@@ -2696,6 +3314,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live project write of {beta:?} failed: {error}"))?;
+    written.insert(beta.clone(), tokio::time::Instant::now());
     let mut round_trip = BTreeMap::new();
     round_trip.insert(
         "live.round_trip".to_owned(),
@@ -2715,6 +3334,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live task write of {first:?} failed: {error}"))?;
+    written.insert(first.clone(), tokio::time::Instant::now());
     await_on_board(rebuilt, &first_id, ItemKind::Task, &prefix, BOARD_WAIT).await?;
     let second_id = writer
         .write_task(&ItemWrite {
@@ -2730,6 +3350,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live task write of {second:?} failed: {error}"))?;
+    written.insert(second.clone(), tokio::time::Instant::now());
     let orphan_id = writer
         .write_task(&ItemWrite {
             target: None,
@@ -2744,6 +3365,7 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live task write of {orphan:?} failed: {error}"))?;
+    written.insert(orphan.clone(), tokio::time::Instant::now());
     let label_id = create_artifact_label(&run.token, &run.repository, &label_name).await?;
     attach_artifact_label(&run.token, &first_id.0, &label_id).await?;
     // That label went onto the issue through GitHub's own REST API rather than through this
@@ -2753,7 +3375,22 @@ async fn drive_every_declared_capability(
         source,
         tasks: run_tasks,
         projects: run_projects,
-    } = settled_fixture(rebuilt, &prefix, 3, 2).await?;
+    } = settled_fixture(
+        rebuilt,
+        &prefix,
+        &[
+            (first_id.clone(), first.clone()),
+            (second_id.clone(), second.clone()),
+            (orphan_id.clone(), orphan.clone()),
+        ],
+        &[
+            (alpha_id.clone(), alpha.clone()),
+            (beta_id.clone(), beta.clone()),
+        ],
+        &written,
+        endpoints().fixture_wait,
+    )
+    .await?;
     let writer = source.as_ref();
     quota::phase(onetaskgraph_github_live::quota::Phase::Capabilities)?;
     budget::recheck_remaining(
@@ -2761,6 +3398,7 @@ async fn drive_every_declared_capability(
         &SESSION,
         budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Capabilities),
     )
+    .await
     .map_err(|declined| declined.to_string())?;
 
     // `search_title` and `projects`: one title search over the whole board selects exactly
@@ -3198,6 +3836,7 @@ async fn drive_every_declared_capability(
         &SESSION,
         budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::CommentActivity),
     )
+    .await
     .map_err(|declined| declined.to_string())?;
     an_edited_comment_moves_its_issue_and_is_selected_since(
         writer,
@@ -3214,6 +3853,7 @@ async fn drive_every_declared_capability(
         &SESSION,
         budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::ChangeToken),
     )
+    .await
     .map_err(|declined| declined.to_string())?;
     every_change_kind_moves_a_tasks_token(
         run,
@@ -3872,14 +4512,7 @@ async fn rename_scratch_option(run: &LiveRun, scratch: &ScratchField) -> Result<
 
 /// Remove the scratch field from the board.
 async fn delete_scratch_field(run: &LiveRun, scratch: &ScratchField) -> Result<(), String> {
-    graphql_variables(
-        &run.token,
-        "mutation($input:DeleteProjectV2FieldInput!){deleteProjectV2Field(input:$input){projectV2Field{... on ProjectV2SingleSelectField{id}}}}",
-        "live scratch field removal",
-        json!({"input": {"fieldId": scratch.id}}),
-    )
-    .await
-    .map(|_| ())
+    delete_board_field(&run.token, &scratch.id, "live scratch field removal").await
 }
 
 /// `filter_by_comment_activity`, and the GitHub fact it rests on, re-taken on every run.
@@ -4187,8 +4820,9 @@ pub async fn run(nomination: Nomination) {
     // on them here — after that one call, before anything is written — rather than left to
     // fail on its next one.
     quota::phase(onetaskgraph_github_live::quota::Phase::Schema).unwrap();
-    verify_contract_schema(&token, || {
+    verify_contract_schema(&token, || async {
         budget::recheck_first_session(&admitted, &SESSION)
+            .await
             .unwrap_or_else(|declined| declined.refuse());
     })
     .await
@@ -4204,6 +4838,7 @@ pub async fn run(nomination: Nomination) {
         &SESSION,
         budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Reconciliation),
     )
+    .await
     .unwrap_or_else(|declined| declined.refuse());
     reconcile_node_counts_and_point_costs(&token)
         .await
@@ -4220,6 +4855,7 @@ pub async fn run(nomination: Nomination) {
         &SESSION,
         budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Setup),
     )
+    .await
     .unwrap_or_else(|declined| declined.refuse());
     let source = onetaskgraph_github_projects::Plugin
         .build_recording_into(
@@ -4233,7 +4869,7 @@ pub async fn run(nomination: Nomination) {
         .unwrap_or_else(|error| {
             panic!("the GitHub Projects live lane cannot use this board: {error}")
         });
-    let project_id = nominated_project_id(&token, &owner, project_number)
+    let project_id = preflight_board(&token, &owner, project_number, &repository)
         .await
         .unwrap_or_else(|error| panic!("GitHub Projects live board lookup failed: {error}"));
     assert!(source.health().await.unwrap().reachable);
@@ -4403,6 +5039,7 @@ pub async fn run(nomination: Nomination) {
                 &SESSION,
                 budget::remaining_design_points(onetaskgraph_github_live::quota::Phase::Cleanup),
             )
+            .await
             .map_err(|declined| declined.to_string());
             let mine = remove_live_state(
                 &token,
@@ -4424,6 +5061,7 @@ pub async fn run(nomination: Nomination) {
                     onetaskgraph_github_live::quota::Phase::OrphanRecovery,
                 ),
             )
+            .await
             .map_err(|declined| declined.to_string());
             let orphans = sweep_orphans(
                 &token,

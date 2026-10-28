@@ -4,17 +4,20 @@
 //! project, use the same flow: [`fileUpload`](https://linear.app/developers/how-to-upload-a-file-to-linear)
 //! receives the content type, filename and size and returns `uploadFile { uploadUrl, assetUrl,
 //! headers { key, value } }`. A PUT sends all bytes to the signed URL with those headers,
-//! Content-Type and Cache-Control. Before writing content, an authenticated GET of `assetUrl`
-//! must answer 2xx; any refusal names the asset, stage and status, and a verifying refusal
-//! also names the URL. Content is written once, with image targets rewritten and the trailing
-//! metadata slot recording `onetaskgraph.assets` entries of `{sha256, url}` by asset name.
+//! Content-Type and Cache-Control. The PUT's own 2xx answer is what says the bytes are held, and
+//! the `assetUrl` is Linear's own answer from `fileUpload`, so nothing reads the asset back
+//! before the content is written: a new image costs the `fileUpload` and the PUT. A refusal
+//! names the asset, the stage — the `fileUpload` mutation or the PUT — and what it was answered
+//! with: the HTTP status, or Linear's own refusal of the mutation. Content is written once, with
+//! image targets rewritten and the trailing metadata slot recording `onetaskgraph.assets`
+//! entries of `{sha256, url}` by asset name.
 //!
-//! A matching recorded SHA-256 reuses its URL without upload or verification. Records without
-//! assets retain the existing write path and spend no asset request. Images are visible to
+//! A matching recorded SHA-256 reuses its URL without an upload. Records without assets retain
+//! the existing write path and spend no asset request. Images are visible to
 //! authenticated members of the workspace, as described in
 //! [file storage authentication](https://linear.app/developers/file-storage-authentication).
 //!
-//! Rate-limited mutations (`RATELIMITED`, including HTTP 400) and HTTP 429 PUTs and GETs retry
+//! Rate-limited mutations (`RATELIMITED`, including HTTP 400) and HTTP 429 PUTs retry
 //! after the reset hint, using the source's injected Clock. The total wait per record is
 //! bounded to 60 seconds across all images and stages; a refusal beyond it names the limiter
 //! and asset. The reset headers are UTC epoch milliseconds as
@@ -23,7 +26,6 @@
 use std::time::Duration;
 
 use onetaskgraph_plugin_api::{AssetPayload, AssetUpload, AssetUploads, AssetWrite, SourceError};
-use secrecy::ExposeSecret;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -53,7 +55,6 @@ struct UploadHeader {
 enum Stage {
     Mutation,
     Put,
-    VerifyingRead,
 }
 
 impl std::fmt::Display for Stage {
@@ -61,7 +62,6 @@ impl std::fmt::Display for Stage {
         out.write_str(match self {
             Self::Mutation => "mutation",
             Self::Put => "PUT",
-            Self::VerifyingRead => "verifying read",
         })
     }
 }
@@ -273,46 +273,6 @@ impl LinearSource {
                         asset,
                         Stage::Put,
                         &format!("HTTP {}", response.status()),
-                    ));
-                }
-                break;
-            }
-            loop {
-                let response = client
-                    .get(upload.asset_url.0.clone())
-                    .header("Authorization", self.key.expose_secret())
-                    .send()
-                    .await
-                    .map_err(|error| {
-                        failure(
-                            asset,
-                            Stage::VerifyingRead,
-                            &format!("{}: {}", upload.asset_url, super::with_causes(&error)),
-                        )
-                    })?;
-                if response.status().as_u16() == 429 {
-                    self.wait_asset(
-                        asset,
-                        Stage::VerifyingRead,
-                        &format!("HTTP {}", response.status()),
-                        super::reset_wait(response.headers()),
-                        &mut waited,
-                    )
-                    .await
-                    .map_err(|error| {
-                        failure(
-                            asset,
-                            Stage::VerifyingRead,
-                            &format!("{}: {error}", upload.asset_url),
-                        )
-                    })?;
-                    continue;
-                }
-                if !response.status().is_success() {
-                    return Err(failure(
-                        asset,
-                        Stage::VerifyingRead,
-                        &format!("{}: HTTP {}", upload.asset_url, response.status()),
                     ));
                 }
                 break;

@@ -18,6 +18,7 @@ async fn invalid_identity_or_core_nomination_sends_no_request_and_opens_no_sessi
         rest_host: host,
         source: None,
         settle: std::time::Duration::ZERO,
+        fixture_wait: journey::STAND_IN_FIXTURE_WAIT,
     });
     for required in [None, Some("1")] {
         for repository in [

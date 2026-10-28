@@ -119,7 +119,8 @@ Every response is an object with exactly two or three members:
 | `error` | object | Present on failure. A `SourceError` (§5). |
 
 Exactly one of `result` and `error` is present. A response carrying both, or
-neither, is a protocol violation (§6.3).
+neither, is a protocol violation (§6.3). A `result` of `null` is present: it is the whole
+answer of a method whose result may be `null` (§4.17a).
 
 A response to a request the plugin never received an `id` for — or a second response
 to one `id` — is a protocol violation.
@@ -209,6 +210,8 @@ the source can do natively, and what configuration it is being built with.
 | `comment_copies` | boolean | Whether this plugin answers `write_comment_copy`. Optional; see §3.12. |
 | `task_details` | boolean | Whether this plugin answers `get_task_detail`. Optional; see §3.13. |
 | `write_checks` | boolean | Whether this plugin answers `check_task_write`. Optional; see §3.14. |
+| `project_status` | boolean | Whether this plugin answers `set_project_status`. Optional; see §3.15. |
+| `stored_forms` | boolean | Whether this plugin answers `stored_status`, and says in a content write's result what its backend stores. Optional; see §3.16. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -407,6 +410,27 @@ here. One that does not is never sent the method; every task a copy plans for it
 it can represent, and a write it refuses as one it cannot takes the whole copy back, as it did
 before the method existed. Omitted when `false`.
 
+### 3.15 `project_status`
+
+Optional, and absent means `false`: a plugin that answers `set_project_status` (§4.17a) says so
+here. One that does not is never sent the method: a project status write naming it is refused
+before anything is sent with `{"kind": "refused"}` and the message `the <kind> plugin cannot
+write a task's status on its own` — exactly the words the trait's default answers with, so a
+caller cannot tell a plugin that never declared the member from one that declares it and has no
+such write. Omitted when `false`.
+
+### 3.16 `stored_forms`
+
+Optional, and absent means `false`: a plugin whose backend rewrites what it is written — a
+hosted tracker that re-renders Markdown, or names a status category itself — says so here, and
+then answers `stored_status` (§4.25) and may carry `stored_content` in the result of a content
+write (§4.9, §4.9a, §4.12). One that does not is never sent `stored_status`: the engine writes
+the content and the status exactly as it was given them and writes nothing again after the
+write, as it did before the member existed. Omitted when `false`.
+
+The member no longer means the plugin answers `stored_form`: that method is retired (§4.25),
+the engine never sends it, and a plugin still answering it is unaffected.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -441,6 +465,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `delete_comment` | `TaskSource::delete_comment` |
 | `write_comment_copy` | `TaskSource::write_comment_copy` |
 | `set_task_status` | `TaskSource::set_task_status` |
+| `set_project_status` | `TaskSource::set_project_status` |
 | `set_delivered_by` | `TaskSource::set_delivered_by` |
 | `set_task_priority` | `TaskSource::set_task_priority` |
 | `set_task_content` | `TaskSource::set_task_content` |
@@ -451,6 +476,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `end_command` | `TaskSource::end_command` |
 | `status_contradictions` | `TaskSource::status_contradictions` |
 | `issue_holdings` | `TaskSource::issue_holdings` |
+| `stored_status` | `TaskSource::stored_status` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -486,6 +512,14 @@ write an item that may only be written somewhere private to it, whatever its con
 declares, and treats it as public for everything else. Its writes still cross only after the
 engine has applied the same classification and term checks it applies to every source, so a
 hosted plugin cannot be a way around them.
+
+`designator` is not carried either: a source hosted over this protocol answers as the trait's
+default does, and the engine asks it nothing.
+
+`stored_content` — the content a write's own answer says the backend stores — is not a
+method: it crosses as the `stored_content` member of a content write's result (§4.9, §4.9a,
+§4.12), from a plugin that declared `stored_forms` (§3.16), and the engine reads it exactly as
+it reads `TaskSource::stored_content` of a source built in process.
 
 ### 4.1 Common parameter shapes
 
@@ -647,6 +681,25 @@ to reach it.
 a message either: for a hosted source the engine answers it exactly as `get_task_details`, so it
 crosses as the same `get_task_detail` or `get_task` and `task_comments` requests.
 
+Nor are the three a copy and `project list --origin` reach for: `TaskSource::query_projects_by_origin`
+and `TaskSource::query_documents_by_origin` — the projects, or documents, whose
+`onetaskgraph.origin` is exactly one qualified id — and `TaskSource::read_ahead_for_copy`, which
+reads a copy's destination counterparts together and holds each for its next read by id. For a
+hosted source the engine answers each by its default: the first two as `query_projects` and
+`query_documents` with no filter, every page walked and narrowed to that origin, and the third by
+reading nothing ahead, so each counterpart crosses as its own `get_task`, `get_project` or
+`get_document`. A plugin written against this document implements nothing more for either.
+
+Nor is `TaskSource::read_ahead_origins_for_copy`, which asks together which items were copied
+from each of a copy's source ids and holds each answer for that origin's next query. For a hosted
+source the engine answers it by its default, reading nothing ahead, so each origin query crosses
+as its own `query_tasks`, `query_projects` or `query_documents`, as above.
+
+Nor is `TaskSource::member_classifications`, the classification and repositories of each member
+of a project, which a write the public boundary screens reads of that project. For a hosted source
+the engine answers it by its default, none, so the members cross as the project's own
+`query_tasks` and `query_documents`, as they always did.
+
 ### 4.4a `get_task_detail`
 
 Only a plugin that declared `task_details: true` (§3.13) and `comments` `"native"` (§4.2) is
@@ -799,6 +852,11 @@ back for a far end its own relationship can name. The fallback is the near item'
 naming a task or `{"id": "<source>:<native>", "kind": "project"}`, and each read as one
 `"blocks"` edge from the near item to that endpoint.
 
+An entry may also take the **opaque** form, which carries a `designator` member beside `id`
+and `kind`; its shape is the `DependencyEndpoint` definition in the schema the binary emits.
+The engine writes it and resolves it, so a plugin reads it back unchanged and never resolves
+the `designator` itself.
+
 Only the forward direction is ever recorded. The reverse of a recorded edge is derived
 from the far end, exactly as a `"forward-only"` plugin's reverse is, so a plugin never
 returns a recorded edge for `"depended-on-by"`.
@@ -881,7 +939,19 @@ to the empty list.
 
 `result` is `{"id": …}`, carrying the `NativeId` this source now holds the item under. A
 create is free to choose an id other than the one `item` suggested; an update answers
-with `target`. A create's answer is the only way the engine learns that id, so a create
+with `target`. A plugin that declared `stored_forms` (§3.16) may add `stored_content`, a
+string: the item's content — its metadata slot and whatever separates it removed, exactly as a
+read reports content — as its backend answered, in the write's own response, that it now holds
+it. The engine sends the content as it composed it, with nothing predicted of the backend's
+rewrite. Where `stored_content` is what was sent, the write is done. Where it differs, the
+engine recomputes every fingerprint it records over the stored content — a rendering's
+`body_digest`, where the provenance vouched for what was sent, and a copy's
+`onetaskgraph.copied_destination_version` — and sends one follow-up write, as its own request,
+of the stored content verbatim beside them. That follow-up write's own `stored_content` has to
+be the stored content again; one that is not is refused as `stored-content-diverged`, naming the
+item, the first differing line and both texts, because the backend did not hold its own stored
+content stable. No read of the item follows either write. Absent or `null` means the plugin has
+nothing to say, and nothing is written again. A create's answer is the only way the engine learns that id, so a create
 answered in any other shape is reported to a copy's caller as a destination that may hold
 an item the copy could not take back, rather than as a refusal: a plugin that refuses a
 create answers `error` and holds nothing.
@@ -900,6 +970,16 @@ and overwrites it — is not a message of this protocol. For a hosted source the
 it the way the trait's default does, admitting every status, so a status this plugin has no
 name for is refused by `write_task` or `write_project` itself, as above, and a plugin written
 against this document implements nothing more.
+
+Nor are the ways an in-process source lets a copy write in fewer requests, and for a hosted
+source the engine answers each by the trait's default: `TaskSource::create_batch_limit` is one,
+so `TaskSource::write_tasks` is never asked of it and every task crosses as its own `write_task`;
+`TaskSource::begin_deferred_writes` and `TaskSource::finish_writes` hold nothing back, so every
+`write_task` and `write_project` lands whole before it answers; `TaskSource::status_as_written`
+answers the status the engine would write, so a status compares as the plugin's `get_task` or
+`get_project` reads it; and `TaskSource::written_location` knows no location, so where the
+engine needs one it reads the item with `get_task`, `get_project` or `get_document`. A plugin
+written against this document implements nothing more.
 
 ### 4.9a Image assets on `write_task` and `write_document`
 
@@ -956,6 +1036,9 @@ The plugin stores each asset, and answers with the record and the content it sto
 | --- | --- | --- |
 | `id` | string | The `NativeId` this source now holds the record under, as §4.9's `result` says. |
 | `content` | string or `null` | The content as stored. |
+
+A plugin that declared `stored_forms` (§3.16) may add `stored_content` beside these, on §4.9's
+terms: the content its backend answered, in the write's own response, that it now holds.
 
 A plugin keeps the assets one of two ways:
 
@@ -1089,7 +1172,8 @@ Only a plugin that answered `"supported"` to §3.3 is ever sent either of these.
 
 `write` is an `ItemWrite` whose `item` is a `Document`, and it is read exactly as §4.9
 reads one: `target` is the id of the document at **this** source to update or `null` to
-create, `result` is `{"id": …}` carrying the `NativeId` this source now holds it under, and
+create, `result` is `{"id": …}` carrying the `NativeId` this source now holds it under — and
+the `stored_content` §4.9 specifies, from a plugin that declared `stored_forms` — and
 nothing the item carries is silently dropped. `depends_on` is always the empty list here,
 because a document has no dependencies.
 
@@ -1183,8 +1267,9 @@ metadata key `onetaskgraph.classification` while it is `"private"` and nowhere w
 public, and reports it as this member rather than as metadata.
 
 It is the record's *declared* classification. The engine tightens it before it writes — a
-record naming a private repository, or filed under a private project, is private however this
-member reads — and never loosens it. Where a private record may be written is the engine's to
+record naming a private repository, or a document filed under a private project, is private
+however this member reads — and never loosens it. A task is never tightened by the project it is
+filed under: its classification is its own declaration and the repositories it names. Where a private record may be written is the engine's to
 decide: it writes one only to a source declared `visibility: private` whose own live read,
 `TaskSource::visibility`, answers that it is private; a source hosted over this protocol
 answers `unknown` there (see the paragraph after the method table), so a private record is never
@@ -1661,6 +1746,15 @@ and the mutation, is overwritten. A write whose rule depends on a value a person
 the caller's to sequence: the store compares against the version the caller expects, and never
 re-reads it behind the caller's back.
 
+**`document metadata set --expect VERSION` is a precondition, held by a read.** The engine
+reads the document (`ISSUE`) and refuses the write with `version-moved`, naming both versions and
+writing nothing, unless that read answers `VERSION`; otherwise the write follows (`UPDATE_ISSUE`),
+primed with what the read left (`write_context`), so it is the read and the write and nothing
+else. It needs no cache. The read is the only way to hold it: GitHub's `UpdateIssueInput` takes
+no expected version — the public schema's only compare-and-swap inputs are `expectedHeadOid` on
+commits and pull-request merges — and its REST API supports no conditional write. A change
+landing between the read and the write is still overwritten.
+
 ### 4.14 `metering`
 
 Sent only to a plugin that answered `meters: true` at the handshake (§3.4), and never to one
@@ -1839,6 +1933,40 @@ it the way the trait's default does, with one `get_task` and then, for a task fo
 `set_task_status`, so a plugin written against this document implements nothing more for the
 engine to keep delivered tasks in step after a status write.
 
+### 4.17a `set_project_status`
+
+Only a plugin that answered `"supported"` to §3.3 **and** `project_status: true` to §3.15 is
+ever sent it. It writes one field of one project and nothing else.
+
+```json
+{ "id": "18", "method": "set_project_status", "params": { "id": "I_40", "category": "done" } }
+{ "id": "18", "result": { "category": "done", "name": "Done" } }
+```
+
+`id` is the `NativeId` of a project at **this** source and `category` a `StatusCategory`. The
+plugin sets that project's status to where its own mapping sends the category for a project —
+exactly where a `write_project` of a project in that category would put it — and changes
+**nothing else**: title, content, labels, metadata, repositories, dependencies and the project's
+tasks stay as they are. `result` is the `Status` object the plugin now reads for that project,
+its `category` and `name`, or `null` when it holds no such project — an id naming one of its
+tasks among them. Unlike `set_task_status` (§4.17), the status is the result itself, with no
+`status` member around it. A category this plugin has disabled is refused with `{"kind": "refused"}`, in the
+words its `write_project` refuses that status with. A project delivers no task, so the engine
+keeps nothing in step after it.
+
+The trait method `TaskSource::set_project_status` is defaulted to the refusal
+`set_task_status` defaults to, so a plugin written against the trait that does not implement it
+needs no edit; over this protocol, a plugin that does not answer it leaves `project_status`
+out of its handshake (§3.15). Each plugin of this build writes it: a GitHub board by the paired
+write a task status takes, for the project kind — a terminal category selects the project
+kind's mapped option first and then closes the issue with the category's fixed reason
+(completed for `done`, not planned for `cancelled`), leaving an issue already closed with a
+reason that reads that category as it is, and an open category reopens a closed issue and then
+selects its option, a draft item refused as a task's is; Linear by one `projectUpdate` carrying
+only `statusId`, the project status its `status_mapping` gives the category; a folder of
+Markdown by the project file's own `status` alone; an in-memory source by the held project's
+status.
+
 #### A task's `delivers` and `delivered_by`
 
 A `Task` carries two optional lists of strings, each left out — never `null` — when empty:
@@ -1919,7 +2047,7 @@ ever sent any of these, and `set_document_metadata` only to one that also declar
 `id` is the `NativeId` of a task, a project or a document at **this** source. `key` is a
 `MetadataKey`: a string of two or more non-empty dot-separated segments whose first segment is
 not `onetaskgraph`, `value` is any JSON value, `null` included, and the engine sends no other
-key in that namespace but one — a plugin may refuse any other with `{"kind": "malformed"}`
+key in that namespace but two — a plugin may refuse any other with `{"kind": "malformed"}`
 if it is ever handed one.
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by behaviour rather
      than by words: the served side refuses every other shape of this one key's value before
@@ -1927,11 +2055,13 @@ if it is ever handed one.
      `a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links` in
      `crates/onetaskgraph-core/tests/subprocess.rs` drives each refused shape and the accepted
      one across the wire; the value's own shape is stated once, in `docs/metadata.md`. -->
-The one is `onetaskgraph.copies`, which a copy writes on an item it read from this plugin to
-record where that item landed; its value is the object `docs/metadata.md` describes, and the
-plugin holds it wherever it holds the item's metadata. A plugin that cannot hold it refuses
-with `{"kind": "refused"}`, and the copy goes on without the link and says so rather than
-failing.
+The two are `onetaskgraph.copies`, which a copy writes on an item it read from this plugin to
+record where that item landed, and `onetaskgraph.copy_locations`, which it writes after it to
+record where each counterpart that link names is; each value is the object `docs/metadata.md`
+describes, and the plugin holds it wherever it holds the item's metadata. A plugin that cannot
+hold the link refuses with `{"kind": "refused"}`, and the copy goes on without the link and
+says so rather than failing; one that cannot hold the locations refuses them the same way, or
+as malformed, and the copy goes on with the link alone.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 The plugin holds `value` under `key` — adding the key when the record does not hold it and
@@ -2058,37 +2188,42 @@ source.
 ### 4.23 `status_contradictions`
 
 Sent only to a plugin that declared `reconcile_status` `"native"` (§4.2). It changes nothing:
-it answers every task this source holds whose **card contradicts its issue's closure**, each
-with the status that brings it in line, and the engine writes each one through
-`set_task_status` (§4.17).
+it answers every task and every project this source holds whose **card contradicts its issue's
+closure**, each with the status that brings it in line, and the engine writes each one through
+`set_task_status` (§4.17) for a task and `set_project_status` (§4.17a) for a project.
 
 ```json
 { "id": "25", "method": "status_contradictions", "params": {} }
-{ "id": "25", "result": { "items": [ { "task": { "id": "I_7", "title": "…", "status": { "category": "done", "name": "Done" }, "…": "…" }, "option": "Todo", "closed_as": "done", "to": "Done" } ] } }
+{ "id": "25", "result": { "items": [ { "task": { "id": "I_7", "title": "…", "status": { "category": "done", "name": "Done" }, "…": "…" }, "option": "Todo", "closed_as": "done", "to": "Done" }, { "project": { "id": "I_40", "title": "…", "status": { "category": "done", "name": "Done" }, "…": "…" }, "option": "In Progress", "closed_as": "done", "to": "Done" } ] } }
 ```
 
 The trait method answers `Vec<StatusContradiction>`, carried as `result.items`, one
-`StatusContradiction` per task. A task is answered when its issue is closed with a reason that
-reads `done` (completed, or no reason) or `cancelled` (not planned, duplicate) and its card does
-not sit at the option this source's mapping gives that category; `option` is the option it sits
-at, or `null`, `closed_as` the category its closure reads as — `"done"` or `"cancelled"`, the
-only two a card is brought in line with — and `to` the name of the option that category is written
-at. An open task, a closure that reads `unknown` and a card already in line are never answered —
-nor is any item this source reads as a project rather than a task, whatever its closure, because
-this method reaches task items only — and no task is answered twice: the engine refuses an
-answer naming one task twice as malformed. `task` is the task as `get_task` reads it.
+`StatusContradiction` per item. The item rides under the member naming its kind — `task`, the
+task as `get_task` reads it, or `project`, the project as `get_project` reads it — which is the
+`ContradictedItem` root, so an answer written before a project could be one, naming `task`
+alone, reads unchanged. An item is answered when its issue is closed with a reason that reads
+`done` (completed, or no reason) or `cancelled` (not planned, duplicate) and its card does not
+sit at the option this source's mapping gives that category **for the item's kind** — a plan's
+own home card, the project item whose issue carries the plan's task issues as sub-issues, judged
+against the project kind's half of `status_mapping`; `option` is the option it sits at, or
+`null`, `closed_as` the category its closure reads as — `"done"` or `"cancelled"`, the only two a
+card is brought in line with — and `to` the name of the option that category is written at for
+that kind. An open item, a closure that reads `unknown` and a card already in line are never
+answered, and no item is answered twice: the engine refuses an answer naming one item of one
+kind twice as malformed.
 
-The `set_task_status` the engine sends for each moves the card alone: an issue already closed
-in a way that reads as the category is not closed again, so its state and its reason — a
-duplicate's among them — stay as they are.
+The status write the engine sends for each moves the card alone: an issue already closed in a
+way that reads as the category is not closed again, so its state and its reason — a duplicate's
+among them — stay as they are. Each item the engine reports carries `kind`, `task` or
+`project`, beside `source`, its qualified id.
 
 ### 4.24 `issue_holdings`
 
 Sent only to a plugin that declared `complete_by_issue` `"native"` (§4.2), and never with an
 empty list. It changes nothing: for each issue reference, in the order given and once each, it
-answers the task this source holds for that issue and what moving it to `done` comes to. It
-reaches task items only: an issue this source holds as a project is answered `absent`, exactly
-as one it holds nothing for.
+answers the item this source holds for that issue — a task, or a project such as a plan's own
+home card — and what moving it to `done` comes to, each judged against its own kind's half of
+the source's mapping.
 
 ```json
 { "id": "26", "method": "issue_holdings", "params": { "issues": ["acme/work#12", "acme/work#40"] } }
@@ -2103,20 +2238,49 @@ each reference it was asked about exactly once and in the order given. Each hold
 of:
 
 - `absent` — this source holds no item for the issue, or cannot see the issue at all; it alone
-  carries no `task`;
+  carries no `task`, and the engine reports it with `kind` `task`;
 - `skipped`, with `task` and `reason` — `closed as not planned` or `closed as duplicate`: the
   closure already says the work will not be done here, which a landing does not overrule;
-- `unchanged`, with `task` — the issue is closed as completed and its card already sits at the
-  `done` option;
-- `due`, with `task` and `to`, the name of the `done` option — every other task: the engine
-  writes it `done` through `set_task_status` (§4.17), which selects the `done` option and closes
-  the issue as completed if it is still open, never reopening one.
+- `unchanged`, with `task` — the issue is closed as completed and its card already sits at its
+  kind's `done` option;
+- `due`, with `task` and `to`, the name of its kind's `done` option — every other item: the
+  engine writes it `done` through `set_task_status` (§4.17) for a task and `set_project_status`
+  (§4.17a) for a project, which selects that option and closes the issue as completed if it is
+  still open, never reopening one.
 
-`task` is the `HeldTask` root: the task's own `id`, the `option` its card sits at, and what the
-write and the rules around it need of it — `classification`, `repositories` and `delivers` — so
-the engine keeps every task it delivers in step exactly as after any status write (§4.17),
-without reading the task again. A plugin's read
+`task` is the `HeldTask` root: the item's own `id`, its `kind` — `"task"` or `"project"`,
+defaulted to `"task"` and left out while it is one, so a holding written before a project could
+be held reads unchanged — the `option` its card sits at, and what the write and the rules
+around it need of it — `classification`, `repositories` and `delivers`, which a project leaves
+empty — so the engine keeps every task a task delivers in step exactly as after any status
+write (§4.17), without reading the task again. Each item the engine reports carries the same
+`kind` beside `task`, the held item's qualified id whichever its kind. A plugin's read
 is proportional to the references it is given and never to the size of what it holds.
+
+### 4.25 `stored_status`
+
+Sent only to a plugin that answered `stored_forms: true` at the handshake (§3.16), and never to
+one that did not. It changes nothing: it says what this source's backend would hold if it were
+written what the engine names.
+
+```json
+{ "id": "28", "method": "stored_status", "params": { "kind": "task", "status": { "category": "done", "name": "done" } } }
+{ "id": "28", "result": { "status": { "category": "done", "name": "Shipped" } } }
+```
+
+`stored_status` takes an item `kind` — `"task"` or `"project"` — and the `Status` it would be
+written at, and answers the `status` the backend holds once it is: the name it records for the
+category, where it names a category itself. A copy compares a destination item's status with
+that answer, so an item whose category it already holds reads as unchanged.
+
+An error envelope means the plugin could not say, and the engine refuses the write it was about
+to make rather than sending the status as given.
+
+**`stored_form` is retired.** It asked a plugin to declare, before a write, the content its
+backend would store, and a rule table chasing a whole-document Markdown serializer never
+converges. The engine never sends it: what a backend stores is read off each content write's
+own `stored_content` (§4.9). A plugin that still answers it is unaffected — it is simply never
+asked.
 
 ## 5. The error envelope
 
@@ -2222,6 +2386,23 @@ reaches only a plugin that declared its member `"native"`, which a plugin writte
 cannot have done, so such a plugin is reported as holding nothing to reconcile and listed as
 unsupported by a completion — and is sent nothing either time.
 
+The `project` member of a contradiction and the `kind` member of a `HeldTask` (§4.23, §4.24)
+were added **without** a bump: a plugin written before them names only task items, under
+`task` and with no `kind`, which reads as exactly the task items it meant.
+`set_project_status` (§4.17a) and the `project_status` member of §3.15 were added **without**
+a bump on the terms of §3.14: the method reaches only a plugin that declared the member, and one
+that did not is refused before anything is sent, in the trait's default words.
+
+`stored_status` (§4.25), the `stored_forms` member of §3.16 and the `stored_content` member of
+a content write's result (§4.9) were added **without** a bump, on the terms of §3.14: the method
+reaches only a plugin that answered `stored_forms: true`, which a plugin written before them
+cannot have done, and the engine reads `stored_content` only from such a plugin. A plugin that
+declares none of them is written the content and the status it is given, and nothing is written
+again after the write — exactly as before they existed. `stored_form`, added beside them, was
+retired the same way, without a bump: the engine stopped sending it, which no plugin can
+observe but by not being asked. The wire shapes are
+held by `crates/onetaskgraph-core/tests/fixtures/stored-forms-wire.json`.
+
 `set_task_priority` (§4.19), `set_task_content` (§4.20) and the `content_updates` member of
 §3.9 were added **without** a bump, as the methods of §4.18 were: the first reaches only a
 plugin that declared `priority` `"native"`, and the second only one that answered
@@ -2258,6 +2439,10 @@ is refused by name before anything is sent.
 that answered `metadata_updates: true`, and one written when §4.18 let a plugin refuse every
 key in that namespace as malformed may go on doing so — the engine reads either refusal of
 that one key as the plugin not holding the link, and the copy completes without it.
+
+`onetaskgraph.copy_locations` as a §4.18 key was added **without** a bump on the same terms: a
+plugin written before it refuses it as malformed, which the engine reads as the plugin not
+holding the locations, and the copy completes with the link alone.
 
 The `assets` member of §4.2 and the `assets` and `recorded_assets` members of §4.9a were added
 **without** a bump, for the reason the documents were: the engine sends a write carrying them
@@ -2447,15 +2632,16 @@ later reads exactly as any created item does.
 ### GitHub Projects request costs
 
 Every request below is one GraphQL document priced at one point by the node-count model, so a
-row's requests are its points. `crates/onetaskgraph-github-projects-e2e/tests/e2e/copy_cost.rs` pins each row
+row's requests are its points — except where a row gives both, as `requests / points`: a new
+copy's ORIGIN_LOOKUPS asks about up to ten origins with the board's fields and costs two. `crates/onetaskgraph-github-projects-e2e/tests/e2e/copy_cost.rs` pins each row
 against the requests the loopback board served, and holds this table and the one in the
 plugin's crate documentation to the same figures.
 
 | Verb | Requests / points | Documents |
 | --- | --- | --- |
-| new copy | 5 | ORIGIN_LOOKUP, CREATION_CONTEXT (the board's fields and the repository's id together), CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS |
-| copy --create | 4 | CREATION_CONTEXT, CREATE_ISSUE, ADD_TO_BOARD, UPDATE_FIELDS: the new copy without its ORIGIN_LOOKUP |
-| bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`), UPDATE_FIELDS, then UPDATE_ISSUE last |
+| new copy | 4 | ORIGIN_LOOKUPS (the origin, the board's fields and the repository's node and numeric ids together, a page of one carrier for each origin), CREATE_ISSUE filing the issue on the board and under its project, CREATED_BOARD_ITEMS once GitHub has added it, WRITE_FIELD_VALUES |
+| copy --create | 4 | CREATION_CONTEXT, CREATE_ISSUE, CREATED_BOARD_ITEMS, WRITE_FIELD_VALUES: the new copy with no origin to ask about |
+| bound copy | 3 | ISSUE (with the board's fields and the issue's `blockedBy`), UPDATE_FIELDS when a board field differs, then UPDATE_ISSUE last carrying only the title, body or state that differs — none, when nothing does |
 | bound copy, filed under a project | 4 | the bound copy's three, and one ISSUE of the destination project its link names, read once per command |
 | bound copy, newly naming n dependencies | + ceil(n / DETAIL_BATCH) + n | ISSUE_DETAILS for the far ends that do not already block the item, DETAIL_BATCH (24) to a request (one alone is ISSUE), then one ADD_BLOCKED_BY each; a far end already blocking it costs nothing |
 | comment | 2 | ISSUE, ADD_COMMENT: the target is read first, because GitHub accepts a comment on any issue or pull request |
@@ -2485,7 +2671,11 @@ a copy re-points, the one metadata key written before the body, is put back when
 is refused, and when putting it back is refused too, the write's own refusal — its kind
 unchanged — names that key, what it now holds and what it held, and the step that restores it.
 When the refused write was the board-field write that carries the origin itself, GitHub does
-not say which of its fields ran, so the refusal names both values the key may hold.
+not say which of its fields ran, so the refusal names both values the key may hold. Inside a
+copy, which holds its writes back until it finishes, that last `updateIssue` of each existing
+issue is held too and sent before the source's next request of any kind — so nothing it reads
+or writes after sees the issue without it — and the updates the copy makes one after another
+go as aliased `updateIssue`s of one `UPDATE_ISSUES` request, each still one write.
 
 Two facts about GitHub the write rows rest on, read off GitHub's published schema artifact
 (<https://docs.github.com/public/fpt/schema.docs.graphql>, 2026-10-01) and pinned in

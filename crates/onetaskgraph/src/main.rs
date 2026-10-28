@@ -23,11 +23,12 @@ use onetaskgraph_core::{
     Delivered, DeliveryOutcome, DependencyRequest, DocumentFilters, DocumentRequest, Engine,
     Environment, ExpectedWrite, Failure, FailureDocument, Filters, GlobalId, LabelRequest, Loaded,
     MatchBy, OutputFormat, PageToken, Paging, ProjectGraphRequest, ProjectRequest, ProjectSelector,
-    QueryResponse, ReconcileOutcome, RenderedRecord, SearchRequest, SourceFailure, TaskRequest,
+    QueryResponse, ReconcileOutcome, RenderedRecord, SearchRequest, SourceFailure, TaskAssetNames,
+    TaskRequest,
 };
 use onetaskgraph_plugin_api::{
-    CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment, SharedClock,
-    SourceName, TextQuery, system_clock,
+    AssetName, CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment,
+    SharedClock, SourceName, TextQuery, system_clock,
 };
 use onetaskgraph_status_options::{
     FieldsReport, GitHubProjectsConfig, SetupMode, StatusOptionsReport,
@@ -38,7 +39,8 @@ use crate::cli::{
     CacheCommand, Cli, Command, CommentCommand, ConfigCommand, ContentCommand, CopyArgs,
     DependencyArgs, DocumentCommand, DocumentFilterArgs, ExpectArgs, FilterArgs, GraphFormat,
     LabelCommand, MetadataCommand, MetadataSetArgs, PageArgs, PriorityCommand, ProjectCommand,
-    SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskCommand,
+    ProjectStatusCommand, SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskAssetsArgs,
+    TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`. A
@@ -64,10 +66,54 @@ const EXIT_USAGE: u8 = 2;
 /// command was asked to do happened, and part of what follows from it did not.
 const EXIT_PARTIAL: u8 = 4;
 
+/// The stack the thread every command runs on is given: 8 MiB, what a Linux host gives a
+/// process's main thread. Windows gives a main thread 1 MiB, and an unoptimised build's copy
+/// nests the whole engine's futures beneath a GraphQL document being parsed, which overflowed
+/// it — so the commands run on a thread of their own, with the same stack on every platform.
+const COMMAND_STACK: usize = 8 << 20;
+
 /// One thread is enough: the concurrency the engine needs is several sources waiting on
-/// I/O at once, which one thread interleaves, not several sources computing at once.
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> ExitCode {
+/// I/O at once, which one thread interleaves, not several sources computing at once. It is
+/// not the process's main thread, so that its stack is [`COMMAND_STACK`] wherever it runs.
+fn main() -> ExitCode {
+    let started = std::thread::Builder::new()
+        .name("onetaskgraph".into())
+        .stack_size(COMMAND_STACK)
+        .spawn(|| {
+            match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime.block_on(command()),
+                Err(error) => fail(
+                    &format!(
+                        "could not start the runtime every command runs on: {error}; \
+                         check the process may create the timers and sockets it needs"
+                    ),
+                    EXIT_FAILURE,
+                ),
+            }
+        });
+    let commands = match started {
+        Ok(commands) => commands,
+        Err(error) => {
+            return fail(
+                &format!(
+                    "could not start the thread every command runs on: {error}; \
+                     free some memory or raise the process's thread limit and run it again"
+                ),
+                EXIT_FAILURE,
+            );
+        }
+    };
+    // A panic has already been reported by the hook on the thread that panicked; it carries
+    // on here, so the process exits as a panicking one does.
+    commands
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+async fn command() -> ExitCode {
     let cli = Cli::parse();
     if let Command::PluginServe { source } = &cli.command {
         let input = io::BufReader::new(io::stdin().lock());
@@ -591,6 +637,9 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Answers(args),
         } => rendered::stored(out, loaded, RenderedRecord::Task, args).await,
+        Command::Task {
+            command: TaskCommand::Assets(args),
+        } => task_assets(out, loaded, args).await,
         Command::Project {
             command: ProjectCommand::Create(args),
         } => rendered::create_project(out, loaded, args).await,
@@ -677,7 +726,9 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             let mut request = copy_request(items, CopyScope::Tasks, &args.copy)?;
             request.statuses = args.query.statuses();
             request.create = args.create;
+            request.target_task = args.target_task.as_deref().map(qualified).transpose()?;
             request.comments = args.comments;
+            request.status_policy = args.status_policy.into();
             request.expect.clone_from(&args.expect.expect);
             copy(out, loaded, &request).await
         }
@@ -691,6 +742,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 .map(|member| qualified(member))
                 .collect::<Result<Vec<_>, _>>()?;
             let scope = match CopyItems::new(members) {
+                Some(members) if args.members_only => CopyScope::MembersOnly(members),
                 Some(members) => CopyScope::Members(members),
                 None => CopyScope::Projects {
                     tasks: !args.no_tasks,
@@ -699,7 +751,24 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             let mut request =
                 copy_request(named(std::iter::once(args.id.as_str()))?, scope, &args.copy)?;
             request.comments = args.comments;
+            request.status_policy = args.status_policy.into();
             copy(out, loaded, &request).await
+        }
+
+        Command::Project {
+            command:
+                ProjectCommand::Status {
+                    command: ProjectStatusCommand::Set(args),
+                },
+        } => {
+            let project = qualified(&args.id)?;
+            let set = engine(loaded)
+                .set_project_status(&project, args.category.category())
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = rendering(loaded, &set, render::project_status_set, "the status")?;
+            emit(out, rendered.trim_end(), "the status")?;
+            Ok(EXIT_OK)
         }
 
         Command::Project {
@@ -710,10 +779,12 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
                 filters: filters(&args.filters)?,
                 paging: paging(loaded, &args.paging)?,
             };
-            let response = engine(loaded)
-                .projects(&request)
-                .await
-                .map_err(|error| Failure::from(&error))?;
+            let engine = engine(loaded);
+            let response = match &args.origin {
+                Some(origin) => engine.projects_by_origin(&request, origin).await,
+                None => engine.projects(&request).await,
+            }
+            .map_err(|error| Failure::from(&error))?;
             respond(
                 out,
                 loaded,
@@ -1036,6 +1107,9 @@ fn term_scope(command: &Command) -> Option<Vec<String>> {
             ProjectCommand::Metadata {
                 command: MetadataCommand::Set(args),
             } => &args.term_scope,
+            ProjectCommand::Status {
+                command: ProjectStatusCommand::Set(args),
+            } => &args.term_scope,
             ProjectCommand::Create(args) => &args.term_scope,
             ProjectCommand::Render(args) => &args.term_scope,
             _ => return None,
@@ -1093,15 +1167,22 @@ fn respond<T: Serialize>(
 
 /// Name each source declared private that could not be asked what it records, on standard
 /// error, as a notice: the answer above is whole for the item it was asked about.
-fn unanswered(unasked: &[SourceFailure]) {
+fn unanswered(unasked: &[onetaskgraph_core::Unanswered]) {
     if unasked.is_empty() {
         return;
     }
-    for failure in unasked {
-        eprintln!(
-            "onetaskgraph: note: private source {} was not asked what it records: {}",
-            failure.source, failure.error
-        );
+    for entry in unasked {
+        match entry {
+            onetaskgraph_core::Unanswered::Source(failure) => eprintln!(
+                "onetaskgraph: note: private source {} was not asked what it records: {}",
+                failure.source, failure.error
+            ),
+            onetaskgraph_core::Unanswered::Designator(unresolved) => eprintln!(
+                "onetaskgraph: note: a dependency recorded under designator {} was not read: {}",
+                unresolved.designator,
+                unresolved.reason.as_str()
+            ),
+        }
     }
     eprintln!(
         "onetaskgraph: note: the answer above leaves out only what the source(s) named above \
@@ -1457,6 +1538,11 @@ async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> R
         .copy(request)
         .await
         .map_err(|error| write_failed(&engine, &error))?;
+    // Each dependency the copy left out because it names something private, said where a
+    // person reads it and kept out of the machine output, which is unchanged by it.
+    for line in engine.take_withheld_edges() {
+        eprintln!("onetaskgraph: {line}");
+    }
     let rendered = match loaded.config.output() {
         OutputFormat::Text => render::copied(&report),
         OutputFormat::Json => json(&report, "the copy")?,
@@ -1495,20 +1581,31 @@ async fn metadata_set(
     let id = qualified(&args.id)?;
     let key = metadata_key(&args.key)?;
     let value = metadata_value(&args.value)?;
-    if args.expect.expect.is_some() && record != MetadataRecord::Task {
+    if args.expect.expect.is_some() && record == MetadataRecord::Project {
         return Err(Failure::decided(
             "expect-one-task",
-            "--expect names the version of a task, and a project's or a document's metadata \
-             is written without one\n\
+            "--expect names the version of a task or a document, and a project's metadata is \
+             written without one\n\
              next: leave --expect out"
                 .to_owned(),
         ));
     }
-    let engine = expecting(loaded, &id, &args.expect)?;
-    let set = match record {
-        MetadataRecord::Task => engine.set_task_metadata(&id, &key, &value).await,
-        MetadataRecord::Project => engine.set_project_metadata(&id, &key, &value).await,
-        MetadataRecord::Document => engine.set_document_metadata(&id, &key, &value).await,
+    // A document's `--expect` is held by a read of the document before the write, so it needs no
+    // cache; a task's takes what its write needs from the cache instead.
+    let engine = if record == MetadataRecord::Document {
+        engine(loaded)
+    } else {
+        expecting(loaded, &id, &args.expect)?
+    };
+    let set = match (record, &args.expect.expect) {
+        (MetadataRecord::Task, _) => engine.set_task_metadata(&id, &key, &value).await,
+        (MetadataRecord::Project, _) => engine.set_project_metadata(&id, &key, &value).await,
+        (MetadataRecord::Document, None) => engine.set_document_metadata(&id, &key, &value).await,
+        (MetadataRecord::Document, Some(version)) => {
+            engine
+                .set_document_metadata_at(&id, &key, &value, version)
+                .await
+        }
     }
     .map_err(|error| write_failed(&engine, &error))?;
     let rendered = rendering(loaded, &set, render::metadata_set, "the metadata key")?;
@@ -1598,6 +1695,7 @@ fn copy_request(
                 ),
             )
         })?,
+        target_task: None,
         match_by: args.match_by.as_deref().map(MatchBy::parse),
         recreate: args.recreate,
         // Only `task copy` takes `--create`; it sets this on the request it builds.
@@ -1608,6 +1706,7 @@ fn copy_request(
         comments: false,
         no_link: args.no_link,
         expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
     })
 }
@@ -1786,6 +1885,47 @@ fn dependency_request(
         completeness: Completeness::NamingUnasked,
         paging: paging(loaded, &args.paging)?,
     })
+}
+
+/// `task assets`: every image asset the task holds, written into `--output-dir` under its
+/// name, and the names written printed — one a line, or under `--json` as one list.
+async fn task_assets(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    args: &TaskAssetsArgs,
+) -> Result<u8, Failure> {
+    let id = qualified(&args.id)?;
+    let held = engine(loaded)
+        .task_assets(&id)
+        .await
+        .map_err(|error| Failure::from(&error))?;
+    let unwritten = |path: &std::path::Path, error: io::Error| {
+        Failure::decided(
+            "write",
+            format!(
+                "could not write {}: {error}\n\
+                 next: name an --output-dir this command can create and write into, then run it \
+                 again.",
+                path.display()
+            ),
+        )
+    };
+    std::fs::create_dir_all(&args.output_dir)
+        .map_err(|error| unwritten(&args.output_dir, error))?;
+    for asset in &held {
+        let path = args.output_dir.join(asset.name.as_str());
+        std::fs::write(&path, &asset.bytes).map_err(|error| unwritten(&path, error))?;
+    }
+    let names = TaskAssetNames(held.into_iter().map(|asset| asset.name).collect());
+    match loaded.config.output() {
+        OutputFormat::Json => emit(out, &json(&names, "the asset names")?, "the asset names")?,
+        OutputFormat::Text if names.0.is_empty() => {}
+        OutputFormat::Text => {
+            let lines: Vec<&str> = names.0.iter().map(AssetName::as_str).collect();
+            emit(out, &lines.join("\n"), "the asset names")?;
+        }
+    }
+    Ok(EXIT_OK)
 }
 
 /// One value as pretty-printed JSON.
@@ -2109,12 +2249,14 @@ mod tests {
                 "task create",
                 "task render",
                 "task answers",
+                "task assets",
                 "project list",
                 "project show",
                 "project deps",
                 "project graph",
                 "project copy",
                 "project metadata set",
+                "project status set",
                 "project create",
                 "project render",
                 "project answers",

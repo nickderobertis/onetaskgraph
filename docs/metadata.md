@@ -19,17 +19,19 @@ Keys are free-form, with two prefixes reserved:
      in `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
      lists or the count it states in words differ from the constants each key is spelled once
      as — `MetadataKey::COPIES_KEY` among them. -->
-- `onetaskgraph.` belongs to this product. It defines exactly thirteen keys, each spelled
+- `onetaskgraph.` belongs to this product. It defines exactly fifteen keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
   (`DependencyEdge::RECORDED_KEY`), `onetaskgraph.delivers` (`TaskRef::DELIVERS_KEY`),
   `onetaskgraph.delivered_by` (`TaskRef::DELIVERED_BY_KEY`), `onetaskgraph.item_kind`
   (`ItemKind::METADATA_KEY`), `onetaskgraph.template` (`MetadataKey::TEMPLATE_KEY`),
-  `onetaskgraph.copies` (`MetadataKey::COPIES_KEY`), `onetaskgraph.members`
+  `onetaskgraph.copies` (`MetadataKey::COPIES_KEY`), `onetaskgraph.copy_locations`
+  (`MetadataKey::COPY_LOCATIONS_KEY`), `onetaskgraph.members`
   (`MetadataKey::MEMBERS_KEY`), `onetaskgraph.member_of` (`MetadataKey::MEMBER_OF_KEY`),
   `onetaskgraph.copied_version` (`MetadataKey::COPIED_VERSION_KEY`),
   `onetaskgraph.copied_with_comments` (`MetadataKey::COPIED_WITH_COMMENTS_KEY`) and
   `onetaskgraph.copied_destination_version` (`MetadataKey::COPIED_DESTINATION_VERSION_KEY`)
+  and `onetaskgraph.edges_on_record` (`MetadataKey::EDGES_ON_RECORD_KEY`)
   in the contract crate, and
   `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) in the engine —
   that last one carries a *qualified* id, whose contents no plugin ever constructs or
@@ -210,6 +212,47 @@ rather than a limit of this backend: a document is not work, so it takes part in
 dependency graph. A write naming a dependency for one is refused, and a board relationship
 this source finds pointing at a design issue is refused by name too — reporting it as a
 task or as a project would name an id no task or project read of that source can find.
+
+### The opaque far end
+
+An entry of `onetaskgraph.depends_on` takes a third form beside a native id and a qualified
+`<source>:<native>` id: `{"designator": "<plugin>/<64 lowercase hex>", "id": "<native id>",
+"kind": "task" | "project"}`, with exactly those three keys (`DependencyEndpoint` in the
+contract crate parses it, and the schema bundle and both SDKs carry it). The `designator` names
+a tracker without conveying anything about it: `<plugin>/` and the hex SHA-256 of
+`<plugin>\n<identifier>`, over the backend's own opaque identifier of itself — a Linear
+workspace's organization id, a GitHub Project's node id — or, for a backend with none (a folder
+of Markdown), `alias/<public_alias>`, where `public_alias` is a source key matching
+`^[A-Za-z0-9_-]{16,64}$` that every host's configuration of that tracker declares identically;
+one off the pattern is refused when the configuration loads. The `id` is the item's native id,
+never a human key, a URL or a slug.
+
+A source works its designator out with at most one request (`TaskSource::designator`), and the
+store keeps it per host in `designator.json` in the directory the source's cache lives in —
+`cache.dir`, or the directory named for its remote — whether or not the cache is on. A read
+resolves an opaque far end by asking the configured sources whose plugin is the designator's
+prefix (or whose `public_alias` it is), in name order, until one is it, and reads the far end
+there by its id; it is reported as that source's qualified id. A designator no configured
+source is leaves the edge out of the answer and names it in `unanswered`, with `not configured
+on this host` — never dropped silently.
+
+### Which sources a dependency read asks
+
+A forward read of task T asks T's own source — its native relations and T's recorded edges —
+and, for each recorded opaque edge, only the source that edge's designator resolves to. It also
+asks the sources declared private what they record of T under `onetaskgraph.depended_on_by`
+(the reverse lookup) only when all three hold: T's source is not declared private, T's record
+carries `onetaskgraph.copied_destination_version` — a copy landed it — and T's record lacks
+`onetaskgraph.edges_on_record`. A copy onto a destination not declared private writes
+`onetaskgraph.edges_on_record: 1` on every task it lands whose edges are all on its own record:
+it writes a private prerequisite whose source has a designator in the opaque form instead of
+withholding it, and takes the legacy `onetaskgraph.depended_on_by` entry naming that task off the
+prerequisite. A prerequisite whose source has a designator but which the task records by a
+prefixed human key, a URL, a slug, or an id its source holds no item under is refused before the
+copy writes anything, with kind `private-reference-content` naming the form and never its value,
+exactly as a direct write refuses it. A task whose prerequisite's source has no designator keeps
+the withhold-and-record path and is not marked. Nothing but a copy writes the key, and `project graph` holds each task
+of the project to the same rule.
 
 An edge is always oriented `from` **depends on** `to`, whichever way the backend spells it.
 GitHub's `blockedBy` and `blocking` are one relationship read from either end, so both
@@ -457,20 +500,31 @@ The reserved keys keep the owners they had:
 | `onetaskgraph.copies`, `onetaskgraph.members`, `onetaskgraph.member_of`, `onetaskgraph.assets` | the destination, which keeps what it holds whatever the source carries |
 | `onetaskgraph.repositories`, `onetaskgraph.depends_on`, `onetaskgraph.delivers`, `onetaskgraph.delivered_by` | neither: the typed fields carry them, so they are dropped from both sides' metadata (above) |
 | `onetaskgraph.template`, `onetaskgraph.item_kind` | the source: where the source holds none, the destination's is dropped, so provenance that no longer describes the content does not survive it |
-| `onetaskgraph.copied_version`, `onetaskgraph.copied_with_comments`, `onetaskgraph.copied_destination_version` | the copy, which writes its own record of itself on every task it writes and keeps neither end's (below) |
+| `onetaskgraph.copied_version`, `onetaskgraph.copied_with_comments`, `onetaskgraph.copied_destination_version` | the copy, which writes its own record of itself on every task, project and document it writes and keeps neither end's (below) |
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ### The copy's record of itself
 
-Every task a copy writes carries three keys recording that copy, on the **destination** task,
-so the next copy can tell whether anything changed at either end without reading the task:
+Every task, project and document a copy writes carries three keys recording that copy, on the
+**destination** item, so the next copy can tell whether anything changed at either end without
+reading the item again:
 
-- `onetaskgraph.copied_version` — the source task's change token (`Task.version`) as the copy
-  read it; absent when the source gave none.
+- `onetaskgraph.copied_version` — what the source item was: its change token (`Task.version`,
+  `Project.version`, `Document.version`) where its source gives one, as the source holds it once
+  the copy has recorded its own link there. Where the source gives none — a folder of Markdown
+  gives none for a project or a document — it is `sha256:` and 64 lowercase hex digits over the
+  item the copy composed from the source: its content after reference and image rewriting, and
+  its title, status, priority, labels, repositories, classification and metadata as the source
+  holds them, without the three keys and the copy's own links (`onetaskgraph.copies`,
+  `onetaskgraph.copy_locations`), and before a rendering's `body_digest` is moved onto what the
+  destination stores. A later copy compares the digest of what it would send now with it.
 - `onetaskgraph.copied_with_comments` — `true` when the copy carried the task's comments
   (`--comments`), and absent after one that did not.
-- `onetaskgraph.copied_destination_version` — `sha256:<hex>`, a digest of the destination task
-  as the copy left it: every member a copy writes and compares, its forward edges, and — after
+- `onetaskgraph.copied_destination_version` — `sha256:<hex>`, a digest of the destination item
+  as a read returns it once the copy left it — over the content the destination reported
+  storing, which a destination that rewrites the Markdown it is sent — Linear — stores rather
+  than what was sent, as that write's own answer reports it. For a
+  task: every member a copy writes and compares, its forward edges, and — after
   a `--comments` copy — its comments, each copy by its origin's identity and body and each
   comment native to the destination by its id and body. The three keys themselves, the task's
   `delivered_by` and `onetaskgraph.depended_on_by` (which the store keeps in step after the
@@ -490,7 +544,14 @@ so the next copy can tell whether anything changed at either end without reading
   each comment native to the destination as `{"id": …, "body": …}`, sorted by its canonical
   JSON. `copy_skip.rs`'s
   `the_recorded_destination_digest_is_the_documented_digest_of_the_destination_as_read` holds
-  the engine to this, by recomputing it from what the binary reads back.
+  the engine to this, by recomputing it from what the binary reads back. A project's and a
+  document's are taken the same way over the members a copy writes of each, a project's forward
+  edges among them.
+
+Each fingerprint an item keeps has one job: a rendering's `body_digest` lets any reader verify
+the item is its template's rendering unedited; `copied_version` says whether the source changed;
+`copied_destination_version` says whether the destination changed, its title, status and edges
+included.
 
 A `--comments` copy and a copy by query report a task `unchanged` with `skipped: true` — and
 read nothing more of it — when the source's token is still `copied_version`, the destination
@@ -498,9 +559,16 @@ digests to `copied_destination_version` over the reads the copy makes to find it
 `--comments` copy finds `copied_with_comments`, and the edges and `delivers` the copy would
 write are the ones the destination holds. So an edit at either end since, a copied comment
 edited or deleted at the destination included, is read and copied again rather than skipped.
-A copy by id without `--comments` reads and compares every task as it always did; it still
-records itself on every task it writes, and brings a stale record up to date only to take
-away a `copied_with_comments` an earlier copy left. The keys are refused to a caller as every
+A copy by id without `--comments` reads every item as it always did, and writes nothing to a
+task, a project or a document whose record says neither end changed — `copied_version` still
+matching the source, the destination still digesting to `copied_destination_version`, and the
+edges, `delivers`, filing and status it would write the ones the destination holds — reporting
+it `unchanged`; any other it compares as it always did. That is what recognises an unchanged item
+on a destination that rewrites the Markdown it is sent, where what the copy composes and what
+the destination stores never compare equal. It records itself on every item it writes, and
+brings a stale task record up to date only to take away a `copied_with_comments` an earlier copy
+left. Items an earlier release wrote carry no record on a project or a document, and are written
+once more on their next copy, which records it. The keys are refused to a caller as every
 key of the namespace is, and a copy never carries one from its source.
 
 ### `onetaskgraph.copies`: where a copied item landed
@@ -521,7 +589,7 @@ most one entry per destination:
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 A copy that is not a dry run records or refreshes the entry for its destination on every item
-whose counterpart it found by this link, by searching the destination, or by `--match-by`,
+whose counterpart it found by `--target-task`, by this link, by searching the destination, or by `--match-by`,
 and on every item it created — once the whole copy has landed, through the item's own
 source's narrow metadata write (the one `metadata set` uses), and undone with the rest of the
 copy if the copy cannot finish. Every other destination's entry is left as it is, so long as
@@ -532,6 +600,8 @@ correspondence is already written down, on the destination item. The next copy o
 reads the entry first: when the item it names still records this item as its origin, it is
 the counterpart, found by one read by id and no search — see the copy section of the README
 for the order the rules are tried in and the `stale-link` refusal.
+
+To select a survivor and replace a stale link, use `task copy --target-task`.
 
 It lives in the `onetaskgraph.` namespace like the origin: `metadata set` refuses to write it,
 and a copy never carries it onto a destination — a destination item keeps the entry it holds,
@@ -558,6 +628,46 @@ before, and the copy reports the link `unrecorded` rather than failing.
 | `github-projects` | the trailing metadata slot of the issue body, beside the caller's keys — the value is small |
 | `linear` | the trailing metadata slot of the issue's `description`, or the project's or the document's `content`, beside the caller's keys |
 | a stdio plugin | wherever it keeps metadata, when its handshake declares `metadata_updates` (`docs/plugin-protocol.md` §4.18); otherwise nowhere, and unrecorded |
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+### `onetaskgraph.copy_locations`: where each counterpart a link names is
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by a drift gate:
+     `a_served_plugin_takes_the_copy_location_key_only_with_a_value_that_is_locations` in
+     `crates/onetaskgraph-core/tests/subprocess.rs` reads the example below out of this page and
+     fails unless the one validator of this value, at the stdio boundary, accepts it — beside
+     the shapes that validator refuses. -->
+Beside `onetaskgraph.copies`, on the same item, a copy records where each counterpart that link
+names is, as its destination reports it. The value is a JSON object mapping a destination
+**source name** to the qualified `id` the link names there and that record's `location`:
+
+```json
+{"followups": {"id": "followups:I_kwDOAbc123", "location": {"url": "https://github.com/acme/plans/issues/7"}}}
+```
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by behaviour:
+     `crates/onetaskgraph-github-projects-e2e/tests/e2e/plan_locations.rs` drives a document copy
+     answered from these entries, a link with none beside it, and an entry its link does not
+     name; `a_copy_records_where_its_counterpart_is_beside_the_link_once_it_knows` in
+     `crates/onetaskgraph-e2e/tests/e2e/copy_link.rs` drives when a copy records one, over both
+     boundaries. -->
+An entry is read only while its `id` is exactly what `onetaskgraph.copies` names for the same
+destination: one whose link moved since, or that no link stands beside, says nothing. It exists
+so a document copy can point a reference at a related record's counterpart without reading that
+counterpart — see "What a copied document's references are pointed at" — and every reference
+whose record has no such entry is resolved by reading, exactly as before the key existed.
+`onetaskgraph.copies` itself is unchanged by it, so a release that knows only the link reads
+every item exactly as it did.
+
+A copy records the entry when it knows the location without asking: the counterpart's read, or
+what the destination's write answered — a `github-projects` create answers with the issue's
+address, and a `local-md` write's location is its file. Otherwise, as over the stdio plugin
+protocol, which carries no location with a write, the next copy that reads the counterpart
+records it. It is written like the link, after it, through the same narrow metadata write, and
+undone with it; a source that will not hold it leaves the link as recorded, and the copy reports
+only the link. Like every key in the namespace, `metadata set` refuses it and a copy never carries
+it onto a destination.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ### `onetaskgraph.members` and `onetaskgraph.member_of`: a plan that spans sources

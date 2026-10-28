@@ -1223,7 +1223,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "chrono",
  "clap",
@@ -1240,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-core"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1251,6 +1251,7 @@ dependencies = [
  "onetaskgraph-linear",
  "onetaskgraph-local-md",
  "onetaskgraph-plugin-api",
+ "pulldown-cmark",
  "schemars",
  "secrecy",
  "serde",
@@ -1265,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-e2e"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "assert_cmd",
  "async-trait",
@@ -1285,7 +1286,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-e2e-support"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "assert_cmd",
  "chrono",
@@ -1301,7 +1302,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-github-live"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "onetaskgraph-live",
  "serde",
@@ -1312,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-github-projects"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1332,9 +1333,10 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-github-projects-e2e"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "chrono",
+ "libc",
  "onebudgetspec-core",
  "onetaskgraph-core",
  "onetaskgraph-e2e-support",
@@ -1347,12 +1349,13 @@ dependencies = [
  "reqwest",
  "secrecy",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 
 [[package]]
 name = "onetaskgraph-in-memory"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1366,7 +1369,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-linear"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1383,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-linear-e2e"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "onebudgetspec-core",
  "onetaskgraph-core",
@@ -1395,16 +1398,17 @@ dependencies = [
  "reqwest",
  "serde-saphyr",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 
 [[package]]
 name = "onetaskgraph-live"
-version = "0.8.0"
+version = "0.12.7"
 
 [[package]]
 name = "onetaskgraph-live-janitor"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "graphql-parser",
  "onebudgetspec-core",
@@ -1420,10 +1424,11 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-local-md"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "async-trait",
  "chrono",
+ "libc",
  "onetaskgraph-plugin-api",
  "schemars",
  "secrecy",
@@ -1438,7 +1443,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-plugin-api"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "async-trait",
  "base64",
@@ -1455,7 +1460,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-status-options"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "onetaskgraph-github-projects",
  "onetaskgraph-plugin-api",
@@ -1466,7 +1471,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-status-options-e2e"
-version = "0.8.0"
+version = "0.12.7"
 dependencies = [
  "onetaskgraph-e2e-support",
  "serde_json",
@@ -2164,9 +2169,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",

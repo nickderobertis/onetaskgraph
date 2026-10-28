@@ -1507,3 +1507,107 @@ fn unknown_is_every_item_of_a_kind_its_mapping_names_nothing_for() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn a_project_status_set_sends_one_project_update_carrying_only_the_mapped_status() {
+    let sandbox = Sandbox::new();
+    let (config, workspace) = linear_workspace_with(
+        &sandbox,
+        held(
+            vec![issue("L-1", "Todo", TEAM_STATES, json!({}))],
+            vec![project("LP-1", "In Progress", PROJECT_STATUSES, json!({}))],
+        ),
+        TEAM_STATES,
+        PROJECT_STATUSES,
+    );
+    sandbox.project_document(&document(&json!({
+        "linear": linear(&config, json!({"status_mapping": example_mapping()})),
+        "unmapped": linear(&config, json!({})),
+    })));
+    let before = workspace.served().len();
+
+    let answer = answered(
+        &sandbox,
+        &["--json", "project", "status", "set", "linear:LP-1", "done"],
+    );
+    assert_eq!(
+        answer,
+        json!({"id": "linear:LP-1", "status": {"category": "done", "name": "Completed"}})
+    );
+    let updates: Vec<Value> = workspace
+        .served()
+        .into_iter()
+        .skip(before)
+        .filter(|(query, _)| query.trim_start().starts_with("mutation"))
+        .map(|(query, variables)| {
+            assert_eq!(
+                query,
+                onetaskgraph_linear::graphql::PROJECT_STATUS_UPDATE,
+                "the one mutation is the project status update"
+            );
+            variables
+        })
+        .collect();
+    assert_eq!(
+        updates,
+        vec![json!({"id": "LP-1", "input": {"statusId": "Completed"}})],
+        "one projectUpdate, its input carrying only the mapped project status"
+    );
+    assert_eq!(workspace.status_of("LP-1").as_deref(), Some("Completed"));
+    assert_eq!(
+        status(&sandbox, "project", "linear:LP-1"),
+        json!(["done", "Completed"]),
+        "a later read agrees"
+    );
+    assert_eq!(
+        workspace.state_of("L-1").as_deref(),
+        Some("Todo"),
+        "no issue is touched"
+    );
+
+    let human = exits(
+        &sandbox,
+        &["project", "status", "set", "linear:LP-1", "todo"],
+        0,
+    );
+    assert_eq!(
+        stdout(&human).trim_end(),
+        "project linear:LP-1 now reads todo (Planned)"
+    );
+
+    let writes = mutations_since(&workspace, 0).len();
+    let output = exits(
+        &sandbox,
+        &[
+            "--json",
+            "project",
+            "status",
+            "set",
+            "linear:LP-404",
+            "done",
+        ],
+        1,
+    );
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(failure["failure"]["kind"], "no-such-item", "{failure:#}");
+    assert!(
+        failure["failure"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("no project with the id linear:LP-404")),
+        "{failure:#}"
+    );
+    let refused = failed(
+        &sandbox,
+        &["project", "status", "set", "unmapped:LP-1", "done"],
+    );
+    assert!(
+        refused.contains("status_mapping") && refused.contains("next:"),
+        "a source without the key refuses every status write, naming it: {refused}"
+    );
+    assert_eq!(
+        mutations_since(&workspace, 0).len(),
+        writes + 1,
+        "the missing project's update is the one mutation the refusals sent"
+    );
+    assert_eq!(workspace.status_of("LP-1").as_deref(), Some("Planned"));
+}

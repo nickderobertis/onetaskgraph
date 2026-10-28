@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -16,7 +17,7 @@ const REQUEST_LIMIT: usize = 2_500;
 const REQUEST_WINDOW: Duration = Duration::from_secs(3_600);
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
-use crate::fixtures::{LinearWorkspace, document, linear_workspace};
+use crate::fixtures::{LinearMarkdown, LinearWorkspace, document, linear_workspace};
 
 #[derive(Default)]
 struct Upload {
@@ -39,11 +40,11 @@ struct State {
     refused_names: std::collections::BTreeSet<String>,
 }
 
-struct Workspace {
-    endpoint: String,
+pub(crate) struct Workspace {
+    pub(crate) endpoint: String,
     state: Arc<Mutex<State>>,
-    held: LinearWorkspace,
-    clock: SimulatedClock,
+    pub(crate) held: LinearWorkspace,
+    pub(crate) clock: SimulatedClock,
 }
 
 impl Workspace {
@@ -95,7 +96,9 @@ impl Workspace {
         )
     }
 
-    fn counts(&self) -> (usize, usize, usize) {
+    /// How many uploads this storage was asked for, how many of them it was sent bytes for, and
+    /// how many times anything read an upload back.
+    pub(crate) fn counts(&self) -> (usize, usize, usize) {
         let state = self.state.lock().unwrap();
         (
             state.uploads.len(),
@@ -415,14 +418,14 @@ fn serve(
     answer(&mut stream, 200, &response);
 }
 
-struct Journey {
+pub(crate) struct Journey {
     config: Value,
-    sandbox: Sandbox,
-    workspace: Workspace,
+    pub(crate) sandbox: Sandbox,
+    pub(crate) workspace: Workspace,
 }
 
 impl Journey {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::with_clients(1)
     }
 
@@ -556,7 +559,8 @@ fn issue_and_document_assets_upload_verify_rewrite_and_reuse() {
                 .find(|upload| upload.name == format!("{kind}-{index}.png"))
                 .unwrap();
             assert_eq!(&upload.bytes, image);
-            assert_eq!(upload.verified, 1);
+            // The PUT's own answer says the bytes are held: nothing reads the asset back.
+            assert_eq!(upload.verified, 0);
             assert!(raw.contains(&asset_sha256(image)));
             assert!(raw.contains(&format!("![alt {index}]({}", journey.workspace.endpoint)));
         }
@@ -582,7 +586,7 @@ fn issue_and_document_assets_upload_verify_rewrite_and_reuse() {
         journey.copy(kind, &id, true);
         assert_eq!(
             journey.workspace.counts(),
-            (before.0 + 1, before.1 + 1, before.2 + 1)
+            (before.0 + 1, before.1 + 1, before.2)
         );
         let raw = journey
             .workspace
@@ -609,14 +613,14 @@ fn issue_and_document_assets_upload_verify_rewrite_and_reuse() {
 #[test]
 fn asset_stage_failures_and_bounded_virtual_rate_limit_recovery() {
     for kind in ["task", "document"] {
-        for stage in ["mutation", "PUT", "verifying read"] {
+        for stage in ["mutation", "PUT"] {
             for (times, status, succeeds) in [(1, 403, false), (1, 429, true), (31, 429, false)] {
                 let journey = Journey::new();
                 let (id, images) = journey.create(kind, 1);
                 journey.workspace.state.lock().unwrap().fail = Some((stage, times, status));
                 let result = journey.copy(kind, &id, succeeds);
                 if succeeds {
-                    assert_eq!(journey.workspace.counts(), (1, 1, 1));
+                    assert_eq!(journey.workspace.counts(), (1, 1, 0));
                     assert!(journey.workspace.clock.now() >= Duration::from_secs(2));
                     let destination = result["items"][0]["destination"]
                         .as_str()
@@ -659,12 +663,6 @@ fn asset_stage_failures_and_bounded_virtual_rate_limit_recovery() {
                     if status == 429 {
                         assert!(said.contains("limiter"));
                     }
-                    if stage == "verifying read" {
-                        assert!(
-                            said.contains(&format!("{}/0/asset/0", journey.workspace.endpoint)),
-                            "{said}"
-                        );
-                    }
                     assert!(!journey.workspace.held.served().iter().any(|(query, _)| {
                         query.contains(if kind == "task" {
                             "issueCreate("
@@ -678,8 +676,20 @@ fn asset_stage_failures_and_bounded_virtual_rate_limit_recovery() {
     }
 }
 
+const COUNTED: &str = "counted at the Linear loopback in simulated time";
+
 fn record_workload(budget: &str, value: f64, sizes: &[usize], copies: usize) {
-    crate::telemetry::record_assets(budget, value, sizes, copies);
+    crate::telemetry::record_assets(budget, value, COUNTED, sizes, copies);
+}
+
+/// The concurrent copies' figure, with what each refused copy said. A passing journey's output
+/// is captured and never shown, while `onebudgetspec check` prints the detail beside the
+/// figure, so this is where a refusal on a runner nobody can reproduce on names its cause.
+fn concurrent_refusals_detail(refusals: &[String]) -> String {
+    if refusals.is_empty() {
+        return COUNTED.to_owned();
+    }
+    format!("{COUNTED}; refused: {}", refusals.join("; "))
 }
 
 fn project_workload(journey: &Journey) -> (Vec<usize>, Vec<String>) {
@@ -710,7 +720,7 @@ fn measure_project_asset_copy_simulated_seconds() {
     for id in documents {
         journey.copy("document", &id, true);
     }
-    assert_eq!(journey.workspace.counts(), (24, 24, 24));
+    assert_eq!(journey.workspace.counts(), (24, 24, 0));
     record_workload(
         "linear-asset-copy-seconds",
         journey
@@ -724,29 +734,35 @@ fn measure_project_asset_copy_simulated_seconds() {
     );
 }
 
-#[test]
-fn measure_three_concurrent_project_asset_copies() {
-    let journey = Journey::with_clients(3);
-    let (sizes, documents) = project_workload(&journey);
+/// What three copies of the project workload made at once said: how many clients had a copy
+/// refused, the figure's detail naming each refusal, the workload's image sizes, and the real
+/// time it took.
+struct ConcurrentCopies {
+    refused: f64,
+    detail: String,
+    sizes: Vec<usize>,
+    elapsed: Duration,
+}
+
+/// Copy the project workload — the project, then each document — to each of `destinations` at
+/// once, the binary at index `n` running as clock client `n`.
+fn copy_plan_concurrently(journey: &Journey, destinations: [&str; 3]) -> ConcurrentCopies {
+    let (sizes, documents) = project_workload(journey);
     let real_start = std::time::Instant::now();
     let mut refused_clients = [false; 3];
+    let mut refusals = Vec::new();
     for (kind, id) in std::iter::once(("project", "notes:launch"))
         .chain(documents.iter().map(|id| ("document", id.as_str())))
     {
         let mut children = Vec::new();
-        for client in 0..3 {
-            let destination = if client == 0 {
-                "dest".to_owned()
-            } else {
-                format!("dest{client}")
-            };
+        for (client, destination) in destinations.iter().enumerate() {
             children.push(
                 journey
                     .sandbox
                     .subprocess(onetaskgraph_e2e_support::binary())
                     .current_dir(journey.sandbox.project())
                     .envs(journey.workspace.clock.client_env(client))
-                    .args(["--json", kind, "copy", id, "--to", &destination])
+                    .args(["--json", kind, "copy", id, "--to", destination])
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
                     .spawn()
@@ -757,23 +773,106 @@ fn measure_three_concurrent_project_asset_copies() {
             let output = child.wait_with_output().unwrap();
             if !output.status.success() {
                 refused_clients[client] = true;
-                eprintln!("{}", stderr(&output));
+                let said = stderr(&output);
+                eprintln!("{said}");
+                refusals.push(format!(
+                    "client {client}'s {kind} copy of {id} failed ({}): {}",
+                    output.status,
+                    said.trim()
+                ));
             }
         }
     }
-    let elapsed = real_start.elapsed();
+    ConcurrentCopies {
+        refused: refused_clients.iter().filter(|refused| **refused).count() as f64,
+        detail: concurrent_refusals_detail(&refusals),
+        sizes: sizes.iter().copied().cycle().take(72).collect(),
+        elapsed: real_start.elapsed(),
+    }
+}
+
+#[test]
+fn measure_three_concurrent_project_asset_copies() {
+    let journey = Journey::with_clients(3);
+    let copies = copy_plan_concurrently(&journey, ["dest", "dest1", "dest2"]);
+    let elapsed = copies.elapsed;
     eprintln!(
         "three concurrent copies real duration: {:.3}s",
         elapsed.as_secs_f64()
     );
     assert!(elapsed < Duration::from_secs(60));
-    assert_eq!(journey.workspace.counts(), (72, 72, 72));
-    let sizes: Vec<_> = sizes.iter().copied().cycle().take(72).collect();
-    record_workload(
+    // Recorded before the copies' items are counted, so a refusal that also loses one still
+    // leaves what it said where the budget check prints it.
+    crate::telemetry::record_assets(
         "linear-concurrent-copies-refused",
-        refused_clients.iter().filter(|refused| **refused).count() as f64,
-        &sizes,
+        copies.refused,
+        &copies.detail,
+        &copies.sizes,
         3,
+    );
+    assert_eq!(journey.workspace.counts(), (72, 72, 0));
+}
+
+/// A refused copy's own words reach what `onebudgetspec check` reports for the figure: the
+/// workload copied to a destination nothing configures, recorded as the measuring journey
+/// records it and read back through the budget's own entry.
+#[test]
+fn a_refused_concurrent_copy_is_named_in_what_the_budget_check_reports() {
+    let journey = Journey::with_clients(3);
+    let copies = copy_plan_concurrently(&journey, ["dest", "dest1", "unconfigured"]);
+    let budget = "linear-concurrent-copies-refused";
+    let telemetry = journey.sandbox.subdirectory("telemetry");
+    crate::telemetry::record_assets_in(
+        &telemetry,
+        budget,
+        copies.refused,
+        &copies.detail,
+        &copies.sizes,
+        3,
+    );
+    let budgets: Value = serde_saphyr::from_str(include_str!("../../budgets.yaml")).unwrap();
+    let mut entry = budgets["budgets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == budget)
+        .unwrap()
+        .clone();
+    entry["command"] = json!(crate::budget_runner::runner());
+    let file = journey.sandbox.subdirectory("budgets").join("budgets.yaml");
+    std::fs::write(
+        &file,
+        json!({"schema_version": 1, "budgets": [entry]}).to_string(),
+    )
+    .unwrap();
+    let output = std::process::Command::new("bun")
+        .args(["run", "onebudgetspec", "check", "--json"])
+        .arg(&file)
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .env(crate::telemetry::DIRECTORY, &telemetry)
+        .output()
+        .expect(
+            "bun runs the workspace's pinned onebudgetspec; run `just bootstrap` to install it",
+        );
+    let report: Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|_| panic!("a JSON report: {}", stderr(&output)));
+    let result = &report["results"][0];
+    assert_eq!(result["verdict"], "over", "{result:#}");
+    assert_eq!(result["actual"], 1.0, "{result:#}");
+    let detail = result["detail"].as_str().expect("a detail");
+    assert!(
+        detail.starts_with(&format!(
+            "{COUNTED}; refused: client 2's project copy of notes:launch failed ("
+        )),
+        "{detail}"
+    );
+    assert!(
+        detail.contains(r#"no source named "unconfigured" is configured"#),
+        "{detail}"
+    );
+    assert!(
+        !detail.contains("client 0") && !detail.contains("client 1"),
+        "{detail}"
     );
 }
 
@@ -830,7 +929,7 @@ fn project_home_routed_to_a_member_source_carries_issue_and_document_assets() {
         .unwrap();
     assert!(home.starts_with("member:"), "{project}");
     let copied = journey.copy("document", &doc, true);
-    assert_eq!(journey.workspace.counts(), (2, 2, 2));
+    assert_eq!(journey.workspace.counts(), (2, 2, 0));
     for (kind, source, report) in [
         ("tasks", issue.as_str(), &project),
         ("documents", doc.as_str(), &copied),
@@ -863,7 +962,7 @@ fn project_home_routed_to_a_member_source_carries_issue_and_document_assets() {
             .unwrap();
         assert!((450_000..=500_000).contains(&upload.bytes.len()));
         assert_eq!(upload.bytes.len(), upload.size);
-        assert_eq!(upload.verified, 1);
+        assert_eq!(upload.verified, 0);
         assert!(raw.contains(&asset_sha256(&upload.bytes)));
         drop(state);
         assert_eq!(
@@ -885,8 +984,8 @@ struct LiveUploads {
     observations: Vec<String>,
 }
 
-/// A forwarding observer changes only the signed PUT URL, keeping Linear's asset URL intact.
-/// Thus the plugin's own verifying GET reaches Linear directly with its source credential.
+/// A forwarding observer changes only the signed PUT URL, keeping Linear's asset URL intact, so
+/// the journey's own authenticated GET of each asset reaches Linear directly.
 fn live_observer(key: String) -> (String, Arc<Mutex<LiveUploads>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -1215,7 +1314,7 @@ fn regenerating_a_linear_rendering_stores_changed_assets_with_its_metadata_slot(
         assert!(output.status.success(), "{}", stderr(&output));
         assert_eq!(
             journey.workspace.counts(),
-            (before.0 + 1, before.1 + 1, before.2 + 1)
+            (before.0 + 1, before.1 + 1, before.2)
         );
         let raw = journey
             .workspace
@@ -1347,7 +1446,6 @@ fn malformed_upload_answers_and_transport_failures_refuse_before_content_is_writ
         ("malformed-upload", "mutation"),
         ("disconnect-mutation", "mutation"),
         ("disconnect-PUT", "PUT"),
-        ("disconnect-read", "verifying read"),
     ] {
         let journey = Journey::new();
         let (id, _) = journey.create("task", 1);
@@ -1358,10 +1456,7 @@ fn malformed_upload_answers_and_transport_failures_refuse_before_content_is_writ
             said.contains(stage) && said.contains("task-0.png"),
             "{fault}: {said}"
         );
-        if fault == "disconnect-read" {
-            assert!(said.contains(&journey.workspace.endpoint));
-        }
-        if matches!(fault, "disconnect-PUT" | "disconnect-read") {
+        if fault == "disconnect-PUT" {
             assert!(
                 names_its_cause(said),
                 "{fault}: a connection that got no answer names what it met: {said}"
@@ -1413,7 +1508,7 @@ fn reset_hints_defaults_and_non_json_http_429_are_waited_on_the_clock() {
             (minimum..=maximum).contains(&waited),
             "{hint}: waited {waited}s, network {network:?}"
         );
-        assert_eq!(journey.workspace.counts(), (1, 1, 1));
+        assert_eq!(journey.workspace.counts(), (1, 1, 0));
     }
     let journey = Journey::new();
     let (id, _) = journey.create("task", 1);
@@ -1423,7 +1518,7 @@ fn reset_hints_defaults_and_non_json_http_429_are_waited_on_the_clock() {
         state.fault = Some("mutation-http429");
     }
     journey.copy("task", &id, true);
-    assert_eq!(journey.workspace.counts(), (1, 1, 1));
+    assert_eq!(journey.workspace.counts(), (1, 1, 0));
 }
 
 #[test]
@@ -1562,7 +1657,7 @@ fn the_published_quota_refills_in_virtual_time_before_an_asset_retry() {
     let (id, _) = journey.create("task", 1);
     journey.workspace.state.lock().unwrap().fault = Some("quota-at-upload");
     let result = journey.copy("task", &id, true);
-    assert_eq!(journey.workspace.counts(), (1, 1, 1));
+    assert_eq!(journey.workspace.counts(), (1, 1, 0));
     let state = journey.workspace.state.lock().unwrap();
     assert!(
         journey
@@ -1593,7 +1688,7 @@ fn records_without_images_keep_the_same_non_asset_request_flow() {
         plain.copy(kind, &plain_id, true);
         pictured.copy(kind, &pictured_id, true);
         assert_eq!(plain.workspace.counts(), (0, 0, 0));
-        assert_eq!(pictured.workspace.counts(), (1, 1, 1));
+        assert_eq!(pictured.workspace.counts(), (1, 1, 0));
         let plain_operations: Vec<_> = plain
             .workspace
             .held
@@ -1654,11 +1749,7 @@ fn upload_destinations_and_headers_are_validated_before_a_put_or_authenticated_g
 
 #[test]
 fn redirects_at_each_asset_stage_are_refused_before_content_is_written() {
-    for (fault, stage) in [
-        ("redirect-mutation", "mutation"),
-        ("redirect-PUT", "PUT"),
-        ("redirect-read", "verifying read"),
-    ] {
+    for (fault, stage) in [("redirect-mutation", "mutation"), ("redirect-PUT", "PUT")] {
         let journey = Journey::new();
         let (id, _) = journey.create("task", 1);
         journey.workspace.state.lock().unwrap().fault = Some(fault);
@@ -1789,9 +1880,9 @@ fn a_task_created_with_an_asset_retires_the_far_ends_reverse_edges_in_a_caching_
         .unwrap()
         .flatten()
         .map(|entry| entry.path())
-        .find(|path| path.join("reverse-edges-v2").is_dir())
+        .find(|path| path.join("reverse-edges-v4").is_dir())
         .unwrap_or_else(|| cache.clone())
-        .join("reverse-edges-v2");
+        .join("reverse-edges-v4");
     let kept = directory.join(format!("{}.json", asset_sha256(native.as_bytes())));
     assert!(kept.exists(), "{}", kept.display());
 
@@ -1831,4 +1922,145 @@ fn names_its_cause(message: &str) -> bool {
         .split_once("error sending request for url (")
         .and_then(|(_, rest)| rest.split_once("): "))
         .is_some_and(|(_, cause)| !cause.trim().is_empty())
+}
+
+/// `sha256:` and the hex SHA-256 of `content`, hashed here rather than taken from the engine.
+fn content_digest(content: &str) -> String {
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(content.as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("sha256:{hex}")
+}
+
+#[test]
+fn an_asset_carrying_rendering_records_what_linear_stores_and_an_unstable_backend_is_refused() {
+    let journey = Journey::new();
+    journey
+        .workspace
+        .held
+        .rewrite_markdown_on_write(LinearMarkdown::Measured);
+    let inputs = journey.sandbox.subdirectory("stored-inputs");
+    let template = inputs.join("shot.md");
+    let image = inputs.join("shot.png");
+    // A bullet Linear stores as `* `, the image its upload serves at a URL, and a numbered line
+    // it keeps as written.
+    std::fs::write(&template, "- ![shot](./shot.png)\n1) Then review it.\n").unwrap();
+    std::fs::write(&image, images::png(700, 60_000)).unwrap();
+    let run = |arguments: &[&str]| {
+        journey
+            .sandbox
+            .command()
+            .envs(journey.workspace.clock.client_env(0))
+            .args(arguments)
+            .output()
+            .unwrap()
+    };
+    let shown = |kind: &str, id: &str| -> Value {
+        let output = run(&[kind, "show", id, "--json"]);
+        assert!(output.status.success(), "{}", stderr(&output));
+        serde_json::from_str::<Value>(&stdout(&output)).unwrap()["items"][0]["item"].clone()
+    };
+    let verifiable = |item: &Value| {
+        let content = item["content"].as_str().expect("content");
+        assert!(content.starts_with("* ![shot](http://"), "{content}");
+        assert_eq!(
+            item["metadata"]["onetaskgraph.template"]["body_digest"],
+            content_digest(content),
+            "{item}"
+        );
+    };
+    let failure_kind = |output: &std::process::Output| -> Value {
+        let printed: Value = serde_json::from_str(&stdout(output)).unwrap_or(Value::Null);
+        printed["failure"]["kind"].clone()
+    };
+    let template = template.to_str().unwrap();
+    let image_path = image.to_str().unwrap();
+    for (index, kind) in ["task", "document"].into_iter().enumerate() {
+        let create = |source: &str, title: &str| {
+            run(&[
+                kind,
+                "create",
+                source,
+                "--project",
+                "launch",
+                "--title",
+                title,
+                "--template",
+                template,
+                "--asset",
+                image_path,
+                "--no-interactive",
+                "--json",
+            ])
+        };
+        // A copy out of a folder of Markdown, then the same rendering created in Linear itself
+        // and rendered again there: each records the digest of what Linear stores.
+        let created = create("notes", "Shot");
+        assert!(created.status.success(), "{}", stderr(&created));
+        let source = serde_json::from_str::<Value>(&stdout(&created)).unwrap()["items"][0]["id"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        let copied = journey.copy(kind, &source, true);
+        let landed = copied["items"][0]["destination"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        verifiable(&shown(kind, &landed));
+        let direct = create("dest", "Shot in Linear");
+        assert!(direct.status.success(), "{}", stderr(&direct));
+        let direct = serde_json::from_str::<Value>(&stdout(&direct)).unwrap()["items"][0]["id"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        verifiable(&shown(kind, &direct));
+        std::fs::write(&image, images::png(710 + index as u64, 60_000)).unwrap();
+        let render = |id: &str| {
+            run(&[
+                kind,
+                "render",
+                id,
+                "--asset",
+                image_path,
+                "--no-interactive",
+                "--json",
+            ])
+        };
+        let rendered = render(&direct);
+        assert!(rendered.status.success(), "{}", stderr(&rendered));
+        verifiable(&shown(kind, &direct));
+
+        // With a backend that does not hold its own stored content stable, the asset-carrying
+        // copy, create and render are each refused as diverged once their follow-up write is
+        // stored otherwise again, the copy reporting its item failed.
+        journey
+            .workspace
+            .held
+            .rewrite_markdown_on_write(LinearMarkdown::Unstable);
+        // The record's own asset changes, so the copy writes rather than finding it unchanged.
+        let output = run(&["--json", kind, "show", &source]);
+        let held = serde_json::from_str::<Value>(&stdout(&output)).unwrap()["assets"][0]["path"]
+            .as_str()
+            .expect("the record's asset")
+            .to_owned();
+        std::fs::write(held, images::png(720 + index as u64, 60_000)).unwrap();
+        let recopied = run(&["--json", kind, "copy", &source, "--to", "dest"]);
+        assert_eq!(recopied.status.code(), Some(4), "{}", stderr(&recopied));
+        let report: Value = serde_json::from_str(&stdout(&recopied)).unwrap();
+        assert_eq!(
+            report["items"][0]["error"]["kind"], "stored-content-diverged",
+            "{report}"
+        );
+        let refused = create("dest", "Refused");
+        assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+        assert_eq!(failure_kind(&refused), "stored-content-diverged");
+        std::fs::write(&image, images::png(730 + index as u64, 60_000)).unwrap();
+        let refused = render(&direct);
+        assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+        assert_eq!(failure_kind(&refused), "stored-content-diverged");
+        journey
+            .workspace
+            .held
+            .rewrite_markdown_on_write(LinearMarkdown::Measured);
+    }
 }

@@ -9,14 +9,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
-    DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, IssueHolding,
-    IssueRef, ItemKind, ItemWrite, Label, MetadataKey, MetadataRecord, Metering, NativeId,
-    NewComment, Page, PageRequest, Priority, Project, ProjectQuery, ProjectVersionCoverage,
-    SharedClock, SourceError, SourceName, Status, StatusCategory, StatusContradiction, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility,
-    WriteJournal, WriteSupport, WriteTarget, assetless, commentless, documentless, unwritable,
-    unwritable_field, unwritable_metadata,
+    Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Classification, Comment,
+    CommentBody, CommentCopy, DependencyEdge, Direction, Document, DocumentQuery,
+    DocumentVersionCoverage, IssueHolding, IssueRef, ItemKind, ItemWrite, Label, Location,
+    MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority,
+    Project, ProjectQuery, ProjectVersionCoverage, Repository, SharedClock, SourceError,
+    SourceName, Status, StatusCategory, StatusContradiction, Task, TaskDetailRead, TaskQuery,
+    TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility, WriteJournal,
+    WriteSupport, WriteTarget, assetless, commentless, documentless, unwritable, unwritable_field,
+    unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -51,6 +52,70 @@ pub struct Health {
     /// What the source said, when it said anything useful.
     pub detail: Option<String>,
 }
+
+/// The task query whose [`TaskQuery::origin_matches`] is the one statement of what "copied
+/// from `origin`" means, so the by-origin defaults read a project's and a document's entry
+/// exactly as a task's is read.
+fn origin_query(origin: &str) -> TaskQuery {
+    TaskQuery {
+        origin: Some(origin.to_owned()),
+        ..TaskQuery::default()
+    }
+}
+
+/// Refuse a page of the listing a by-origin default walks that holds more rows than it was
+/// asked for, in the words the engine refuses one in: a source may return fewer and never
+/// more, and a default that narrowed such a page would hide the defect behind it.
+fn overran(returned: usize, asked_for: u32) -> Result<(), SourceError> {
+    if returned as u64 <= u64::from(asked_for) {
+        return Ok(());
+    }
+    Err(SourceError::Malformed {
+        message: format!(
+            "the source returned {returned} rows for a page of at most {asked_for}; a source \
+             may return fewer than it was asked for and never more"
+        ),
+    })
+}
+
+/// What a by-origin default answers when the listing it walks hands back a cursor it has
+/// already handed out, which would walk forever.
+fn repeated_cursor() -> SourceError {
+    SourceError::Malformed {
+        message: "the source returned a cursor it had already handed out while its listing \
+                  was walked for one origin, so the walk would never end"
+            .to_owned(),
+    }
+}
+
+/// The page `page` asks for of `matched`, every item a by-origin default kept: the cursor
+/// it hands out is the position of the next match, so a walk of its pages neither repeats
+/// nor drops one while the listing under it holds still.
+fn page_of_matches<T>(matched: Vec<T>, page: &PageRequest) -> Result<Page<T>, SourceError> {
+    let start = match &page.cursor {
+        None => 0,
+        Some(cursor) => cursor
+            .0
+            .strip_prefix(MATCHED_PAGE_CURSOR)
+            .and_then(|position| position.parse::<usize>().ok())
+            .filter(|position| *position <= matched.len())
+            .ok_or_else(|| SourceError::Refused {
+                message: format!(
+                    "cursor {:?} was not handed out by this by-origin listing; start the walk \
+                     again without one",
+                    cursor.0
+                ),
+            })?,
+    };
+    let end = start.saturating_add(page.limit as usize).min(matched.len());
+    let next = (end < matched.len()).then(|| crate::Cursor(format!("{MATCHED_PAGE_CURSOR}{end}")));
+    Ok(Page {
+        items: matched.into_iter().skip(start).take(end - start).collect(),
+        next,
+    })
+}
+
+const MATCHED_PAGE_CURSOR: &str = "origin:";
 
 /// One configured source, as the engine drives it.
 ///
@@ -275,6 +340,21 @@ pub trait TaskSource: Send + Sync {
     /// Returns a [`SourceError`] when the check itself could not be made.
     async fn health(&self) -> Result<Health, SourceError>;
 
+    /// The [`Designator`](crate::Designator) naming the tracker this source reads, built by
+    /// [`Designator::of_backend`](crate::Designator::of_backend) over the backend's own opaque
+    /// identifier of itself — or `None` for a backend with none, whose configuration may
+    /// declare a `public_alias` instead.
+    ///
+    /// At most one request. The engine keeps the answer per host, so a source is asked once.
+    /// The default is `None`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the backend could not be asked.
+    async fn designator(&self) -> Result<Option<crate::Designator>, SourceError> {
+        Ok(None)
+    }
+
     /// Fetch one task by its native id, or `None` when there is no such task.
     ///
     /// # Errors
@@ -347,6 +427,64 @@ pub trait TaskSource: Send + Sync {
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError>;
 
+    /// One page of the projects whose [`TaskQuery::ORIGIN_KEY`] entry is a string equal to
+    /// `origin`, exactly — the projects copied from that qualified id, and none other.
+    ///
+    /// `origin` is compared byte for byte, on the terms [`TaskQuery::origin`] states, and is
+    /// never constructed or interpreted here. Zero, one or several projects may match; which
+    /// of several a caller wants is the caller's question.
+    ///
+    /// Defaulted to [`query_projects`](Self::query_projects) unfiltered, walked to its end on
+    /// every call and narrowed here, so a source that implements nothing answers exactly what
+    /// its own listing holds; the default's cursor is a position among the matches. A source
+    /// that can ask its store for one origin overrides it, which is the whole reason it
+    /// exists: a caller looking for the copies of one plan pays for those copies rather than
+    /// for every project the store holds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the source could not answer, and
+    /// [`SourceError::Refused`] for a cursor the default did not hand out.
+    async fn query_projects_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        let wanted = origin_query(origin);
+        let mut matched = Vec::new();
+        let mut cursor: Option<crate::Cursor> = None;
+        // Every cursor the listing handed out, so one cycling through several is caught as
+        // one repeating the last is.
+        let mut visited: Vec<String> = Vec::new();
+        loop {
+            let listed = self
+                .query_projects(
+                    &ProjectQuery::default(),
+                    &PageRequest {
+                        cursor: cursor.clone(),
+                        limit: page.limit,
+                    },
+                )
+                .await?;
+            overran(listed.items.len(), page.limit)?;
+            matched.extend(
+                listed
+                    .items
+                    .into_iter()
+                    .filter(|project| wanted.origin_matches(&project.metadata)),
+            );
+            cursor = match listed.next {
+                None => break,
+                Some(next) if visited.contains(&next.0) => return Err(repeated_cursor()),
+                Some(next) => {
+                    visited.push(next.0.clone());
+                    Some(next)
+                }
+            };
+        }
+        page_of_matches(matched, page)
+    }
+
     /// One page of every label this source knows.
     ///
     /// # Errors
@@ -386,6 +524,47 @@ pub trait TaskSource: Send + Sync {
     /// copy naming such a source as its destination is refused before anything is read.
     fn writes(&self) -> WriteSupport {
         WriteSupport::Unsupported
+    }
+
+    /// The status this source's backend holds once an item of `kind` is written at `status`:
+    /// the name it records for the category, where it names a category itself rather than
+    /// keeping the name it was given.
+    ///
+    /// What a copy compares a destination item's status with, so an item whose category it
+    /// already holds reads as unchanged rather than as differing by a name no write could
+    /// change. Defaulted to `status` as given: a backend that keeps the name it is written
+    /// declares nothing.
+    ///
+    /// Asynchronous and fallible because a source hosted over the stdio plugin protocol asks
+    /// the plugin that declares it; an in-process source answers at once and never fails.
+    ///
+    /// # Errors
+    ///
+    /// A [`SourceError`] when the source could not say what its backend holds — never the
+    /// status as given in its place.
+    async fn stored_status(&self, kind: ItemKind, status: &Status) -> Result<Status, SourceError> {
+        let _ = kind;
+        Ok(status.clone())
+    }
+
+    /// The content the backend answered it now holds for the `record` `id`, as the response
+    /// to this instance's latest write of that item's content reported it — taken, so a second
+    /// call answers `None` until the next such write.
+    ///
+    /// The content is as a read reports content — the metadata slot, and whatever separates
+    /// it from the content, removed — and it is read off the write's own response, never by a
+    /// request of its own. It is what the engine takes as the record of what the item holds: a
+    /// backend may rewrite the Markdown it is written, keeping its rendered meaning, and where
+    /// this differs from what was sent the engine records each fingerprint it keeps over this
+    /// content instead — a rendering's `body_digest`, a copy's
+    /// [`MetadataKey::COPIED_DESTINATION_VERSION_KEY`] — and writes it back once, beside them,
+    /// as its own request. That follow-up write's own answer is then compared with this
+    /// content byte for byte, and a backend that does not hold its own stored content stable
+    /// is refused as `stored-content-diverged`. Defaulted to `None`: a backend that stores what
+    /// it is given says nothing, and nothing is compared or written again.
+    fn stored_content(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        let _ = (record, id);
+        None
     }
 
     /// Create or update one task, answering with the native id the destination holds it
@@ -469,6 +648,22 @@ pub trait TaskSource: Send + Sync {
         Ok(())
     }
 
+    /// The status an item of `kind` reads back as once this source has written `status` for
+    /// it, asked without writing or reading anything.
+    ///
+    /// A source that keeps a status's name as it was given answers `status` itself. One that
+    /// writes a category to a name of its own — a board's `Status` option the category maps
+    /// to — answers that name, so a caller comparing what it would write with what the source
+    /// holds does not read a difference of spelling alone as a change: a copy then leaves an
+    /// item that already reads as the source does unwritten.
+    ///
+    /// Defaulted to `status` itself, which is what every source keeping names verbatim reads
+    /// back, and what a caller compared against before this was asked.
+    fn status_as_written(&self, kind: ItemKind, status: &Status) -> Status {
+        let _ = kind;
+        status.clone()
+    }
+
     /// Set the status of one task this source holds, and change nothing else about it,
     /// answering with the status as this source now reads it — or `None` when this source
     /// holds no such task.
@@ -491,6 +686,34 @@ pub trait TaskSource: Send + Sync {
     /// Returns [`SourceError::Refused`] when this source cannot write a status, or cannot
     /// write this one; and whatever else the source could not do the write for.
     async fn set_task_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        let _ = (id, category);
+        Err(unwritable_field(self.kind(), "status"))
+    }
+
+    /// Set the status of one project this source holds, and change nothing else about it,
+    /// answering with the status as this source now reads it — or `None` when this source
+    /// holds no such project.
+    ///
+    /// The category lands where this source's own mapping sends it for a project, exactly as a
+    /// [`write_project`](Self::write_project) of a project in that category would: a category
+    /// this source has disabled is refused in the words a write of it is refused with. Title,
+    /// content, labels, metadata, repositories, dependencies and the project's tasks are left
+    /// exactly as they are. A project delivers no task, so nothing is kept in step after it.
+    ///
+    /// Defaulted to the refusal [`set_task_status`](Self::set_task_status) defaults to,
+    /// [`unwritable_field`] naming `status`, which is what keeps this an addition rather than a
+    /// break: a source that does not implement it needs no edit. A source declaring
+    /// [`WriteSupport::Unsupported`] is never asked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source cannot write a project's status, or
+    /// cannot write this one; and whatever else the source could not do the write for.
+    async fn set_project_status(
         &self,
         id: &NativeId,
         category: StatusCategory,
@@ -839,6 +1062,58 @@ pub trait TaskSource: Send + Sync {
         Err(documentless(self.kind()))
     }
 
+    /// One page of the documents whose [`TaskQuery::ORIGIN_KEY`] entry is a string equal to
+    /// `origin`, exactly, on the terms of
+    /// [`query_projects_by_origin`](Self::query_projects_by_origin).
+    ///
+    /// Defaulted to [`query_documents`](Self::query_documents) unfiltered, walked and narrowed
+    /// as that default is — so a source with no documents refuses exactly as its
+    /// `query_documents` does.
+    ///
+    /// # Errors
+    ///
+    /// As [`query_documents`](Self::query_documents), and [`SourceError::Refused`] for a
+    /// cursor the default did not hand out.
+    async fn query_documents_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        let wanted = origin_query(origin);
+        let mut matched = Vec::new();
+        let mut cursor: Option<crate::Cursor> = None;
+        // Every cursor the listing handed out, so one cycling through several is caught as
+        // one repeating the last is.
+        let mut visited: Vec<String> = Vec::new();
+        loop {
+            let listed = self
+                .query_documents(
+                    &DocumentQuery::default(),
+                    &PageRequest {
+                        cursor: cursor.clone(),
+                        limit: page.limit,
+                    },
+                )
+                .await?;
+            overran(listed.items.len(), page.limit)?;
+            matched.extend(
+                listed
+                    .items
+                    .into_iter()
+                    .filter(|document| wanted.origin_matches(&document.metadata)),
+            );
+            cursor = match listed.next {
+                None => break,
+                Some(next) if visited.contains(&next.0) => return Err(repeated_cursor()),
+                Some(next) => {
+                    visited.push(next.0.clone());
+                    Some(next)
+                }
+            };
+        }
+        page_of_matches(matched, page)
+    }
+
     /// Create or update one document, on exactly the terms of
     /// [`write_task`](Self::write_task).
     ///
@@ -901,6 +1176,181 @@ pub trait TaskSource: Send + Sync {
         comments: &PageRequest,
     ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
         self.get_task_details(ids, Some(comments)).await
+    }
+
+    /// Read the items `ids` names — tasks, projects and documents alike, whatever kind each
+    /// is — together, as a copy reads the counterparts it is about to write, and hold each for
+    /// this command so that the next [`get_task`](Self::get_task),
+    /// [`get_project`](Self::get_project) or [`get_document`](Self::get_document) of it is
+    /// answered from that read, once, instead of being sent on its own.
+    ///
+    /// What is held is exactly what that read by id would have answered — the item's fields,
+    /// its edges, its asset manifest and its change token — and only until the next read of
+    /// it, a write naming it, or [`end_command`](Self::end_command), whichever comes first, so
+    /// a read answered from it is never staler than the read-before-write it stands in for.
+    ///
+    /// Defaulted to doing nothing, so every read is sent as it always was: a source whose
+    /// reads are free has no reason to override it, and one priced per request overrides it
+    /// with a batched read. An id the batched read finds nothing at is either held as absent —
+    /// its next read answers `None`, exactly as that read would have — or not held, and its own
+    /// read answers as it always does.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the batched read could not be made. Nothing is then
+    /// held, and each item's own read answers as it would have.
+    async fn read_ahead_for_copy(&self, ids: &[NativeId]) -> Result<(), SourceError> {
+        let _ = ids;
+        Ok(())
+    }
+
+    /// Ask, together, which items were copied from each of `origins` — the qualified ids a copy
+    /// is about to look for at this destination by the `onetaskgraph.origin` each item records
+    /// — and hold each answer
+    /// for this command, so that the next query for the items copied from one of them (a
+    /// [`TaskQuery::origin`] task query, [`query_projects_by_origin`](Self::query_projects_by_origin)
+    /// or [`query_documents_by_origin`](Self::query_documents_by_origin)) is answered from it,
+    /// once, instead of being sent on its own. A source may carry in the same read whatever its
+    /// creating an item would read first, since a copy finding nothing creates — and its
+    /// [`designator`](Self::designator), which a copy writing edges asks next: a designator
+    /// carried in that read answers the next [`designator`](Self::designator) of the command
+    /// without a request of its own.
+    ///
+    /// What is held is exactly what those queries would have answered, and only until the next
+    /// write or [`end_command`](Self::end_command); a designator, which no write moves, until
+    /// [`end_command`](Self::end_command). An origin is held as having no counterpart only when
+    /// the read answered it whole: one whose answer the read could not see the end of is left
+    /// to its own query. Defaulted to doing nothing, so each query is sent as it always was.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the read could not be made. Nothing is then held, and each
+    /// query answers as it would have.
+    async fn read_ahead_origins_for_copy(&self, origins: &[String]) -> Result<(), SourceError> {
+        let _ = origins;
+        Ok(())
+    }
+
+    /// Who may read each member of the project `project` — every task and document filed under
+    /// it — as the classification and repositories each one's record holds, read by whatever
+    /// this source holds for this command rather than by its whole records: what a write the
+    /// public boundary screens reads of a project before it is held to it.
+    ///
+    /// `None` is no such read, and is the default: the engine then reads the members as it
+    /// always has, through [`query_tasks`](Self::query_tasks) narrowed to the project and
+    /// [`query_documents`](Self::query_documents), so every source answers exactly as before. A
+    /// source answers `Some` only with every member — a page that says there is more is no
+    /// answer, and is left to that path — and never with fewer members than those queries
+    /// would have listed. A source may hold such a page from a read it made beside another,
+    /// such as the one [`read_ahead_for_copy`](Self::read_ahead_for_copy) names the project to.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the read could not be made.
+    async fn member_classifications(
+        &self,
+        project: &NativeId,
+    ) -> Result<Option<Vec<(Classification, Vec<Repository>)>>, SourceError> {
+        let _ = project;
+        Ok(None)
+    }
+
+    /// How many tasks this source creates in one [`write_tasks`](Self::write_tasks): more than
+    /// one only for a source that creates several in one request.
+    ///
+    /// A copy hands such a source the tasks it creates together, and names each one's edges to
+    /// the others in a write after they all exist. Defaulted to one, which has a copy write every
+    /// task on its own, exactly as before.
+    fn create_batch_limit(&self) -> usize {
+        1
+    }
+
+    /// Create every task of `writes` — each [`ItemWrite::target`] `None` — answering with the
+    /// native ids they were created under, in order.
+    ///
+    /// All of them or none: a source that cannot create every one takes back each it did create
+    /// before refusing, on the terms §4.9 of the protocol puts on [`write_task`](Self::write_task).
+    /// Defaulted to creating them one at a time through [`write_task`](Self::write_task), taking
+    /// back those created when a later one is refused.
+    ///
+    /// # Errors
+    ///
+    /// Refused, before anything is written, when a write names an existing target; otherwise
+    /// whatever [`write_task`](Self::write_task) of one of them refuses with.
+    // llmlint: ignore[invalid_states_unrepresentable] Approved by the contract's owner as an additive method taking `ItemWrite<Task>` exactly as `write_task` does; a create-only input type would be a new contract type. A write naming an existing target is refused below before anything is written, so rollback only ever takes back what this call created.
+    async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        if let Some(write) = writes.iter().find(|write| write.target.is_some()) {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "write_tasks creates tasks, and the write of {} names an existing target; \
+                     next: update it with write_task",
+                    write.item.id
+                ),
+            });
+        }
+        let mut created = Vec::with_capacity(writes.len());
+        for write in writes {
+            match self.write_task(write).await {
+                Ok(id) => created.push(id),
+                Err(error) => {
+                    // The caller is never handed these ids, so one this source will not take
+                    // back is named here or by nobody.
+                    let mut left: Vec<&str> = Vec::new();
+                    for id in &created {
+                        if self.delete_task(id).await.is_err() {
+                            left.push(id.0.as_str());
+                        }
+                    }
+                    if left.is_empty() {
+                        return Err(error);
+                    }
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "{error}; this source then refused to take back {}, which this \
+                             write created and which it still holds; next: delete {} before \
+                             writing again",
+                            left.join(", "),
+                            if left.len() == 1 { "it" } else { "them" }
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(created)
+    }
+
+    /// From here until [`finish_writes`](Self::finish_writes), a source may hold back the part of
+    /// each write that can land later — a created item's fields and edges — and send it together
+    /// with the others' when that is called.
+    ///
+    /// A caller asks for this only when it will call `finish_writes` before it reads what it
+    /// wrote from anywhere but this source, or reports it written. Defaulted to holding nothing
+    /// back, so every write lands whole as it is made.
+    fn begin_deferred_writes(&self) {}
+
+    /// Send whatever this source has held back since [`begin_deferred_writes`](Self::begin_deferred_writes),
+    /// and hold nothing back after it.
+    ///
+    /// All or nothing for the items it created: a source that cannot finish them takes them back
+    /// before refusing, so a caller undoing its writes finds them gone. Defaulted to doing
+    /// nothing, since nothing was held.
+    ///
+    /// # Errors
+    ///
+    /// Whatever sending what was held back was refused with.
+    async fn finish_writes(&self) -> Result<(), SourceError> {
+        Ok(())
+    }
+
+    /// Where an item this source wrote in the current command is, when the write's own answer
+    /// said so: `record` names which kind of item `id` is.
+    ///
+    /// Answered only from what a write already returned — never by a request — so a caller may
+    /// ask it after every write for free. A caller treats `None` as not knowing, and reads the
+    /// item when it needs its location. Defaulted to `None`.
+    fn written_location(&self, record: MetadataRecord, id: &NativeId) -> Option<Location> {
+        let _ = (record, id);
+        None
     }
 
     /// Add one comment to `task`, answering with the comment as the source now holds it, or

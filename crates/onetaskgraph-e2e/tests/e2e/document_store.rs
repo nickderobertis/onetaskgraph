@@ -464,6 +464,99 @@ fn a_document_copy_into_a_destination_with_no_documents_reads_nothing_from_the_s
     );
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] What this proves is the engine's own half of the stdio protocol (§3.16, §4.25) against the document-store peer, which no single plugin owns: AGENTS.md puts the engine's journeys in `onetaskgraph-e2e`, and the eight document-store journeys already in this file sit behind that same edge.
+#[test]
+fn a_store_that_cannot_say_what_it_keeps_of_a_status_is_written_nothing_and_never_asked_its_content()
+ {
+    // A peer declaring `stored_forms` and refusing what it is asked (§3.16, §4.25): a task copy
+    // asks `stored_status` before it sends anything, so it is refused in the peer's own words and
+    // the store is byte for byte what it was. A document has no status, and its content is sent
+    // as composed — the retired `stored_form` is never asked — so a document copy and a create
+    // land, and what the store keeps is read off each write's own answer.
+    let sandbox = Sandbox::new();
+    let store = store_path(&sandbox);
+    let log = sandbox.subdirectory("store").join("asked.log");
+    // The store already holds a copy of `D-1`, so a copy of it is an update and one of `D-2` a
+    // create.
+    let held = source_document(json!({
+        "title": "Alpha design, as copied before",
+        "metadata": {"onetaskgraph.origin": qualified(SOURCE, "D-1")},
+    }));
+    std::fs::write(&store, json!({"documents": [held]}).to_string()).expect("the store");
+    let before = std::fs::read(&store).expect("the store's bytes");
+    let mut refusing = store_at(&store, Some(&log), "native");
+    refusing["config"]["settings"]["stored_forms"] = json!("refused");
+    sandbox.project_document(&document(&json!({
+        SOURCE: {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [{"id": "P-1", "title": "Engine", "content": null,
+                          "status": {"category": "in-progress", "name": "Doing"}, "labels": []}],
+            "tasks": [{"id": "T-1", "title": "Build it", "content": "- one",
+                       "status": {"category": "todo", "name": "Todo"}, "labels": []}],
+            "documents": [
+                source_document(json!({})),
+                source_document(json!({"id": "D-2", "title": "Beta design"})),
+            ],
+        }},
+        STORE: refusing,
+    })));
+    let inputs = sandbox.subdirectory("inputs");
+    let body = inputs.join("body.md");
+    std::fs::write(&body, "- one\n").expect("a body file");
+    let (d1, d2, t1) = (
+        qualified(SOURCE, "D-1"),
+        qualified(SOURCE, "D-2"),
+        qualified(SOURCE, "T-1"),
+    );
+    let complaint = refused(&sandbox, &["task", "copy", &t1, "--to", STORE], 1);
+    assert!(
+        complaint.contains(STORE)
+            && complaint.contains("this store cannot say what it would keep of that status"),
+        "a task copy is refused naming the store and its own words:\n{complaint}"
+    );
+    assert_eq!(
+        std::fs::read(&store).expect("the store's bytes"),
+        before,
+        "the refused task copy left the store as it was"
+    );
+    let asked = std::fs::read_to_string(&log).expect("the store recorded what it was asked");
+    assert!(
+        asked.lines().any(|method| method == "stored_status")
+            && !asked.lines().any(|method| method.starts_with("write_")),
+        "the refusal is the store's own answer, and it is sent no write: {asked}"
+    );
+    let body = body.display().to_string();
+    for arguments in [
+        vec!["document", "copy", &d1, "--to", STORE],
+        vec!["document", "copy", &d2, "--to", STORE],
+        vec![
+            "document",
+            "create",
+            STORE,
+            "--project",
+            "P-1",
+            "--title",
+            "Gamma",
+            "--body-file",
+            &body,
+        ],
+    ] {
+        ok(&sandbox, &arguments);
+    }
+    let asked = std::fs::read_to_string(&log).expect("the store recorded what it was asked");
+    assert!(
+        !asked.lines().any(|method| method == "stored_form"),
+        "the retired stored_form is never asked: {asked}"
+    );
+    let kept: Value = serde_json::from_slice(&std::fs::read(&store).expect("the store"))
+        .expect("the store is JSON");
+    assert_eq!(
+        kept["documents"].as_array().map(Vec::len),
+        Some(3),
+        "both documents and the create landed: {kept}"
+    );
+}
+
 /// This row's own source, with the persistent store beside it as the destination.
 fn row_with_store(row: &Row, sandbox: &Sandbox, store: &Path) -> String {
     document(&json!({

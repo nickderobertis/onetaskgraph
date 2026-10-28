@@ -49,12 +49,15 @@ struct Held {
     more_states: bool,
     /// Say the workspace's project statuses run on past the page the resolution reads.
     more_statuses: bool,
+    /// Answer the next project status update about another project than the one it named.
+    other_project_next: bool,
 }
 
 /// The spellings of Linear's refusal of a mutation naming nothing, each recognised on its own.
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum Missing {
-    /// `Entity not found: Issue`, with its user-presentable sentence, on an HTTP 200.
+    /// `Entity not found: Issue` — or `Project` — with its user-presentable sentence, on an
+    /// HTTP 200.
     #[default]
     Both,
     /// The message alone.
@@ -267,6 +270,24 @@ impl Workspace {
             graphql::ISSUE => {
                 json!({"issue": held.issues.iter().find(|issue| issue["id"] == id)})
             }
+            // The issue beside a resolution without the team's states, as a malformed
+            // `RESOLUTION` above is answered.
+            graphql::ISSUE_RESOLVED if std::mem::take(&mut held.malformed_next_resolution) => {
+                json!({"issue": held.issues.iter().find(|issue| issue["id"] == id),
+                       "teams":{"nodes":[{"id":format!("TEAM-{}", held.team)}]},
+                       "projectStatuses":{"nodes":held.statuses,"pageInfo":{"hasNextPage":false}}})
+            }
+            // The issue beside the resolution, each answered as it is alone.
+            graphql::ISSUE_RESOLVED => {
+                let teams = if variables["key"] == json!(held.team) {
+                    json!([{"id":format!("TEAM-{}", held.team),"states":{"nodes":held.states,"pageInfo":{"hasNextPage":held.more_states}}}])
+                } else {
+                    json!([])
+                };
+                json!({"issue": held.issues.iter().find(|issue| issue["id"] == id),
+                       "teams":{"nodes":teams},
+                       "projectStatuses":{"nodes":held.statuses,"pageInfo":{"hasNextPage":held.more_statuses}}})
+            }
             graphql::PROJECT => {
                 json!({"project": held.projects.iter().find(|project| project["id"] == id)})
             }
@@ -284,7 +305,7 @@ impl Workspace {
                 };
                 json!({(root): {(long_form):null,"relations":empty,"inverseRelations":empty}})
             }
-            graphql::ISSUE_UPDATE_READ | graphql::ISSUE_UPDATE | graphql::ISSUE_REWRITE => {
+            graphql::ISSUE_UPDATE | graphql::ISSUE_REWRITE => {
                 let state = match input.get("stateId").and_then(Value::as_str) {
                     Some(state) => match held.states.iter().find(|held| held["id"] == state) {
                         Some(held) => Some(json!({"name":held["name"],"type":held["type"]})),
@@ -319,8 +340,10 @@ impl Workspace {
                 }
                 let answered = match query.as_str() {
                     graphql::ISSUE_UPDATE_READ => issue.clone(),
-                    graphql::ISSUE_REWRITE => json!({"id":id,"relations":no_relations()}),
-                    _ => json!({"id":id}),
+                    graphql::ISSUE_REWRITE => {
+                        json!({"id":id,"description":issue["description"],"relations":no_relations()})
+                    }
+                    _ => json!({"id":id,"description":issue["description"]}),
                 };
                 json!({"issueUpdate":{"success":true,"issue":answered}})
             }
@@ -335,7 +358,7 @@ impl Workspace {
                     "description":input["description"],"url":null,"createdAt":null,"updatedAt":null,
                     "archivedAt":null,"state":{"name":state["name"],"type":state["type"]},"priority":0,
                     "labels":{"nodes":[]},"project":null}));
-                json!({"issueCreate":{"success":true,"issue":{"id":new}}})
+                json!({"issueCreate":{"success":true,"issue":{"id":new,"description":input["description"]}}})
             }
             graphql::PROJECT_CREATE | graphql::PROJECT_UPDATE | graphql::PROJECT_REWRITE => {
                 let status = input["statusId"].as_str().unwrap_or_default().to_owned();
@@ -353,7 +376,7 @@ impl Workspace {
                         .push(json!({"id":new,"name":input["name"],"content":null,
                         "url":null,"createdAt":null,"updatedAt":null,"archivedAt":null,
                         "status":status,"labels":{"nodes":[]}}));
-                    json!({"projectCreate":{"success":true,"project":{"id":new}}})
+                    json!({"projectCreate":{"success":true,"project":{"id":new,"content":input["content"]}}})
                 } else {
                     let Some(project) =
                         held.projects.iter_mut().find(|project| project["id"] == id)
@@ -361,8 +384,35 @@ impl Workspace {
                         return json!({"errors":[{"message":"Entity not found: Project"}]});
                     };
                     project["status"] = status;
-                    json!({"projectUpdate":{"success":true,"project":{"id":id,"relations":no_relations()}}})
+                    json!({"projectUpdate":{"success":true,"project":{"id":id,"content":input["content"],"relations":no_relations()}}})
                 }
+            }
+            graphql::PROJECT_STATUS_UPDATE => {
+                let status = input["statusId"].as_str().unwrap_or_default().to_owned();
+                let Some(status) = held
+                    .statuses
+                    .iter()
+                    .find(|held| held["id"] == status)
+                    .map(|held| json!({"name":held["name"],"type":held["type"]}))
+                else {
+                    return json!({"errors":[{"message":"Entity not found: ProjectStatus"}]});
+                };
+                let other = std::mem::take(&mut held.other_project_next);
+                let Some(project) = held.projects.iter_mut().find(|project| project["id"] == id)
+                else {
+                    return json!({"errors":[match held.missing {
+                        Missing::MessageOnly => json!({"message":graphql::PROJECT_NOT_FOUND_MESSAGE}),
+                        Missing::SentenceOnly => json!({"message":"Argument Validation Error",
+                            "extensions":{"code":"INVALID_INPUT",
+                                "userPresentableMessage":graphql::PROJECT_NOT_FOUND_PRESENTABLE}}),
+                        Missing::Both | Missing::Http400 => json!({"message":graphql::PROJECT_NOT_FOUND_MESSAGE,
+                            "extensions":{"code":"INVALID_INPUT",
+                                "userPresentableMessage":graphql::PROJECT_NOT_FOUND_PRESENTABLE}}),
+                    }]});
+                };
+                project["status"] = status.clone();
+                let answered = if other { "P-OTHER" } else { id.as_str() };
+                json!({"projectUpdate":{"success":true,"project":{"id":answered,"status":status}}})
             }
             graphql::WORKFLOW_STATE_CREATE | graphql::PROJECT_STATUS_CREATE => {
                 let new = json!({"id":format!("NEW-{}", input["name"].as_str().unwrap_or_default()),
@@ -416,6 +466,7 @@ fn read_request(stream: &mut std::net::TcpStream) -> Option<Value> {
 fn document_name(query: &str) -> &'static str {
     [
         ("RESOLUTION", graphql::RESOLUTION),
+        ("ISSUE_RESOLVED", graphql::ISSUE_RESOLVED),
         ("ISSUE", graphql::ISSUE),
         ("PROJECT", graphql::PROJECT),
         ("ISSUE_RELATIONS", graphql::ISSUE_RELATIONS),
@@ -427,6 +478,7 @@ fn document_name(query: &str) -> &'static str {
         ("ISSUE_CREATE", graphql::ISSUE_CREATE),
         ("PROJECT_CREATE", graphql::PROJECT_CREATE),
         ("PROJECT_UPDATE", graphql::PROJECT_UPDATE),
+        ("PROJECT_STATUS_UPDATE", graphql::PROJECT_STATUS_UPDATE),
         ("WORKFLOW_STATE_CREATE", graphql::WORKFLOW_STATE_CREATE),
         ("PROJECT_STATUS_CREATE", graphql::PROJECT_STATUS_CREATE),
     ]
@@ -1174,10 +1226,11 @@ async fn refused_settlement_task_and_project_writes_resolve_again_before_their_r
             if retry {
                 result.unwrap();
                 let requests = workspace.names_since(from);
+                // A settlement resolves again inside the read of its issue.
                 assert_eq!(
                     requests
                         .iter()
-                        .filter(|name| **name == "RESOLUTION")
+                        .filter(|name| matches!(**name, "RESOLUTION" | "ISSUE_RESOLVED"))
                         .count(),
                     1,
                     "{operation}: {requests:?}"
@@ -1406,4 +1459,233 @@ async fn project_statuses_that_do_not_fit_one_page_are_refused_rather_than_read_
         .await
         .expect("the whole vocabulary fits once Linear says so");
     assert_eq!(workspace.status_of("P-1").as_deref(), Some("Completed"));
+}
+
+#[tokio::test]
+async fn a_project_status_write_is_one_update_carrying_only_its_status_and_answers_what_it_reads() {
+    let workspace = example_workspace("ex");
+    workspace.project("P-1", "In Progress");
+    let source = source(&workspace, example_mapping());
+    let before = workspace.count();
+    let written = source
+        .set_project_status(&NativeId::from("P-1"), StatusCategory::Done)
+        .await
+        .expect("the write lands");
+    assert_eq!(
+        written,
+        Some(Status {
+            category: StatusCategory::Done,
+            name: "Completed".into()
+        })
+    );
+    assert_eq!(
+        workspace.since(before),
+        [
+            ("RESOLUTION", json!({"key": "ENG"})),
+            (
+                "PROJECT_STATUS_UPDATE",
+                json!({"id": "P-1", "input": {"statusId": "ex-status-Completed"}})
+            ),
+        ]
+    );
+    assert_eq!(workspace.status_of("P-1").as_deref(), Some("Completed"));
+
+    // Held: the next write is the one mutation.
+    let before = workspace.count();
+    source
+        .set_project_status(&NativeId::from("P-1"), StatusCategory::Todo)
+        .await
+        .expect("the write lands");
+    assert_eq!(workspace.names_since(before), ["PROJECT_STATUS_UPDATE"]);
+    assert_eq!(workspace.status_of("P-1").as_deref(), Some("Planned"));
+}
+
+#[tokio::test]
+async fn a_project_status_write_answers_none_refused_malformed_or_unavailable_as_linear_answers() {
+    let workspace = example_workspace("ex");
+    workspace.project("P-1", "In Progress");
+    let source = source(&workspace, example_mapping());
+    let p1 = NativeId::from("P-1");
+
+    // A project Linear does not hold is no such project, never a refusal.
+    let missing = source
+        .set_project_status(&NativeId::from("P-404"), StatusCategory::Done)
+        .await
+        .expect("a missing project is not an error");
+    assert_eq!(missing, None);
+
+    // A refusal of the mutation is a refusal, and the vocabulary is read again before the next.
+    workspace.held().refuse_next_mutation = true;
+    let refused = source
+        .set_project_status(&p1, StatusCategory::Done)
+        .await
+        .expect_err("a refused mutation");
+    assert!(
+        matches!(&refused, SourceError::Refused { message } if message.contains("could not complete")),
+        "{refused:?}"
+    );
+    let before = workspace.count();
+    source
+        .set_project_status(&p1, StatusCategory::Done)
+        .await
+        .expect("the retry lands");
+    assert_eq!(
+        workspace.names_since(before),
+        ["RESOLUTION", "PROJECT_STATUS_UPDATE"],
+        "the retry resolves again before its mutation"
+    );
+
+    // An answer about another project is not this write landing.
+    workspace.held().other_project_next = true;
+    let other = source
+        .set_project_status(&p1, StatusCategory::Cancelled)
+        .await
+        .expect_err("an answer about another project");
+    assert!(
+        matches!(&other, SourceError::Malformed { message } if message.contains("P-OTHER")),
+        "{other:?}"
+    );
+
+    // A connection closed unanswered is the source being unreachable.
+    workspace.held().drop_next = true;
+    let dropped = source
+        .set_project_status(&p1, StatusCategory::Done)
+        .await
+        .expect_err("a dropped connection");
+    assert!(
+        matches!(dropped, SourceError::Unavailable { .. }),
+        "{dropped:?}"
+    );
+}
+
+#[tokio::test]
+async fn each_spelling_of_linears_not_found_refusal_is_no_such_project() {
+    for missing in [
+        Missing::Both,
+        Missing::MessageOnly,
+        Missing::SentenceOnly,
+        Missing::Http400,
+    ] {
+        let workspace = example_workspace("ex");
+        workspace.project("P-1", "In Progress");
+        workspace.held().missing = missing;
+        let source = source(&workspace, example_mapping());
+        assert_eq!(
+            source
+                .set_project_status(&NativeId::from("P-404"), StatusCategory::Done)
+                .await
+                .unwrap(),
+            None,
+            "a missing project is no such project, however Linear spelled it"
+        );
+        assert_eq!(workspace.status_of("P-1").as_deref(), Some("In Progress"));
+    }
+}
+
+#[tokio::test]
+async fn a_source_scoped_to_one_project_refuses_another_projects_status_before_any_request() {
+    let workspace = example_workspace("ex");
+    workspace.project("P-1", "In Progress");
+    workspace.project("P-2", "In Progress");
+    let scoped = build(
+        &workspace.serve(),
+        json!({"status_mapping": example_mapping(), "project": "P-1"}),
+    )
+    .unwrap();
+    let before = workspace.count();
+    let refused = scoped
+        .set_project_status(&NativeId::from("P-2"), StatusCategory::Done)
+        .await
+        .expect_err("a project outside the scope");
+    assert!(
+        matches!(&refused, SourceError::Refused { message }
+            if message.contains("scoped to the Linear project P-1")
+                && message.contains("the project P-2")),
+        "{refused:?}"
+    );
+    assert_eq!(workspace.count(), before, "nothing was sent to Linear");
+    assert_eq!(workspace.status_of("P-2").as_deref(), Some("In Progress"));
+
+    // Its own project is written as an unscoped source writes it.
+    let written = scoped
+        .set_project_status(&NativeId::from("P-1"), StatusCategory::Done)
+        .await
+        .expect("the scoped project is written");
+    assert_eq!(
+        written.map(|status| status.category),
+        Some(StatusCategory::Done)
+    );
+    assert_eq!(workspace.status_of("P-1").as_deref(), Some("Completed"));
+}
+
+/// A fresh source's settlement reads its issue and the resolution in one request. An answer
+/// to it that is malformed — the team's states missing — or never arrives fails the update,
+/// writes nothing and holds nothing, and the same update retried on the same source reads both
+/// again in one request and lands.
+#[tokio::test]
+async fn a_failed_read_of_an_issue_with_its_resolution_writes_nothing_and_is_retried() {
+    for malformed in [true, false] {
+        let workspace = example_workspace("A");
+        workspace.issue("I-1", "Todo", Some("A person's text."));
+        let source = source(&workspace, example_mapping());
+        let mut settlement = TaskUpdate {
+            status: Some(Status {
+                category: StatusCategory::Done,
+                name: String::new(),
+            }),
+            ..TaskUpdate::default()
+        };
+        settlement.metadata_set.insert(
+            MetadataKey::new("onepipeline.settlement").unwrap(),
+            json!("landed"),
+        );
+        if malformed {
+            workspace.held().malformed_next_resolution = true;
+        } else {
+            workspace.held().drop_next = true;
+        }
+        let from = workspace.count();
+        let failed = source
+            .update_task(&"I-1".into(), &settlement)
+            .await
+            .expect_err("the read failed");
+        assert!(
+            matches!(
+                (&failed, malformed),
+                (SourceError::Malformed { .. }, true) | (SourceError::Unavailable { .. }, false)
+            ),
+            "{failed:?}"
+        );
+        // The workspace records what it answered: the malformed read, and nothing at all for
+        // the one it dropped.
+        let answered: &[&str] = if malformed { &["ISSUE_RESOLVED"] } else { &[] };
+        assert_eq!(
+            workspace.names_since(from),
+            answered,
+            "nothing was written: {failed:?}"
+        );
+        assert_eq!(workspace.state_of("I-1").as_deref(), Some("Todo"));
+        assert_eq!(
+            workspace.description_of("I-1").as_deref(),
+            Some("A person's text.")
+        );
+
+        let from = workspace.count();
+        source
+            .update_task(&"I-1".into(), &settlement)
+            .await
+            .expect("the retry lands");
+        assert_eq!(
+            workspace.names_since(from),
+            ["ISSUE_RESOLVED", "ISSUE_UPDATE_READ"],
+            "nothing of the failed answer was held: the retry reads both again, in one request"
+        );
+        assert_eq!(workspace.state_of("I-1").as_deref(), Some("Done"));
+        let description = workspace.description_of("I-1").expect("a description");
+        assert!(description.starts_with("A person's text."), "{description}");
+        assert!(
+            description.contains(r#""onepipeline.settlement":"landed""#),
+            "{description}"
+        );
+    }
 }

@@ -44,6 +44,11 @@ Merging `main`'s issue-closure work (#3677) on top added its own three requests 
 of issues by their references, the board's closed items, and one more board search — with their
 reconciliations, taking the record to 209 requests and 302,377 worst-case nodes.
 
+Merging `main` again (018a4b61) brought its own cuts and additions — #3679 to #3775 took its
+record from 193 to 216 requests, among them four reads of a document with its project's members
+and four fewer reads of one issue — on top of this branch's lanes. The two add: 232 requests and
+275,837 worst-case nodes, with three more reads by id than `main` for the lanes' first tokens.
+
 ## Whole credentialed lane
 
 The budget is `github-live-session-points`, max 299 in the GitHub e2e budgets file.

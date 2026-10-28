@@ -116,14 +116,21 @@ onetaskgraph task render <ID> [--template FILE | --template-loader FILE] [--sear
 # edit — takes --term-scope REPOSITORY (repeatable) or --term-scope-empty: see
 # "The public boundary" below.
 onetaskgraph task answers <ID>
+onetaskgraph task assets <SOURCE:ID> --output-dir DIR [--json]
+                                                 # write the task's image assets into DIR
 
 onetaskgraph project list / show / deps          # the same flags, minus the project filter
+onetaskgraph project list [--source S]... --origin SOURCE:ID [--json]
+                                                 # the projects copied from that item
 onetaskgraph project graph <ID> [--format mermaid|json] [--direction auto|td|lr]
                            [--group-by KEY] [--complete]
                                                  # see "Drawing a project's dependency graph"
 onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks | --member TASK-ID...]
                                                  [--match-by KEY] [--recreate] [--dry-run]
+onetaskgraph project copy <ID> --to <SOURCE> --member TASK-ID... --members-only
+                                                 # into the project already there, untouched
 onetaskgraph project metadata set <ID> <KEY> <VALUE>
+onetaskgraph project status set <ID> draft|backlog|todo|queued|in-progress|done|cancelled|unknown
 onetaskgraph project create <SOURCE> --id NATIVE-ID --title TITLE [--status CATEGORY]
                             ...                  # the body, label, repository, metadata,
                                                  # classification and term-scope flags of
@@ -133,7 +140,7 @@ onetaskgraph project answers <ID>
 
 onetaskgraph document list / show                # the same flags, minus --status
 onetaskgraph document copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--dry-run]
-onetaskgraph document metadata set <ID> <KEY> <VALUE>
+onetaskgraph document metadata set <ID> <KEY> <VALUE> [--expect VERSION]
 onetaskgraph document create <SOURCE> --project P --title TITLE [--id DOC]
                              ...                 # the body, label, repository, metadata,
                                                  # asset, classification and term-scope
@@ -255,6 +262,13 @@ ever returned. A text with no letter or digit, such as `--`, is refused there be
 is sent. `document list --project P --search` sends no search: it reads that project's
 sub-issues and matches the text inside words too, as before.
 
+`project list --origin <SOURCE>:<ID>` lists the projects whose `onetaskgraph.origin` is exactly
+that qualified id — every copy of one plan, zero, one or several, in the rows and JSON
+`project list` prints — and none other; which of several a caller wants is the caller's
+question. A GitHub Projects board answers it with the same origin lookup `task list --origin`
+sends, so what it costs is the copies it finds and never a page of the board; a source with no
+narrower answer is listed whole and narrowed. `project list` without `--origin` is unchanged.
+
 ![A terminal showing one task from `task show`: an aligned block of id, title, status, project, labels and a path location, then the task's body, then its one comment with that comment's id, author and created and updated times](docs/screenshots/task-show.svg)
 
 A task's **status** is set on its own with `task status set`, which writes that one field —
@@ -297,7 +311,12 @@ A task's **content** is replaced on its own with `task content set <ID> --file P
 file's bytes become the task's body, and status, priority, metadata, labels, repositories and
 dependencies stay exactly as they are — on a GitHub board, whose metadata lives in the issue
 body beside the content, that block is kept as it was. There is no compare-and-set: what the
-file holds replaces whatever the task held.
+file holds replaces whatever the task held. The answer — `TaskContentSet` under `--json` —
+carries the `content` the task then holds: on a source that rewrites the Markdown it is written,
+as Linear does, that is the content Linear stored, read off the write's own answer with no read
+after it. Linear may normalize a content write's spelling — `- ` bullets as `* `, a table's
+delimiter row as `| -- |`, a blank line before a list — while keeping its rendered meaning; on
+every other source it is exactly the bytes sent.
 
 One **metadata** key of a task, a project or a document is set on its own with `task`,
 `project` or `document metadata set <ID> <KEY> <VALUE>`, which adds the key or replaces what
@@ -558,6 +577,11 @@ two items, inside the plugins that own them.
 
 These rules find the counterpart, in this order:
 
+0. **The explicit task.** For `task copy` with one source id, `--target-task <QUALIFIED-ID>`
+   selects an existing task in the destination whose origin names the source task. A missing
+   task, a task in another source, or a different origin is refused without writing. The
+   report says `via: target-task`. This option is refused beside `--create`, `--match-by`
+   or `--recreate`, or with several source ids, before any store request.
 1. **The link.** If the item's `onetaskgraph.copies` names an item at the destination, that
    item is read by id, and when its own origin names the item being copied it is the
    counterpart and the copy updates it — one read, and no search of the destination. If it
@@ -573,7 +597,7 @@ These rules find the counterpart, in this order:
    created carrying that origin.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
-Once the whole copy has landed, every item found by the link, the search or `--match-by`, or
+Once the whole copy has landed, every item found by `--target-task`, the link, the search or `--match-by`, or
 created, has its link for that destination recorded or refreshed — one metadata write at its
 own source, undone with everything else if the copy cannot finish. An item found by its own
 origin records nothing: that correspondence is already written down, on the destination
@@ -596,12 +620,14 @@ copied from, which is what makes the next copy of it an update.
 | `--recreate` | An origin or a link naming an item the destination no longer holds refuses by default, because creating there would duplicate work somebody deleted. This says create instead. |
 | `--create` | `task copy` only: you assert the destination holds no counterpart of any task named — typically because you have just asked it — so each is created without the correspondence lookup, and a GitHub board is sent no origin query. Sound because that query reads an index that lags a fresh write by the same amount whoever asks, so repeating yours could find nothing yours did not. Refused beside `--match-by` or `--recreate`, and for a task whose own link or origin already names an item at the destination, naming that item. |
 | `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy back creates a new item. This re-establishes the lost correspondence by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
+| `--status-policy source\|preserve-destination` | Task and project copies default to `source`, carrying the source status. With `preserve-destination`, existing destination tasks and project items keep their status and open/closed state while other changed fields are copied. New items take the source status under either policy. Documents have no status. |
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it — a home's members' tasks included — matching each task independently. |
 | `--comments` | `task copy` and `project copy`: keep the destination's copies of each task's comments in step with the source's, as [below](#carrying-comments-and-copying-only-what-changed). Without it a copy reads and writes no comment. |
 | `--no-link` | Write nothing at all to the source — no `onetaskgraph.copies` link — and report every link `skipped`. The next copy finds each counterpart by the destination's own `onetaskgraph.origin`. |
 | `--source S`, `--commented-since RFC3339`, `--metadata KEY=VALUE` | `task copy` only, in place of ids: copy what `task list` with the same narrowing answers. Refused beside ids. |
 | `--status CATEGORY` | `task copy` only, repeatable: keep only the tasks at these categories, as `task list --status` keeps them. In a query a task at another category is not read for its comments, not copied and not named in the answer — and on a GitHub board, a status filter naming only open categories (any but `done`, `cancelled` and `unknown`, which a closed issue reads as when closed for a reason that implies neither) narrows the board-scoped issue search with `is:open`, each candidate's category still confirmed from its own item. Beside ids, an id whose task is at another category is read only as far as its status and answered `{"source": …, "action": "skipped", "reason": "status <category> is not one of <categories>"}`, neither copied nor read for its comments, without changing the exit code. The comment snapshot a host keeps is this shape: `task copy --source board --commented-since <instant> --status backlog --to snapshot`, into a folder configured with the board's own status names. |
 | `--member TASK-ID` | Copy the project and exactly the tasks named, repeating the flag for each, when you know which of them changed. A task not named is not read at the destination, not written and not reported, so a one-task change costs what one task costs rather than a read of the whole project. A named task the destination does not hold yet is still created. An edge to a task not named is written to the destination id that task records at `onetaskgraph.origin`, and a copy whose edge names a task recording none is refused before anything is written, naming that task. A copy naming members was not told about the rest, so it reports nothing `orphaned`. |
+| `--members-only` | With `--member`, and refused without one: copy the named tasks into the project the destination already holds, and leave that project exactly as it is. It is found by the `onetaskgraph.copies` link the source project records, then by the origin it records, then by asking the destination for the project recording it as its origin — never read to be compared, never written, and not reported, so adding one task to a board's project costs that task alone and cannot overwrite the project's title, body, labels or fields. A project the destination does not hold yet is refused before anything is written, naming the `project copy` that creates it. Everything else is `--member`'s: the same edges, the same `delivered` and `via`, and nothing `orphaned`. |
 
 `--dry-run` is how you read that table's first row before trusting it: every source is
 read, nothing is written, and each item is reported with the action it would have got.
@@ -679,15 +705,50 @@ what the journeys validate this output against.
      `the_readme_names_every_word_of_the_copy_reports_via_and_link` in
      `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this paragraph and fails unless the words
      it names are exactly the ones `onetaskgraph schema` emits for these two fields. -->
-`via` is one field with five words, on every `created`, `updated` and `unchanged` item. On
-`updated` and `unchanged` it names the rule above that found the counterpart: `link`,
-`origin`, `scan`, or `match` for `--match-by`. On `created` it is always `created`, because
+`via` is one field with six words, on every `created`, `updated` and `unchanged` item. On
+`updated` and `unchanged` it names the rule above that found the counterpart: `target-task`,
+`link`, `origin`, `scan`, or `match` for `--match-by`. On `created` it is always `created`, because
 none did. `link` says what became of the item's own link, on those same three actions of a
 copy that writes: `recorded`, `unchanged`, `unrecorded` where its source could not hold
 one, or `skipped` under `--no-link`, which writes nothing at all to the source. A dry run
 reports `via` and leaves `link` out, and an `orphaned` item and a `failed` one carry neither.
-In the generated SDKs the four rule words are the type `CopyVia` and `created` is
+In the generated SDKs the five rule words are the type `CopyVia` and `created` is
 `NoCounterpart`, and the link words are `CopyLink`.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
+     `crates/onetaskgraph-github-projects-e2e/tests/e2e/project_status.rs`,
+     `crates/onetaskgraph-linear-e2e/tests/e2e/linear_status.rs` and
+     `crates/onetaskgraph-e2e/tests/e2e/project_status.rs`, which assert the document below
+     exactly, the requests each source is sent, and each refusal's exit code. -->
+A project's **status** is set on its own with **`project status set <ID> <CATEGORY>`**, `<ID>`
+the project's qualified id and `<CATEGORY>` one of the categories `task status set` takes. It
+writes that one field — title, content, labels, metadata, repositories, dependencies and the
+project's tasks stay exactly as they are — and answers with the status as the source reads it
+back. A project delivers no task, so nothing is kept in step after it. On a GitHub board it is
+the paired write a task status takes, for the project kind: a terminal category selects the
+project kind's mapped option first and then closes the issue with the category's fixed reason —
+completed for `done`, not planned for `cancelled` — leaving an issue already closed with a
+reason that reads that category as it is; an open category reopens a closed issue and then
+selects its option; a draft item is refused as a task's is. On Linear it is one `projectUpdate`
+carrying only `statusId`, the project status the source's `status_mapping` gives the category; a
+folder of Markdown rewrites the project file's own `status` and nothing else of the file; an
+in-memory source sets the held project's status. `--json` answers:
+
+```json
+{"id": "plans:I_40", "status": {"category": "done", "name": "Done"}}
+```
+
+and its human form is one line naming the project and the status it now reads. It exits `0` on
+a write, and `1` for a refusal, with the failure document — a source nothing configures, one
+with no write side, a project the source does not hold (a task's id among them), and a
+category the source has disabled, each refused before anything is written. An out-of-process
+plugin answers it only if its handshake declares `project_status`; one that does not is sent
+nothing and refused in the words a plugin with no such write refuses with
+([`docs/plugin-protocol.md`](docs/plugin-protocol.md) §3.15, §4.17a). **Its library form** is
+`onetaskgraph_core::Engine::set_project_status(&self, id: &GlobalId, category: StatusCategory)
+-> Result<ProjectStatusSet, EngineError>`, answering `ProjectStatusSet { id, status }` — the
+document above — through the same public boundary a task's status write passes.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ### When an issue closes: reconciling and completing its card
@@ -709,29 +770,35 @@ outside the stack. A task needs it when its issue is closed with a reason that r
 `cancelled` and its card does not sit at the option the mapping gives that category, a card
 with no option included; it is written to that option and nothing else — never the issue's
 state, which already says it. Open items, other closures and cards already in line are never
-written and never listed. **It reaches task items only**: an item the board reads as a project
-is never listed or written, whatever its closure, and keeps its card as it was. Candidates come from the board's own `is:closed` filter, never its
+written and never listed. **A project item is brought in line exactly as a task item is** —
+a plan's own home card, the item whose issue carries the plan's task issues as sub-issues —
+each judged against its own kind's half of `status_mapping`: `done` for an issue closed as
+completed or with no reason, `cancelled` for one closed as not planned or as a duplicate.
+Candidates come from the board's own `is:closed` filter, never its
 unfiltered items, and each is confirmed from the item it reads, so a filter that let open items
 through would cost reads and write nothing wrong. Writes go one per item through the source's
 own write pacing (`pacing.min_mutation_interval_ms`), which is what keeps a run of a couple of
 hundred under GitHub's secondary limit on content-creating requests. `--json` answers:
 
 ```json
-{"items": [{"source": "board:I_7", "from": "Todo",
+{"items": [{"source": "board:I_7", "kind": "task", "from": "Todo",
+            "to": {"category": "done", "name": "Done"}, "action": "updated"},
+           {"source": "board:I_40", "kind": "project", "from": "In Progress",
             "to": {"category": "done", "name": "Done"}, "action": "updated"}]}
 ```
 
+`source` is the item's qualified id and `kind` what it is, `task` or `project`, always present;
 `from` is the card's option before, or `null`; `action` is `updated`, `would-update` under
 `--dry-run` — which writes nothing — or `failed`, with `error` the failure object a failure
 document carries. It exits `0` when every listed item was updated or would be, `4` when any
 failed, and `1` when the whole command was refused, with the failure document. Its human form is
-one line per item and a closing count, or, for a source whose status is its closure, that
-nothing needs reconciling. A source answers it only if its plugin declares the capability
+one line per item and a closing count, a project item's line naming `project` before its
+qualified id, or, for a source whose status is its closure, that nothing needs reconciling. A source answers it only if its plugin declares the capability
 `reconcile_status`; an out-of-process plugin that does not is sent nothing
 ([`docs/plugin-protocol.md`](docs/plugin-protocol.md) §4.23).
 
 **`task status complete --issue <OWNER/NAME#N>... [--source <SOURCE>]... [--dry-run]`** moves to
-`done` every task the configured sources hold for the issues a landing closed, by issue
+`done` every item the configured sources hold for the issues a landing closed, by issue
 reference — `owner/name#N`, exactly the spelling a landing event's `closes` reports, its owner
 and name compared ignoring case; anything else is refused as a usage error naming it. **The
 caller names no source**: every source the configuration declares is asked — not only the
@@ -744,17 +811,19 @@ source plus the writes for the items they hold, and never grows with a board's s
 other source — Linear, a folder of Markdown, an in-memory source, an out-of-process plugin that
 does not declare it — is sent no request and listed in `unsupported`. Per reference and source:
 
-- no task for the issue, or an issue the source's credential cannot see: `absent`, no write.
-  **It reaches task items only**, so an issue the board holds as a project is `absent` too, and
-  neither its card nor its issue is written. On a GitHub board a number past GitHub's 32-bit
+- no item for the issue, or an issue the source's credential cannot see: `absent`, no write.
+  **A project item is held exactly as a task item is** — a plan's own home card, its issue
+  carrying the plan's task issues as sub-issues — each judged against its own kind's half of
+  `status_mapping`, from the same read, and answered with `kind` `project`. On a GitHub board a
+  number past GitHub's 32-bit
   issue numbers names no issue at all, so it is `absent` without being sent;
 - closed as not planned or as duplicate: `skipped`, with `reason` `closed as <reason>`, no
   write — the closure already says it, and a landing does not overrule it;
-- closed as completed with its card already at the `done` option: `unchanged`;
-- otherwise the item is written `done` through the status write — its card moved, and its issue
-  closed as completed if it is still open, never reopened — so every task it delivers is kept in
-  step exactly as after `task status set`: `updated`, or `would-update` under `--dry-run`, which
-  writes nothing.
+- closed as completed with its card already at its kind's `done` option: `unchanged`;
+- otherwise the item is written `done` through its kind's status write — its card moved to its
+  kind's `done` option, and its issue closed as completed if it is still open, never reopened —
+  so every task a task item delivers is kept in step exactly as after `task status set`:
+  `updated`, or `would-update` under `--dry-run`, which writes nothing.
 
 Because sources are asked one after another, an open issue held on two boards is closed by the
 first board's write and read closed as completed by the second, which moves only its card: one
@@ -762,24 +831,30 @@ call closes an issue at most once. `--json` answers one item per distinct refere
 source asked, sources in configuration order and references in the order given:
 
 ```json
-{"items": [{"issue": "acme/work#12", "source": "plans", "task": "plans:I_12",
+{"items": [{"issue": "acme/work#12", "source": "plans", "task": "plans:I_12", "kind": "task",
             "from": "Todo", "to": {"category": "done", "name": "Done"}, "action": "updated"},
-           {"issue": "acme/work#12", "source": "followups", "task": null,
+           {"issue": "acme/work#40", "source": "plans", "task": "plans:I_40", "kind": "project",
+            "from": "In Progress", "to": {"category": "done", "name": "Done"},
+            "action": "updated"},
+           {"issue": "acme/work#12", "source": "followups", "task": null, "kind": "task",
             "from": null, "to": null, "action": "absent"}],
  "unsupported": ["notes"]}
 ```
 
-`reason` is present on a `skipped` item and `error` — the failure object — on a `failed` one; an
+`task` is the held item's qualified id whichever its kind, and `kind` — always present — says
+which it is: `task` or `project`, and `task` for an `absent` item and for a reference a source
+could not be asked about. A reader that took `task` to be a task id reads `kind` first. `reason` is present on a `skipped` item and `error` — the failure object — on a `failed` one; an
 `updated` item whose task delivers others carries `delivered`, the entries `task status set`
-reports, and has none when it delivers nothing. It exits `0` when no item failed, `4` when one
-did or a delivered task could not be kept in step, and `1` when the whole command was refused.
-Its human form is one line per item, a line naming the unsupported sources, and a closing
-count.
+reports, and has none when it delivers nothing — a project never does. It exits `0` when no item
+failed, `4` when one did or a delivered task could not be kept in step, and `1` when the whole
+command was refused. Its human form is one line per item, a project item's line naming `project`
+before its qualified id, a line naming the unsupported sources, and a closing count.
 
 **Its library form** is `onetaskgraph_core::Engine::complete_issues(&self, issues: &[IssueRef],
 only: &[SourceName], dry_run: bool) -> Result<IssuesCompleted, EngineError>`, an empty `only`
-asking every configured source; it answers the very document above, and a delivered task it
-could not keep in step is reported in its result rather than failing the call. `IssueRef` is
+asking every configured source; it answers the very document above, each item with its `kind`,
+as `Engine::reconcile_statuses` answers the reconcile's, and a delivered task it could not keep
+in step is reported in its result rather than failing the call. `IssueRef` is
 `onetaskgraph_plugin_api::IssueRef`, parsed from and displayed as `owner/name#N`.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
@@ -991,6 +1066,43 @@ the digest that chain computes, or the render is refused naming both. Every othe
 ignored. `template variables` and `template render` take one in place of their `<FILE>`.
 [`docs/local-md.md`](./docs/local-md.md) describes the answers block.
 
+### Writing to a destination that rewrites Markdown
+
+Linear stores an issue's description, a project's content and a document's content as Markdown
+it normalizes on write — `- ` bullets as `* `, a table's delimiter row as `| -- |`, a blank line
+before a list after a heading or a paragraph line, an indented code block as a fenced one, and
+more — keeping the rendered meaning. Nothing predicts that rewrite. A copy, a create or a render
+sends the content as it composed it, and the write's own answer says what the destination now
+stores. Where that is what was sent, the write is done. Where it is not, the store recomputes
+every fingerprint the item keeps over what was stored — a rendering's `body_digest`, moved onto
+it only where the provenance vouched for what was sent, so a hand edit's entry is carried as it
+came, and a copy's `onetaskgraph.copied_destination_version` — and writes the stored content
+back once, beside them, as its own request. That follow-up's own answer has to report the same
+content again; a destination that stores it otherwise is refused as `stored-content-diverged`,
+naming the item and the first line that moved. No read of the item follows either write. So
+every item a copy lands records a `body_digest` that a read of it verifies, whatever Markdown its
+template holds.
+
+An unchanged item is recognised without comparing what was composed with what was stored, which
+never compare equal on such a destination. A copy reads the copy record every task, project and
+document it writes carries (see [docs/metadata.md](docs/metadata.md), "The copy's record of
+itself"): an item whose source still matches `onetaskgraph.copied_version` and whose destination
+still digests to `onetaskgraph.copied_destination_version` is written nothing, and an edit at
+either end — a destination's title, status or edges included — is written back. A re-render
+writes nothing when the item's rendering record names the same template and answers, its
+`body_digest` is still that of the content it holds, and its assets are the same set.
+
+A first copy of a realistic plan into Linear — one project, five tasks and a design document
+with two new images — sends 20 requests: one request for every origin lookup of the project
+copy, which carries the organization and the team's workflow states and project statuses too;
+the document copy's own origin lookup; one write of each item and one follow-up of each item
+Linear rewrote; and a `fileUpload` and a PUT per new image. A document is filed under the
+project its project's copy link names without that project being read; a link left naming a
+project the destination no longer holds is refused as a stale link, writing nothing, unless
+`--recreate` asks the destination to be walked for it, which points the link at the project
+found. An unchanged repeat copy writes nothing at all. `linear-requests-per-plan-copy` in
+`crates/onetaskgraph-linear-e2e/budgets.yaml` holds the figure.
+
 ### Image assets
 
 A task or a document carries pictures — a before-and-after screenshot in a design document,
@@ -1041,6 +1153,13 @@ first references them — `[]` for a record that holds none:
 a directory beside its file ([`docs/local-md.md`](./docs/local-md.md)) — and `null` for a
 hosted source. `content_type` is `image/png`, `image/jpeg`, `image/gif` or `image/webp`,
 decided by the extension.
+
+`task assets <SOURCE:ID> --output-dir DIR` writes every asset the task holds to `DIR/<name>`,
+under the name its content references it by, creating `DIR` when it is not there; `--json`
+prints the names it wrote as one list, `[]` for a task holding none. The bytes come through the
+task's own source — a `local-md` folder's files, a board's uploaded images — so it reads the
+same on every store, and a Rust caller reaches the same read as `Engine::task_assets`. A task
+that is not there, or a source that cannot be read, fails naming the id and the store's reason.
 
 **A copy carries every asset a record's content references.** `task copy`, `document copy` and
 every project copy that carries tasks or documents hand each asset's bytes to the destination
@@ -1154,7 +1273,7 @@ This complete example constructs an engine over two in-memory sources, copies a 
 
 ```rust
 use onetaskgraph_core::{
-    Config, CopyItems, CopyRequest, CopyScope, Engine, Environment, GlobalId, Secrets,
+    Config, CopyItems, CopyRequest, CopyScope, Engine, Environment, GlobalId, Secrets, StatusPolicy,
 };
 use onetaskgraph_plugin_api::SourceName;
 use serde_json::json;
@@ -1185,8 +1304,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         items: CopyItems::new(vec!["drafts:T-1".parse::<GlobalId>()?])
             .expect("a copy names at least one item"),
         scope: CopyScope::Tasks,
+        status_policy: StatusPolicy::Source,
         destination: SourceName::new("work")?,
         match_by: None,
+        target_task: None,
         recreate: false,
         create: false,
         dry_run: false,
@@ -1459,6 +1580,15 @@ to a field the write *does* set, made after the caller's read, is overwritten. T
 the cache can add is the first write after a board option it kept was renamed or deleted: the
 refused mutation, one read that refreshes the board's kept ids, and that part once more.
 
+On `document metadata set`, **`--expect VERSION` is the document's version, and it is a
+precondition**: the document is read first, and a read answering any other version — a change
+made on the board since the caller's read, whether or not anything has read it since — refuses
+the write, naming both versions and writing nothing. At that version the write follows in one
+more request, taking what the read answered rather than reading again: two requests, and no
+cache needed. Neither GitHub's `updateIssue` nor its REST API takes a precondition, so the read
+is what holds the version; a change landing in the moment between the read and the write is the
+one still overwritten.
+
 The cache is an efficiency layer and never a snapshot: it serves the pinned version or a later
 one, keeps one entry per record, and is shared and cleared freely. To keep an exact version of a
 task, copy it into a folder of Markdown of your own with `task copy`.
@@ -1716,17 +1846,55 @@ by the named source's routes. So does the engine's own member copy, which is wha
 engine's write-back uses.
 
 - **A task** goes where its own repositories route it.
-- **A project's home** goes to a routed source only when every task the copy carries routes
-  there, and so do the project's own repositories when it names any. Any other project's home
-  is the named destination. With `--no-tasks`, the project's own repositories alone decide.
-  **A home that already exists stays where it is**: a task added later that routes back to
-  the named destination goes into a member project there.
+- **A project's home** is placed by its **voters**: every task the copy carries that names at
+  least one repository, and the project's own `repositories` when it names any. A task naming
+  no repository, and every document, never votes.
+  - When every voter places at one source, the home goes there — so a plan of tasks routed
+    to one source, plus a person's step naming no repository, lands wholly in that source.
+  - When the voters disagree, the home is the named destination, with a member project for
+    each routed task — unless the [public boundary](#the-public-boundary) is active and any
+    item of the plan classifies private. Then the home goes to the source declared private
+    that the plan's private voters place at, by their own repositories and the placement a
+    private item takes. When those voters place at two different private sources and the
+    plan has no home yet, the copy is refused before anything is written, naming each source
+    and the qualified ids of the items placing there. Every task of the plan then lands
+    canonically beside that private home, and each public voter is seen where its own
+    repositories place it only through a neutral **public projection** — see [Public
+    projections of a private plan](#public-projections-of-a-private-plan).
+  - With no voter at all, the home is the named destination. With `--no-tasks` only the
+    project's own repositories can vote.
+  - A `{classification: private, to: <source>}` entry keeps its precedence: a project holding
+    anything private goes there whole, with every task and document in it, its public tasks
+    projected where their own placement is.
+  - **A home that already exists stays where it is**, found by the project's link or origin
+    and naming it back: a task added later that routes elsewhere goes into a member project
+    there. A private plan whose existing home sits in a source not declared private is refused
+    before anything is written, while the boundary is active; the home is never moved.
+- **A task naming no repository**, carried by a project copy, goes with its home, wherever the
+  home went; its own placement is never consulted.
 - **A task routed away from its home's source** goes into the home's **member project** in
-  that source, found through the home's `onetaskgraph.members` — or created, with the home's
-  title and status and `onetaskgraph.member_of` naming the home, and recorded on the home in
-  the same copy. A home has at most one member per source. `task create` files a routed task
-  the same way, under the member of the project it names.
+  that source, found through the home's `onetaskgraph.members`, or else as the project there
+  whose `onetaskgraph.member_of` names the home — or created, with the home's title and status
+  and `onetaskgraph.member_of` naming the home, and recorded on the home in the same copy. A
+  member in a source not declared private, of a home in one that is, records no
+  `onetaskgraph.member_of`: the home's own list is what ties them. A home has at most one
+  member per source. `task create` files a routed task the same way, under the member of the
+  project it names.
 - **A document** goes with its project's home.
+
+**A copy never creates a second project of one plan in a source.** When a copy would create
+a home or a member project in a source that already holds this plan's project there — the
+member the plan's counterpart home names in its `onetaskgraph.members` for that source, or a
+project whose `onetaskgraph.member_of` names that home — it uses that project instead. The
+counterpart home is the project the copied project's `onetaskgraph.copies` links to in another
+source, naming it back as its origin — or naming none, where a copy out of a private source
+withheld it. Taken
+over as the home, it drops `onetaskgraph.member_of` and records `onetaskgraph.origin` naming
+the copied project, the copied project's `onetaskgraph.copies` records the link to it as any
+copy's link is recorded, and the former home's `onetaskgraph.members` no longer names it; its report says `via: scan`. So
+copying a plan `--to` the source its routed tasks went to, after a routed copy gave it a home
+elsewhere, leaves that source holding one project of the plan, carrying every routed task. No
+key is renamed, and none is removed from an item the copy does not write.
 
 A task's project is still a native id of its own source: a plan spanning two sources is a
 home plus a member project in the other, never a project holding another source's tasks. An
@@ -1772,8 +1940,9 @@ things decide where an item may be written, and one decides what it may say ther
 `public` or `private`. A folder of Markdown writes `classification: private` in the front
 matter and nothing while it is public; a hosted source keeps it under the reserved metadata key
 `onetaskgraph.classification`. An item written before it existed reads as public. It only ever
-tightens: an item naming a repository that is not public is private, an item filed under a
-private project is private, and an explicit `public` changes neither. A project is the strictest
+tightens: an item naming a repository that is not public is private, a document filed under a
+private project is private, and an explicit `public` changes neither — a task's project never
+tightens it (see below). A project is the strictest
 of its own classification, its tasks' and its documents', and a store writes it so — so a
 project stays private after the members that made it private are gone, and a copy never writes
 an item looser than the destination already holds it. `task create`, `document create` and
@@ -1830,23 +1999,33 @@ references among `paths` — and **passes it only by exiting 0 with `{"verdict":
 refusal names where the check stopped and never what it found; no command, a failure, or any
 other answer is unavailable, which never passes.
 
+**A task owns its classification.** Who may read a task is its own declaration and every
+repository it names, and nothing else: all-public repositories leave it public unless it says
+`private`, and any private or unknown one makes it private. The project it is filed under never
+tightens it, so a public task in a private coordination project is public — read, depended on,
+narrowly written and copied on its own as the public task it is, a copy on its own naming no
+private project it is filed under. The tightening runs the other way: a project holding any
+private task or document is private, and so is every document filed under a private project. A
+classification already recorded private — declared, or written by an earlier copy — stays
+private: no copy, re-copy or update loosens it.
+
 **When the boundary is active.** It is active when the configuration names a `write_policy`,
 when any source declares a `visibility`, or when a program linking the engine supplies its own
 policy. An inactive store still persists, copies and routes classification, and still refuses
 an explicitly private item anywhere not declared private — at a create, a copy, a route and a
 render — but it consults no repository's visibility, reads nothing extra before a narrow
-write, and does not read a project to learn whether an item filed under it inherits a private
-classification, so a store that has not opted in answers and spends exactly what it did before. **A
+write, and does not read a project to learn whether a document filed under it inherits a
+private classification, so a store that has not opted in answers and spends exactly what it did before. **A
 store that wants repositories screened has to configure `write_policy` or declare a
 visibility.** Active:
 
 - a repository the policy does not answer `public` for makes an item private;
 - a write to a source not declared private — `unknown` included — is screened as public, and a
   missing or failed check refuses it;
-- a narrow write (`task status set`, `priority set`, `content set`, `metadata set`, `update`,
-  `comment add` and `edit`, `render`) to an item of a source not verified private reads the
-  item for its classification, with what it inherits — a task's or a document's project, a
-  project's tasks and documents — and refuses a private one; to a source verified private it
+- a narrow write (`task status set`, `project status set`, `priority set`, `content set`,
+  `metadata set`, `update`, `comment add` and `edit`, `render`) to an item of a source not verified private reads the
+  item for its classification, with what it inherits — a document's project, a project's
+  tasks and documents; a task inherits nothing — and refuses a private one; to a source verified private it
   reads nothing more.
 
 **Routing by classification.** A route entry may match on `classification` instead of
@@ -1854,9 +2033,74 @@ visibility.** Active:
 Safety is decided before matching — a private item is only ever placed in a source declared
 private, classification entries are tried before repository entries, and otherwise the order
 is the one written. A project holding anything private goes, with every task and document in
-it, wholly to one private source, whatever its tasks' repositories would say; with none
-reachable, the whole copy is refused before anything is written. `sources route <SOURCE>
---classification private` answers where such an item would go.
+it, wholly to the private source a classification entry names, whatever its tasks'
+repositories would say. Without one, its home goes where its private tasks' repositories route
+it — see [Which writes route, and where each item lands](#which-writes-route-and-where-each-item-lands);
+with no private source reachable, the whole copy is refused before anything is written. Either
+way every task of the plan lands canonically beside that private home, and its public tasks are
+seen publicly only through the views below. `sources route <SOURCE> --classification private`
+answers where such an item would go.
+
+**Public projections of a private plan.** A private coordination project copied, while the
+boundary is active, to a home declared private — `project copy PRIVATE_HOME --to
+PRIVATE_DESTINATION` — keeps every canonical task, edge, description, design document, approval
+and rendering provenance in that destination, and makes one **view** of each public task in the
+source its repositories route it to as public, when that is a source not declared private:
+
+- one project per such source, created under an opaque id (`pw-…`) and titled `Public work`,
+  naming the views' own public repositories and carrying one reserved key,
+  `onetaskgraph.allocation`, a random nonce derived from nothing private — and nothing else;
+- one task per public task, created under an opaque id (`pt-…`), carrying its screened title,
+  content, repositories and status, and depending only on the views of other public tasks — no
+  labels, priority, metadata, origin, copy link, delivery, member list, count or path of the
+  private plan;
+- every view put to the caller's check, every Markdown link in its content held to being a URL,
+  a fragment or one of its own image assets, and any raw HTML tag carrying an attribute — or a
+  `style` or `script` element — refused, since a view cannot read where such HTML points,
+  **before the copy writes anything**: a view naming private material, or carrying a link it
+  could not, refuses the whole copy.
+
+A view is a view, never another executable task: the engine reads and writes the canonical
+records, a view never enters its task enumeration, and a person's edit of a view changes nothing
+of the plan and is overwritten by the next copy, which takes every view's content from the
+canonical records again. The private destination project alone records which view is each
+canonical task's, at `onetaskgraph.public_projections`:
+
+```json
+{"schema_version": 1,
+ "tasks": [{"task": "vault:widget", "projection": "site:pt-57c4c9592576a5b1"}],
+ "projects": [{"source": "site", "allocation": "3f9c…", "project": "pw-0c1d2e3f4a5b6c7d"}]}
+```
+
+`task` is the canonical destination task and `projection` its view, both qualified, unique by
+either id, and a projection is never in a source declared private; a map that breaks any of that
+is refused rather than trusted. `projects`, absent when empty, names each public source's
+`Public work` project: the `allocation` it was created carrying, recorded before the create is
+sent, and the `project` id that source assigned it, recorded once it answers and before any view
+is filed under it; one entry per source, never a source declared private. A copy never carries the map anywhere, and records each view in
+it the moment the view is created, so a copy interrupted part way and run again finds every view
+it made — by the map, by its opaque id, or, at a destination that issues ids of its own, as the
+one task under the public project no map entry names with the view's title and repositories —
+rather than making a second. The public project is found by ownership alone: by the `project`
+its entry records, or — when the copy never learned that id, its
+create's answer lost or the copy ended first — as the one project, whatever its title,
+carrying its recorded `allocation` — refused, writing nothing, when that one is no longer a
+neutral `Public work` or when two carry it — created afresh, carrying that same allocation, only when none does. No other
+project is ever taken or altered, however much it looks like one: an unrelated empty `Public work`
+naming the same repositories is left as it is, so is a project a person moved a view into —
+that view is left where they put it, the next copy records a new view under the copy's own
+project, and a status is not mirrored to a view filed anywhere else — and so is one already
+sitting at the opaque
+id a create would ask for — a destination honouring that id would write over it, so the copy is
+refused, naming that project, before anything is written. A copy that fails takes back the project it asked
+for by its allocation even when the answer was lost; when the destination will not take it back,
+the private project keeps the allocation, is named among what is still there, and the next copy
+resumes into that project rather than making another. A view recorded private is refused rather than written public again,
+and every field a person adds to a view in public is taken off by the next copy. A canonical task
+with a view hands it every new status category — `task status set` and a `task update` naming a
+status each answer the view as `projection`, and a ticket the delivery rule moves moves its view —
+through the view's own screened status write; nothing but the category crosses, and a view's other
+fields change only with the next copy.
 
 **Every check runs before the first write.** A copy holds every item of every project to the
 boundary before it writes any, and each write reads its destination's reality immediately
@@ -1876,22 +2120,36 @@ own record. Between public items nothing is left out. While the boundary is acti
 into a source not declared private first reads, once per command, every item outside the copy
 that a carried dependency or delivery names in a source not declared private, and withholds
 its id when that item is private by its own record, its repositories, or what it inherits —
-a task the project it is filed under, a project every task and document it holds — whatever
-its source declares; a reference whose classification cannot be read — its source not
-configured, any of those reads failing, no such item, or a task filed under a project its
-source does not hold or cannot read — is refused before anything is written. A `--depends-on` or
+a project every task and document it holds, a document its project — whatever its source
+declares; a reference whose classification cannot be read — its source not configured, any of
+those reads failing, or no such item — is refused before anything is written. A `--depends-on` or
 `--delivers` naming such an item — or, while the boundary is active, an item of any other
 source read as private, with what it inherits, or one it cannot classify — is the caller asking
 for it to be written, so that write is refused before anything is written rather than quietly
 answering something else.
 
-**A public task's dependency on a private task is kept on the private side.** A copy that
+**A public task names a private prerequisite opaquely.** Onto a source not declared private, a
+dependency on a private item — a `--depends-on <private source>:<native id>`, or an edge a copy
+carries — is written as `{"designator", "id", "kind"}`: the private tracker's designator, which
+conveys nothing about it, and the item's native id, read once at its source to confirm it is
+one. A prefixed human key (`ABC-123`), a URL, a slug, and an endpoint object carrying any key
+beyond those three are refused before anything is written, with `--json` kind
+`private-reference-content`, naming the form or the key and never its value. A private source
+whose backend has no identifier of its own is named by its `public_alias` — a source key, 16 to
+64 of `A-Z a-z 0-9 _ -`, declared identically on every host configuring that tracker. A source
+with neither keeps the rule below. `docs/metadata.md`, under "The opaque far end" and "Which
+sources a dependency read asks", states the form and the rule.
+
+**A public task's dependency on a private task is kept on the private side**, when the private
+task's source has no designator. A copy that
 withholds an edge from a task it lands somewhere not declared private to a task of the copied
 set that lands in a source declared private records that edge on the private task instead,
 under the reserved key `onetaskgraph.depended_on_by`, one entry per dependent's qualified id.
 So a plan whose home is on a public board and whose member project is in a private source keeps
 its order both ways. `task deps` of the public task also asks every source declared private
-which of its tasks record it, a copy of a task filed under a home naming a member in such a
+which of its tasks record it — only while the public task carries a copy's record and not
+`onetaskgraph.edges_on_record`, the mark a copy leaves on a task whose every edge is its own,
+so a task no copy landed never costs a private source a request — a copy of a task filed under a home naming a member in such a
 source asks that source and carries the edge to the private task's counterpart, `task deps
 --direction depended-on-by` of the private task reads what it records, and `project graph`
 draws the edge. A source declared private that could not be asked — its credential absent or

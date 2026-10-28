@@ -126,9 +126,10 @@ pub struct Task {
     ///
     /// Defaulted and left out of the wire while `public`, so a task written before this
     /// field existed reads as public and a reader written before it reads what it always
-    /// read. It is the *declared* classification: the engine tightens it by the task's
-    /// repositories and its project before it decides where the task may be written, and
-    /// nothing written here can loosen either.
+    /// read. It is the *declared* classification: the engine tightens it by the task's own
+    /// repositories — any private or unknown one makes the task private — before it decides
+    /// where the task may be written, and nothing written here can loosen that. The project
+    /// a task is filed under never tightens it: a task's visibility is its own.
     #[serde(default, skip_serializing_if = "Classification::is_public")]
     #[schemars(!skip_serializing_if)]
     pub classification: Classification,
@@ -232,7 +233,8 @@ pub struct Document {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Who may read this document, as it was declared, on the terms of
-    /// [`Task::classification`].
+    /// [`Task::classification`] — except that a document filed under a private project is
+    /// private, however this reads.
     #[serde(default, skip_serializing_if = "Classification::is_public")]
     #[schemars(!skip_serializing_if)]
     pub classification: Classification,
@@ -242,8 +244,9 @@ pub struct Document {
 ///
 /// Two values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of
 /// any two is the one an item they both describe carries. Nothing combines them any other
-/// way, which is what makes an explicit `public` unable to loosen a private repository or a
-/// private project — a classification only ever tightens.
+/// way, which is what makes an explicit `public` unable to loosen a private repository, or
+/// a document's private project — a classification only ever tightens. A task's project
+/// never tightens the task.
 ///
 /// It is recorded on the item and travels with it. A source whose backend has no notion of
 /// its own records it under [`Self::METADATA_KEY`], exactly as it records
@@ -805,7 +808,9 @@ impl DependencyEdge {
     /// The forward edges `near` records under [`Self::RECORDED_KEY`], or none.
     ///
     /// The key holds a list of endpoints — a bare string is a native id naming a task,
-    /// and `{"id": "<source>:<native>", "kind": "project"}` names any item of any source.
+    /// `{"id": "<source>:<native>", "kind": "project"}` names any item of any source, and
+    /// `{"designator": "<plugin>/<hex>", "id": "<native>", "kind": "task"}` names an item of
+    /// whichever tracker that designator is, conveying nothing about it.
     /// Each becomes one `blocks` edge from `near` to that endpoint.
     ///
     /// `natively_names` is the kind of item the near item's **own backend** can relate it
@@ -844,9 +849,12 @@ impl DependencyEdge {
             })?;
         far.into_iter()
             .map(|to| {
-                let names_this_source = to
-                    .source()
-                    .is_none_or(|source| source == near_source.as_str());
+                // An opaque far end names a tracker rather than a source, which is never one
+                // this backend relates.
+                let names_this_source = to.designator().is_none()
+                    && to
+                        .source()
+                        .is_none_or(|source| source == near_source.as_str());
                 if names_this_source && natively_names == Some(to.kind) {
                     return Err(format!(
                         "{key} on {near} records {to}, which this source can relate \
@@ -866,10 +874,15 @@ impl DependencyEdge {
 }
 
 /// One endpoint of a dependency edge.
+///
+/// Three forms: a native id of the source reporting it, a qualified `<source>:<native>` id,
+/// and the **opaque** form — a [`Designator`] naming the tracker that holds the item and the
+/// item's native id there, which names a private item from a public one while conveying
+/// nothing about it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DependencyEndpoint {
-    /// A qualified `<source>:<native>` id, or a legacy native id which the engine
-    /// qualifies to the source reporting the edge.
+    /// A qualified `<source>:<native>` id, a legacy native id which the engine qualifies to
+    /// the source reporting the edge, or a designator with a native id.
     id: EndpointIdentity,
     /// Whether the endpoint names a task or a project.
     pub kind: ItemKind,
@@ -879,19 +892,168 @@ pub struct DependencyEndpoint {
 enum EndpointIdentity {
     Native(String),
     Qualified(String),
+    Opaque { designator: Designator, id: String },
 }
 
 impl EndpointIdentity {
     fn as_str(&self) -> &str {
         match self {
-            Self::Native(id) | Self::Qualified(id) => id,
+            Self::Native(id) | Self::Qualified(id) | Self::Opaque { id, .. } => id,
         }
     }
 
     fn into_string(self) -> String {
         match self {
-            Self::Native(id) | Self::Qualified(id) => id,
+            Self::Native(id) | Self::Qualified(id) | Self::Opaque { id, .. } => id,
         }
+    }
+}
+
+/// The keys the opaque form of a [`DependencyEndpoint`] holds, and the only ones.
+pub(crate) const OPAQUE_ENDPOINT_KEYS: [&str; 3] = ["designator", "id", "kind"];
+
+/// Names a tracker without conveying anything about it: `<plugin>/<64 lowercase hex>`, the
+/// SHA-256 of `<plugin>\n<identifier>` over the backend's own opaque identifier of itself —
+/// a Linear workspace's organization id, a GitHub Project's node id — or, for a plugin whose
+/// backend has none, `alias/<public_alias>`, the alias every host's configuration of that
+/// tracker declares identically.
+///
+/// The one spelling, validated wherever one is built or read, so a stored opaque edge cannot
+/// carry anything a designator does not.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub struct Designator(String);
+
+/// The pattern every [`Designator`] matches, as the schema publishes it. What
+/// [`Designator::try_from`] accepts is reconciled with it by `tests/designator_pattern.rs` in
+/// `onetaskgraph-core`, over the schema the bundle emits.
+pub(crate) const DESIGNATOR_PATTERN: &str =
+    "^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$";
+
+impl JsonSchema for Designator {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Designator".into()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "description": "A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+            "type": "string",
+            "pattern": DESIGNATOR_PATTERN
+        })
+    }
+}
+
+impl Designator {
+    /// The prefix of a designator built from a configured `public_alias`.
+    pub const ALIAS_PREFIX: &'static str = "alias";
+
+    /// The designator of a backend `plugin` identifies by `identifier`, its own opaque
+    /// identifier of itself.
+    ///
+    /// # Errors
+    ///
+    /// A message when `plugin` is not a plugin kind's spelling — the pattern a source name
+    /// matches — or is [`Self::ALIAS_PREFIX`], which an alias designator's prefix is.
+    pub fn of_backend(plugin: &str, identifier: &str) -> Result<Self, String> {
+        use sha2::{Digest, Sha256};
+        use std::fmt::Write as _;
+        if plugin == Self::ALIAS_PREFIX || SourceName::new(plugin).is_err() {
+            return Err(format!(
+                "{plugin:?} cannot prefix a designator: a plugin kind is lower-case letters, \
+                 digits and dashes, and not {:?}",
+                Self::ALIAS_PREFIX
+            ));
+        }
+        let mut hex = String::with_capacity(64);
+        for byte in Sha256::digest(format!("{plugin}\n{identifier}").as_bytes()) {
+            write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
+        }
+        Ok(Self(format!("{plugin}/{hex}")))
+    }
+
+    /// The designator of a tracker whose configuration declares `alias` as its
+    /// `public_alias`.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the pattern when `alias` is not one.
+    pub fn of_alias(alias: &str) -> Result<Self, String> {
+        if Self::is_public_alias(alias) {
+            Ok(Self(format!("{}/{alias}", Self::ALIAS_PREFIX)))
+        } else {
+            Err(format!(
+                "a public_alias is 16 to 64 of A-Z, a-z, 0-9, `_` and `-` \
+                 (^[A-Za-z0-9_-]{{16,64}}$), and this one is {} characters of something else",
+                alias.chars().count()
+            ))
+        }
+    }
+
+    /// Whether `alias` is a valid `public_alias`: `^[A-Za-z0-9_-]{16,64}$`.
+    #[must_use]
+    pub fn is_public_alias(alias: &str) -> bool {
+        (16..=64).contains(&alias.len())
+            && alias
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    }
+
+    /// The designator as it is spelled.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// What comes before the `/`: the plugin whose backend it digests, or
+    /// [`Self::ALIAS_PREFIX`].
+    #[must_use]
+    pub fn prefix(&self) -> &str {
+        self.0.split_once('/').map_or("", |(prefix, _)| prefix)
+    }
+
+    /// Whether it was built from a configured `public_alias`.
+    #[must_use]
+    pub fn is_alias(&self) -> bool {
+        self.prefix() == Self::ALIAS_PREFIX
+    }
+}
+
+impl TryFrom<String> for Designator {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let refused =
+            || "a designator is `<plugin>/<64 lowercase hex>` or `alias/<public_alias>`".to_owned();
+        let (prefix, rest) = value.split_once('/').ok_or_else(refused)?;
+        if prefix == Self::ALIAS_PREFIX {
+            return Self::of_alias(rest);
+        }
+        let plugin = SourceName::new(prefix).is_ok();
+        let digest = rest.len() == 64
+            && rest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+        if plugin && digest {
+            Ok(Self(value))
+        } else {
+            Err(refused())
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Designator {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Self::try_from(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl std::fmt::Display for Designator {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
     }
 }
 
@@ -902,10 +1064,13 @@ impl Serialize for DependencyEndpoint {
     {
         #[derive(Serialize)]
         struct Wire<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            designator: Option<&'a Designator>,
             id: &'a str,
             kind: ItemKind,
         }
         Wire {
+            designator: self.designator(),
             id: self.id(),
             kind: self.kind,
         }
@@ -920,7 +1085,7 @@ impl JsonSchema for DependencyEndpoint {
 
     fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
         json_schema!({
-            "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead.",
+            "description": "A dependency endpoint. A bare string is a native id of the source reporting it, and this decoding reads one as a task; a reader that knows the level it was written at — a source's own configuration, say — may read it at that level instead. An object with a `designator` is the opaque form: the item's native id in the tracker the designator names, which a reader resolves to whichever configured source that tracker is.",
             "oneOf": [
                 {"type": "string", "minLength": 1},
                 {
@@ -928,6 +1093,16 @@ impl JsonSchema for DependencyEndpoint {
                     "additionalProperties": false,
                     "required": ["id", "kind"],
                     "properties": {
+                        "id": {"type": "string", "minLength": 1},
+                        "kind": {"type": "string", "enum": ["task", "project"]}
+                    }
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["designator", "id", "kind"],
+                    "properties": {
+                        "designator": {"type": "string", "pattern": DESIGNATOR_PATTERN},
                         "id": {"type": "string", "minLength": 1},
                         "kind": {"type": "string", "enum": ["task", "project"]}
                     }
@@ -956,6 +1131,45 @@ impl DependencyEndpoint {
         })
     }
 
+    /// The opaque endpoint naming `id`, an item's native id in the tracker `designator` names.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty id.
+    pub fn opaque(designator: Designator, id: String, kind: ItemKind) -> Result<Self, String> {
+        if id.is_empty() {
+            return Err("a dependency endpoint id cannot be empty".into());
+        }
+        Ok(Self {
+            id: EndpointIdentity::Opaque { designator, id },
+            kind,
+        })
+    }
+
+    /// Reads an endpoint from any of its three JSON forms, naming what about an object
+    /// makes it none of them.
+    ///
+    /// Unlike deserialization, which reads what a store already holds, this is for what a
+    /// caller asks to be written: an object carrying a key beyond `designator`, `id` and `kind` —
+    /// a title, a team, a URL — is refused with [`EndpointRefusal::Key`] naming that key, and
+    /// never its value.
+    ///
+    /// # Errors
+    ///
+    /// [`EndpointRefusal`].
+    pub fn from_value(value: &Value) -> Result<Self, EndpointRefusal> {
+        if let Value::Object(entries) = value
+            && let Some(key) = entries
+                .keys()
+                .find(|key| !OPAQUE_ENDPOINT_KEYS.contains(&key.as_str()))
+        {
+            return Err(EndpointRefusal::Key(key.clone()));
+        }
+        // Serde's diagnostic can repeat what it was given — an unknown `kind`, an id — so it is
+        // not carried.
+        serde_json::from_value(value.clone()).map_err(|_| EndpointRefusal::Malformed)
+    }
+
     /// Builds an endpoint from a source-native id, whose contents are deliberately opaque.
     #[must_use]
     pub fn from_native(id: NativeId, kind: ItemKind) -> Self {
@@ -965,7 +1179,8 @@ impl DependencyEndpoint {
         }
     }
 
-    /// The serialized native or qualified id.
+    /// The serialized native or qualified id — for the opaque form, the native id in the
+    /// tracker [`Self::designator`] names.
     #[must_use]
     pub fn id(&self) -> &str {
         self.id.as_str()
@@ -983,15 +1198,32 @@ impl DependencyEndpoint {
         matches!(self.id, EndpointIdentity::Qualified(_))
     }
 
-    /// The source segment of a qualified id, or `None` for a native one.
+    /// The source segment of a qualified id, or `None` for a native or an opaque one.
     ///
     /// A native id belongs to whichever source reports it, so `None` reads as "this
-    /// source" rather than "no source".
+    /// source" rather than "no source" — ask [`Self::is_native`] before reading it that way,
+    /// because an opaque endpoint names no source of this configuration either.
     #[must_use]
     pub fn source(&self) -> Option<&str> {
         match &self.id {
             EndpointIdentity::Qualified(id) => id.split_once(':').map(|(source, _)| source),
-            EndpointIdentity::Native(_) => None,
+            EndpointIdentity::Native(_) | EndpointIdentity::Opaque { .. } => None,
+        }
+    }
+
+    /// Whether the id is a native id of the source reporting it: neither qualified nor
+    /// opaque.
+    #[must_use]
+    pub fn is_native(&self) -> bool {
+        matches!(self.id, EndpointIdentity::Native(_))
+    }
+
+    /// The tracker an opaque endpoint names, or `None` for the other two forms.
+    #[must_use]
+    pub fn designator(&self) -> Option<&Designator> {
+        match &self.id {
+            EndpointIdentity::Opaque { designator, .. } => Some(designator),
+            EndpointIdentity::Native(_) | EndpointIdentity::Qualified(_) => None,
         }
     }
 }
@@ -1002,12 +1234,30 @@ impl<'de> Deserialize<'de> for DependencyEndpoint {
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Opaque {
+            designator: Designator,
+            id: String,
+            kind: ItemKind,
+        }
+        #[derive(Deserialize)]
         #[serde(untagged)]
         enum Wire {
             Legacy(String),
             Endpoint { id: String, kind: ItemKind },
         }
-        match Wire::deserialize(deserializer)? {
+        let value = Value::deserialize(deserializer)?;
+        // An object naming a designator is the opaque form and nothing else, so a malformed
+        // one is refused rather than read as the qualified form with a key ignored.
+        if value.get("designator").is_some() {
+            let Opaque {
+                designator,
+                id,
+                kind,
+            } = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+            return Self::opaque(designator, id, kind).map_err(serde::de::Error::custom);
+        }
+        match Wire::deserialize(value).map_err(serde::de::Error::custom)? {
             Wire::Legacy(id) => {
                 if id.is_empty() {
                     return Err(serde::de::Error::custom(
@@ -1034,15 +1284,37 @@ fn valid_endpoint_id(id: String) -> Result<String, String> {
     Ok(id)
 }
 
+/// Why [`DependencyEndpoint::from_value`] refused what a caller asked to be written. Neither
+/// variant carries a value the caller gave, so a refusal can be printed anywhere.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum EndpointRefusal {
+    /// The object carries this key beyond `designator`, `id` and `kind`.
+    #[error(
+        "a dependency endpoint object carries `{0}`; it holds only `designator`, `id` and `kind`"
+    )]
+    Key(String),
+    /// It is none of the three forms.
+    #[error(
+        "not a dependency endpoint: give a native id, a qualified `<source>:<native id>`, or an \
+         object of `designator`, `id` and `kind`"
+    )]
+    Malformed,
+}
+
 impl std::fmt::Display for DependencyEndpoint {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.id().fmt(formatter)
+        match &self.id {
+            EndpointIdentity::Opaque { designator, id } => write!(formatter, "{designator}:{id}"),
+            EndpointIdentity::Native(id) | EndpointIdentity::Qualified(id) => id.fmt(formatter),
+        }
     }
 }
 
+/// An opaque endpoint names an item of another tracker, so it never equals a native id of the
+/// source comparing it, whatever id it holds.
 impl PartialEq<NativeId> for DependencyEndpoint {
     fn eq(&self, other: &NativeId) -> bool {
-        self.id() == other.0
+        self.designator().is_none() && self.id() == other.0
     }
 }
 

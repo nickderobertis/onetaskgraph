@@ -12,12 +12,20 @@ use onetaskgraph_core::cache::{ENTRY_SCHEMA, KIND_ENTRY_SCHEMA, entry_shapes, ki
 include!("support/bundle_digest.rs");
 
 /// Every entry schema number with the digest of the task and board entry shapes it publishes.
-const PUBLISHED_ENTRIES: &[(u32, u64)] = &[(1, 0x9da1_0712_ef55_81f8)];
+const PUBLISHED_ENTRIES: &[(u32, u64)] = &[
+    (1, 0x9da1_0712_ef55_81f8),
+    (2, 0x2616_f726_f856_0d98),
+    (3, 0xabfb_68ff_ed88_0835),
+];
 
 /// Every project, document, edge and byte entry schema number with the digest of the shapes it
 /// publishes — the same rule, for the kinds whose directories that number names.
-const PUBLISHED_KIND_ENTRIES: &[(u32, u64)] =
-    &[(1, 0xe94c_8da5_254a_45d2), (2, 0x75c8_dae9_dbc6_b859)];
+const PUBLISHED_KIND_ENTRIES: &[(u32, u64)] = &[
+    (1, 0xe94c_8da5_254a_45d2),
+    (2, 0x75c8_dae9_dbc6_b859),
+    (3, 0xa942_830c_4051_d5ad),
+    (4, 0x77ac_ae1a_58aa_189e),
+];
 
 #[test]
 fn the_entry_schema_number_moves_whenever_the_entry_shape_does() {

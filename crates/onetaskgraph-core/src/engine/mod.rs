@@ -23,15 +23,18 @@ mod comment;
 mod copy;
 mod delivery;
 mod dependents;
+mod designators;
 pub use dependents::Completeness;
 mod fetch;
 mod graph;
+mod held_off;
 mod join;
 mod local;
 mod metadata;
 mod narrow;
 mod rendered;
 mod resume;
+mod stored;
 mod update;
 
 use std::collections::BTreeMap;
@@ -50,7 +53,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::GlobalId;
 use crate::config::{Config, Placement, Routes};
-use crate::plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
+use crate::plan::{
+    PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan, Unanswered,
+};
 use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available_with_clock};
 
 use fetch::{Fetched, Stream, fits, merge, unrepeated, walk};
@@ -59,6 +64,7 @@ use local::{LocalDocuments, LocalProjects, LocalTasks};
 pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
+pub use assets::{HeldAsset, TaskAssetNames, TaskAssetsError};
 pub use closure::{
     CompleteAction, IssueCompleted, IssuesCompleted, ReconcileOutcome, StatusReconciled,
     StatusesReconciled,
@@ -66,13 +72,15 @@ pub use closure::{
 pub use comment::{
     CommentList, CommentWritten, DeletedComment, DocumentDetail, TaskDetail, TaskDetails,
 };
-pub(crate) use copy::malformed_links;
+pub use copy::MirrorTarget;
 pub(crate) use copy::spent_between;
 pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
-    CopyReport, CopyRequest, CopyScope, CopyVia, MatchBy, NoCounterpart, Spent,
+    CopyReport, CopyRequest, CopyScope, CopyVia, MatchBy, NoCounterpart, PublicProjection,
+    PublicProjections, Spent, StatusPolicy,
 };
-pub use delivery::{Delivered, DeliveryOutcome, TaskStatusSet, settled};
+pub(crate) use copy::{malformed_links, malformed_locations};
+pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};
 pub use graph::{
     GraphDirection, GraphEdge, GraphNode, GroupKey, PROJECT_GRAPH_SCHEMA_VERSION, ProjectGraph,
     ProjectGraphRequest, label as graph_label,
@@ -484,6 +492,43 @@ pub enum EngineError {
         named: String,
     },
 
+    /// A write to a source not declared private would name a private item by something other
+    /// than its native id: a prefixed human key, a URL or a slug, or an endpoint object
+    /// carrying a key beyond `designator`, `id` and `kind`. Only a native id can be written
+    /// where a private item must not be named, in the opaque form, because only it conveys
+    /// nothing; this refusal names the form, never what it held.
+    #[error(
+        "{item} cannot be written to source {destination}: it names a private item by {form}, \
+         which would carry what that item is called where it must not be named, so nothing was \
+         written\n\
+         next: name the item by its qualified native id, `<source>:<native id>`, which is \
+         written as an opaque designator and id, or take the dependency off."
+    )]
+    PrivateReferenceContent {
+        /// How the write named the item being written.
+        item: String,
+        /// The configured name of the destination.
+        destination: String,
+        /// The form of the reference — never its value.
+        form: boundary::ReferenceForm,
+    },
+
+    /// A dependency read asked for every edge, and one is recorded under a designator no source
+    /// this host configures is.
+    #[error(
+        "{id} depends on an item recorded under designator {designator}, and no source this host \
+         configures is that tracker, so the answer would lack it; the read was refused as \
+         --complete asks\n\
+         next: configure the tracker that designator names — its plugin and, for a folder, the \
+         same public_alias — or read without --complete to have it named in `unanswered`."
+    )]
+    DesignatorNotConfigured {
+        /// The item read.
+        id: String,
+        /// The designator no configured source is.
+        designator: onetaskgraph_plugin_api::Designator,
+    },
+
     /// A write to a source not declared private would name an item classified private, though
     /// its source is not declared private.
     #[error(
@@ -534,6 +579,54 @@ pub enum EngineError {
         /// The project, qualified.
         project: String,
         /// Why its classification could not be established.
+        why: String,
+    },
+
+    /// A public projection's content links to a local path, or carries raw HTML that could
+    /// name one, which the view could not carry.
+    #[error(
+        "{task} is public, and its content carries {reference:?}, a local link or raw HTML its \
+         public projection cannot carry; a projection never carries a path of the private \
+         store, nor HTML whose destination it cannot read, so nothing was written\n\
+         next: link to a URL in Markdown instead, attach the file as an image asset referenced \
+         as `./<name>`, or take it out of the task."
+    )]
+    ProjectionReference {
+        /// The canonical task, qualified.
+        task: crate::GlobalId,
+        /// The link's destination, as the content spells it.
+        reference: String,
+    },
+
+    /// A private project's `onetaskgraph.public_projections` map is not the shape this engine
+    /// reads.
+    #[error(
+        "the public projection map of {project} cannot be read ({why}), so nothing was \
+         written\n\
+         next: put that project's `onetaskgraph.public_projections` back as a copy wrote it, \
+         or remove it to let the next copy record it afresh."
+    )]
+    ProjectionsMalformed {
+        /// The private project, qualified.
+        project: crate::GlobalId,
+        /// What is wrong with it.
+        why: String,
+    },
+
+    /// A canonical task's status was set, and its public projection's could not be.
+    #[error(
+        "the status of {task} was set, but its public projection {projection} could not be \
+         given it ({why})\n\
+         next: set the status of {task} again once {projection}'s source answers, or copy its \
+         project again, which brings every projection in step."
+    )]
+    ProjectionNotMirrored {
+        /// The canonical task, qualified.
+        task: crate::GlobalId,
+        /// The view it has, or the map naming it when that could not be read — boxed, so every
+        /// other error is not as large as this one.
+        projection: Box<copy::MirrorTarget>,
+        /// Why its write failed.
         why: String,
     },
 
@@ -590,6 +683,23 @@ pub enum EngineError {
          next: copy that one task by its id with --expect, and the others without it"
     )]
     ExpectOneTask,
+
+    /// A document write expecting a version was refused because a read of the document answered
+    /// another — a change made at the source since the caller's read.
+    #[error(
+        "document {id} is at version {found}, not the version {expected} this write expects — \
+         it changed since that version was read — so nothing was written\n\
+         next: read the document again (`onetaskgraph document show`), decide whether the write \
+         still applies, and pass the version that read reports"
+    )]
+    VersionMoved {
+        /// The qualified id of the document.
+        id: String,
+        /// The version the write expected.
+        expected: String,
+        /// The version the read answered.
+        found: String,
+    },
 
     /// `--expect` named a task of a source that keeps no local cache, which is where what an
     /// expected write takes instead of reading lives.
@@ -1077,6 +1187,48 @@ pub enum EngineError {
         link: String,
     },
 
+    /// An explicit target cannot be combined with another target selection mode.
+    #[error(
+        "--target-task cannot be given with {flag}\nnext: choose one way to select the destination task."
+    )]
+    TargetTaskWith {
+        /// The incompatible option.
+        flag: CopyLookup,
+    },
+    /// An explicit target binds exactly one named source task.
+    #[error(
+        "--target-task requires exactly one source task id\nnext: name one task, without query selection."
+    )]
+    TargetTaskNeedsOne,
+    /// The target must belong to the configured destination.
+    #[error(
+        "target task {target} is not in destination {destination}\nnext: name a task in the destination source."
+    )]
+    TargetTaskSource {
+        /// The named task.
+        target: GlobalId,
+        /// The requested destination.
+        destination: SourceName,
+    },
+    /// The destination no longer holds the named task.
+    #[error(
+        "target task {target} does not exist\nnext: name an existing destination task whose origin names the source task."
+    )]
+    TargetTaskMissing {
+        /// The missing task.
+        target: GlobalId,
+    },
+    /// The named task does not record the source task as its origin.
+    #[error(
+        "target task {target} has no origin naming {item}\nnext: choose a destination task whose origin names {item}."
+    )]
+    TargetTaskOrigin {
+        /// The named destination task.
+        target: GlobalId,
+        /// The source task being copied.
+        item: GlobalId,
+    },
+
     /// `--create` was given beside a flag that says how to look for a counterpart, when
     /// `--create` says there is none to look for.
     #[error(
@@ -1145,6 +1297,45 @@ pub enum EngineError {
         item: GlobalId,
     },
 
+    /// A destination did not hold its own stored content stable: the follow-up write that sent
+    /// back exactly the content an earlier write's own answer said it stores — see
+    /// [`TaskSource::stored_content`](onetaskgraph_plugin_api::TaskSource::stored_content) — was
+    /// answered with something else again.
+    ///
+    /// A destination may rewrite the Markdown it is written, and the engine then takes what it
+    /// reported storing as the item's record and writes it back once, beside the fingerprints
+    /// it keeps over it. Only a destination that rewrites its own stored content is refused, so
+    /// the `body_digest` and the copy record the item carries are never vouched for over
+    /// content a later read would not hand back.
+    #[error(
+        "{item} was written, but source {} did not keep the content it said it stores: the \
+         follow-up write sent that content back and its answer stores it otherwise, first at \
+         line {line}:\n\
+         sent:   {}\n\
+         stored: {}\n\
+         so the fingerprints the item records cannot be vouched for, and no rendering check will \
+         accept it\n\
+         next: read the item back from source {} and compare it with what the line shows; a \
+         backend that rewrites its own stored content on every write is a defect of that \
+         backend or its plugin, so report it there, then write the item again.",
+        item.source,
+        diverged_line(sent.as_deref(), *line),
+        diverged_line(stored.as_deref(), *line),
+        item.source
+    )]
+    StoredContentDiverged {
+        /// The item as the destination holds it, qualified by the destination source.
+        item: GlobalId,
+        /// The first line, counted from 1, at which the two differ.
+        line: usize,
+        /// That line as the follow-up write sent it, `None` when the sent content ended before
+        /// it — told apart from an empty line, because a line Linear inserts and a line it leaves
+        /// out read alike otherwise.
+        sent: Option<String>,
+        /// That line as the destination stored it, `None` when the stored content ended before it.
+        stored: Option<String>,
+    },
+
     /// `--create` named an item that itself records a counterpart at the destination.
     ///
     /// Refused rather than created: the item's own `onetaskgraph.copies` link — or its
@@ -1178,6 +1369,26 @@ pub enum EngineError {
         id: GlobalId,
         /// The projects the copy carries, none of which it is a member of.
         projects: Vec<GlobalId>,
+    },
+
+    /// A members-only copy named a project with no counterpart where its members would land.
+    ///
+    /// Refused before anything is written, because a members-only copy leaves the project
+    /// alone: it is the whole project copy this names that creates one.
+    #[error(
+        "{project} has no counterpart in {missing} to copy its members into, and a \
+         members-only copy never creates or writes a project\n\
+         next: create it with `onetaskgraph project copy {project} --to {destination}`, then \
+         copy members into it with --members-only."
+    )]
+    NoProjectCounterpart {
+        /// The project the copy named.
+        project: GlobalId,
+        /// The destination the copy was asked to write.
+        destination: SourceName,
+        /// The source holding no counterpart: the destination, or one its routes send a
+        /// member to.
+        missing: SourceName,
     },
 
     /// A member copy's item depends on a member it was not told to carry, and that member
@@ -1222,6 +1433,34 @@ pub enum EngineError {
         counterpart: GlobalId,
         /// The source it routes to now.
         route: SourceName,
+    },
+
+    /// A routed copy of a plan holding private work could not choose one home for it: the
+    /// items whose repositories decide where its home goes, among those classified private,
+    /// route to more than one source declared private.
+    ///
+    /// Refused before anything is written. A plan is one home, and choosing one of the two
+    /// private sources would file the other's work under a member the first one names.
+    #[error(
+        "{project}'s private work routes to more than one private source, so it has no one \
+         home: {split}\n\
+         next: route the plan's private repositories to one source declared private, or add a \
+         `{{classification: private, to: <source>}}` route to the source it was copied to.",
+        split = .destinations
+            .iter()
+            .map(|(destination, items)| format!(
+                "{destination} for {}",
+                items.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+            ))
+            .collect::<Vec<_>>()
+            .join("; ")
+    )]
+    SplitPrivateHome {
+        /// The project being copied.
+        project: GlobalId,
+        /// Each private source its private work routes to, in the order first met, with the
+        /// items that route there.
+        destinations: Vec<(SourceName, Vec<GlobalId>)>,
     },
 
     /// A source refused something the copy asked of it.
@@ -1288,14 +1527,23 @@ pub enum EngineError {
     CopyDestinationUncertain {
         /// The malformed answer, as the destination's refusal of the write.
         error: Box<EngineError>,
-        // llmlint: ignore-block[invalid_states_unrepresentable] Both fields are `String` because this variant's shape is a stated contract other work builds against, and it matches its neighbours: `SourceRefused`, `NotWritable` and the rest name a source as a `String`. Both are only ever built in `engine/copy.rs`, from a configured source's own name and from one of three method literals.
+        // llmlint: ignore-block[invalid_states_unrepresentable] Both fields are `String` because this variant's shape is a stated contract other work builds against, and it matches its neighbours: `SourceRefused`, `NotWritable` and the rest name a source as a `String`. Both are only ever built in `engine/copy.rs`, from a configured source's own name and from one of four method literals.
         /// The destination source the create was sent to.
         destination: String,
-        /// The plugin method whose answer was malformed: `write_task`, `write_document` or
-        /// `write_project`.
+        /// The plugin method whose answer was malformed: `write_task`, `write_tasks`,
+        /// `write_document` or `write_project`.
         operation: String,
         // llmlint: ignore-end[invalid_states_unrepresentable]
     },
+}
+
+/// One side's `line` of a [`EngineError::StoredContentDiverged`] as its message shows it: the
+/// line quoted, or that side's content having ended before it.
+fn diverged_line(text: Option<&str>, line: usize) -> String {
+    match text {
+        Some(text) => format!("{text:?}"),
+        None => format!("no line {line}: the content ends at line {}", line - 1),
+    }
 }
 
 /// Why a wrapped failure happened, without the next action it would give on its own: a
@@ -1400,6 +1648,15 @@ pub struct Engine {
     caches: BTreeMap<SourceName, std::sync::Arc<crate::cache::SourceCache>>,
     /// The destination version a running `task copy --expect` names, while it runs.
     copy_expect: std::sync::Mutex<Option<String>>,
+    /// Which tracker each source reads, as its configuration declares and its plugin answers.
+    designators: designators::Designators,
+}
+
+/// `source`, sent nothing between a rate limit it answers and the reset that limit names, on
+/// `clock`.
+fn held_off(source: ResolvedSource, clock: &SharedClock) -> ResolvedSource {
+    let name = source.name().clone();
+    source.wrapped(|inner| Box::new(held_off::HeldOff::new(name, inner, clock.clone())))
 }
 
 impl Engine {
@@ -1443,13 +1700,14 @@ impl Engine {
                 None => source,
             })
             .collect();
-        let mut engine = Self::new(
+        let mut engine = Self::assembled(
             ready
                 .into_iter()
                 .map(ConfiguredSource::Ready)
                 .chain(unavailable.into_iter().map(ConfiguredSource::Unavailable))
                 .collect(),
             config.selected_sources(),
+            clock,
         )
         .with_routes(config.routes())
         .with_incomplete(config.incomplete().clone())
@@ -1458,13 +1716,35 @@ impl Engine {
             &config.visibilities(),
         ));
         engine.caches = caches;
+        engine.designators = designators::Designators::configured(config);
         engine
     }
 
     /// Drive sources built elsewhere — the engine's own tests, and any caller holding a
     /// source it did not resolve from a configuration document.
+    ///
+    /// Each ready source is put behind the engine's rate-limit memory on the system clock, as
+    /// [`build_with_clock`](Self::build_with_clock) puts each one behind it on the clock it is
+    /// handed: see `held_off`.
     #[must_use]
     pub fn new(sources: Vec<ConfiguredSource>, selection: Vec<SourceName>) -> Self {
+        Self::assembled(sources, selection, &system_clock())
+    }
+
+    /// An engine over `sources`, each ready one behind the rate-limit memory on `clock` — the
+    /// one place every source is put there, so every call to it passes through.
+    fn assembled(
+        sources: Vec<ConfiguredSource>,
+        selection: Vec<SourceName>,
+        clock: &SharedClock,
+    ) -> Self {
+        let sources = sources
+            .into_iter()
+            .map(|source| match source {
+                ConfiguredSource::Ready(source) => ConfiguredSource::Ready(held_off(source, clock)),
+                unavailable @ ConfiguredSource::Unavailable(_) => unavailable,
+            })
+            .collect();
         Self {
             sources,
             selection,
@@ -1473,6 +1753,7 @@ impl Engine {
             boundary: boundary::Boundary::default(),
             caches: BTreeMap::new(),
             copy_expect: std::sync::Mutex::new(None),
+            designators: designators::Designators::default(),
         }
     }
 
@@ -1582,6 +1863,8 @@ impl Engine {
     ///
     /// [`TaskSource::end_command`]: onetaskgraph_plugin_api::TaskSource::end_command
     pub async fn end_command(&self) -> Result<(), EngineError> {
+        // What the write policy answered was this command's: the next one asks again.
+        self.boundary.forget();
         let mut first = None;
         for source in self.ready() {
             if let Err(error) = source.source().end_command().await
@@ -1802,8 +2085,46 @@ impl Engine {
         &self,
         request: &ProjectRequest,
     ) -> Result<QueryResponse<Qualified<Project>>, EngineError> {
+        self.projects_copied_from(request, None).await
+    }
+
+    /// One page of the projects copied from `origin` — those whose recorded copy origin is
+    /// exactly that qualified id — in the shape [`projects`](Self::projects) answers, with
+    /// every other filter of `request` applied as it applies them.
+    ///
+    /// Each selected source is asked [`TaskSource::query_projects_by_origin`], so a source
+    /// that can find one origin's copies answers without listing every project it holds, and
+    /// the plan reports the origin pushed down to it. Zero, one or several projects may come
+    /// back: which of several a caller wants is the caller's question.
+    ///
+    /// # Errors
+    ///
+    /// As [`tasks`](Self::tasks).
+    pub async fn projects_by_origin(
+        &self,
+        request: &ProjectRequest,
+        origin: &GlobalId,
+    ) -> Result<QueryResponse<Qualified<Project>>, EngineError> {
+        self.projects_copied_from(request, Some(origin)).await
+    }
+
+    /// [`projects`](Self::projects), narrowed to one copy origin when `origin` names one.
+    async fn projects_copied_from(
+        &self,
+        request: &ProjectRequest,
+        origin: Option<&GlobalId>,
+    ) -> Result<QueryResponse<Qualified<Project>>, EngineError> {
         let names = self.resolve_selection(&request.sources)?;
-        let query = shape("project-list", &names, &request.filters);
+        // An origin is part of what a page token resumes, so a token one origin's listing
+        // handed out is refused by another's, as a token of other filters is.
+        let query = match origin {
+            None => shape("project-list", &names, &request.filters),
+            Some(origin) => shape(
+                "project-list",
+                &names,
+                &(&request.filters, origin.to_string()),
+            ),
+        };
         let states = resumption(
             self,
             request.paging.token.as_ref(),
@@ -1830,7 +2151,7 @@ impl Engine {
 
         let shapes: Vec<ProjectShape> = ready
             .iter()
-            .map(|source| shape_projects(&source.source().capabilities(), &request.filters))
+            .map(|source| shape_projects(&source.source().capabilities(), &request.filters, origin))
             .collect();
         let counters: Vec<AtomicU32> = ready.iter().map(|_| AtomicU32::new(0)).collect();
         let outcomes: Vec<Outcomes> = shapes.iter().map(|shape| shape.outcomes.clone()).collect();
@@ -2207,7 +2528,9 @@ impl Engine {
     ) -> Result<QueryResponse<QualifiedEdge>, EngineError> {
         let name = self.known(&request.id.source)?;
         let recording = match (entity, request.direction) {
-            (Entity::Task, Direction::DependsOn) => self.recording_sources(&name),
+            (Entity::Task, Direction::DependsOn) => {
+                self.recording_sources_for(&name, &request.id.native).await
+            }
             _ => Vec::new(),
         };
         let records_its_own = entity == Entity::Task
@@ -2305,6 +2628,22 @@ impl Engine {
                 Outcomes::default()
             });
         }
+        // An opaque far end is answered as the source its designator is, and one no configured
+        // source is leaves the page and is named instead.
+        let mut resolving = designators::Resolving::default();
+        for fetched in walked.iter_mut().flatten() {
+            let mut kept = Vec::with_capacity(fetched.rows.len());
+            for mut row in std::mem::take(&mut fetched.rows) {
+                if let Some(to) = self
+                    .resolve_endpoint(row.item.to.clone(), &mut resolving)
+                    .await
+                {
+                    row.item.to = to;
+                    kept.push(row);
+                }
+            }
+            fetched.rows = kept;
+        }
         let ready: Vec<&ResolvedSource> = streams.iter().map(|(stream, _, _)| *stream).collect();
         let kinds: Vec<StreamKind> = streams.iter().map(|(_, kind, _)| *kind).collect();
 
@@ -2327,7 +2666,13 @@ impl Engine {
                 .into_iter()
                 .partition(|failure| self.records_unasked(&name, failure));
             response.errors = failed;
-            response.unanswered = unasked;
+            response.unanswered = unasked.into_iter().map(Unanswered::Source).collect();
+        }
+        if request.completeness == Completeness::Required {
+            resolving.required(&request.id.to_string(), &mut response.errors)?;
+        } else {
+            response.errors.extend(resolving.failed);
+            response.unanswered.extend(resolving.unanswered);
         }
         Ok(response)
     }
@@ -2470,11 +2815,20 @@ struct TaskShape {
 /// As [`TaskShape`], for projects.
 struct ProjectShape {
     /// What the source is asked.
-    pushed: ProjectQuery,
+    pushed: ProjectAsk,
     /// What the engine narrows afterwards.
     local: LocalProjects,
     /// What to report.
     outcomes: Outcomes,
+}
+
+/// Which of its two project listings a source is asked: one query, or every project copied
+/// from one origin — never both, because the second carries nothing of the first.
+enum ProjectAsk {
+    /// [`TaskSource::query_projects`] with this query.
+    Query(ProjectQuery),
+    /// [`TaskSource::query_projects_by_origin`] for this origin.
+    Origin(GlobalId),
 }
 
 /// As [`TaskShape`], for documents.
@@ -3067,11 +3421,55 @@ fn shape_tasks(
 }
 
 /// Split a project query between the source and the engine.
-fn shape_projects(capabilities: &Capabilities, filters: &Filters) -> ProjectShape {
+///
+/// A listing by copy origin asks the source [`TaskSource::query_projects_by_origin`], which
+/// carries the origin and nothing else, so every other predicate of it is the engine's to
+/// apply — and the origin itself is checked again here, so a source answering wider than
+/// the method states cannot widen the answer.
+fn shape_projects(
+    capabilities: &Capabilities,
+    filters: &Filters,
+    origin: Option<&GlobalId>,
+) -> ProjectShape {
+    if let Some(origin) = origin {
+        let mut local = LocalProjects::default();
+        let mut outcomes = Outcomes::default();
+        local.labels = (!filters.labels.is_empty()).then(|| filters.labels.clone());
+        local.statuses.clone_from(&filters.statuses);
+        local.text.clone_from(&filters.text);
+        local.origin = Some(origin.clone());
+        if !filters.labels.is_empty() {
+            outcomes.record(Predicate::Label, Outcome::AppliedLocally);
+        }
+        if !filters.statuses.is_empty() {
+            outcomes.record(Predicate::Status, Outcome::AppliedLocally);
+        }
+        if let Some(text) = &filters.text {
+            outcomes.record_all(text_predicates(text.fields), Outcome::AppliedLocally);
+        }
+        outcomes.record(Predicate::Origin, Outcome::PushedDown);
+        return ProjectShape {
+            pushed: ProjectAsk::Origin(origin.clone()),
+            local,
+            outcomes,
+        };
+    }
+    let (pushed, local, outcomes) = shape_project_query(capabilities, filters);
+    ProjectShape {
+        pushed: ProjectAsk::Query(pushed),
+        local,
+        outcomes,
+    }
+}
+
+/// Split a project query that names no origin between the source and the engine.
+fn shape_project_query(
+    capabilities: &Capabilities,
+    filters: &Filters,
+) -> (ProjectQuery, LocalProjects, Outcomes) {
     let mut pushed = ProjectQuery::default();
     let mut local = LocalProjects::default();
     let mut outcomes = Outcomes::default();
-
     if !filters.labels.is_empty() {
         if capabilities.filter_by_label.is_native() {
             pushed.labels = filters.labels.clone();
@@ -3100,12 +3498,7 @@ fn shape_projects(capabilities: &Capabilities, filters: &Filters) -> ProjectShap
             outcomes.record_all(predicates, Outcome::AppliedLocally);
         }
     }
-
-    ProjectShape {
-        pushed,
-        local,
-        outcomes,
-    }
+    (pushed, local, outcomes)
 }
 
 /// Split a document query between the source and the engine.
@@ -3173,14 +3566,14 @@ fn shape_documents(
 fn shape_hits(capabilities: &Capabilities, filters: &Filters, stream: StreamKind) -> HitShape {
     match stream {
         StreamKind::Projects => {
-            let shaped = shape_projects(capabilities, filters);
+            let (projects, local_projects, outcomes) = shape_project_query(capabilities, filters);
             HitShape {
                 stream,
                 tasks: TaskQuery::default(),
-                projects: shaped.pushed,
+                projects,
                 local_tasks: LocalTasks::default(),
-                local_projects: shaped.local,
-                outcomes: shaped.outcomes,
+                local_projects,
+                outcomes,
             }
         }
         StreamKind::Items | StreamKind::Tasks | StreamKind::Recorded => {
@@ -3268,10 +3661,15 @@ async fn fetch_projects(
         |cursor, limit| async move {
             calls.fetch_add(1, Ordering::Relaxed);
             let request = PageRequest { cursor, limit };
-            source
-                .source()
-                .query_projects(&shape.pushed, &request)
-                .await
+            match &shape.pushed {
+                ProjectAsk::Origin(origin) => {
+                    source
+                        .source()
+                        .query_projects_by_origin(&origin.to_string(), &request)
+                        .await
+                }
+                ProjectAsk::Query(query) => source.source().query_projects(query, &request).await,
+            }
         },
     )
     .await

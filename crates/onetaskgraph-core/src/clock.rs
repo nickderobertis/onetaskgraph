@@ -20,6 +20,7 @@
 //! | client | `now <seq>` | What is virtual time now? |
 //! | coordinator | `now <seq> <nanos>` | It is `<nanos>` nanoseconds past the origin. |
 //! | client | `sleep <seq> <nanos>` | Wake this client's wait `<seq>` once `<nanos>` have passed. |
+//! | client | `sleep <seq> <nanos> <cause>` | The same, for a wait the plugin names a cause of — one word, a `WaitCause`, see [`Clock::sleep_because`]. A coordinator keeps it beside the wait. |
 //! | coordinator | `wake <seq>` | That wait is over. |
 //! | client | `cancel <seq>` | The wait `<seq>` was dropped before it was woken. |
 //!
@@ -37,7 +38,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use onetaskgraph_plugin_api::{Clock, SharedClock, system_clock};
+use onetaskgraph_plugin_api::{Clock, SharedClock, WaitCause, system_clock};
 use tokio::sync::oneshot;
 
 use crate::Environment;
@@ -269,6 +270,25 @@ impl Clock for SimulatedClient {
     }
 
     fn sleep(&self, duration: Duration) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        self.wait(duration, None)
+    }
+
+    fn sleep_because(
+        &self,
+        duration: Duration,
+        cause: WaitCause,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
+        self.wait(duration, Some(cause))
+    }
+}
+
+impl SimulatedClient {
+    /// One wait on the coordinator, naming its cause when it has one.
+    fn wait(
+        &self,
+        duration: Duration,
+        cause: Option<WaitCause>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
         let seq = self.shared.next();
         let (sender, receiver) = oneshot::channel();
         {
@@ -282,8 +302,12 @@ impl Clock for SimulatedClient {
             }
             pending.wakes.insert(seq, sender);
         }
-        self.shared
-            .send(&format!("sleep {seq} {}", duration.as_nanos()));
+        // A cause is one word on the wire, which `WaitCause` holds it to.
+        let line = match cause {
+            Some(cause) => format!("sleep {seq} {} {cause}", duration.as_nanos()),
+            None => format!("sleep {seq} {}", duration.as_nanos()),
+        };
+        self.shared.send(&line);
         Box::pin(Wait {
             shared: Arc::clone(&self.shared),
             seq,
@@ -361,6 +385,55 @@ mod tests {
             let refused = clock_choice(Some(malformed)).expect_err("refused");
             assert!(refused.contains(SIMULATED_CLOCK_VARIABLE), "{refused}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_named_cause_is_sent_as_its_word_beside_a_plain_sleep() {
+        // A stand-in coordinator over a real socket, waking each wait as it arrives and keeping
+        // every line the client sent: a wait with a cause carries its word as the line's last,
+        // and a plain sleep carries none.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let address = listener.local_addr().expect("its address");
+        let coordinator = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("the client connects");
+            let mut writer = stream.try_clone().expect("a second handle");
+            let mut sent = Vec::new();
+            for line in BufReader::new(stream).lines() {
+                let line = line.expect("a line");
+                let mut words = line.split_whitespace();
+                match words.next() {
+                    Some("attach") => writeln!(writer, "attached").expect("answered"),
+                    Some("sleep") => {
+                        let seq = words.next().expect("a sequence number");
+                        writeln!(writer, "wake {seq}").expect("woken");
+                        sent.push(line.clone());
+                        if sent.len() == 3 {
+                            return sent;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            sent
+        });
+        let clock = attach(address, 0).expect("attached");
+        let second = Duration::from_secs(1);
+        clock.sleep(second).await;
+        clock
+            .sleep_because(second, WaitCause::new("retry-after"))
+            .await;
+        clock
+            .sleep_because(second, WaitCause::new("board-filing"))
+            .await;
+        let nanos = second.as_nanos();
+        assert_eq!(
+            coordinator.join().expect("the coordinator"),
+            [
+                format!("sleep 0 {nanos}"),
+                format!("sleep 1 {nanos} retry-after"),
+                format!("sleep 2 {nanos} board-filing"),
+            ]
+        );
     }
 
     #[tokio::test]

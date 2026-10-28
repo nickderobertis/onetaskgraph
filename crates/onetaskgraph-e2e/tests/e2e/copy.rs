@@ -19,8 +19,9 @@ use crate::common::{SOURCE_BOUNDARIES, Sandbox, SourceBoundary, stderr, stdout};
 use crate::fixtures::{
     LINEAR_REFUSED_WRITE, ROWS, SOURCE, document, empty_folder,
     github_projects_failing_a_field_write_and_its_cleanup,
-    github_projects_failing_a_field_write_once, github_projects_failing_to_file_and_its_cleanup,
-    github_projects_failing_to_file_once, github_projects_reading_one_item_behind,
+    github_projects_failing_a_field_write_once,
+    github_projects_failing_to_read_a_filing_and_its_cleanup,
+    github_projects_failing_to_read_a_filing_once, github_projects_reading_one_item_behind,
     github_projects_with_board, linear_block, linear_empty_workspace,
     linear_failing_a_relation_write_once, qualified,
 };
@@ -1369,12 +1370,12 @@ fn a_copy_says_in_words_what_it_spent_and_nothing_where_nothing_meters() {
 }
 
 #[test]
-fn a_board_that_fails_between_creating_an_issue_and_filing_it_says_so_and_recovers() {
-    // Landing an item on a board is two calls — `createIssue`, then
-    // `addProjectV2ItemById` — so GitHub can fail between them, and what happens then is
-    // a journey rather than a reading of the code: the copy exits non-zero saying what
-    // GitHub said, the board holds nothing it was not already holding, and the retry
-    // lands exactly one item rather than two.
+fn a_board_that_fails_to_read_where_it_filed_a_created_issue_says_so_and_recovers() {
+    // Landing an item on a board is more than one call — `createIssue` filing it, then a
+    // read of the board item GitHub adds after answering — so GitHub can fail between them,
+    // and what happens then is a journey rather than a reading of the code: the copy exits
+    // non-zero saying what GitHub said, the board holds nothing it was not already holding,
+    // and the retry lands exactly one item rather than two.
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("plans");
     std::fs::create_dir_all(root.join("tasks")).unwrap();
@@ -1387,7 +1388,7 @@ fn a_board_that_fails_between_creating_an_issue_and_filing_it_says_so_and_recove
         "plans": {"plugin":"local-md","config":{
             "root": root, "status_mapping": {"Todo":"todo"}}},
         "board": {"plugin":"github-projects",
-                  "config": github_projects_failing_to_file_once(&sandbox)}
+                  "config": github_projects_failing_to_read_a_filing_once(&sandbox)}
     })));
 
     let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
@@ -2437,12 +2438,19 @@ fn a_project_copied_beside_itself_files_its_tasks_under_the_copy_and_links_them_
         }]),
         "{dependencies:#}"
     );
-    // The original is as it was, but for the one entry that records where it was copied to.
+    // The original is as it was, but for the two entries that record where it was copied to
+    // and where that copy is.
+    let copied = std::fs::canonicalize(root.join("tasks/rule-scope-2/alpha.md")).expect("the copy");
     assert_eq!(
         std::fs::read_to_string(root.join("tasks/rule-scope/alpha.md")).expect("the original"),
-        "---\ntitle: Alpha\nstatus: todo\nproject: rule-scope\n\
-         depends_on: [rule-scope/beta]\nmetadata:\n  \
-         \"onetaskgraph.copies\": {\"authoring\":\"authoring:rule-scope-2/alpha\"}\n---\nbody\n"
+        format!(
+            "---\ntitle: Alpha\nstatus: todo\nproject: rule-scope\n\
+             depends_on: [rule-scope/beta]\nmetadata:\n  \
+             \"onetaskgraph.copies\": {{\"authoring\":\"authoring:rule-scope-2/alpha\"}}\n  \
+             \"onetaskgraph.copy_locations\": {{\"authoring\":{{\"id\":\"authoring:rule-scope-2/alpha\",\
+             \"location\":{{\"path\":{}}}}}}}\n---\nbody\n",
+            json!(copied)
+        )
     );
 
     // Copied again onto the copy it made, each task is found where the first copy put it and
@@ -2907,6 +2915,250 @@ fn a_member_copy_it_cannot_finish_is_refused_before_it_writes_anything() {
     assert_eq!(files(&notes), before);
 }
 
+/// [`shadowed`], then changed at the source the way a write-back changes it between two
+/// member copies: the project renamed, `T-2` moved to `doing` and made the deliverer of a
+/// ticket the destination keeps, and a new task `T-5` — while the destination holds a task
+/// filed under the project that the source no longer has, which a whole copy reports
+/// orphaned. Answers the source root.
+fn shadowed_and_changed(sandbox: &Sandbox) -> std::path::PathBuf {
+    let root = shadowed(sandbox);
+    let notes = sandbox.project().join(NOTES);
+    for (path, from, to) in [
+        ("projects/P-1.md", "title: Engine", "title: Engine, renamed"),
+        (
+            "tasks/T-2.md",
+            "status: todo",
+            "status: doing\ndelivers: [\"notes:TICKET\"]",
+        ),
+    ] {
+        let path = root.join(path);
+        let text = std::fs::read_to_string(&path).expect("the source item");
+        std::fs::write(&path, text.replace(from, to)).expect("the change");
+    }
+    std::fs::write(
+        root.join("tasks/T-5.md"),
+        "---\ntitle: Epsilon\nstatus: todo\nproject: P-1\n---\nnew work\n",
+    )
+    .expect("a new task");
+    std::fs::write(
+        notes.join("tasks/TICKET.md"),
+        "---\ntitle: The ticket the plan delivers\nstatus: todo\n---\nfiled by a person\n",
+    )
+    .expect("the ticket");
+    std::fs::write(
+        notes.join("tasks/GONE.md"),
+        "---\ntitle: Gone at the source\nstatus: todo\nproject: P-1\n\
+         metadata: {onetaskgraph.origin: \"remote:T-9\"}\n---\nleft behind\n",
+    )
+    .expect("an orphan");
+    root
+}
+
+#[test]
+fn a_members_only_copy_carries_the_named_members_and_leaves_the_project_alone() {
+    let member_copy = |only: bool| {
+        let sandbox = Sandbox::new();
+        shadowed_and_changed(&sandbox);
+        let mut arguments = vec![
+            "project",
+            "copy",
+            "remote:P-1",
+            "--to",
+            NOTES,
+            "--member",
+            "remote:T-5",
+            "--member",
+            "remote:T-2",
+            "--json",
+        ];
+        if only {
+            arguments.push("--members-only");
+        }
+        let notes = sandbox.project().join(NOTES);
+        let before = files(&notes);
+        if only {
+            let source = sandbox.project().join("remote");
+            let source_before = files(&source);
+            let mut preview = arguments.clone();
+            preview.push("--dry-run");
+            let preview: Value =
+                serde_json::from_str(&ok(&sandbox, &preview)).expect("preview JSON");
+            assert_eq!(preview["items"].as_array().expect("preview items").len(), 2);
+            assert_eq!(
+                files(&source),
+                source_before,
+                "dry-run leaves source links unchanged"
+            );
+            assert_eq!(
+                files(&notes),
+                before,
+                "dry-run leaves the destination unchanged"
+            );
+        }
+        let report: Value =
+            serde_json::from_str(&ok(&sandbox, &arguments)).expect("a copy emits JSON");
+        (sandbox, before, report)
+    };
+    let (_, _, members) = member_copy(false);
+    let (sandbox, before, only) = member_copy(true);
+    let notes = sandbox.project().join(NOTES);
+
+    // The tasks, their `via` and what they delivered are exactly what the same copy with
+    // `--member` alone reports — less the project, which it neither compares nor reports.
+    let items = members["items"]
+        .as_array()
+        .expect("a copy report carries items");
+    assert_eq!(items[0]["source"], json!("remote:P-1"), "{members:#}");
+    assert_eq!(items[0]["action"], json!("updated"), "{members:#}");
+    assert_eq!(only["items"], json!(items[1..]), "{only:#}");
+    assert_eq!(only["delivered"], members["delivered"], "{only:#}");
+    assert_eq!(
+        reported(&only.to_string()),
+        vec![
+            (
+                "remote:T-5".to_owned(),
+                json!("notes:T-5"),
+                "created".to_owned()
+            ),
+            (
+                "remote:T-2".to_owned(),
+                json!("notes:T-2"),
+                "updated".to_owned()
+            ),
+        ],
+        "nothing is reported orphaned: {only:#}"
+    );
+    assert_eq!(only["items"][1]["via"], json!("origin"), "{only:#}");
+    assert_eq!(
+        only["delivered"][0]["ticket"],
+        json!("notes:TICKET"),
+        "{only:#}"
+    );
+    assert_eq!(
+        shown(&sandbox, "task", "notes:TICKET")["status"]["category"],
+        json!("in-progress"),
+        "the ticket the copied member delivers is kept in step"
+    );
+
+    assert_eq!(
+        shown(&sandbox, "task", "notes:T-5")["project"],
+        json!("P-1"),
+        "a named member with no counterpart is created under the project already there"
+    );
+    let dependencies: Value =
+        serde_json::from_str(&ok(&sandbox, &["task", "deps", "notes:T-2", "--json"]))
+            .expect("task dependencies emit JSON");
+    assert_eq!(
+        dependencies["items"]
+            .as_array()
+            .expect("dependency items")
+            .iter()
+            .map(|edge| edge["to"]["id"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!("notes:T-3")],
+        "an edge to an unnamed member resolves as a member copy resolves it: {dependencies:#}"
+    );
+    let untouched = |files: Vec<(std::path::PathBuf, Vec<u8>)>| {
+        files
+            .into_iter()
+            .filter(|(path, _)| {
+                path.ends_with("projects/P-1.md")
+                    || ["T-1.md", "T-3.md", "T-4.md", "GONE.md"]
+                        .iter()
+                        .any(|name| path.ends_with(format!("tasks/{name}")))
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(untouched(before.clone()).len(), 5);
+    assert_eq!(
+        untouched(files(&notes)),
+        untouched(before),
+        "the project, the unnamed members and the orphan are byte-for-byte what they were"
+    );
+}
+
+#[test]
+fn a_members_only_copy_of_a_project_the_destination_lacks_is_refused_before_any_write() {
+    let sandbox = Sandbox::new();
+    let root = shadowed(&sandbox);
+    let notes = sandbox.project().join(NOTES);
+    std::fs::write(
+        root.join("projects/P-2.md"),
+        "---\ntitle: Not yet copied\nstatus: doing\n---\nnew plan\n",
+    )
+    .expect("a project");
+    std::fs::write(
+        root.join("tasks/T-6.md"),
+        "---\ntitle: Zeta\nstatus: todo\nproject: P-2\n---\nnew work\n",
+    )
+    .expect("its task");
+    let before = files(&notes);
+
+    let output = sandbox
+        .command()
+        .args([
+            "project",
+            "copy",
+            "remote:P-2",
+            "--to",
+            NOTES,
+            "--member",
+            "remote:T-6",
+            "--members-only",
+            "--json",
+        ])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let failure: Value = serde_json::from_slice(&output.stdout).expect("a failure document");
+    assert_eq!(
+        failure["failure"]["kind"], "no-project-counterpart",
+        "{failure:#}"
+    );
+
+    let said = refused(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "remote:P-2",
+            "--to",
+            NOTES,
+            "--member",
+            "remote:T-6",
+            "--members-only",
+        ],
+        1,
+    );
+    assert!(
+        said.contains("remote:P-2 has no counterpart in notes")
+            && said.contains("`onetaskgraph project copy remote:P-2 --to notes`")
+            && said.contains("next:"),
+        "{said}"
+    );
+    assert_eq!(
+        files(&notes),
+        before,
+        "a refused members-only copy wrote something"
+    );
+
+    let said = refused(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "remote:P-1",
+            "--to",
+            NOTES,
+            "--members-only",
+        ],
+        2,
+    );
+    assert!(said.contains("--member"), "{said}");
+    assert_eq!(files(&notes), before);
+}
+
 #[test]
 fn a_copy_that_cannot_run_at_all_exits_non_zero_with_a_suggested_next_action() {
     let sandbox = Sandbox::new();
@@ -3163,8 +3415,8 @@ fn a_cleanup_that_also_fails_reports_the_write_that_failed_rather_than_the_tidy_
     // The tidy-up's own failure is about an item they never asked to exist; reporting it
     // instead would leave them reading a deletion error for a copy they made.
     //
-    // This board refuses the field write and then refuses the removal, so both failures are
-    // real and the copy has to choose which one to say.
+    // This board refuses the field write and then refuses the source's removal, so both
+    // failures are real and the copy has to choose which one to say.
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("plans");
     std::fs::create_dir_all(root.join("tasks")).unwrap();
@@ -3190,33 +3442,20 @@ fn a_cleanup_that_also_fails_reports_the_write_that_failed_rather_than_the_tidy_
         "and not the failure of the tidy-up that followed it: {said}"
     );
 
-    // The item the removal could not take back really is still there — the refusal above is
-    // the whole of what the caller gets, so this is the state they are left in.
+    // The source's own removal was refused, and the copy's undo — which journalled the issue
+    // when it was created — took it back on its own attempt, so the board holds nothing of the
+    // failed copy, and the plain retry files exactly one.
     let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
     assert_eq!(
         listed.matches("First step").count(),
-        1,
-        "the removal failed, so the item it could not take back is on the board: {listed}"
+        0,
+        "the copy's undo took back the item the source's removal could not: {listed}"
     );
-
-    // Both failures are spent, so the copy the caller runs next matches that item by title
-    // rather than filing a second one for the same plan.
     let again = ok(
         &sandbox,
-        &[
-            "task",
-            "copy",
-            "plans:A",
-            "--to",
-            "board",
-            "--match-by",
-            "title",
-            "--json",
-        ],
+        &["task", "copy", "plans:A", "--to", "board", "--json"],
     );
-    let landed = reported(&again);
-    assert_eq!(landed.len(), 1, "{again}");
-    assert_eq!(landed[0].2, "updated", "{again}");
+    assert_eq!(reported(&again)[0].2, "created", "{again}");
     let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
     assert_eq!(
         listed.matches("First step").count(),
@@ -3226,9 +3465,10 @@ fn a_cleanup_that_also_fails_reports_the_write_that_failed_rather_than_the_tidy_
 }
 
 #[test]
-fn a_creation_whose_filing_and_cleanup_both_fail_still_reports_the_filing() {
-    // The earlier half of the same sequence: `createIssue` lands, filing it on the board
-    // does not, and the removal that would take the created issue back is refused as well.
+fn a_creation_whose_filing_read_and_cleanup_both_fail_still_reports_the_read() {
+    // The earlier half of the same sequence: `createIssue` lands, the read of the board item
+    // it filed does not, and the removal that would take the created issue back is refused as
+    // well.
     // The caller is told why the copy stopped — an issue they never asked to exist failing
     // to be removed is not something they can act on, and reporting it would replace the
     // reason with a consequence.
@@ -3244,12 +3484,12 @@ fn a_creation_whose_filing_and_cleanup_both_fail_still_reports_the_filing() {
         "plans": {"plugin":"local-md","config":{
             "root": root, "status_mapping": {"Doing":"in-progress"}}},
         "board": {"plugin":"github-projects",
-                  "config": github_projects_failing_to_file_and_its_cleanup(&sandbox)}
+                  "config": github_projects_failing_to_read_a_filing_and_its_cleanup(&sandbox)}
     })));
 
     let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
     assert!(
-        said.contains("addProjectV2ItemById"),
+        said.contains("status:fieldValueByName(name:$statusName)"),
         "the failure that stopped the copy is what the caller is told: {said}"
     );
     assert!(
@@ -3881,9 +4121,12 @@ fn a_reference_carrying_a_fragment_lands_on_the_copied_tasks_destination_locatio
             authored.contains(&format!("[t1]({here}#budgets)")),
             "{authored}"
         );
+        // The copy sends the content as composed, predicting nothing of what a destination
+        // stores, and this loopback Linear stores it as it is sent.
+        let expected = authored.replace(&here, &there);
         assert_eq!(
             body(&sandbox, landed),
-            authored.replace(&here, &there),
+            expected,
             "{plugin}: the link names the destination's task with its fragment kept, and \
              nothing else moved"
         );
@@ -4109,4 +4352,172 @@ fn a_copy_by_id_beside_a_status_refuses_an_id_it_cannot_read_and_writes_nothing(
         "---\ntitle: A proposal\nstatus: backlog\n---\nAsked for.\n",
         "the source records no link to a copy that never happened"
     );
+}
+
+#[test]
+fn a_members_only_copy_refuses_an_unrecorded_edge_before_writing() {
+    let sandbox = Sandbox::new();
+    shadowed(&sandbox);
+    let notes = sandbox.project().join(NOTES);
+    let before = files(&notes);
+    let said = refused(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "remote:P-1",
+            "--to",
+            NOTES,
+            "--member",
+            "remote:T-2",
+            "--member",
+            "remote:T-4",
+            "--members-only",
+        ],
+        1,
+    );
+    assert!(
+        said.contains("remote:T-4 depends on remote:T-1")
+            && said.contains("records no origin in notes"),
+        "{said}"
+    );
+    assert_eq!(files(&notes), before);
+}
+
+#[test]
+fn status_policy_keeps_destination_decisions_and_creates_with_source_status() {
+    for policy in ["source", "preserve-destination"] {
+        let sandbox = Sandbox::new();
+        let root = folders(&sandbox);
+        let args = [
+            "task",
+            "copy",
+            "remote:ENG-1",
+            "--to",
+            NOTES,
+            "--status-policy",
+            policy,
+        ];
+        ok(&sandbox, &args);
+        assert_eq!(
+            shown(&sandbox, "task", "notes:ENG-1")["status"]["category"],
+            "in-progress"
+        );
+        ok(&sandbox, &["task", "status", "set", "notes:ENG-1", "done"]);
+        if policy == "preserve-destination" {
+            let before = files(&sandbox.project());
+            let mut preview = args.to_vec();
+            preview.extend(["--dry-run", "--json"]);
+            assert_eq!(reported(&ok(&sandbox, &preview))[0].2, "unchanged");
+            assert_eq!(files(&sandbox.project()), before);
+        }
+        // Keep the source's correspondence written by the first copy while editing its body.
+        let path = root.join("tasks/ENG-1.md");
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            text.replace("status: doing", "status: todo")
+                .replace("the body", "the revised body"),
+        )
+        .unwrap();
+        if policy == "preserve-destination" {
+            let before = files(&sandbox.project());
+            let mut preview = args.to_vec();
+            preview.extend(["--dry-run", "--json"]);
+            assert_eq!(reported(&ok(&sandbox, &preview))[0].2, "updated");
+            assert_eq!(files(&sandbox.project()), before);
+        }
+        ok(&sandbox, &args);
+        let held = shown(&sandbox, "task", "notes:ENG-1");
+        assert_eq!(
+            held["status"]["category"],
+            if policy == "source" { "todo" } else { "done" }
+        );
+        assert!(
+            held["content"]
+                .as_str()
+                .unwrap()
+                .contains("the revised body")
+        );
+        // Omitting the policy still intentionally carries the source's status.
+        ok(&sandbox, &["task", "copy", "remote:ENG-1", "--to", NOTES]);
+        assert_eq!(
+            shown(&sandbox, "task", "notes:ENG-1")["status"]["category"],
+            "todo"
+        );
+    }
+}
+
+#[test]
+fn both_copy_verbs_refuse_an_unknown_status_policy_at_parse() {
+    let sandbox = Sandbox::new();
+    for verb in ["task", "project"] {
+        let error = refused(
+            &sandbox,
+            &[
+                verb,
+                "copy",
+                "remote:one",
+                "--to",
+                NOTES,
+                "--status-policy",
+                "guess",
+            ],
+            2,
+        );
+        assert!(error.contains("invalid value 'guess'"), "{error}");
+        assert!(error.contains("preserve-destination"), "{error}");
+    }
+}
+
+#[test]
+fn status_policy_preserves_items_even_when_the_source_category_has_no_destination_mapping() {
+    for kind in ["task", "project"] {
+        let sandbox = Sandbox::new();
+        let root = sandbox.subdirectory("authored");
+        std::fs::create_dir_all(root.join(format!("{kind}s"))).unwrap();
+        let path = root.join(format!("{kind}s/A.md"));
+        std::fs::write(
+            &path,
+            "---\ntitle: A step\nstatus: Done\n---\noriginal body\n",
+        )
+        .unwrap();
+        let mut config = linear_empty_workspace(&sandbox);
+        config["status_mapping"] = json!({"done":"Shipped"});
+        sandbox.project_document(&document(&json!({
+            "authored": {"plugin":"local-md","config":{"root":root,"status_mapping":{"Done":"done","Todo":"todo"}}},
+            "linear": {"plugin":"linear","config":config},
+        })));
+        let mut args = vec![kind, "copy", "authored:A", "--to", "linear", "--json"];
+        if kind == "project" {
+            args.push("--no-tasks");
+        }
+        let first = reported(&ok(&sandbox, &args));
+        let destination = first[0].1.as_str().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            text.replace("status: Done", "status: Todo")
+                .replace("original body", "revised body"),
+        )
+        .unwrap();
+        let mut preserve = args.clone();
+        preserve.extend(["--status-policy", "preserve-destination"]);
+        ok(&sandbox, &preserve);
+        let held = shown(&sandbox, kind, destination);
+        assert_eq!(held["status"]["category"], "done", "{held:#}");
+        assert_eq!(held["content"], "revised body");
+        // Source policy and creates still require the source category's mapping.
+        let error = refused(&sandbox, &args, 1);
+        assert!(error.contains("status_mapping.todo"), "{error}");
+        std::fs::write(
+            root.join(format!("{kind}s/B.md")),
+            "---\ntitle: Another step\nstatus: Todo\n---\nnew body\n",
+        )
+        .unwrap();
+        preserve[2] = "authored:B";
+        let error = refused(&sandbox, &preserve, 1);
+        assert!(error.contains("status_mapping.todo"), "{error}");
+        assert_eq!(shown(&sandbox, kind, destination), held);
+    }
 }
