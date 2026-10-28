@@ -71,3 +71,16 @@ run_check
 grep -q 'did not reach:' "$tmp/out" && grep -q '    scripts/check-workspace-config.sh (running stdin ' "$tmp/out" \
   || fail "the comparison refused the missed site without naming it and its program: $(cat "$tmp/out")" \
     "make scripts/check-relative-interpreter.sh name each script it missed and what that script ran"
+
+# Missing evidence must refuse the interpreter call itself. A directory at the record's
+# path forces a real append error even on hosts running the tests as root.
+mkdir -p "$tmp/unwritable/call-sites.failure"
+printf '%s\n' failure >"$tmp/unwritable/current"
+bash -c '. "$1" "$2" -c pass' _ "$root/scripts/python-call-site.sh" "$tmp/unwritable" >"$tmp/record-error" 2>&1 \
+  && status=0 || status=$?
+[ "$status" -ne 0 ] || fail "the recorder accepted an unwritable call-site record" \
+  "make scripts/python-call-site.sh refuse recording errors"
+grep -q 'could not append the Python call site' "$tmp/record-error" \
+  && grep -q 'next: check free space and write permissions' "$tmp/record-error" \
+  || fail "the recorder refused without the failed operation and repair: $(cat "$tmp/record-error")" \
+    "name the recording operation and how to repair its destination"

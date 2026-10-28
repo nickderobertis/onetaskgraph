@@ -9,10 +9,15 @@
 # process, from its last `scripts/` on, or `bash -c <digest>` for an inline body such as a
 # release workflow step; the program is the script path from its last `scripts/` on (or its
 # name), `-m <module>`, or `-c <digest>` or `stdin <digest>` of the code itself, which is read
-# here and handed on to the interpreter unchanged. Recording never fails the call: a site it
-# cannot name is recorded as `unknown`, which no comparison can mistake for a site it saw.
+# here and handed on to the interpreter unchanged. A site it cannot name is recorded as
+# `unknown`; an unwritable record refuses the call, because the comparison needs its evidence.
 python_call_site_record() {
   local probe="$1" run caller="" program="" argument digest
+  recording_failed() {
+    echo "python-call-site: could not $1" >&2
+    echo "python-call-site: next: check free space and write permissions in $probe, then rerun the relative-interpreter check" >&2
+    exit 1
+  }
   shift
   run="$(cat "$probe/current" 2>/dev/null)" || run=none
   [ -n "$run" ] || run=none
@@ -53,11 +58,12 @@ python_call_site_record() {
   if [ -z "$program" ]; then
     # The code comes on standard input: kept, digested and handed on as it arrived.
     local code="$probe/stdin.$$"
-    cat >"$code" 2>/dev/null || :
+    cat >"$code" || recording_failed "save the Python input to $code"
     program="stdin $(digest_of <"$code")"
-    exec 0<"$code"
-    rm -f "$code" 2>/dev/null || :
+    exec 0<"$code" || recording_failed "reopen the Python input from $code"
+    rm -f "$code" || recording_failed "remove the saved Python input $code"
   fi
-  printf '%s\t%s\n' "$caller" "$program" >>"$probe/call-sites.$run" 2>/dev/null || :
+  printf '%s\t%s\n' "$caller" "$program" >>"$probe/call-sites.$run" \
+    || recording_failed "append the Python call site to $probe/call-sites.$run"
 }
 python_call_site_record "$@"
