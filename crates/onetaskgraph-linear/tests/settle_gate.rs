@@ -1062,3 +1062,38 @@ async fn a_read_after_a_change_whose_token_never_moves_fails_within_the_bound_na
         );
     }
 }
+
+/// The hosted failure returned the preceding probe, not a new serializer output.
+#[tokio::test]
+async fn document_content_waits_for_the_exact_stored_markdown_and_refuses_other_content() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/document-content-40721997875.json")).unwrap();
+    let expected = fixture["after"].as_str().unwrap();
+    for catches_up in [true, false] {
+        let stored = expected.to_owned();
+        let (source, count) = workspace(move |n, request| {
+            assert!(request.contains("document(id:$id)"));
+            json!({"document":{"id":"d1","title":"Probe",
+                "content": if catches_up && n >= 3 {stored.as_str()} else {"previous probe"},
+                "url":null,"createdAt":null,"updatedAt":null,"project":null}})
+        });
+        let result = settle::settled_content(BOUND, expected, || async {
+            source
+                .get_document(&"d1".into())
+                .await
+                .map_err(|error| error.to_string())?
+                .and_then(|document| document.content)
+                .ok_or_else(|| "missing document content".to_owned())
+        })
+        .await;
+        if catches_up {
+            assert_eq!(result.unwrap(), expected);
+            assert_eq!(count.load(Ordering::SeqCst), 3);
+        } else {
+            let error = result.unwrap_err();
+            assert!(error.contains("previous probe"), "{error}");
+            assert!(error.contains("still after 5 reads"), "{error}");
+            assert_eq!(count.load(Ordering::SeqCst), BOUND.reads);
+        }
+    }
+}

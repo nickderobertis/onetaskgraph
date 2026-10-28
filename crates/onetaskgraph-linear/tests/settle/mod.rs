@@ -454,3 +454,30 @@ where
         unchanged(before.metadata == after.metadata),
     ))
 }
+
+/// Wait for exactly the stored Markdown promised by a write, without normalizing either
+/// side. A stale replica may catch up; a refusal or a permanently different body fails.
+pub async fn settled_content<F, Fut>(
+    bound: Bound,
+    expected: &str,
+    mut read: F,
+) -> Result<String, String>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<String, String>>,
+{
+    let mut content = read().await?;
+    let mut reads = 1;
+    while content != expected && reads < bound.reads {
+        tokio::time::sleep(bound.interval).await;
+        content = read().await?;
+        reads += 1;
+    }
+    if content == expected {
+        Ok(content)
+    } else {
+        Err(format!(
+            "document content came back as {content:?} rather than {expected:?}, still after {reads} reads"
+        ))
+    }
+}

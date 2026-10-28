@@ -1,0 +1,24 @@
+{
+  "run": 40721997875,
+  "job": 122936492339,
+  "evidence": "test-linux failure at 2026-10-28T16:29:47.3077958Z. This is the preceding HTML-comment probe, returned after the subsequent Markdown update; not evidence of a new Markdown serialization rule.",
+  "before": "P.\n\n<!-- probe {\"site\":\"example.com\",\"list\":[1]} -->\n\n<!-- probe\n{\"k\":\"v\"}\n-->\n\n<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->",
+  "after": "P.\n\n<!-- probe {\"site\":\"[example.com](<http://example.com>)\",\"list\":\\[1\\]} -->\n\n<!-- probe\n{\"k\":\"v\"}\n\\-->\n\n<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->",
+  "rewrites": [
+    {
+      "before": "example.com",
+      "after": "[example.com](<http://example.com>)"
+    },
+    {
+      "before": "[1]",
+      "after": "\\[1\\]"
+    },
+    {
+      "before": "\n-->",
+      "after": "\n\\-->"
+    }
+  ],
+  "preserved": "<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->",
+  "run_url": "https://github.com/nickderobertis/onetaskgraph/actions/runs/40721997875",
+  "later_comparison": "The change request must compare these recorded responses and both exact document probes against real Linear in its required live capability journey; no fresh live comparison was performed by this dispatch."
+}

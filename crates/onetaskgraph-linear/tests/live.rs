@@ -70,9 +70,9 @@ use cleanup::{
 mod settle;
 
 use settle::{
-    LINEAR_DOCUMENT_LISTING, LINEAR_INDEX, LINEAR_REPLICA, settled, settled_document_absent,
-    settled_documents, settled_label, settled_tasks, settled_walk, task_titles, token_moved,
-    walked_task_titles,
+    LINEAR_DOCUMENT_LISTING, LINEAR_INDEX, LINEAR_REPLICA, settled, settled_content,
+    settled_document_absent, settled_documents, settled_label, settled_tasks, settled_walk,
+    task_titles, token_moved, walked_task_titles,
 };
 
 /// The two workflow states this fixture files its issues under.
@@ -866,18 +866,21 @@ async fn raw_description(run: &LiveRun, id: &NativeId) -> Result<String, String>
 }
 
 /// One document's raw `content`, as Linear hands it back.
-async fn raw_content(run: &LiveRun, id: &NativeId) -> Result<String, String> {
-    linear(
-        &run.key,
-        "query($id:String!){ document(id:$id){ content } }",
-        json!({"id":id.0}),
-        "live raw document read",
-    )
-    .await?
-    .pointer("/document/content")
-    .and_then(Value::as_str)
-    .map(str::to_owned)
-    .ok_or_else(|| format!("document {} carried no content", id.0))
+async fn raw_content(run: &LiveRun, id: &NativeId, expected: &str) -> Result<String, String> {
+    settled_content(LINEAR_REPLICA, expected, || async {
+        linear(
+            &run.key,
+            "query($id:String!){ document(id:$id){ content } }",
+            json!({"id":id.0}),
+            "live raw document read",
+        )
+        .await?
+        .pointer("/document/content")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| format!("document {} carried no content", id.0))
+    })
+    .await
 }
 
 /// The text the lane writes into an issue's description, a comment's body and a document's
@@ -1091,14 +1094,25 @@ async fn drive_follow_ups(
             && document.content.as_deref() == Some("A probed document."),
         "a document's slot did not keep its metadata: {document:?}"
     );
-    linear(
+    let updated = linear(
         &run.key,
-        "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success} }",
+        "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success document{content}} }",
         json!({"id":document_id.0,"input":{"content":PROBE}}),
         "live content probe",
     )
     .await?;
-    let content = raw_content(run, &document_id).await?;
+    ensure!(
+        updated
+            .pointer("/documentUpdate/success")
+            .and_then(Value::as_bool)
+            == Some(true)
+            && updated
+                .pointer("/documentUpdate/document/content")
+                .and_then(Value::as_str)
+                == Some(PROBE_STORED),
+        "the document update did not acknowledge the exact stored content: {updated:?}"
+    );
+    let content = raw_content(run, &document_id, PROBE_STORED).await?;
     ensure!(
         content == PROBE_STORED,
         "a document's HTML comments came back as {content:?}, not as recorded"
@@ -1126,23 +1140,42 @@ async fn drive_follow_ups(
         read.as_deref() == Some(MARKDOWN_PROBE_STORED),
         "a read of the Markdown probe's issue handed back {read:?}, not its stored form"
     );
-    linear(
+    let updated = linear(
         &run.key,
-        "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success} }",
+        "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success document{content}} }",
         json!({"id":document_id.0,"input":{"content":MARKDOWN_PROBE}}),
         "live Markdown content probe",
     )
     .await?;
-    let content = raw_content(run, &document_id).await?;
+    ensure!(
+        updated
+            .pointer("/documentUpdate/success")
+            .and_then(Value::as_bool)
+            == Some(true)
+            && updated
+                .pointer("/documentUpdate/document/content")
+                .and_then(Value::as_str)
+                == Some(MARKDOWN_PROBE_STORED),
+        "the document update did not acknowledge the exact stored content: {updated:?}"
+    );
+    let content = raw_content(run, &document_id, MARKDOWN_PROBE_STORED).await?;
     ensure!(
         content == MARKDOWN_PROBE_STORED,
         "a document's Markdown came back as {content:?}, not as the ruling declares"
     );
-    let read = source
-        .get_document(&document_id)
-        .await
-        .map_err(|error| format!("the Markdown probe's document could not be read: {error}"))?
-        .and_then(|document| document.content);
+    let read = Some(
+        settled_content(LINEAR_REPLICA, MARKDOWN_PROBE_STORED, || async {
+            source
+                .get_document(&document_id)
+                .await
+                .map_err(|error| {
+                    format!("the Markdown probe's document could not be read: {error}")
+                })?
+                .and_then(|document| document.content)
+                .ok_or_else(|| "the Markdown probe's document carried no content".to_owned())
+        })
+        .await?,
+    );
     ensure!(
         read.as_deref() == Some(MARKDOWN_PROBE_STORED),
         "a read of the Markdown probe's document handed back {read:?}, not its stored form"
