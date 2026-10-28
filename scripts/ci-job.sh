@@ -197,6 +197,31 @@ record_phase() {
   if run_phase "$@"; then echo 0 >"$scratch/exit.$1"; else echo 1 >"$scratch/exit.$1"; fi
 }
 
+# TEMPORARY DIAGNOSTIC: revert before the finished tree. CPU utilisation every 30 s.
+if [ "${GITHUB_ACTIONS:-}" = true ] && ! "$select_only"; then
+  (
+    case "$(uname -s)" in
+      Linux)
+        read -r _ u n s i w q sq _ </proc/stat
+        while sleep 30; do
+          read -r _ u2 n2 s2 i2 w2 q2 sq2 _ </proc/stat
+          busy=$(( (u2+n2+s2+q2+sq2) - (u+n+s+q+sq) )); idle=$(( (i2+w2) - (i+w) ))
+          echo "[cpu] $(date -u +%H:%M:%S) busy $(( 100 * busy / (busy + idle + 1) ))% load $(cut -d' ' -f1 /proc/loadavg)"
+          u=$u2 n=$n2 s=$s2 i=$i2 w=$w2 q=$q2 sq=$sq2
+        done ;;
+      Darwin)
+        while sleep 25; do
+          echo "[cpu] $(date -u +%H:%M:%S) $(top -l 2 -n 0 -s 3 | awk '/CPU usage/ {l=$0} END {print l}') load $(sysctl -n vm.loadavg)"
+        done ;;
+      *)
+        while sleep 25; do
+          echo "[cpu] $(date -u +%H:%M:%S) busy $(powershell -NoProfile -Command '[int](Get-Counter "\Processor(_Total)\% Processor Time" -SampleInterval 3 -MaxSamples 1).CounterSamples[0].CookedValue' 2>/dev/null | tr -d '\r')%"
+        done ;;
+    esac
+  ) &
+  cpu_sampler=$!
+  trap 'kill "$cpu_sampler" 2>/dev/null; rm -rf "$scratch"' EXIT
+fi
 phase=0
 group=
 while IFS=' ' read -r in_group kind targets excluded flags; do
