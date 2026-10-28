@@ -76,3 +76,28 @@ did not recur. In a separate detached checkout of `main` at
 dependencies, the release-CD test file passed all 12 tests.
 The full workflow suite on this branch also passed that publication journey. The
 separate checkout was removed afterward; no release tooling was changed.
+
+## Publication repair verification
+
+The shared live-support crate no longer owns the Linear prefix. The Linear plugin
+exports it, matching the existing GitHub plugin's ownership of its design prefix;
+the janitor's Cargo and Nx dependencies agree. No GitHub lane depends on that plugin.
+
+The repair also validates incoming fixture-server requests, represents advancing
+pagination with a required cursor, and checks the actual listing filter and recorded
+delete acknowledgement against the pinned upstream schema. Eight Linear subprocess
+journeys passed, including direct-team precedence, empty project ownership and a zero
+ownership timestamp. Temporarily removing the zero-timestamp guard made the new
+journey fail on the unexpected deletion; restoring it made the full suite pass.
+
+The main-branch release-CD recheck passed all 12 tests at
+`057b6c30b35314d1c2a70daef1feec3f5b14ef67`. Its local HTTP double emitted connection-reset
+tracebacks, but the test runner returned success. The earlier publication assertion
+did not reproduce.
+
+Two narrow lint exceptions retain established repository conventions: the scheduled
+janitor already owns hosted sweeps, so its Cargo and Nx Linear dependency declarations
+carry `new_command_or_client_gets_its_own_project` markers; the shared fixture guard's
+central MANIFEST already inventories domain stores, so the Linear listing entry carries
+`code_lands_in_the_domain_that_owns_it`. The manager confirmed those placements and a
+follow-up records the rule-applicability question. No lint configuration changed.

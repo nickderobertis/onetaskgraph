@@ -88,10 +88,12 @@
       "//": "Judges the request count recorded by the offline test, on every platform. The cache includes the measured code, telemetry and onebudgetspec pins."
     }
   },
+  "// ownership": "llmlint: ignore-block[new_command_or_client_gets_its_own_project] The existing scheduled janitor owns both hosted sweeps; this dependency mirrors its GitHub plugin dependency rather than introducing another scheduled command.",
   "implicitDependencies": [
     "onetaskgraph-live",
     "onetaskgraph-linear",
     "onetaskgraph-github-live",
     "onetaskgraph-github-projects"
-  ]
+  ],
+  "// ownership end": "llmlint: ignore-end[new_command_or_client_gets_its_own_project]"
 }

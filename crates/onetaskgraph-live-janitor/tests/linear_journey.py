@@ -38,6 +38,20 @@ class Request(TypedDict):
     variables: ListingVariables | DeleteVariables
 
 
+def read_request(value: object) -> Request:
+    assert isinstance(value, dict) and isinstance(value.get('query'), str)
+    variables = value.get('variables')
+    assert isinstance(variables, dict)
+    if 'documentDelete(' in value['query']:
+        assert set(variables) == {'id'}
+        assert isinstance(variables['id'], str) and variables['id'].strip()
+    else:
+        assert set(variables) == {'after', 'filter'}
+        assert variables['after'] is None or (isinstance(variables['after'], str) and variables['after'].strip())
+        assert variables['filter'] == {'title': {'startsWith': 'onetaskgraph live cleanup '}}
+    return cast(Request, value)
+
+
 @dataclass
 class Team:
     key: str
@@ -154,7 +168,7 @@ class Workspace:
                 case FailureMode.MALFORMED_DELETE:
                     return {'data': {'documentDelete': {}}}
             self.deleted.append(identifier)
-            return {'data': {'documentDelete': {'success': True}}}
+            return json.loads((Path(__file__).parent / 'fixtures/linear-document-delete.json').read_text())
         assert 'team{key}' in request['query']
         assert 'project{teams(first:100)' in request['query']
         variables = cast(ListingVariables, request['variables'])
@@ -205,7 +219,7 @@ class LinearJourneys(unittest.TestCase):
             def do_POST(self) -> None:
                 assert self.path == '/graphql'
                 assert self.headers['Authorization'] == 'offline-linear-key'
-                request = cast(Request, json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+                request = read_request(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
                 match workspace.failure:
                     case FailureMode.CONNECTION:
                         workspace.requests.append(request)
@@ -279,6 +293,21 @@ class LinearJourneys(unittest.TestCase):
         self.assertEqual(len(workspace.requests), 5)
         self.assertIn('0 REST reads, 2 GraphQL queries, 3 content writes', result.stdout)
         self.assertIn('[0, 1000000, 2000000]', result.stdout)
+
+    def test_direct_team_precedes_project_and_unvouched_documents_survive(self) -> None:
+        workspace = Workspace()
+        sample = workspace.pages[0].data.documents.nodes[0]
+        project = Project(Teams([Team('TEST')], TeamPageInfo(False)))
+        workspace.pages[0].data.documents.nodes = [
+            replace(sample, id=DocumentId('direct-other'), team=Team('OTHER'), project=project),
+            replace(sample, id=DocumentId('direct-test'), project=Project(Teams([Team('OTHER')], TeamPageInfo(False)))),
+            replace(sample, id=DocumentId('empty-project'), team=None, project=Project(Teams([], TeamPageInfo(False)))),
+            replace(sample, id=DocumentId('zero-stamp'), title='onetaskgraph live cleanup 1-2-0'),
+        ]
+        workspace.pages[1].data.documents.nodes = []
+        result = self.run_janitor(workspace)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(workspace.deleted, ['direct-test'])
 
     def test_expiry_is_twenty_four_hours(self) -> None:
         workspace = Workspace()

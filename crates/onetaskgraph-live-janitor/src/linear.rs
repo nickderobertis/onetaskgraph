@@ -62,9 +62,39 @@ impl TryFrom<String> for Cursor {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PageInfo {
+struct WirePageInfo {
     has_next_page: bool,
     end_cursor: Option<Cursor>,
+}
+#[derive(Deserialize)]
+#[serde(try_from = "WirePageInfo")]
+enum PageInfo {
+    Complete,
+    More(Cursor),
+}
+impl TryFrom<WirePageInfo> for PageInfo {
+    type Error = String;
+    fn try_from(value: WirePageInfo) -> Result<Self, String> {
+        if value.has_next_page {
+            value
+                .end_cursor
+                .map(Self::More)
+                .ok_or("Linear omitted advancing cursor".into())
+        } else {
+            Ok(Self::Complete)
+        }
+    }
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamPageInfo {
+    has_next_page: bool,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Teams {
+    nodes: Vec<Team>,
+    page_info: TeamPageInfo,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,7 +108,7 @@ struct Team {
 }
 #[derive(Deserialize)]
 struct Project {
-    teams: Connection<Team>,
+    teams: Teams,
 }
 #[derive(Deserialize)]
 struct Document {
@@ -136,8 +166,9 @@ struct DocumentVariables {
     after: Option<Cursor>,
     filter: DocumentFilter,
 }
+/// The typed predicate sent when listing stamped Linear documents.
 #[derive(Serialize)]
-struct DocumentFilter {
+pub struct DocumentFilter {
     title: TitleFilter,
 }
 #[derive(Serialize)]
@@ -145,6 +176,15 @@ struct DocumentFilter {
 struct TitleFilter {
     starts_with: &'static str,
 }
+/// The listing predicate serialized on every Linear document request.
+pub fn document_filter() -> DocumentFilter {
+    DocumentFilter {
+        title: TitleFilter {
+            starts_with: DOCUMENT_PREFIX,
+        },
+    }
+}
+
 #[derive(Serialize)]
 struct DeleteVariables {
     id: DocumentId,
@@ -242,11 +282,7 @@ pub async fn run_linear_with_clock(
             DOCUMENTS,
             DocumentVariables {
                 after,
-                filter: DocumentFilter {
-                    title: TitleFilter {
-                        starts_with: DOCUMENT_PREFIX,
-                    },
-                },
+                filter: document_filter(),
             },
         )
         .await?;
@@ -258,14 +294,10 @@ pub async fn run_linear_with_clock(
                 listed.push(document.id)
             }
         }
-        if !data.documents.page_info.has_next_page {
-            break;
-        }
-        let next = data
-            .documents
-            .page_info
-            .end_cursor
-            .ok_or("Linear omitted advancing cursor")?;
+        let next = match data.documents.page_info {
+            PageInfo::Complete => break,
+            PageInfo::More(next) => next,
+        };
         if !cursors.insert(next.clone()) {
             return Err("Linear document cursor did not advance".into());
         }

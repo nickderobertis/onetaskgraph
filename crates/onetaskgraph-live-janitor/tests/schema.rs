@@ -254,6 +254,25 @@ fn linear_documents_match_the_pinned_upstream_schema() {
     for document in [DOCUMENTS, DELETE_DOCUMENT] {
         validate_against(document, &pinned);
     }
+    let input_schema = schema::parse_schema::<String>(&pinned).expect("upstream parses");
+    let inputs: HashMap<_, _> = input_schema
+        .definitions
+        .iter()
+        .filter_map(|definition| {
+            if let schema::Definition::TypeDefinition(schema::TypeDefinition::InputObject(input)) =
+                definition
+            {
+                Some((input.name.as_str(), input.fields.as_slice()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    validate_input(
+        &inputs,
+        "DocumentFilter",
+        &serde_json::to_value(onetaskgraph_live_janitor::linear::document_filter()).unwrap(),
+    );
     let parsed = schema::parse_schema::<String>(&pinned).expect("upstream parses");
     let schema = Schema::new(&parsed);
     let query = query::parse_query::<String>(DOCUMENTS).unwrap();
@@ -267,6 +286,20 @@ fn linear_documents_match_the_pinned_upstream_schema() {
     validate_response(
         &schema,
         "Query",
+        &operation.selection_set,
+        &response["data"],
+    );
+    let mutation = query::parse_query::<String>(DELETE_DOCUMENT).unwrap();
+    let query::Definition::Operation(query::OperationDefinition::Mutation(operation)) =
+        &mutation.definitions[0]
+    else {
+        panic!("document deletion is a mutation")
+    };
+    let response: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/linear-document-delete.json")).unwrap();
+    validate_response(
+        &schema,
+        "Mutation",
         &operation.selection_set,
         &response["data"],
     );
@@ -327,5 +360,25 @@ fn validate_value(
             other => panic!("unexpected scalar {other}"),
         },
         schema::Type::NonNullType(_) => unreachable!(),
+    }
+}
+
+fn validate_input<'a>(
+    inputs: &HashMap<&str, &'a [schema::InputValue<'a, String>]>,
+    name: &str,
+    value: &serde_json::Value,
+) {
+    for (key, value) in value.as_object().expect("input object").iter() {
+        let field = inputs[name]
+            .iter()
+            .find(|field| field.name == *key)
+            .expect("input field exists upstream");
+        let kind = named(&field.value_type);
+        if inputs.contains_key(kind) {
+            validate_input(inputs, kind, value);
+        } else {
+            assert_eq!(kind, "String");
+            assert!(value.is_string());
+        }
     }
 }
