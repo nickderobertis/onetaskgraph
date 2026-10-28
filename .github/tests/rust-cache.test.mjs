@@ -204,6 +204,11 @@ test("the real cache action ignores floating stable but tracks the pin and lockf
       env: { ...env, _srt_NEW_RUSTFLAGS: setup.inputs.rustflags.default },
     });
     for (const line of readFileSync(env.GITHUB_ENV, "utf8").trim().split(/\r?\n/)) {
+      assert.match(
+        line,
+        /^[A-Z_][A-Z0-9_]*=[^\r\n]*$/,
+        "unsupported setup action environment record",
+      );
       const at = line.indexOf("=");
       env[line.slice(0, at)] = line.slice(at + 1);
     }
