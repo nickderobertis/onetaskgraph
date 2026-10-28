@@ -1,3 +1,6 @@
+# llmlint: ignore-file[new_code_lands_in_a_project] This is the measurement record beside the captures it produced: run by hand against GitHub through measure.sh, never by a target. docs/measurements is no Nx project (nor is coalesced-members-dry-run/dry_run.py beside it), and making it one would put a live-GitHub harness inside affected selection.
+# llmlint: ignore-file[boundary_inputs_validated] Every input here is this harness's own raw log, its own state folder or the plan it generated moments earlier; the committed captures are validated where they are read, by analyze.py, and what leaves the raw logs is held by the sanitizer's allowlist and leak scan.
+# llmlint: ignore-file[changed_behavior_has_e2e] Its proof is the live run itself, whose captures are committed and reconciled by test_analyze.py; the GitHub-facing parts can be driven only against GitHub's test board, which measure.sh does, and the sanitizer produces every capture those tests read.
 """Stamp a generated plan with the review records `copy-plan` requires, without a judged turn.
 
 Run with ai-orchestrator's own environment from its checkout, the `authoring` source
@@ -15,6 +18,10 @@ from orchestrator import plan_review, plan_store
 
 
 def main() -> None:
+    if len(sys.argv) != 2 or not sys.argv[1].startswith("authoring:"):
+        sys.exit(
+            "stamp_reviews.py: name the generated plan's project, as authoring:<plan>"
+        )
     project = sys.argv[1]
     by = next(iter(plan_review.By))
     records = plan_store.read_tasks(project)

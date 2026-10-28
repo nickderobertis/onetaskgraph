@@ -1,3 +1,8 @@
+# llmlint: ignore-file[new_code_lands_in_a_project] This is the measurement record beside the captures it produced: run by hand against GitHub through measure.sh, never by a target. docs/measurements is no Nx project (nor is coalesced-members-dry-run/dry_run.py beside it), and making it one would put a live-GitHub harness inside affected selection.
+# llmlint: ignore-file[async_typed_clients_at_boundaries] These sequential urllib and http.client calls are the clients that took the committed captures (the 2026-10-18 timing harness, adapted only where the adopted releases required); one request at a time is deliberate so a row's timing is not perturbed, and rewriting them would make this no longer the code that measured.
+# llmlint: ignore-file[boundary_inputs_validated] Every input here is this harness's own raw log, its own state folder or the plan it generated moments earlier; the committed captures are validated where they are read, by analyze.py, and what leaves the raw logs is held by the sanitizer's allowlist and leak scan.
+# llmlint: ignore-file[changed_behavior_has_e2e] Its proof is the live run itself, whose captures are committed and reconciled by test_analyze.py; the GitHub-facing parts can be driven only against GitHub's test board, which measure.sh does, and the sanitizer produces every capture those tests read.
+# llmlint: ignore-file[modern_domain_modeling] These records are JSON lines passed by allowlist from the proxy's raw log to the sanitized captures; the typed reading of them is analyze.py, and remodelling the retained harness would make it no longer the code that took the captures.
 """The spike's quota rule: read `GET /rate_limit` (free) before every live scenario, and
 pause while a bucket the scenario draws on holds under 40% of its limit, unless its burn
 rate since the last reading shows it resetting before it runs out.
@@ -65,8 +70,8 @@ def read(token: str, base: str = "https://api.github.com") -> dict:
         "remaining": own["remaining"],
         "reset": reset,
         "readings": [r["remaining"] for r in readings],
-        # Each read's own `used`, in order: the rise between two consecutive reads is what one
-        # `rateLimit` read itself costs, which is subtracted from a scenario's own figure.
+        # Each read's own `used`, in order: when nothing else is spending, consecutive reads
+        # answer the same figure, which is the evidence that a `rateLimit` read costs nothing.
         "used_readings": [r["used"] for r in readings],
         "reset_readings": [r["resetAt"] for r in readings],
     }

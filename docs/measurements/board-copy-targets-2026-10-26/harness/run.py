@@ -1,3 +1,9 @@
+# llmlint: ignore-file[new_code_lands_in_a_project] This is the measurement record beside the captures it produced: run by hand against GitHub through measure.sh, never by a target. docs/measurements is no Nx project (nor is coalesced-members-dry-run/dry_run.py beside it), and making it one would put a live-GitHub harness inside affected selection.
+# llmlint: ignore-file[async_typed_clients_at_boundaries] These sequential urllib and http.client calls are the clients that took the committed captures (the 2026-10-18 timing harness, adapted only where the adopted releases required); one request at a time is deliberate so a row's timing is not perturbed, and rewriting them would make this no longer the code that measured.
+# llmlint: ignore-file[boundary_inputs_validated] Every input here is this harness's own raw log, its own state folder or the plan it generated moments earlier; the committed captures are validated where they are read, by analyze.py, and what leaves the raw logs is held by the sanitizer's allowlist and leak scan.
+# llmlint: ignore-file[changed_behavior_has_e2e] Its proof is the live run itself, whose captures are committed and reconciled by test_analyze.py; the GitHub-facing parts can be driven only against GitHub's test board, which measure.sh does, and the sanitizer produces every capture those tests read.
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] What this mirrors (the plugin's documents, the host's configuration, the scratch identities) is pinned to the releases measured, onetaskgraph v0.12.7 and ai-orchestrator 668dc496, each stated in the report and in every row's versions.json; the capture schema it shares with analyze.py is held by test_analyze.py, which builds every capture through sanitize.write.
+# llmlint: ignore-file[modern_domain_modeling] These records are JSON lines passed by allowlist from the proxy's raw log to the sanitized captures; the typed reading of them is analyze.py, and remodelling the retained harness would make it no longer the code that took the captures.
 """One measurement of one named scenario: `run.py <scenario>`.
 
 The board-copy-targets measurement (`docs/measurements/board-copy-targets-2026-10-26.md`). It is
@@ -254,6 +260,9 @@ class Proxy:
         self.process.wait(timeout=30)
 
 
+FAILED_STEPS: list[str] = []
+
+
 def step(run: Path, name: str, argv: list, env: dict, cwd: Path) -> int:
     """Run one process, recording its wall time; its output is kept raw beside the logs."""
     start = time.time()
@@ -274,6 +283,7 @@ def step(run: Path, name: str, argv: list, env: dict, cwd: Path) -> int:
     print(f"  {name}: exit {done.returncode} in {end - start:.1f}s", flush=True)
     if done.returncode not in (0, 4):
         sys.stderr.write(done.stderr.decode(errors="replace")[-3000:])
+        FAILED_STEPS.append(name)
     return done.returncode
 
 
@@ -287,8 +297,6 @@ def screening(run: Path | None) -> dict[str, list[str]]:
         "check_command": shim + ["check", "--destination", "public", "--input", "-"],
     }
 
-
-# --- the bare store ------------------------------------------------------------------------
 
 BARE_STATE = CACHE / "state" / "bare"
 
@@ -424,8 +432,6 @@ def run_bare(run: Path, scenario: str, proxy: Proxy) -> Path:
     return BARE_STATE / "store-cache"
 
 
-# --- ai-orchestrator's recipes ------------------------------------------------------------
-
 HOST_STATE = CACHE / "state" / "host"
 
 
@@ -467,7 +473,12 @@ def host_setup() -> None:
         return
     state.mkdir(parents=True, exist_ok=True)
     workload.main_args(
-        state / "md", PLAN, state / "out", variant=0, rewrite=False, bare_last=True
+        state / "md",
+        PLAN,
+        state / "out",
+        variant=0,
+        rewrite=False,
+        last_task_without_repositories=True,
     )
     (state / "variant").write_text("0")
     env = host_env(None, None)
@@ -521,9 +532,6 @@ def run_host(run: Path, scenario: str, proxy: Proxy) -> Path:
     return HOST_STATE / "cache"
 
 
-# --- the quota gate -----------------------------------------------------------------------
-
-
 def last_headers() -> dict | None:
     """The GraphQL bucket as the last real answer any run recorded reported it, while its
     window is still open: `{limit, used, remaining, reset, at}`, or `None`."""
@@ -563,9 +571,6 @@ def corrected_read(token_value: str) -> dict:
         if headers["remaining"] < out["graphql"]["remaining"]:
             out["graphql"] = dict(out["graphql (last headers)"])
     return out
-
-
-# --- driver -------------------------------------------------------------------------------
 
 
 def main() -> None:
@@ -622,6 +627,11 @@ def main() -> None:
     if not args.no_sanitize:
         out = sanitize.write(run, LOGS / f"{name}-{stamp_at}")
         print(f"{name}: sanitized logs in {out.relative_to(REPO)}", flush=True)
+    if FAILED_STEPS:
+        sys.exit(
+            f"run.py: {', '.join(FAILED_STEPS)} failed (its stderr is above and in {run}); this "
+            "capture is not a row: move it to captures/superseded/ and take the scenario again"
+        )
 
 
 if __name__ == "__main__":

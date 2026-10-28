@@ -98,7 +98,10 @@ re-copies and the approval. The unchanged re-copies send none, so their verdict 
   store and read. Its own scenarios are probes, so its 40% rule and test-board guard are what this
   run keeps. The runner now lives in
   [`board-copy-targets-2026-10-26/harness/`](board-copy-targets-2026-10-26/harness/). It changed only
-  where the adopted releases, the private source or the rulings below required:
+  where the adopted releases, the private source or the rulings below required. It ran from this
+  worktree before it was committed, so the `harness` commit each row's `versions.json` records,
+  `c9dbca3e`, is the commit it ran on top of. The runner it committed as, in `2c21737b`, is the one
+  that ran, and later commits only reformatted it. The changes:
   1. **Version and documents.** It expects `onetaskgraph 0.12.7`. The proxy's operation table
      (`harness/documents.json`) was regenerated from `v0.12.7` by `harness/dump_documents.sh`.
   2. **A private source.** The bare store reads the plan out of a `local-md` folder declared

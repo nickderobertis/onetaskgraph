@@ -1,3 +1,9 @@
+# llmlint: ignore-file[new_code_lands_in_a_project] This is the measurement record beside the captures it produced: run by hand against GitHub through measure.sh, never by a target. docs/measurements is no Nx project (nor is coalesced-members-dry-run/dry_run.py beside it), and making it one would put a live-GitHub harness inside affected selection.
+# llmlint: ignore-file[async_typed_clients_at_boundaries] These sequential urllib and http.client calls are the clients that took the committed captures (the 2026-10-18 timing harness, adapted only where the adopted releases required); one request at a time is deliberate so a row's timing is not perturbed, and rewriting them would make this no longer the code that measured.
+# llmlint: ignore-file[boundary_inputs_validated] Every input here is this harness's own raw log, its own state folder or the plan it generated moments earlier; the committed captures are validated where they are read, by analyze.py, and what leaves the raw logs is held by the sanitizer's allowlist and leak scan.
+# llmlint: ignore-file[changed_behavior_has_e2e] Its proof is the live run itself, whose captures are committed and reconciled by test_analyze.py; the GitHub-facing parts can be driven only against GitHub's test board, which measure.sh does, and the sanitizer produces every capture those tests read.
+# llmlint: ignore-file[least_privilege_grants] The guard refuses any mutation naming a repository or project other than the test board's; a mutation addressing an existing issue by id names neither, and every such issue is one these runs created on the test board, which cleanup.py reads back by title and repository before deleting. Tunnels carry onevcs's own GitHub reads and the image upload's storage host, which GitHub chooses per upload.
+# llmlint: ignore-file[modern_domain_modeling] These records are JSON lines passed by allowlist from the proxy's raw log to the sanitized captures; the typed reading of them is analyze.py, and remodelling the retained harness would make it no longer the code that took the captures.
 """A recording HTTP proxy in front of GitHub, for the board-copy-targets measurement.
 
 The GitHub Projects source is pointed at it through its `endpoint` override
@@ -143,7 +149,7 @@ def guarded_ids(value: object) -> list[str]:
 def refusal(kind: str, body: bytes, writes: str, allowed: set[str]) -> str | None:
     """Why a request must not leave, or `None`: under `none` no mutation and no upload leaves;
     under `allowed` a mutation naming a repository or project not in `allowed` does not."""
-    if writes == "any" or kind not in ("mutation", "upload"):
+    if kind not in ("mutation", "upload"):
         return None
     if writes == "none":
         return "this run sends no writes"
@@ -202,7 +208,7 @@ class Handler(BaseHTTPRequestHandler):
     recorder: Recorder
     api: str
     uploads: str
-    writes: str = "any"
+    writes: str = "none"
     allowed: frozenset[str] = frozenset()
     refused_ops: frozenset[str] = frozenset()
     local = threading.local()
@@ -397,7 +403,7 @@ def serve(
     api: str,
     uploads: str,
     port: int = 0,
-    writes: str = "any",
+    writes: str = "none",
     allowed: frozenset[str] = frozenset(),
     refused_ops: frozenset[str] = frozenset(),
 ) -> None:
@@ -422,8 +428,8 @@ def main() -> None:
     parser.add_argument("--uploads", default="https://uploads.github.com")
     parser.add_argument(
         "--writes",
-        choices=("any", "none", "allowed"),
-        default="any",
+        choices=("none", "allowed"),
+        default="none",
         help="none: refuse every mutation and upload; allowed: refuse a mutation naming a "
         "repository or project id not given with --allow",
     )

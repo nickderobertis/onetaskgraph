@@ -1,3 +1,9 @@
+# llmlint: ignore-file[new_code_lands_in_a_project] This is the measurement record beside the captures it produced: run by hand against GitHub through measure.sh, never by a target. docs/measurements is no Nx project (nor is coalesced-members-dry-run/dry_run.py beside it), and making it one would put a live-GitHub harness inside affected selection.
+# llmlint: ignore-file[boundary_inputs_validated] Every input here is this harness's own raw log, its own state folder or the plan it generated moments earlier; the committed captures are validated where they are read, by analyze.py, and what leaves the raw logs is held by the sanitizer's allowlist and leak scan.
+# llmlint: ignore-file[changed_behavior_has_e2e] Its proof is the live run itself, whose captures are committed and reconciled by test_analyze.py; the GitHub-facing parts can be driven only against GitHub's test board, which measure.sh does, and the sanitizer produces every capture those tests read.
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] What this mirrors (the plugin's documents, the host's configuration, the scratch identities) is pinned to the releases measured, onetaskgraph v0.12.7 and ai-orchestrator 668dc496, each stated in the report and in every row's versions.json; the capture schema it shares with analyze.py is held by test_analyze.py, which builds every capture through sanitize.write.
+# llmlint: ignore-file[modern_domain_modeling] These records are JSON lines passed by allowlist from the proxy's raw log to the sanitized captures; the typed reading of them is analyze.py, and remodelling the retained harness would make it no longer the code that took the captures.
+# llmlint: ignore-file[structural_pattern_matching] This repository's Python target is 3.9 (requires-python in pyproject.toml), where a match statement does not parse.
 """Reduce one run's raw logs to what is committed: timestamps, durations, operation names,
 counts, costs and limit headers. Nothing else passes. Every field is copied by allowlist,
 never by removing what looks sensitive, so a board's titles, bodies, URLs and node ids
@@ -130,7 +136,9 @@ def span(record: dict) -> dict:
 
 
 def argv(words: list[str]) -> list[str]:
-    """A command line with every id, path and value replaced by what kind of word it was."""
+    """A command line with every id, path and value replaced by what kind of word it was, except
+    a flag, a store verb and a short lowercase word (a source name, or the generated plan's
+    synthetic id), which are kept as they are."""
     out = []
     for word in words:
         if (

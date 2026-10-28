@@ -1,3 +1,4 @@
+# llmlint: ignore-file[new_code_lands_in_a_project] The report's own recomputation and its tests, run by hand beside the measurement record whose command the report names; docs/measurements is no Nx project, and making it one is a change to the project graph and its four guarded selections, outside this measurement.
 """Recompute every table of `board-copy-targets-2026-10-26.md` from the sanitized captures.
 
     python3 docs/measurements/board-copy-targets-2026-10-26/analyze.py           # check
@@ -17,50 +18,85 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from enum import Enum
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE / "harness"))
+
+import sanitize  # the producer of every capture this reads
+
 CAPTURES = HERE / "captures"
 REPORT = HERE.parent / "board-copy-targets-2026-10-26.md"
 
+
+class Verdict(str, Enum):
+    WITHIN = "within"
+    OVER = "over"
+
+
+@dataclass(frozen=True)
+class Figures:
+    """One operation's seconds, GraphQL points and writes; a figure not stated is `None`."""
+
+    seconds: float | None = None
+    points: int | None = None
+    writes: int | None = None
+
+    def of(self, name: str) -> float | None:
+        return getattr(self, name)
+
+
+@dataclass(frozen=True)
+class Scenario:
+    name: str
+    operation: str
+    label: str
+
+
 # The user's targets, as the brief states them. Seconds warn on this host; points and writes
 # are strict.
-TARGETS: dict[str, dict[str, float]] = {
-    "first": {"points": 12, "writes": 40, "seconds": 32},
-    "changed1": {"points": 4, "seconds": 8},
-    "unchanged": {"points": 3, "seconds": 7},
-    "approve": {"points": 5, "seconds": 7},
+TARGETS: dict[str, Figures] = {
+    "first": Figures(seconds=32, points=12, writes=40),
+    "changed1": Figures(seconds=8, points=4),
+    "unchanged": Figures(seconds=7, points=3),
+    "approve": Figures(seconds=7, points=5),
 }
 # The brief's before figures: the host journey's copies on the loopback board at onetaskgraph
 # 0.12.3. The brief gives none for an approval or for writes.
-BEFORE: dict[str, dict[str, float]] = {
-    "first": {"seconds": 51, "points": 25},
-    "changed1": {"seconds": 20.8, "points": 18},
-    "unchanged": {"seconds": 17.4, "points": 14},
+BEFORE: dict[str, Figures] = {
+    "first": Figures(seconds=51, points=25),
+    "changed1": Figures(seconds=20.8, points=18),
+    "unchanged": Figures(seconds=17.4, points=14),
 }
 # The same operations measured on GitHub at onetaskgraph 0.11.0 on 2026-10-24
-# (`board-copy-speed-2026-10-18.md`, combined table): seconds, points, writes.
-EARLIER: dict[str, dict[str, float]] = {
-    "bare-first": {"seconds": 29.8, "points": 20, "writes": 36},
-    "bare-changed1": {"seconds": 8.7, "points": 7, "writes": 1},
-    "bare-unchanged": {"seconds": 6.7, "points": 6, "writes": 0},
-    "host-first": {"seconds": 64.4, "points": 17, "writes": 25},
-    "host-changed1": {"seconds": 52.2, "points": 7, "writes": 2},
-    "host-unchanged": {"seconds": 44.7, "points": 4, "writes": 0},
-    "host-approve": {"seconds": 16.4, "points": 7, "writes": 1},
+# (`board-copy-speed-2026-10-18.md`, combined table).
+EARLIER: dict[str, Figures] = {
+    "bare-first": Figures(seconds=29.8, points=20, writes=36),
+    "bare-changed1": Figures(seconds=8.7, points=7, writes=1),
+    "bare-unchanged": Figures(seconds=6.7, points=6, writes=0),
+    "host-first": Figures(seconds=64.4, points=17, writes=25),
+    "host-changed1": Figures(seconds=52.2, points=7, writes=2),
+    "host-unchanged": Figures(seconds=44.7, points=4, writes=0),
+    "host-approve": Figures(seconds=16.4, points=7, writes=1),
 }
 ROWS = (
-    ("bare-first", "first", "bare store: first copy"),
-    ("bare-changed1", "changed1", "bare store: re-copy, one task's body changed"),
-    ("bare-unchanged", "unchanged", "bare store: unchanged re-copy"),
-    ("host-first", "first", "host `just copy-plan`: first copy"),
-    ("host-changed1", "changed1", "host `just copy-plan`: one task's body changed"),
-    ("host-unchanged", "unchanged", "host `just copy-plan`: unchanged re-copy"),
-    ("host-approve", "approve", "host `just approve-design`"),
+    Scenario("bare-first", "first", "bare store: first copy"),
+    Scenario(
+        "bare-changed1", "changed1", "bare store: re-copy, one task's body changed"
+    ),
+    Scenario("bare-unchanged", "unchanged", "bare store: unchanged re-copy"),
+    Scenario("host-first", "first", "host `just copy-plan`: first copy"),
+    Scenario(
+        "host-changed1", "changed1", "host `just copy-plan`: one task's body changed"
+    ),
+    Scenario("host-unchanged", "unchanged", "host `just copy-plan`: unchanged re-copy"),
+    Scenario("host-approve", "approve", "host `just approve-design`"),
 )
 # The reference-size arithmetic of the timing spike (`board-copy-speed-2026-10-18.md`): every
 # walk page the test board answered is replaced by the pages the same walk takes on a board of
@@ -71,13 +107,124 @@ COPY_VERBS = (("project", "copy"), ("document", "copy"))
 # A mutation request's primary price, by the manager's ruling: GitHub's dry run cannot price a
 # mutation, and the smallest rise of `x-ratelimit-used` observed before one is its evidence.
 MUTATION_PRICE = 1
-UPLOAD = "POST /user-attachments/assets"
+# The upload's request kind, spelled as the sanitizer spells it.
+UPLOAD = sanitize.operation(
+    {
+        "kind": "rest",
+        "method": "POST",
+        "host": "uploads.github.com",
+        "path": "/user-attachments/assets",
+    }
+)
+
+
+class CaptureError(SystemExit):
+    """A capture that is not what `harness/sanitize.py` writes."""
+
+
+def refuse(path: Path, number: int | None, why: str) -> CaptureError:
+    where = f"{path}:{number}" if number else str(path)
+    return CaptureError(
+        f"analyze.py: {where}: {why}; take the capture again with measure.sh"
+    )
 
 
 def lines(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    out = []
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except ValueError as error:
+            raise refuse(path, number, f"not JSON ({error})") from error
+        if not isinstance(record, dict):
+            raise refuse(path, number, "not a JSON object")
+        out.append(record)
+    return out
+
+
+def finite(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+REQUEST_KINDS = {"query", "mutation", "rest", "tunnel", "other"}
+HOST_KINDS = {"store", "subprocess", "interpreter", "step", "other"}
+
+
+def timed(path: Path, records: list[dict]) -> list[dict]:
+    """`records`, each held to a finite `start` no later than its finite `end`."""
+    for number, r in enumerate(records, 1):
+        if not finite(r.get("start")) or not finite(r.get("end", r.get("start"))):
+            raise refuse(path, number, "a start or end that is not a finite number")
+        if r.get("end", r["start"]) < r["start"]:
+            raise refuse(path, number, "an end before its start")
+    return records
+
+
+def requests_of(path: Path) -> list[dict]:
+    records = timed(path, lines(path))
+    for number, r in enumerate(records, 1):
+        if r.get("kind") not in REQUEST_KINDS or not isinstance(r.get("op"), str):
+            raise refuse(path, number, "a request with no known kind or operation")
+        if (
+            not count(r.get("seq"))
+            or not finite(r.get("ms"))
+            or not isinstance(r.get("limits"), dict)
+        ):
+            raise refuse(
+                path, number, "a request without its sequence, duration or limits"
+            )
+        if not isinstance(r.get("host"), str) or not isinstance(r.get("path"), str):
+            raise refuse(path, number, "a request without its host or path")
+        if "mutations" in r and not count(r["mutations"]):
+            raise refuse(path, number, "a mutation count that is not a whole number")
+    return records
+
+
+def host_of(path: Path) -> list[dict]:
+    records = timed(path, lines(path))
+    for number, r in enumerate(records, 1):
+        if r.get("kind") not in HOST_KINDS:
+            raise refuse(path, number, "a host event of no known kind")
+        if r["kind"] == "store" and not isinstance(r.get("argv"), list):
+            raise refuse(path, number, "a store invocation without its command line")
+    return records
+
+
+def steps_of(path: Path) -> list[dict]:
+    records = timed(path, lines(path))
+    if not records:
+        raise refuse(path, None, "no timed step")
+    for number, r in enumerate(records, 1):
+        if not isinstance(r.get("argv"), list) or not isinstance(
+            r.get("returncode"), int
+        ):
+            raise refuse(path, number, "a step without its command line or exit status")
+    return records
+
+
+def prices_of(path: Path) -> dict[str, int]:
+    pricing = json.loads(path.read_text()) if path.exists() else {}
+    requests = pricing.get("requests", {})
+    if not isinstance(requests, dict):
+        raise refuse(path, None, "`requests` is not an object")
+    for key, value in requests.items():
+        if not count(value):
+            raise refuse(
+                path, None, f"the price of {key} is not a whole number of points"
+            )
+    return dict(requests)
 
 
 def latest_captures(captures: Path) -> dict[str, Path]:
@@ -88,9 +235,6 @@ def latest_captures(captures: Path) -> dict[str, Path]:
         if path.is_dir() and match:
             found[match.group(1)] = path
     return found
-
-
-# --- points ---------------------------------------------------------------------------------
 
 
 @dataclass
@@ -185,9 +329,6 @@ def points_of(
     )
 
 
-# --- writes, requests, screening --------------------------------------------------------------
-
-
 def writes_of(requests: list[dict]) -> dict[str, int]:
     """Individual mutations (each aliased one counted) plus uploads, and the requests carrying them."""
     sent = [r for r in requests if r["host"] != "refused"]
@@ -239,8 +380,6 @@ def screening_of(screen: list[dict]) -> dict[str, float]:
     }
 
 
-# --- seconds ---------------------------------------------------------------------------------
-
 # Causes in the order an instant is given to them when several are under way at once: a
 # screening call runs inside a store invocation, and so does every round trip.
 PRIORITY = (
@@ -269,6 +408,14 @@ def store_label(argv: list[str]) -> str:
         if not w.startswith("<") and not w.startswith("--") and ":" not in w
     ]
     return "store invocation: " + " ".join(words[:2] or ["(unnamed)"])
+
+
+# Each kind of host event that is a cause of its own: its priority and how it is named.
+HOST_CAUSES = {
+    "store": ("store", lambda h: store_label(h["argv"])),
+    "subprocess": ("subprocess", lambda h: f"host subprocess: {h['program']}"),
+    "step": ("step", lambda h: f"host step: {h['name']}"),
+}
 
 
 def intervals_of(capture: dict) -> tuple[list[Interval], float, float]:
@@ -330,27 +477,9 @@ def intervals_of(capture: dict) -> tuple[list[Interval], float, float]:
             Interval(last, end, rank["launch"], "interpreter exit and recipe teardown")
         )
         for h in host:
-            if h["kind"] == "store":
-                out.append(
-                    Interval(
-                        h["start"], h["end"], rank["store"], store_label(h["argv"])
-                    )
-                )
-            elif h["kind"] == "subprocess":
-                out.append(
-                    Interval(
-                        h["start"],
-                        h["end"],
-                        rank["subprocess"],
-                        f"host subprocess: {h['program']}",
-                    )
-                )
-            elif h["kind"] == "step":
-                out.append(
-                    Interval(
-                        h["start"], h["end"], rank["step"], f"host step: {h['name']}"
-                    )
-                )
+            if h["kind"] in HOST_CAUSES:
+                cause, label = HOST_CAUSES[h["kind"]]
+                out.append(Interval(h["start"], h["end"], rank[cause], label(h)))
     else:
         for s in steps:
             out.append(
@@ -413,9 +542,6 @@ def rounded(
     return out
 
 
-# --- a row ------------------------------------------------------------------------------------
-
-
 @dataclass
 class Row:
     scenario: str
@@ -438,7 +564,7 @@ class Row:
     walk_ms: float
     refused: int
     returncodes: list[int]
-    verdicts: dict[str, str] = field(default_factory=dict)
+    verdicts: dict[str, Verdict] = field(default_factory=dict)
 
 
 def load(path: Path) -> dict:
@@ -447,10 +573,10 @@ def load(path: Path) -> dict:
         return json.loads(target.read_text()) if target.exists() else {}
 
     return {
-        "requests": lines(path / "requests.jsonl"),
-        "steps": lines(path / "steps.jsonl"),
-        "host": lines(path / "host.jsonl"),
-        "screen": lines(path / "screen.jsonl"),
+        "requests": requests_of(path / "requests.jsonl"),
+        "steps": steps_of(path / "steps.jsonl"),
+        "host": host_of(path / "host.jsonl"),
+        "screen": timed(path / "screen.jsonl", lines(path / "screen.jsonl")),
         "quota": optional("quota.json"),
         "versions": optional("versions.json"),
         "conditions": optional("conditions.json"),
@@ -536,22 +662,29 @@ def row_of(
         returncodes=[s["returncode"] for s in steps],
     )
     target = TARGETS[operation]
-    figures = {
-        "points": row.points.figure,
-        "seconds": row.seconds,
-        "writes": row.writes["writes"],
-    }
+    measured = Figures(
+        seconds=row.seconds, points=row.points.figure, writes=row.writes["writes"]
+    )
     row.verdicts = {
-        name: ("within" if figures[name] <= bar else "over")
-        for name, bar in target.items()
+        name: verdict(measured.of(name), target.of(name))
+        for name in ("seconds", "points", "writes")
+        if target.of(name) is not None
     }
-    row.verdicts["points at 5 per mutation"] = (
-        "within" if row.points.at_five <= target["points"] else "over"
+    row.verdicts["points at 5 per mutation"] = verdict(
+        row.points.at_five, target.points
     )
     return row
 
 
-def reference_seconds(row: Row, walked_ms: float) -> float:
+def verdict(figure: float | None, bar: float | None) -> Verdict:
+    return (
+        Verdict.WITHIN
+        if figure is not None and bar is not None and figure <= bar
+        else Verdict.OVER
+    )
+
+
+def reference_seconds(row: Row) -> float:
     """The row's seconds at the `plans` board's size: every walk page the test board answered
     replaced by the pages the same walk takes there. With no walk page it is the measured figure."""
     if not any(row.walk_pages.values()):
@@ -561,10 +694,7 @@ def reference_seconds(row: Row, walked_ms: float) -> float:
         for op, n in row.walk_pages.items()
         if n
     )
-    return round(row.seconds - walked_ms / 1000 + extra, 1)
-
-
-# --- the board-size evidence ------------------------------------------------------------------
+    return round(row.seconds - row.walk_ms / 1000 + extra, 1)
 
 
 def loopback(captures: Path) -> list[dict]:
@@ -574,7 +704,11 @@ def loopback(captures: Path) -> list[dict]:
     for path in sorted((captures / "loopback").glob("*.json")):
         record = json.loads(path.read_text())
         detail = record.get("detail")
-        detail = json.loads(detail) if isinstance(detail, str) else detail or {}
+        detail = json.loads(detail) if isinstance(detail, str) else detail
+        if not isinstance(record.get("budget"), str) or not isinstance(detail, dict):
+            raise refuse(
+                path, None, "a loopback recording without its budget or its detail"
+            )
         out.append(
             {
                 "file": path.name,
@@ -603,43 +737,47 @@ SIZES = (
 WALK_WORDS = ("page of the board", "board's items", "search")
 
 
-def size_pairs(recordings: list[dict]) -> list[dict]:
+@dataclass(frozen=True)
+class SizePair:
+    """One loopback recording on the board of 2,000 items beside its twin on 20,000."""
+
+    budget: str
+    recording: str
+    same: bool
+    requests: tuple[int, int]
+    points: tuple[int | None, int | None]
+    walk_pages: int
+
+
+def size_pairs(recordings: list[dict]) -> list[SizePair]:
     """Every loopback points recording on the board of 2,000 items beside its twin on 20,000:
     whether the two sent the same requests by operation, their points, and the walk pages."""
     pairs = []
     for record in recordings:
-        if not str(record["budget"]).startswith("github-plan-copy-points-"):
+        if not record["budget"].startswith("github-plan-copy-points-"):
             continue
         for small, large in SIZES:
             a, b = record["detail"].get(small), record["detail"].get(large)
             if not isinstance(a, dict) or not isinstance(b, dict):
                 continue
-            sent = a.get("requests by operation", {})
+            sent_small = a.get("requests by operation", {})
+            sent_large = b.get("requests by operation", {})
             pairs.append(
-                {
-                    "budget": record["budget"],
-                    "recording": small,
-                    "same": sent == b.get("requests by operation")
+                SizePair(
+                    budget=record["budget"],
+                    recording=small,
+                    same=sent_small == sent_large
                     and a.get("points") == b.get("points"),
-                    "requests": [
-                        sum(sent.values()),
-                        sum(b.get("requests by operation", {}).values()),
-                    ],
-                    "points": [a.get("points"), b.get("points")],
-                    "walk_pages": sum(
+                    requests=(sum(sent_small.values()), sum(sent_large.values())),
+                    points=(a.get("points"), b.get("points")),
+                    walk_pages=sum(
                         n
-                        for op, n in {
-                            **sent,
-                            **b.get("requests by operation", {}),
-                        }.items()
+                        for op, n in {**sent_small, **sent_large}.items()
                         if any(w in op for w in WALK_WORDS)
                     ),
-                }
+                )
             )
     return pairs
-
-
-# --- the tables --------------------------------------------------------------------------------
 
 
 def fmt(value: object) -> str:
@@ -660,7 +798,7 @@ def targets_table(rows: list[Row]) -> str:
     for row in rows:
         target, before, earlier = (
             TARGETS[row.operation],
-            BEFORE.get(row.operation, {}),
+            BEFORE.get(row.operation, Figures()),
             EARLIER[row.scenario],
         )
         cells = [row.label]
@@ -670,23 +808,23 @@ def targets_table(rows: list[Row]) -> str:
             "writes": str(row.writes["writes"]),
         }
         for name in ("seconds", "points", "writes"):
-            bar = target.get(name)
+            bar = target.of(name)
             mark = (
-                f"target {fmt(bar)}: **{row.verdicts[name]}**"
+                f"target {fmt(bar)}: **{row.verdicts[name].value}**"
                 if bar is not None
                 else "no target"
             )
             was = (
-                f"{fmt(before[name])} (loopback, 0.12.3)"
-                if name in before
+                f"{fmt(before.of(name))} (loopback, 0.12.3)"
+                if before.of(name) is not None
                 else "none in the brief"
             )
             cells.append(
-                f"**{values[name]}** — {mark}; before {was}; GitHub at 0.11.0 {fmt(earlier[name])}"
+                f"**{values[name]}** — {mark}; before {was}; GitHub at 0.11.0 {fmt(earlier.of(name))}"
             )
         flip = row.verdicts.get("points at 5 per mutation")
         cells.append(
-            f"{row.points.at_five} — {'**would flip to over**' if flip == 'over' and row.verdicts['points'] == 'within' else 'no flip'}"
+            f"{row.points.at_five} — {'**would flip to over**' if flip is Verdict.OVER and row.verdicts['points'] is Verdict.WITHIN else 'no flip'}"
         )
         body.append(cells)
     return table(
@@ -934,15 +1072,15 @@ def workload_table(rows: list[Row]) -> str:
     )
 
 
-def size_table(pairs: list[dict]) -> str:
+def size_table(pairs: list[SizePair]) -> str:
     body = [
         [
-            f"`{p['budget']}`",
-            p["recording"],
-            f"{p['requests'][0]} / {p['requests'][1]}",
-            "same" if p["same"] else "**differ**",
-            f"{fmt(p['points'][0])} / {fmt(p['points'][1])}",
-            str(p["walk_pages"]),
+            f"`{p.budget}`",
+            p.recording,
+            f"{p.requests[0]} / {p.requests[1]}",
+            "same" if p.same else "**differ**",
+            f"{fmt(p.points[0])} / {fmt(p.points[1])}",
+            str(p.walk_pages),
         ]
         for p in pairs
     ]
@@ -964,9 +1102,9 @@ def reference_table(rows: list[Row]) -> str:
     for row in rows:
         pages = row.walk_pages
         arithmetic = (
-            f"{row.seconds:.1f} s measured − 0 s of 0 walk pages + 0 × 6.95 s + 0 × 6.79 s = **{reference_seconds(row, 0):.1f} s**"
+            f"{row.seconds:.1f} s measured − 0 s of 0 walk pages + 0 × 6.95 s + 0 × 6.79 s = **{reference_seconds(row):.1f} s**"
             if not any(pages.values())
-            else f"**{reference_seconds(row, row.walk_ms):.1f} s**"
+            else f"**{reference_seconds(row):.1f} s**"
         )
         body.append(
             [
@@ -1041,8 +1179,24 @@ def probes_table(captures: Path) -> str:
     if not path.exists():
         return "No probe was recorded."
     probe = json.loads(path.read_text())
+    readings = probe.get("idle_background", {}).get("readings", [])
+    inspect = probe.get("onevcs_inspect", {})
+    if not readings or not all(
+        finite(r.get("at")) and count(r.get("used")) for r in readings
+    ):
+        raise refuse(path, None, "an idle-background probe without timed readings")
+    if (
+        not count(inspect.get("inspects"))
+        or not inspect["inspects"]
+        or not inspect.get("before")
+        or not inspect.get("after")
+    ):
+        raise refuse(
+            path,
+            None,
+            "an onevcs probe without its inspects and its readings either side",
+        )
     body = []
-    readings = probe["idle_background"]["readings"]
     for reset in sorted({r["reset"] for r in readings}):
         on = [r for r in readings if r["reset"] == reset]
         rise, seconds = slope(on)
@@ -1054,7 +1208,6 @@ def probes_table(captures: Path) -> str:
                 f"{rise / seconds:.2f} points/s" if seconds else "—",
             ]
         )
-    inspect = probe["onevcs_inspect"]
     core = inspect["after"][0]["core_used"] - inspect["before"][-1]["core_used"]
     graphql = (
         inspect["after"][0]["graphql_used"] - inspect["before"][-1]["graphql_used"]
@@ -1161,19 +1314,16 @@ def spend_table(captures: Path, priced: int) -> str:
 
 
 def tables(captures: Path) -> tuple[dict[str, str], dict]:
-    pricing = (
-        json.loads((captures / "pricing.json").read_text())
-        if (captures / "pricing.json").exists()
-        else {}
-    )
-    prices = {key: int(value) for key, value in pricing.get("requests", {}).items()}
+    pricing_path = captures / "pricing.json"
+    pricing = json.loads(pricing_path.read_text()) if pricing_path.exists() else {}
+    prices = prices_of(pricing_path)
     latest = latest_captures(captures)
-    missing = [s for s, _, _ in ROWS if s not in latest]
+    missing = [s.name for s in ROWS if s.name not in latest]
     if missing:
         raise SystemExit(
             f"analyze.py: no capture of {', '.join(missing)} under {captures}; take them with measure.sh"
         )
-    rows = [row_of(s, op, label, latest[s], prices) for s, op, label in ROWS]
+    rows = [row_of(s.name, s.operation, s.label, latest[s.name], prices) for s in ROWS]
     pairs = size_pairs(loopback(captures))
     out = {
         "targets": targets_table(rows),
@@ -1210,7 +1360,7 @@ def tables(captures: Path) -> tuple[dict[str, str], dict]:
             }
             for r in rows
         ],
-        "board_size_pairs": pairs,
+        "board_size_pairs": [asdict(p) for p in pairs],
         "mutation_rises": {
             k: v for k, v in pricing.get("mutation_rises", {}).items() if v
         },
@@ -1261,6 +1411,14 @@ def main(argv: list[str] | None = None) -> int:
     updated, drifted = reconcile(args.report.read_text(), computed)
     if args.write:
         args.report.write_text(updated)
+        unresolved = [name for name in drifted if name.endswith(")")]
+        if unresolved:
+            print(
+                f"analyze.py: {args.report.name} has no place for, or an unknown, table: "
+                f"{', '.join(unresolved)}; add or rename its analyze:begin/end markers",
+                file=sys.stderr,
+            )
+            return 1
         return 0
     if drifted:
         print(

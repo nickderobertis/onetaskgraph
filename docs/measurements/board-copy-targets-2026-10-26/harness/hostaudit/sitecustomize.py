@@ -1,3 +1,7 @@
+# llmlint: ignore-file[new_code_lands_in_a_project] This is the measurement record beside the captures it produced: run by hand against GitHub through measure.sh, never by a target. docs/measurements is no Nx project (nor is coalesced-members-dry-run/dry_run.py beside it), and making it one would put a live-GitHub harness inside affected selection.
+# llmlint: ignore-file[changed_behavior_has_e2e] Its proof is the live run itself, whose captures are committed and reconciled by test_analyze.py; the GitHub-facing parts can be driven only against GitHub's test board, which measure.sh does, and the sanitizer produces every capture those tests read.
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] What this mirrors (the plugin's documents, the host's configuration, the scratch identities) is pinned to the releases measured, onetaskgraph v0.12.7 and ai-orchestrator 668dc496, each stated in the report and in every row's versions.json; the capture schema it shares with analyze.py is held by test_analyze.py, which builds every capture through sanitize.write.
+# llmlint: ignore-file[modern_domain_modeling] These records are JSON lines passed by allowlist from the proxy's raw log to the sanitized captures; the typed reading of them is analyze.py, and remodelling the retained harness would make it no longer the code that took the captures.
 """Host-side timing for ai-orchestrator's recipes, loaded through `PYTHONPATH`.
 
 Inert unless `SPIKE_HOST_AUDIT` names a file. Then it appends one JSON line when the
@@ -96,7 +100,7 @@ def _timed(module: str, name: str, function):
     return wrapper
 
 
-def _record_store(argv, start, code) -> None:
+def _record_call(argv, start, code) -> None:
     program, words = argv
     record = {
         "kind": "store" if program == "onetaskgraph" else "subprocess",
@@ -129,7 +133,7 @@ def _patch_asyncio(module) -> None:
             code = await wait()
             if not done:
                 done.append(True)
-                _record_store(argv, start, code)
+                _record_call(argv, start, code)
             return code
 
         process.wait = timed_wait
@@ -212,7 +216,7 @@ if LOG:
         argv = getattr(self, "_spike_store", None)
         if argv is not None and not getattr(self, "_spike_done", False):
             self._spike_done = True
-            _record_store(argv, self._spike_start, code)
+            _record_call(argv, self._spike_start, code)
         return code
 
     subprocess.Popen.__init__ = _popen_init
