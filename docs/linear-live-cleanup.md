@@ -85,9 +85,10 @@ the janitor's Cargo and Nx dependencies agree. No GitHub lane depends on that pl
 
 The repair also validates incoming fixture-server requests, represents advancing
 pagination with a required cursor, and checks the actual listing filter and recorded
-delete acknowledgement against the pinned upstream schema. Nine Linear subprocess
+delete acknowledgement against the pinned upstream schema. Ten Linear subprocess
 journeys passed, including direct-team precedence, empty project ownership and a zero
-ownership timestamp, missing ownership fields and a failure after the first deletion. Temporarily removing the zero-timestamp guard made the new
+ownership timestamp, missing ownership fields, a failure after the first deletion,
+and real-clock cleanup and listing refusal. Temporarily removing the zero-timestamp guard made the new
 journey fail on the unexpected deletion; restoring it made the full suite pass.
 
 The main-branch release-CD recheck passed all 12 tests at

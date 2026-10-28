@@ -164,6 +164,7 @@ class Workspace:
     def answer(self, request: Request) -> dict[str, Any]:
         self.requests.append(request)
         if 'documentDelete(' in request['query']:
+            # read_request validated delete variables before this operation discriminator.
             identifier = cast(DeleteVariables, request['variables'])['id']
             match self.failure:
                 case FailureMode.DELETE:
@@ -176,6 +177,7 @@ class Workspace:
             return json.loads((Path(__file__).parent / 'fixtures/linear-document-delete.json').read_text())
         assert 'team{key}' in request['query']
         assert 'project{teams(first:100)' in request['query']
+        # read_request validated the listing shape; Python cannot narrow a TypedDict union by query text.
         variables = cast(ListingVariables, request['variables'])
         assert variables['filter']['title']['startsWith'] == 'onetaskgraph live cleanup '
         after = variables['after']
@@ -220,9 +222,10 @@ class Workspace:
 
 class LinearJourneys(unittest.TestCase):
     def run_janitor(self, workspace: Workspace, *, arguments: list[str] | None = None,
-                    variables: dict[str, str | None] | None = None) -> subprocess.CompletedProcess[str]:
+                    variables: dict[str, str | None] | None = None,
+                    virtual_clock: bool = True) -> subprocess.CompletedProcess[str]:
         class Handler(http.server.BaseHTTPRequestHandler):
-            def log_message(self, *_args: Any) -> None:
+            def log_message(self, *_args: object) -> None:
                 pass
 
             def do_POST(self) -> None:
@@ -263,13 +266,26 @@ class LinearJourneys(unittest.TestCase):
                 else:
                     environment[name] = value
             args = arguments if arguments is not None else [
-                '--loopback', f'http://127.0.0.1:{server.server_port}', '--virtual-clock']
+                '--loopback', f'http://127.0.0.1:{server.server_port}']
+            if arguments is None and virtual_clock:
+                args.append('--virtual-clock')
             return subprocess.run([os.environ['JANITOR_BINARY'], '--linear', *args],
                                   env=environment, capture_output=True, text=True, timeout=30)
         finally:
             server.shutdown()
             server.server_close()
             thread.join()
+
+    def test_real_clock_runs_cleanup_and_reports_listing_failure(self) -> None:
+        for failure in [None, FailureMode.LISTING]:
+            with self.subTest(failure=failure):
+                workspace = Workspace(failure)
+                sample = workspace.pages[0].data.documents.nodes[0]
+                workspace.pages[0].data.documents.nodes = [sample]
+                workspace.pages[1].data.documents.nodes = []
+                result = self.run_janitor(workspace, virtual_clock=False)
+                self.assertEqual(result.returncode, 0 if failure is None else 1, result.stderr)
+                self.assertEqual(workspace.deleted, ['stale-machine'] if failure is None else [])
 
     def test_configuration_refusals_send_no_requests(self) -> None:
         cases = [
@@ -371,6 +387,7 @@ class LinearJourneys(unittest.TestCase):
         result = self.run_janitor(workspace)
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(workspace.deleted, ['stale-machine'])
+        # The filter selects delete operations whose variables read_request already validated.
         deletes = [cast(DeleteVariables, request['variables'])['id'] for request in workspace.requests
                    if 'documentDelete(' in request['query']]
         self.assertEqual(deletes, ['stale-machine', 'stale-ci'])
