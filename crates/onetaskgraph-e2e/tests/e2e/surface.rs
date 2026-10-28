@@ -301,7 +301,14 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 47);
+    assert_eq!(bundle["version"], 48);
+    // Version 48: what `task locate` answers, and every source `sources route` can reach.
+    assert!(bundle["roots"]["LocateReport"].is_object());
+    assert_eq!(
+        bundle["roots"]["SourceRoute"]["properties"]["reachable"]["type"], "array",
+        "{:#}",
+        bundle["roots"]["SourceRoute"]
+    );
     // Version 47: the `content` a `task content set` answers the task then holds.
     // Version 45: the opaque dependency endpoint, and a dependency read's `unanswered` naming a
     // designator no configured source is.
@@ -409,6 +416,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task show-many",
             "task deps",
             "task copy",
+            "task locate",
             "task comment add",
             "task comment list",
             "task comment edit",
