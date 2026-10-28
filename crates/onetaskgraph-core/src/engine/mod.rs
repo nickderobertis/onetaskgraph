@@ -76,8 +76,9 @@ pub use copy::MirrorTarget;
 pub(crate) use copy::spent_between;
 pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
-    CopyReport, CopyRequest, CopyScope, CopyVia, MatchBy, NoCounterpart, PublicProjection,
-    PublicProjections, Spent, StatusPolicy,
+    CopyReport, CopyRequest, CopyScope, CopyVia, CreatesIn, LocateLookup, LocateReport,
+    LocateRequest, Located, LocatedCounterpart, LocatedLookup, MatchBy, NoCounterpart,
+    PublicProjection, PublicProjections, Spent, StatusPolicy,
 };
 pub(crate) use copy::{malformed_links, malformed_locations};
 pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};
@@ -1200,6 +1201,26 @@ pub enum EngineError {
         "--target-task requires exactly one source task id\nnext: name one task, without query selection."
     )]
     TargetTaskNeedsOne,
+    /// `task locate --target-native` names one destination item, so it locates one task.
+    #[error(
+        "--target-native names the counterpart of exactly one task, and {count} were named\n\
+         next: name one task beside --target-native, or drop it to look each counterpart up."
+    )]
+    TargetNativeNeedsOne {
+        /// How many tasks were named.
+        count: usize,
+    },
+    /// `task locate` was named an item that is not a task.
+    #[error(
+        "{id} is a {kind}, not a task, and task locate places tasks alone\n\
+         next: name a task's qualified id — `onetaskgraph task list` reports them."
+    )]
+    NotATask {
+        /// The id named.
+        id: GlobalId,
+        /// What it names instead: `project` or `document`.
+        kind: &'static str,
+    },
     /// The target must belong to the configured destination.
     #[error(
         "target task {target} is not in destination {destination}\nnext: name a task in the destination source."

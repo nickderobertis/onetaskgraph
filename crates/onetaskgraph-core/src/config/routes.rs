@@ -155,6 +155,10 @@ pub struct SourceRoute {
     /// Where it would land, and the route entry that would send it there.
     #[serde(flatten)]
     pub placement: Placement,
+    /// Every source an item written to `source` could land in, whatever its repositories and
+    /// classification: `source` itself first, then each source its routes name as `to`, in
+    /// the order they are written, each once — the set a routed copy reads ahead from.
+    pub reachable: Vec<SourceName>,
 }
 
 /// Every configured source's routes, by source name, and who each source is declared

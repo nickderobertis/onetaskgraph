@@ -768,6 +768,14 @@ impl TaskSource for HeldOff {
         self.refused()?;
         self.noted(self.inner.visibility(target).await)
     }
+
+    async fn creation_repository(
+        &self,
+        target: &WriteTarget<'_>,
+    ) -> Result<Option<onetaskgraph_plugin_api::Repository>, SourceError> {
+        self.refused()?;
+        self.noted(self.inner.creation_repository(target).await)
+    }
 }
 
 #[cfg(test)]
