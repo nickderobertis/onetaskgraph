@@ -504,6 +504,19 @@ fn locate_lists_every_carrier_across_pages_and_finds_a_copy_back_by_its_origin()
         item["counterpart"],
         json!({"id": "board:TWIN-1", "via": "scan"})
     );
+    // The same carriers for a person, in listing order.
+    let read = store.run(&["task", "locate", "drafts:twin", "--to", "site"]);
+    assert_eq!(
+        read.output.status.code(),
+        Some(0),
+        "{}",
+        stderr(&read.output)
+    );
+    let text = stdout(&read.output);
+    assert!(
+        text.contains("board:TWIN-1, board:TWIN-2") && text.contains("board:TWIN-1 via scan"),
+        "{text}"
+    );
     let report = store.copy("drafts:twin", "site", &[]).answer();
     assert_eq!(
         outcome(&report)["destination"],
@@ -821,5 +834,178 @@ fn the_write_nothing_snapshot_reads_a_coverage_profile_in_the_store_as_a_write()
         );
         std::fs::remove_file(&planted).expect("the planted profile goes");
         assert_eq!(store.tree(), before, "removing {name} restores the tree");
+    }
+}
+
+/// The repository each issue a command created was created in, as `github.com/owner/name`: the
+/// last one it resolved before that `createIssue` — by the lookup of the repository alone, or by
+/// a read carrying it beside the board's fields.
+fn created_in(served: &[(String, Value)]) -> Vec<String> {
+    let mut resolved = None;
+    let mut created = Vec::new();
+    for (document, variables) in served {
+        let named = if document.contains("repository(owner:$owner,name:$name)") {
+            Some(("owner", "name"))
+        } else if variables.get("repositoryName").is_some() {
+            Some(("repositoryOwner", "repositoryName"))
+        } else {
+            None
+        };
+        if let Some((owner, name)) = named {
+            resolved = Some(format!(
+                "github.com/{}/{}",
+                variables[owner].as_str().unwrap_or_default(),
+                variables[name].as_str().unwrap_or_default()
+            ));
+        }
+        if document.contains("createIssue(input:$input)") {
+            created.push(
+                resolved
+                    .clone()
+                    .expect("a create resolves its repository first"),
+            );
+        }
+    }
+    created
+}
+
+#[test]
+fn locate_files_a_routed_task_under_its_home_s_member_where_the_copy_after_it_does() {
+    // `plan` holds the work; `home`, a public folder, holds each plan project's home and routes
+    // the board's owner's repositories to the board, where a routed task is filed under the home's member
+    // project. `goal`'s home names its member `board:MEM-1`, whose issue sits in
+    // `nickderobertis/planning`; `fresh`'s home names none, so the copy creates one.
+    let sandbox = Sandbox::new();
+    let (config, board) = crate::fixtures::github_projects_with_items(
+        &sandbox,
+        vec![json!({
+            "item": "ITEM-MEM-1", "id": "MEM-1", "type": "Issue", "title": "Goal",
+            "body": "The goal.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.item_kind\":\"project\",\"onetaskgraph.member_of\":\"home:goal\"}\n-->",
+            "state": "OPEN", "reason": null, "parent": null,
+            "repo": "nickderobertis/planning", "status": "Todo", "origin": "", "labels": [],
+        })],
+    );
+    let folder =
+        |name: &str| json!({"plugin": "local-md", "config": {"root": sandbox.subdirectory(name)}});
+    let mut home = folder("home");
+    home["routes"] = json!([{"repositories": ["github.com/nickderobertis/*"], "to": "board"}]);
+    sandbox.project_document(
+        &json!({"sources": {
+            "plan": folder("plan"),
+            "home": home,
+            "board": {"plugin": "github-projects", "config": config},
+        }})
+        .to_string(),
+    );
+    let record = |source: &str, kind: &str, id: &str, front: &str| {
+        let path = sandbox
+            .project()
+            .join(source)
+            .join(kind)
+            .join(format!("{id}.md"));
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the kind's folder");
+        std::fs::write(&path, format!("---\n{front}\n---\nBody of {id}.\n")).expect("a record");
+    };
+    for (project, members) in [
+        ("goal", "\"onetaskgraph.members\": [\"board:MEM-1\"], "),
+        ("fresh", ""),
+    ] {
+        record(
+            "plan",
+            "projects",
+            project,
+            &format!(
+                "title: {project}\nstatus: todo\nmetadata: {{onetaskgraph.copies: {{home: \"home:{project}\"}}}}"
+            ),
+        );
+        record(
+            "home",
+            "projects",
+            project,
+            &format!(
+                "title: {project}\nstatus: todo\nmetadata: {{{members}onetaskgraph.origin: \"plan:{project}\"}}"
+            ),
+        );
+        // Several repositories, so a create files under the parent project's issue.
+        record(
+            "plan",
+            "tasks",
+            project,
+            &format!(
+                "title: Task of {project}\nstatus: todo\nproject: {project}\n\
+                 repositories: [github.com/nickderobertis/tooling, github.com/nickderobertis/docs]"
+            ),
+        );
+    }
+    let tree = || {
+        let mut held = BTreeMap::new();
+        for source in ["plan", "home"] {
+            let mut pending = vec![sandbox.project().join(source)];
+            while let Some(directory) = pending.pop() {
+                for entry in std::fs::read_dir(&directory).expect("a folder") {
+                    let path = entry.expect("an entry").path();
+                    if path.is_dir() {
+                        pending.push(path);
+                    } else {
+                        held.insert(display(&path), std::fs::read(&path).expect("a file"));
+                    }
+                }
+            }
+        }
+        held
+    };
+    let run = |arguments: &[&str]| {
+        let before = board.served().len();
+        let output = sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{arguments:?}\n{}{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        let answer: Value = serde_json::from_str(&stdout(&output)).expect("a JSON answer");
+        (answer, board.served()[before..].to_vec())
+    };
+    for (id, repository) in [
+        // The member's issue sits in another repository than the board's configured one.
+        ("plan:goal", "github.com/nickderobertis/planning"),
+        // No member yet: a locate creates none, so the task files where a create with no
+        // parent does — and the copy files it under the member it creates there.
+        ("plan:fresh", CONFIGURED),
+    ] {
+        for extra in [&[][..], &["--no-counterpart"][..]] {
+            let before = tree();
+            let mut arguments = vec!["task", "locate", id, "--to", "home", "--json"];
+            arguments.extend(extra);
+            let (located, served) = run(&arguments);
+            assert_eq!(tree(), before, "{arguments:?} wrote no file");
+            assert!(
+                !served
+                    .iter()
+                    .any(|(document, _)| document.trim_start().starts_with("mutation")),
+                "{arguments:?} wrote nothing to the board: {served:#?}"
+            );
+            let item = only(&located).clone();
+            assert_eq!(item["destination"], "board", "{id}: {item:#}");
+            assert_eq!(item["route"], 0, "{id}: {item:#}");
+            assert_eq!(
+                item["creates_in"],
+                json!({"repository": repository}),
+                "{arguments:?}: {item:#}"
+            );
+        }
+        let (copied, served) = run(&["task", "copy", id, "--to", "home", "--json"]);
+        assert_eq!(outcome(&copied)["action"], "created", "{id}: {copied:#}");
+        assert_eq!(
+            created_in(&served).last().map(String::as_str),
+            Some(repository),
+            "{id}: the copy created the task's issue where locate said: {served:#?}"
+        );
     }
 }
