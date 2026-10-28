@@ -1,0 +1,488 @@
+{
+  "schema_version": 1,
+  "revision": "babea92b24a095fdc671e90990fab0d2c949deea",
+  "measured_file_sha256": {
+    "crates/onetaskgraph-github-projects-e2e/tests/e2e/projection_spike.rs": "54511a3455f9d10600edc09d6ac733995246062cb3423a773cc40f3aba0985b1",
+    "crates/onetaskgraph-github-projects-e2e/tests/e2e/approval.rs": "ef3850b0c097ee8a83cf394f0531ff00a5c26344278c51d5216089b74a416665",
+    "crates/onetaskgraph-github-projects-e2e/tests/e2e/asset_board.rs": "f410f09896776b1f34088e0a196bd5f12dece3ba739fc3245365822f2f8ac708",
+    "crates/onetaskgraph-linear-e2e/tests/e2e/projection_spike.rs": "bd716bc8a2e5ee30f2d75f70c8b0e74f6ca6df111b78d1d3f2af9101b1c5aa62",
+    "crates/onetaskgraph-e2e-support/src/fixtures.rs": "1c220929f8a7e9eb2562eb5c42a19ecdc9d4721474c19a093f7d30aac63405c7",
+    "crates/onetaskgraph-github-projects-e2e/human-items/measure-projection.py": "08d8b100a7e6feca9602e549227af7b9d54fe3b079dad9beb0898fb71c15f98a"
+  },
+  "workload": {
+    "tasks": 100,
+    "managers": 10,
+    "board_items": 2000
+  },
+  "elapsed_seconds": 14.833141975977924,
+  "github": {
+    "existing": {
+      "normal_requests": 1350,
+      "normal_points": 1350,
+      "points_per_item": 13.5,
+      "requests_including_retries": 1370,
+      "points_including_retries": 1370,
+      "secondary_points": 4170
+    },
+    "prototype": {
+      "normal_requests": 710,
+      "normal_points": 710,
+      "points_per_item": 7.1,
+      "requests_including_retries": 730,
+      "points_including_retries": 730,
+      "secondary_points": 4130
+    }
+  },
+  "operation_breakdown": {
+    "existing": {
+      "cold_terminal_retry: reading one issue": {
+        "requests": 10,
+        "points": 10,
+        "mutation_fields": 0,
+        "secondary_points": 10
+      },
+      "create: adding an issue to the board": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 100,
+        "secondary_points": 500
+      },
+      "create: creating an issue": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 100,
+        "secondary_points": 500
+      },
+      "create: filing an issue under its project": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 100,
+        "secondary_points": 500
+      },
+      "create: reading a project's tasks": {
+        "requests": 250,
+        "points": 250,
+        "mutation_fields": 0,
+        "secondary_points": 250
+      },
+      "create: reading one issue with its comments": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 0,
+        "secondary_points": 100
+      },
+      "create: reading the board's fields and the destination repository": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 0,
+        "secondary_points": 100
+      },
+      "create: writing a board field": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 100,
+        "secondary_points": 500
+      },
+      "mixed_route_refused: reading a project's tasks": {
+        "requests": 5,
+        "points": 5,
+        "mutation_fields": 0,
+        "secondary_points": 5
+      },
+      "private_route_refused: reading a project's tasks": {
+        "requests": 5,
+        "points": 5,
+        "mutation_fields": 0,
+        "secondary_points": 5
+      },
+      "required_priority: reading one issue": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 0,
+        "secondary_points": 100
+      },
+      "required_priority: writing a board field": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 100,
+        "secondary_points": 500
+      },
+      "resolve: reading one issue": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 0,
+        "secondary_points": 100
+      },
+      "resolve: updating an issue": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 100,
+        "secondary_points": 500
+      },
+      "resolve: writing a board field": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 100,
+        "secondary_points": 500
+      }
+    },
+    "prototype": {
+      "cold_terminal_retry: reading one issue": {
+        "requests": 10,
+        "points": 10,
+        "mutation_fields": 0,
+        "secondary_points": 10
+      },
+      "create: adding an issue to the board": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 100,
+        "secondary_points": 500
+      },
+      "create: creating an issue": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 100,
+        "secondary_points": 500
+      },
+      "create: filing an issue under its project": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 100,
+        "secondary_points": 500
+      },
+      "create: reading one issue": {
+        "requests": 90,
+        "points": 90,
+        "mutation_fields": 0,
+        "secondary_points": 90
+      },
+      "create: reading the board's fields and the destination repository": {
+        "requests": 10,
+        "points": 10,
+        "mutation_fields": 0,
+        "secondary_points": 10
+      },
+      "create: writing board fields together": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 300,
+        "secondary_points": 1500
+      },
+      "lost_create_response_recovery: looking up the items copied from one origin": {
+        "requests": 10,
+        "points": 10,
+        "mutation_fields": 0,
+        "secondary_points": 10
+      },
+      "resolve: updating an issue": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 100,
+        "secondary_points": 500
+      },
+      "resolve: writing a board field": {
+        "requests": 100,
+        "points": 100,
+        "mutation_fields": 100,
+        "secondary_points": 500
+      },
+      "shared_project_preflight: reading one issue": {
+        "requests": 10,
+        "points": 10,
+        "mutation_fields": 0,
+        "secondary_points": 10
+      }
+    }
+  },
+  "measured_cold_one_task_increment": {
+    "requests": 8,
+    "points": 8,
+    "mutation_fields": 8,
+    "secondary_points": 42
+  },
+  "approval": [
+    {
+      "board": 2000,
+      "complete_points": 17,
+      "consumed_points": 44,
+      "consumed_requests": 48,
+      "existing": [
+        {
+          "call": "project show",
+          "operations": [
+            "reading one issue"
+          ],
+          "points": 1,
+          "requests": 1,
+          "screening": []
+        },
+        {
+          "call": "task list --project",
+          "operations": [
+            "reading a project's tasks"
+          ],
+          "points": 1,
+          "requests": 1,
+          "screening": []
+        },
+        {
+          "call": "document list --project",
+          "operations": [
+            "reading a project's tasks"
+          ],
+          "points": 1,
+          "requests": 1,
+          "screening": []
+        },
+        {
+          "call": "document metadata set --expect",
+          "operations": [
+            "reading one document with its project and the project's members",
+            "updating an issue"
+          ],
+          "points": 2,
+          "requests": 2,
+          "screening": []
+        }
+      ],
+      "existing_points": 5,
+      "increment_points": 12,
+      "review": [
+        {
+          "call": "review create",
+          "operations": [
+            "reading one issue",
+            "reading the board's fields and the destination repository",
+            "creating an issue",
+            "adding an issue to the board",
+            "writing a board field",
+            "filing an issue under its project",
+            "reading one issue with its comments",
+            "reading one issue",
+            "writing a board field"
+          ],
+          "points": 9,
+          "requests": 9,
+          "screening": []
+        },
+        {
+          "call": "review resolve",
+          "operations": [
+            "reading one issue",
+            "writing a board field",
+            "updating an issue"
+          ],
+          "points": 3,
+          "requests": 3,
+          "screening": []
+        }
+      ],
+      "review_url": "https://github.com/nickderobertis/onetaskgraph/issues/1071",
+      "screened": false,
+      "setup_points": 20,
+      "setup_requests": 24,
+      "stale_version_recovery_operations": [
+        "reading one document with its project and the project's members",
+        "reading one document with its project and the project's members"
+      ],
+      "stale_version_recovery_points": 2,
+      "stale_version_recovery_requests": 2,
+      "with_review": [
+        {
+          "call": "project show",
+          "operations": [
+            "reading one issue"
+          ],
+          "points": 1,
+          "requests": 1,
+          "screening": []
+        },
+        {
+          "call": "task list --project",
+          "operations": [
+            "reading a project's tasks"
+          ],
+          "points": 1,
+          "requests": 1,
+          "screening": []
+        },
+        {
+          "call": "document list --project",
+          "operations": [
+            "reading a project's tasks"
+          ],
+          "points": 1,
+          "requests": 1,
+          "screening": []
+        },
+        {
+          "call": "document metadata set --expect",
+          "operations": [
+            "reading one document with its project and the project's members",
+            "updating an issue"
+          ],
+          "points": 2,
+          "requests": 2,
+          "screening": []
+        }
+      ]
+    },
+    {
+      "board": 2000,
+      "complete_points": 17,
+      "consumed_points": 44,
+      "consumed_requests": 48,
+      "existing": [
+        {
+          "call": "project show",
+          "operations": [
+            "reading one issue"
+          ],
+          "points": 1,
+          "requests": 1,
+          "screening": []
+        },
+        {
+          "call": "task list --project",
+          "operations": [
+            "reading a project's tasks"
+          ],
+          "points": 1,
+          "requests": 1,
+          "screening": []
+        },
+        {
+          "call": "document list --project",
+          "operations": [
+            "reading a project's tasks"
+          ],
+          "points": 1,
+          "requests": 1,
+          "screening": []
+        },
+        {
+          "call": "document metadata set --expect",
+          "operations": [
+            "reading one document with its project and the project's members",
+            "updating an issue"
+          ],
+          "points": 2,
+          "requests": 2,
+          "screening": [
+            {
+              "command": "check",
+              "exit": 0
+            }
+          ]
+        }
+      ],
+      "existing_points": 5,
+      "increment_points": 12,
+      "review": [
+        {
+          "call": "review create",
+          "operations": [
+            "reading a project's tasks",
+            "reading the board's fields and the destination repository",
+            "creating an issue",
+            "adding an issue to the board",
+            "writing a board field",
+            "filing an issue under its project",
+            "reading one issue with its comments",
+            "reading one issue",
+            "writing a board field"
+          ],
+          "points": 9,
+          "requests": 9,
+          "screening": [
+            {
+              "command": "check",
+              "exit": 0
+            },
+            {
+              "command": "check",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "call": "review resolve",
+          "operations": [
+            "reading one issue",
+            "writing a board field",
+            "updating an issue"
+          ],
+          "points": 3,
+          "requests": 3,
+          "screening": [
+            {
+              "command": "check",
+              "exit": 0
+            }
+          ]
+        }
+      ],
+      "review_url": "https://github.com/synthco/public-widgets/issues/1071",
+      "screened": true,
+      "setup_points": 20,
+      "setup_requests": 24,
+      "stale_version_recovery_operations": [
+        "reading one document with its project and the project's members",
+        "reading one document with its project and the project's members"
+      ],
+      "stale_version_recovery_points": 2,
+      "stale_version_recovery_requests": 2,
+      "with_review": [
+        {
+          "call": "project show",
+          "operations": [
+            "reading one issue"
+          ],
+          "points": 1,
+          "requests": 1,
+          "screening": []
+        },
+        {
+          "call": "task list --project",
+          "operations": [
+            "reading a project's tasks"
+          ],
+          "points": 1,
+          "requests": 1,
+          "screening": []
+        },
+        {
+          "call": "document list --project",
+          "operations": [
+            "reading a project's tasks"
+          ],
+          "points": 1,
+          "requests": 1,
+          "screening": []
+        },
+        {
+          "call": "document metadata set --expect",
+          "operations": [
+            "reading one document with its project and the project's members",
+            "updating an issue"
+          ],
+          "points": 2,
+          "requests": 2,
+          "screening": [
+            {
+              "command": "check",
+              "exit": 0
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "linear_requests": 1261,
+  "github_consumed_requests": 2196,
+  "github_consumed_modeled_points": 2188,
+  "live_requests": 0,
+  "live_points": 0,
+  "point_authority": "GitHub plugin worst_case_point_cost per emitted document; offline model, not live quota"
+}

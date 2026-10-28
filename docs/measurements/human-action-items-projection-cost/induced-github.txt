@@ -1,0 +1,5 @@
+Intentionally induced: PROJECTION_SPIKE_SKIP_RESOLVE=1. This is expected failure evidence, not a failing final-tree measurement.
+assertion `left == right` failed: terminal projection did not close the tracker issue
+  left: "OPEN"
+ right: "CLOSED"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
