@@ -90,6 +90,7 @@
   },
   "implicitDependencies": [
     "onetaskgraph-live",
+    "onetaskgraph-linear",
     "onetaskgraph-github-live",
     "onetaskgraph-github-projects"
   ]

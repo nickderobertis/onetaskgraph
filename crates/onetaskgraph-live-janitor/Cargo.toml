@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 onetaskgraph-live.workspace = true
+onetaskgraph-linear.workspace = true
 onetaskgraph-github-live.workspace = true
 onetaskgraph-github-projects.workspace = true
 reqwest.workspace = true

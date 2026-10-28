@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{Clock, GRAPHQL_READ_LIMIT, RealClock, Report, WRITE_INTERVAL, WRITE_LIMIT};
 
-pub use onetaskgraph_live::linear_artifact::TITLE_PREFIX as DOCUMENT_PREFIX;
+pub use onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX as DOCUMENT_PREFIX;
 pub const DOCUMENT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 pub const DOCUMENTS: &str = "query($after:String,$filter:DocumentFilter!){documents(first:100,after:$after,filter:$filter){nodes{id title team{key} project{teams(first:100){nodes{key} pageInfo{hasNextPage}}}} pageInfo{hasNextPage endCursor}}}";
 pub const DELETE_DOCUMENT: &str = "mutation($id:String!){documentDelete(id:$id){success}}";

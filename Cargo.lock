@@ -1414,6 +1414,7 @@ dependencies = [
  "onebudgetspec-core",
  "onetaskgraph-github-live",
  "onetaskgraph-github-projects",
+ "onetaskgraph-linear",
  "onetaskgraph-live",
  "regex",
  "reqwest",

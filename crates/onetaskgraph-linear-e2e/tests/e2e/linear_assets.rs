@@ -1150,7 +1150,7 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
     for kind in ["task", "document"] {
         let title = format!(
             "{}{}",
-            onetaskgraph_live::linear_artifact::TITLE_PREFIX,
+            onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX,
             onetaskgraph_live::artifact::Stamp::new(
                 onetaskgraph_live::artifact::Run::current(),
                 stamp as u64
