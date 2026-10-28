@@ -161,7 +161,7 @@ fn serve(
 /// one, ten tasks to each repository.
 fn named(index: usize) -> String {
     let k = (index / 2) % REPOSITORIES;
-    if index % 2 == 0 {
+    if index.is_multiple_of(2) {
         public(k)
     } else {
         private(k)
