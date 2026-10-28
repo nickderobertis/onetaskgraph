@@ -508,6 +508,12 @@ class Handler(BaseHTTPRequestHandler):
         if match and self.command == "GET":
             name, version = match.groups()
             self.record(registry="crates", action="read", package=name, version=version)
+            # Only an entry naming the read refuses it, so a publication refusal leaves the
+            # status read the publish step skips published crates by answering as before.
+            status = next((entry.get("status", 500) for entry in control().get("refuse", []) if entry.get("registry") == "crates" and entry.get("action") == "read" and entry.get("package") in (None, name)), None)
+            if status:
+                self.send(status, {"errors": [{"detail": "refused by the journey"}]})
+                return
             with lock:
                 found = version in crates.get(name, {}) and not hidden(f"{name}@{version}")
             self.send(200 if found else 404, {"version": {"crate": name, "num": version}} if found else {"errors": [{"detail": "Not Found"}]})

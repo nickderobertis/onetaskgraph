@@ -556,7 +556,7 @@ for artifact in artifacts:
 
 test("the publish job waits for every platform, then publishes the crates, SDKs and launcher once", {
   skip,
-}, () => {
+}, async () => {
   const env = registries();
   control({ releases: [tag] });
   // Only Linux has published: every registry is missing a platform, and the check says which.
@@ -922,6 +922,38 @@ for name, members in [
       `the publish job's ${registry} check once it is served again`,
     );
   }
+  // A crates read the registry refuses fails at the deadline with the status script's own
+  // diagnostic, and one it answers after a refusal passes without printing that diagnostic.
+  control({ releases: [tag], refuse: [{ registry: "crates", action: "read", status: 503 }] });
+  const refusedRead = recipe(
+    "publish",
+    ["verify", "--from", "crates", "--tag", tag, "--wait", "1"],
+    env,
+  );
+  assert.equal(refusedRead.status, 1, refusedRead.output);
+  assert.match(refusedRead.output, /crates\.io answered HTTP 503 for onetaskgraph-plugin-api /);
+  assert.match(refusedRead.output, /\(still, after asking for \d+ s\)/);
+  const crateReads = () =>
+    requests().filter((r) => r.registry === "crates" && r.action === "read").length;
+  const readsBefore = crateReads();
+  const waiting = spawn(
+    "just",
+    ["release-publish", "verify", "--from", "crates", "--tag", tag, "--wait", "120"],
+    {
+      cwd: checkout,
+      env: { ...process.env, PATH: `${shims(join(scratch, "shims"))}:${process.env.PATH}`, ...env },
+    },
+  );
+  let waitingOutput = "";
+  for (const stream of [waiting.stdout, waiting.stderr])
+    stream.on("data", (chunk) => {
+      waitingOutput += chunk;
+    });
+  const waited = new Promise((resolve) => waiting.on("exit", resolve));
+  while (crateReads() === readsBefore) await new Promise((resolve) => setTimeout(resolve, 200));
+  control({ releases: [tag] });
+  assert.equal(await waited, 0, waitingOutput);
+  assert.doesNotMatch(waitingOutput, /crates\.io answered HTTP|next: request /);
   // Packaging verification builds under other RUSTFLAGS than onetaskgraph:build, so in the
   // shared target it relinked target/debug/onetaskgraph while the e2e suites spawned it.
   const crateBuilds = invocations().filter((line) => line.startsWith("cargo publish "));

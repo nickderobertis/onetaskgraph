@@ -116,12 +116,17 @@ USER_AGENT = "onetaskgraph-release (https://github.com/nickderobertis/onetaskgra
 
 
 class ReleaseStepFailed(Exception):
-    """A release step that cannot go on; carries what failed and the next action."""
+    """A release step that cannot go on; carries what failed and the next action.
 
-    def __init__(self, problem: str, next_action: str) -> None:
+    `output` is what a captured command printed. It travels with the failure rather than
+    being written as the command fails, so a read `retrying` recovers prints nothing.
+    """
+
+    def __init__(self, problem: str, next_action: str, output: str = "") -> None:
         super().__init__(problem)
         self.problem = problem
         self.next_action = next_action
+        self.output = output
 
 
 def fail(problem: str, next_action: str) -> NoReturn:
@@ -282,10 +287,7 @@ def run(command: list[str], what: str, next_action: str, env: dict[str, str] | N
     except OSError as error:
         fail(f"{what}: could not start {command[0]}: {error}", next_action)
     if completed.returncode != 0:
-        if capture:
-            sys.stderr.write(completed.stdout or "")
-            sys.stderr.write(completed.stderr or "")
-        fail(f"{what} (exit {completed.returncode})", next_action)
+        raise ReleaseStepFailed(f"{what} (exit {completed.returncode})", next_action, (completed.stdout or "") + (completed.stderr or "") if capture else "")
     return completed.stdout or ""
 
 
@@ -719,7 +721,7 @@ def retrying(what: str, wait: float, attempt) -> None:
         except ReleaseStepFailed as error:
             if time.monotonic() >= deadline:
                 if wait:
-                    raise ReleaseStepFailed(f"{what}: {error.problem} (still, after asking for {round(time.monotonic() - started)} s)", error.next_action) from error
+                    raise ReleaseStepFailed(f"{what}: {error.problem} (still, after asking for {round(time.monotonic() - started)} s)", error.next_action, error.output) from error
                 raise
             time.sleep(min(20.0, max(0.0, deadline - time.monotonic())))
 
@@ -1022,6 +1024,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 planned = "; ".join(would_publish(publishable(args.platform, tag, dist, registry), registry) for registry in registries)
                 say(f"built {args.platform} for {tag}; dry run: {planned}")
     except ReleaseStepFailed as error:
+        sys.stderr.write(error.output)
         say(error.problem)
         say(f"next: {error.next_action}")
         return 1
