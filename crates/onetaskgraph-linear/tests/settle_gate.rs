@@ -1097,3 +1097,51 @@ async fn document_content_waits_for_the_exact_stored_markdown_and_refuses_other_
         }
     }
 }
+
+fn projects(names: &[&str], next: Option<&str>) -> Value {
+    json!({"projects": {
+        "nodes": names.iter().map(|name| json!({
+            "id": name, "name": name, "content": null, "url": null,
+            "createdAt": null, "updatedAt": null,
+            "status": {"name": "Started", "type": "started"},
+            "labels": {"nodes": []}
+        })).collect::<Vec<_>>(),
+        "pageInfo": {"hasNextPage": next.is_some(), "endCursor": next}
+    }})
+}
+
+#[tokio::test]
+async fn created_projects_are_waited_for_across_complete_unfiltered_listings() {
+    let (source, reads) = workspace(|n, request| {
+        let request = variables(request);
+        assert_eq!(request["filter"], json!({"and": []}));
+        if request["after"] == "older" {
+            assert!(n >= 3);
+            projects(&["alpha", "beta"], None)
+        } else {
+            projects(&["older"], (n >= 3).then_some("older"))
+        }
+    });
+    let listed = settle::settled_projects(BOUND, source.as_ref(), &["alpha".into(), "beta".into()])
+        .await
+        .unwrap();
+    assert!(listed.contains(&"alpha".into()) && listed.contains(&"beta".into()));
+    assert!(listed.contains(&"older".into()));
+    assert_eq!(reads.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test]
+async fn a_project_listing_that_never_catches_up_fails_with_its_last_answer() {
+    let (source, reads) = workspace(|_, _| projects(&["alpha", "older"], None));
+    let started = Instant::now();
+    let error = settle::settled_projects(BOUND, source.as_ref(), &["alpha".into(), "beta".into()])
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("not in Linear's own project listing"),
+        "{error}"
+    );
+    assert!(error.contains("beta") && error.contains("older"), "{error}");
+    assert_eq!(reads.load(Ordering::SeqCst), BOUND.reads);
+    assert!(started.elapsed() < BOUND.interval * BOUND.reads + SLACK);
+}

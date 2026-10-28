@@ -116,7 +116,10 @@
 //! `tests/fixtures/document-content-40721997875.json` records autolinking, bracket escaping
 //! and a comment terminator escape. That run returned the preceding probe after an update:
 //! by-id reads can lag a write, so the live journey waits within its replica bound for the
-//! exact recorded content, refusing a different value when that bound expires.
+//! exact recorded content, refusing a different value when that bound expires. Hosted run
+//! 40734970799 also missed freshly created projects in the unfiltered listing. That listing
+//! is retried within the existing index bound (21 reads, one second apart), still requiring
+//! both created projects; the journey's test timeout is unchanged.
 //!
 //! Linear stores an issue's `description`, a project's `content` and a document's `content` as
 //! Markdown it normalizes on write — `- ` bullets come back `* `, a table's delimiter row `| -- |`,

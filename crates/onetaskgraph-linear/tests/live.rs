@@ -27,9 +27,9 @@ use onetaskgraph_live::{Credential, Exclusivity, Session, missing, required};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
     Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataMatch,
-    NativeId, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, SecretResolver,
-    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource,
-    TextFields, TextQuery,
+    NativeId, PageRequest, Priority, Project, ProjectFilter, SecretResolver, SourceName,
+    SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
+    TextQuery,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -71,8 +71,8 @@ mod settle;
 
 use settle::{
     LINEAR_DOCUMENT_LISTING, LINEAR_INDEX, LINEAR_REPLICA, settled, settled_content,
-    settled_document_absent, settled_documents, settled_label, settled_tasks, settled_walk,
-    task_titles, token_moved, walked_task_titles,
+    settled_document_absent, settled_documents, settled_label, settled_projects, settled_tasks,
+    settled_walk, task_titles, token_moved, walked_task_titles,
 };
 
 /// The two workflow states this fixture files its issues under.
@@ -390,26 +390,7 @@ async fn drive_every_declared_capability(
     // `projects`: two are held, and a listing scoped to one keeps the issue filed under
     // it and no other. Unscoped on purpose — the workspace holds issues of its own, so a
     // filter declared and then ignored returns them too.
-    let mut listed = Vec::new();
-    let mut cursor = None;
-    loop {
-        let step = source
-            .query_projects(
-                &ProjectQuery::default(),
-                &PageRequest {
-                    cursor,
-                    limit: onetaskgraph_linear::MAX_PAGE_SIZE,
-                },
-            )
-            .await
-            .map_err(|error| format!("live project listing failed: {error}"))?;
-        listed.extend(step.items.into_iter().map(|project| project.title));
-        cursor = step.next;
-        if cursor.is_none() {
-            break;
-        }
-        ensure!(listed.len() < 100_000, "the project walk must terminate");
-    }
+    let listed = settled_projects(LINEAR_INDEX, source, &[alpha.clone(), beta.clone()]).await?;
     ensure!(
         listed.contains(&alpha) && listed.contains(&beta),
         "the two projects this run created are not in Linear's own project listing"
