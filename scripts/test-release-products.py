@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -53,7 +54,7 @@ def stage_only(binary: Path, target: RustTarget) -> None:
         raise ValueError('invalid carrier version; restore the version written by scripts/set-version.sh')
     version = SemanticVersion(value)
     tag = validate_tag(f'v{version}')
-    with tempfile.TemporaryDirectory(prefix='release-staging-') as scratch:
+    with tempfile.TemporaryDirectory(prefix='release staging-') as scratch:
         tree = Path(scratch)
         staging_tree(root, tree)
         probe = os.environ.get('ONETASKGRAPH_RELATIVE_INTERPRETER_PROBE')
@@ -67,7 +68,7 @@ def stage_only(binary: Path, target: RustTarget) -> None:
         with zipfile.ZipFile(wheels / wheel_name, 'w', zipfile.ZIP_DEFLATED, compresslevel=FIXTURE_COMPRESSION) as wheel:
             wheel.write(binary, f'onetaskgraph_cli-{version}.data/scripts/{name}')
         subprocess.run(['just', f'release-{selected.platform}',
-                        'package', '--tag', tag, '--dist', str(tree / 'dist')],
+                        'package', '--tag', tag, '--dist', shlex.quote(str(tree / 'dist'))],
                        cwd=tree, check=True, stdout=subprocess.DEVNULL)
         asset = tree / 'dist/assets' / f'onetaskgraph-{tag}-{target}.{selected.extension}'
         if not asset.is_file() or not Path(f'{asset}.sha256').is_file():
@@ -93,7 +94,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         if rejected.returncode != 1 or 'invalid manifest project table' not in rejected.stderr:
             raise ValueError('malformed project table did not produce its boundary diagnostic')
     binary = 'onetaskgraph.exe' if selected.extension == 'zip' else 'onetaskgraph'
-    with tempfile.TemporaryDirectory(prefix='release-products-') as scratch:
+    with tempfile.TemporaryDirectory(prefix='release products-') as scratch:
         tree = Path(scratch)
         staging_tree(root, tree)
         wheels = tree / 'dist/wheels' / target
@@ -122,7 +123,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
                 raise ValueError('malformed wheel scripts were accepted by extraction')
         wheel_path.write_bytes(original_wheel)
         subprocess.run([PYTHON_EXECUTABLE, 'scripts/release-wheel-binary.py', '--wheels', str(wheels), '--binary', str(canonical)], cwd=tree, check=True, stdout=subprocess.DEVNULL)
-        package = ['just', f'release-{selected.platform}', 'package', '--tag', f'v{version}', '--dist', str(tree / 'dist')]
+        package = ['just', f'release-{selected.platform}', 'package', '--tag', f'v{version}', '--dist', shlex.quote(str(tree / 'dist'))]
         subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
         command = [PYTHON_EXECUTABLE, 'scripts/verify-release-products.py', '--target', target, '--npm', selected.npm_platform, '--tag', f'v{version}', '--ext', selected.extension, '--dist', str(tree / 'dist')]
         installed = subprocess.run(command + ['--install'], cwd=tree, capture_output=True, text=True)

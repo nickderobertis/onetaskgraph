@@ -22,7 +22,10 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/scratch-clone.sh
 source "$root/scripts/scratch-clone.sh"
 binary=target/debug/onetaskgraph
-[ -f "$root/$binary" ] || binary="$binary.exe"
+# Keep the scratch executable's real suffix: Git Bash also finds .exe without spelling it.
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) binary="$binary.exe" ;;
+esac
 [ -f "$root/$binary" ] || fail "no $binary, which the targeted pass packages" \
   "run 'scripts/nx.sh run onetaskgraph:build', then rerun"
 
@@ -58,6 +61,42 @@ run_check() {
 run_check
 [ "$status" -eq 0 ] || fail "the comparison refused a targeted pass that reaches every site the journey does (exit $status): $(cat "$tmp/out")" \
   "run 'bash scripts/check-relative-interpreter.sh scripts/test-distribution.sh' and fix what it reports"
+
+# Reproduce Git Bash's extensionless file lookup while Python still opens literal paths.
+# Only the host's uname and file lookup differ; the targeted pass and packaging stay real.
+if [ "$binary" = target/debug/onetaskgraph ]; then
+  mv "$repo/$binary" "$repo/$binary.exe"
+  mkdir "$tmp/windows-host"
+  real_uname="$(command -v uname)"
+  printf '#!/bin/sh\nif [ "$1" = -s ]; then echo MINGW64_NT; else exec "%s" "$@"; fi\n' "$real_uname" > "$tmp/windows-host/uname"
+  chmod +x "$tmp/windows-host/uname"
+  cat > "$tmp/windows-host/bash-env" <<'HOST'
+function [() {
+  if builtin [ "$#" -eq 3 ] && builtin [ "$1" = -f ]; then
+    case "$2" in
+      */target/debug/onetaskgraph | target/debug/onetaskgraph)
+        builtin [ -f "$2.exe" ] && return 0 ;;
+    esac
+  fi
+  builtin [ "$@"
+}
+HOST
+  (cd "$repo" && PATH="$tmp/windows-host:$PATH" BASH_ENV="$tmp/windows-host/bash-env" \
+    bash scripts/test-python-call-sites.sh) > "$tmp/windows-out" 2>&1 \
+    && status=0 || status=$?
+  [ "$status" -eq 0 ] || fail "the targeted pass could not package the explicit .exe under Git Bash file lookup: $(cat "$tmp/windows-out")" \
+    "spell the executable's .exe suffix before handing its path to Python"
+  cp "$repo/scripts/test-python-call-sites.sh" "$tmp/targeted-with-suffix"
+  sed 's/binary="$binary.exe"/:/' "$tmp/targeted-with-suffix" > "$repo/scripts/test-python-call-sites.sh"
+  (cd "$repo" && PATH="$tmp/windows-host:$PATH" BASH_ENV="$tmp/windows-host/bash-env" \
+    bash scripts/test-python-call-sites.sh) > "$tmp/windows-missing-suffix" 2>&1 \
+    && status=0 || status=$?
+  [ "$status" -ne 0 ] && grep -q 'No such file or directory.*onetaskgraph' "$tmp/windows-missing-suffix" \
+    || fail "the simulated host did not expose Python refusing an extensionless .exe path: $(cat "$tmp/windows-missing-suffix")" \
+      "keep the Git Bash file lookup simulation and literal Python file read in this journey"
+  cp "$tmp/targeted-with-suffix" "$repo/scripts/test-python-call-sites.sh"
+  mv "$repo/$binary.exe" "$repo/$binary"
+fi
 
 grep -v 'scripts/check-workspace-config.sh"' "$repo/scripts/test-python-call-sites.sh" >"$tmp/targeted"
 cmp -s "$tmp/targeted" "$repo/scripts/test-python-call-sites.sh" \

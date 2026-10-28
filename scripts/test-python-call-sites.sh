@@ -32,7 +32,10 @@ case $python_bin in
   *) python_bin="$(cd "$(dirname "$python_bin")" && pwd)/$(basename "$python_bin")" ;;
 esac
 binary=target/debug/onetaskgraph
-[ -f "$binary" ] || binary="$binary.exe"
+# Git Bash's file test accepts an extensionless .exe path; Python's file reader does not.
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) binary="$binary.exe" ;;
+esac
 [ -f "$binary" ] || fail "no $binary, which the release staging body packages" \
   "run 'scripts/nx.sh run onetaskgraph:build', then rerun"
 
@@ -67,14 +70,10 @@ site "$clone" "scripts/check-distribution-contract.sh" bash scripts/check-distri
 # And the release workflow's staging body, which test-release-products.py runs; it starts
 # Python itself where its archive is a zip.
 target="$(cd "$clone" && "$python_bin" -c '
-import platform
-system, machine = platform.system(), platform.machine().lower()
-if system == "Darwin":
-    print("aarch64-apple-darwin")
-elif system == "Linux":
-    print("aarch64-unknown-linux-gnu" if machine in ("aarch64", "arm64") else "x86_64-unknown-linux-gnu")
-else:
-    print("x86_64-pc-windows-msvc")
+import sys
+sys.path.insert(0, "scripts")
+from release_cd import host_target
+print(host_target().target)
 ' | tr -d '\r')"
 site "$clone" "the release workflow's staging body for $target" \
   "$python_bin" scripts/test-release-products.py --stage-only "$root/$binary" --target "$target"
