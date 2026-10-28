@@ -154,6 +154,10 @@ NOT_METHODS = {
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, knowing no location, and reads the item where it needs one"
     ),
+    "creation_repository": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, none, so `task locate` reports no repository a create would file in"
+    ),
     "check_status_write": (
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, and the plugin's own write refuses a status it has no name for"
