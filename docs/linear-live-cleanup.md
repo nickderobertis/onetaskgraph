@@ -117,3 +117,24 @@ Model lint passed on the repaired implementation: 56 rules, 28 passed, zero fail
 11 skipped, two ignored and 15 not relevant (history `20261028T204633Z-ae728`).
 Static validation also passed. The final changes after that review only record
 these completed verification results.
+
+## Windows formatting repair
+
+Publication run [40767548268, check (windows-latest)](https://github.com/nickderobertis/onetaskgraph/actions/runs/40767548268/job/123102092578)
+failed in `workspace:format-check`: Biome required spaces in the new
+`linear-document-delete.json` response fixture. Commit `d63eeafb` formats that
+fixture without changing its JSON value. No enforcement configuration changed.
+
+After that repair, `workspace:format-check` passed with Nx cache disabled. A serial,
+uncached Nx run of `test`, `lint`, `format-check` and `typecheck` for
+`onetaskgraph-live-janitor`, `onetaskgraph-live`, `onetaskgraph-linear`,
+`onetaskgraph-linear-e2e`, `scripts` and `github-workflows`, plus their two prerequisite
+tasks, passed in 79 minutes 17 seconds with `RUST_TEST_THREADS=2`. This includes all
+146 Linear e2e tests, all 95 workflow tests (including release-CD publication), and
+the janitor subprocess and schema tests. No credentialed Linear run is claimed.
+The store-fixture guard and whitespace check passed too.
+
+Model lint passed with `LLMLINT_ONEHARNESS_BIN` unset: 56 rules, 30 passed, zero
+failed, 11 skipped, two ignored and 13 not relevant (history
+`20261028T213751Z-ce529`). Static validation passed. The only subsequent change is
+this verification record. Hosted Windows verification still belongs to publication.
