@@ -277,6 +277,7 @@ impl Engine {
                 let planned = Planned {
                     status_policy: copy.status_policy,
                     source: id.clone(),
+                    source_status: read.item.status().cloned(),
                     item: read.item,
                     edges: Vec::new(),
                     target,

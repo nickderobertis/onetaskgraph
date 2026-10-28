@@ -619,6 +619,144 @@ pub(crate) fn first_copy_of_the_realistic_plan() -> FirstCopy {
 }
 
 #[test]
+fn an_unchanged_private_plan_with_repositories_and_a_dependency_sends_no_write() {
+    let plan = Plan::new(LinearMarkdown::Measured);
+    let path = plan.journey.sandbox.project().join("onetaskgraph.yaml");
+    let mut config: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    config["sources"]["notes"]["visibility"] = json!("private");
+    config["sources"]["dest"]["visibility"] = json!("private");
+    config["sources"]["dest"]["cache"] =
+        json!({"enabled": true, "dir": plan.journey.sandbox.subdirectory("cache")});
+    plan.journey.sandbox.project_document(&config.to_string());
+    for (kind, id) in plan.items() {
+        let path = plan.file(kind, &id);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut text = text.replacen(
+            "---\n",
+            "---\nclassification: private\nrepositories: [github.com/example/plan]\n",
+            1,
+        );
+        if kind != "document" {
+            let start = text.find("\nstatus:").unwrap();
+            let end = text[start + 1..].find('\n').unwrap() + start + 1;
+            text.replace_range(start..end, "\nstatus: todo");
+        }
+        if id == plan.tasks[1] {
+            text = text.replacen(
+                "---\n",
+                &format!(
+                    "---\ndepends_on: [{}]\n",
+                    plan.tasks[0].trim_start_matches("notes:")
+                ),
+                1,
+            );
+        }
+        std::fs::write(path, text).unwrap();
+    }
+    let copy = [
+        "project",
+        "copy",
+        "notes:plan",
+        "--to",
+        "dest",
+        "--status-policy",
+        "preserve-destination",
+    ];
+    let (first, _) = plan.json(&copy);
+    let document_copy = ["document", "copy", &plan.design, "--to", "dest"];
+    let (design, _) = plan.json(&document_copy);
+    let landed: Vec<_> = plan
+        .items()
+        .into_iter()
+        .map(|(kind, source)| {
+            let report = if kind == "document" { &design } else { &first };
+            let id = format!("dest:{}", Plan::landed(report, &source));
+            let before = plan.show(kind, &id);
+            assert_eq!(
+                before["metadata"]["onetaskgraph.template"]["body_digest"],
+                sha256(before["content"].as_str().unwrap()),
+                "{source}"
+            );
+            if kind == "task" {
+                assert_eq!(
+                    before["metadata"]["onetaskgraph.copied_version"],
+                    plan.show(kind, &source)["version"],
+                    "{source} records the source after linking"
+                );
+            }
+            (kind, source, id, before)
+        })
+        .collect();
+    let (report, again) = plan.json(&copy);
+    assert_eq!(again.mutations(), Vec::<String>::new(), "{report}");
+    let (_, document) = plan.json(&document_copy);
+    assert_eq!(document.mutations(), Vec::<String>::new());
+    for (kind, source, id, before) in &landed {
+        assert_eq!(
+            plan.show(kind, id)["metadata"],
+            before["metadata"],
+            "{source}: provenance and both copy versions are stable"
+        );
+    }
+
+    // Editing a task outside the dependency leaves that relation and every other item alone.
+    let edited = &landed[3];
+    let path = plan.file("task", &edited.1);
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(path, format!("{text}\nAn edit at the source.\n")).unwrap();
+    let (_, changed) = plan.json(&copy);
+    assert_eq!(changed.mutations(), ["issueUpdate", "issueUpdate"]);
+    let native = edited.2.trim_start_matches("dest:").to_owned();
+    assert_eq!(changed.writes(), [native.clone(), native]);
+    assert!(
+        plan.show("task", &edited.2)["content"]
+            .as_str()
+            .unwrap()
+            .contains("An edit at the source.")
+    );
+    for (kind, source, id, before) in &landed {
+        if source != &edited.1 {
+            assert_eq!(
+                plan.show(kind, id)["metadata"],
+                before["metadata"],
+                "{source} stays untouched"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_tokenless_task_keeps_its_source_version_when_linear_normalizes_its_status() {
+    let plan = Plan::new(LinearMarkdown::Measured);
+    let path = plan.journey.sandbox.project().join("onetaskgraph.yaml");
+    let mut config: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let mut task = plan.show("task", &plan.tasks[0]);
+    task["id"] = json!("tokenless");
+    task["version"] = Value::Null;
+    task["project"] = Value::Null;
+    task["status"] = json!({"category": "todo", "name": "todo"});
+    config["sources"]["memory"] = json!({"plugin": "in-memory", "config": {"tasks": [task]}});
+    plan.journey.sandbox.project_document(&config.to_string());
+    let copy = [
+        "task",
+        "copy",
+        "memory:tokenless",
+        "--to",
+        "dest",
+        "--no-link",
+        "--status-policy",
+        "preserve-destination",
+    ];
+    let (first, _) = plan.json(&copy);
+    let id = format!("dest:{}", Plan::landed(&first, "memory:tokenless"));
+    let before = plan.show("task", &id);
+    assert_eq!(before["status"]["name"], "Todo");
+    let (_, again) = plan.json(&copy);
+    assert_eq!(again.mutations(), Vec::<String>::new());
+    assert_eq!(plan.show("task", &id)["metadata"], before["metadata"]);
+}
+
+#[test]
 fn edits_made_in_linear_are_written_back_to_what_the_source_holds_and_nothing_else_is_written() {
     let plan = Plan::new(LinearMarkdown::Measured);
     let ((project_report, _), (document_report, _)) = plan.copy_plan();
