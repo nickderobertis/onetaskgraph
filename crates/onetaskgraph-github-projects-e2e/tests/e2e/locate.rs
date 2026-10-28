@@ -194,7 +194,7 @@ fn locate_names_the_repository_the_copy_after_it_creates_each_issue_in() {
             assert_eq!(copied["items"][0]["action"], "created", "{id}: {copied:#}");
             assert_eq!(
                 created_in(&served),
-                [repository.clone()],
+                std::slice::from_ref(&repository),
                 "{id}: the copy created the issue where locate said"
             );
         }
