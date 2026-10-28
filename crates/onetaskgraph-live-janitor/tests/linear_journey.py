@@ -49,6 +49,7 @@ def read_request(value: object) -> Request:
         assert set(variables) == {'after', 'filter'}
         assert variables['after'] is None or (isinstance(variables['after'], str) and variables['after'].strip())
         assert variables['filter'] == {'title': {'startsWith': 'onetaskgraph live cleanup '}}
+    # Runtime checks above establish the union shape; Python cannot infer a TypedDict from dictionary checks.
     return cast(Request, value)
 
 
