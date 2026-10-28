@@ -8,8 +8,8 @@ use onetaskgraph_core::{
     StatusPolicy,
 };
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, Direction, Health, Label, NativeId, Page, PageRequest, Project,
-    ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Task, TaskQuery,
+    Capabilities, DependencyEdge, Direction, Document, Health, Label, NativeId, Page, PageRequest,
+    Project, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Task, TaskQuery,
     TaskSource, WriteSupport,
 };
 use secrecy::SecretString;
@@ -151,47 +151,66 @@ async fn naming_no_task_answers_none_and_a_project_a_missing_id_and_two_targets_
     assert_eq!(several, EngineError::TargetNativeNeedsOne { count: 2 });
 }
 
-/// An `in-memory` source whose every project read fails as unreachable.
-struct ProjectsUnreachable(Box<dyn TaskSource>);
+/// An `in-memory` source whose every project read — or, with `documents`, document read —
+/// fails as unreachable.
+struct ProbeUnreachable {
+    inner: Box<dyn TaskSource>,
+    documents: bool,
+}
+
+impl ProbeUnreachable {
+    fn unreachable(what: &str) -> SourceError {
+        SourceError::Unavailable {
+            message: format!("the {what} could not be reached"),
+        }
+    }
+}
 
 #[async_trait::async_trait]
-impl TaskSource for ProjectsUnreachable {
+impl TaskSource for ProbeUnreachable {
     fn kind(&self) -> &'static str {
-        self.0.kind()
+        self.inner.kind()
     }
     fn capabilities(&self) -> Capabilities {
-        self.0.capabilities()
+        self.inner.capabilities()
     }
     fn writes(&self) -> WriteSupport {
-        self.0.writes()
+        self.inner.writes()
     }
     async fn health(&self) -> Result<Health, SourceError> {
-        self.0.health().await
+        self.inner.health().await
     }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
-        self.0.get_task(id).await
+        self.inner.get_task(id).await
     }
-    async fn get_project(&self, _id: &NativeId) -> Result<Option<Project>, SourceError> {
-        Err(SourceError::Unavailable {
-            message: "the projects could not be reached".to_owned(),
-        })
+    async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+        if self.documents {
+            return self.inner.get_project(id).await;
+        }
+        Err(Self::unreachable("projects"))
+    }
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        if self.documents {
+            return Err(Self::unreachable("documents"));
+        }
+        self.inner.get_document(id).await
     }
     async fn query_tasks(
         &self,
         query: &TaskQuery,
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
-        self.0.query_tasks(query, page).await
+        self.inner.query_tasks(query, page).await
     }
     async fn query_projects(
         &self,
         query: &ProjectQuery,
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
-        self.0.query_projects(query, page).await
+        self.inner.query_projects(query, page).await
     }
     async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
-        self.0.labels(page).await
+        self.inner.labels(page).await
     }
     async fn task_dependencies(
         &self,
@@ -199,7 +218,7 @@ impl TaskSource for ProjectsUnreachable {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        self.0.task_dependencies(id, direction, page).await
+        self.inner.task_dependencies(id, direction, page).await
     }
     async fn project_dependencies(
         &self,
@@ -207,53 +226,59 @@ impl TaskSource for ProjectsUnreachable {
         direction: Direction,
         page: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        self.0.project_dependencies(id, direction, page).await
+        self.inner.project_dependencies(id, direction, page).await
     }
 }
 
 #[tokio::test]
-async fn an_id_naming_no_task_whose_project_read_fails_is_refused_by_that_failure() {
-    let built = |name: &str| {
-        onetaskgraph_in_memory::Plugin
-            .build(
-                &SourceName::new(name).unwrap(),
-                &json!({"tasks": [task("T-1", json!({}))]}),
-                &NoSecrets,
-            )
-            .expect("the in-memory plugin builds")
-    };
-    let unreachable = ConfiguredSource::Ready(ResolvedSource::adopt(
-        SourceName::new("from").unwrap(),
-        Box::new(ProjectsUnreachable(built("from"))),
-    ));
-    let into = ConfiguredSource::Ready(ResolvedSource::adopt(
-        SourceName::new("into").unwrap(),
-        built("into"),
-    ));
-    let engine = Engine::new(
-        vec![unreachable, into],
-        vec![
+async fn an_id_naming_no_task_whose_project_or_document_read_fails_is_refused_by_that_failure() {
+    for (documents, what) in [(false, "projects"), (true, "documents")] {
+        let built = |name: &str| {
+            onetaskgraph_in_memory::Plugin
+                .build(
+                    &SourceName::new(name).unwrap(),
+                    &json!({"tasks": [task("T-1", json!({}))],
+                            "capabilities": {"documents": "native"}}),
+                    &NoSecrets,
+                )
+                .expect("the in-memory plugin builds")
+        };
+        let unreachable = ConfiguredSource::Ready(ResolvedSource::adopt(
             SourceName::new("from").unwrap(),
+            Box::new(ProbeUnreachable {
+                inner: built("from"),
+                documents,
+            }),
+        ));
+        let into = ConfiguredSource::Ready(ResolvedSource::adopt(
             SourceName::new("into").unwrap(),
-        ],
-    );
-    let refused = engine
-        .locate(&locating(&["from:P-1"], LocateLookup::NoCounterpart))
-        .await
-        .expect_err("whether it names a project cannot be read");
-    let message = refused.to_string();
-    assert!(
-        message.contains("the projects could not be reached"),
-        "{message}"
-    );
-    assert!(
-        !matches!(refused, EngineError::NoSuchItem { .. }),
-        "never answered as naming nothing: {refused:?}"
-    );
-    // A task it holds is still located.
-    let located = engine
-        .locate(&locating(&["from:T-1"], LocateLookup::NoCounterpart))
-        .await
-        .expect("a task is read without the probe");
-    assert_eq!(located.items.len(), 1);
+            built("into"),
+        ));
+        let engine = Engine::new(
+            vec![unreachable, into],
+            vec![
+                SourceName::new("from").unwrap(),
+                SourceName::new("into").unwrap(),
+            ],
+        );
+        let refused = engine
+            .locate(&locating(&["from:X-1"], LocateLookup::NoCounterpart))
+            .await
+            .expect_err("whether it names something else cannot be read");
+        let message = refused.to_string();
+        assert!(
+            message.contains(&format!("the {what} could not be reached")),
+            "{what}: {message}"
+        );
+        assert!(
+            !matches!(refused, EngineError::NoSuchItem { .. }),
+            "{what}: never answered as naming nothing: {refused:?}"
+        );
+        // A task it holds is still located.
+        let located = engine
+            .locate(&locating(&["from:T-1"], LocateLookup::NoCounterpart))
+            .await
+            .expect("a task is read without the probe");
+        assert_eq!(located.items.len(), 1);
+    }
 }
