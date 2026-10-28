@@ -322,7 +322,7 @@ fn a_layer_declaring_the_plugin_completes_the_refined_source_as_before() {
                 "github.com/example-org/app"
             ]
         ),
-        json!({"source": PARTNER, "destination": NOTES, "route": 0})
+        json!({"source": PARTNER, "destination": NOTES, "route": 0, "reachable": [PARTNER, NOTES]})
     );
 
     // A source that has a plugin but is otherwise invalid is still refused, everywhere.
@@ -386,7 +386,7 @@ fn a_route_to_an_incomplete_source_is_refused_by_the_command_that_would_follow_i
                 "github.com/other-org/app"
             ]
         ),
-        json!({"source": NOTES, "destination": "archive", "route": 1})
+        json!({"source": NOTES, "destination": "archive", "route": 1, "reachable": [NOTES, PARTNER, "archive"]})
     );
     let arguments = create("Archived work", "github.com/other-org/app");
     let created = answer(
