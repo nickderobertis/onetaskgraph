@@ -358,10 +358,29 @@ measured over the ten seconds either side, and the sessions behind it do not spe
 <!-- analyze:end workload -->
 
 The brief's workload is a 50,205-byte project, eight tasks of 45,234–49,330 bytes with 10
-blocked-by edges, and a 35,617-byte document with one 104,072-byte PNG. Every figure here is that
-but the document, which onepipeline 0.95.3's `design-doc` template renders from the same seeded
-answers 16 bytes shorter than 0.86.0's did. The re-copies' smallest task is the one task whose body
-changed.
+blocked-by edges, and a 35,617-byte document with one 104,072-byte PNG. Every figure here matches
+it but the document, which is 35,601 bytes in all seven rows. The re-copies' smallest task is the
+one task whose body changed.
+
+**The document's 16 bytes are a departure, accepted by the manager's ruling quoted below.** Its
+cause was verified by comparing the earlier measurement's rendered document with this run's: the two
+bodies are the same byte for byte but for the planned-tasks table. Each of its eight rows embeds the
+absolute local path of its task file. In the earlier run that path is 85 bytes, because its scratch
+folder was `state/bcs-span/` under `board-copy-speed-2026-10-18`; here it is 83 bytes, under
+`state/bare/` or `state/host/` of `board-copy-targets-2026-10-26`. 8 × −2 bytes is −16. The
+engine's `design-doc` template plays no part in it, and the 35,617 the brief states is itself that
+earlier folder's name. An earlier version of this file said instead that onepipeline 0.95.3's
+template rendered the document shorter; that was wrong.
+
+On the design document's size (2026-10-28, `c-08137dfc6ac5bfa502b52e4c4b8661eb`):
+
+> Manager ruling: (a). Accept the 35,601-byte design document as the workload, and do not
+> re-measure. The 16-byte difference comes only from eight embedded scratch-folder paths that are 2
+> bytes shorter. GitHub's GraphQL points and write counts do not depend on issue-body length, so no
+> figure this report judges moves. In the report and the mirror, state the departure, its verified
+> cause (the table rows' embedded task-file paths, 83 bytes against the earlier run's 85) and that
+> every other workload figure matches. Also correct the wrong statement about onepipeline 0.95.3's
+> template rendering the document shorter.
 
 ## Board size: no request depends on it
 
