@@ -2,16 +2,18 @@
 set -euo pipefail
 # In test-linux this journey runs once, under the relative interpreter
 # scripts/check-relative-interpreter.sh simulates, rather than once plainly and once again
-# under that check; its plain-PATH run is test-macos's and test-windows's (scripts/ci-job.sh).
+# under that check; its plain-PATH run is test-macos's and test-windows's (scripts/ci-job.sh),
+# where that check puts only its Python call sites to the relative interpreter
+# (scripts/test-python-call-sites.sh).
 if [ "${ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER:-}" = 1 ]; then
   exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-relative-interpreter.sh" scripts/test-distribution.sh
 fi
-# One run of this journey at a time in a tree, held for the whole run: test-macos and
-# test-windows run scripts:test's re-run of it under the relative interpreter beside
-# scripts:distribution-test, and both build, move and package the same files under target/ —
-# test-macos failed when maturin found target/maturin changed under it. `just check` runs them
-# one after the other, as these jobs now do.
-if [ "${ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED:-}" != 1 ]; then
+# One run of this journey at a time in a tree, held for the whole run: two runs build, move
+# and package the same files under target/ — test-macos failed when maturin found
+# target/maturin changed under it, when scripts:test re-ran the whole journey beside
+# scripts:distribution-test.
+# `--interpreter-only` builds and moves nothing, so it takes no lock and waits on no journey.
+if [ "${ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED:-}" != 1 ] && [ "$*" != --interpreter-only ]; then
   journey_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
   [ -r "$journey_root/scripts/file-lock.sh" ] && source "$journey_root/scripts/file-lock.sh" || { echo "distribution test could not load $journey_root/scripts/file-lock.sh; next: restore it with 'git checkout -- scripts/file-lock.sh', then rerun" >&2; exit 1; }
   export ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED=1
@@ -105,10 +107,14 @@ name="onetaskgraph-${tag}-${target}.${ext}"
 build_release_wheel() {
   (cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$1")
 }
+# `--interpreter-only` is this journey's own call sites for scripts/test-python-call-sites.sh:
+# every one of them starts "$python_bin", resolved above, and runs it from inside a scratch
+# tree, so the resolution followed by a change of directory is the whole of what they share.
 case "$#:${1:-}" in
   0:) ;;
   1:--release-build-only) build_release_wheel "$tmp/python-wheel"; exit 0 ;;
-  *) echo "distribution test takes no argument or --release-build-only alone, not '$*'; next: run scripts/test-distribution.sh with none" >&2; exit 2 ;;
+  1:--interpreter-only) (cd "$tmp" && "$python_bin" -c 'pass'); exit 0 ;;
+  *) echo "distribution test takes no argument, --release-build-only or --interpreter-only alone, not '$*'; next: run scripts/test-distribution.sh with none" >&2; exit 2 ;;
 esac
 # The binary is what onetaskgraph:build produced and this target depends on; nothing here
 # builds it, because a cargo invocation of that package from anywhere else replaces the

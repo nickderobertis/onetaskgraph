@@ -42,8 +42,8 @@ class ReleaseTarget:
             raise ValueError('invalid release archive extension')
 
 
-def run(wheel_dir: Path, target: RustTarget) -> None:
-    root = Path(__file__).resolve().parents[1]
+def staging_body(root: Path, target: RustTarget) -> tuple[ReleaseTarget, str]:
+    """The release target row for `target` and its job's 'Archive, checksum, and stage' body."""
     workflow = (root / '.github/workflows/release.yml').read_text()
     native = re.search(r'(?ms)^  native-assets-carriers-and-wheels:\n(.*?)(?=^  [a-z-]+:)', workflow)
     mac = re.search(r'(?ms)^  macos-assets-carriers-and-wheels:\n(.*?)(?=^  [a-z-]+:)', workflow)
@@ -68,7 +68,47 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
     step = re.search(r'(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )', job)
     if step is None:
         raise ValueError('release packaging body missing; retain the drivable run block')
-    body = '\n'.join(line[10:] for line in step[1].splitlines())
+    return selected, '\n'.join(line[10:] for line in step[1].splitlines())
+
+
+def staging_tree(root: Path, tree: Path) -> None:
+    """The part of this repository a staging body reads, copied into `tree`."""
+    shutil.copytree(root / 'scripts', tree / 'scripts')
+    (tree / '.github/workflows').mkdir(parents=True)
+    shutil.copy2(root / '.github/workflows/release.yml', tree / '.github/workflows/release.yml')
+    shutil.copytree(root / 'npm/platforms', tree / 'npm/platforms')
+
+
+def stage_only(binary: Path, target: RustTarget) -> None:
+    """Run the staging body alone over `binary`, for scripts/test-python-call-sites.sh.
+
+    Where scripts/check-relative-interpreter.sh has a relative interpreter first on PATH, its
+    probe is planted at the same relative path in the scratch tree, so the body resolves that
+    interpreter from the directory it starts in exactly as it does from a checkout's root.
+    """
+    root = Path(__file__).resolve().parents[1]
+    selected, body = staging_body(root, target)
+    tag = 'v0.0.0'
+    with tempfile.TemporaryDirectory(prefix='release-staging-') as scratch:
+        tree = Path(scratch)
+        staging_tree(root, tree)
+        probe = os.environ.get('ONETASKGRAPH_RELATIVE_INTERPRETER_PROBE')
+        if probe:
+            shutil.copytree(root / probe, tree / probe, ignore=shutil.ignore_patterns('call-sites.*', 'stdin.*'))
+        name = 'onetaskgraph.exe' if selected.extension == 'zip' else 'onetaskgraph'
+        canonical = tree / f'target/{target}/release/{name}'
+        canonical.parent.mkdir(parents=True)
+        shutil.copy2(binary, canonical)
+        env = {**os.environ, 'TARGETS': f'{target}={selected.npm_platform}', 'EXT': selected.extension, 'TAG': tag}
+        subprocess.run([bash_executable(platform.system()), '-c', body], cwd=tree, env=env, check=True, stdout=subprocess.DEVNULL)
+        asset = tree / 'dist/assets' / f'onetaskgraph-{tag}-{target}.{selected.extension}'
+        if not asset.is_file() or not Path(f'{asset}.sha256').is_file():
+            raise ValueError(f'the staging body staged no {asset.name} and checksum')
+
+
+def run(wheel_dir: Path, target: RustTarget) -> None:
+    root = Path(__file__).resolve().parents[1]
+    selected, body = staging_body(root, target)
     manifest = tomllib.loads((root / 'pyproject.toml').read_text())
     project = manifest.get('project')
     if not isinstance(project, dict):
@@ -89,10 +129,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
     binary = 'onetaskgraph.exe' if selected.extension == 'zip' else 'onetaskgraph'
     with tempfile.TemporaryDirectory(prefix='release-products-') as scratch:
         tree = Path(scratch)
-        shutil.copytree(root / 'scripts', tree / 'scripts')
-        (tree / '.github/workflows').mkdir(parents=True)
-        shutil.copy2(root / '.github/workflows/release.yml', tree / '.github/workflows/release.yml')
-        shutil.copytree(root / 'npm/platforms', tree / 'npm/platforms')
+        staging_tree(root, tree)
         wheels = tree / 'dist/wheels' / target
         shutil.copytree(wheel_dir.resolve(), wheels)
         canonical = tree / f'target/{target}/release/{binary}'
@@ -353,7 +390,9 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, epilog='Exit codes: 0 journey passed; 1 packaging/install/proof failure; 2 invalid invocation. Repair the named workflow body or staged product before retrying.')
-    parser.add_argument('--wheel-dir', type=Path, required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument('--wheel-dir', type=Path)
+    inputs.add_argument('--stage-only', type=Path, metavar='BINARY', help='run the staging body alone over this built binary')
     parser.add_argument('--target', required=True)
     args = parser.parse_args()
     try:
@@ -361,7 +400,10 @@ def main() -> None:
     except ValueError as error:
         parser.error(f'{error}; next: choose a Rust target declared in .github/workflows/release.yml')
     try:
-        run(args.wheel_dir, RustTarget(args.target))
+        if args.stage_only is not None:
+            stage_only(args.stage_only, RustTarget(args.target))
+        else:
+            run(args.wheel_dir, RustTarget(args.target))
     except argparse.ArgumentError as error:
         parser.error(f'{error}; next: choose a Rust target declared in .github/workflows/release.yml')
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, tarfile.TarError) as error:

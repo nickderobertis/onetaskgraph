@@ -1568,9 +1568,13 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   looking for, live-session paths that "do not all consult the decision". The first of those
   refused this repository's own merge path. Resolve it once, absolutely, where the script
   resolves it. `scripts/check-relative-interpreter.sh`, a command in `scripts:test`, runs the
-  three scripts that need it again with a relative entry first on PATH — and refuses to run
+  scripts that need it again with a relative entry first on PATH — and refuses to run
   at all when the host cannot reproduce the defect, because a simulation that did not take
-  would look exactly like a pass.
+  would look exactly like a pass. The distribution journey is put to it whole on Linux alone
+  (test-linux runs it under that check); elsewhere `scripts/test-python-call-sites.sh` puts
+  each Python call site the journey reaches to it through the real scripts, by the user's
+  decision of 2026-10-28, and test-linux fails when the journey started Python from a script
+  that targeted pass did not (`scripts/check-python-call-sites-enforced.sh` watches it fail).
 - **A loopback board keeps its connections alive, and a proxy in front of one forwards
   through `loopback::Upstream`.** Answering every request `Connection: close` cost a TCP
   connection per request — one run of the GitHub Projects suite opened about 37,000 and held

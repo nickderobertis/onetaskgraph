@@ -283,10 +283,11 @@ done
 
 # Where test-linux runs the distribution journey under the relative interpreter, the real
 # check-relative-interpreter.sh runs the scripts it is given, or every one but that journey,
-# and clears the variable before any runs; and the journey hands itself to that check. The
+# and clears the variable before any runs; and the journey hands itself to that check, which
+# follows it with the targeted pass. Elsewhere the targeted pass stands in for it. The
 # scripts it runs are stand-ins that record their name and what they were given.
 under="ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER"
-for script in test-distribution check-guard-path-spelling check-live-lane-selection; do
+for script in test-distribution test-python-call-sites check-guard-path-spelling check-live-lane-selection; do
   printf '#!/usr/bin/env bash\necho "%s ${%s:-cleared}" >>"$INTERPRETER_RECORD"\n' "$script" "$under" \
     >"$REPO/scripts/$script.sh"
 done
@@ -300,11 +301,11 @@ ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1 relative_check
 [ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "check-guard-path-spelling cleared check-live-lane-selection cleared " ] \
   || fail "under the relative interpreter, check-relative-interpreter.sh ran '$INTERPRETED' (exit $INTERPRETER_STATUS), not every script but the distribution journey: it said: $INTERPRETER_OUTPUT"
 ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1 relative_check scripts/test-distribution.sh
-[ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "test-distribution cleared " ] \
-  || fail "check-relative-interpreter.sh given the distribution journey ran '$INTERPRETED' (exit $INTERPRETER_STATUS): it said: $INTERPRETER_OUTPUT"
+[ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "test-distribution cleared test-python-call-sites cleared " ] \
+  || fail "check-relative-interpreter.sh given the distribution journey ran '$INTERPRETED' (exit $INTERPRETER_STATUS), not it and then the targeted pass: it said: $INTERPRETER_OUTPUT"
 relative_check
-[ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "test-distribution cleared check-guard-path-spelling cleared check-live-lane-selection cleared " ] \
-  || fail "elsewhere, check-relative-interpreter.sh ran '$INTERPRETED' (exit $INTERPRETER_STATUS), not all three: it said: $INTERPRETER_OUTPUT"
+[ "$INTERPRETER_STATUS" -eq 0 ] && [ "$INTERPRETED" = "test-python-call-sites cleared check-guard-path-spelling cleared check-live-lane-selection cleared " ] \
+  || fail "elsewhere, check-relative-interpreter.sh ran '$INTERPRETED' (exit $INTERPRETER_STATUS), not the targeted pass and the other two: it said: $INTERPRETER_OUTPUT"
 relative_check scripts/no-such-script.sh
 [ "$INTERPRETER_STATUS" -ne 0 ] && [ -z "$INTERPRETED" ] \
   || fail "check-relative-interpreter.sh given a script that is not there ran '$INTERPRETED' (exit $INTERPRETER_STATUS): it said: $INTERPRETER_OUTPUT"
