@@ -4,193 +4,190 @@ on:
     types: [published]
 permissions:
   contents: read
-# llmlint: ignore-block[changed_behavior_has_e2e] Proving these jobs requires publishing a GitHub Release and registry packages, which a pre-publication dispatch cannot perform.
+# Every run step is one phase of the job's justfile recipe (scripts/release_cd.py). The build
+# jobs do not wait on one another, and `publish` publishes nothing until all four have: a
+# failed build leaves the other platforms published and the platform-independent packages
+# unpublished until it is re-run, and a re-run sends only what is missing.
+#
+# llmlint: ignore-block[changed_behavior_has_e2e] Every run step below calls a recipe that .github/tests/release-cd.test.mjs drives on Linux against loopback registries; what is left is GitHub's own scheduling of these jobs on a published release, which a pre-publication dispatch cannot trigger.
 jobs:
-  native-assets-carriers-and-wheels:
-    strategy:
-      matrix:
-        include:
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, ext: tar.gz, npm: linux-x64 }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, ext: tar.gz, npm: linux-arm64 }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: zip, npm: win32-x64 }
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: { target: "${{ matrix.target }}" }
-      - uses: PyO3/maturin-action@v1
-        env: { RUSTFLAGS: "-D warnings" }
-        with: { target: "${{ matrix.target }}", args: "--release --locked --out dist/wheels/${{ matrix.target }}" }
-      - name: Reuse the wheel binary
-        shell: bash
-        env: { TARGET: "${{ matrix.target }}", EXT: "${{ matrix.ext }}" }
-        run: |
-          binary=onetaskgraph
-          [ "$EXT" != zip ] || binary=onetaskgraph.exe
-          python3 scripts/release-wheel-binary.py --wheels "dist/wheels/$TARGET" --binary "target/$TARGET/release/$binary"
-      # One packaging body, shared byte for byte with the macOS job below over `TARGETS`
-      # pairs of <rust target>=<npm platform>; scripts/check-distribution-contract.sh holds
-      # the two copies identical, so a fix to one cannot leave the other behind.
-      - name: Archive, checksum, and stage
-        shell: bash
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-          TARGETS: ${{ matrix.target }}=${{ matrix.npm }}
-          EXT: ${{ matrix.ext }}
-        run: |
-          printf '%s\n' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || { echo "invalid release tag: $TAG" >&2; exit 64; }
-          for pair in $TARGETS; do
-            target="${pair%%=*}"; npm_platform="${pair#*=}"
-            name="onetaskgraph-${TAG}-${target}"; bin="target/${target}/release/onetaskgraph"
-            [ "$EXT" != zip ] || bin="${bin}.exe"
-            if [ "$EXT" = zip ]; then (cd "$(dirname "$bin")" && python3 -m zipfile -c "../../../${name}.zip" "$(basename "$bin")"); else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
-            asset="${name}.${EXT}"
-            if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"; else shasum -a 256 "$asset" > "$asset.sha256"; fi
-            mkdir -p dist/assets
-            cp "$asset" "$asset.sha256" dist/assets/
-            mkdir -p "carrier/${npm_platform}/bin" "dist/carriers/${npm_platform}"
-            cp "npm/platforms/${npm_platform}/package.json" "carrier/${npm_platform}/package.json"
-            cp "$bin" "carrier/${npm_platform}/bin/$(basename "$bin")"
-            npm pack ./carrier/"${npm_platform}" --pack-destination "dist/carriers/${npm_platform}"
-          done
-      - name: Verify and install staged products
-        shell: bash
-        env: { TARGET: "${{ matrix.target }}", NPM_PLATFORM: "${{ matrix.npm }}", EXT: "${{ matrix.ext }}", TAG: "${{ github.event.release.tag_name }}" }
-        run: python3 scripts/verify-release-products.py --target "$TARGET" --npm "$NPM_PLATFORM" --ext "$EXT" --tag "$TAG" --install
-      - uses: actions/upload-artifact@v4
-        with: { name: "wheels-${{ matrix.target }}", path: "dist/wheels/${{ matrix.target }}" }
-      - uses: actions/upload-artifact@v4
-        with: { name: "assets-${{ matrix.target }}", path: dist/assets }
-      - uses: actions/upload-artifact@v4
-        with: { name: "carrier-${{ matrix.npm }}", path: "dist/carriers/${{ matrix.npm }}/*.tgz" }
-  # One Apple Silicon host builds the only Darwin wheel; its payload is the single input
-  # to the archive and npm carrier, and the staged products run before publication.
-  # Intel macOS is no longer released, so nothing here cross-compiles or emulates x86_64.
-  macos-assets-carriers-and-wheels:
-    runs-on: macos-latest
-    env:
-      TARGETS: aarch64-apple-darwin=darwin-arm64
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: { target: "aarch64-apple-darwin" }
-      - uses: PyO3/maturin-action@v1
-        env: { RUSTFLAGS: "-D warnings" }
-        with: { target: "aarch64-apple-darwin", args: "--release --locked --out dist/wheels/aarch64-apple-darwin" }
-      - name: Reuse the wheel binaries
-        run: |
-          for pair in $TARGETS; do
-            target="${pair%%=*}"
-            python3 scripts/release-wheel-binary.py --wheels "dist/wheels/$target" --binary "target/$target/release/onetaskgraph"
-          done
-      - name: Archive, checksum, and stage
-        shell: bash
-        env:
-          TAG: ${{ github.event.release.tag_name }}
-          EXT: tar.gz
-        run: |
-          printf '%s\n' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' || { echo "invalid release tag: $TAG" >&2; exit 64; }
-          for pair in $TARGETS; do
-            target="${pair%%=*}"; npm_platform="${pair#*=}"
-            name="onetaskgraph-${TAG}-${target}"; bin="target/${target}/release/onetaskgraph"
-            [ "$EXT" != zip ] || bin="${bin}.exe"
-            if [ "$EXT" = zip ]; then (cd "$(dirname "$bin")" && python3 -m zipfile -c "../../../${name}.zip" "$(basename "$bin")"); else tar -czf "${name}.tar.gz" -C "$(dirname "$bin")" "$(basename "$bin")"; fi
-            asset="${name}.${EXT}"
-            if command -v sha256sum >/dev/null; then sha256sum "$asset" > "$asset.sha256"; else shasum -a 256 "$asset" > "$asset.sha256"; fi
-            mkdir -p dist/assets
-            cp "$asset" "$asset.sha256" dist/assets/
-            mkdir -p "carrier/${npm_platform}/bin" "dist/carriers/${npm_platform}"
-            cp "npm/platforms/${npm_platform}/package.json" "carrier/${npm_platform}/package.json"
-            cp "$bin" "carrier/${npm_platform}/bin/$(basename "$bin")"
-            npm pack ./carrier/"${npm_platform}" --pack-destination "dist/carriers/${npm_platform}"
-          done
-      - name: Install and run the Apple Silicon products
-        env: { TAG: "${{ github.event.release.tag_name }}" }
-        run: |
-          for pair in $TARGETS; do
-            python3 scripts/verify-release-products.py --target "${pair%%=*}" --npm "${pair#*=}" --tag "$TAG" --install
-          done
-      - uses: actions/upload-artifact@v4
-        with: { name: assets-darwin, path: dist/assets }
-      - uses: actions/upload-artifact@v4
-        with: { name: "carrier-darwin-arm64", path: "dist/carriers/darwin-arm64/*.tgz" }
-      - uses: actions/upload-artifact@v4
-        with: { name: "wheels-aarch64-apple-darwin", path: dist/wheels/aarch64-apple-darwin }
-  collect-wheels:
-    needs: [native-assets-carriers-and-wheels, macos-assets-carriers-and-wheels]
+  build-linux:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { pattern: "wheels-*", path: dist/wheels, merge-multiple: true }
-  publish-assets:
-    needs: [native-assets-carriers-and-wheels, macos-assets-carriers-and-wheels]
-    runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions: { contents: write }
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { pattern: "assets-*", path: dist/assets, merge-multiple: true }
-      - env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}", TAG: "${{ github.event.release.tag_name }}" }
-        run: gh release upload "$TAG" dist/assets/* --clobber --repo "$GITHUB_REPOSITORY"
-  build-distributions:
-    needs: native-assets-carriers-and-wheels
-    runs-on: ubuntu-latest
+    env: { TAG: "${{ github.event.release.tag_name }}" }
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: { target: x86_64-unknown-linux-gnu }
       - uses: astral-sh/setup-uv@v7
-      - run: |
-          uv build sdks/python --out-dir dist/python-sdk
-          ./scripts/nx.sh run sdk-typescript:build
-          bun pm pack --cwd sdks/typescript --destination ../../dist/typescript-sdk
-          bun pm pack --cwd npm/cli --destination ../../dist/npm
-      - uses: actions/upload-artifact@v4
-        with: { name: distributions, path: dist }
-  publish-crates:
-    needs: [native-assets-carriers-and-wheels, macos-assets-carriers-and-wheels, publish-assets]
-    if: ${{ vars.CARGO_PUBLISH == 'true' }}
-    runs-on: ubuntu-latest
+      - uses: extractions/setup-just@v4
+      - name: Build, package and test-install the Linux artifacts
+        run: just release-linux build --tag "$TAG"
+      - name: Upload the Linux archive to the GitHub Release
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: just release-linux publish --to github --tag "$TAG"
+      - name: Publish the Linux wheel to PyPI
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        env: { UV_PUBLISH_TOKEN: "${{ secrets.PYPI_TOKEN }}" }
+        run: just release-linux publish --to pypi --tag "$TAG"
+      - name: Publish the Linux npm platform package
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+        run: just release-linux publish --to npm --tag "$TAG"
+      - name: Install and run the Linux archive from the GitHub Release
+        run: just release-linux verify --from github --tag "$TAG"
+      - name: Install and run the Linux wheel from PyPI
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        run: just release-linux verify --from pypi --tag "$TAG"
+      - name: Install and run the Linux npm platform package
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        run: just release-linux verify --from npm --tag "$TAG"
+  # Native on GitHub's hosted ARM Linux runner, so the aarch64 artifacts are built, installed
+  # and run on their own architecture rather than cross-compiled.
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions: { contents: write }
+    env: { TAG: "${{ github.event.release.tag_name }}" }
     steps:
       - uses: actions/checkout@v7
-      - env: { CARGO_REGISTRY_TOKEN: "${{ secrets.CARGO_REGISTRY_TOKEN }}" }
-        run: |
-          [ -n "$CARGO_REGISTRY_TOKEN" ] || { echo "CARGO_REGISTRY_TOKEN is required" >&2; exit 1; }
-          for crate in onetaskgraph-plugin-api onetaskgraph-in-memory onetaskgraph-local-md onetaskgraph-linear onetaskgraph-github-projects onetaskgraph-status-options onetaskgraph-core onetaskgraph; do
-            version=$(cargo metadata --no-deps --format-version 1 | jq -r --arg n "$crate" '.packages[]|select(.name==$n)|.version')
-            publication=$(scripts/crate-publication-status.sh "$crate" "$version") || exit $?
-            case "$publication" in
-              published) ;;
-              absent) scripts/crate-sibling-resolution.sh "$crate" || exit $?; RUSTFLAGS='-D warnings' cargo publish -p "$crate" --locked ;;
-              *) echo "unusable crates.io answer for $crate $version: $publication" >&2; exit 69 ;;
-            esac
-          done
-  publish-python:
-    needs: [collect-wheels, macos-assets-carriers-and-wheels, build-distributions, publish-assets]
-    if: ${{ vars.PYPI_PUBLISH == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { pattern: "wheels-*", path: dist/cli, merge-multiple: true }
-      - uses: actions/download-artifact@v4
-        with: { name: distributions, path: dist/all }
-      - env: { UV_PUBLISH_TOKEN: "${{ secrets.PYPI_TOKEN }}" }
-        run: |
-          [ -n "$UV_PUBLISH_TOKEN" ] || { echo "PYPI_TOKEN is required" >&2; exit 1; }
-          pip install uv
-          uv publish --check-url https://pypi.org/simple/onetaskgraph-cli/ dist/cli/*
-          uv publish --check-url https://pypi.org/simple/onetaskgraph-sdk/ dist/all/python-sdk/*
-  publish-npm:
-    needs: [native-assets-carriers-and-wheels, macos-assets-carriers-and-wheels, build-distributions, publish-assets]
-    if: ${{ vars.NPM_PUBLISH == 'true' }}
-    runs-on: ubuntu-latest
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: { target: aarch64-unknown-linux-gnu }
+      - uses: astral-sh/setup-uv@v7
+      - uses: extractions/setup-just@v4
+      - name: Build, package and test-install the Linux arm64 artifacts
+        run: just release-linux-arm64 build --tag "$TAG"
+      - name: Upload the Linux arm64 archive to the GitHub Release
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: just release-linux-arm64 publish --to github --tag "$TAG"
+      - name: Publish the Linux arm64 wheel to PyPI
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        env: { UV_PUBLISH_TOKEN: "${{ secrets.PYPI_TOKEN }}" }
+        run: just release-linux-arm64 publish --to pypi --tag "$TAG"
+      - name: Publish the Linux arm64 npm platform package
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+        run: just release-linux-arm64 publish --to npm --tag "$TAG"
+      - name: Install and run the Linux arm64 archive from the GitHub Release
+        run: just release-linux-arm64 verify --from github --tag "$TAG"
+      - name: Install and run the Linux arm64 wheel from PyPI
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        run: just release-linux-arm64 verify --from pypi --tag "$TAG"
+      - name: Install and run the Linux arm64 npm platform package
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        run: just release-linux-arm64 verify --from npm --tag "$TAG"
+  # Apple Silicon alone: Intel macOS is no longer released, so nothing here cross-compiles
+  # or emulates x86_64.
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions: { contents: write }
+    env: { TAG: "${{ github.event.release.tag_name }}" }
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
-        with: { pattern: "carrier-*", path: dist/carriers, merge-multiple: true }
-      - env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
-        # The publication itself is scripts/publish-npm.sh rather than a block of YAML
-        # here, because a release is the only thing that runs this job — so a defect in it
-        # was discoverable only by cutting a version, which is how this repository stayed
-        # absent from npm with a publish-npm job on main. scripts/check-npm-publish.sh runs
-        # that same script against a registry it stands up, on every `just check`.
-        run: scripts/publish-npm.sh
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: { target: aarch64-apple-darwin }
+      - uses: astral-sh/setup-uv@v7
+      - uses: extractions/setup-just@v4
+      - name: Build, package and test-install the macOS artifacts
+        run: just release-macos build --tag "$TAG"
+      - name: Upload the macOS archive to the GitHub Release
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: just release-macos publish --to github --tag "$TAG"
+      - name: Publish the macOS wheel to PyPI
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        env: { UV_PUBLISH_TOKEN: "${{ secrets.PYPI_TOKEN }}" }
+        run: just release-macos publish --to pypi --tag "$TAG"
+      - name: Publish the macOS npm platform package
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+        run: just release-macos publish --to npm --tag "$TAG"
+      - name: Install and run the macOS archive from the GitHub Release
+        run: just release-macos verify --from github --tag "$TAG"
+      - name: Install and run the macOS wheel from PyPI
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        run: just release-macos verify --from pypi --tag "$TAG"
+      - name: Install and run the macOS npm platform package
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        run: just release-macos verify --from npm --tag "$TAG"
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions: { contents: write }
+    env: { TAG: "${{ github.event.release.tag_name }}" }
+    defaults:
+      run: { shell: bash }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: { target: x86_64-pc-windows-msvc }
+      - uses: astral-sh/setup-uv@v7
+      - uses: extractions/setup-just@v4
+      - name: Build, package and test-install the Windows artifacts
+        run: just release-windows build --tag "$TAG"
+      - name: Upload the Windows archive to the GitHub Release
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: just release-windows publish --to github --tag "$TAG"
+      - name: Publish the Windows wheel to PyPI
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        env: { UV_PUBLISH_TOKEN: "${{ secrets.PYPI_TOKEN }}" }
+        run: just release-windows publish --to pypi --tag "$TAG"
+      - name: Publish the Windows npm platform package
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+        run: just release-windows publish --to npm --tag "$TAG"
+      - name: Install and run the Windows archive from the GitHub Release
+        run: just release-windows verify --from github --tag "$TAG"
+      - name: Install and run the Windows wheel from PyPI
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        run: just release-windows verify --from pypi --tag "$TAG"
+      - name: Install and run the Windows npm platform package
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        run: just release-windows verify --from npm --tag "$TAG"
+  publish:
+    needs: [build-linux, build-linux-arm64, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env: { TAG: "${{ github.event.release.tag_name }}" }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: astral-sh/setup-uv@v7
+      - uses: oven-sh/setup-bun@v2
+      - uses: extractions/setup-just@v4
+      # Nothing platform-independent is published until every platform is: the launcher
+      # resolves a carrier at its own exact version, and the SDKs pin the CLI they drive.
+      - name: Confirm the GitHub Release serves the archive of every platform
+        run: just release-publish available --from github --tag "$TAG"
+      - name: Confirm PyPI serves the wheel of every platform
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        run: just release-publish available --from pypi --tag "$TAG"
+      - name: Confirm npm serves the package of every platform
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        run: just release-publish available --from npm --tag "$TAG"
+      - name: Build the Python and TypeScript SDK distributions
+        run: just release-publish build --tag "$TAG"
+      - name: Publish the crates to crates.io
+        if: ${{ vars.CARGO_PUBLISH == 'true' }}
+        env: { CARGO_REGISTRY_TOKEN: "${{ secrets.CARGO_REGISTRY_TOKEN }}" }
+        run: just release-publish publish --to crates --tag "$TAG"
+      - name: Publish the Python SDK to PyPI
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        env: { UV_PUBLISH_TOKEN: "${{ secrets.PYPI_TOKEN }}" }
+        run: just release-publish publish --to pypi --tag "$TAG"
+      - name: Publish the npm launcher and the TypeScript SDK
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+        run: just release-publish publish --to npm --tag "$TAG"
+      - name: Confirm crates.io serves every crate
+        if: ${{ vars.CARGO_PUBLISH == 'true' }}
+        run: just release-publish verify --from crates --tag "$TAG"
+      - name: Confirm PyPI serves the Python SDK
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        run: just release-publish verify --from pypi --tag "$TAG"
+      - name: Confirm npm serves the launcher and the TypeScript SDK
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        run: just release-publish verify --from npm --tag "$TAG"
+      # The final step position is kept for the budget tail onetaskgraph-ci-budgets adds.
 # llmlint: ignore-end[changed_behavior_has_e2e]

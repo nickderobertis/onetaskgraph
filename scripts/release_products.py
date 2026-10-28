@@ -1,4 +1,6 @@
 """Validated identities for the repository's staged release products."""
+
+# llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] These identities are what the release's own scripts in this project share — release_cd.py, verify-release-products.py and release-wheel-binary.py read them — and this file was the release products' home in the `scripts` project before this change; AGENTS.md names `PLATFORM_TARGETS` here as where the released platforms are declared.
 from dataclasses import dataclass
 import json
 from typing import Literal, NewType
@@ -16,6 +18,57 @@ RunnerLabel = NewType("RunnerLabel", str)
 ArchiveFormat = Literal["tar.gz", "zip"]
 ReleaseOS = Literal["Darwin", "Windows", "Linux"]
 WheelArchitecture = Literal["arm64", "aarch64", "amd64", "x86_64"]
+# The four release platforms, each one CD job of .github/workflows/release.yml
+# (`build-<platform>`) and one recipe of the justfile (`release-<platform>`).
+ReleasePlatform = Literal["linux", "linux-arm64", "macos", "windows"]
+
+# The one grammar a release tag is held to: the GitHub Release the release-plz job cuts is
+# named by it, scripts/install.sh repeats it, and scripts/check-distribution-contract.sh
+# holds that copy to this one.
+RELEASE_TAG_PATTERN = r'^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+
+
+@dataclass(frozen=True)
+class PlatformTarget:
+    """One Rust target a release builds, and every name its artifacts are published under.
+
+    The wheel tag is part of the contract rather than an observation: the build refuses a
+    wheel maturin tagged otherwise, so a runner image whose glibc moved changes nothing
+    published without this table — and the published artifacts of v0.7.1 — saying so.
+    """
+
+    platform: ReleasePlatform
+    runner: RunnerLabel
+    target: RustTarget
+    npm_platform: NpmPlatform
+    extension: ArchiveFormat
+    wheel_platform_tag: str
+
+
+# Every target a release builds, in the order each platform's job builds them. Linux arm64
+# builds natively on GitHub's hosted ARM Linux runner. Intel macOS is no longer released:
+# scripts/install.sh and the npm launcher refuse it by name, naming cargo.
+PLATFORM_TARGETS: tuple[PlatformTarget, ...] = (
+    PlatformTarget("linux", RunnerLabel("ubuntu-latest"), RustTarget("x86_64-unknown-linux-gnu"), NpmPlatform("linux-x64"), "tar.gz", "manylinux_2_39_x86_64"),
+    PlatformTarget("linux-arm64", RunnerLabel("ubuntu-24.04-arm"), RustTarget("aarch64-unknown-linux-gnu"), NpmPlatform("linux-arm64"), "tar.gz", "manylinux_2_39_aarch64"),
+    PlatformTarget("macos", RunnerLabel("macos-latest"), RustTarget("aarch64-apple-darwin"), NpmPlatform("darwin-arm64"), "tar.gz", "macosx_11_0_arm64"),
+    PlatformTarget("windows", RunnerLabel("windows-latest"), RustTarget("x86_64-pc-windows-msvc"), NpmPlatform("win32-x64"), "zip", "win_amd64"),
+)
+# maturin's `bin` bindings carry no Python ABI, so every CLI wheel is py3-none.
+WHEEL_INTERPRETER_TAGS = "py3-none"
+
+
+def platform_targets(platform: str) -> tuple[PlatformTarget, ...]:
+    selected = tuple(row for row in PLATFORM_TARGETS if row.platform == platform)
+    if not selected:
+        raise ValueError(f'unknown release platform {platform!r}; choose one of linux, linux-arm64, macos, windows')
+    return selected
+
+
+def validate_tag(value: str) -> ReleaseTag:
+    if re.fullmatch(RELEASE_TAG_PATTERN, value) is None:
+        raise ValueError(f'invalid semantic release tag {value!r}; use vX.Y.Z')
+    return ReleaseTag(value)
 
 
 def bash_executable(system: str) -> str:
@@ -87,18 +140,10 @@ class ReleaseProduct:
 
         if self.extension not in ('tar.gz', 'zip'):
             raise ValueError('invalid release archive extension')
-        # llmlint: ignore[async_typed_clients_at_boundaries] Validation reads the one local release workflow, the tag grammar's single source, synchronously inside a short ordered release step with no concurrent work.
-        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release.yml').read_text()
-        grammars = set(re.findall(r"grep -Eq '([^']+)'", workflow))
-        if len(grammars) != 1 or re.fullmatch(next(iter(grammars)), self.tag) is None:
-            raise ValueError('invalid semantic release tag; use the release workflow tag grammar')
-
-        mappings = {RustTarget(target): target_mapping(npm, extension) for target, extension, npm in re.findall(r'target: ([a-z0-9_-]+), ext: ([a-z.]+), npm: ([a-z0-9-]+)', workflow)}
-        mac_pairs = re.search(r'^      TARGETS: (.*)$', workflow, re.M)
-        if mac_pairs:
-            mappings.update({RustTarget(target): target_mapping(npm, 'tar.gz') for target, npm in (pair.split('=') for pair in mac_pairs[1].split())})
+        validate_tag(self.tag)
+        mappings = {row.target: target_mapping(row.npm_platform, row.extension) for row in PLATFORM_TARGETS}
         if mappings.get(self.target) != TargetMapping(self.npm_platform, self.extension):
-            raise ValueError('unsupported or inconsistent target/npm/archive combination; use a mapping declared in release.yml')
+            raise ValueError('unsupported or inconsistent target/npm/archive combination; use a mapping PLATFORM_TARGETS in scripts/release_products.py declares')
 
 
     @property
@@ -199,10 +244,7 @@ class VerificationReport:
         if not isinstance(value, dict) or not isinstance(value.get('target'), str) or not isinstance(value.get('tag'), str):
             raise ValueError('invalid verification report')
         validate_target(value['target'])
-        # llmlint: ignore[async_typed_clients_at_boundaries] Validation reads the one local release workflow, the tag grammar's single source, synchronously inside a short ordered release step with no concurrent work.
-        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/release.yml').read_text()
-        grammars = set(re.findall(r"grep -Eq '([^']+)'", workflow))
-        if len(grammars) != 1 or re.fullmatch(next(iter(grammars)), value['tag']) is None:
+        if re.fullmatch(RELEASE_TAG_PATTERN, value['tag']) is None:
             raise ValueError('invalid verification report release tag')
         return cls(RustTarget(value['target']), ReleaseTag(value['tag']), PayloadHashes.parse(value.get('payloadHashes')))
 

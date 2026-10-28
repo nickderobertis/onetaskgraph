@@ -636,7 +636,7 @@ test("publication workload reconciles actual workflow condition variables", () =
     "vars[inputs.control] == 'true'",
   ]) {
     const definitions = workflows();
-    definitions["release.yml"].jobs["publish-npm"].if = expression;
+    definitions["release.yml"].jobs.publish.if = expression;
     assert.throws(() => validatePublishControls(definitions), /Unmeasured|Unresolved/);
   }
 });
@@ -712,7 +712,7 @@ test("workflow matrices, event fan-out and exact release head model record sched
                 entry.id === "manual-opt-in",
               );
             if (entry.event === "release" && run.workflow === "release.yml")
-              assert.ok(macs.some((r) => r.job === "macos-assets-carriers-and-wheels"));
+              assert.ok(macs.some((r) => r.job === "build-macos"));
             run.macJobs = macs.length;
           }
           scenarios.push({ ...scenario, policy: policyResult, runs });

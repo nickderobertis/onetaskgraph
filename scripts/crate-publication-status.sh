@@ -4,7 +4,7 @@
 # about the crate — so the query names this release and a contact URL for it.
 set -euo pipefail
 usage() { echo "usage: scripts/crate-publication-status.sh CRATE VERSION" >&2; echo "next: $1" >&2; exit 64; }
-[[ $# -eq 2 ]] || usage "name one crate and its X.Y.Z version, as .github/workflows/release.yml does"
+[[ $# -eq 2 ]] || usage "name one crate and its X.Y.Z version, as scripts/release_cd.py does"
 crate=$1
 version=$2
 base=${ONETASKGRAPH_CRATES_API_BASE_URL:-https://crates.io/api/v1/crates}

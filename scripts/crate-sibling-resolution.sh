@@ -20,7 +20,7 @@
 set -euo pipefail
 usage() { echo "usage: scripts/crate-sibling-resolution.sh CRATE" >&2; echo "next: $1" >&2; exit 64; }
 refuse() { echo "crate-sibling-resolution: $1" >&2; echo "crate-sibling-resolution: next: $2" >&2; exit 1; }
-[[ $# -eq 1 ]] || usage "name the one workspace crate about to be published, as .github/workflows/release.yml does"
+[[ $# -eq 1 ]] || usage "name the one workspace crate about to be published, as scripts/release_cd.py does for the publish job"
 crate=$1
 [[ $crate =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || usage "invalid crate name: $crate"
 index=${ONETASKGRAPH_CRATES_INDEX_URL:-}
@@ -86,14 +86,14 @@ with open(scratch / "expected", "w", encoding="utf-8", newline="\n") as expected
 PY
 then
   refuse "could not read $crate's sibling requirements out of cargo metadata" \
-    "name a package of this workspace, as the publish order in .github/workflows/release.yml does"
+    "name a package of this workspace, as the publish order in scripts/release_cd.py does"
 fi
 [ -s "$scratch/expected" ] || exit 0
 
 if ! resolution="$(cd "$scratch" && cargo generate-lockfile 2>&1)"; then
   printf '%s\n' "$resolution" >&2
   refuse "$crate's sibling requirements do not resolve on the registry (cargo's answer is above)" \
-    "publish the siblings it names first, in the order .github/workflows/release.yml gives, or restore the version they were released at"
+    "publish the siblings it names first, in the order scripts/release_cd.py gives, or restore the version they were released at"
 fi
 
 # Every version the lockfile holds for each sibling, which is more than one when a sibling

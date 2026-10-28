@@ -10,13 +10,14 @@ parser = argparse.ArgumentParser(description=__doc__, epilog='Exit codes: 0 extr
 parser.add_argument('--wheels', type=Path, required=True)
 parser.add_argument('--binary', type=Path, required=True)
 args = parser.parse_args()
-# Both callers in release.yml run from the checkout root and name dist/wheels/<target>
-# and target/<target>/release/<cli> under it; anything else would read a stray wheel or
-# write a binary the archive, carrier and wheel forms never read.
+# Every caller runs from the checkout root and names a staging directory's wheels/<target>
+# — scripts/release_cd.py stages under dist/ unless given another — and
+# target/<target>/release/<cli> under the checkout; anything else would read a stray wheel
+# or write a binary the archive, carrier and wheel forms never read.
 checkout = Path.cwd().resolve()
 target = args.wheels.name
-if not re.fullmatch(r'[a-z0-9_]+(?:-[a-z0-9_]+)+', target) or args.wheels.resolve() != checkout / 'dist' / 'wheels' / target:
-    parser.error(f'--wheels must be dist/wheels/<rust target> under the checkout {checkout}, got {args.wheels}; next: run from the checkout root and pass dist/wheels/<target> as release.yml does')
+if not re.fullmatch(r'[a-z0-9_]+(?:-[a-z0-9_]+)+', target) or args.wheels.resolve().parent.name != 'wheels':
+    parser.error(f'--wheels must be a staging directory\'s wheels/<rust target>, such as dist/wheels/<target> under the checkout {checkout}, got {args.wheels}; next: pass the wheels/<target> directory maturin built into, as scripts/release_cd.py does')
 if args.binary.name not in ('onetaskgraph', 'onetaskgraph.exe') or args.binary.resolve() != checkout / 'target' / target / 'release' / args.binary.name:
     parser.error(f'--binary must be target/{target}/release/onetaskgraph[.exe] under the checkout {checkout}, got {args.binary}; next: name the release binary of the same target as --wheels')
 try:
