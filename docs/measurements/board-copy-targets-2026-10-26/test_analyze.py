@@ -144,7 +144,7 @@ def captures(root: Path) -> Path:
 def report(path: Path) -> Path:
     blocks = "".join(f"<!-- analyze:begin {name} -->\nstale\n<!-- analyze:end {name} -->\n\n" for name in (
         "targets", "over", "detail", "owners", "seconds", "burn", "quota", "conditions", "workload",
-        "board-size", "reference-size", "writes"))
+        "board-size", "reference-size", "writes", "spend", "probes"))
     path.write_text("# A report\n\n" + blocks)
     return path
 
@@ -314,3 +314,11 @@ def test_the_committed_report_matches_the_committed_captures(tmp_path):
     shutil.copy(analyze.REPORT, copy)
     assert analyze.main(["--captures", str(root), "--report", str(copy)]) == 0
     assert json.loads((root / "summary.json").read_text()) == json.loads((analyze.CAPTURES / "summary.json").read_text())
+
+
+def test_an_empty_block_is_filled_by_write(measured):
+    path = measured[1]
+    path.write_text(path.read_text().replace("<!-- analyze:begin over -->\nstale\n", "<!-- analyze:begin over -->\n"))
+    assert run(measured, "--write") == 0
+    assert "<!-- analyze:begin over -->\nNo points or writes figure is over its target.\n<!-- analyze:end over -->" in path.read_text()
+    assert run(measured) == 0

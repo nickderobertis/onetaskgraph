@@ -1,0 +1,475 @@
+# Board copy targets: the seven operations on GitHub at the releases the host adopted
+
+The plan `board-copy-targets-library-2026-10-26` set the user's targets for copying a 10-item plan
+onto a GitHub Projects board and for approving its design document. This file measures the seven
+operations those targets name on real GitHub, at the releases ai-orchestrator adopted
+(`668dc496`, "perf(plans): adopt the private-source copy and lazy SDK fixes"), and sets each
+figure beside its target and its before figures.
+
+Every table below is recomputed from the sanitized captures in
+[`board-copy-targets-2026-10-26/captures/`](board-copy-targets-2026-10-26/captures/) by one command:
+
+    python3 docs/measurements/board-copy-targets-2026-10-26/analyze.py
+
+It exits 1, naming the table, when a table here differs from what the captures say, and `--write`
+puts the recomputed tables in place. `test_analyze.py` beside it holds its parser and that
+reconciliation. No committed file holds a credential, a board item's title, body, URL or node id,
+or anything of a private source.
+
+**The later check.** The one command that re-takes the whole measurement against GitHub is
+
+    docs/measurements/board-copy-targets-2026-10-26/measure.sh provision   # once: the host clone
+    docs/measurements/board-copy-targets-2026-10-26/measure.sh all
+
+which takes the seven rows in order, prices what they sent, deletes every issue they created and
+runs the analyzer. That later run's result is a later check; it is not this file's bar.
+
+## The targets, and who judges them
+
+| Operation | seconds | GraphQL points | writes |
+| --- | --- | --- | --- |
+| first copy (`project copy` then `document copy`) | 32 s | 12 | 40 |
+| re-copy after one task's body changed | 8 s | 4 | — |
+| unchanged re-copy | 7 s | 3 | — |
+| one approval through `just approve-design` | 7 s | 5 | — |
+
+The points and writes targets are strict. On this host, which runs no CI, the seconds targets warn
+and are reported, never decided here. The analyzer states these targets once (`TARGETS`) and no
+figure here is compared against anything lower.
+
+This file registers and changes no budget. The gated bars belong to the tasks that move these
+figures: otg-copy-parity's seven store plan-copy budgets, which record the host's configuration,
+and adopt-copy-targets' four host seconds budgets. Whether the plan's goal is met is the manager's
+closeout rule, not this file's verdict.
+
+**The before figures** are the brief's: the host journey's copies on the loopback board at
+onetaskgraph 0.12.3, 51, 20.8 and 17.4 s and 25, 18 and 14 points for the first, changed and
+unchanged copies. They are shown beside the bare rows of the same operation too. The brief gives
+none for an approval or for writes, so the table says so. Beside them stands the same operation
+measured on GitHub at onetaskgraph 0.11.0 on 2026-10-24
+([`board-copy-speed-2026-10-18.md`](board-copy-speed-2026-10-18.md), its combined table).
+
+## Each row against its target
+
+<!-- analyze:begin targets -->
+| row | elapsed seconds | GraphQL points | writes (mutations + uploads) | points if each mutation request cost 5 |
+| --- | --- | --- | --- | --- |
+| bare store: first copy | **29.8** — target 32: **within**; before 51 (loopback, 0.12.3); GitHub at 0.11.0 29.8 | **11** — target 12: **within**; before 25 (loopback, 0.12.3); GitHub at 0.11.0 20 | **25** — target 40: **within**; before none in the brief; GitHub at 0.11.0 36 | 27 — **would flip to over** |
+| bare store: re-copy, one task's body changed | **6.3** — target 8: **within**; before 20.8 (loopback, 0.12.3); GitHub at 0.11.0 8.7 | **3** — target 4: **within**; before 18 (loopback, 0.12.3); GitHub at 0.11.0 7 | **1** — no target; before none in the brief; GitHub at 0.11.0 1 | 7 — **would flip to over** |
+| bare store: unchanged re-copy | **5.7** — target 7: **within**; before 17.4 (loopback, 0.12.3); GitHub at 0.11.0 6.7 | **2** — target 3: **within**; before 14 (loopback, 0.12.3); GitHub at 0.11.0 6 | **0** — no target; before none in the brief; GitHub at 0.11.0 0 | 2 — no flip |
+| host `just copy-plan`: first copy | **28.2** — target 32: **within**; before 51 (loopback, 0.12.3); GitHub at 0.11.0 64.4 | **11** — target 12: **within**; before 25 (loopback, 0.12.3); GitHub at 0.11.0 17 | **25** — target 40: **within**; before none in the brief; GitHub at 0.11.0 25 | 27 — **would flip to over** |
+| host `just copy-plan`: one task's body changed | **10.0** — target 8: **over**; before 20.8 (loopback, 0.12.3); GitHub at 0.11.0 52.2 | **3** — target 4: **within**; before 18 (loopback, 0.12.3); GitHub at 0.11.0 7 | **2** — no target; before none in the brief; GitHub at 0.11.0 2 | 7 — **would flip to over** |
+| host `just copy-plan`: unchanged re-copy | **7.4** — target 7: **over**; before 17.4 (loopback, 0.12.3); GitHub at 0.11.0 44.7 | **2** — target 3: **within**; before 14 (loopback, 0.12.3); GitHub at 0.11.0 4 | **0** — no target; before none in the brief; GitHub at 0.11.0 0 | 2 — no flip |
+| host `just approve-design` | **9.5** — target 7: **over**; before none in the brief; GitHub at 0.11.0 16.4 | **5** — target 5: **within**; before none in the brief; GitHub at 0.11.0 7 | **1** — no target; before none in the brief; GitHub at 0.11.0 1 | 9 — **would flip to over** |
+<!-- analyze:end targets -->
+
+<!-- analyze:begin over -->
+No points or writes figure is over its target.
+<!-- analyze:end over -->
+
+So no points or writes figure needed escalating, and none is labelled accepted anywhere here.
+Three seconds figures are over their targets: the host's one-change re-copy, its unchanged re-copy
+and the approval. They are reported, with their causes in the seconds table below.
+
+**The mutation price is an assumption.** GitHub's dry run prices a query but cannot price a
+mutation, so each mutation request is counted at 1 point, by the manager's ruling. Its evidence is
+the smallest rise of `x-ratelimit-used` observed before a mutation's answer. That rise is 1, seen in
+five of this measurement's runs (`captures/summary.json`, `mutation_rises`), and another session
+only ever adds to a rise. The last column above prices each mutation request at 5 instead. Every
+row that sends a mutation would then be over its points target: both first copies, both one-change
+re-copies and the approval. The unchanged re-copies send none, so their verdict cannot move.
+
+## What was measured
+
+- **Versions.** Each row records its own, in `versions.json`, and the conditions table below
+  repeats them: onetaskgraph **0.12.7** (the `onetaskgraph-cli` wheel `uv.lock` names), the
+  onetaskgraph SDK 0.12.7, the engine onepipeline **0.95.3** (from npm, as `package.json` names
+  it), onevcs **0.57.0**, all as a scratch clone of `github.com/nickderobertis/ai-orchestrator` at
+  `668dc496` installed them with `uv sync --frozen` and `bun install --frozen-lockfile`. The
+  board-size evidence is the tag `v0.12.7` (`d4038704`).
+- **When and where.** 2026-10-28, 05:01–05:08 UTC, on onetaskgraph's public test board (owner
+  `nickderobertis`, project 1) with issues in the public scratch repository
+  `nickderobertis/onetaskgraph-live-scratch`, which `board-copy-speed-2026-10-18.md` names. Nothing
+  was read from or written to the `plans` or `followups` boards.
+- **Harness.** The board-copy-speed measurement's runner as it was adapted on 2026-10-24 (kept on
+  this host under `${XDG_CACHE_HOME:-$HOME/.cache}/board-copy-speed-2026-10-18/harness-after/`), the
+  copy-row half of the `spike/harness/` that `spike/gaps/gaps.sh` extended. That spike branch is no
+  longer on the remote; its last commit, `94b4f0d8`, was recovered from this repository's object
+  store and read. Its own scenarios are probes, so its 40% rule and test-board guard are what this
+  run keeps. The runner now lives in
+  [`board-copy-targets-2026-10-26/harness/`](board-copy-targets-2026-10-26/harness/). It changed only
+  where the adopted releases, the private source or the rulings below required:
+  1. **Version and documents.** It expects `onetaskgraph 0.12.7`. The proxy's operation table
+     (`harness/documents.json`) was regenerated from `v0.12.7` by `harness/dump_documents.sh`.
+  2. **A private source.** The bare store reads the plan out of a `local-md` folder declared
+     `visibility: private`, as the host's `authoring` is. The earlier measurement's bare runs
+     declared nothing.
+  3. **Screening on the bare rows.** At 0.12.7 a copy out of a private source onto a public board
+     is refused `boundary-unavailable` with no `write_policy.check_command`, so the bare store runs
+     with the host's own `write_policy` and the board configured as `plans` is: declared public,
+     cache on, its `status_mapping`. That is the first ruling below.
+  4. **Aliased mutations** are counted by the proxy as it records each answer, every field of its
+     `data`, rather than by a later relabelling pass.
+  5. **Timing.** The host audit (`harness/hostaudit/sitecustomize.py`) now also records the
+     interpreter's start and exit and every subprocess the host starts. The onevcs shim runs with
+     `python3 -I` and hands onevcs an environment without the audit, so screening is never timed
+     as a host step.
+  6. **Points.** Every GraphQL query a run sent is priced by GitHub's own dry run
+     (`harness/pricing.py`), and idle `rateLimit` reads bracket every row
+     (`harness/quota.py`, `burn`). That is the second ruling below.
+- **The rows.** "Bare store" runs the store's own binary: `project copy` then `document copy` from
+  the private folder onto the test board. "Host" runs ai-orchestrator's own `just copy-plan` or
+  `just approve-design` in the scratch clone, with its `authoring` source rooted at a generated
+  folder and its `plans` source pointed at the test board, both through environment overrides in
+  that one process. No tracked configuration changed. The host plan's review records are stamped
+  by the host's own `plan_review` before each copy that needs them, outside the timed step. The bare
+  and host plans are one generated plan (`bcs-span`) in two folders. Each side's copy links are its
+  own, so the two never share a board item.
+- **Reused results.** No cached result of the earlier measurements is at these versions, so none
+  stands in for a row here. The before figures are reused as the brief and the committed 0.11.0
+  report state them.
+- **No user layer, and the visibility stand-in.** Every row ran with an empty
+  `XDG_CONFIG_HOME` for onetaskgraph, so no user layer was read. The conditions table shows only
+  `file` and `environment` layers. A real host with private sources configured in its user layer
+  would also spend their reachability checks, which these rows exclude. The host's onevcs refuses to
+  inspect the scratch repository, which it has not registered, so in the scratch process alone an
+  inspection of the scratch repository inspected `nickderobertis/onetaskgraph`, a registered public
+  repository, through the same onevcs (`harness/inspect_shim.py`). Nothing was registered. The
+  copied source stayed declared private throughout.
+
+### Manager rulings quoted
+
+On the bare rows' screening and the visibility stand-in (2026-10-28,
+`c-97853bdb17dff14b7091eb79763c7b70`):
+
+> Both approved. (1) Measure the bare-store rows from a `visibility: private` local source with the
+> host's own write_policy (the pinned onevcs boundary inspect/check) and the board configured as
+> `plans` is (public, cache on), counting every screening call in each row; that is the
+> configuration the user's targets are about. (2) Reuse the 2026-10-24 scratch-process visibility
+> stand-in (inspection of the scratch repository answered by inspecting nickderobertis/onetaskgraph
+> through the same onevcs), registering nothing, and state it plainly in the report; the copied
+> source stays declared private. The board-size plan is fine; ask before seeding. Keep the GitHub
+> quota rule: pause while GraphQL remaining is below 40% unless the burn rate shows the window
+> resets first, read the allowance through GraphQL's own rateLimit field, and reuse cached results.
+
+On how points are judged (2026-10-28, `c-378b41a47a28f81d1ba91db2bda25570`):
+
+> Approved. Judge each points target by the sum of GitHub's own price for every GraphQL request the
+> row sent (its recorded document and variables re-priced with rateLimit(dryRun: true) { cost }),
+> plus 1 point per mutation request, and keep beside it per row the raw rateLimit readings, the idle
+> background burn bracketing the row, and the residual. Do not inject rateLimit into live traffic.
+> Two additions to the report: state plainly that the 1-point mutation price is an assumption the
+> dry run cannot verify, citing the smallest observed header rise as its evidence; and for any row
+> whose verdict would flip if each mutation cost more (say up to 5), say so beside that row. Keep
+> the request count and the content-creating write count per row too, since the 40-write target is
+> judged on writes.
+
+The board-size method is the manager's ruling for the earlier measurement,
+`c-a76752a839dfb9d24f9ba3dabd38d9f7`, which the brief names.
+
+**Why the points method moved.** The token's GraphQL allowance is the user's, and other sessions
+on this host were drawing on it the whole time, at about a point a second (the probes table
+below). GitHub also answered from two counters with different resets in the same seconds, as the
+earlier measurement found. A row's own 2 to 11 points cannot be read out of a before-and-after
+`rateLimit` rise of that size. The burn table keeps every raw reading beside the priced figure.
+onevcs's `boundary inspect` spends one REST core request and no GraphQL point, so screening is not
+in any points figure.
+
+## Requests, points and writes, row by row
+
+<!-- analyze:begin detail -->
+| row | capture | requests | request kinds (requests/points/writes) | points | writes | screening calls | store cache |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| bare store: first copy | `bare-first-20261028T050631` | 12 | `CREATED_BOARD_ITEMS` 4×/4 pt, `CREATE_ISSUE` 2×/2 pt/2 w, `CREATE_ISSUES` 1×/1 pt/8 w, `ISSUE_COPY_DETAILS` 1×/1 pt, `ORIGIN_LOOKUPS` 1×/1 pt, `ORIGIN_LOOKUPS_WITH_MEMBERS` 1×/1 pt, `POST /user-attachments/assets` 1×/0 pt/1 w, `WRITE_FIELDS_AND_EDGES` 1×/1 pt/14 w | 7 queries at their dry-run price + 4 mutation requests at 1 = 11 | 4 requests carrying 24 mutations + 1 upload(s) = 25; 10 issues created | 2 inspect + 2 check (1.93 s) | 0 → 0 files |
+| bare store: re-copy, one task's body changed | `bare-changed1-20261028T050726` | 3 | `DOCUMENT_IN_PROJECT` 1×/1 pt, `SUB_ISSUES` 1×/1 pt, `UPDATE_ISSUE` 1×/1 pt/1 w | 2 queries at their dry-run price + 1 mutation requests at 1 = 3 | 1 requests carrying 1 mutations + 0 upload(s) = 1; 0 issues created | 2 inspect + 2 check (1.74 s) | 0 → 0 files |
+| bare store: unchanged re-copy | `bare-unchanged-20261028T050756` | 2 | `DOCUMENT_IN_PROJECT` 1×/1 pt, `SUB_ISSUES` 1×/1 pt | 2 queries at their dry-run price + 0 mutation requests at 1 = 2 | 0 requests carrying 0 mutations + 0 upload(s) = 0; 0 issues created | 2 inspect + 2 check (1.82 s) | 0 → 8 files |
+| host `just copy-plan`: first copy | `host-first-20261028T050121` | 12 | `CREATED_BOARD_ITEMS` 4×/4 pt, `CREATE_ISSUE` 2×/2 pt/2 w, `CREATE_ISSUES` 1×/1 pt/8 w, `ISSUE_COPY_DETAILS` 1×/1 pt, `ORIGIN_LOOKUPS` 1×/1 pt, `ORIGIN_LOOKUPS_WITH_MEMBERS` 1×/1 pt, `POST /user-attachments/assets` 1×/0 pt/1 w, `WRITE_FIELDS_AND_EDGES` 1×/1 pt/14 w | 7 queries at their dry-run price + 4 mutation requests at 1 = 11 | 4 requests carrying 24 mutations + 1 upload(s) = 25; 10 issues created | 2 inspect + 2 check (1.67 s) | 0 → 0 files |
+| host `just copy-plan`: one task's body changed | `host-changed1-20261028T050232` | 3 | `DOCUMENT_IN_PROJECT` 1×/1 pt, `SUB_ISSUES` 1×/1 pt, `UPDATE_ISSUES` 1×/1 pt/2 w | 2 queries at their dry-run price + 1 mutation requests at 1 = 3 | 1 requests carrying 2 mutations + 0 upload(s) = 2; 0 issues created | 2 inspect + 2 check (2.09 s) | 0 → 0 files |
+| host `just copy-plan`: unchanged re-copy | `host-unchanged-20261028T050310` | 2 | `DOCUMENT_IN_PROJECT` 1×/1 pt, `SUB_ISSUES` 1×/1 pt | 2 queries at their dry-run price + 0 mutation requests at 1 = 2 | 0 requests carrying 0 mutations + 0 upload(s) = 0; 0 issues created | 2 inspect + 2 check (2.35 s) | 0 → 8 files |
+| host `just approve-design` | `host-approve-20261028T050343` | 5 | `DOCUMENT_IN_PROJECT` 1×/1 pt, `ISSUE` 1×/1 pt, `SUB_ISSUES` 2×/2 pt, `UPDATE_ISSUE` 1×/1 pt/1 w | 4 queries at their dry-run price + 1 mutation requests at 1 = 5 | 1 requests carrying 1 mutations + 0 upload(s) = 1; 0 issues created | 1 inspect + 1 check (0.88 s) | 8 → 8 files |
+<!-- analyze:end detail -->
+
+"Requests" counts every request the store sent through the recording proxy and excludes tunnels.
+Writes are the content-creating count the 40-write target is judged on: every mutation, each
+aliased one counted, plus every upload. The store cache column counts the files in the board
+source's cache directory before and after the row. Each first copy began cold, with the cache
+empty, and the first copy and the one-change re-copy left it empty. The unchanged re-copy filled
+it, and the approval ran over that warm cache.
+
+### Who sent each request
+
+The trace of every request kind each row sent, by the store invocation it was sent inside. A
+request inside the store's own `project copy` or `document copy` is the **store's**. One inside
+any other store invocation the host recipe made is the **host's**, because the host chose to make
+that call. The request inside it is still the store's answer to that verb.
+
+<!-- analyze:begin owners -->
+| row | owner | sent inside | request kind | requests | points | writes |
+| --- | --- | --- | --- | --- | --- | --- |
+| bare store: first copy | store | document copy | `CREATED_BOARD_ITEMS` | 2 | 2 | 0 |
+| bare store: first copy | store | document copy | `CREATE_ISSUE` | 1 | 1 | 1 |
+| bare store: first copy | store | document copy | `ISSUE_COPY_DETAILS` | 1 | 1 | 0 |
+| bare store: first copy | store | document copy | `ORIGIN_LOOKUPS_WITH_MEMBERS` | 1 | 1 | 0 |
+| bare store: first copy | store | document copy | `POST /user-attachments/assets` | 1 | 0 | 1 |
+| bare store: first copy | store | project copy | `CREATED_BOARD_ITEMS` | 2 | 2 | 0 |
+| bare store: first copy | store | project copy | `CREATE_ISSUE` | 1 | 1 | 1 |
+| bare store: first copy | store | project copy | `CREATE_ISSUES` | 1 | 1 | 8 |
+| bare store: first copy | store | project copy | `ORIGIN_LOOKUPS` | 1 | 1 | 0 |
+| bare store: first copy | store | project copy | `WRITE_FIELDS_AND_EDGES` | 1 | 1 | 14 |
+| bare store: re-copy, one task's body changed | store | document copy | `DOCUMENT_IN_PROJECT` | 1 | 1 | 0 |
+| bare store: re-copy, one task's body changed | store | project copy | `SUB_ISSUES` | 1 | 1 | 0 |
+| bare store: re-copy, one task's body changed | store | project copy | `UPDATE_ISSUE` | 1 | 1 | 1 |
+| bare store: unchanged re-copy | store | document copy | `DOCUMENT_IN_PROJECT` | 1 | 1 | 0 |
+| bare store: unchanged re-copy | store | project copy | `SUB_ISSUES` | 1 | 1 | 0 |
+| host `just copy-plan`: first copy | store | document copy | `CREATED_BOARD_ITEMS` | 2 | 2 | 0 |
+| host `just copy-plan`: first copy | store | document copy | `CREATE_ISSUE` | 1 | 1 | 1 |
+| host `just copy-plan`: first copy | store | document copy | `ISSUE_COPY_DETAILS` | 1 | 1 | 0 |
+| host `just copy-plan`: first copy | store | document copy | `ORIGIN_LOOKUPS_WITH_MEMBERS` | 1 | 1 | 0 |
+| host `just copy-plan`: first copy | store | document copy | `POST /user-attachments/assets` | 1 | 0 | 1 |
+| host `just copy-plan`: first copy | store | project copy | `CREATED_BOARD_ITEMS` | 2 | 2 | 0 |
+| host `just copy-plan`: first copy | store | project copy | `CREATE_ISSUE` | 1 | 1 | 1 |
+| host `just copy-plan`: first copy | store | project copy | `CREATE_ISSUES` | 1 | 1 | 8 |
+| host `just copy-plan`: first copy | store | project copy | `ORIGIN_LOOKUPS` | 1 | 1 | 0 |
+| host `just copy-plan`: first copy | store | project copy | `WRITE_FIELDS_AND_EDGES` | 1 | 1 | 14 |
+| host `just copy-plan`: one task's body changed | store | document copy | `DOCUMENT_IN_PROJECT` | 1 | 1 | 0 |
+| host `just copy-plan`: one task's body changed | store | project copy | `SUB_ISSUES` | 1 | 1 | 0 |
+| host `just copy-plan`: one task's body changed | store | project copy | `UPDATE_ISSUES` | 1 | 1 | 2 |
+| host `just copy-plan`: unchanged re-copy | store | document copy | `DOCUMENT_IN_PROJECT` | 1 | 1 | 0 |
+| host `just copy-plan`: unchanged re-copy | store | project copy | `SUB_ISSUES` | 1 | 1 | 0 |
+| host `just approve-design` | host | document list | `SUB_ISSUES` | 1 | 1 | 0 |
+| host `just approve-design` | host | document metadata | `DOCUMENT_IN_PROJECT` | 1 | 1 | 0 |
+| host `just approve-design` | host | document metadata | `UPDATE_ISSUE` | 1 | 1 | 1 |
+| host `just approve-design` | host | project show | `ISSUE` | 1 | 1 | 0 |
+| host `just approve-design` | host | task list | `SUB_ISSUES` | 1 | 1 | 0 |
+<!-- analyze:end owners -->
+
+Set against `spike-host-copy-parity`, which attributed the host's loopback copies and estimated
+them with the four store fixes at 10–11 / 3 / 2 points, the GitHub rows here send 11 / 3 / 2. The
+one private `issue` read that spike could not attribute does not appear: no host document copy
+here sent an `ISSUE` read. Its estimate of 5 for the host's changed copy, one over the target of
+4, measured 3. The approval's one `ISSUE` read is `project show`'s.
+
+## Seconds, attributed by cause
+
+Each row's measured seconds are split among named causes. Every instant goes to the cause under way
+then, in this order: write screening (an `onevcs` call), a network round trip (a request through
+the proxy, or a tunnel), a store invocation's own work, a host subprocess, a named host step
+(innermost first), the host's Python outside the named steps, and the recipe's launch and exit.
+The shares therefore sum to the measured total. A bare row's total is its two commands' own times,
+and the harness's gap between them is in neither.
+
+<!-- analyze:begin seconds -->
+| row | measured | attributed to | sum of shares |
+| --- | --- | --- | --- |
+| bare store: first copy | 29.82 s | network round trips: GitHub GraphQL 22.50 s; network round trips: tunnelled HTTPS (the image upload's storage and its check) 2.26 s; write screening: onevcs boundary inspect 1.85 s; store invocation: project copy 1.63 s; network round trips: GitHub REST and uploads 1.03 s; store invocation: document copy 0.47 s; write screening: onevcs boundary check 0.08 s | 29.82 s |
+| bare store: re-copy, one task's body changed | 6.28 s | network round trips: GitHub GraphQL 4.19 s; write screening: onevcs boundary inspect 1.68 s; store invocation: project copy 0.20 s; store invocation: document copy 0.15 s; write screening: onevcs boundary check 0.06 s | 6.28 s |
+| bare store: unchanged re-copy | 5.67 s | network round trips: GitHub GraphQL 3.23 s; write screening: onevcs boundary inspect 1.73 s; store invocation: project copy 0.40 s; store invocation: document copy 0.22 s; write screening: onevcs boundary check 0.09 s | 5.67 s |
+| host `just copy-plan`: first copy | 28.19 s | network round trips: GitHub GraphQL 19.92 s; network round trips: tunnelled HTTPS (the image upload's storage and its check) 2.15 s; write screening: onevcs boundary inspect 1.60 s; store invocation: project copy 1.50 s; interpreter and SDK start-up 1.02 s; network round trips: GitHub REST and uploads 1.02 s; recipe launch: just, plan-store.sh and uv run 0.23 s; store invocation: document copy 0.18 s; interpreter exit and recipe teardown 0.15 s; host step: plan_review.review_key 0.13 s; write screening: onevcs boundary check 0.06 s; store invocation: project graph 0.04 s; host step: plan_store.read_tasks 0.03 s; host subprocess: llmlint 0.03 s; store invocation: project show 0.03 s; store invocation: task list 0.03 s; host subprocess: git 0.02 s; store invocation: document list 0.02 s; host Python outside the named steps 0.01 s; host step: plan_review.bar_fingerprint 0.01 s; host step: plan_review.plan_key 0.01 s; 6 further causes under 0.005 s each (host step: plan_copy._measure_documents, host step: plan_review.plan_bar_fingerprint, host step: plan_review.unreviewed, host step: plan_store.plan_listing, host step: plan_store.project_record, host step: task_body.serve) 0.00 s | 28.19 s |
+| host `just copy-plan`: one task's body changed | 10.01 s | network round trips: GitHub GraphQL 6.16 s; write screening: onevcs boundary inspect 2.00 s; interpreter and SDK start-up 0.51 s; store invocation: project copy 0.41 s; store invocation: document copy 0.24 s; interpreter exit and recipe teardown 0.21 s; recipe launch: just, plan-store.sh and uv run 0.12 s; host step: plan_review.review_key 0.11 s; write screening: onevcs boundary check 0.08 s; host step: plan_store.read_tasks 0.03 s; store invocation: task list 0.03 s; host subprocess: llmlint 0.02 s; store invocation: document list 0.02 s; store invocation: project graph 0.02 s; store invocation: project show 0.02 s; host Python outside the named steps 0.01 s; host step: plan_store.plan_listing 0.01 s; host subprocess: git 0.01 s; 7 further causes under 0.005 s each (host step: plan_copy._measure_documents, host step: plan_copy._report, host step: plan_review.bar_fingerprint, host step: plan_review.plan_key, host step: plan_review.unreviewed, host step: plan_store.project_record, host step: task_body.serve) 0.00 s | 10.01 s |
+| host `just copy-plan`: unchanged re-copy | 7.36 s | network round trips: GitHub GraphQL 3.32 s; write screening: onevcs boundary inspect 2.28 s; interpreter and SDK start-up 0.55 s; store invocation: project copy 0.35 s; interpreter exit and recipe teardown 0.21 s; store invocation: document copy 0.19 s; recipe launch: just, plan-store.sh and uv run 0.12 s; host step: plan_review.review_key 0.11 s; write screening: onevcs boundary check 0.07 s; store invocation: project graph 0.03 s; store invocation: task list 0.03 s; host step: plan_store.read_tasks 0.02 s; host subprocess: llmlint 0.02 s; store invocation: document list 0.02 s; store invocation: project show 0.02 s; host step: plan_review.plan_key 0.01 s; host subprocess: git 0.01 s; 9 further causes under 0.005 s each (host Python outside the named steps, host step: plan_copy._measure_documents, host step: plan_review.bar_fingerprint, host step: plan_review.checklist_fingerprint, host step: plan_review.unreviewed, host step: plan_store.plan_listing, host step: plan_store.project_record, host step: plan_store.read_plan, host step: task_body.serve) 0.00 s | 7.36 s |
+| host `just approve-design` | 9.46 s | network round trips: GitHub GraphQL 7.48 s; write screening: onevcs boundary inspect 0.85 s; interpreter and SDK start-up 0.35 s; interpreter exit and recipe teardown 0.19 s; store invocation: document metadata 0.19 s; recipe launch: just, plan-store.sh and uv run 0.09 s; store invocation: document list 0.07 s; store invocation: task list 0.07 s; store invocation: project show 0.05 s; write screening: onevcs boundary check 0.03 s; host step: design_approval.approve 0.02 s; host step: design_approval.body_digest 0.02 s; host subprocess: onepipeline 0.02 s; store invocation: project list 0.02 s; store invocation: config show 0.01 s; 5 further causes under 0.005 s each (host step: design_approval.asset_digests, host step: design_chain.plan_repository, host step: plan_store.plan_listing, host step: plan_store.project_record, host step: plan_store.read_projects) 0.00 s | 9.46 s |
+<!-- analyze:end seconds -->
+
+Reading it: in every row most of the time is GitHub's answer to a handful of requests, and the
+rest is mostly screening. On the host's three rows over their seconds targets, each `onevcs boundary
+inspect` is a separate process of about a second whose own refresh reaches GitHub. Start-up, the
+recipe's launch and exit, and each host step are each a fraction of a second. Each GraphQL round
+trip's own time is in `captures/<row>/requests.jsonl` (`ms`).
+
+## Quota: the allowance before and after every row
+
+The 40% rule: before each row the gate took the least of `GET /rate_limit`, three GraphQL
+`rateLimit` reads and the last real answer's headers, and would have paused while it held under
+40% of the limit unless the burn rate showed the window resetting first. It never needed to.
+
+<!-- analyze:begin quota -->
+| row | gate figure (least reading) | GraphQL `rateLimit` before (three reads) | GraphQL `rateLimit` after (three reads) | `GET /rate_limit` graphql before → after | REST core before → after | gate | pauses |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| bare store: first copy | 4034 / 5000 (81%) | remaining 4034, 4034, 4034 | remaining 3971, 4412, 3971 | 4426 → 4412 | 4622 → 4618 | proceed (≥ 40%) | none |
+| bare store: re-copy, one task's body changed | 3961 / 5000 (79%) | remaining 3961, 3961, 4409 | remaining 3953, 3953, 3953 | 4409 → 4408 | 4618 → 4616 | proceed (≥ 40%) | none |
+| bare store: unchanged re-copy | 3948 / 5000 (79%) | remaining 3948, 3948, 3948 | remaining 3946, 3946, 3946 | 4407 → 4407 | 4616 → 4614 | proceed (≥ 40%) | none |
+| host `just copy-plan`: first copy | 4264 / 5000 (85%) | remaining 4264, 4500, 4264 | remaining 4489, 4215, 4214 | 4500 → 4489 | 4758 → 4736 | proceed (≥ 40%) | none |
+| host `just copy-plan`: one task's body changed | 4172 / 5000 (83%) | remaining 4172, 4474, 4474 | remaining 4140, 4466, 4140 | 4474 → 4467 | 4734 → 4732 | proceed (≥ 40%) | none |
+| host `just copy-plan`: unchanged re-copy | 4118 / 5000 (82%) | remaining 4121, 4119, 4118 | remaining 4108, 4108, 4108 | 4457 → 4451 | 4728 → 4722 | proceed (≥ 40%) | none |
+| host `just approve-design` | 4104 / 5000 (82%) | remaining 4104, 4104, 4104 | remaining 4096, 4446, 4095 | 4448 → 4446 | 4722 → 4715 | proceed (≥ 40%) | none |
+<!-- analyze:end quota -->
+
+The idle background around each row, and what remains once the row's own priced points are taken
+out:
+
+<!-- analyze:begin burn -->
+| row | GraphQL `rateLimit` used, last idle read before → first after | rise | idle background burn bracketing the row | background expected over the row | the row's own priced points | residual (rise − own − background) |
+| --- | --- | --- | --- | --- | --- | --- |
+| bare store: first copy | 978 → 1029 (counter resetting 1793166051) | 51 | 1.24 points/s | 43.9 | 11 | -3.9 |
+| bare store: re-copy, one task's body changed | 1043 → 1047 (counter resetting 1793166051) | 4 | 0.28 points/s | 2.4 | 3 | -1.4 |
+| bare store: unchanged re-copy | 1052 → 1054 (counter resetting 1793166051) | 2 | 0.21 points/s | 1.7 | 2 | -1.7 |
+| host `just copy-plan`: first copy | 742 → 787 (counter resetting 1793166051) | 45 | 1.08 points/s | 36.7 | 11 | -2.7 |
+| host `just copy-plan`: one task's body changed | 833 → 864 (counter resetting 1793166051) | 31 | 1.02 points/s | 17.2 | 3 | +10.8 |
+| host `just copy-plan`: unchanged re-copy | 889 → 892 (counter resetting 1793166051) | 3 | 0.56 points/s | 5.4 | 2 | -4.4 |
+| host `just approve-design` | 896 → 905 (counter resetting 1793166051) | 9 | 0.29 points/s | 3.6 | 5 | +0.4 |
+<!-- analyze:end burn -->
+
+The residual is the background's burstiness, never a share of the row: the background is a rate
+measured over the ten seconds either side, and the sessions behind it do not spend evenly.
+
+<!-- analyze:begin probes -->
+| probe | readings | rise | rate |
+| --- | --- | --- | --- |
+| idle background, counter resetting 1793165131 | 5 reads over 24.6 s | 26 points | 1.06 points/s |
+| idle background, counter resetting 1793166051 | 7 reads over 30.4 s | 41 points | 1.35 points/s |
+| 3 × `onevcs boundary inspect` | `GET /rate_limit` last read before → first after | REST core +3, GraphQL +0 | 1 REST request and 0 GraphQL points per inspect |
+<!-- analyze:end probes -->
+
+## Conditions and workload
+
+<!-- analyze:begin conditions -->
+| row | sources (plugin, visibility, cache) | write_policy | configuration layers present | versions |
+| --- | --- | --- | --- | --- |
+| bare store: first copy | `spike-md` local-md, private; `testboard` github-projects, public, cache on | `check_command` set (file), `visibility_command` set (file) | file | onetaskgraph 0.12.7; onepipeline 0.95.3; onetaskgraph-sdk 0.12.7; onevcs 0.57.0; host `668dc496`; harness `c9dbca3e` |
+| bare store: re-copy, one task's body changed | `spike-md` local-md, private; `testboard` github-projects, public, cache on | `check_command` set (file), `visibility_command` set (file) | file | onetaskgraph 0.12.7; onepipeline 0.95.3; onetaskgraph-sdk 0.12.7; onevcs 0.57.0; host `668dc496`; harness `c9dbca3e` |
+| bare store: unchanged re-copy | `spike-md` local-md, private; `testboard` github-projects, public, cache on | `check_command` set (file), `visibility_command` set (file) | file | onetaskgraph 0.12.7; onepipeline 0.95.3; onetaskgraph-sdk 0.12.7; onevcs 0.57.0; host `668dc496`; harness `c9dbca3e` |
+| host `just copy-plan`: first copy | `authoring` local-md, private; `drafts` local-md, undeclared; `examples` local-md, undeclared; `follow-up-runs` local-md, private; `followups` github-projects, public, cache on; `plans` github-projects, public, cache on; `test-fixtures` local-md, private | `check_command` set (environment), `visibility_command` set (environment) | environment, file | onetaskgraph 0.12.7; onepipeline 0.95.3; onetaskgraph-sdk 0.12.7; onevcs 0.57.0; host `668dc496`; harness `c9dbca3e` |
+| host `just copy-plan`: one task's body changed | `authoring` local-md, private; `drafts` local-md, undeclared; `examples` local-md, undeclared; `follow-up-runs` local-md, private; `followups` github-projects, public, cache on; `plans` github-projects, public, cache on; `test-fixtures` local-md, private | `check_command` set (environment), `visibility_command` set (environment) | environment, file | onetaskgraph 0.12.7; onepipeline 0.95.3; onetaskgraph-sdk 0.12.7; onevcs 0.57.0; host `668dc496`; harness `c9dbca3e` |
+| host `just copy-plan`: unchanged re-copy | `authoring` local-md, private; `drafts` local-md, undeclared; `examples` local-md, undeclared; `follow-up-runs` local-md, private; `followups` github-projects, public, cache on; `plans` github-projects, public, cache on; `test-fixtures` local-md, private | `check_command` set (environment), `visibility_command` set (environment) | environment, file | onetaskgraph 0.12.7; onepipeline 0.95.3; onetaskgraph-sdk 0.12.7; onevcs 0.57.0; host `668dc496`; harness `c9dbca3e` |
+| host `just approve-design` | `authoring` local-md, private; `drafts` local-md, undeclared; `examples` local-md, undeclared; `follow-up-runs` local-md, private; `followups` github-projects, public, cache on; `plans` github-projects, public, cache on; `test-fixtures` local-md, private | `check_command` set (environment), `visibility_command` set (environment) | environment, file | onetaskgraph 0.12.7; onepipeline 0.95.3; onetaskgraph-sdk 0.12.7; onevcs 0.57.0; host `668dc496`; harness `c9dbca3e` |
+<!-- analyze:end conditions -->
+
+<!-- analyze:begin workload -->
+| row | project bytes | task bytes (tasks) | document bytes | PNG bytes |
+| --- | --- | --- | --- | --- |
+| bare store: first copy | 50,205 | 45,234–49,330 (8) | 35,601 | 104,072 |
+| bare store: re-copy, one task's body changed | 50,205 | 45,286–49,330 (8) | 35,601 | 104,072 |
+| bare store: unchanged re-copy | 50,205 | 45,286–49,330 (8) | 35,601 | 104,072 |
+| host `just copy-plan`: first copy | 50,205 | 45,234–49,330 (8) | 35,601 | 104,072 |
+| host `just copy-plan`: one task's body changed | 50,205 | 45,286–49,330 (8) | 35,601 | 104,072 |
+| host `just copy-plan`: unchanged re-copy | 50,205 | 45,286–49,330 (8) | 35,601 | 104,072 |
+| host `just approve-design` | 50,205 | 45,286–49,330 (8) | 35,601 | 104,072 |
+<!-- analyze:end workload -->
+
+The brief's workload is a 50,205-byte project, eight tasks of 45,234–49,330 bytes with 10
+blocked-by edges, and a 35,617-byte document with one 104,072-byte PNG. Every figure here is that
+but the document, which onepipeline 0.95.3's `design-doc` template renders from the same seeded
+answers 16 bytes shorter than 0.86.0's did. The re-copies' smallest task is the one task whose body
+changed.
+
+## Board size: no request depends on it
+
+Kept small by the method the brief names: show from the adopted release's loopback evidence that no
+request depends on the board's size, then apply the reference-size arithmetic. The `v0.12.7`
+journeys below ran on boards of 2,000 and of 20,000 generated items and all four passed
+(`captures/loopback/test-run.txt`):
+
+- `plan_copy::a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated` asserts
+  that every copy, unscreened, screened and in the host's configuration with a private and a
+  public source, sends the same requests by operation at both sizes and never walks the board;
+- `plan_reads::a_plans_records_are_read_from_the_project_and_cost_the_same_on_any_board` and
+  `plan_reads::project_list_by_origin_lists_exactly_its_copies_and_costs_the_same_on_any_board`
+  assert the same of an approval's reads (`project show`, `task list --project`, `document list
+  --project`);
+- `approval::approving_a_plan_lists_each_kind_in_one_point_and_writes_its_approval_behind_one_read`
+  asserts that the approval sequence never walks the board and that its guarded write is one read
+  and one update.
+
+The copy journey's recordings (`captures/loopback/`), set side by side:
+
+<!-- analyze:begin board-size -->
+| loopback recording | configuration | requests at 2,000 / 20,000 items | requests by operation | points at 2,000 / 20,000 | walk pages |
+| --- | --- | --- | --- | --- | --- |
+| `github-plan-copy-points-changed` | unscreened | 3 / 3 | same | 3 / 3 | 0 |
+| `github-plan-copy-points-changed` | screened | 3 / 3 | same | 3 / 3 | 0 |
+| `github-plan-copy-points-changed` | host configuration, private source | 3 / 3 | same | 3 / 3 | 0 |
+| `github-plan-copy-points-changed` | host configuration, public source | 3 / 3 | same | 3 / 3 | 0 |
+| `github-plan-copy-points-first` | unscreened | 14 / 14 | same | 12 / 12 | 0 |
+| `github-plan-copy-points-first` | screened | 14 / 14 | same | 12 / 12 | 0 |
+| `github-plan-copy-points-first` | host configuration, private source | 13 / 13 | same | 11 / 11 | 0 |
+| `github-plan-copy-points-first` | host configuration, public source | 14 / 14 | same | 12 / 12 | 0 |
+| `github-plan-copy-points-unchanged` | unscreened | 2 / 2 | same | 2 / 2 | 0 |
+| `github-plan-copy-points-unchanged` | screened | 2 / 2 | same | 2 / 2 | 0 |
+| `github-plan-copy-points-unchanged` | host configuration, private source | 2 / 2 | same | 2 / 2 | 0 |
+| `github-plan-copy-points-unchanged` | host configuration, public source | 2 / 2 | same | 2 / 2 | 0 |
+<!-- analyze:end board-size -->
+
+So no size-dependent read remains, nothing was seeded, and the reference-size arithmetic replaces
+no page:
+
+<!-- analyze:begin reference-size -->
+| row | walk pages sent | seconds at the `plans` board's size | points at that size |
+| --- | --- | --- | --- |
+| bare store: first copy | 0 BOARD + 0 SEARCH_ISSUES | 29.8 s measured − 0 s of 0 walk pages + 0 × 6.95 s + 0 × 6.79 s = **29.8 s** | 11 |
+| bare store: re-copy, one task's body changed | 0 BOARD + 0 SEARCH_ISSUES | 6.3 s measured − 0 s of 0 walk pages + 0 × 6.95 s + 0 × 6.79 s = **6.3 s** | 3 |
+| bare store: unchanged re-copy | 0 BOARD + 0 SEARCH_ISSUES | 5.7 s measured − 0 s of 0 walk pages + 0 × 6.95 s + 0 × 6.79 s = **5.7 s** | 2 |
+| host `just copy-plan`: first copy | 0 BOARD + 0 SEARCH_ISSUES | 28.2 s measured − 0 s of 0 walk pages + 0 × 6.95 s + 0 × 6.79 s = **28.2 s** | 11 |
+| host `just copy-plan`: one task's body changed | 0 BOARD + 0 SEARCH_ISSUES | 10.0 s measured − 0 s of 0 walk pages + 0 × 6.95 s + 0 × 6.79 s = **10.0 s** | 3 |
+| host `just copy-plan`: unchanged re-copy | 0 BOARD + 0 SEARCH_ISSUES | 7.4 s measured − 0 s of 0 walk pages + 0 × 6.95 s + 0 × 6.79 s = **7.4 s** | 2 |
+| host `just approve-design` | 0 BOARD + 0 SEARCH_ISSUES | 9.5 s measured − 0 s of 0 walk pages + 0 × 6.95 s + 0 × 6.79 s = **9.5 s** | 5 |
+<!-- analyze:end reference-size -->
+
+On GitHub too, no row sent a `BOARD` or `SEARCH_ISSUES` page. Every request is item- or
+project-scoped. The test board held its own residue of other runs throughout, which none of these
+reads touched.
+
+## Writes, the guard and the cleanup
+
+Every mutation went through the recording proxy, which refuses any mutation naming a repository or
+project id other than the test board's and its scratch repository's. It refused none. Every issue
+created was then read back, its title and repository checked, and deleted (`harness/cleanup.py`).
+That covers the three superseded bare captures as well, taken before the idle-burn reads existed and
+re-taken after a cleanup of the bare plan alone.
+
+<!-- analyze:begin writes -->
+| capture | mutation requests | mutations | uploads | issues created | issues deleted by cleanup | requests the guard refused |
+| --- | --- | --- | --- | --- | --- | --- |
+| `bare-first-20261028T045736` (superseded) | 4 | 25 | 1 | 10 | — | 0 |
+| `bare-changed1-20261028T045854` (superseded) | 1 | 1 | 0 | 0 | — | 0 |
+| `bare-unchanged-20261028T045905` (superseded) | 0 | 0 | 0 | 0 | — | 0 |
+| `host-first-20261028T050121` | 4 | 24 | 1 | 10 | — | 0 |
+| `host-changed1-20261028T050232` | 1 | 2 | 0 | 0 | — | 0 |
+| `host-unchanged-20261028T050310` | 0 | 0 | 0 | 0 | — | 0 |
+| `host-approve-20261028T050343` | 1 | 1 | 0 | 0 | — | 0 |
+| `cleanup-20261028T050514` | 10 | 10 | 0 | 0 | 10 (bare) | 0 |
+| `bare-first-20261028T050631` | 4 | 24 | 1 | 10 | — | 0 |
+| `bare-changed1-20261028T050726` | 1 | 1 | 0 | 0 | — | 0 |
+| `bare-unchanged-20261028T050756` | 0 | 0 | 0 | 0 | — | 0 |
+| `cleanup-20261028T051125` | 20 | 20 | 0 | 0 | 20 (all) | 0 |
+<!-- analyze:end writes -->
+
+The superseded bare first copy wrote one more field value than the row that replaced it. How many
+the store sends depends on what the board reported each new item already holding, as the earlier
+measurement found.
+
+## What this run spent
+
+<!-- analyze:begin spend -->
+| capture | GraphQL queries | mutation requests | REST requests | tunnels (onevcs and the upload's storage) | onevcs calls | GraphQL `rateLimit` reads (free) | `GET /rate_limit` reads (free) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `bare-first-20261028T045736` | 7 | 4 | 1 | 4 | 4 | 6 | 2 |
+| `bare-changed1-20261028T045854` | 2 | 1 | 0 | 2 | 4 | 6 | 2 |
+| `bare-unchanged-20261028T045905` | 2 | 0 | 0 | 2 | 4 | 6 | 2 |
+| `host-first-20261028T050121` | 7 | 4 | 1 | 4 | 4 | 16 | 2 |
+| `host-changed1-20261028T050232` | 2 | 1 | 0 | 2 | 4 | 16 | 2 |
+| `host-unchanged-20261028T050310` | 2 | 0 | 0 | 2 | 4 | 16 | 2 |
+| `host-approve-20261028T050343` | 4 | 1 | 0 | 1 | 2 | 16 | 2 |
+| `cleanup-20261028T050514` | 10 | 10 | 0 | 0 | 0 | 16 | 2 |
+| `bare-first-20261028T050631` | 7 | 4 | 1 | 4 | 4 | 16 | 2 |
+| `bare-changed1-20261028T050726` | 2 | 1 | 0 | 2 | 4 | 16 | 2 |
+| `bare-unchanged-20261028T050756` | 2 | 0 | 0 | 2 | 4 | 16 | 2 |
+| `cleanup-20261028T051125` | 30 | 20 | 0 | 0 | 0 | 16 | 2 |
+| **total** | **77** | **46** | **3** | **25** | **38** | **162** | **24** |
+
+Beside these, `harness/pricing.py` sent 47 dry-run pricings, one per GraphQL query of every run it read.
+<!-- analyze:end spend -->
+
+Outside the captures, by hand: the two probes above, read through the same free endpoints, and
+three `onevcs boundary inspect` calls of a registered public repository. The loopback journeys and
+the analyzer reach nothing.
+
+## Limits on how far the numbers carry
+
+- One sample per row, at one hour, while other sessions were spending the same allowance. The
+  seconds move with GitHub's latency that hour, and the points do not, being GitHub's own price of
+  each request.
+- The mutation price of 1 point is the assumption stated above, and a higher price would put every
+  row that writes over its points target.
+- The host rows exclude a real host's reachability checks of private sources in its user layer.
+  Every row includes the stand-in shim's own interpreter start, which the earlier measurement put at
+  about 0.06 s per `onevcs` call, in its store invocation's share rather than screening's.

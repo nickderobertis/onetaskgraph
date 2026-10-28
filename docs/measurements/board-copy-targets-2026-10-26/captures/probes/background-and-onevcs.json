@@ -1,0 +1,91 @@
+{
+ "idle_background": {
+  "what": "GraphQL rateLimit read 12 times about 3 s apart while this measurement sent nothing else",
+  "readings": [
+   {
+    "at": 1793163581.432,
+    "used": 460,
+    "reset": 1793165131
+   },
+   {
+    "at": 1793163584.407,
+    "used": 666,
+    "reset": 1793166051
+   },
+   {
+    "at": 1793163587.36,
+    "used": 670,
+    "reset": 1793166051
+   },
+   {
+    "at": 1793163590.349,
+    "used": 672,
+    "reset": 1793166051
+   },
+   {
+    "at": 1793163593.283,
+    "used": 676,
+    "reset": 1793166051
+   },
+   {
+    "at": 1793163596.326,
+    "used": 476,
+    "reset": 1793165131
+   },
+   {
+    "at": 1793163599.539,
+    "used": 480,
+    "reset": 1793165131
+   },
+   {
+    "at": 1793163603.063,
+    "used": 482,
+    "reset": 1793165131
+   },
+   {
+    "at": 1793163606.033,
+    "used": 486,
+    "reset": 1793165131
+   },
+   {
+    "at": 1793163608.954,
+    "used": 700,
+    "reset": 1793166051
+   },
+   {
+    "at": 1793163611.876,
+    "used": 705,
+    "reset": 1793166051
+   },
+   {
+    "at": 1793163614.795,
+    "used": 707,
+    "reset": 1793166051
+   }
+  ]
+ },
+ "onevcs_inspect": {
+  "what": "GET /rate_limit read twice, `onevcs boundary inspect` of a registered public repository run 3 times, GET /rate_limit read twice",
+  "inspects": 3,
+  "before": [
+   {
+    "core_used": 237,
+    "graphql_used": 497
+   },
+   {
+    "core_used": 237,
+    "graphql_used": 497
+   }
+  ],
+  "after": [
+   {
+    "core_used": 240,
+    "graphql_used": 497
+   },
+   {
+    "core_used": 240,
+    "graphql_used": 498
+   }
+  ]
+ }
+}

@@ -679,14 +679,17 @@ def reference_table(rows: list[Row]) -> str:
 
 def writes_table(captures: Path) -> str:
     body = []
-    for path in sorted(p for p in captures.iterdir() if p.is_dir() and re.fullmatch(r".+-\d{8}T\d{6}", p.name)):
+    named = [p for p in captures.iterdir() if p.is_dir() and re.fullmatch(r".+-\d{8}T\d{6}", p.name)]
+    superseded = captures / "superseded"
+    named += [p for p in superseded.iterdir() if p.is_dir()] if superseded.exists() else []
+    for path in sorted(named, key=lambda p: p.name.rsplit("-", 1)[-1]):
         requests = lines(path / "requests.jsonl")
         w = writes_of(requests)
         cleanup = json.loads((path / "cleanup.json").read_text()) if (path / "cleanup.json").exists() else {}
         refused = sum(1 for r in requests if r["host"] == "refused")
         body.append(
             [
-                f"`{path.name}`",
+                f"`{path.name}`" + (" (superseded)" if path.parent == superseded else ""),
                 str(w["mutation_requests"]),
                 str(w["mutations"]),
                 str(w["uploads"]),
@@ -696,6 +699,51 @@ def writes_table(captures: Path) -> str:
             ]
         )
     return table(["capture", "mutation requests", "mutations", "uploads", "issues created", "issues deleted by cleanup", "requests the guard refused"], body)
+
+
+def probes_table(captures: Path) -> str:
+    """The two hand probes: the idle background on each counter, and what onevcs's inspect spends."""
+    path = captures / "probes" / "background-and-onevcs.json"
+    if not path.exists():
+        return "No probe was recorded."
+    probe = json.loads(path.read_text())
+    body = []
+    readings = probe["idle_background"]["readings"]
+    for reset in sorted({r["reset"] for r in readings}):
+        on = [r for r in readings if r["reset"] == reset]
+        rise, seconds = slope(on)
+        body.append([f"idle background, counter resetting {reset}", f"{len(on)} reads over {seconds:.1f} s", f"{rise:g} points", f"{rise / seconds:.2f} points/s" if seconds else "—"])
+    inspect = probe["onevcs_inspect"]
+    core = inspect["after"][0]["core_used"] - inspect["before"][-1]["core_used"]
+    graphql = inspect["after"][0]["graphql_used"] - inspect["before"][-1]["graphql_used"]
+    body.append([f"{inspect['inspects']} × `onevcs boundary inspect`", "`GET /rate_limit` last read before → first after", f"REST core {core:+d}, GraphQL {graphql:+d}", f"{core / inspect['inspects']:g} REST request and {graphql / inspect['inspects']:g} GraphQL points per inspect"])
+    return table(["probe", "readings", "rise", "rate"], body)
+
+
+def spend_table(captures: Path, priced: int) -> str:
+    """What every capture sent, and the quota reads around it, with the total."""
+    named = [p for p in captures.iterdir() if p.is_dir() and re.fullmatch(r".+-\d{8}T\d{6}", p.name)]
+    superseded = captures / "superseded"
+    named += [p for p in superseded.iterdir() if p.is_dir()] if superseded.exists() else []
+    body, totals = [], Counter()
+    for path in sorted(named, key=lambda p: p.name.rsplit("-", 1)[-1]):
+        requests = [r for r in lines(path / "requests.jsonl") if r["host"] != "refused"]
+        q = json.loads((path / "quota.json").read_text()) if (path / "quota.json").exists() else {}
+        figures = Counter(
+            queries=sum(1 for r in requests if r["kind"] == "query"),
+            mutation_requests=sum(1 for r in requests if r["kind"] == "mutation"),
+            rest=sum(1 for r in requests if r["kind"] == "rest"),
+            tunnels=sum(1 for r in requests if r["kind"] == "tunnel"),
+            screening=len(lines(path / "screen.jsonl")),
+            rate_limit_reads=sum(len(q.get(k, {}).get("buckets", {}).get("graphql (rateLimit)", {}).get("readings", [])) for k in ("quota-before", "quota-after"))
+            + len(q.get("burn-before", [])) + len(q.get("burn-after", [])),
+            rest_rate_limit_reads=sum(1 for k in ("quota-before", "quota-after") if k in q),
+        )
+        totals += figures
+        body.append([f"`{path.name}`"] + [str(figures[k]) for k in ("queries", "mutation_requests", "rest", "tunnels", "screening", "rate_limit_reads", "rest_rate_limit_reads")])
+    body.append(["**total**"] + [f"**{totals[k]}**" for k in ("queries", "mutation_requests", "rest", "tunnels", "screening", "rate_limit_reads", "rest_rate_limit_reads")])
+    table_text = table(["capture", "GraphQL queries", "mutation requests", "REST requests", "tunnels (onevcs and the upload's storage)", "onevcs calls", "GraphQL `rateLimit` reads (free)", "`GET /rate_limit` reads (free)"], body)
+    return table_text + f"\n\nBeside these, `harness/pricing.py` sent {priced} dry-run pricings, one per GraphQL query of every run it read."
 
 
 def tables(captures: Path) -> tuple[dict[str, str], dict]:
@@ -720,6 +768,8 @@ def tables(captures: Path) -> tuple[dict[str, str], dict]:
         "board-size": size_table(pairs),
         "reference-size": reference_table(rows),
         "writes": writes_table(captures),
+        "spend": spend_table(captures, len(prices)),
+        "probes": probes_table(captures),
     }
     summary = {
         "rows": [
@@ -746,7 +796,7 @@ def tables(captures: Path) -> tuple[dict[str, str], dict]:
     return out, summary
 
 
-BLOCK = re.compile(r"(<!-- analyze:begin ([a-z-]+) -->\n)(.*?)(\n<!-- analyze:end \2 -->)", re.S)
+BLOCK = re.compile(r"<!-- analyze:begin ([a-z-]+) -->\n(.*?)\n?<!-- analyze:end \1 -->", re.S)
 
 
 def reconcile(report: str, computed: dict[str, str]) -> tuple[str, list[str]]:
@@ -756,14 +806,14 @@ def reconcile(report: str, computed: dict[str, str]) -> tuple[str, list[str]]:
     drifted: list[str] = []
 
     def replace(match: re.Match) -> str:
-        name = match.group(2)
+        name = match.group(1)
         seen.add(name)
         if name not in computed:
             drifted.append(f"{name} (no such table)")
             return match.group(0)
-        if match.group(3).strip() != computed[name].strip():
+        if match.group(2).strip() != computed[name].strip():
             drifted.append(name)
-        return match.group(1) + computed[name] + match.group(4)
+        return f"<!-- analyze:begin {name} -->\n{computed[name]}\n<!-- analyze:end {name} -->"
 
     updated = BLOCK.sub(replace, report)
     drifted += [f"{name} (missing from the report)" for name in computed if name not in seen]
