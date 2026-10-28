@@ -87,6 +87,31 @@ distribution-check:
 distribution-test:
     @{{nx}} run scripts:distribution-test
 
+# The five CD jobs of .github/workflows/release.yml, one recipe each: every step of a job is
+# one phase of its recipe (`plan`, `build`, `publish --to <registry>`, `verify --from
+# <registry>`, `available --from <registry>`, or `run --dry-run` for the whole job with
+# nothing sent), so a release runs nothing a contributor cannot. See scripts/release_cd.py.
+
+# The build-linux job: build, package, test-install, publish and verify x86_64 Linux.
+release-linux *args:
+    @python3 scripts/release_cd.py --platform linux {{args}}
+
+# The build-linux-arm64 job: build, package, test-install, publish and verify arm64 Linux.
+release-linux-arm64 *args:
+    @python3 scripts/release_cd.py --platform linux-arm64 {{args}}
+
+# The build-macos job: build, package, test-install, publish and verify Apple Silicon.
+release-macos *args:
+    @python3 scripts/release_cd.py --platform macos {{args}}
+
+# The build-windows job: build, package, test-install, publish and verify x86_64 Windows.
+release-windows *args:
+    @python3 scripts/release_cd.py --platform windows {{args}}
+
+# The publish job: confirm every platform landed, then publish crates, SDKs and the launcher.
+release-publish *args:
+    @python3 scripts/release_cd.py --platform independent {{args}}
+
 # The one place the live-lane decision is consulted, so every path that can open a live
 # session reaches the API through this recipe. scripts/live-lane-selection.sh prints the
 # `--exclude` for each live plugin the diff against NX_BASE cannot reach; an empty or

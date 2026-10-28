@@ -367,6 +367,17 @@ pub enum TaskCommand {
     /// Copy tasks into another configured source, by qualified id or by the narrowing
     /// `task list` takes.
     Copy(TaskCopyArgs),
+    /// Say where `task copy --to SOURCE` would put each task, and write nothing anywhere.
+    ///
+    /// Each task is read, classified and placed by the very path `task copy` places it through
+    /// — over SOURCE's routes — and its counterpart there is looked up by copy's own rules in
+    /// copy's order: its `onetaskgraph.copies` link, its own `onetaskgraph.origin`, then the
+    /// destination's origin query, read to its last page. Every refusal that lookup makes before
+    /// a copy writes is made here with the copy's error. The answer names the destination, the
+    /// route entry, the class, the counterpart and every item carrying the task's origin, and
+    /// the repository a create there would file the issue in. It never runs the boundary check
+    /// command and never reads a destination's live visibility.
+    Locate(TaskLocateArgs),
     /// Add, list, edit and delete one task's comments.
     ///
     /// A copy without --comments writes no comment at either end, and reads one only to confirm
@@ -1928,6 +1939,31 @@ pub struct TaskCopyArgs {
     pub expect: ExpectArgs,
     #[command(flatten)]
     pub copy: CopyArgs,
+}
+
+/// `onetaskgraph task locate`.
+#[derive(Debug, Args)]
+pub struct TaskLocateArgs {
+    // llmlint: ignore-block[invalid_states_unrepresentable] As `TaskCopyArgs::id`: a `GlobalId` here would refuse an unqualified id as a bad invocation under clap's wording, and `qualified` in `main` converts each through `GlobalId::from_str` before any source is started, saying what a qualified id is and where to read the configured names.
+    /// The qualified task ids, `<source>:<native-id>`, in the order they are answered.
+    #[arg(value_name = "ID", required = true)]
+    pub ids: Vec<String>,
+    /// The configured source a copy would be made into, as `task copy --to` names it.
+    #[arg(long, value_name = "SOURCE")]
+    pub to: String,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
+    /// Look no counterpart up: answer the placement and where a create would file the issue,
+    /// with no link, origin or origin-query read at the destination.
+    #[arg(long = "no-counterpart")]
+    // llmlint: ignore[invalid_states_unrepresentable] A presence-only CLI flag is intrinsically boolean; `main` maps it and `--target-native` to one `LocateLookup`, refusing the two together before anything is read.
+    pub no_counterpart: bool,
+    /// The native id of the item where the task is placed that the caller already knows is its
+    /// counterpart — the general mirror of `task copy --target-task`. It is read by id and
+    /// verified by its `onetaskgraph.origin` naming the task back; the task's link, its origin
+    /// and the origin query are not followed. Taken beside exactly one id.
+    #[arg(long = "target-native", value_name = "NATIVE-ID")]
+    // llmlint: ignore[invalid_states_unrepresentable] A source's native id is opaque text the engine never parses; `main` wraps it in a `NativeId` and folds it with `--no-counterpart` into one `LocateLookup`.
+    pub target_native: Option<String>,
 }
 
 /// The narrowing `task copy` takes in place of ids: the `task list` flags that name which

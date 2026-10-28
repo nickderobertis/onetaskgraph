@@ -1,0 +1,131 @@
+{
+ "gate": [
+  {
+   "at": 1793163456.824042,
+   "buckets": {
+    "core": {
+     "limit": 5000,
+     "remaining": 4778,
+     "reset": 1793165970,
+     "used": 222
+    },
+    "graphql": {
+     "limit": 5000,
+     "remaining": 4480,
+     "reset": 1793166051,
+     "used": 520
+    },
+    "graphql (GET /rate_limit)": {
+     "limit": 5000,
+     "remaining": 4612,
+     "reset": 1793165131,
+     "used": 388
+    },
+    "graphql (rateLimit)": {
+     "limit": 5000,
+     "readings": [
+      4480,
+      4480,
+      4612
+     ],
+     "remaining": 4480,
+     "reset": 1793166051,
+     "used": 520
+    }
+   },
+   "event": "reading",
+   "verdicts": {
+    "core": true,
+    "graphql": true
+   }
+  }
+ ],
+ "quota-after": {
+  "at": 1793163487.4936957,
+  "buckets": {
+   "core": {
+    "limit": 5000,
+    "remaining": 4771,
+    "reset": 1793165970,
+    "used": 229
+   },
+   "graphql": {
+    "limit": 5000,
+    "remaining": 4461,
+    "reset": 1793166051,
+    "used": 539
+   },
+   "graphql (GET /rate_limit)": {
+    "limit": 5000,
+    "remaining": 4610,
+    "reset": 1793165131,
+    "used": 390
+   },
+   "graphql (rateLimit)": {
+    "limit": 5000,
+    "readings": [
+     4461,
+     4461,
+     4461
+    ],
+    "remaining": 4461,
+    "reset": 1793166051,
+    "reset_readings": [
+     "2026-10-28T05:40:51Z",
+     "2026-10-28T05:40:51Z",
+     "2026-10-28T05:40:51Z"
+    ],
+    "used": 539,
+    "used_readings": [
+     539,
+     539,
+     539
+    ]
+   }
+  }
+ },
+ "quota-before": {
+  "at": 1793163456.824042,
+  "buckets": {
+   "core": {
+    "limit": 5000,
+    "remaining": 4778,
+    "reset": 1793165970,
+    "used": 222
+   },
+   "graphql": {
+    "limit": 5000,
+    "remaining": 4480,
+    "reset": 1793166051,
+    "used": 520
+   },
+   "graphql (GET /rate_limit)": {
+    "limit": 5000,
+    "remaining": 4612,
+    "reset": 1793165131,
+    "used": 388
+   },
+   "graphql (rateLimit)": {
+    "limit": 5000,
+    "readings": [
+     4480,
+     4480,
+     4612
+    ],
+    "remaining": 4480,
+    "reset": 1793166051,
+    "reset_readings": [
+     "2026-10-28T05:40:51Z",
+     "2026-10-28T05:40:51Z",
+     "2026-10-28T05:25:31Z"
+    ],
+    "used": 520,
+    "used_readings": [
+     520,
+     520,
+     388
+    ]
+   }
+  }
+ }
+}

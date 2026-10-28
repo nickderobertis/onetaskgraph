@@ -6,8 +6,9 @@
 //! for as long as it writes. On Windows a rename over a record used to make the listing
 //! spell that record, for an instant, with a path that failed the root-containment check
 //! (`a.md escapes configured root`, with both paths naming the same root); the listing now
-//! resolves only links, so there is no such instant to land in. What a record depends on is
-//! read from its own file by the same rule, and is read here at the same instants.
+//! resolves only links, so there is no such instant to land in. What a record depends on, and
+//! the record read by its id, are found by the same rule, and are read here at the same
+//! instants.
 
 use std::fs;
 use std::path::Path;
@@ -135,6 +136,14 @@ fn a_folder_lists_while_another_process_replaces_a_record_in_place() {
             ["team/b"],
             "the record's one edge is read from its file"
         );
+        let shown = runtime
+            .block_on(reader.get_task(&id("a")))
+            .unwrap_or_else(|error| {
+                let _ = writer.kill();
+                panic!("a read of the record during a replacement failed: {error:?}")
+            })
+            .expect("the record is held throughout");
+        assert_eq!(shown.title, "Busy");
         listings += 1;
         if let Some(status) = exited {
             break status;

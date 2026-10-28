@@ -5,18 +5,24 @@
 //! source's entry, and a plugin's own block never sees it. Every writer reaches the store,
 //! so the rule is held here once rather than restated, and drifting, in each of them.
 //!
-//! An entry is one of two kinds. A **repository** entry, `{repositories, to}`, matches an
+//! An entry is one of three kinds. A **repository** entry, `{repositories, to}`, matches an
 //! item when **every** one of the item's repositories matches at least one of its patterns;
 //! an item with no repositories matches none. A **classification** entry,
-//! `{classification, to}`, matches every item of that classification.
+//! `{classification, to}`, matches every item of that classification. A **combined** entry,
+//! `{repositories, classification, to}`, matches an item of that classification every one of
+//! whose repositories matches one of its patterns — and, like a repository entry, never an
+//! item naming none.
 //!
 //! **Safety is decided before matching.** An item that may only be written somewhere
 //! private is never placed in a source not declared private: for it, only entries sending
-//! to a private source are tried — classification entries before repository entries, each
-//! in the order written — and then the source itself when it is private. When none is, it
-//! stays in the source itself, and the write is refused there rather than sent anywhere
-//! less safe. Every other item tries its classification entries, then its repository
-//! entries, each in order, and no match leaves it in the source itself.
+//! to a private source, or to one no layer gives a plugin, are tried. When none places it,
+//! it stays in the source itself — and when that source is not private, the write is
+//! refused there rather than sent anywhere less safe.
+//!
+//! **The kind decides the order, wherever an entry is written.** Among the entries an item
+//! may try, combined entries are tried first, then classification entries, then repository
+//! entries, each kind in the order written, and no match leaves the item in the source
+//! itself. A placement names the entry by its index as written.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -84,14 +90,17 @@ pub struct Route {
     to: SourceName,
 }
 
-/// What one entry matches on: exactly one of the two, so an entry naming both or neither
-/// cannot be held.
+/// What one entry matches on: its repositories, its classification, or both together, so
+/// an entry naming neither cannot be held.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Matcher {
     /// Items every one of whose repositories one of these patterns matches. Never empty.
     Repositories(Vec<RepositoryPattern>),
     /// Every item of this classification.
     Classification(Classification),
+    /// Items of this classification every one of whose repositories one of these patterns
+    /// matches. Never empty.
+    Combined(Classification, Vec<RepositoryPattern>),
 }
 
 impl Route {
@@ -99,17 +108,20 @@ impl Route {
     #[must_use]
     pub fn repositories(&self) -> &[RepositoryPattern] {
         match &self.matcher {
-            Matcher::Repositories(patterns) => patterns,
+            Matcher::Repositories(patterns) | Matcher::Combined(_, patterns) => patterns,
             Matcher::Classification(_) => &[],
         }
     }
 
-    /// The classification a classification entry matches, or `None` for a repository entry.
+    /// The classification a classification or combined entry matches, or `None` for a
+    /// repository entry.
     #[must_use]
     pub fn classification(&self) -> Option<Classification> {
         match &self.matcher {
             Matcher::Repositories(_) => None,
-            Matcher::Classification(classification) => Some(*classification),
+            Matcher::Classification(classification) | Matcher::Combined(classification, _) => {
+                Some(*classification)
+            }
         }
     }
 
@@ -120,16 +132,37 @@ impl Route {
     }
 
     /// Whether every one of `repositories` matches one of this entry's patterns — `false`
-    /// for an item naming none, and for a classification entry.
+    /// for an item naming none, and for a classification entry. A combined entry asks this of
+    /// its patterns alone; whether its classification is the item's is
+    /// [`Routes::place_classified`]'s to decide.
     #[must_use]
     pub fn matches(&self, repositories: &[Repository]) -> bool {
-        let Matcher::Repositories(patterns) = &self.matcher else {
-            return false;
-        };
-        !repositories.is_empty()
+        let patterns = self.repositories();
+        !patterns.is_empty()
+            && !repositories.is_empty()
             && repositories
                 .iter()
                 .all(|origin| patterns.iter().any(|pattern| pattern.matches(origin)))
+    }
+
+    /// Whether this entry places an item of `classification` with `repositories`.
+    fn places(&self, classification: Classification, repositories: &[Repository]) -> bool {
+        match &self.matcher {
+            Matcher::Repositories(_) => self.matches(repositories),
+            Matcher::Classification(matched) => *matched == classification,
+            Matcher::Combined(matched, _) => {
+                *matched == classification && self.matches(repositories)
+            }
+        }
+    }
+
+    /// The tier this entry is tried in: combined, then classification, then repository.
+    fn tier(&self) -> u8 {
+        match &self.matcher {
+            Matcher::Combined(..) => 0,
+            Matcher::Classification(_) => 1,
+            Matcher::Repositories(_) => 2,
+        }
     }
 }
 
@@ -155,6 +188,10 @@ pub struct SourceRoute {
     /// Where it would land, and the route entry that would send it there.
     #[serde(flatten)]
     pub placement: Placement,
+    /// Every source an item written to `source` could land in, whatever its repositories and
+    /// classification: `source` itself first, then each source its routes name as `to`, in
+    /// the order they are written, each once — the set a routed copy reads ahead from.
+    pub reachable: Vec<SourceName>,
 }
 
 /// Every configured source's routes, by source name, and who each source is declared
@@ -176,8 +213,8 @@ impl Routes {
     }
 
     /// Where an item of `classification` with `repositories`, written to `source`, lands —
-    /// by the module's rule: safety first, then classification entries, then repository
-    /// entries, then the source itself.
+    /// by the module's rule: safety first, then combined entries, then classification
+    /// entries, then repository entries, each in the order written, then the source itself.
     #[must_use]
     pub fn place_classified(
         &self,
@@ -202,12 +239,8 @@ impl Routes {
             .unwrap_or_default();
         let chosen = entries
             .iter()
-            .find(|(_, route)| route.classification() == Some(classification))
-            .or_else(|| {
-                entries
-                    .iter()
-                    .find(|(_, route)| route.matches(repositories))
-            });
+            .filter(|(_, route)| route.places(classification, repositories))
+            .min_by_key(|(index, route)| (route.tier(), *index));
         chosen.map_or_else(
             || Placement {
                 destination: source.clone(),
@@ -222,7 +255,8 @@ impl Routes {
 
     /// Whether `source` holds a classification entry a private item may take: one that sends
     /// every private item it is written to somewhere declared private, whatever its
-    /// repositories.
+    /// repositories. A combined entry never answers this: it is asked with no repositories,
+    /// which no combined entry matches.
     #[must_use]
     pub fn classifies_private(&self, source: &SourceName) -> bool {
         self.place_classified(source, Classification::Private, &[])
@@ -343,6 +377,39 @@ impl Routes {
         Ok(self)
     }
 
+    /// One source's combined entries, built in code beside [`Routes::classified`]'s: each
+    /// sends an item of its classification every one of whose repositories one of its
+    /// patterns matches to its `to`, tried before any classification or repository entry.
+    /// Put first among the source's entries, in the order given. Checked by the same rules a
+    /// document's are: the patterns as a repository entry's, the `to` by [`check`], and a
+    /// `private` entry sending to a source this value does not hold as private is refused.
+    ///
+    /// # Errors
+    ///
+    /// As [`check`] and [`check_classified`], and an empty or malformed pattern list as a
+    /// repository entry's.
+    pub fn combined(
+        mut self,
+        source: SourceName,
+        entries: Vec<(Classification, Vec<String>, SourceName)>,
+        configured: &[SourceName],
+    ) -> Result<Self, ConfigError> {
+        let mut combined = Vec::new();
+        for (index, (classification, patterns, to)) in entries.into_iter().enumerate() {
+            let key = entry_key(&source, index);
+            combined.push(Route {
+                matcher: Matcher::Combined(classification, patterns_of(&key, patterns)?),
+                to,
+            });
+        }
+        let routes = self.0.entry(source).or_default();
+        combined.append(routes);
+        *routes = combined;
+        check(&self, configured)?;
+        check_classified(&self, &self.1)?;
+        Ok(self)
+    }
+
     pub(super) fn insert(&mut self, source: SourceName, routes: Vec<Route>) {
         if !routes.is_empty() {
             self.0.insert(source, routes);
@@ -410,15 +477,15 @@ pub(super) fn parse(source: &SourceName, value: &Value) -> Result<Vec<Route>, Co
         .collect()
 }
 
-/// One entry, refused naming its key when it is not `{repositories, to}` or
-/// `{classification, to}`.
+/// One entry, refused naming its key when it is not `{repositories, to}`,
+/// `{classification, to}` or `{repositories, classification, to}`.
 fn parse_entry(key: &str, entry: &Value) -> Result<Route, ConfigError> {
     let Value::Object(fields) = entry else {
         return Err(ConfigError::setting(
             key,
-            "a route is a mapping holding `to` and one of `repositories` or `classification`",
-            "write the entry as `{repositories: [host/owner/*], to: <source>}` or \
-             `{classification: private, to: <source>}`.",
+            "a route is a mapping holding `to` and `repositories`, `classification` or both",
+            "write the entry as `{repositories: [host/owner/*], to: <source>}`, \
+             `{classification: private, to: <source>}` or both matchers together.",
         ));
     };
     if let Some(unknown) = fields
@@ -427,31 +494,28 @@ fn parse_entry(key: &str, entry: &Value) -> Result<Route, ConfigError> {
     {
         return Err(ConfigError::setting(
             format!("{key}.{unknown}"),
-            "unknown field; a route holds `to` and one of `repositories` or `classification`, \
+            "unknown field; a route holds `to` and `repositories`, `classification` or both, \
              and nothing else",
             "remove it.",
         ));
     }
     let to = destination_of(key, fields)?;
-    if let Some(classification) = fields.get("classification") {
-        if fields.contains_key("repositories") {
-            return Err(ConfigError::setting(
-                key,
-                "a route matches on `repositories` or on `classification`, and this one names \
-                 both",
-                "split it into two entries, in the order they should be tried.",
-            ));
-        }
-        let classification = classification
-            .as_str()
-            .and_then(|spelled| spelled.parse::<Classification>().ok())
-            .ok_or_else(|| {
-                ConfigError::setting(
-                    format!("{key}.classification"),
-                    format!("{classification} is not a classification"),
-                    "write `public` or `private`.",
-                )
-            })?;
+    let classification = fields
+        .get("classification")
+        .map(|classification| {
+            classification
+                .as_str()
+                .and_then(|spelled| spelled.parse::<Classification>().ok())
+                .ok_or_else(|| {
+                    ConfigError::setting(
+                        format!("{key}.classification"),
+                        format!("{classification} is not a classification"),
+                        "write `public` or `private`.",
+                    )
+                })
+        })
+        .transpose()?;
+    if let (Some(classification), false) = (classification, fields.contains_key("repositories")) {
         return Ok(Route {
             matcher: Matcher::Classification(classification),
             to,
@@ -486,8 +550,12 @@ fn parse_entry(key: &str, entry: &Value) -> Result<Route, ConfigError> {
             ));
         }
     };
+    let patterns = patterns_of(key, patterns)?;
     Ok(Route {
-        matcher: Matcher::Repositories(patterns_of(key, patterns)?),
+        matcher: match classification {
+            Some(classification) => Matcher::Combined(classification, patterns),
+            None => Matcher::Repositories(patterns),
+        },
         to,
     })
 }
@@ -600,7 +668,8 @@ pub(super) fn check(routes: &Routes, configured: &[SourceName]) -> Result<(), Co
     Ok(())
 }
 
-/// Refuse a `classification: private` entry whose `to` is not declared private.
+/// Refuse a `classification: private` entry — classification or combined — whose `to` is not
+/// declared private.
 ///
 /// Such an entry could never be taken — a private item is placed only where it may be
 /// written — so writing one down is a mistake about where private work goes, refused when
@@ -793,5 +862,437 @@ mod tests {
             refused.to_string().contains("not declared private"),
             "{refused}"
         );
+    }
+
+    /// The routes a configuration document builds for `site`, written as `routes`, beside
+    /// `public` and the private `vault` and `special` — every source in memory.
+    fn configured(routes: Value) -> Routes {
+        crate::Config::from_document(serde_json::json!({"sources": {
+            "site": {"plugin": "in-memory", "routes": routes},
+            "public": {"plugin": "in-memory"},
+            "team": {"plugin": "in-memory"},
+            "vault": {"plugin": "in-memory", "visibility": "private"},
+            "special": {"plugin": "in-memory", "visibility": "private"},
+        }}))
+        .expect("the configuration loads")
+        .routes()
+    }
+
+    /// The configuration's own refusal of `routes` on `site`, as text.
+    fn refused(routes: Value) -> String {
+        crate::Config::from_document(serde_json::json!({"sources": {
+            "site": {"plugin": "in-memory", "routes": routes},
+            "public": {"plugin": "in-memory"},
+            "vault": {"plugin": "in-memory", "visibility": "private"},
+            "chained": {"plugin": "in-memory", "visibility": "private",
+                        "routes": [{"classification": "private", "to": "vault"}]},
+        }}))
+        .expect_err("the configuration is refused")
+        .to_string()
+    }
+
+    fn placed(destination: &str, route: u32) -> Placement {
+        Placement {
+            destination: name(destination),
+            route: Some(route),
+        }
+    }
+
+    fn stays(source: &str) -> Placement {
+        Placement {
+            destination: name(source),
+            route: None,
+        }
+    }
+
+    /// The README's example: one private repository to its own source, the rest of the
+    /// owner's private work to another, every other private item to `vault`, and a team's
+    /// work wherever it is — written with the repository entry first and the combined ones
+    /// last, so only the kind can be what orders them.
+    fn example() -> Routes {
+        configured(serde_json::json!([
+            {"repositories": ["github.com/example-org/*"], "to": "public"},
+            {"classification": "private", "to": "vault"},
+            {"repositories": ["github.com/example-org/special"], "classification": "private",
+             "to": "special"},
+            {"repositories": ["github.com/example-org/*"], "classification": "private",
+             "to": "vault"},
+        ]))
+    }
+
+    #[test]
+    fn a_combined_entry_matches_only_its_classification_with_every_repository_matching() {
+        let routes = configured(serde_json::json!([
+            {"repositories": ["github.com/example-org/*"], "classification": "private",
+             "to": "vault"},
+        ]));
+        let site = name("site");
+        let private = Classification::Private;
+        assert_eq!(
+            routes.place_classified(&site, private, &[origin("github.com/example-org/api")]),
+            placed("vault", 0)
+        );
+        // Not its classification.
+        assert_eq!(
+            routes.place_classified(
+                &site,
+                Classification::Public,
+                &[origin("github.com/example-org/api")]
+            ),
+            stays("site")
+        );
+        // One repository the patterns do not name.
+        assert_eq!(
+            routes.place_classified(
+                &site,
+                private,
+                &[
+                    origin("github.com/example-org/api"),
+                    origin("github.com/widgetco/api")
+                ]
+            ),
+            stays("site")
+        );
+        // No repository at all.
+        assert_eq!(routes.place_classified(&site, private, &[]), stays("site"));
+        assert!(!routes.classifies_private(&site));
+    }
+
+    #[test]
+    fn the_kind_orders_the_entries_wherever_each_is_written_and_the_index_is_as_written() {
+        let routes = example();
+        let site = name("site");
+        let private = Classification::Private;
+        // The repository-specific combined entry, written above the owner-wide one.
+        assert_eq!(
+            routes.place_classified(&site, private, &[origin("github.com/example-org/special")]),
+            placed("special", 2)
+        );
+        // The owner's other private work: the second combined entry, before the
+        // classification-only entry written above it.
+        assert_eq!(
+            routes.place_classified(&site, private, &[origin("github.com/example-org/api")]),
+            placed("vault", 3)
+        );
+        // A private item no combined entry matches takes the classification entry.
+        assert_eq!(
+            routes.place_classified(&site, private, &[origin("github.com/widgetco/api")]),
+            placed("vault", 1)
+        );
+        assert_eq!(
+            routes.place_classified(&site, private, &[]),
+            placed("vault", 1)
+        );
+        assert!(routes.classifies_private(&site));
+        // A public item of the same owner: the repository entry, which no combined private
+        // entry shadows.
+        assert_eq!(
+            routes.place(&site, &[origin("github.com/example-org/special")]),
+            placed("public", 0)
+        );
+        assert_eq!(routes.place(&site, &[]), stays("site"));
+    }
+
+    #[test]
+    fn within_one_kind_the_entry_written_first_wins() {
+        let routes = configured(serde_json::json!([
+            {"repositories": ["github.com/example-org/*"], "classification": "private",
+             "to": "vault"},
+            {"repositories": ["github.com/example-org/special"], "classification": "private",
+             "to": "special"},
+        ]));
+        assert_eq!(
+            routes.place_classified(
+                &name("site"),
+                Classification::Private,
+                &[origin("github.com/example-org/special")]
+            ),
+            placed("vault", 0)
+        );
+    }
+
+    #[test]
+    fn a_public_combined_entry_outranks_a_public_classification_entry_and_never_a_private_item() {
+        let routes = configured(serde_json::json!([
+            {"classification": "public", "to": "team"},
+            {"repositories": ["github.com/example-org/*"], "classification": "public",
+             "to": "public"},
+        ]));
+        let site = name("site");
+        assert_eq!(
+            routes.place(&site, &[origin("github.com/example-org/api")]),
+            placed("public", 1)
+        );
+        assert_eq!(
+            routes.place(&site, &[origin("github.com/widgetco/api")]),
+            placed("team", 0)
+        );
+        assert_eq!(
+            routes.place_classified(
+                &site,
+                Classification::Private,
+                &[origin("github.com/example-org/api")]
+            ),
+            stays("site")
+        );
+    }
+
+    #[test]
+    fn a_private_item_tries_only_entries_sending_where_it_may_be_written() {
+        // A public combined entry to a public source, and a repository entry to one, never
+        // take a private item; a source no layer gives a plugin may be named and is tried.
+        let routes = crate::Config::from_document(serde_json::json!({"sources": {
+            "site": {"plugin": "in-memory", "routes": [
+                {"repositories": ["github.com/example-org/*"], "to": "public"},
+                {"repositories": ["github.com/example-org/*"], "classification": "private",
+                 "to": "elsewhere"},
+            ]},
+            "public": {"plugin": "in-memory"},
+            "elsewhere": {"visibility": "private"},
+        }}))
+        .expect("an incomplete destination still loads")
+        .routes();
+        assert_eq!(
+            routes.place_classified(
+                &name("site"),
+                Classification::Private,
+                &[origin("github.com/example-org/api")]
+            ),
+            placed("elsewhere", 1)
+        );
+        // The same entries with the combined one gone leave a private item where it was sent.
+        let routes = configured(serde_json::json!([
+            {"repositories": ["github.com/example-org/*"], "to": "public"},
+        ]));
+        assert_eq!(
+            routes.place_classified(
+                &name("site"),
+                Classification::Private,
+                &[origin("github.com/example-org/api")]
+            ),
+            stays("site")
+        );
+    }
+
+    #[test]
+    fn a_configuration_with_no_combined_entry_places_as_it_did() {
+        // Classification before repository, whatever their order, exactly as before.
+        let routes = configured(serde_json::json!([
+            {"repositories": ["github.com/widgetco/*"], "to": "team"},
+            {"classification": "private", "to": "vault"},
+        ]));
+        let site = name("site");
+        assert_eq!(
+            routes.place_classified(
+                &site,
+                Classification::Private,
+                &[origin("github.com/widgetco/api")]
+            ),
+            placed("vault", 1)
+        );
+        assert_eq!(
+            routes.place(&site, &[origin("github.com/widgetco/api")]),
+            placed("team", 0)
+        );
+    }
+
+    #[test]
+    fn a_combined_entry_is_refused_at_load_naming_the_source_and_the_entry() {
+        let combined = |repositories: Value, to: &str| {
+            serde_json::json!([
+                {"classification": "private", "to": "vault"},
+                {"repositories": repositories, "classification": "private", "to": to},
+            ])
+        };
+        let one = serde_json::json!(["github.com/example-org/*"]);
+        for (routes, wanted) in [
+            (combined(one.clone(), "public"), "not declared private"),
+            (combined(one.clone(), "nowhere"), "no source is configured"),
+            (combined(one.clone(), "site"), "itself"),
+            (combined(one, "chained"), "routes of its own"),
+            (combined(serde_json::json!([]), "vault"), "empty"),
+            (
+                combined(serde_json::json!(["github.com/example*/x"]), "vault"),
+                "not a repository pattern",
+            ),
+        ] {
+            let refusal = refused(routes.clone());
+            assert!(
+                refusal.contains("sources.site.routes.1") && refusal.contains(wanted),
+                "{routes}: {refusal}"
+            );
+        }
+        // A combined entry naming a classification that is none is refused by that key.
+        let refusal = refused(serde_json::json!([
+            {"repositories": ["github.com/example-org/*"], "classification": "secret",
+             "to": "vault"},
+        ]));
+        assert!(
+            refusal.contains("sources.site.routes.0.classification"),
+            "{refusal}"
+        );
+    }
+
+    /// The sources [`configured`] declares, and their visibility, for building in code.
+    fn declared() -> ([SourceName; 5], BTreeMap<SourceName, SourceVisibility>) {
+        (
+            [
+                name("site"),
+                name("public"),
+                name("team"),
+                name("vault"),
+                name("special"),
+            ],
+            BTreeMap::from([
+                (name("vault"), SourceVisibility::Private),
+                (name("special"), SourceVisibility::Private),
+            ]),
+        )
+    }
+
+    #[test]
+    fn combined_routes_built_in_code_place_as_the_same_entries_loaded_do() {
+        let (configured, visibility) = declared();
+        let built = Routes::new(
+            BTreeMap::from([(
+                name("site"),
+                vec![(vec!["github.com/example-org/*".to_owned()], name("public"))],
+            )]),
+            &configured,
+        )
+        .expect("repository routes")
+        .with_visibility(visibility)
+        .classified(
+            name("site"),
+            vec![(Classification::Private, name("vault"))],
+            &configured,
+        )
+        .expect("a classification route")
+        .combined(
+            name("site"),
+            vec![
+                (
+                    Classification::Private,
+                    vec!["github.com/example-org/special".to_owned()],
+                    name("special"),
+                ),
+                (
+                    Classification::Private,
+                    vec!["github.com/example-org/*".to_owned()],
+                    name("vault"),
+                ),
+            ],
+            &configured,
+        )
+        .expect("combined routes");
+        // The same entries, written in the order the constructors leave them.
+        let loaded = self::configured(serde_json::json!([
+            {"repositories": ["github.com/example-org/special"], "classification": "private",
+             "to": "special"},
+            {"repositories": ["github.com/example-org/*"], "classification": "private",
+             "to": "vault"},
+            {"classification": "private", "to": "vault"},
+            {"repositories": ["github.com/example-org/*"], "to": "public"},
+        ]));
+        let site = name("site");
+        assert_eq!(built.of(&site), loaded.of(&site));
+        for classification in [Classification::Private, Classification::Public] {
+            for repositories in [
+                vec![origin("github.com/example-org/special")],
+                vec![origin("github.com/example-org/api")],
+                vec![origin("github.com/widgetco/api")],
+                vec![],
+            ] {
+                assert_eq!(
+                    built.place_classified(&site, classification, &repositories),
+                    loaded.place_classified(&site, classification, &repositories),
+                    "{classification:?} {repositories:?}"
+                );
+            }
+        }
+        assert_eq!(
+            built.place_classified(
+                &site,
+                Classification::Private,
+                &[origin("github.com/example-org/special")]
+            ),
+            placed("special", 0)
+        );
+        // Both accessors answer for a combined entry.
+        let entry = &built.of(&site)[1];
+        assert_eq!(entry.classification(), Some(Classification::Private));
+        assert_eq!(
+            entry
+                .repositories()
+                .iter()
+                .map(RepositoryPattern::as_str)
+                .collect::<Vec<_>>(),
+            vec!["github.com/example-org/*"]
+        );
+        assert_eq!(entry.to(), &name("vault"));
+    }
+
+    #[test]
+    fn combined_routes_built_in_code_are_refused_as_a_documents_are() {
+        let (configured, visibility) = declared();
+        let chained = Routes::new(
+            BTreeMap::from([(
+                name("team"),
+                vec![(vec!["github.com/widgetco/*".to_owned()], name("public"))],
+            )]),
+            &configured,
+        )
+        .expect("a route on team");
+        for (base, patterns, to, wanted) in [
+            (
+                Routes::default(),
+                vec!["github.com/example-org/*"],
+                "public",
+                "not declared private",
+            ),
+            (
+                Routes::default(),
+                vec!["github.com/example-org/*"],
+                "nowhere",
+                "no source is configured",
+            ),
+            (
+                Routes::default(),
+                vec!["github.com/example-org/*"],
+                "site",
+                "itself",
+            ),
+            (
+                chained,
+                vec!["github.com/example-org/*"],
+                "team",
+                "routes of its own",
+            ),
+            (Routes::default(), vec![], "vault", "empty"),
+            (
+                Routes::default(),
+                vec!["github.com/example*/x"],
+                "vault",
+                "not a repository pattern",
+            ),
+        ] {
+            let refusal = base
+                .with_visibility(visibility.clone())
+                .combined(
+                    name("site"),
+                    vec![(
+                        Classification::Private,
+                        patterns.iter().map(|&pattern| pattern.to_owned()).collect(),
+                        name(to),
+                    )],
+                    &configured,
+                )
+                .expect_err("refused")
+                .to_string();
+            assert!(
+                refusal.contains("sources.site.routes.0") && refusal.contains(wanted),
+                "{to} {patterns:?}: {refusal}"
+            );
+        }
     }
 }

@@ -14,10 +14,10 @@
 use onetaskgraph_core::config::SourceRoute;
 use onetaskgraph_core::{
     CommentList, CompleteAction, CopyAction, CopyReport, DeletedComment, Delivered,
-    DeliveryOutcome, GlobalId, IssuesCompleted, MetadataSet, Predicate, ProjectStatusSet,
-    Qualified, QualifiedEdge, QueryPlan, ReconcileOutcome, Regenerated, SearchHit, SourceListing,
-    SourceState, StatusesReconciled, TaskContentSet, TaskDetails, TaskPrioritySet, TaskStatusSet,
-    TaskUpdated, TemplateVariables,
+    DeliveryOutcome, GlobalId, IssuesCompleted, LocateReport, MetadataSet, Predicate,
+    ProjectStatusSet, Qualified, QualifiedEdge, QueryPlan, ReconcileOutcome, Regenerated,
+    SearchHit, SourceListing, SourceState, StatusesReconciled, TaskContentSet, TaskDetails,
+    TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateVariables,
 };
 use onetaskgraph_plugin_api::{
     Asset, Capabilities, Comment, Document, ItemKind, Label, Location, MetadataKey, Priority,
@@ -1051,7 +1051,74 @@ pub fn source_route(route: &SourceRoute) -> String {
                 .route
                 .map_or_else(|| "none".to_owned(), |index| index.to_string()),
         ],
+        vec![
+            "reachable:".to_owned(),
+            route
+                .reachable
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+        ],
     ])
+}
+
+/// What `task locate` answers, one block per task: where a copy would land it, what it would
+/// update there, and where a create would file its issue. A block names a counterpart and its
+/// carriers only when they were looked up.
+pub fn locate(report: &LocateReport) -> String {
+    let blocks: Vec<String> = report
+        .items
+        .iter()
+        .map(|item| {
+            let mut rows = vec![
+                vec!["task:".to_owned(), item.source.to_string()],
+                vec![
+                    "classification:".to_owned(),
+                    item.classification.to_string(),
+                ],
+                vec![
+                    "destination:".to_owned(),
+                    match item.placement.route {
+                        Some(index) => format!("{} by route {index}", item.placement.destination),
+                        None => format!("{} by no route", item.placement.destination),
+                    },
+                ],
+            ];
+            if let Some(counterpart) = &item.counterpart {
+                rows.push(vec![
+                    "counterpart:".to_owned(),
+                    counterpart.as_ref().map_or_else(
+                        || "none: a copy would create one".to_owned(),
+                        |counterpart| format!("{} via {}", counterpart.id, wire(&counterpart.via)),
+                    ),
+                ]);
+            }
+            if let Some(carriers) = &item.carriers {
+                rows.push(vec![
+                    "carriers:".to_owned(),
+                    if carriers.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        carriers
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    },
+                ]);
+            }
+            rows.push(vec![
+                "creates in:".to_owned(),
+                item.creates_in.as_ref().map_or_else(
+                    || "no repository".to_owned(),
+                    |creates_in| creates_in.repository.as_str().to_owned(),
+                ),
+            ]);
+            columns(&rows)
+        })
+        .collect();
+    blocks.join("\n")
 }
 
 /// The fields a task, a project and a document share below their own.

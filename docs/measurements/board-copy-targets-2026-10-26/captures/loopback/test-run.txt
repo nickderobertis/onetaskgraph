@@ -1,0 +1,6 @@
+     Running tests/e2e/main.rs (target/debug/deps/e2e-dc2735020d3cbf23)
+test approval::approving_a_plan_lists_each_kind_in_one_point_and_writes_its_approval_behind_one_read ... ok
+test plan_reads::project_list_by_origin_lists_exactly_its_copies_and_costs_the_same_on_any_board ... ok
+test plan_reads::a_plans_records_are_read_from_the_project_and_cost_the_same_on_any_board ... ok
+test plan_copy::a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 323 filtered out; finished in 61.93s

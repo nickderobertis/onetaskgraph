@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Drive the release workflow's packaging step, as written, over the macOS job's targets.
+# Drive the packaging every CD build job runs, as written, over every released target.
 #
-# Only a release runs that `run: |` block in .github/workflows/release.yml, so this runs
-# the production body offline, against stand-in binaries, to find a packaging defect
-# without cutting a version.
+# Only a release runs .github/workflows/release.yml, so this runs the packaging half of its
+# build phase — scripts/release_cd.py's `package`, the same code `build` calls after maturin
+# — offline, over stand-in wheels for all four build platforms on whatever host this is, to find a
+# packaging defect without cutting a version.
 set -euo pipefail
 
 fatal() {
@@ -25,7 +26,6 @@ if [ ! -r "$ROOT/scripts/scratch-clone.sh" ] || ! source "$ROOT/scripts/scratch-
   fatal "could not load $ROOT/scripts/scratch-clone.sh, which copies the tracked files below" \
     "restore it with 'git checkout -- scripts/scratch-clone.sh' and rerun"
 fi
-readonly WORKFLOW=".github/workflows/release.yml"
 python_bin=$(command -v python3 || true)
 [ -n "$python_bin" ] || fatal "python3 is not on PATH" "install Python 3 and rerun this packaging proof"
 case $python_bin in
@@ -60,63 +60,43 @@ scratch="$(mktemp -d)" || fatal \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 trap 'rm -rf "$scratch"' EXIT
 
-# The step body of the macOS job, read out of the workflow rather than restated here, with
-# its block indentation removed so bash can run it.
-if ! (cd "$ROOT" && python3 - "$WORKFLOW" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
-job = re.search(r"(?ms)^  macos-assets-carriers-and-wheels:\n(.*?)(?=^  [a-z-]+:\n)", workflow)
-if not job:
-    print("check-release-packaging: the release workflow has no macos-assets-carriers-and-wheels job", file=sys.stderr)
-    raise SystemExit(1)
-body = re.search(r"(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )", job.group(1))
-if not body:
-    print("check-release-packaging: the macOS job has no 'Archive, checksum, and stage' step with a `run: |` body", file=sys.stderr)
-    raise SystemExit(1)
-lines = body.group(1).splitlines()
-margin = min((len(line) - len(line.lstrip()) for line in lines if line.strip()), default=0)
-sys.stdout.reconfigure(newline="\n")
-print("\n".join(line[margin:] for line in lines))
-PY
-) > "$scratch/package.sh" 2> "$scratch/package-error"; then
-  fatal "the packaging step could not be read out of $WORKFLOW: $(cat "$scratch/package-error")" \
-    "keep that step a 'run: |' block of the macOS job, which is what makes it drivable outside a release"
-fi
-
-# What the workflow hands the step: the job-level TARGETS and the step's own EXT and TAG.
-targets="$(cd "$ROOT" && sed -n 's/^      TARGETS: \(.*\)$/\1/p' "$WORKFLOW" | head -n1)"
-[ -n "$targets" ] || fatal "the macOS job declares no job-level TARGETS" "restore 'TARGETS: <target>=<npm> ...' under the job's env"
-# Each pair is used as two path components below, so each is held to the grammar of a
-# Rust target triple and an npm platform name before anything is created from it.
-for pair in $targets; do
-  [[ $pair =~ ^[a-z0-9_]+(-[a-z0-9_]+)+=[a-z0-9]+-[a-z0-9]+$ ]] || fatal \
-    "the macOS job's TARGETS entry '$pair' is not <rust target triple>=<npm platform>" \
-    "restore the job's TARGETS to pairs like aarch64-apple-darwin=darwin-arm64"
-done
-
-# A stand-in binary per target, and a `gh` that records any premature upload.
-readonly TREE="$scratch/tree"
-mkdir -p "$TREE" "$scratch/bin" || fatal "could not create $TREE" "check the permissions of \$TMPDIR, then rerun"
-copy_tracked_files "$ROOT" "$TREE" npm/platforms || fatal \
-  "could not copy the carrier manifests into $TREE" "confirm 'git ls-files' answers in $ROOT, then rerun"
-for pair in $targets; do
-  target="${pair%%=*}"
-  mkdir -p "$TREE/target/$target/release" || fatal "could not create the $target build directory" "check the permissions of \$TMPDIR, then rerun"
-  printf 'stand-in for the %s binary\n' "$target" > "$TREE/target/$target/release/onetaskgraph"
-done
-readonly UPLOADS="$scratch/uploads"
-cat > "$scratch/bin/gh" <<GH
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$UPLOADS"
-GH
-chmod +x "$scratch/bin/gh" || fatal "could not make the gh stand-in executable" "check the permissions of \$TMPDIR, then rerun"
-
 version="$(cd "$ROOT" && python3 -c 'import json; print(json.load(open("npm/cli/package.json", encoding="utf-8"))["version"])')" || fatal \
   "could not read the launcher's version out of npm/cli/package.json" "restore that manifest, then rerun"
 tag="v$version"
+
+# The tracked scripts and carrier manifests, so what runs is the tree under review, and one
+# stand-in wheel per released target, named exactly as the plan says maturin names it.
+readonly TREE="$scratch/tree"
+mkdir -p "$TREE" || fatal "could not create $TREE" "check the permissions of \$TMPDIR, then rerun"
+copy_tracked_files "$ROOT" "$TREE" scripts npm/platforms || fatal \
+  "could not copy the scripts and carrier manifests into $TREE" "confirm 'git ls-files' answers in $ROOT, then rerun"
+rows="$(cd "$TREE" && "$python_bin" - "$tag" <<'PY' | tr -d '\r'
+import sys
+sys.path.insert(0, "scripts")
+from release_cd import plan
+for platform in ("linux", "linux-arm64", "macos", "windows"):
+    for artifact in plan(platform, sys.argv[1]):
+        if artifact.kind == "wheel":
+            print(platform, artifact.target, artifact.file)
+PY
+)" || fatal "could not read the release plan out of scripts/release_cd.py" "run 'python3 scripts/release_cd.py --platform linux plan --tag $tag' and fix what it reports"
+[ -n "$rows" ] || fatal "the release plan names no wheel" "restore PLATFORM_TARGETS in scripts/release_products.py"
+while read -r platform target wheel; do
+  "$python_bin" - "$TREE" "$target" "$version" "$wheel" <<'PYWHEEL' || fatal "could not stage the $target stand-in wheel" "check the permissions of \$TMPDIR, then rerun"
+from pathlib import Path
+import sys
+import zipfile
+root, target, version, wheel = sys.argv[1:]
+binary = "onetaskgraph.exe" if "windows" in target else "onetaskgraph"
+tag = wheel.removesuffix(".whl").split("-", 2)[2]
+directory = Path(root) / "dist/wheels" / target
+directory.mkdir(parents=True, exist_ok=True)
+with zipfile.ZipFile(directory / wheel, "w") as packed:
+    packed.writestr(f"onetaskgraph_cli-{version}.data/scripts/{binary}", f"stand-in for the {target} binary\n")
+    packed.writestr(f"onetaskgraph_cli-{version}.dist-info/METADATA", f"Name: onetaskgraph-cli\nVersion: {version}\n")
+    packed.writestr(f"onetaskgraph_cli-{version}.dist-info/WHEEL", f"Tag: {tag}\n")
+PYWHEEL
+done <<< "$rows"
 
 failures=0
 report() {
@@ -141,55 +121,34 @@ report_unless_archive_lists() {
   grep -qx -- "$2" <<<"$listing" || report "$3"
 }
 
-if ! (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="$tag" \
-  bash "$scratch/package.sh") > "$scratch/package.log" 2>&1; then
-  sed 's/^/    /' "$scratch/package.log" >&2
-  report "the packaging step failed over TARGETS='$targets' (its output is above)"
-fi
-for pair in $targets; do
-  target="${pair%%=*}"; npm_platform="${pair#*=}"
-  asset="onetaskgraph-$tag-$target.tar.gz"
-  [ -f "$TREE/$asset" ] || report "the step left no archive $asset, which is the name scripts/install.sh downloads for $target"
-  [ -f "$TREE/$asset.sha256" ] || report "the step left no checksum $asset.sha256"
-  if [ -f "$TREE/$asset" ]; then
-    report_unless_archive_lists "$TREE/$asset" onetaskgraph \
+for platform in linux linux-arm64 macos windows; do
+  if ! (cd "$TREE" && "$python_bin" scripts/release_cd.py --platform "$platform" package --tag "$tag" --dist "$TREE/dist") > "$scratch/package.log" 2>&1; then
+    sed 's/^/    /' "$scratch/package.log" >&2
+    report "the $platform packaging failed (its output is above)"
+  fi
+done
+while read -r platform target wheel; do
+  npm_platform="$(cd "$TREE" && "$python_bin" -c 'import sys; sys.path.insert(0, "scripts"); from release_products import PLATFORM_TARGETS; print(next(row.npm_platform for row in PLATFORM_TARGETS if row.target == sys.argv[1]))' "$target" | tr -d '\r')"
+  ext=tar.gz binary=onetaskgraph
+  [ "$platform" != windows ] || { ext=zip; binary=onetaskgraph.exe; }
+  asset="onetaskgraph-$tag-$target.$ext"
+  [ -f "$TREE/dist/assets/$asset" ] || report "the packaging left no archive $asset, which is the name scripts/install.sh downloads for $target"
+  [ -f "$TREE/dist/assets/$asset.sha256" ] || report "the packaging left no checksum $asset.sha256"
+  if [ -f "$TREE/dist/assets/$asset" ] && [ "$ext" = tar.gz ]; then
+    report_unless_archive_lists "$TREE/dist/assets/$asset" onetaskgraph \
       "$asset does not carry a bare 'onetaskgraph' at its root, which is what the installer extracts"
   fi
-  cmp "$TREE/$asset" "$TREE/dist/assets/$asset" >&2 || report "the staged archive differs from $asset"
-  cmp "$TREE/$asset.sha256" "$TREE/dist/assets/$asset.sha256" >&2 || report "the staged checksum differs from $asset.sha256"
   carrier="$TREE/dist/carriers/$npm_platform/onetaskgraph-cli-$npm_platform-$version.tgz"
-  [ -f "$carrier" ] || report "the step left no carrier at dist/carriers/$npm_platform/onetaskgraph-cli-$npm_platform-$version.tgz, which is the path and name scripts/publish-npm.sh reads after the carrier-$npm_platform artifact is downloaded"
+  [ -f "$carrier" ] || report "the packaging left no carrier at dist/carriers/$npm_platform/onetaskgraph-cli-$npm_platform-$version.tgz, which is the path and name scripts/publish-npm.sh reads"
   if [ -f "$carrier" ]; then
-    report_unless_archive_lists "$carrier" package/bin/onetaskgraph "the $npm_platform carrier does not carry package/bin/onetaskgraph"
+    report_unless_archive_lists "$carrier" "package/bin/$binary" "the $npm_platform carrier does not carry package/bin/$binary"
     packed_name="$(tar -xzOf "$carrier" package/package.json | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')" || packed_name=""
     [ "$packed_name" = "@onetaskgraph/cli-$npm_platform" ] || report "the $npm_platform carrier's manifest names '$packed_name', expected @onetaskgraph/cli-$npm_platform"
   fi
-done
-[ ! -f "$UPLOADS" ] || report "the builder published an asset before install verification"
-
-# Foreign payloads are compared by wheel/archive/npm hashes; only the native
-# product journey installs and executes the host-compatible target.
-for pair in $targets; do
-  target="${pair%%=*}"; npm_platform="${pair#*=}"
-  if ! "$python_bin" - "$TREE" "$target" "$version" <<'PYWHEEL'
-from pathlib import Path
-import sys
-import zipfile
-root, target, version = sys.argv[1:]
-root = Path(root)
-arch = "arm64" if target.startswith("aarch64") else "x86_64"
-platform = "macosx_11_0_" + arch
-wheel_dir = root / "dist/wheels" / target
-wheel_dir.mkdir(parents=True, exist_ok=True)
-with zipfile.ZipFile(wheel_dir / f"onetaskgraph_cli-{version}-py3-none-{platform}.whl", "w") as wheel:
-    wheel.writestr(f"onetaskgraph_cli-{version}.data/scripts/onetaskgraph", (root / "target" / target / "release/onetaskgraph").read_bytes())
-    wheel.writestr(f"onetaskgraph_cli-{version}.dist-info/METADATA", f"Name: onetaskgraph-cli\nVersion: {version}\n")
-    wheel.writestr(f"onetaskgraph_cli-{version}.dist-info/WHEEL", f"Tag: py3-none-{platform}\n")
-PYWHEEL
-  then report "could not stage the $target wheel fixture"; fi
-  (cd "$TREE" && "$python_bin" "$ROOT/scripts/verify-release-products.py" --target "$target" --npm "$npm_platform" --tag "$tag" > /dev/null) || report "the production verifier refused the $target artifact contract"
-done
-
+  # Foreign payloads are compared by wheel/archive/npm hashes; only the native product
+  # journey installs and executes the host-compatible target.
+  (cd "$TREE" && "$python_bin" scripts/verify-release-products.py --target "$target" --npm "$npm_platform" --tag "$tag" --ext "$ext" --dist "$TREE/dist" > /dev/null) || report "the production verifier refused the $target artifact contract"
+done <<< "$rows"
 
 # The verifier's trust boundary is portable: no foreign executable runs in these cases.
 if ! "$python_bin" - "$ROOT" "$TREE" "$tag" <<'PYREFUSALS'
@@ -205,45 +164,30 @@ import tarfile
 import zipfile
 root, tree, tag = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 version = tag[1:]
-workflow = (root / '.github/workflows/release.yml').read_text(encoding='utf-8')
-windows, = [row for row in re.findall(r'target: ([a-z0-9_-]+), ext: ([a-z.]+), npm: ([a-z0-9-]+)', workflow) if row[1] == 'zip']
-target, extension, npm = windows
-binary = 'onetaskgraph.exe'
-payload = b'foreign artifact contract payload; never executed'
-canonical = tree / f'target/{target}/release/{binary}'
-canonical.parent.mkdir(parents=True, exist_ok=True)
-canonical.write_bytes(payload)
-archive = tree / f'onetaskgraph-{tag}-{target}.zip'
-native = re.search(r'(?ms)^  native-assets-carriers-and-wheels:\n(.*?)(?=^  [a-z-]+:)', workflow)
-step = re.search(r'(?ms)^      - name: Archive, checksum, and stage\n.*?^        run: \|\n(.*?)(?=^      - )', native[1])
-body = '\n'.join(line[10:] for line in step[1].splitlines())
 sys.path.insert(0, str(root / 'scripts'))
-from release_products import bash_executable
-subprocess.run([bash_executable(platform.system()), '-e', '-c', body], cwd=tree,
-               env={**os.environ, 'TARGETS': f'{target}={npm}', 'EXT': extension, 'TAG': tag}, check=True)
+from release_products import PLATFORM_TARGETS
+windows, = [row for row in PLATFORM_TARGETS if row.extension == 'zip']
+target, extension, npm = windows.target, windows.extension, windows.npm_platform
+binary = 'onetaskgraph.exe'
+dist = tree / 'dist'
+archive = dist / 'assets' / f'onetaskgraph-{tag}-{target}.zip'
+canonical = tree / f'target/{target}/release/{binary}'
+payload = canonical.read_bytes()
 with zipfile.ZipFile(archive) as packed:
     entries = packed.infolist()
     if len(entries) != 1 or entries[0].filename != binary or packed.read(entries[0]) != payload:
         raise SystemExit('production Windows ZIP must contain only the canonical CLI at its root')
-wheels = tree / f'dist/wheels/{target}'
-wheels.mkdir(parents=True, exist_ok=True)
-with zipfile.ZipFile(wheels / f'onetaskgraph_cli-{version}-py3-none-win_amd64.whl', 'w') as wheel:
-    wheel.writestr(f'onetaskgraph_cli-{version}.data/scripts/{binary}', payload)
-    wheel.writestr(f'onetaskgraph_cli-{version}.dist-info/METADATA', f'Name: onetaskgraph-cli\nVersion: {version}\n')
-    wheel.writestr(f'onetaskgraph_cli-{version}.dist-info/WHEEL', 'Tag: py3-none-win_amd64\n')
-carriers = tree / f'dist/carriers/{npm}'
-command = [sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', target, '--npm', npm, '--tag', tag, '--ext', extension]
+wheels = dist / f'wheels/{target}'
+carriers = dist / f'carriers/{npm}'
+command = [sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', target, '--npm', npm, '--tag', tag, '--ext', extension, '--dist', str(dist)]
 def refused(args, reason):
     result = subprocess.run(args, cwd=tree, capture_output=True, text=True)
     if result.returncode == 0 or reason not in result.stderr:
         raise SystemExit(f'product boundary did not refuse {reason}: {result.stderr}; repair the production verifier')
 for flags, reason in [(['--target', '../invalid'], 'invalid Rust target'), (['--npm', '../invalid'], 'invalid npm platform'), (['--tag', 'invalid'], 'invalid semantic release tag'), (['--ext', 'invalid'], 'invalid choice'), (['--npm', 'darwin-arm64'], 'inconsistent target'), (['--ext', 'tar.gz'], 'inconsistent target')]:
     refused(command + flags, reason)
-# \S+ rather than [^ ]+: the latter also takes the newline and the next line's indent,
-# which the verifier rightly refuses as an invalid npm platform before it reaches this case.
-pair = re.search(r'^      TARGETS: (\S+)$', workflow, re.M)[1]
-darwin_target, darwin_npm = pair.split('=')
-foreign = [sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', darwin_target, '--npm', darwin_npm, '--tag', tag]
+darwin, = [row for row in PLATFORM_TARGETS if row.platform == 'macos']
+foreign = [sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', darwin.target, '--npm', darwin.npm_platform, '--tag', tag, '--dist', str(dist)]
 if platform.system() != 'Windows':
     refused(command + ['--install'], 'cannot execute a non-native release target')
 if platform.system() != 'Darwin':
@@ -322,19 +266,22 @@ for broken in [None, {}, {**report, 'target': '../invalid'}, {**report, 'tag': '
     except ValueError:
         continue
     raise SystemExit('malformed verification report was accepted; repair its typed boundary parser')
+# A Linux host asked to install the other architecture's Linux release.
 if platform.system() == 'Linux':
     host_arm = platform.machine().lower() in ('aarch64', 'arm64')
-    candidate, = [row for row in re.findall(r'target: ([a-z0-9_-]+), ext: ([a-z.]+), npm: ([a-z0-9-]+)', workflow) if row[0].endswith('unknown-linux-gnu') and row[0].startswith('aarch64') != host_arm]
-    other_target, other_extension, other_npm = candidate
+    linux, = [row for row in PLATFORM_TARGETS if row.platform == ('linux' if host_arm else 'linux-arm64')]
+    other_target, other_extension, other_npm = linux.target, linux.extension, linux.npm_platform
     other_payload = b'foreign architecture artifact; never executed'
     other_binary = tree / f'target/{other_target}/release/onetaskgraph'
     other_binary.parent.mkdir(parents=True, exist_ok=True)
     other_binary.write_bytes(other_payload)
-    with tarfile.open(tree / f'onetaskgraph-{tag}-{other_target}.tar.gz', 'w:gz') as packed:
+    with tarfile.open(dist / 'assets' / f'onetaskgraph-{tag}-{other_target}.tar.gz', 'w:gz') as packed:
         info = tarfile.TarInfo('onetaskgraph')
         info.size = len(other_payload)
         packed.addfile(info, io.BytesIO(other_payload))
-    other_wheels = tree / f'dist/wheels/{other_target}'
+    other_wheels = dist / f'wheels/{other_target}'
+    for stale in other_wheels.glob('*.whl'):
+        stale.unlink()
     other_wheels.mkdir(parents=True, exist_ok=True)
     wheel_arch = 'aarch64' if other_target.startswith('aarch64') else 'x86_64'
     wheel_platform = 'linux_' + wheel_arch
@@ -342,14 +289,16 @@ if platform.system() == 'Linux':
         packed.writestr(f'onetaskgraph_cli-{version}.data/scripts/onetaskgraph', other_payload)
         packed.writestr(f'onetaskgraph_cli-{version}.dist-info/METADATA', f'Name: onetaskgraph-cli\nVersion: {version}\n')
         packed.writestr(f'onetaskgraph_cli-{version}.dist-info/WHEEL', f'Tag: py3-none-{wheel_platform}\n')
-    other_carriers = tree / f'dist/carriers/{other_npm}'
+    other_carriers = dist / f'carriers/{other_npm}'
+    for stale in other_carriers.glob('*.tgz'):
+        stale.unlink()
     other_carriers.mkdir(parents=True, exist_ok=True)
     with tarfile.open(other_carriers / 'fixture.tgz', 'w:gz') as packed:
         for name, data in [('package/package.json', (root / f'npm/platforms/{other_npm}/package.json').read_bytes()), ('package/bin/onetaskgraph', other_payload)]:
             info = tarfile.TarInfo(name)
             info.size = len(data)
             packed.addfile(info, io.BytesIO(data))
-    refused([sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', other_target, '--npm', other_npm, '--tag', tag, '--install'], 'cannot execute a foreign architecture')
+    refused([sys.executable, str(root / 'scripts/verify-release-products.py'), '--target', other_target, '--npm', other_npm, '--tag', tag, '--dist', str(dist), '--install'], 'cannot execute a foreign architecture')
 archive_bytes = archive.read_bytes()
 archive.write_bytes(b'corrupt ZIP')
 refused(command, 'File is not a zip file')
@@ -371,19 +320,17 @@ refused(command, 'archive must contain only the root regular CLI file')
 PYREFUSALS
 then report "the production verifier accepted an invalid release product input"; fi
 
-# 2. A tag the installer would refuse is refused here first, before anything is built.
-rm -f "$UPLOADS"
-if (cd "$TREE" && PATH="$scratch/bin:$PATH" TARGETS="$targets" EXT=tar.gz TAG="not-a-release" \
-  bash "$scratch/package.sh") > "$scratch/package.log" 2>&1; then
-  report "the packaging step accepted the tag 'not-a-release'"
-elif ! grep -qF "invalid release tag: not-a-release" "$scratch/package.log"; then
-  report "the packaging step refused 'not-a-release' without naming the tag. It said:"
+# 2. A tag the installer would refuse is refused here first, before anything is packaged.
+if (cd "$TREE" && "$python_bin" scripts/release_cd.py --platform macos package --tag not-a-release --dist "$scratch/invalid-tag") > "$scratch/package.log" 2>&1; then
+  report "the packaging accepted the tag 'not-a-release'"
+elif ! grep -qF "invalid semantic release tag 'not-a-release'" "$scratch/package.log"; then
+  report "the packaging refused 'not-a-release' without naming the tag. It said:"
   sed 's/^/    /' "$scratch/package.log" >&2
 fi
-[ ! -f "$UPLOADS" ] || report "the packaging step uploaded something for an invalid tag"
+[ ! -e "$scratch/invalid-tag" ] || report "the packaging wrote something for an invalid tag"
 
 if [ "$failures" -ne 0 ]; then
   echo "check-release-packaging: $failures finding(s)." >&2
-  echo "check-release-packaging: repair the 'Archive, checksum, and stage' step of $WORKFLOW rather than these cases." >&2
+  echo "check-release-packaging: repair package_target in scripts/release_cd.py, or the verifier it names, rather than these cases." >&2
   exit 1
 fi

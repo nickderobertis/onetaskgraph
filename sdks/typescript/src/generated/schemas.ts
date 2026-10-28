@@ -8088,6 +8088,243 @@ export const runtimeSchemas = {
     "title": "LinearConfig",
     "type": "object"
   },
+  "LocateReport": {
+    "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
+      "Classification": {
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "oneOf": [
+          {
+            "const": "public",
+            "description": "Anybody who may read the destination may read it.",
+            "type": "string"
+          },
+          {
+            "const": "private",
+            "description": "It may be written only to a destination verified private, and nothing of it may\nreach a public one.",
+            "type": "string"
+          }
+        ]
+      },
+      "CopyVia": {
+        "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the explicit target\ntask, the link the item records, its own origin, a search of the destination for an item\nrecording it as its origin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
+        "oneOf": [
+          {
+            "const": "target-task",
+            "description": "The destination task explicitly named by the caller and verified by origin.",
+            "type": "string"
+          },
+          {
+            "const": "link",
+            "description": "The item's `onetaskgraph.copies` entry for the destination named an item whose own\norigin names this one back. Found by one read by id, and no scan.",
+            "type": "string"
+          },
+          {
+            "const": "origin",
+            "description": "The item's own `onetaskgraph.origin` named the destination item: a copy-back.",
+            "type": "string"
+          },
+          {
+            "const": "scan",
+            "description": "A search of the destination for an item recording this one as its origin.",
+            "type": "string"
+          },
+          {
+            "const": "match",
+            "description": "A search of the destination by the caller's `--match-by`.",
+            "type": "string"
+          }
+        ]
+      },
+      "CreatesIn": {
+        "description": "Where a create would file a task's issue.",
+        "properties": {
+          "repository": {
+            "$ref": "#/$defs/Repository",
+            "description": "The repository, as a normalized origin `host/owner/name`."
+          }
+        },
+        "required": [
+          "repository"
+        ],
+        "type": "object"
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "Located": {
+        "description": "Where one task would land, what it would update there, and where a create would file it.",
+        "properties": {
+          "carriers": {
+            "description": "Every destination item the origin query found carrying this task's origin, in listing\norder — `[]` when the query did not run, and absent under `--no-counterpart`. When it ran,\n`counterpart` is the first.",
+            "items": {
+              "$ref": "#/$defs/GlobalId"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "classification": {
+            "$ref": "#/$defs/Classification",
+            "description": "The class it was placed as, as a copy classifies it: its own declaration and, while the\nstore's boundary is active, its repositories' visibility. A source declared private does\nnot by itself make it private; it withholds the task's provenance instead."
+          },
+          "counterpart": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LocatedCounterpart"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The item a copy would update, and the rule that found it — `null` when a copy would\ncreate one, and absent under `--no-counterpart`, which looks for none."
+          },
+          "creates_in": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CreatesIn"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The repository a create there would file the task's issue in, or `null` where the\ndestination files no issue in a repository. Where a create would file, whether or not a\ncounterpart exists: an existing issue is never moved."
+          },
+          "destination": {
+            "$ref": "#/$defs/SourceName",
+            "description": "The source the item lands in: the routed one, or the source itself."
+          },
+          "route": {
+            "description": "The index of the route entry that matched, or `None` when none did and the item\nstays in the source itself.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "The qualified id the task was read from."
+          }
+        },
+        "required": [
+          "source",
+          "classification",
+          "destination"
+        ],
+        "type": "object"
+      },
+      "LocatedCounterpart": {
+        "description": "The destination item a copy would update.",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/GlobalId",
+            "description": "Its qualified id at the destination the task is placed in."
+          },
+          "via": {
+            "$ref": "#/$defs/CopyVia",
+            "description": "Which rule found it, as a copy's report spells it."
+          }
+        },
+        "required": [
+          "id",
+          "via"
+        ],
+        "type": "object"
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What `task locate` answers: one entry per task, in the order they were named.",
+    "properties": {
+      "items": {
+        "description": "One entry per task named, in the order named.",
+        "items": {
+          "$ref": "#/$defs/Located"
+        },
+        "type": "array"
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What the command spent at the sources that meter their own requests, as a copy reports\nit — absent when none of them does."
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "title": "LocateReport",
+    "type": "object"
+  },
   "Location": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "Where an entity is, in the one form a consumer can act on without knowing the backend.\n\nExternally tagged with exactly two variants, so the JSON is `{\"url\": \"https://…\"}` or\n`{\"path\": \"/home/…\"}` and a consumer tells them apart by which key is present. A reader\nhanded one of these knows what to *do* with it — open a link, or print a path and read\nthe file out — which is what a bare string could not have said.\n\nIt carries no third case on purpose. `None` on the field is the third case, and it\nmeans the source did not say where the entity is, which is not the same as saying it is\nnowhere.\n\nThis does **not** redefine, replace or derive from the `url` field of [`Task`],\n[`Project`] or [`Document`]: a source that reports a web URL there goes on reporting\nit, and every existing consumer sees exactly what it saw.",
@@ -17913,6 +18150,13 @@ export const runtimeSchemas = {
         "$ref": "#/$defs/SourceName",
         "description": "The source the item lands in: the routed one, or the source itself."
       },
+      "reachable": {
+        "description": "Every source an item written to `source` could land in, whatever its repositories and\nclassification: `source` itself first, then each source its routes name as `to`, in\nthe order they are written, each once — the set a routed copy reads ahead from.",
+        "items": {
+          "$ref": "#/$defs/SourceName"
+        },
+        "type": "array"
+      },
       "route": {
         "description": "The index of the route entry that matched, or `None` when none did and the item\nstays in the source itself.",
         "format": "uint32",
@@ -17929,7 +18173,8 @@ export const runtimeSchemas = {
     },
     "required": [
       "source",
-      "destination"
+      "destination",
+      "reachable"
     ],
     "title": "SourceRoute",
     "type": "object"

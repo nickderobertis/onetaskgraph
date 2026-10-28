@@ -22,9 +22,9 @@ use onetaskgraph_core::{
     CommentWritten, Completeness, CopyAction, CopyItems, CopyReport, CopyRequest, CopyScope,
     Delivered, DeliveryOutcome, DependencyRequest, DocumentFilters, DocumentRequest, Engine,
     Environment, ExpectedWrite, Failure, FailureDocument, Filters, GlobalId, LabelRequest, Loaded,
-    MatchBy, OutputFormat, PageToken, Paging, ProjectGraphRequest, ProjectRequest, ProjectSelector,
-    QueryResponse, ReconcileOutcome, RenderedRecord, SearchRequest, SourceFailure, TaskAssetNames,
-    TaskRequest,
+    LocateLookup, LocateRequest, MatchBy, OutputFormat, PageToken, Paging, ProjectGraphRequest,
+    ProjectRequest, ProjectSelector, QueryResponse, ReconcileOutcome, RenderedRecord,
+    SearchRequest, SourceFailure, TaskAssetNames, TaskRequest,
 };
 use onetaskgraph_plugin_api::{
     AssetName, CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment,
@@ -733,6 +733,10 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             copy(out, loaded, &request).await
         }
 
+        Command::Task {
+            command: TaskCommand::Locate(args),
+        } => locate(out, loaded, args).await,
+
         Command::Project {
             command: ProjectCommand::Copy(args),
         } => {
@@ -1268,11 +1272,10 @@ fn source_route(
     if !loaded.config.sources().contains_key(&name) {
         return Err(unknown());
     }
+    let routes = loaded.config.routes();
     Ok(onetaskgraph_core::config::SourceRoute {
-        placement: loaded
-            .config
-            .routes()
-            .place_classified(&name, classification, repositories),
+        placement: routes.place_classified(&name, classification, repositories),
+        reachable: routes.reachable(&name),
         source: name,
     })
 }
@@ -1549,6 +1552,60 @@ async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> R
     };
     emit(out, rendered.trim_end(), "the copy")?;
     Ok(delivery_exit(&report.delivered).max(failed_exit(&report)))
+}
+
+/// Say where a copy of each task named would land, through the engine's own locate — which
+/// places and looks up through the copy's own path — and write nothing.
+///
+/// `--target-native` and `--no-counterpart` are two answers to how a counterpart is looked
+/// for, so the two together are refused here, before the engine is built and anything read.
+async fn locate(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    args: &crate::cli::TaskLocateArgs,
+) -> Result<u8, Failure> {
+    let lookup = match (&args.target_native, args.no_counterpart) {
+        (Some(_), true) => {
+            return Err(Failure::decided(
+                "target-native-with",
+                "--target-native cannot be given with --no-counterpart: --target-native names \
+                 the counterpart, and --no-counterpart looks for none\n\
+                 next: drop --no-counterpart to locate the item you named, or drop \
+                 --target-native to look no counterpart up."
+                    .to_owned(),
+            ));
+        }
+        (Some(native), false) => LocateLookup::TargetNative(NativeId::from(native.as_str())),
+        (None, true) => LocateLookup::NoCounterpart,
+        (None, false) => LocateLookup::Counterpart,
+    };
+    let items = args
+        .ids
+        .iter()
+        .map(|id| qualified(id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let destination = SourceName::new(args.to.clone()).map_err(|error| {
+        Failure::decided(
+            "invalid-source-name",
+            format!(
+                "--to {}: {error}\n\
+                 next: name a configured source — `onetaskgraph sources list` reports them.",
+                args.to
+            ),
+        )
+    })?;
+    let engine = engine(loaded);
+    let report = engine
+        .locate(&LocateRequest {
+            items,
+            destination,
+            lookup,
+        })
+        .await
+        .map_err(|error| write_failed(&engine, &error))?;
+    let rendered = rendering(loaded, &report, render::locate, "the location")?;
+    emit(out, rendered.trim_end(), "the location")?;
+    Ok(EXIT_OK)
 }
 
 /// Name every item a copy left unwritten, and say what the exit code will mean: `4`, the
@@ -2235,6 +2292,7 @@ mod tests {
                 "task show-many",
                 "task deps",
                 "task copy",
+                "task locate",
                 "task comment add",
                 "task comment list",
                 "task comment edit",

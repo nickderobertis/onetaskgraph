@@ -1,11 +1,12 @@
+import { cdJourneyReadSet } from "../test-inputs.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { graph, readSet } from "../workflow-graph.mjs";
+import { graph, graphReadSet } from "../workflow-graph.mjs";
 import { definitions, refusals } from "./workflow-definitions.mjs";
 
 // Today's required contexts, as the run graph resolves a pull request's runs. The graph reads
-// files outside .github (readSet() names them), so this is the github-workflows project's
+// files outside .github (graphReadSet() names them), so this is the github-workflows project's
 // `ci-contexts` target, keyed on those files too, rather than the .github-only `ci-jobs`.
 
 // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Branch protection's required set is not this repository's to hold: its source is the create-repo skill's setup_github_governance.py, and the orchestration repository reconciles its inventory of this merge path against GitHub on every gate run (AGENTS.md, "Commits, releases, and merging"). A pull request's token cannot read branch protection, so this is the set the workflow must keep producing, held to the workflow below.
@@ -79,29 +80,41 @@ test("a job behind one of today's required contexts going missing is refused", (
   }, /required context visual-docs/);
 });
 
-// Each target that runs the graph (this spec, and the *.test.mjs suites) is keyed on exactly the
-// files outside .github that the graph reads, so a change to one re-runs it and selects it.
-test("every target that reads the run graph is keyed on each file outside .github it reads", () => {
-  const project = JSON.parse(readFileSync(new URL("../project.json", import.meta.url), "utf8"));
+// Graph-only checks stay narrow; the mixed test target also declares every release
+// journey input, including the sources its real publication/build commands consume.
+function inputProblems(project, target) {
   const expand = (inputs) =>
     inputs.flatMap((input) =>
       typeof input === "string" && project.namedInputs?.[input]
         ? expand(project.namedInputs[input])
         : [input],
     );
-  const outside = readSet().filter((path) => !path.startsWith(".github/"));
-  assert.ok(
-    outside.length > 0,
-    "the run graph reads nothing outside .github, so this proves nothing",
-  );
-  for (const target of ["ci-contexts", "test"]) {
-    const inputs = expand(project.targets[target].inputs ?? ["default"]);
-    for (const path of outside)
-      assert.ok(inputs.includes(`{workspaceRoot}/${path}`), `${target} is not keyed on ${path}`);
-    for (const input of inputs.filter((entry) => String(entry).startsWith("{workspaceRoot}/")))
-      assert.ok(
-        outside.includes(input.slice("{workspaceRoot}/".length)),
-        `${target} is keyed on ${input}, which the run graph does not read`,
-      );
+  const graph = graphReadSet().filter((path) => !path.startsWith(".github/"));
+  assert.ok(graph.length > 0, "the graph reads no outside file, so this proves nothing");
+  const outside = [...new Set([...graph, ...(target === "test" ? cdJourneyReadSet : [])])];
+  const inputs = expand(project.targets[target].inputs ?? ["default"]);
+  return [
+    ...outside
+      .filter((path) => !inputs.includes(`{workspaceRoot}/${path}`))
+      .map((path) => `${target} is not keyed on ${path}`),
+    ...inputs
+      .filter((entry) => String(entry).startsWith("{workspaceRoot}/"))
+      .filter((input) => !outside.includes(input.slice("{workspaceRoot}/".length)))
+      .map((input) => `${target} is keyed on ${input}, which its tests do not read`),
+  ];
+}
+
+test("each target is keyed on the combined read set of the tests it runs", () => {
+  const project = JSON.parse(readFileSync(new URL("../project.json", import.meta.url), "utf8"));
+  for (const target of ["ci-contexts", "test"])
+    assert.deepEqual(inputProblems(project, target), []);
+});
+
+test("a release journey read omitted from its target's inputs is refused", () => {
+  for (const path of cdJourneyReadSet) {
+    const project = JSON.parse(readFileSync(new URL("../project.json", import.meta.url), "utf8"));
+    for (const [name, inputs] of Object.entries(project.namedInputs))
+      project.namedInputs[name] = inputs.filter((input) => input !== `{workspaceRoot}/${path}`);
+    assert.ok(inputProblems(project, "test").includes(`test is not keyed on ${path}`), path);
   }
 });

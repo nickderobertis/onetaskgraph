@@ -19,9 +19,9 @@
 # **The contents.** A hand-written inventory goes stale in silence, so the published
 # set is DERIVED from the release configuration rather than transcribed:
 #
-#   crates — the crate names the publish-crates job of .github/workflows/release.yml
-#            iterates over.
-#   pypi   — the project names the publish-python job passes `uv publish --check-url`.
+#   plan   — every package the five CD jobs of .github/workflows/release.yml publish,
+#            as scripts/release_cd.py plans them: the crates, the wheels and SDK
+#            distributions, and the npm packages, each job's own.
 #   npm    — the specs scripts/publish-npm.sh publishes, plus the per-platform
 #            carrier manifests under npm/platforms/ that it sends first.
 #
@@ -172,7 +172,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python older than 3.11
 reader_ran = sys.argv[1] == "0"
 READER_OUTPUT = Path(sys.argv[2])
 DECLARATION = Path("release-targets.toml")
-WORKFLOW = Path(".github/workflows/release.yml")
+RELEASE_PLAN = Path("scripts/release_cd.py")
 NPM_PUBLICATION = Path("scripts/publish-npm.sh")
 
 # The canonical schema, version 2, restated. Every key it declares, per table:
@@ -403,7 +403,6 @@ for name in sorted(set(seen_names) - set(EXPECTED_NAMES)):
 
 # What this repository really publishes, derived from the release configuration
 # rather than transcribed, because a transcription is what goes stale in silence.
-workflow = read(WORKFLOW, "the release workflow")
 published = {}
 
 
@@ -411,24 +410,16 @@ def publishes(identifier, where):
     published.setdefault(identifier, where)
 
 
-crate_line = re.search(r"for crate in ([^;]+); do", workflow)
-if crate_line is None:
-    problems.append(
-        f"{WORKFLOW}'s publish-crates job no longer iterates a crate list this can read, so "
-        "what it publishes cannot be derived"
-    )
+sys.path.insert(0, str(RELEASE_PLAN.parent.resolve()))
+try:
+    from release_cd import plan  # noqa: E402 - the plan is the release's own, read where it lives
+except (ImportError, SyntaxError) as problem:
+    problems.append(f"{RELEASE_PLAN} could not be loaded, so what the release publishes cannot be derived: {problem}")
 else:
-    for crate in crate_line.group(1).split():
-        publishes(f"crate:{crate}", f"{WORKFLOW}'s publish-crates job")
-
-pypi_projects = re.findall(r"uv publish --check-url https://pypi\.org/simple/([^/]+)/", workflow)
-if not pypi_projects:
-    problems.append(
-        f"{WORKFLOW}'s publish-python job names no project through `uv publish --check-url`, so "
-        "what it publishes cannot be derived"
-    )
-for project in pypi_projects:
-    publishes(f"pypi:{project}", f"{WORKFLOW}'s publish-python job")
+    for platform in ("linux", "linux-arm64", "macos", "windows", "independent"):
+        for artifact in plan(platform, "v0.0.0"):
+            if artifact.release_target is not None:
+                publishes(artifact.release_target, f"{RELEASE_PLAN}'s {platform} plan (the {artifact.record()['job']} job)")
 
 npm_publication = read(NPM_PUBLICATION, "the npm publication")
 npm_specs = re.findall(r'publish_if_absent "([^"@][^"]*|@[^"]+)@\$[A-Za-z_]+"', npm_publication)

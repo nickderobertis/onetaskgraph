@@ -1,7 +1,7 @@
 [package]
 name = "onetaskgraph-core"
 description = "The onetaskgraph engine: the plugin registry, global-id qualification, and the plan every response carries."
-version = "0.12.7"
+version = "0.12.9"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -34,6 +34,7 @@ onetaskgraph-plugin-api.workspace = true
 jsonschema.workspace = true
 minijinja.workspace = true
 # A public projection's content is read for the local links it could not carry.
+# The workspace's 0.13.5 floor (RUSTSEC-2026-0414) is this crate's published requirement.
 pulldown-cmark.workspace = true
 schemars.workspace = true
 secrecy.workspace = true

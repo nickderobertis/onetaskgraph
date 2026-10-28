@@ -125,16 +125,19 @@ readonly old_version new_version divergent_version divergent_crate
 
 # Every version manifest release-plz does NOT write. Each is a way the release pull request
 # fails its own gate, and the root Cargo.toml is here because the version under
-# [workspace.package] is one release-plz leaves behind too.
+# [workspace.package] is one release-plz leaves behind too. The platform carriers are read
+# from the tree, so a carrier added or retired is carried without editing this list.
+platform_carriers="$(cd "$repo" && ls npm/platforms/*/package.json)" || fatal \
+  "could not list the platform carrier manifests under npm/platforms in $repo" \
+  "restore npm/platforms/<platform>/package.json, then rerun"
+[ -n "$platform_carriers" ] || fatal "npm/platforms holds no carrier manifest" \
+  "restore npm/platforms/<platform>/package.json, then rerun"
 carriers="Cargo.toml
 pyproject.toml
 sdks/python/pyproject.toml
 sdks/typescript/package.json
 npm/cli/package.json
-npm/platforms/darwin-arm64/package.json
-npm/platforms/linux-arm64/package.json
-npm/platforms/linux-x64/package.json
-npm/platforms/win32-x64/package.json"
+$platform_carriers"
 
 state="$scratch/state"
 mkdir -p "$state/seen" || fatal \

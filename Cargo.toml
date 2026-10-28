@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.12.7"
+version = "0.12.9"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
@@ -17,13 +17,13 @@ authors = ["Nick DeRobertis"]
 # another's newer patch and compile nothing. release-plz rewrites these in step, keeping the
 # `=`; scripts/set-version.sh --check refuses one without it, and the release job refuses to
 # publish a crate whose siblings resolve elsewhere (scripts/crate-sibling-resolution.sh).
-onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "=0.12.7" }
-onetaskgraph-core = { path = "crates/onetaskgraph-core", version = "=0.12.7" }
-onetaskgraph-in-memory = { path = "crates/onetaskgraph-in-memory", version = "=0.12.7" }
-onetaskgraph-local-md = { path = "crates/onetaskgraph-local-md", version = "=0.12.7" }
-onetaskgraph-linear = { path = "crates/onetaskgraph-linear", version = "=0.12.7" }
-onetaskgraph-github-projects = { path = "crates/onetaskgraph-github-projects", version = "=0.12.7" }
-onetaskgraph-status-options = { path = "crates/onetaskgraph-status-options", version = "=0.12.7" }
+onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "=0.12.9" }
+onetaskgraph-core = { path = "crates/onetaskgraph-core", version = "=0.12.9" }
+onetaskgraph-in-memory = { path = "crates/onetaskgraph-in-memory", version = "=0.12.9" }
+onetaskgraph-local-md = { path = "crates/onetaskgraph-local-md", version = "=0.12.9" }
+onetaskgraph-linear = { path = "crates/onetaskgraph-linear", version = "=0.12.9" }
+onetaskgraph-github-projects = { path = "crates/onetaskgraph-github-projects", version = "=0.12.9" }
+onetaskgraph-status-options = { path = "crates/onetaskgraph-status-options", version = "=0.12.9" }
 # The workspace's own test-support crate: the gate every live session opens. Path-only
 # and unpublished on purpose — cargo strips a path-only dev-dependency when it packages
 # the crates that name it, so nothing a consumer installs can reach it.
@@ -68,8 +68,10 @@ github-graphql-node-count = "0.0.1"
 # tests/e2e/budget_commands.rs fails when the two pins part.
 onebudgetspec-core = "=0.1.5"
 # Which image syntax in a content is inside code, and so is no asset reference: CommonMark's
-# code spans and code blocks, read by a parser rather than restated.
-pulldown-cmark = { version = "0.13.4", default-features = false }
+# code spans and code blocks, read by a parser rather than restated. No earlier floor than
+# 0.13.5: every 0.13 release before it is RUSTSEC-2026-0414, and a published crate's
+# requirement is what a consumer resolves.
+pulldown-cmark = { version = "0.13.5", default-features = false }
 # The Linear budgets' runner checks a budget id against onebudgetspec's own exported pattern.
 regex = "1.13.1"
 schemars = { version = "1.2.2", features = ["chrono04"] }

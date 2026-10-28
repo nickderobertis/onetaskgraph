@@ -17,7 +17,8 @@ resolved in this order: the `binary=` constructor argument, the
 on `PATH` by the packaged binary distribution. Pass `cwd=` to select the directory from
 which configuration is discovered. Partial query exit status 4 is parsed and returned,
 so callers can inspect each typed `SourceFailure`; other non-zero statuses raise
-`OnetaskgraphError` with the exit code.
+`OnetaskgraphError` with the exit code, and with the failure document the binary wrote as its
+`failure` — so a caller branches on `failure.kind` — or `None` when it wrote none.
 
 Every call also passes `--no-interactive`, so no call ever waits on a prompt: a template
 variable nothing answers takes its default, and a required one left unanswered raises with

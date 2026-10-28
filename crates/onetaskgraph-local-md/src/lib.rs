@@ -97,6 +97,7 @@ use serde::{Deserialize, Serialize};
 
 mod assets;
 pub mod change_token;
+mod containment;
 #[cfg(windows)]
 mod probe;
 #[cfg(any(windows, test))]
@@ -542,12 +543,13 @@ impl LocalMdSource {
         let canonical = fs::canonicalize(&path).map_err(|e| SourceError::Config {
             message: format!("cannot resolve {}: {e}", path.display()),
         })?;
-        if !canonical.starts_with(&self.root) {
+        if !containment::within(&self.root, &canonical) {
             return Err(SourceError::Config {
                 message: format!(
-                    "{} escapes configured root {}",
+                    "{} escapes configured root {} (resolved as {})",
                     path.display(),
-                    self.root.display()
+                    self.root.display(),
+                    canonical.display()
                 ),
             });
         }
@@ -651,12 +653,13 @@ impl LocalMdSource {
                             message: format!("{}: {e}", path.display()),
                         })?,
                     };
-                    if !canonical.starts_with(root) {
+                    if !containment::within(root, &canonical) {
                         return Err(SourceError::Config {
                             message: format!(
-                                "{} escapes configured root {}",
+                                "{} escapes configured root {} (resolved as {})",
                                 path.display(),
-                                root.display()
+                                root.display(),
+                                canonical.display()
                             ),
                         });
                     }
@@ -1000,7 +1003,8 @@ impl LocalMdSource {
             .collect()
     }
 
-    /// The confined canonical path `id` names under `kind`, when this source holds one.
+    /// The confined path `id` names under `kind`, when this source holds one, resolved by
+    /// [`Self::confined`].
     fn locate(&self, kind: Kind, id: &NativeId) -> Result<Option<PathBuf>, SourceError> {
         let _replacement = replacement_reader();
         let base = self.directory(kind)?;
@@ -1008,28 +1012,19 @@ impl LocalMdSource {
         if !candidate.exists() {
             return Ok(None);
         }
-        let canonical = fs::canonicalize(&candidate).map_err(|e| SourceError::Malformed {
-            message: format!("{}: {e}", candidate.display()),
-        })?;
-        if !canonical.starts_with(&base) {
-            return Err(SourceError::Config {
-                message: format!(
-                    "{} escapes configured root {}",
-                    candidate.display(),
-                    self.root.display()
-                ),
-            });
-        }
-        Ok(Some(canonical))
+        self.confined(&base, &candidate)
     }
 
-    /// The record `id` names under `kind`, found by the rule [`Self::paths`] lists by: its
-    /// folder resolved and confined, the file itself resolved only when it is a link. Another
-    /// process may be renaming a replacement over that file, and Windows can spell a plain
-    /// file resolved in that instant with a path outside the root; a file gone in between is
-    /// not held, as a listing would skip it. A link that leads nowhere is malformed, as the
-    /// listing reports it.
-    fn find_listed(&self, kind: WorkKind, id: &NativeId) -> Result<Option<Entry>, SourceError> {
+    /// Where `candidate`, a record's path under `base`, really is, by the rule
+    /// [`Self::paths`] lists by: its folder resolved and confined — `base` already is, so a
+    /// folder that is `base` is not resolved again — the file itself resolved only when it is
+    /// a link, and containment judged by [`containment::within`], whatever spelling Windows
+    /// resolves either in. Another process may be renaming a replacement over that file,
+    /// and Windows can spell a plain file resolved in that instant with a path outside the
+    /// root, so a plain file is never resolved. `None` when the record is not there — its
+    /// folder absent, a segment a file rather than a folder, or the file gone in between —
+    /// and a link that leads nowhere is malformed, as the listing reports it.
+    fn confined(&self, base: &Path, candidate: &Path) -> Result<Option<PathBuf>, SourceError> {
         // Not there, or under a segment that is a file rather than a folder: no record.
         let absent = |path: &Path, e: &std::io::Error| {
             gone(path, e) || e.kind() == std::io::ErrorKind::NotADirectory
@@ -1037,41 +1032,58 @@ impl LocalMdSource {
         let unreadable = |path: &Path, e: std::io::Error| SourceError::Unavailable {
             message: format!("cannot read {}: {e}", path.display()),
         };
-        let base = self.directory(kind.kind())?;
-        let candidate = base.join(&id.0).with_extension("md");
         let (Some(folder), Some(name)) = (candidate.parent(), candidate.file_name()) else {
             return Ok(None);
         };
-        let folder = match fs::canonicalize(folder) {
-            Err(e) if absent(folder, &e) => return Ok(None),
-            folder_path => folder_path.map_err(|e| unreadable(folder, e))?,
-        };
-        let confined = |path: &Path| {
-            if path.starts_with(&base) {
+        let inside = |path: &Path| {
+            if containment::within(base, path) {
                 Ok(())
             } else {
                 Err(SourceError::Config {
                     message: format!(
-                        "{} escapes configured root {}",
+                        "{} escapes configured root {} (resolved as {})",
                         candidate.display(),
-                        self.root.display()
+                        self.root.display(),
+                        path.display()
                     ),
                 })
             }
         };
-        confined(&folder)?;
+        // The record's own folder is `base` itself — already resolved and confined — unless
+        // its id names a subfolder, and only then is the folder resolved again.
+        let folder = if folder == base {
+            folder.to_path_buf()
+        } else {
+            let folder = match fs::canonicalize(folder) {
+                Err(e) if absent(folder, &e) => return Ok(None),
+                folder_path => folder_path.map_err(|e| unreadable(folder, e))?,
+            };
+            inside(&folder)?;
+            folder
+        };
         let path = folder.join(name);
-        let path = match fs::symlink_metadata(&path) {
-            Err(e) if absent(&path, &e) => return Ok(None),
-            Err(e) => return Err(unreadable(&path, e)),
+        match fs::symlink_metadata(&path) {
+            Err(e) if absent(&path, &e) => Ok(None),
+            Err(e) => Err(unreadable(&path, e)),
             Ok(meta) if meta.file_type().is_symlink() => {
                 let canonical = fs::canonicalize(&path).map_err(|e| SourceError::Malformed {
                     message: format!("{}: {e}", path.display()),
                 })?;
-                confined(&canonical)?;
-                canonical
+                inside(&canonical)?;
+                Ok(Some(canonical))
             }
-            Ok(_) => path,
+            Ok(_) => Ok(Some(path)),
+        }
+    }
+
+    /// The record `id` names under `kind`, found by [`Self::confined`]: a file gone in
+    /// between is not held, as a listing would skip it, and a link that leads nowhere is
+    /// malformed, as the listing reports it.
+    fn find_listed(&self, kind: WorkKind, id: &NativeId) -> Result<Option<Entry>, SourceError> {
+        let base = self.directory(kind.kind())?;
+        let candidate = base.join(&id.0).with_extension("md");
+        let Some(path) = self.confined(&base, &candidate)? else {
+            return Ok(None);
         };
         Self::read_listed(&path)?
             .map(|text| self.parse_text(kind, &path, &text))
@@ -3836,19 +3848,14 @@ impl LocalMdSource {
                 ),
             });
         }
-        let canonical = fs::canonicalize(&candidate).map_err(|e| SourceError::Malformed {
-            message: format!("{}: {e}", candidate.display()),
-        })?;
-        if !canonical.starts_with(&base) {
-            return Err(SourceError::Config {
+        self.confined(&base, &candidate)?
+            .ok_or_else(|| SourceError::Refused {
                 message: format!(
-                    "{} escapes configured root {}",
-                    candidate.display(),
-                    self.root.display()
+                    "{id} names no {} here; next: copy with --recreate to create one \
+                 instead of updating",
+                    kind.noun()
                 ),
-            });
-        }
-        Ok(canonical)
+            })
     }
 
     /// A path nothing in that folder occupies, and the id it will be read back under.

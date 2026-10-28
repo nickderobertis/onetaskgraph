@@ -48,7 +48,6 @@ printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[
 
 case "$(uname -s):$(uname -m)" in
   Linux:x86_64|Linux:amd64) target=x86_64-unknown-linux-gnu; ext=tar.gz; binary=onetaskgraph;;
-  # llmlint: ignore[changed_behavior_has_e2e] Executing this native branch requires a Linux ARM64 runner, another platform action unavailable to this pre-publication dispatch.
   Linux:aarch64|Linux:arm64) target=aarch64-unknown-linux-gnu; ext=tar.gz; binary=onetaskgraph;;
   Darwin:x86_64) die 69 "Intel macOS is no longer supported; onetaskgraph releases macOS binaries for Apple Silicon only. On this machine, build it with 'cargo install onetaskgraph'";;
   Darwin:arm64|Darwin:aarch64) target=aarch64-apple-darwin; ext=tar.gz; binary=onetaskgraph;;

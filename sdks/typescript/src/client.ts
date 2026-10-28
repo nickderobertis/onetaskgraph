@@ -12,8 +12,10 @@ import type {
   DeletedComment,
   DocumentDetail,
   EffectiveConfig,
+  FailureDocument,
   FieldsReport,
   IssuesCompleted,
+  LocateReport,
   MetadataSet,
   NativeId,
   Priority,
@@ -209,9 +211,13 @@ export type ClientOptions = {
 };
 
 export class OnetaskgraphExecutionError extends Error {
+  // `failure` is the failure document the binary wrote under `--json` when it refused the
+  // command, so a caller branches on its `kind` rather than on the wording of `stderr`; absent
+  // when the process wrote none.
   constructor(
     readonly exitCode: number | null,
     readonly stderr = "",
+    readonly failure?: FailureDocument["failure"],
   ) {
     const diagnostic = stderr.trim();
     super(
@@ -249,6 +255,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task show-many": "TaskDetails",
   "task deps": "QueryResponseOfQualifiedEdge",
   "task copy": "CopyReport",
+  // Where a copy would land each task, what it would update and where it would file an issue.
+  "task locate": "LocateReport",
   "task comment add": "CommentWritten",
   "task comment list": "CommentList",
   "task comment edit": "CommentWritten",
@@ -817,6 +825,19 @@ function assetFlags(method: string, options: AssetOptions): string[] {
 // none is given, so the binary's check reads exactly the scope the caller passed. Its member is
 // read as `unknown` and checked here, so an options object not yet narrowed to `WriteOptions`
 // is refused member by member rather than trusted.
+// The failure document a refused command wrote to standard output, when it wrote one that the
+// binary's own schema describes.
+function failureOf(stdout: string): FailureDocument["failure"] | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  const validate = new Ajv2020({ strict: false }).compile(runtimeSchemas.FailureDocument);
+  return validate(value) ? (value as FailureDocument).failure : undefined;
+}
+
 function termScopeFlags(method: string, options: { termScope?: unknown }): string[] {
   if (options.termScope === undefined) return [];
   const scope = stringList(method, "termScope", options.termScope);
@@ -1177,6 +1198,26 @@ export class OnetaskgraphClient {
   taskCopy(ids: string[], to: string, options: TaskCopyOptions = {}): Promise<CopyReport> {
     return this.run("task copy", [...ids, "--to", to, ...taskCopyFlags(options)]);
   }
+  // Where `task copy --to <to>` would land each task, writing nothing: `noCounterpart` looks no
+  // counterpart up, and `targetNative` names the one task's counterpart by its native id where
+  // it is placed. The binary refuses the two together, and `targetNative` beside several ids.
+  taskLocate(
+    ids: string[],
+    options: { to: string; noCounterpart?: boolean; targetNative?: string },
+  ): Promise<LocateReport> {
+    if (options.noCounterpart !== undefined && typeof options.noCounterpart !== "boolean") {
+      throw new TypeError("taskLocate: noCounterpart must be a boolean");
+    }
+    return this.run("task locate", [
+      ...ids,
+      "--to",
+      stringOption("taskLocate", "to", options.to),
+      ...(options.noCounterpart ? ["--no-counterpart"] : []),
+      ...(options.targetNative === undefined
+        ? []
+        : ["--target-native", stringOption("taskLocate", "targetNative", options.targetNative)]),
+    ]);
+  }
   projectList(options: FilterOptions = {}): Promise<QueryResponseOfQualifiedProject> {
     const args: string[] = [];
     addFilters(args, options);
@@ -1459,7 +1500,7 @@ export class OnetaskgraphClient {
           stdout.length === 0 ||
           (code !== 0 && (code !== 4 || !partialResponseCommands.has(command)))
         ) {
-          reject(new OnetaskgraphExecutionError(code, stderr));
+          reject(new OnetaskgraphExecutionError(code, stderr, failureOf(stdout)));
           return;
         }
         let value: unknown;

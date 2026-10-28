@@ -1496,14 +1496,220 @@ fn a_classification_route_to_a_source_not_declared_private_and_a_chain_are_refus
         ),
         (
             json!({"site": {"routes": [{"classification": "private",
-                                        "repositories": ["github.com/openco/*"], "to": "vault"}]}}),
-            "names both",
+                                        "repositories": ["github.com/openco/*"], "to": "loose"}]},
+                   "loose": {"plugin": "local-md", "config": {"root": "loose"}}}),
+            "not declared private",
         ),
     ] {
         let store = Store::new(Some(registered), extra);
         let output = store.run(&["sources", "list"]);
         assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
         assert!(stderr(&output).contains(problem), "{}", stderr(&output));
+    }
+}
+
+/// A public repository under `hiddenco`, the owner whose `quietharbor` is private.
+const SUNNY: &str = "github.com/hiddenco/sunnyharbor";
+
+/// [`registered`], with `hiddenco` holding a public repository beside its private one.
+fn mixed_owners(home: &mut OnevcsHome) {
+    registered(home);
+    home.public("hiddenco", "sunnyharbor");
+}
+
+/// `site` routing each owner's private work by a combined entry — `hiddenco`'s to `vault`,
+/// `lanternco`'s to the private `archive` — beside a repository entry, written first, sending
+/// `hiddenco` work to the public `shelf`; `draft` is a public folder to author in.
+fn combined_store() -> Store {
+    Store::laid(Some(mixed_owners), |sandbox| {
+        json!({
+            "draft": folder(sandbox, "draft", "public"),
+            "shelf": folder(sandbox, "shelf", "public"),
+            "archive": folder(sandbox, "archive", "private"),
+            "site": {"routes": [
+                {"repositories": ["github.com/hiddenco/*"], "to": "shelf"},
+                {"repositories": ["github.com/hiddenco/*"], "classification": "private",
+                 "to": "vault"},
+                {"repositories": ["github.com/lanternco/*"], "classification": "private",
+                 "to": "archive"},
+            ]},
+        })
+    })
+}
+
+/// Every source `site`'s routes can reach, itself first and `shelf` once although two entries
+/// name it — whatever repository and classification are asked about.
+const REACHABLE: [&str; 4] = ["site", "shelf", "vault", "archive"];
+
+/// What `sources route site` answers for `repository` under `classification`, when one is
+/// given.
+fn routed(store: &Store, repository: &str, classification: Option<&str>) -> Value {
+    let mut arguments = vec!["sources", "route", "site", "--repository", repository];
+    if let Some(classification) = classification {
+        arguments.extend(["--classification", classification]);
+    }
+    arguments.push("--json");
+    serde_json::from_str(&store.ok(&arguments)).expect("a route")
+}
+
+#[test]
+fn combined_routes_send_each_owner_s_private_work_to_its_own_private_source() {
+    let store = combined_store();
+    // Each owner's private repository is answered at its own private source, by the combined
+    // entry's index as written — the `hiddenco` one over the repository entry written above it.
+    assert_eq!(
+        routed(&store, A, Some("private")),
+        json!({"source": "site", "destination": "vault", "route": 1, "reachable": REACHABLE})
+    );
+    assert_eq!(
+        routed(&store, B, Some("private")),
+        json!({"source": "site", "destination": "archive", "route": 2, "reachable": REACHABLE})
+    );
+    // The mixed owner's public repository, under the default classification, takes the
+    // repository entry no combined private entry shadows.
+    assert_eq!(
+        routed(&store, SUNNY, None),
+        json!({"source": "site", "destination": "shelf", "route": 0, "reachable": REACHABLE})
+    );
+
+    // A task naming the private repository, classified private by the policy, lands in `vault`
+    // and nowhere else.
+    std::fs::create_dir_all(store.folder("draft")).expect("the draft folder");
+    store.record(
+        "draft",
+        "tasks",
+        "quiet",
+        &format!("title: Quiet work\nstatus: todo\nrepositories: [{A}]"),
+        A_TEXT,
+    );
+    store.record(
+        "draft",
+        "tasks",
+        "sunny",
+        &format!("title: Sunny work\nstatus: todo\nrepositories: [{SUNNY}]"),
+        PLAIN,
+    );
+    let report: Value =
+        serde_json::from_str(&store.ok(&["task", "copy", "draft:quiet", "--to", "site", "--json"]))
+            .expect("a copy report");
+    assert_eq!(
+        report["items"][0]["placed"],
+        json!({"destination": "vault", "route": 1}),
+        "{report:#}"
+    );
+    assert!(one_file(&store, "vault", "tasks").contains("Quiet work"));
+    for elsewhere in ["site", "shelf", "archive", "plan"] {
+        assert_eq!(
+            files_under(&store, elsewhere),
+            Vec::<String>::new(),
+            "{elsewhere} holds nothing"
+        );
+    }
+    // The public task naming the public repository lands where the public answer said.
+    let report: Value =
+        serde_json::from_str(&store.ok(&["task", "copy", "draft:sunny", "--to", "site", "--json"]))
+            .expect("a copy report");
+    assert_eq!(
+        report["items"][0]["placed"],
+        json!({"destination": "shelf", "route": 0}),
+        "{report:#}"
+    );
+    assert!(one_file(&store, "shelf", "tasks").contains("Sunny work"));
+
+    // `config show` prints the combined entry with both fields, attributed to the document.
+    let shown: Value =
+        serde_json::from_str(&store.ok(&["config", "show", "--json"])).expect("the settings");
+    let routes = shown["settings"]
+        .as_array()
+        .expect("settings")
+        .iter()
+        .find(|setting| setting["key"] == "sources.site.routes")
+        .unwrap_or_else(|| panic!("config show names site's routes: {shown:#}"))
+        .clone();
+    assert_eq!(
+        routes["value"][1],
+        json!({"repositories": ["github.com/hiddenco/*"], "classification": "private",
+               "to": "vault"}),
+        "{routes:#}"
+    );
+    assert_eq!(routes["origin"]["layer"], "file", "{routes:#}");
+    let human = store.ok(&["config", "show"]);
+    let line = human
+        .lines()
+        .find(|line| line.starts_with("sources.site.routes"))
+        .unwrap_or_else(|| panic!("config show prints site's routes:\n{human}"));
+    assert!(
+        line.contains("\"classification\":\"private\"")
+            && line.contains("github.com/lanternco/*")
+            && line.contains("file "),
+        "both fields and the layer: {line}"
+    );
+}
+
+#[test]
+fn a_plan_of_a_mixed_owner_homes_in_its_combined_private_source_with_a_public_view() {
+    let store = combined_store();
+    std::fs::create_dir_all(store.folder("draft")).expect("the draft folder");
+    store.record(
+        "draft",
+        "projects",
+        "goal",
+        "title: One goal\nstatus: todo",
+        PLAIN,
+    );
+    store.record(
+        "draft",
+        "tasks",
+        "quiet",
+        &format!("title: Quiet work\nstatus: todo\nproject: goal\nrepositories: [{A}]"),
+        A_TEXT,
+    );
+    store.record(
+        "draft",
+        "tasks",
+        "sunny",
+        &format!("title: Sunny work\nstatus: todo\nproject: goal\nrepositories: [{SUNNY}]"),
+        PLAIN,
+    );
+    let landed =
+        landed_ids(&store.ok(&["project", "copy", "draft:goal", "--to", "site", "--json"]));
+    // The home and both tasks land canonically in the private source the combined entry names.
+    for item in ["draft:goal", "draft:quiet", "draft:sunny"] {
+        assert!(landed[item].starts_with("vault:"), "{item}: {landed:?}");
+    }
+    // The public task reaches the public source its repository entry names only as a view.
+    let map =
+        shown_project(&store, &landed["draft:goal"])["metadata"]["onetaskgraph.public_projections"]
+            .clone();
+    let entries = map["tasks"].as_array().expect("the map's entries");
+    assert_eq!(entries.len(), 1, "{map:#}");
+    assert_eq!(
+        entries[0]["task"],
+        landed["draft:sunny"].as_str(),
+        "{map:#}"
+    );
+    let view = entries[0]["projection"].as_str().expect("a view");
+    assert!(view.starts_with("shelf:"), "{map:#}");
+    let shown: Value =
+        serde_json::from_str(&store.ok(&["task", "show", view, "--json"])).expect("the view");
+    assert_eq!(shown["items"][0]["item"]["title"], "Sunny work");
+    assert_eq!(
+        files_under(&store, "shelf").len(),
+        2,
+        "the view's project and the view"
+    );
+    for (path, bytes) in tree(&store.folder("shelf")) {
+        let text = public_text(&bytes);
+        for named in ["vault", "Quiet work", "One goal", "quietharbor", "draft:"] {
+            assert!(!text.contains(named), "{path} names {named}:\n{text}");
+        }
+    }
+    for elsewhere in ["site", "archive"] {
+        assert_eq!(
+            files_under(&store, elsewhere),
+            Vec::<String>::new(),
+            "{elsewhere} holds nothing"
+        );
     }
 }
 

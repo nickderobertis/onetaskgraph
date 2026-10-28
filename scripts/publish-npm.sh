@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Publish this repository's npm packages: the five platform carriers, the launcher that
-# selects between them, and the TypeScript SDK.
+# Publish this repository's npm packages: the platform carriers, the launcher that selects
+# between them, and the TypeScript SDK.
+#
+# Which of them is NPM_PUBLISH_SET's to say, because more than one job publishes them: each
+# `build-<platform>` job of .github/workflows/release.yml sends its own carriers
+# (`carriers`, narrowed to NPM_PLATFORMS), and the `publish` job sends the launcher and the
+# SDK (`root`) only once every platform's carrier is there for the launcher to resolve.
+# Unset, it is `all`, every package in that order, which scripts/check-npm-publish.sh drives.
 #
 # A script rather than a block of YAML inside .github/workflows/release.yml, because this
 # is the one publication path nothing could drive before it ran for real: a release is the
@@ -22,8 +28,10 @@
 # republished, so a release that partly published can be re-run.
 #
 # Inputs: NODE_AUTH_TOKEN (required); NPM_REGISTRY (optional — the public registry by
-# default; the check above is the only thing that sets it); and NPM_CARRIERS (optional —
-# `dist/carriers`, where the release workflow downloads the per-platform tarballs).
+# default; only the checks and journeys that stand a registry up set it); NPM_CARRIERS
+# (optional — `dist/carriers`, the directory holding the per-platform tarballs);
+# NPM_PUBLISH_SET (optional — `all`, `carriers` or `root`); and NPM_PLATFORMS (optional —
+# the space-separated carriers `carriers` sends, every one under npm/platforms by default).
 set -euo pipefail
 
 # Every failure below this point says what went wrong and what to do about it. This one
@@ -46,6 +54,33 @@ cd "$ROOT" || fatal \
   "check that directory's permissions, then re-run"
 
 readonly CARRIERS="${NPM_CARRIERS:-dist/carriers}"
+readonly PUBLISH_SET="${NPM_PUBLISH_SET:-all}"
+case "$PUBLISH_SET" in
+  all|carriers|root) ;;
+  *)
+    echo "NPM_PUBLISH_SET must be all, carriers or root (received: $PUBLISH_SET)" >&2
+    echo "next: unset it to publish every package, as scripts/check-npm-publish.sh does" >&2
+    exit 64;;
+esac
+selected_platforms=""
+for package in npm/platforms/*; do selected_platforms="$selected_platforms ${package##*/}"; done
+if [ -n "${NPM_PLATFORMS:-}" ]; then
+  for platform in $NPM_PLATFORMS; do
+    # A name from the inventory, never a path: `../` would reach a manifest outside it.
+    [[ " $selected_platforms " == *" $platform "* ]] || {
+      echo "NPM_PLATFORMS names $platform, which is not one of the platforms under npm/platforms" >&2
+      echo "next: name only platforms this repository releases:$selected_platforms" >&2
+      exit 64
+    }
+  done
+  selected_platforms=" $NPM_PLATFORMS"
+  [ -n "${NPM_PLATFORMS//[[:space:]]/}" ] || {
+    echo "NPM_PLATFORMS names no platform, so no carrier would be published" >&2
+    echo "next: name one or more of:$(for package in npm/platforms/*; do printf ' %s' "${package##*/}"; done), or unset it for every one" >&2
+    exit 64
+  }
+fi
+readonly selected_platforms
 registry=${NPM_REGISTRY:-https://registry.npmjs.org/}
 readonly registry
 
@@ -65,7 +100,7 @@ if ! [[ $registry =~ $REGISTRY_URL ]]; then
   echo "next: unset NPM_REGISTRY to publish to https://registry.npmjs.org/" >&2
   exit 64
 fi
-[ -d "$CARRIERS" ] || {
+[ "$PUBLISH_SET" = root ] || [ -d "$CARRIERS" ] || {
   echo "no carrier directory at $CARRIERS" >&2
   echo "next: download the release workflow's carrier-* artifacts into it, or set" >&2
   echo "next: NPM_CARRIERS to the directory holding the per-platform .tgz files" >&2
@@ -136,7 +171,9 @@ publish_if_absent() {
 carrier_specs=()
 carrier_files=()
 absent=""
-for package in npm/platforms/*; do
+for platform in $selected_platforms; do
+  [ "$PUBLISH_SET" != root ] || break
+  package="npm/platforms/$platform"
   # A manifest node cannot read leaves these empty rather than ending the script: node
   # has already said why on stderr, and the guards below are what name the file to fix.
   name=$(node -p "require('./$package/package.json').name") || true
@@ -176,10 +213,12 @@ printf '%s\n' "$sdk_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(
   echo "next: version, then rerun" >&2
   exit 64
 }
-for directory in ./npm/cli ./sdks/typescript; do
-  [ -d "$directory" ] || absent="$absent
+if [ "$PUBLISH_SET" != carriers ]; then
+  for directory in ./npm/cli ./sdks/typescript; do
+    [ -d "$directory" ] || absent="$absent
   $directory"
-done
+  done
+fi
 [ -z "$absent" ] || {
   echo "these package operands are not there:$absent" >&2
   echo "next: for a tarball, run the release workflow's carrier download (or 'npm pack')" >&2
@@ -197,5 +236,6 @@ while [ "$index" -lt "${#carrier_specs[@]}" ]; do
   publish_if_absent "${carrier_specs[$index]}" "${carrier_files[$index]}"
   index=$((index + 1))
 done
+[ "$PUBLISH_SET" != carriers ] || exit 0
 publish_if_absent "@onetaskgraph/cli@$cli_version" ./npm/cli
 publish_if_absent "@onetaskgraph/sdk@$sdk_version" ./sdks/typescript

@@ -1857,6 +1857,29 @@ pub trait TaskSource: Send + Sync {
         let _ = target;
         Ok(Visibility::Unknown)
     }
+
+    /// The repository a create of `target` would file its issue in, as a normalized origin,
+    /// by the same rule the create itself applies — or `None` for a source that files no
+    /// issue in a repository.
+    ///
+    /// Read-only: it writes nothing, and reads only what that rule reads — for a source whose
+    /// rule looks at the project a new item is filed under, that project, and only when
+    /// `target` names one. It answers where a *create* would file, so an
+    /// [`WriteTarget::Existing`] target, which no create makes, answers `None`.
+    ///
+    /// Defaulted to `None`, the answer of every source that files no issue in a repository.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the create would be refused — refused as the create
+    /// would refuse it — or the read the rule needs failed.
+    async fn creation_repository(
+        &self,
+        target: &WriteTarget<'_>,
+    ) -> Result<Option<Repository>, SourceError> {
+        let _ = target;
+        Ok(None)
+    }
 }
 
 /// The factory that turns one configuration block into a live [`TaskSource`].

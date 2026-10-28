@@ -1,0 +1,65 @@
+{
+  "//": "What release v0.7.1 published, as each registry served it on 2026-10-16: the GitHub Release's assets (gh release view v0.7.1 --json assets), https://pypi.org/pypi/onetaskgraph-cli/0.7.1/json and onetaskgraph-sdk's, https://registry.npmjs.org/@onetaskgraph/<package>/0.7.1, and https://crates.io/api/v1/crates/<crate>/0.7.1 (each answering 200). x86_64-apple-darwin is recorded because v0.7.1 published it; it is not released any more, and .github/tests/release.test.mjs holds the plan to everything else.",
+  "version": "0.7.1",
+  "targets": {
+    "x86_64-unknown-linux-gnu": {
+      "assets": [
+        "onetaskgraph-v0.7.1-x86_64-unknown-linux-gnu.tar.gz",
+        "onetaskgraph-v0.7.1-x86_64-unknown-linux-gnu.tar.gz.sha256"
+      ],
+      "wheel": "onetaskgraph_cli-0.7.1-py3-none-manylinux_2_39_x86_64.whl",
+      "npm": { "name": "@onetaskgraph/cli-linux-x64", "os": ["linux"], "cpu": ["x64"] }
+    },
+    "aarch64-apple-darwin": {
+      "assets": [
+        "onetaskgraph-v0.7.1-aarch64-apple-darwin.tar.gz",
+        "onetaskgraph-v0.7.1-aarch64-apple-darwin.tar.gz.sha256"
+      ],
+      "wheel": "onetaskgraph_cli-0.7.1-py3-none-macosx_11_0_arm64.whl",
+      "npm": { "name": "@onetaskgraph/cli-darwin-arm64", "os": ["darwin"], "cpu": ["arm64"] }
+    },
+    "x86_64-pc-windows-msvc": {
+      "assets": [
+        "onetaskgraph-v0.7.1-x86_64-pc-windows-msvc.zip",
+        "onetaskgraph-v0.7.1-x86_64-pc-windows-msvc.zip.sha256"
+      ],
+      "wheel": "onetaskgraph_cli-0.7.1-py3-none-win_amd64.whl",
+      "npm": { "name": "@onetaskgraph/cli-win32-x64", "os": ["win32"], "cpu": ["x64"] }
+    },
+    "x86_64-apple-darwin": {
+      "assets": [
+        "onetaskgraph-v0.7.1-x86_64-apple-darwin.tar.gz",
+        "onetaskgraph-v0.7.1-x86_64-apple-darwin.tar.gz.sha256"
+      ],
+      "wheel": "onetaskgraph_cli-0.7.1-py3-none-macosx_10_12_x86_64.whl",
+      "npm": null
+    },
+    "aarch64-unknown-linux-gnu": {
+      "assets": [
+        "onetaskgraph-v0.7.1-aarch64-unknown-linux-gnu.tar.gz",
+        "onetaskgraph-v0.7.1-aarch64-unknown-linux-gnu.tar.gz.sha256"
+      ],
+      "wheel": "onetaskgraph_cli-0.7.1-py3-none-manylinux_2_39_aarch64.whl",
+      "npm": { "name": "@onetaskgraph/cli-linux-arm64", "os": ["linux"], "cpu": ["arm64"] }
+    }
+  },
+  "independent": {
+    "crates": [
+      "onetaskgraph-plugin-api",
+      "onetaskgraph-in-memory",
+      "onetaskgraph-local-md",
+      "onetaskgraph-linear",
+      "onetaskgraph-github-projects",
+      "onetaskgraph-status-options",
+      "onetaskgraph-core",
+      "onetaskgraph"
+    ],
+    "pypi": {
+      "onetaskgraph-sdk": [
+        "onetaskgraph_sdk-0.7.1-py3-none-any.whl",
+        "onetaskgraph_sdk-0.7.1.tar.gz"
+      ]
+    },
+    "npm": ["@onetaskgraph/cli", "@onetaskgraph/sdk"]
+  }
+}

@@ -981,6 +981,13 @@ answers the status the engine would write, so a status compares as the plugin's 
 engine needs one it reads the item with `get_task`, `get_project` or `get_document`. A plugin
 written against this document implements nothing more.
 
+Nor is the repository a create would file its issue in: for a hosted source the engine answers
+`TaskSource::creation_repository` by the trait's default, none, so `task locate` reports
+`creates_in` as `null` for a destination hosted over this protocol, and the plugin's own
+`write_task` decides where anything it creates is filed — which the `task locate` journey
+drives against a board hosted this way. A plugin written against this document implements
+nothing more.
+
 ### 4.9a Image assets on `write_task` and `write_document`
 
 A task's or a document's content references an image **asset** as a Markdown image whose

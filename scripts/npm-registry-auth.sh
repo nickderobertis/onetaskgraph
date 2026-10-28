@@ -8,7 +8,7 @@
 # The file names the variable; the token's value never reaches it.
 set -euo pipefail
 usage() { echo "usage: scripts/npm-registry-auth.sh [REGISTRY_URL]" >&2; echo "next: $1" >&2; exit 64; }
-[[ $# -le 1 ]] || usage "pass at most one registry URL, as .github/workflows/release.yml does"
+[[ $# -le 1 ]] || usage "pass at most one registry URL, as scripts/publish-npm.sh does"
 registry=${1:-https://registry.npmjs.org/}
 # The authority becomes npm's auth key, so a URL without a host would key the token to
 # nothing and publish anonymously. "everything up to the next slash" is not that check: it

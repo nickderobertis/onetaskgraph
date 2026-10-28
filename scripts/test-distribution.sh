@@ -227,6 +227,16 @@ if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE
 [[ $intel_mac_status -eq 69 ]] || { cat "$tmp/error" >&2; echo "Intel macOS install exited $intel_mac_status, expected 69; next: inspect the Darwin:x86_64 branch of scripts/install.sh" >&2; exit 1; }
 grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS refusal did not say Intel macOS is no longer supported; next: inspect platform diagnostics" >&2; exit 1; }
 [[ ! -e "$tmp/intel-mac-bin" ]] || { echo "the Intel macOS refusal created an installation directory; next: refuse before any download or write" >&2; exit 1; }
+# Linux arm64 is released, and an arm64 Linux host installs its own archive and no other —
+# a stand-in, so the selection is proven on a host of either architecture.
+arm_name="onetaskgraph-${tag}-aarch64-unknown-linux-gnu.tar.gz"
+mkdir -p "$tmp/arm-payload"
+printf 'linux arm64 payload\n' > "$tmp/arm-payload/onetaskgraph"
+tar -czf "$tmp/releases/$tag/$arm_name" -C "$tmp/arm-payload" onetaskgraph
+(cd "$tmp/releases/$tag" && if command -v sha256sum >/dev/null; then sha256sum "$arm_name"; else shasum -a 256 "$arm_name"; fi) > "$tmp/canonical/$tag/$arm_name.sha256"
+printf '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo aarch64;; esac\n' > "$tmp/shims/uname"
+PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/linux-arm64-bin" "$root/scripts/install.sh" >/dev/null 2>"$tmp/error" || { cat "$tmp/error" >&2; echo "the Linux arm64 install failed; next: inspect the Linux:aarch64 branch of scripts/install.sh" >&2; exit 1; }
+cmp -s "$tmp/arm-payload/onetaskgraph" "$tmp/linux-arm64-bin/onetaskgraph" || { echo "the Linux arm64 install did not install the aarch64-unknown-linux-gnu archive's binary; next: inspect the Linux:aarch64 branch of scripts/install.sh" >&2; exit 1; }
 rm "$tmp/shims/uname" "$tmp/shims/curl"
 printf 'not a directory' > "$tmp/not-a-directory"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/not-a-directory/child" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "uncreatable installation directory was accepted; next: inspect directory creation" >&2; exit 1; fi
@@ -374,6 +384,21 @@ grep -q 'unsupported platform' "$tmp/error" || { cat "$tmp/error" >&2; echo "uns
 if node -e 'Object.defineProperty(process,"platform",{value:"darwin"}); Object.defineProperty(process,"arch",{value:"x64"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then intel_launcher_status=0; else intel_launcher_status=$?; fi
 [[ $intel_launcher_status -eq 64 ]] || { cat "$tmp/error" >&2; echo "Intel macOS launcher exited $intel_launcher_status, expected 64; next: inspect the darwin-x64 refusal in npm/cli/bin/onetaskgraph.js" >&2; exit 1; }
 grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS launcher refusal did not say Intel macOS is no longer supported; next: inspect launcher diagnostics" >&2; exit 1; }
+# Every platform released resolves its own carrier: the spawn is intercepted, so this proves
+# which binary the launcher would run for each platform on any host, Windows included.
+for supported in linux:x64 linux:arm64 darwin:arm64 win32:x64; do
+  supported_platform="${supported%%:*}"; supported_arch="${supported#*:}"; supported_key="$supported_platform-$supported_arch"
+  supported_binary=onetaskgraph; [[ $supported_platform != win32 ]] || supported_binary=onetaskgraph.exe
+  supported_dir="$tmp/supported/node_modules/@onetaskgraph/cli-$supported_key"
+  mkdir -p "$supported_dir/bin"
+  printf '{"name":"@onetaskgraph/cli-%s","version":"0.0.0"}\n' "$supported_key" > "$supported_dir/package.json"
+  printf 'stand-in carrier\n' > "$supported_dir/bin/$supported_binary"
+  resolved=$(cd "$tmp/supported" && NODE_PATH="$tmp/supported/node_modules" node -e 'require("node:child_process").spawnSync = (command) => { process.stdout.write(command); return { status: 0 }; }; Object.defineProperty(process,"platform",{value:process.argv[2]}); Object.defineProperty(process,"arch",{value:process.argv[3]}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" "$supported_platform" "$supported_arch" 2>"$tmp/error") || { cat "$tmp/error" >&2; echo "the launcher did not resolve the $supported_key carrier; next: inspect the package map in npm/cli/bin/onetaskgraph.js" >&2; exit 1; }
+  case "${resolved//\\//}" in
+    */cli-"$supported_key"/bin/"$supported_binary") ;;
+    *) echo "the launcher resolved '$resolved' for $supported_key, not its own carrier's binary; next: inspect the package map in npm/cli/bin/onetaskgraph.js" >&2; exit 1;;
+  esac
+done
 mkdir -p "$tmp/python-wheel"
 build_release_wheel "$tmp/python-wheel"
 "$python_bin" "$root/scripts/test-release-products.py" --wheel-dir "$tmp/python-wheel" --target "$target"
@@ -866,6 +891,10 @@ restore_contract_repo() {
   cp "$root/scripts/publish-npm.sh" "$tmp/contract-repo/scripts/publish-npm.sh"
   cp "$root/scripts/npm-registry-auth.sh" "$tmp/contract-repo/scripts/npm-registry-auth.sh"
   cp "$root/scripts/check-distribution-contract.sh" "$tmp/contract-repo/scripts/check-distribution-contract.sh"
+  cp "$root/scripts/release_cd.py" "$root/scripts/release_products.py" "$root/scripts/install.sh" "$tmp/contract-repo/scripts/"
+  cp "$root/release-targets.toml" "$tmp/contract-repo/release-targets.toml"
+  rm -rf "$tmp/contract-repo/npm"
+  cp -R "$root/npm" "$tmp/contract-repo/npm"
 }
 restore_contract_repo
 (cd "$tmp/contract-repo" && ./scripts/check-distribution-contract.sh) || { echo "the distribution contract refused the release path it is meant to accept; next: rerun scripts/check-distribution-contract.sh" >&2; exit 1; }
@@ -873,7 +902,7 @@ restore_contract_repo
 # would end the contract on sed's own diagnostic, before the refusal that carries the next
 # action. A sed that fails for that one read and no other is what forces the handler.
 mkdir -p "$tmp/contract-shims"
-printf '#!/bin/sh\ncase "$*" in *publish-npm*) echo "sed: simulated read failure" >&2; exit 2;; esac\nexec %s "$@"\n' "$(command -v sed)" > "$tmp/contract-shims/sed"
+printf '#!/bin/sh\ncase "$*" in *release.yml*) echo "sed: simulated read failure" >&2; exit 2;; esac\nexec %s "$@"\n' "$(command -v sed)" > "$tmp/contract-shims/sed"
 chmod +x "$tmp/contract-shims/sed"
 if (cd "$tmp/contract-repo" && PATH="$tmp/contract-shims:$PATH" ./scripts/check-distribution-contract.sh) >"$tmp/contract-output" 2>"$tmp/error"; then
   echo "the distribution contract accepted a release workflow it could not read; next: inspect scripts/check-distribution-contract.sh" >&2
@@ -899,4 +928,4 @@ assert_contract_refuses() {
 assert_contract_refuses 'NODE_AUTH_TOKEN alone leaves the npm client logged out' scripts/publish-npm.sh 'NPM_CONFIG_USERCONFIG=$(scripts/npm-registry-auth.sh'
 assert_contract_refuses 'must be exported as NPM_CONFIG_USERCONFIG' scripts/publish-npm.sh 'export NPM_CONFIG_USERCONFIG'
 assert_contract_refuses 'must name NODE_AUTH_TOKEN rather than carry a token value' scripts/npm-registry-auth.sh ':_authToken=${NODE_AUTH_TOKEN}'
-assert_contract_refuses 'no publish-npm job to authenticate' .github/workflows/release.yml '  publish-npm:'
+assert_contract_refuses 'no npm publication step to authenticate' .github/workflows/release.yml 'publish --to npm'

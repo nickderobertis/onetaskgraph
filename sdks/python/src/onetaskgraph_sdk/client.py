@@ -7,21 +7,30 @@ import shutil
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from pydantic import RootModel, TypeAdapter, ValidationError
 
 from ._generated import GeneratedClient
 from ._generated.client import POSITIONALS
 
+if TYPE_CHECKING:
+    from ._generated.failure_document import Failure
+
 
 class OnetaskgraphError(RuntimeError):
     """The command could not produce a response."""
 
-    def __init__(self, message: str, *, exit_code: int) -> None:
-        """Remember both the diagnostic and stable process status."""
+    def __init__(self, message: str, *, exit_code: int, failure: Failure | None = None) -> None:
+        """Remember the diagnostic, the stable process status and the binary's failure.
+
+        ``failure`` is the failure document the binary wrote under ``--json`` when it refused
+        the command, so a caller branches on its ``kind`` rather than on the message's
+        wording; ``None`` when the process wrote none.
+        """
         super().__init__(message)
         self.exit_code = exit_code
+        self.failure = failure
 
 
 class Client(GeneratedClient):
@@ -96,7 +105,11 @@ class Client(GeneratedClient):
         arguments.extend(("--json", "--no-interactive"))
         completed = await self._invoke_process(arguments, stdin)
         if completed.returncode not in {0, 4}:
-            raise OnetaskgraphError(completed.stderr.strip(), exit_code=completed.returncode)
+            raise OnetaskgraphError(
+                completed.stderr.strip(),
+                exit_code=completed.returncode,
+                failure=_failure_of(completed.stdout),
+            )
         try:
             # TypeAdapter validates `model`; its dynamic constructor cannot preserve T.
             return cast(T, TypeAdapter(model).validate_json(completed.stdout))
@@ -132,6 +145,16 @@ class Client(GeneratedClient):
         return subprocess.CompletedProcess(
             arguments, process.returncode or 0, stdout.decode(), stderr.decode()
         )
+
+
+def _failure_of(stdout: str) -> Failure | None:
+    """The failure a refused command wrote, when it wrote a document its schema describes."""
+    from ._generated.failure_document import FailureDocument
+
+    try:
+        return FailureDocument.model_validate_json(stdout).failure
+    except ValidationError:
+        return None
 
 
 def _resolve_binary(explicit: str | Path | None, environment: Mapping[str, str] | None) -> str:

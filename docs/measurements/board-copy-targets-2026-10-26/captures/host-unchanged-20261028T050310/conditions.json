@@ -1,0 +1,66 @@
+{
+ "sources.authoring.plugin": {
+  "layer": "file",
+  "value": "local-md"
+ },
+ "sources.authoring.visibility": {
+  "layer": "file",
+  "value": "private"
+ },
+ "sources.drafts.plugin": {
+  "layer": "file",
+  "value": "local-md"
+ },
+ "sources.examples.plugin": {
+  "layer": "file",
+  "value": "local-md"
+ },
+ "sources.follow-up-runs.plugin": {
+  "layer": "file",
+  "value": "local-md"
+ },
+ "sources.follow-up-runs.visibility": {
+  "layer": "file",
+  "value": "private"
+ },
+ "sources.followups.cache.enabled": {
+  "layer": "file",
+  "value": true
+ },
+ "sources.followups.plugin": {
+  "layer": "file",
+  "value": "github-projects"
+ },
+ "sources.followups.visibility": {
+  "layer": "file",
+  "value": "public"
+ },
+ "sources.plans.cache.enabled": {
+  "layer": "file",
+  "value": true
+ },
+ "sources.plans.plugin": {
+  "layer": "file",
+  "value": "github-projects"
+ },
+ "sources.plans.visibility": {
+  "layer": "file",
+  "value": "public"
+ },
+ "sources.test-fixtures.plugin": {
+  "layer": "file",
+  "value": "local-md"
+ },
+ "sources.test-fixtures.visibility": {
+  "layer": "file",
+  "value": "private"
+ },
+ "write_policy.check_command": {
+  "layer": "environment",
+  "value": "set"
+ },
+ "write_policy.visibility_command": {
+  "layer": "environment",
+  "value": "set"
+ }
+}

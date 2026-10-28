@@ -33,12 +33,12 @@ use crate::template::{
 use crate::{
     CommentList, CommentWritten, CompleteAction, CopyAction, CopyLink, CopyOutcome, CopyReport,
     CopyVia, DeletedComment, Delivered, DeliveryOutcome, DocumentDetail, Failure, FailureClass,
-    FailureDocument, GlobalId, IssueCompleted, IssuesCompleted, MetadataSet, PageToken, Predicate,
-    ProjectGraph, ProjectStatusSet, PublicProjections, Qualified, QualifiedEdge, QualifiedEndpoint,
-    QueryPlan, QueryResponse, ReconcileOutcome, Regenerated, SearchHit, SearchKind, SourceFailure,
-    SourceListing, SourcePlan, StatusReconciled, StatusesReconciled, TaskAssetNames,
-    TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet, TaskStatusSet, TaskUpdated,
-    TemplateAnswers,
+    FailureDocument, GlobalId, IssueCompleted, IssuesCompleted, LocateReport, MetadataSet,
+    PageToken, Predicate, ProjectGraph, ProjectStatusSet, PublicProjections, Qualified,
+    QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, ReconcileOutcome, Regenerated,
+    SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan, StatusReconciled,
+    StatusesReconciled, TaskAssetNames, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet,
+    TaskStatusSet, TaskUpdated, TemplateAnswers,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -54,7 +54,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 47;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 48;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -236,6 +236,9 @@ pub fn schema_bundle() -> Value {
     // one: a caller branches on which rule found an item and on what became of its link.
     roots.insert("CopyVia", schema_for!(CopyVia));
     roots.insert("CopyLink", schema_for!(CopyLink));
+    // What `task locate` answers: where a copy would land each task, what it would update and
+    // where a create would file its issue.
+    roots.insert("LocateReport", schema_for!(LocateReport));
 
     // What `template variables` and `template render` answer with, and the declaration and
     // the two vocabularies inside the first, which a caller branches on by name.

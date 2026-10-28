@@ -1,0 +1,37 @@
+// Repository files read by the release tests and the real release recipes they drive.
+// Globs include the source payloads cargo, maturin and npm build/package, not just their
+// manifests. ci-contexts.spec reconciles this inventory with the target that runs them;
+// graph-only ci-contexts retains workflow-graph.graphReadSet() alone.
+export const cdJourneyReadSet = [
+  "config/github-interfaces.toml",
+  "pyproject.toml",
+  "release-plz.toml",
+  "npm/**/*",
+  "scripts/release_cd.py",
+  "scripts/verify-release-products.py",
+  "scripts/release-wheel-binary.py",
+  "scripts/loopback-release-registries.py",
+  "scripts/enable-release-automerge.py",
+  "scripts/publish-npm.sh",
+  "scripts/npm-registry-auth.sh",
+  "scripts/install.sh",
+  "scripts/crate-publication-status.sh",
+  "scripts/crate-sibling-resolution.sh",
+  "scripts/prepare-release-pr.sh",
+  "scripts/select-release-version.sh",
+  "scripts/scoped-release-plz.sh",
+  "scripts/set-version.sh",
+  "scripts/scratch-clone.sh",
+  "justfile",
+  "Cargo.toml",
+  "Cargo.lock",
+  "rust-toolchain.toml",
+  ".cargo/**/*",
+  "crates/**/*",
+  "sdks/**/*",
+  "README.md",
+  "LICENSE",
+  "uv.lock",
+  "bun.lock",
+  "package.json",
+];

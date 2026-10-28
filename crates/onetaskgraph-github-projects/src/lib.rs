@@ -9069,23 +9069,33 @@ impl GitHubProjectsSource {
         &self,
         incoming: &Incoming<'_>,
     ) -> Result<RepositoryTarget, SourceError> {
+        let what = format!(
+            "{} {:?}",
+            incoming.written.kind().describes(),
+            incoming.title
+        );
+        self.creation_rule(incoming.repositories, incoming.parent, &what)
+            .await
+    }
+
+    /// [`Self::creation_target`]'s rule over what it reads of the item — its `repositories`
+    /// and the project issue it is filed under — with `what` naming the item in a refusal: the
+    /// one place the rule is, so the create and [`TaskSource::creation_repository`] cannot
+    /// answer differently.
+    async fn creation_rule(
+        &self,
+        repositories: &[Repository],
+        parent: Option<&NativeId>,
+        what: &str,
+    ) -> Result<RepositoryTarget, SourceError> {
         let fallback = self.configured_repository()?;
-        let what = |incoming: &Incoming<'_>| {
-            format!(
-                "{} {:?}",
-                incoming.written.kind().describes(),
-                incoming.title
-            )
-        };
-        let parent = match incoming.parent {
+        let parent = match parent {
             Some(parent) => Some(self.bound_item(parent).await?.ok_or_else(|| {
                 SourceError::Refused {
                     message: format!(
                         "GitHub project issue {} was not found on the board of source {}, so {} \
                          cannot be filed under it",
-                        parent.0,
-                        self.name,
-                        what(incoming)
+                        parent.0, self.name, what
                     ),
                 }
             })?),
@@ -9102,9 +9112,7 @@ impl GitHubProjectsSource {
                         message: format!(
                             "GitHub project item {} on the board of source {} is a draft, \
                              which cannot have sub-issues, so {} cannot be filed under it",
-                            parent.id.0,
-                            self.name,
-                            what(incoming)
+                            parent.id.0, self.name, what
                         ),
                     });
                 }
@@ -9127,19 +9135,19 @@ impl GitHubProjectsSource {
                                 .as_ref()
                                 .map_or("no repository", Repository::as_str),
                             RepositoryTarget::HOST,
-                            what(incoming)
+                            what
                         ),
                     })
             })
             .transpose()?;
-        match incoming.repositories {
+        match repositories {
             [named] => {
                 let target =
                     RepositoryTarget::from_origin(named).map_err(|_| SourceError::Refused {
                         message: format!(
                             "{} names repository {}, which is not a {}/owner/name repository \
                              source {} can create an issue in; name one that is, or name none",
-                            what(incoming),
+                            what,
                             named.as_str(),
                             RepositoryTarget::HOST,
                             self.name
@@ -9154,7 +9162,7 @@ impl GitHubProjectsSource {
                              {}, owned by {}, and GitHub files a sub-issue only in a repository \
                              of the same owner as its parent issue; name a repository of {}, or \
                              name none",
-                            what(incoming),
+                            what,
                             target.slug(),
                             target.owner,
                             parents.slug(),
@@ -13192,6 +13200,26 @@ impl TaskSource for GitHubProjectsSource {
         target: &onetaskgraph_plugin_api::WriteTarget<'_>,
     ) -> Result<onetaskgraph_plugin_api::Visibility, SourceError> {
         self.write_visibility(target).await
+    }
+    /// Where a create of `target` would file its issue, by [`Self::creation_rule`] — the rule
+    /// the create applies — reading the parent project's issue only when `target` names one.
+    async fn creation_repository(
+        &self,
+        target: &onetaskgraph_plugin_api::WriteTarget<'_>,
+    ) -> Result<Option<Repository>, SourceError> {
+        let onetaskgraph_plugin_api::WriteTarget::New {
+            repositories,
+            project,
+        } = target
+        else {
+            return Ok(None);
+        };
+        let target = self
+            .creation_rule(repositories, *project, "a new item")
+            .await?;
+        Repository::try_from(target.origin())
+            .map(Some)
+            .map_err(|message| SourceError::Malformed { message })
     }
     async fn health(&self) -> Result<Health, SourceError> {
         let board = self.board_page(None, 1).await?;

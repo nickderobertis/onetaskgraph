@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drive scripts/crate-sibling-resolution.sh — the step publish-crates runs before each
+# Drive scripts/crate-sibling-resolution.sh — the step the publish job runs before each
 # `cargo publish` — against a registry answer this check supplies, and prove it refuses.
 #
 # The registry is a sparse index of static files served on loopback, holding every crate of
@@ -156,9 +156,9 @@ expect_refused() {
 # 1. The tree as it stands: every published crate, in the order the release job publishes
 #    them, resolves each sibling to the version it is released with although a newer patch
 #    of every one of them is on the registry.
-order="$(sed -n 's/^ *for crate in \(onetaskgraph[a-z -]*\); do$/\1/p' .github/workflows/release.yml)"
-[ -n "$order" ] || fatal "could not read the publish order out of .github/workflows/release.yml" \
-  "keep publish-crates' 'for crate in …; do' loop on one line, which is what this check reads"
+order="$(python3 -c 'import sys; sys.path.insert(0, "scripts"); from release_cd import CRATE_PUBLICATION_ORDER; print(" ".join(CRATE_PUBLICATION_ORDER))' | tr -d '\r')" || order=""
+[ -n "$order" ] || fatal "could not read the publish order out of scripts/release_cd.py" \
+  "restore CRATE_PUBLICATION_ORDER there, which is the order the publish job sends crates in"
 for crate in $order; do
   run_check "$crate"
   if [ "$STATUS" -ne 0 ] || [ -n "$OUTPUT" ]; then
