@@ -79,7 +79,10 @@ const files = {
     name: "@onetaskgraph/cli",
     version: "1.2.3",
     optionalDependencies: Object.fromEntries(
-      ["linux-x64", "darwin-arm64", "win32-x64"].map((x) => [`@onetaskgraph/cli-${x}`, "1.2.3"]),
+      ["linux-x64", "linux-arm64", "darwin-arm64", "win32-x64"].map((x) => [
+        `@onetaskgraph/cli-${x}`,
+        "1.2.3",
+      ]),
     ),
   }),
   "bun.lock": JSON.stringify(
