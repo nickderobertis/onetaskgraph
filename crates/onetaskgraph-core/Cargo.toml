@@ -34,6 +34,7 @@ onetaskgraph-plugin-api.workspace = true
 jsonschema.workspace = true
 minijinja.workspace = true
 # A public projection's content is read for the local links it could not carry.
+# The workspace's 0.13.5 floor (RUSTSEC-2026-0414) is this crate's published requirement.
 pulldown-cmark.workspace = true
 schemars.workspace = true
 secrecy.workspace = true
