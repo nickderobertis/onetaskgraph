@@ -227,7 +227,7 @@ esac
 # executables by their dep-info off the copy's. Only files naming COPY_DIR are the copy's: this
 # repository's own build of the crate may be writing beside them while this runs.
 copies="$(find "$BUILD_DIR/debug/deps" -name '*.d' -newer "$scratch/started" -type f \
-  -exec grep -l "$COPY_DIR/" {} + 2>/dev/null || true)"
+  -exec grep -El "crates[/\\\\]+${CRATE}-fixture-discrimination[/\\\\]+" {} + 2>/dev/null || true)"
 if [ -z "$copies" ]; then
   echo "check-fixture-discrimination: no dep-info written by this run names $COPY_DIR/, so the" >&2
   echo "check-fixture-discrimination: copy was not built from the directory it was moved to." >&2
@@ -237,7 +237,7 @@ if [ -z "$copies" ]; then
 fi
 named=""
 while IFS= read -r copy; do
-  if grep -q "crates/$CRATE/" "$copy"; then
+  if grep -Eq "crates[/\\\\]+${CRATE}[/\\\\]+" "$copy"; then
     named="$copy"
     break
   fi
