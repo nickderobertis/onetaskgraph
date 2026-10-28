@@ -1537,6 +1537,10 @@ fn combined_store() -> Store {
     })
 }
 
+/// Every source `site`'s routes can reach, itself first and `shelf` once although two entries
+/// name it — whatever repository and classification are asked about.
+const REACHABLE: [&str; 4] = ["site", "shelf", "vault", "archive"];
+
 /// What `sources route site` answers for `repository` under `classification`, when one is
 /// given.
 fn routed(store: &Store, repository: &str, classification: Option<&str>) -> Value {
@@ -1555,17 +1559,17 @@ fn combined_routes_send_each_owner_s_private_work_to_its_own_private_source() {
     // entry's index as written — the `hiddenco` one over the repository entry written above it.
     assert_eq!(
         routed(&store, A, Some("private")),
-        json!({"source": "site", "destination": "vault", "route": 1})
+        json!({"source": "site", "destination": "vault", "route": 1, "reachable": REACHABLE})
     );
     assert_eq!(
         routed(&store, B, Some("private")),
-        json!({"source": "site", "destination": "archive", "route": 2})
+        json!({"source": "site", "destination": "archive", "route": 2, "reachable": REACHABLE})
     );
     // The mixed owner's public repository, under the default classification, takes the
     // repository entry no combined private entry shadows.
     assert_eq!(
         routed(&store, SUNNY, None),
-        json!({"source": "site", "destination": "shelf", "route": 0})
+        json!({"source": "site", "destination": "shelf", "route": 0, "reachable": REACHABLE})
     );
 
     // A task naming the private repository, classified private by the policy, lands in `vault`
