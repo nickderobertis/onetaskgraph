@@ -2,11 +2,11 @@
 # llmlint: ignore-file[async_typed_clients_at_boundaries] One release job runs these registry calls strictly in order — a publication must land before the verification that reads it back — so there is no concurrent work for an async client to overlap, and the build tools it drives (maturin, npm, uv, cargo) are subprocesses, not services.
 """Build, package, test-install, publish and verify one release platform's artifacts.
 
-This is the whole body of the four CD jobs of .github/workflows/release.yml. Each job calls
-it through one justfile recipe — `release-linux`, `release-macos`, `release-windows`, and
-`release-publish` for the platform-independent `publish` job — one phase per workflow step,
-so that a step is one decision the workflow test can read and a publication cannot run
-before the test-install that guards it:
+This is the whole body of the five CD jobs of .github/workflows/release.yml. Each job calls
+it through one justfile recipe — `release-linux`, `release-linux-arm64`, `release-macos`,
+`release-windows`, and `release-publish` for the platform-independent `publish` job — one
+phase per workflow step, so that a step is one decision the workflow test can read and a
+publication cannot run before the test-install that guards it:
 
   plan       list, without building, every file, package, wheel tag and target a platform
              releases (the contract scripts and .github/tests hold to v0.7.1's artifacts)
@@ -72,11 +72,11 @@ ReleaseTargetId = NewType("ReleaseTargetId", str)
 RepositoryName = NewType("RepositoryName", str)
 AssetId = NewType("AssetId", int)
 Token = NewType("Token", str)
-PlanPlatform = Literal["linux", "macos", "windows", "independent"]
-BUILD_PLATFORMS = ("linux", "macos", "windows")
+PlanPlatform = Literal["linux", "linux-arm64", "macos", "windows", "independent"]
+BUILD_PLATFORMS = ("linux", "linux-arm64", "macos", "windows")
 PLATFORM_REGISTRIES: tuple[Registry, ...] = ("github", "pypi", "npm")
 INDEPENDENT_REGISTRIES: tuple[Registry, ...] = ("crates", "pypi", "npm")
-JOB_OF = {"linux": "build-linux", "macos": "build-macos", "windows": "build-windows", "independent": "publish"}
+JOB_OF = {"linux": "build-linux", "linux-arm64": "build-linux-arm64", "macos": "build-macos", "windows": "build-windows", "independent": "publish"}
 
 CLI_DISTRIBUTION = "onetaskgraph-cli"
 SDK_DISTRIBUTION = "onetaskgraph-sdk"
@@ -1002,7 +1002,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 build(args.platform, tag, dist)
             case "package":
                 if args.platform == "independent":
-                    parser.error("`package` packages a platform's wheels: --platform linux, macos or windows")
+                    parser.error("`package` packages a platform's wheels: --platform linux, linux-arm64, macos or windows")
                 for row in platform_targets(args.platform):
                     package_target(row, tag, dist)
             case "publish":

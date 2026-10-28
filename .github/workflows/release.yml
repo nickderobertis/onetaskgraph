@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 # Every run step is one phase of the job's justfile recipe (scripts/release_cd.py). The build
-# jobs do not wait on one another, and `publish` publishes nothing until all three have: a
+# jobs do not wait on one another, and `publish` publishes nothing until all four have: a
 # failed build leaves the other platforms published and the platform-independent packages
 # unpublished until it is re-run, and a re-run sends only what is missing.
 #
@@ -43,6 +43,40 @@ jobs:
       - name: Install and run the Linux npm platform package
         if: ${{ vars.NPM_PUBLISH == 'true' }}
         run: just release-linux verify --from npm --tag "$TAG"
+  # Native on GitHub's hosted ARM Linux runner, so the aarch64 artifacts are built, installed
+  # and run on their own architecture rather than cross-compiled.
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions: { contents: write }
+    env: { TAG: "${{ github.event.release.tag_name }}" }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: { target: aarch64-unknown-linux-gnu }
+      - uses: astral-sh/setup-uv@v7
+      - uses: extractions/setup-just@v4
+      - name: Build, package and test-install the Linux arm64 artifacts
+        run: just release-linux-arm64 build --tag "$TAG"
+      - name: Upload the Linux arm64 archive to the GitHub Release
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: just release-linux-arm64 publish --to github --tag "$TAG"
+      - name: Publish the Linux arm64 wheel to PyPI
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        env: { UV_PUBLISH_TOKEN: "${{ secrets.PYPI_TOKEN }}" }
+        run: just release-linux-arm64 publish --to pypi --tag "$TAG"
+      - name: Publish the Linux arm64 npm platform package
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
+        run: just release-linux-arm64 publish --to npm --tag "$TAG"
+      - name: Install and run the Linux arm64 archive from the GitHub Release
+        run: just release-linux-arm64 verify --from github --tag "$TAG"
+      - name: Install and run the Linux arm64 wheel from PyPI
+        if: ${{ vars.PYPI_PUBLISH == 'true' }}
+        run: just release-linux-arm64 verify --from pypi --tag "$TAG"
+      - name: Install and run the Linux arm64 npm platform package
+        if: ${{ vars.NPM_PUBLISH == 'true' }}
+        run: just release-linux-arm64 verify --from npm --tag "$TAG"
   # Apple Silicon alone: Intel macOS is no longer released, so nothing here cross-compiles
   # or emulates x86_64.
   build-macos:
@@ -112,7 +146,7 @@ jobs:
         if: ${{ vars.NPM_PUBLISH == 'true' }}
         run: just release-windows verify --from npm --tag "$TAG"
   publish:
-    needs: [build-linux, build-macos, build-windows]
+    needs: [build-linux, build-linux-arm64, build-macos, build-windows]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env: { TAG: "${{ github.event.release.tag_name }}" }

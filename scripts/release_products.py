@@ -18,9 +18,9 @@ RunnerLabel = NewType("RunnerLabel", str)
 ArchiveFormat = Literal["tar.gz", "zip"]
 ReleaseOS = Literal["Darwin", "Windows", "Linux"]
 WheelArchitecture = Literal["arm64", "aarch64", "amd64", "x86_64"]
-# The three release platforms, each one CD job of .github/workflows/release.yml
+# The four release platforms, each one CD job of .github/workflows/release.yml
 # (`build-<platform>`) and one recipe of the justfile (`release-<platform>`).
-ReleasePlatform = Literal["linux", "macos", "windows"]
+ReleasePlatform = Literal["linux", "linux-arm64", "macos", "windows"]
 
 # The one grammar a release tag is held to: the GitHub Release the release-plz job cuts is
 # named by it, scripts/install.sh repeats it, and scripts/check-distribution-contract.sh
@@ -46,10 +46,11 @@ class PlatformTarget:
 
 
 # Every target a release builds, in the order each platform's job builds them. Linux arm64
-# and Intel macOS are no longer released: scripts/install.sh and the npm launcher refuse both
-# by name, naming cargo.
+# builds natively on GitHub's hosted ARM Linux runner. Intel macOS is no longer released:
+# scripts/install.sh and the npm launcher refuse it by name, naming cargo.
 PLATFORM_TARGETS: tuple[PlatformTarget, ...] = (
     PlatformTarget("linux", RunnerLabel("ubuntu-latest"), RustTarget("x86_64-unknown-linux-gnu"), NpmPlatform("linux-x64"), "tar.gz", "manylinux_2_39_x86_64"),
+    PlatformTarget("linux-arm64", RunnerLabel("ubuntu-24.04-arm"), RustTarget("aarch64-unknown-linux-gnu"), NpmPlatform("linux-arm64"), "tar.gz", "manylinux_2_39_aarch64"),
     PlatformTarget("macos", RunnerLabel("macos-latest"), RustTarget("aarch64-apple-darwin"), NpmPlatform("darwin-arm64"), "tar.gz", "macosx_11_0_arm64"),
     PlatformTarget("windows", RunnerLabel("windows-latest"), RustTarget("x86_64-pc-windows-msvc"), NpmPlatform("win32-x64"), "zip", "win_amd64"),
 )
@@ -60,7 +61,7 @@ WHEEL_INTERPRETER_TAGS = "py3-none"
 def platform_targets(platform: str) -> tuple[PlatformTarget, ...]:
     selected = tuple(row for row in PLATFORM_TARGETS if row.platform == platform)
     if not selected:
-        raise ValueError(f'unknown release platform {platform!r}; choose one of linux, macos, windows')
+        raise ValueError(f'unknown release platform {platform!r}; choose one of linux, linux-arm64, macos, windows')
     return selected
 
 

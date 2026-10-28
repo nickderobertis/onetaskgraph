@@ -74,7 +74,7 @@ rows="$(cd "$TREE" && "$python_bin" - "$tag" <<'PY' | tr -d '\r'
 import sys
 sys.path.insert(0, "scripts")
 from release_cd import plan
-for platform in ("linux", "macos", "windows"):
+for platform in ("linux", "linux-arm64", "macos", "windows"):
     for artifact in plan(platform, sys.argv[1]):
         if artifact.kind == "wheel":
             print(platform, artifact.target, artifact.file)
@@ -121,7 +121,7 @@ report_unless_archive_lists() {
   grep -qx -- "$2" <<<"$listing" || report "$3"
 }
 
-for platform in linux macos windows; do
+for platform in linux linux-arm64 macos windows; do
   if ! (cd "$TREE" && "$python_bin" scripts/release_cd.py --platform "$platform" package --tag "$tag" --dist "$TREE/dist") > "$scratch/package.log" 2>&1; then
     sed 's/^/    /' "$scratch/package.log" >&2
     report "the $platform packaging failed (its output is above)"
@@ -266,10 +266,10 @@ for broken in [None, {}, {**report, 'target': '../invalid'}, {**report, 'tag': '
     except ValueError:
         continue
     raise SystemExit('malformed verification report was accepted; repair its typed boundary parser')
-# Linux arm64 is no longer released, so the one foreign-architecture case left is an arm64
-# Linux host asked to install the x86_64 Linux release.
-if platform.system() == 'Linux' and platform.machine().lower() in ('aarch64', 'arm64'):
-    linux, = [row for row in PLATFORM_TARGETS if row.platform == 'linux']
+# A Linux host asked to install the other architecture's Linux release.
+if platform.system() == 'Linux':
+    host_arm = platform.machine().lower() in ('aarch64', 'arm64')
+    linux, = [row for row in PLATFORM_TARGETS if row.platform == ('linux' if host_arm else 'linux-arm64')]
     other_target, other_extension, other_npm = linux.target, linux.extension, linux.npm_platform
     other_payload = b'foreign architecture artifact; never executed'
     other_binary = tree / f'target/{other_target}/release/onetaskgraph'

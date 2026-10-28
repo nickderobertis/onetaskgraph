@@ -10,7 +10,7 @@ fail() { echo "distribution contract drift: $1" >&2; echo "next: update the rele
 # directory", which names the sourcing line rather than the file to put back.
 read_lines_path="$(dirname "${BASH_SOURCE[0]}")/read-lines.sh"
 if [ ! -r "$read_lines_path" ] || ! source "$read_lines_path"; then echo "distribution contract drift: could not load scripts/read-lines.sh, which reads both inventories below into arrays" >&2; echo "next: restore it with 'git checkout -- scripts/read-lines.sh'" >&2; exit 1; fi
-expected=(darwin-arm64 linux-x64 win32-x64)
+expected=(darwin-arm64 linux-arm64 linux-x64 win32-x64)
 packages_file="$(mktemp)" || fail "could not create a temporary carrier inventory"
 trap 'rm -f "$packages_file"' EXIT
 if ! find npm/platforms -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort > "$packages_file"; then
@@ -34,8 +34,9 @@ installer_tag_pattern=$(sed -n "/unsupported release tag:/s/.*grep -Eq '\([^']*\
 [[ -n $release_tag_pattern && $release_tag_pattern == "$installer_tag_pattern" ]] || fail "the release platform table and installer accept different release-tag grammars"
 mappings=$(sed 1d <<< "$release_table")
 [[ $mappings == "linux ubuntu-latest x86_64-unknown-linux-gnu tar.gz linux-x64
+linux-arm64 ubuntu-24.04-arm aarch64-unknown-linux-gnu tar.gz linux-arm64
 macos macos-latest aarch64-apple-darwin tar.gz darwin-arm64
-windows windows-latest x86_64-pc-windows-msvc zip win32-x64" ]] || fail "the release platform table builds '${mappings//$'\n'/; }', not x86_64 Linux, Apple Silicon and x86_64 Windows, one job each"
+windows windows-latest x86_64-pc-windows-msvc zip win32-x64" ]] || fail "the release platform table builds '${mappings//$'\n'/; }', not x86_64 Linux, arm64 Linux, Apple Silicon and x86_64 Windows, one job each"
 # Read before it is judged: under `set -e` a sed that cannot open the workflow would end the
 # script here on sed's own diagnostic, and the refusal below — which is where the next action
 # lives — would never run.
@@ -50,8 +51,6 @@ while read -r platform runner target ext npm; do
 done <<< "$mappings"
 ! grep -RqiE 'x86_64-apple-darwin|darwin-x64|rosetta' .github/workflows release-targets.toml npm/platforms npm/cli/package.json scripts/product_versions.py scripts/verify-release-products.py scripts/release_products.py scripts/release_cd.py || fail "an Intel macOS target, carrier or Rosetta step is still declared; Intel macOS is no longer released"
 grep -Fq 'Darwin:x86_64) die 69 "Intel macOS is no longer supported' scripts/install.sh || fail "the installer must refuse Intel macOS by name"
-! grep -RqiE 'aarch64-unknown-linux-gnu|linux-arm64|ubuntu-24.04-arm' .github/workflows release-targets.toml npm/platforms npm/cli/package.json scripts/product_versions.py scripts/release_products.py scripts/release_cd.py justfile || fail "a Linux arm64 target, carrier or runner is still declared; Linux arm64 is no longer released"
-grep -Fq "Linux:aarch64|Linux:arm64) die 69 \"Linux arm64 is no longer supported" scripts/install.sh || fail "the installer must refuse Linux arm64 by name"
 # Maturin owns the canonical bytes, and every other form is staged from them: the wheel is
 # built, its binary taken out, the archive and carrier packed from that, and all of it
 # installed and run — in that order, inside the build phase, before any publication.

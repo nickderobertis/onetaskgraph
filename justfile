@@ -86,7 +86,7 @@ distribution-check:
 distribution-test:
     @{{nx}} run scripts:distribution-test
 
-# The four CD jobs of .github/workflows/release.yml, one recipe each: every step of a job is
+# The five CD jobs of .github/workflows/release.yml, one recipe each: every step of a job is
 # one phase of its recipe (`plan`, `build`, `publish --to <registry>`, `verify --from
 # <registry>`, `available --from <registry>`, or `run --dry-run` for the whole job with
 # nothing sent), so a release runs nothing a contributor cannot. See scripts/release_cd.py.
@@ -94,6 +94,10 @@ distribution-test:
 # The build-linux job: build, package, test-install, publish and verify x86_64 Linux.
 release-linux *args:
     @python3 scripts/release_cd.py --platform linux {{args}}
+
+# The build-linux-arm64 job: build, package, test-install, publish and verify arm64 Linux.
+release-linux-arm64 *args:
+    @python3 scripts/release_cd.py --platform linux-arm64 {{args}}
 
 # The build-macos job: build, package, test-install, publish and verify Apple Silicon.
 release-macos *args:

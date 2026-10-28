@@ -3,9 +3,8 @@ const { spawnSync } = require("node:child_process");
 const { readFileSync, realpathSync } = require("node:fs");
 const { join } = require("node:path");
 const key = `${process.platform}-${process.arch}`;
-const packages = { "linux-x64": "linux-x64", "darwin-arm64": "darwin-arm64", "win32-x64": "win32-x64" };
+const packages = { "linux-x64": "linux-x64", "linux-arm64": "linux-arm64", "darwin-arm64": "darwin-arm64", "win32-x64": "win32-x64" };
 if (key === "darwin-x64") { console.error("onetaskgraph: Intel macOS is no longer supported; releases carry macOS binaries for Apple Silicon only. Install with cargo instead"); process.exit(64); }
-if (key === "linux-arm64") { console.error("onetaskgraph: Linux arm64 is no longer supported; releases carry Linux binaries for x86_64 only. Install with cargo instead: cargo install onetaskgraph"); process.exit(64); }
 if (!packages[key]) { console.error(`onetaskgraph: unsupported platform ${key}; install with cargo instead`); process.exit(64); }
 const expectedPackage = `@onetaskgraph/cli-${packages[key]}`;
 let manifestPath;

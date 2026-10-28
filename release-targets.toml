@@ -16,7 +16,7 @@
 # both SDKs are targets: `sdk-npm` is to `npm` what `sdk-pypi` is to `pypi`.
 #
 # Everything else this repository publishes is a `covers` entry under the target
-# whose release carries it — the three `@onetaskgraph/cli-<platform>` carriers, which
+# whose release carries it — the four `@onetaskgraph/cli-<platform>` carriers, which
 # exist only so the launcher can resolve one at its own exact version, and the six
 # sibling crates, which publish at the one `[workspace.package]` version in the same
 # run. Nothing names either kind on its own, so a target apiece would be several
@@ -68,7 +68,7 @@ covers = [
 id = "pypi:onetaskgraph-cli"
 name = "pypi"
 what = "The standalone `onetaskgraph` binary as a wheel, so `pip install onetaskgraph-cli` puts it on PATH without compiling anything."
-published_by = ".github/workflows/release.yml — the build-linux, build-macos and build-windows jobs, each publishing its own platform's wheel through `just release-<platform> publish --to pypi`, under pyproject.toml's [project] name."
+published_by = ".github/workflows/release.yml — the build-linux, build-linux-arm64, build-macos and build-windows jobs, each publishing its own platform's wheel through `just release-<platform> publish --to pypi`, under pyproject.toml's [project] name."
 manifest = "pyproject.toml"
 
 # The Python SDK, which drives the `pypi:onetaskgraph-cli` release it pins by
@@ -81,15 +81,16 @@ published_by = ".github/workflows/release.yml — the publish job, from the dist
 manifest = "sdks/python/pyproject.toml"
 
 # The launcher an `npm install @onetaskgraph/cli` resolves, published after the
-# three per-platform carriers it pins at its own exact version.
+# four per-platform carriers it pins at its own exact version.
 [[target]]
 id = "npm:@onetaskgraph/cli"
 name = "npm"
 what = "The `onetaskgraph` binary as an npm launcher, which resolves and execs the carrier for the host it is installed on."
-published_by = ".github/workflows/release.yml — the build-linux, build-macos and build-windows jobs for the carriers, one platform apiece, and then the publish job for the launcher, each through scripts/publish-npm.sh, under npm/cli/package.json's name."
+published_by = ".github/workflows/release.yml — the build-linux, build-linux-arm64, build-macos and build-windows jobs for the carriers, one platform apiece, and then the publish job for the launcher, each through scripts/publish-npm.sh, under npm/cli/package.json's name."
 manifest = "npm/cli/package.json"
 covers = [
     "npm:@onetaskgraph/cli-linux-x64",
+    "npm:@onetaskgraph/cli-linux-arm64",
     "npm:@onetaskgraph/cli-darwin-arm64",
     "npm:@onetaskgraph/cli-win32-x64",
 ]

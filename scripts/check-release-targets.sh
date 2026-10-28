@@ -416,7 +416,7 @@ try:
 except (ImportError, SyntaxError) as problem:
     problems.append(f"{RELEASE_PLAN} could not be loaded, so what the release publishes cannot be derived: {problem}")
 else:
-    for platform in ("linux", "macos", "windows", "independent"):
+    for platform in ("linux", "linux-arm64", "macos", "windows", "independent"):
         for artifact in plan(platform, "v0.0.0"):
             if artifact.release_target is not None:
                 publishes(artifact.release_target, f"{RELEASE_PLAN}'s {platform} plan (the {artifact.record()['job']} job)")

@@ -1,5 +1,5 @@
 {
-  "//": "What release v0.7.1 published, as each registry served it on 2026-10-16: the GitHub Release's assets (gh release view v0.7.1 --json assets), https://pypi.org/pypi/onetaskgraph-cli/0.7.1/json and onetaskgraph-sdk's, https://registry.npmjs.org/@onetaskgraph/<package>/0.7.1, and https://crates.io/api/v1/crates/<crate>/0.7.1 (each answering 200). x86_64-apple-darwin and aarch64-unknown-linux-gnu are recorded because v0.7.1 published them; neither is released any more, and .github/tests/release.test.mjs holds the plan to everything else.",
+  "//": "What release v0.7.1 published, as each registry served it on 2026-10-16: the GitHub Release's assets (gh release view v0.7.1 --json assets), https://pypi.org/pypi/onetaskgraph-cli/0.7.1/json and onetaskgraph-sdk's, https://registry.npmjs.org/@onetaskgraph/<package>/0.7.1, and https://crates.io/api/v1/crates/<crate>/0.7.1 (each answering 200). x86_64-apple-darwin is recorded because v0.7.1 published it; it is not released any more, and .github/tests/release.test.mjs holds the plan to everything else.",
   "version": "0.7.1",
   "targets": {
     "x86_64-unknown-linux-gnu": {

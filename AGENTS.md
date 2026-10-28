@@ -1409,12 +1409,14 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   real pinned release-plz. What GitHub answers those calls and the release's asset uploads
   with is pinned, with its provenance, in `config/github-interfaces.toml`, and
   `.github/tests/github-interfaces.test.mjs` holds both scripts and the double to it.
-- **A release is five CD jobs, and each platform publishes its own artifacts.**
+- **A release is six CD jobs, and each platform publishes its own artifacts.**
   `release-plz` cuts the tag and the GitHub Release; `.github/workflows/release.yml` then
-  runs `build-linux` (x86_64 Linux), `build-macos` (Apple Silicon) and `build-windows`
-  (x86_64 Windows) side by side, and `publish` after all three, each inside 30 minutes.
+  runs `build-linux` (x86_64 Linux), `build-linux-arm64` (arm64 Linux, native on GitHub's
+  hosted `ubuntu-24.04-arm` runner), `build-macos` (Apple Silicon) and `build-windows`
+  (x86_64 Windows) side by side, and `publish` after all four, each inside 30 minutes.
   Every step of them is one phase of one justfile recipe — `release-linux`,
-  `release-macos`, `release-windows`, `release-publish`, all `scripts/release_cd.py` — so
+  `release-linux-arm64`, `release-macos`, `release-windows`, `release-publish`, all
+  `scripts/release_cd.py` — so
   nothing a release does is YAML only a release could run. A build job builds each of its
   targets once with maturin, packages the archive, the wheel and the npm platform package
   from that one binary, installs and runs those exact files, publishes them (the archive
@@ -1427,9 +1429,8 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   artifacts published and the platform-independent ones unpublished until it is re-run**,
   and every publication skips what a registry already holds, so the re-run sends only
   what is missing. The platforms are `PLATFORM_TARGETS` in `scripts/release_products.py`,
-  with the wheel tag each must carry: **Linux arm64 and Intel macOS are no longer
-  released**, and the installer and the npm launcher refuse both by name, pointing at
-  `cargo install onetaskgraph`. `.github/tests/release.test.mjs` holds the job set, which
+  with the wheel tag each must carry: **Intel macOS is no longer released**, and the
+  installer and the npm launcher refuse it by name, pointing at `cargo install onetaskgraph`. `.github/tests/release.test.mjs` holds the job set, which
   one step uploads each artifact, the order of test-install, publication and
   verification, and each platform's plan against `v0.7.1`'s published artifacts;
   `.github/tests/release-cd.test.mjs` drives the Linux recipe end to end and every

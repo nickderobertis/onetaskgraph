@@ -6,11 +6,22 @@ import { digest, graph, read, root, workflows } from "../workflow-graph.mjs";
 
 const RELEASE_JOBS = {
   "build-linux": { runner: "ubuntu-latest", recipe: "linux", platform: "linux" },
+  "build-linux-arm64": {
+    runner: "ubuntu-24.04-arm",
+    recipe: "linux-arm64",
+    platform: "linux-arm64",
+  },
   "build-macos": { runner: "macos-latest", recipe: "macos", platform: "macos" },
   "build-windows": { runner: "windows-latest", recipe: "windows", platform: "windows" },
   publish: { runner: "ubuntu-latest", recipe: "publish", platform: "independent" },
 };
-const PLATFORM_OF = { linux: "linux", macos: "macos", windows: "windows", publish: "independent" };
+const PLATFORM_OF = {
+  linux: "linux",
+  "linux-arm64": "linux-arm64",
+  macos: "macos",
+  windows: "windows",
+  publish: "independent",
+};
 const CONTROL_OF = { pypi: "PYPI_PUBLISH", npm: "NPM_PUBLISH", crates: "CARGO_PUBLISH" };
 const version = JSON.parse(read("npm/cli/package.json")).version;
 const plans = new Map();
@@ -32,7 +43,7 @@ function plan(platform, tag = `v${version}`) {
 // One step is one phase of one recipe, or it is setup; nothing else runs in a CD job.
 function phase(step) {
   const match =
-    /^just release-(linux|macos|windows|publish) (plan|build|publish|verify|available)(?: --(?:to|from) (github|pypi|npm|crates))? --tag "\$TAG"$/.exec(
+    /^just release-(linux-arm64|linux|macos|windows|publish) (plan|build|publish|verify|available)(?: --(?:to|from) (github|pypi|npm|crates))? --tag "\$TAG"$/.exec(
       (step.run || "").trim(),
     );
   return match && { recipe: match[1], phase: match[2], registry: match[3] };
@@ -65,7 +76,7 @@ function uploads() {
   return found;
 }
 
-test("the release is four jobs on the runners their names say, and release-plz is one", () => {
+test("the release is five jobs on the runners their names say, and release-plz is one", () => {
   const all = workflows();
   const release = all["release.yml"];
   assert.deepEqual(Object.keys(release.jobs).sort(), Object.keys(RELEASE_JOBS).sort());
@@ -79,10 +90,11 @@ test("the release is four jobs on the runners their names say, and release-plz i
       assert.equal(parsed.recipe, expected.recipe, `${id} runs another job's recipe`);
     }
   }
-  for (const id of ["build-linux", "build-macos", "build-windows"])
+  for (const id of ["build-linux", "build-linux-arm64", "build-macos", "build-windows"])
     assert.equal(release.jobs[id].needs, undefined, `${id} waits on another build`);
   assert.deepEqual([...release.jobs.publish.needs].sort(), [
     "build-linux",
+    "build-linux-arm64",
     "build-macos",
     "build-windows",
   ]);
@@ -134,7 +146,7 @@ test("every artifact is uploaded by exactly one step of the job release-targets.
     const named = new Set(
       [
         ...target.published_by.matchAll(
-          /((?:(?:build-[a-z]+|publish)(?:, and |, | and ))*(?:build-[a-z]+|publish)) jobs?\b/g,
+          /((?:(?:build-[a-z]+(?:-arm64)?|publish)(?:, and |, | and ))*(?:build-[a-z]+(?:-arm64)?|publish)) jobs?\b/g,
         ),
       ].flatMap((match) => match[1].split(/, and |, | and /)),
     );
@@ -188,7 +200,7 @@ test("each build job test-installs before it publishes and installs back from ev
   }
 });
 
-test("Linux arm64 and Intel macOS are neither built, published, verified nor declared", () => {
+test("Intel macOS is neither built, published, verified nor declared, and Linux arm64 is", () => {
   const sources = [
     ...Object.keys(workflows()).map((name) => read(`.github/workflows/${name}`)),
     read("justfile"),
@@ -198,15 +210,26 @@ test("Linux arm64 and Intel macOS are neither built, published, verified nor dec
     read("scripts/release_cd.py"),
     JSON.stringify(Object.values(RELEASE_JOBS).flatMap(({ platform }) => plan(platform))),
   ];
-  for (const source of sources) {
-    assert.doesNotMatch(source, /aarch64-unknown-linux-gnu|linux-arm64|ubuntu-24\.04-arm/i);
+  for (const source of sources)
     assert.doesNotMatch(source, /x86_64-apple-darwin|darwin-x64|rosetta/i);
-  }
   const carriers = readdirSync(new URL("npm/platforms/", root)).sort();
-  assert.deepEqual(carriers, ["darwin-arm64", "linux-x64", "win32-x64"]);
+  assert.deepEqual(carriers, ["darwin-arm64", "linux-arm64", "linux-x64", "win32-x64"]);
+  // Linux arm64 is built natively on GitHub's hosted ARM runner, never cross-compiled.
+  const arm = workflows()["release.yml"].jobs["build-linux-arm64"];
+  assert.equal(arm["runs-on"], "ubuntu-24.04-arm");
+  assert.ok(
+    arm.steps.some((step) => step.with?.target === "aarch64-unknown-linux-gnu"),
+    "build-linux-arm64 installs the aarch64-unknown-linux-gnu toolchain",
+  );
+  assert.deepEqual(
+    plan("linux-arm64")
+      .map((artifact) => artifact.target)
+      .filter((target, index, all) => all.indexOf(target) === index),
+    ["aarch64-unknown-linux-gnu"],
+  );
   assert.match(
     read("scripts/install.sh"),
-    /Linux:aarch64\|Linux:arm64\) die 69 "Linux arm64 is no longer supported/,
+    /Linux:aarch64\|Linux:arm64\) target=aarch64-unknown-linux-gnu; ext=tar\.gz;/,
   );
   assert.match(
     read("scripts/install.sh"),
@@ -223,13 +246,13 @@ test("Linux arm64 and Intel macOS are neither built, published, verified nor dec
 // Plan mode, not a build: The macOS and Windows build recipes need native macOS and Windows toolchains this Linux host cannot run, so inside the dispatch their proof is the recipes' plan mode checked against the last release's published artifacts; the Linux recipe is driven for real end to end, and the hosted build jobs build and run the foreign artifacts on every release.
 test("each platform's plan is what v0.7.1 published for its targets, at any version", () => {
   const published = JSON.parse(read(".github/tests/fixtures/v0.7.1-published.json"));
-  const retired = ["x86_64-apple-darwin", "aarch64-unknown-linux-gnu"];
+  const retired = ["x86_64-apple-darwin"];
   const expected = (golden, from, to) => JSON.parse(JSON.stringify(golden).replaceAll(from, to));
   for (const releaseVersion of [published.version, "9.8.7"]) {
     const golden = expected(published, published.version, releaseVersion);
     const tag = `v${releaseVersion}`;
     const planned = {};
-    for (const platform of ["linux", "macos", "windows"])
+    for (const platform of ["linux", "linux-arm64", "macos", "windows"])
       for (const artifact of plan(platform, tag)) {
         planned[artifact.target] ??= { platform, assets: [], wheel: null, npm: null };
         if (artifact.registry === "github") planned[artifact.target].assets.push(artifact.file);
@@ -268,9 +291,11 @@ test("each platform's plan is what v0.7.1 published for its targets, at any vers
       assert.deepEqual([manifest.os, manifest.cpu], [before.npm.os, before.npm.cpu], target);
       assert.equal(
         row.platform,
-        { "apple-darwin": "macos", "pc-windows-msvc": "windows" }[
-          target.split("-").slice(1).join("-")
-        ] || "linux",
+        {
+          "aarch64-unknown-linux-gnu": "linux-arm64",
+          "aarch64-apple-darwin": "macos",
+          "x86_64-pc-windows-msvc": "windows",
+        }[target] || "linux",
       );
     }
     const independent = plan("independent", tag);

@@ -29,7 +29,7 @@ const checkout = fileURLToPath(root);
 const skip =
   process.platform === "linux" && process.arch === "x64"
     ? false
-    : "the Linux recipe builds and installs x86_64 Linux artifacts natively; build-macos and build-windows drive their own on every release";
+    : "the Linux recipe builds and installs x86_64 Linux artifacts natively; build-linux-arm64, build-macos and build-windows drive their own on every release";
 const version = JSON.parse(readFileSync(join(checkout, "npm/cli/package.json"), "utf8")).version;
 const tag = `v${version}`;
 const scratch = mkdtempSync(join(tmpdir(), "release-cd-"));
@@ -569,11 +569,11 @@ test("the publish job waits for every platform, then publishes the crates, SDKs 
     assert.equal(
       result.status,
       1,
-      `${registry} with two platforms missing:\n${result.output.slice(-2000)}`,
+      `${registry} with three platforms missing:\n${result.output.slice(-2000)}`,
     );
-    assert.match(result.output, /aarch64-apple-darwin|darwin-arm64/);
+    assert.match(result.output, /aarch64-unknown-linux-gnu|linux-arm64/);
   }
-  for (const platform of ["macos", "windows"]) {
+  for (const platform of ["linux-arm64", "macos", "windows"]) {
     const directory = standIns(platform);
     for (const registry of ["github", "pypi", "npm"])
       expectStatus(
@@ -1195,7 +1195,7 @@ test("the npm publication refuses a package set or platform it does not publish"
     ],
     [{ NPM_PUBLISH_SET: "carriers", NPM_PLATFORMS: "   " }, /NPM_PLATFORMS names no platform/],
     [
-      { NPM_PUBLISH_SET: "carriers", NPM_PLATFORMS: "linux-arm64" },
+      { NPM_PUBLISH_SET: "carriers", NPM_PLATFORMS: "darwin-x64" },
       /not one of the platforms under npm\/platforms/,
     ],
   ]) {

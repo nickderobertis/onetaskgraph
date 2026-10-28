@@ -285,15 +285,14 @@ run_guard
 expect_refused "a build that publishes artifacts it never installed" "install and run them" "next:"
 restore scripts/release_cd.py
 
-# 12. Linux arm64 declared again, where nothing builds it: a consumer would wait on a carrier
-#     no job publishes.
-substitute release-targets.toml \
-  '    "npm:@onetaskgraph/cli-linux-x64",' \
-  '    "npm:@onetaskgraph/cli-linux-x64",
-    "npm:@onetaskgraph/cli-linux-arm64",'
+# 12. The Linux arm64 build job gone while the platform table still releases it: a consumer
+#     would wait on an aarch64 archive, wheel and carrier no job publishes.
+substitute .github/workflows/release.yml \
+  '  build-linux-arm64:' \
+  '  build-linux-arm64-retired:'
 run_guard
-expect_refused "Linux arm64 declared after it stopped being released" "Linux arm64 is no longer released"
-restore release-targets.toml
+expect_refused "a released platform with no build job" "the release workflow has no build-linux-arm64 job"
+restore .github/workflows/release.yml
 
 if [ "$failures" -ne 0 ]; then
   echo "check-distribution-contract-enforced: $failures case(s) failed." >&2

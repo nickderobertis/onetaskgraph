@@ -77,7 +77,7 @@ binary=onetaskgraph
 case "$(uname -s):$(uname -m)" in
   Darwin:x86_64) echo "distribution test cannot run on Intel macOS, which is no longer released; next: run it on Apple Silicon, Linux or Windows" >&2; exit 1;;
   Darwin:arm64|Darwin:aarch64) target=aarch64-apple-darwin;;
-  Linux:aarch64|Linux:arm64) echo "distribution test cannot run on Linux arm64, which is no longer released; next: run it on x86_64 Linux, Apple Silicon or Windows" >&2; exit 1;;
+  Linux:aarch64|Linux:arm64) target=aarch64-unknown-linux-gnu;;
   MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) target=x86_64-pc-windows-msvc; ext=zip; binary=onetaskgraph.exe;;
 esac
 name="onetaskgraph-${tag}-${target}.${ext}"
@@ -192,12 +192,16 @@ if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE
 [[ $intel_mac_status -eq 69 ]] || { cat "$tmp/error" >&2; echo "Intel macOS install exited $intel_mac_status, expected 69; next: inspect the Darwin:x86_64 branch of scripts/install.sh" >&2; exit 1; }
 grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS refusal did not say Intel macOS is no longer supported; next: inspect platform diagnostics" >&2; exit 1; }
 [[ ! -e "$tmp/intel-mac-bin" ]] || { echo "the Intel macOS refusal created an installation directory; next: refuse before any download or write" >&2; exit 1; }
-# Linux arm64 is no longer released either, and is refused the same way, naming cargo.
+# Linux arm64 is released, and an arm64 Linux host installs its own archive and no other —
+# a stand-in, so the selection is proven on a host of either architecture.
+arm_name="onetaskgraph-${tag}-aarch64-unknown-linux-gnu.tar.gz"
+mkdir -p "$tmp/arm-payload"
+printf 'linux arm64 payload\n' > "$tmp/arm-payload/onetaskgraph"
+tar -czf "$tmp/releases/$tag/$arm_name" -C "$tmp/arm-payload" onetaskgraph
+(cd "$tmp/releases/$tag" && if command -v sha256sum >/dev/null; then sha256sum "$arm_name"; else shasum -a 256 "$arm_name"; fi) > "$tmp/canonical/$tag/$arm_name.sha256"
 printf '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo aarch64;; esac\n' > "$tmp/shims/uname"
-if PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/linux-arm64-bin" "$root/scripts/install.sh" 2>"$tmp/error"; then linux_arm64_status=0; else linux_arm64_status=$?; fi
-[[ $linux_arm64_status -eq 69 ]] || { cat "$tmp/error" >&2; echo "Linux arm64 install exited $linux_arm64_status, expected 69; next: inspect the Linux:aarch64 branch of scripts/install.sh" >&2; exit 1; }
-grep -q "Linux arm64 is no longer supported.*cargo install onetaskgraph" "$tmp/error" || { cat "$tmp/error" >&2; echo "Linux arm64 refusal did not name cargo; next: inspect platform diagnostics" >&2; exit 1; }
-[[ ! -e "$tmp/linux-arm64-bin" ]] || { echo "the Linux arm64 refusal created an installation directory; next: refuse before any download or write" >&2; exit 1; }
+PATH="$tmp/shims:$PATH" ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/linux-arm64-bin" "$root/scripts/install.sh" >/dev/null 2>"$tmp/error" || { cat "$tmp/error" >&2; echo "the Linux arm64 install failed; next: inspect the Linux:aarch64 branch of scripts/install.sh" >&2; exit 1; }
+cmp -s "$tmp/arm-payload/onetaskgraph" "$tmp/linux-arm64-bin/onetaskgraph" || { echo "the Linux arm64 install did not install the aarch64-unknown-linux-gnu archive's binary; next: inspect the Linux:aarch64 branch of scripts/install.sh" >&2; exit 1; }
 rm "$tmp/shims/uname" "$tmp/shims/curl"
 printf 'not a directory' > "$tmp/not-a-directory"
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/not-a-directory/child" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "uncreatable installation directory was accepted; next: inspect directory creation" >&2; exit 1; fi
@@ -345,13 +349,9 @@ grep -q 'unsupported platform' "$tmp/error" || { cat "$tmp/error" >&2; echo "uns
 if node -e 'Object.defineProperty(process,"platform",{value:"darwin"}); Object.defineProperty(process,"arch",{value:"x64"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then intel_launcher_status=0; else intel_launcher_status=$?; fi
 [[ $intel_launcher_status -eq 64 ]] || { cat "$tmp/error" >&2; echo "Intel macOS launcher exited $intel_launcher_status, expected 64; next: inspect the darwin-x64 refusal in npm/cli/bin/onetaskgraph.js" >&2; exit 1; }
 grep -q 'Intel macOS is no longer supported' "$tmp/error" || { cat "$tmp/error" >&2; echo "Intel macOS launcher refusal did not say Intel macOS is no longer supported; next: inspect launcher diagnostics" >&2; exit 1; }
-# Linux arm64 is refused by the launcher too, naming cargo, while every platform still
-# released resolves its own carrier: the spawn is intercepted, so this proves which binary
-# the launcher would run for each platform on any host, Windows included.
-if node -e 'Object.defineProperty(process,"platform",{value:"linux"}); Object.defineProperty(process,"arch",{value:"arm64"}); require(process.argv[1])' "$root/npm/cli/bin/onetaskgraph.js" 2>"$tmp/error"; then linux_arm64_launcher_status=0; else linux_arm64_launcher_status=$?; fi
-[[ $linux_arm64_launcher_status -eq 64 ]] || { cat "$tmp/error" >&2; echo "Linux arm64 launcher exited $linux_arm64_launcher_status, expected 64; next: inspect the linux-arm64 refusal in npm/cli/bin/onetaskgraph.js" >&2; exit 1; }
-grep -q 'Linux arm64 is no longer supported.*cargo install onetaskgraph' "$tmp/error" || { cat "$tmp/error" >&2; echo "Linux arm64 launcher refusal did not name cargo; next: inspect launcher diagnostics" >&2; exit 1; }
-for supported in linux:x64 darwin:arm64 win32:x64; do
+# Every platform released resolves its own carrier: the spawn is intercepted, so this proves
+# which binary the launcher would run for each platform on any host, Windows included.
+for supported in linux:x64 linux:arm64 darwin:arm64 win32:x64; do
   supported_platform="${supported%%:*}"; supported_arch="${supported#*:}"; supported_key="$supported_platform-$supported_arch"
   supported_binary=onetaskgraph; [[ $supported_platform != win32 ]] || supported_binary=onetaskgraph.exe
   supported_dir="$tmp/supported/node_modules/@onetaskgraph/cli-$supported_key"
