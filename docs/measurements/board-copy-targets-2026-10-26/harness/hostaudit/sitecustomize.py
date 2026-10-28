@@ -176,7 +176,8 @@ class _Finder(importlib.abc.MetaPathFinder):
 
 
 def _program_and_args(args) -> tuple[str, list[str]] | None:
-    """Every subprocess, as its program's name and (for the store alone) its arguments."""
+    """Every subprocess, as its program's name and its arguments; the record keeps the arguments
+    for a store invocation alone (`_record_call`)."""
     argv = args if isinstance(args, (list, tuple)) else [args]
     if not argv:
         return None

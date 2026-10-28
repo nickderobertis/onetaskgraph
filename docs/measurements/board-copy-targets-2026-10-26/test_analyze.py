@@ -906,3 +906,134 @@ def test_the_committed_loopback_recordings_still_carry_every_pair_the_report_com
         for recording, _ in analyze.SIZES
     }
     assert all(p.same and p.walk_pages == 0 for p in pairs)
+
+
+def test_mutation_rises_that_are_not_whole_numbers_are_refused(measured):
+    path = measured[0] / "pricing.json"
+    pricing = json.loads(path.read_text()) | {
+        "mutation_rises": {"bare-first-20261028T050000": [1, True]}
+    }
+    path.write_text(json.dumps(pricing))
+    with pytest.raises(
+        SystemExit,
+        match="mutation rises of bare-first-20261028T050000 are not whole numbers",
+    ):
+        run(measured)
+
+
+def test_a_step_whose_exit_status_is_a_boolean_is_refused(measured):
+    path = measured[0] / "host-first-20261028T050000" / "steps.jsonl"
+    path.write_text(
+        '{"argv": ["copy-plan"], "start": 0, "end": 1, "returncode": false}\n'
+    )
+    with pytest.raises(SystemExit, match="without its command line or exit status"):
+        run(measured)
+
+
+def quota_with(measured: tuple[Path, Path], change) -> None:
+    path = measured[0] / "bare-unchanged-20261028T050000" / "quota.json"
+    q = json.loads(path.read_text())
+    change(q)
+    path.write_text(json.dumps(q))
+
+
+@pytest.mark.parametrize(
+    ("change", "why"),
+    [
+        (lambda q: q.update({"quota-after": None}), "`quota-after` is not an object"),
+        (
+            lambda q: q["quota-before"]["buckets"]["core"].pop("limit"),
+            "bucket core without its limit",
+        ),
+        (
+            lambda q: q["quota-before"]["buckets"]["graphql (rateLimit)"].update(
+                readings=["x"]
+            ),
+            "readings that are not whole",
+        ),
+        (
+            lambda q: q["quota-before"]["buckets"]["graphql"].update(limit=0),
+            "a GraphQL limit of 0",
+        ),
+        (
+            lambda q: q.update({"burn-after": [{"at": 1.0, "used": -3, "reset": 1}]}),
+            "`burn-after` is not a list of timed",
+        ),
+        (
+            lambda q: q.update({"gate": {"event": "reading"}}),
+            "the gate's events are not a list",
+        ),
+        (
+            lambda q: q["gate"].append({"event": "guess"}),
+            "neither a reading nor a pause",
+        ),
+        (
+            lambda q: q["gate"].append(
+                {"event": "reading", "verdicts": {"graphql": "yes"}}
+            ),
+            "a gate reading without its verdicts",
+        ),
+        (
+            lambda q: q["gate"].append({"event": "pause", "seconds": -5}),
+            "a gate pause without its seconds",
+        ),
+    ],
+)
+def test_a_quota_capture_the_sanitizer_could_not_have_written_is_refused(
+    measured, change, why
+):
+    quota_with(measured, change)
+    with pytest.raises(SystemExit, match=why):
+        run(measured)
+
+
+@pytest.mark.parametrize(
+    ("record", "why"),
+    [
+        (
+            {"budget": "github-plan-copy-points-unchanged", "detail": "{not json"},
+            "a detail that is not JSON",
+        ),
+        ({"detail": "{}"}, "without its budget or its detail"),
+        (
+            {
+                "budget": "github-plan-copy-points-unchanged",
+                "detail": {"unscreened": {"requests by operation": {}, "points": -1}},
+            },
+            "points that are not a whole number",
+        ),
+    ],
+)
+def test_a_loopback_recording_the_journey_could_not_have_written_is_refused(
+    measured, record, why
+):
+    (measured[0] / "loopback" / "github-plan-copy-points-unchanged.json").write_text(
+        json.dumps(record)
+    )
+    with pytest.raises(SystemExit, match=why):
+        run(measured)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [{"deleted": -1, "only": "all"}, {"deleted": 2, "only": 3}, {"only": "bare"}],
+)
+def test_a_cleanup_outcome_without_its_count_and_scope_is_refused(measured, outcome):
+    root = measured[0]
+    take(root, "cleanup-20261028T070000", [], [store_step("cleanup", 0.0, 1.0)])
+    (root / "cleanup-20261028T070000" / "cleanup.json").write_text(json.dumps(outcome))
+    with pytest.raises(SystemExit, match="without its deleted count and its scope"):
+        run(measured)
+
+
+def test_a_cleanup_is_reported_with_what_it_deleted(measured):
+    root = measured[0]
+    take(root, "cleanup-20261028T070000", [], [store_step("cleanup", 0.0, 1.0)])
+    (root / "cleanup-20261028T070000" / "cleanup.json").write_text(
+        json.dumps({"deleted": 10, "only": "bare"})
+    )
+    run(measured, "--write")
+    assert (
+        "| `cleanup-20261028T070000` | 0 | 0 | 0 | 0 | 10 (bare) | 0 |"
+        in measured[1].read_text()
+    )

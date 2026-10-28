@@ -281,8 +281,13 @@ def step(run: Path, name: str, argv: list, env: dict, cwd: Path) -> int:
             "end": end,
         }
         out.write(json.dumps(record | {"returncode": done.returncode}) + "\n")
-    print(f"  {name}: exit {done.returncode} in {end - start:.1f}s", flush=True)
-    if done.returncode not in (0, 4):
+    failed = done.returncode not in (0, 4)
+    print(
+        f"  {name}: exit {done.returncode} in {end - start:.1f}s",
+        file=sys.stderr if failed else sys.stdout,
+        flush=True,
+    )
+    if failed:
         sys.stderr.write(done.stderr.decode(errors="replace")[-3000:])
         FAILED_STEPS.append(name)
     return done.returncode

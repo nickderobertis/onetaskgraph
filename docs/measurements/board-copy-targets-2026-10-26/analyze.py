@@ -1,3 +1,4 @@
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] The capture fields read here are the sanitizer's, shared by import (sanitize.REQUEST_KINDS, HOST_KINDS, SCREEN_NAMES, operation) and held by test_analyze.py, which builds every capture through sanitize.write and requires every loopback configuration; that suite sits outside every gate only because docs/measurements is no Nx project, which the new_code_lands_in_a_project note states.
 # llmlint: ignore-file[new_code_lands_in_a_project] The report's own recomputation and its tests, run by hand beside the measurement record whose command the report names; docs/measurements is no Nx project, and making it one is a change to the project graph and its four guarded selections, outside this measurement.
 """Recompute every table of `board-copy-targets-2026-10-26.md` from the sanitized captures.
 
@@ -142,8 +143,12 @@ def finite(value: object) -> bool:
     )
 
 
+def whole(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def count(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    return whole(value) and value >= 0
 
 
 def text(value: object) -> bool:
@@ -325,7 +330,7 @@ def steps_of(path: Path) -> list[Step]:
     out = []
     for number, r in lines(path):
         start, end = interval(path, number, r)
-        if not words(r.get("argv")) or not isinstance(r.get("returncode"), int):
+        if not words(r.get("argv")) or not whole(r.get("returncode")):
             raise refuse(path, number, "a step without its command line or exit status")
         out.append(Step(tuple(r["argv"]), start, end, r["returncode"]))
     if not out:
@@ -357,7 +362,7 @@ def prices_of(path: Path) -> tuple[dict[str, int], dict[str, list[int]]]:
                 path, None, f"the price of {key} is not a whole number of points"
             )
     for key, value in rises.items():
-        if not isinstance(value, list) or not all(isinstance(v, int) for v in value):
+        if not isinstance(value, list) or not all(whole(v) for v in value):
             raise refuse(
                 path, None, f"the mutation rises of {key} are not whole numbers"
             )
@@ -405,7 +410,10 @@ def quota_of(path: Path) -> Quota:
     q = document(path)
 
     def buckets(name: str) -> dict[str, Bucket]:
-        raw = (q.get(name) or {}).get("buckets")
+        envelope = q.get(name)
+        if not isinstance(envelope, dict):
+            raise refuse(path, None, f"`{name}` is not an object")
+        raw = envelope.get("buckets")
         if not isinstance(raw, dict) or any(b not in raw for b in BUCKETS):
             raise refuse(
                 path, None, f"`{name}` does not carry every bucket {', '.join(BUCKETS)}"
@@ -446,8 +454,11 @@ def quota_of(path: Path) -> Quota:
             raise refuse(path, None, f"`{name}` is not a list of timed readings")
         return tuple(Reading(float(r["at"]), r["used"], r["reset"]) for r in raw)
 
+    events = q.get("gate", [])
+    if not isinstance(events, list):
+        raise refuse(path, None, "the gate's events are not a list")
     gate = []
-    for event in q.get("gate", []):
+    for event in events:
         if not isinstance(event, dict) or event.get("event") not in (
             "reading",
             "pause",
@@ -461,13 +472,14 @@ def quota_of(path: Path) -> Quota:
             or not all(isinstance(v, bool) for v in verdicts.values())
         ):
             raise refuse(path, None, "a gate reading without its verdicts")
-        if event["event"] == "pause" and not finite(event.get("seconds")):
+        if event["event"] == "pause" and not (
+            finite(event.get("seconds")) and event["seconds"] >= 0
+        ):
             raise refuse(path, None, "a gate pause without its seconds")
+        seconds = float(event["seconds"]) if event["event"] == "pause" else 0.0
         gate.append(
             GateEvent(
-                event["event"],
-                all(verdicts.values()) if verdicts else False,
-                float(event.get("seconds", 0.0)),
+                event["event"], all(verdicts.values()) if verdicts else False, seconds
             )
         )
     return Quota(
@@ -519,7 +531,15 @@ def cache_of(path: Path) -> CacheState:
     return CacheState(raw["files"], raw["bytes"])
 
 
-def workload_of(path: Path) -> dict[str, tuple[int, int]]:
+@dataclass(frozen=True)
+class Size:
+    """A rendered body's size."""
+
+    bytes: int
+    characters: int
+
+
+def workload_of(path: Path) -> dict[str, Size]:
     raw = document(path)
     out = {}
     for label, sizes in raw.items():
@@ -531,7 +551,7 @@ def workload_of(path: Path) -> dict[str, tuple[int, int]]:
             raise refuse(
                 path, None, f"the size of {label} is not its bytes and characters"
             )
-        out[label] = (sizes[0], sizes[1])
+        out[label] = Size(sizes[0], sizes[1])
     return out
 
 
@@ -549,7 +569,7 @@ class Capture:
     conditions: dict[str, Condition]
     cache_before: CacheState
     cache_after: CacheState
-    workload: dict[str, tuple[int, int]]
+    workload: dict[str, Size]
 
 
 def load(path: Path) -> Capture:
@@ -892,14 +912,27 @@ def rounded(
     return out
 
 
-def owners_of(capture: Capture, prices: dict[str, int]) -> dict[str, KindFigures]:
+@dataclass(frozen=True, order=True)
+class Sender:
+    """Who sent a request: the store or the host, the store invocation it was sent inside, and
+    its request kind."""
+
+    owner: str
+    invocation: str
+    operation: str
+
+    def __str__(self) -> str:
+        return f"{self.owner} | {self.invocation} | {self.operation}"
+
+
+def owners_of(capture: Capture, prices: dict[str, int]) -> dict[Sender, KindFigures]:
     """Each request kind's points and writes by who sent it: a request made inside the store's
     own `project copy` or `document copy` is the store's; one inside any other store invocation
     the host recipe made is the host's (it chose to make that call)."""
     calls = [h for h in capture.host if h.kind == "store"] or [
         HostEvent("store", s.start, s.end, s.argv) for s in capture.steps
     ]
-    out: dict[str, KindFigures] = defaultdict(KindFigures)
+    out: dict[Sender, KindFigures] = defaultdict(KindFigures)
     for r in capture.requests:
         if r.kind == "tunnel" or r.refused:
             continue
@@ -910,7 +943,7 @@ def owners_of(capture: Capture, prices: dict[str, int]) -> dict[str, KindFigures
             else "(no store invocation)"
         )
         owner = "store" if tuple(verb.split()[:2]) in COPY_VERBS else "host"
-        out[f"{owner} | {verb} | {r.op}"].add(
+        out[Sender(owner, verb, r.op)].add(
             r, price(r, prices, capture.name) if r.graphql else 0
         )
     return dict(sorted(out.items()))
@@ -926,7 +959,7 @@ class Row:
     kinds: dict[str, KindFigures]
     screening: Screening
     attribution: dict[str, float]
-    owners: dict[str, KindFigures]
+    owners: dict[Sender, KindFigures]
     walk_pages: dict[str, int]
     walk_ms: float
     verdicts: dict[str, Verdict] = field(default_factory=dict)
@@ -1073,7 +1106,7 @@ class SizePair:
 
     budget: str
     recording: str
-    same: bool
+    same: bool  # the same requests by operation at both sizes
     requests: tuple[int, int]
     points: tuple[int | None, int | None]
     walk_pages: int
@@ -1094,7 +1127,7 @@ def size_pairs(recordings: list[Loopback]) -> list[SizePair]:
                 SizePair(
                     budget=record.budget,
                     recording=small,
-                    same=a == b,
+                    same=a.sent == b.sent,
                     requests=(sum(a.sent.values()), sum(b.sent.values())),
                     points=(a.points, b.points),
                     walk_pages=sum(
@@ -1217,7 +1250,7 @@ def owners_table(rows: list[Row]) -> str:
     body = []
     for row in rows:
         for key, value in row.owners.items():
-            owner, verb, op = key.split(" | ")
+            owner, verb, op = key.owner, key.invocation, key.operation
             body.append(
                 [
                     row.label,
@@ -1373,14 +1406,14 @@ def workload_table(rows: list[Row]) -> str:
     body = []
     for row in rows:
         w = row.capture.workload
-        tasks = [w[k][0] for k in sorted(w) if k.startswith("task")]
+        tasks = [w[k].bytes for k in sorted(w) if k.startswith("task")]
         body.append(
             [
                 row.label,
-                f"{w.get('project', (0, 0))[0]:,}",
+                f"{w.get('project', Size(0, 0)).bytes:,}",
                 f"{min(tasks):,}–{max(tasks):,} ({len(tasks)})" if tasks else "—",
-                f"{w.get('document', (0, 0))[0]:,}",
-                f"{w.get('image', (0, 0))[0]:,}",
+                f"{w.get('document', Size(0, 0)).bytes:,}",
+                f"{w.get('image', Size(0, 0)).bytes:,}",
             ]
         )
     return table(
@@ -1648,7 +1681,7 @@ def tables(captures: Path) -> tuple[dict[str, str], dict]:
                 "kinds": {op: asdict(k) for op, k in r.kinds.items()},
                 "screening": asdict(r.screening),
                 "attribution": r.attribution,
-                "owners": {key: asdict(k) for key, k in r.owners.items()},
+                "owners": {str(key): asdict(k) for key, k in r.owners.items()},
                 "verdicts": {name: v.value for name, v in r.verdicts.items()},
                 "walk_pages": r.walk_pages,
                 "refused": sum(1 for q in r.capture.requests if q.refused),

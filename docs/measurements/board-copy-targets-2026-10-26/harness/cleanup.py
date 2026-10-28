@@ -16,6 +16,7 @@ issues one side's runs created, and retires only that side's folder.
 from __future__ import annotations
 
 import json
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -120,7 +121,11 @@ def run(
     (run_dir / "cleanup.json").write_text(
         json.dumps(outcome | {"only": only or "all"}, indent=1)
     )
-    print(f"  cleanup: {outcome}", flush=True)
+    print(
+        f"  cleanup: {outcome}",
+        file=sys.stderr if outcome["failed"] else sys.stdout,
+        flush=True,
+    )
     if outcome["failed"]:
         raise SystemExit(
             f"cleanup: {outcome['failed']} delete(s) failed; run `measure.sh cleanup` again once "
