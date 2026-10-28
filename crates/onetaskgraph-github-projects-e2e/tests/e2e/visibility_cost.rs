@@ -76,8 +76,8 @@ struct VisibilityBoard {
     endpoint: String,
     /// The virtual intervals the reads were delayed over.
     intervals: Arc<Mutex<Vec<(Duration, Duration)>>>,
-    /// The connections the binary opened to this proxy.
-    accepted: Arc<AtomicUsize>,
+    /// The client connections that actually forwarded a request to the board.
+    forwarded: Arc<AtomicUsize>,
 }
 
 impl VisibilityBoard {
@@ -95,20 +95,36 @@ impl VisibilityBoard {
         let intervals = Arc::new(Mutex::new(Vec::new()));
         let held = Arc::clone(&intervals);
         let clock = clock.clone();
-        // Each connection the binary keeps alive to this proxy keeps one of its own to the board
-        // behind it, so no request costs the board a connection of its own.
-        let accepted = loopback::serve_each(listener, move || {
+        // Upstream connects lazily: an accepted client may close without sending a request.
+        // Count only handlers that forward, each of which keeps one connection to the board.
+        let forwarded = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&forwarded);
+        loopback::serve_each(listener, move || {
             let (clock, held) = (clock.clone(), Arc::clone(&held));
             let mut upstream = Upstream::new(upstream);
+            let counted = Arc::clone(&counted);
+            let mut first = true;
             move |sent: &loopback::Request, stream: &mut TcpStream| {
+                if first {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    first = false;
+                }
                 serve(sent, stream, &clock, &mut upstream, &held)
             }
         });
         Self {
             endpoint,
             intervals,
-            accepted,
+            forwarded,
         }
+    }
+
+    fn assert_connections(&self, connections: usize) {
+        assert_eq!(
+            connections,
+            self.forwarded.load(Ordering::SeqCst),
+            "the proxy opened a connection to the board other than the one each of its own keeps"
+        );
     }
 
     /// The simulated seconds the visibility reads held the copies for, overlapping reads once.
@@ -277,6 +293,17 @@ fn a_mixed_plans_project_and_document_copies_record_visibility_reads_by_destinat
         board.set_repository_visibility(&public(k), RepositoryAnswer::Public);
     }
     let front = VisibilityBoard::new(config["endpoint"].as_str().expect("an endpoint"), &clock);
+    // Some HTTP stacks open a speculative connection and close it without a request.
+    drop(
+        TcpStream::connect(
+            front
+                .endpoint
+                .strip_prefix("http://")
+                .unwrap()
+                .trim_end_matches("/graphql"),
+        )
+        .expect("an unused client connection"),
+    );
     config["endpoint"] = json!(front.endpoint);
     // The public board the views go to: a loopback of its own, filing in a public repository.
     let (mut site_config, site) = github_projects_with_board(&sandbox);
@@ -417,9 +444,29 @@ fn a_mixed_plans_project_and_document_copies_record_visibility_reads_by_destinat
         .expect("JSON"),
     )
     .expect("the telemetry is written");
-    assert_eq!(
-        board.connections(),
-        front.accepted.load(Ordering::SeqCst),
-        "the proxy opened a connection to the board other than the one each of its own keeps"
-    );
+    front.assert_connections(board.connections());
+}
+
+/// An extra upstream connection must still be detected even with an unused client socket.
+#[test]
+#[should_panic(expected = "the proxy opened a connection to the board other than")]
+fn an_extra_board_connection_is_refused() {
+    let sandbox = Sandbox::new();
+    let (config, board) = github_projects_with_board(&sandbox);
+    let clock = SimulatedClock::start(1);
+    let endpoint = config["endpoint"].as_str().expect("an endpoint");
+    let front = VisibilityBoard::new(endpoint, &clock);
+    let address = |endpoint: &str| {
+        endpoint
+            .strip_prefix("http://")
+            .and_then(|rest| rest.split('/').next())
+            .expect("a loopback address")
+            .parse()
+            .expect("a socket address")
+    };
+    drop(TcpStream::connect(address(&front.endpoint)).expect("an unused client connection"));
+    // Bypass the proxy just as an erroneous extra upstream connection would.
+    let mut extra = Upstream::new(address(endpoint));
+    assert!(!extra.forward(b"GET /repos/nickderobertis/onetaskgraph HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer test-token\r\n\r\n").is_empty());
+    front.assert_connections(board.connections());
 }
