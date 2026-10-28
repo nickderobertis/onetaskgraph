@@ -89,6 +89,15 @@ if [ "${1:-}" = metadata ]; then
   exit 0
 fi
 : >"$record/$index.test"
+# What a real build leaves in the build directory: a dep-info file naming the suite's sources
+# by their path in the tree it was run from, which the step holds to the copy's own directory.
+mkdir -p "$here/../target/debug/deps"
+dep_info="$here/../target/debug/deps/plugin-standin$index.d"
+{
+  printf '%s:' "$dep_info"
+  printf ' %s' crates/*/tests/plugin.rs
+  printf '\n'
+} >"$dep_info"
 if [ "$(find "$record" -name '*.test' | wc -l | tr -d ' ')" -eq 1 ]; then
   echo "test result: ok. 128 passed; 0 failed; 0 ignored"
   exit 0

@@ -77,7 +77,31 @@ copy_tracked_files "$ROOT" "$scratch/repo" || fatal \
 # — which hashes it apart, and the copy's files are touched so each of those is built afresh
 # for this tree rather than taken from an earlier run's.
 readonly CRATE=onetaskgraph-github-projects
-readonly SOURCE="crates/$CRATE/src/lib.rs"
+# The copy's crate lives under a directory of its own name. Sharing the build directory puts
+# the copy's test executables beside this repository's, each with a dep-info file naming its
+# sources by their path relative to the workspace, and the last of them is the mutated suite.
+# A test that finds a sibling crate's test executable by the source its dep-info names —
+# live_pair.rs finds the plugin's `plugin` and `live` that way — would otherwise take the
+# copy's newest one, mutated, whenever this ran beside or before it, as test-macos and
+# test-windows run it. Under another directory no copy's dep-info names this crate's sources.
+readonly COPY_DIR="crates/$CRATE-fixture-discrimination"
+mv "$scratch/repo/crates/$CRATE" "$scratch/repo/$COPY_DIR" || fatal \
+  "could not move the copy's crate to $COPY_DIR" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+COPY_MANIFEST="$scratch/repo/Cargo.toml" COPY_CRATE="$CRATE" COPY_TO="$COPY_DIR" python3 - <<'PY' || fatal \
+  "could not point the copy's workspace dependency at $COPY_DIR" \
+  "the message above names what changed; update this check to the root manifest's shape now"
+import os
+import pathlib
+
+path = pathlib.Path(os.environ["COPY_MANIFEST"])
+before = f'path = "crates/{os.environ["COPY_CRATE"]}"'
+text = path.read_text(encoding="utf-8")
+if text.count(before) != 1:
+    raise SystemExit(f"check-fixture-discrimination: {before} appears {text.count(before)} times in Cargo.toml, not once")
+path.write_text(text.replace(before, f'path = "{os.environ["COPY_TO"]}"'), encoding="utf-8")
+PY
+readonly SOURCE="$COPY_DIR/src/lib.rs"
 METADATA="$(cd "$ROOT" && cargo metadata --no-deps --format-version 1)" || fatal \
   "could not read $ROOT's cargo metadata, which names the build directory this check shares" \
   "run 'cargo metadata --no-deps' in $ROOT and fix what it reports, then rerun"
@@ -85,6 +109,10 @@ BUILD_DIR="$(printf '%s' "$METADATA" \
   | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' \
   | tr -d '\r')"
 readonly BUILD_DIR
+# What this run writes into the shared build directory is judged against this mark at the end.
+touch "$scratch/started" || fatal \
+  "could not mark when this run began in $scratch" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 APART=()
 while IFS= read -r member; do
   [ -n "$member" ] || continue
@@ -193,3 +221,35 @@ case "$SUITE_OUTPUT" in
     exit 1
     ;;
 esac
+
+# The copy's test executables in the shared build directory name its sources under COPY_DIR
+# and never this crate's own, which is what keeps a test that finds the plugin's test
+# executables by their dep-info off the copy's. Only files naming COPY_DIR are the copy's: this
+# repository's own build of the crate may be writing beside them while this runs.
+copies="$(find "$BUILD_DIR/debug/deps" -name '*.d' -newer "$scratch/started" -type f \
+  -exec grep -l "$COPY_DIR/" {} + 2>/dev/null || true)"
+if [ -z "$copies" ]; then
+  echo "check-fixture-discrimination: no dep-info written by this run names $COPY_DIR/, so the" >&2
+  echo "check-fixture-discrimination: copy was not built from the directory it was moved to." >&2
+  echo "check-fixture-discrimination: next: check that the copy's crate is moved to COPY_DIR before" >&2
+  echo "check-fixture-discrimination: run_suite and that BUILD_DIR is the build directory cargo uses, then rerun." >&2
+  exit 1
+fi
+named=""
+while IFS= read -r copy; do
+  if grep -q "crates/$CRATE/" "$copy"; then
+    named="$copy"
+    break
+  fi
+done <<EOF
+$copies
+EOF
+if [ -n "$named" ]; then
+  echo "check-fixture-discrimination: the copy's build wrote $named, which names" >&2
+  echo "check-fixture-discrimination: crates/$CRATE/, so a test that finds that crate's test" >&2
+  echo "check-fixture-discrimination: executables by the sources they name could take the copy's" >&2
+  echo "check-fixture-discrimination: mutated one." >&2
+  echo "check-fixture-discrimination: next: build the copy's crate from a directory of another name" >&2
+  echo "check-fixture-discrimination: (COPY_DIR in this check), then rerun." >&2
+  exit 1
+fi
