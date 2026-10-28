@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.8](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.12.7...onetaskgraph-core-v0.12.8) - 2026-10-28
+
+### Added
+
+- *(routes)* route an item by its repositories and classification together ([#3788](https://github.com/nickderobertis/onetaskgraph/pull/3788))
+
+### Fixed
+
+- *(linear)* keep a private home's public projections through a copy's follow-up write ([#3783](https://github.com/nickderobertis/onetaskgraph/pull/3783))
+
 ## [0.12.7](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.12.6...onetaskgraph-core-v0.12.7) - 2026-10-27
 
 ### Performance
