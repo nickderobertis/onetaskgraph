@@ -117,7 +117,11 @@ def run(
             {"id": issue_id},
             write=True,
         )
-        outcome["failed" if body.get("errors") else "deleted"] += 1
+        answered = (
+            isinstance(body.get("data"), dict)
+            and body["data"].get("deleteIssue") is not None
+        )
+        outcome["deleted" if answered and not body.get("errors") else "failed"] += 1
     (run_dir / "cleanup.json").write_text(
         json.dumps(outcome | {"only": only or "all"}, indent=1)
     )

@@ -59,8 +59,11 @@ if [ "$1" != "all" ]; then
     echo "measure.sh: $1 captured under $here/captures/ (log: $log)"
     exit 0
 fi
-for scenario in bare-first bare-changed1 bare-unchanged host-first host-changed1 \
-    host-unchanged host-approve; do
+scenarios=$("$python" "$here/harness/run.py" --list) || {
+    echo "measure.sh: harness/run.py could not list its scenarios; run it by hand to see why" >&2
+    exit 1
+}
+for scenario in $scenarios; do
     quiet "$python" "$here/harness/run.py" "$scenario"
 done
 quiet "$python" "$here/harness/pricing.py"

@@ -281,7 +281,8 @@ def step(run: Path, name: str, argv: list, env: dict, cwd: Path) -> int:
             "end": end,
         }
         out.write(json.dumps(record | {"returncode": done.returncode}) + "\n")
-    failed = done.returncode not in (0, 4)
+    # Exit 4 is a copy that wrote part of what it was asked to: not a row either.
+    failed = done.returncode != 0
     print(
         f"  {name}: exit {done.returncode} in {end - start:.1f}s",
         file=sys.stderr if failed else sys.stdout,
@@ -581,7 +582,12 @@ def corrected_read(token_value: str) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("scenario", choices=SCENARIOS)
+    parser.add_argument("scenario", choices=SCENARIOS, nargs="?")
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="print the seven rows' scenarios in the order `all` takes them",
+    )
     parser.add_argument("--no-sanitize", action="store_true")
     parser.add_argument(
         "--only",
@@ -589,6 +595,11 @@ def main() -> None:
         help="cleanup: only the issues one side's runs created",
     )
     args = parser.parse_args()
+    if args.list:
+        print("\n".join((*BARE, *HOST)))
+        return
+    if args.scenario is None:
+        parser.error("name a scenario, or pass --list")
     binary()
     stamp_at = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     name = args.scenario

@@ -312,7 +312,7 @@ def requests_of(path: Path) -> list[Request]:
             raise refuse(path, number, "a request with no known kind or operation")
         if (
             not count(r.get("seq"))
-            or not finite(r.get("ms"))
+            or not (finite(r.get("ms")) and r["ms"] >= 0)
             or not isinstance(r.get("limits"), dict)
         ):
             raise refuse(
@@ -499,6 +499,10 @@ def quota_of(path: Path) -> Quota:
             for r in raw
         ):
             raise refuse(path, None, f"`{name}` is not a list of timed readings")
+        if any(b["at"] < a["at"] for a, b in zip(raw, raw[1:])):
+            raise refuse(
+                path, None, f"`{name}` readings out of the order they were taken"
+            )
         return tuple(Reading(float(r["at"]), r["used"], r["reset"]) for r in raw)
 
     events = q.get("gate", [])
@@ -514,10 +518,13 @@ def quota_of(path: Path) -> Quota:
                 path, None, "a gate event that is neither a reading nor a pause"
             )
         verdicts = event.get("verdicts", {})
-        if event["event"] == "reading" and (
-            not isinstance(verdicts, dict)
-            or not all(isinstance(v, bool) for v in verdicts.values())
+        if not isinstance(verdicts, dict) or not all(
+            isinstance(v, bool) for v in verdicts.values()
         ):
+            raise refuse(
+                path, None, f"a gate {event['event']} whose verdicts are not yes or no"
+            )
+        if event["event"] == "reading" and not verdicts:
             raise refuse(path, None, "a gate reading without its verdicts")
         if event["event"] == "pause" and not (
             finite(event.get("seconds")) and event["seconds"] >= 0
