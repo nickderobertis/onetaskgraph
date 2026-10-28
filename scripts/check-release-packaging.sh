@@ -3,7 +3,7 @@
 #
 # Only a release runs .github/workflows/release.yml, so this runs the packaging half of its
 # build phase — scripts/release_cd.py's `package`, the same code `build` calls after maturin
-# — offline, over stand-in wheels for all three platforms on whatever host this is, to find a
+# — offline, over stand-in wheels for all four build platforms on whatever host this is, to find a
 # packaging defect without cutting a version.
 set -euo pipefail
 

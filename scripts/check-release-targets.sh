@@ -19,7 +19,7 @@
 # **The contents.** A hand-written inventory goes stale in silence, so the published
 # set is DERIVED from the release configuration rather than transcribed:
 #
-#   plan   — every package the four CD jobs of .github/workflows/release.yml publish,
+#   plan   — every package the five CD jobs of .github/workflows/release.yml publish,
 #            as scripts/release_cd.py plans them: the crates, the wheels and SDK
 #            distributions, and the npm packages, each job's own.
 #   npm    — the specs scripts/publish-npm.sh publishes, plus the per-platform
