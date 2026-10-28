@@ -2,12 +2,7 @@
 # Every call site the distribution journey reaches that starts a Python interpreter, run
 # through the real scripts and nothing else of that journey.
 #
-# scripts/check-relative-interpreter.sh runs this with a relative python3 first on PATH, in
-# place of the whole of scripts/test-distribution.sh, wherever that journey already runs in
-# full under a plain PATH (test-macos, test-windows, `just check`): the full journey re-run
-# was the half of its cost that bought nothing a targeted pass does not. Where the journey
-# itself runs under the relative interpreter (test-linux), that check runs this too and
-# fails when the journey started Python from a script this pass did not.
+# check-relative-interpreter.sh compares this targeted pass with the full journey.
 #
 # Each script runs from the root of the tree it works on. A scratch clone gets the probe
 # interpreter planted at the same relative path, so the relative entry resolves from that

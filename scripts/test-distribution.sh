@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# In test-linux this journey runs once, under the relative interpreter
-# scripts/check-relative-interpreter.sh simulates, rather than once plainly and once again
-# under that check; its plain-PATH run is test-macos's and test-windows's (scripts/ci-job.sh),
-# where that check puts only its Python call sites to the relative interpreter
-# (scripts/test-python-call-sites.sh).
+# Hand this invocation to the relative-interpreter check before any build work begins.
 if [ "${ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER:-}" = 1 ]; then
   exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-relative-interpreter.sh" scripts/test-distribution.sh
 fi
