@@ -156,7 +156,7 @@ NOT_METHODS = {
     ),
     "creation_repository": (
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
-        "default does, none, so `task locate` reports no repository a create would file in"
+        "default does"
     ),
     "check_status_write": (
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "

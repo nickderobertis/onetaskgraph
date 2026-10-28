@@ -155,6 +155,13 @@ impl Store {
                 "board": {"plugin": "github-projects", "config": board_config,
                           "visibility": "private"},
                 "ledger": {"plugin": "linear", "config": ledger_config},
+                // The same board, hosted over the stdio plugin protocol.
+                "hosted": {"plugin": "subprocess", "config": {
+                    "command": onetaskgraph_e2e_support::binary(),
+                    "args": ["plugin-serve", "github-projects"],
+                    "secrets": ["GITHUB_PROJECTS_FIXTURE_TOKEN"],
+                    "settings": board_config,
+                }},
             },
             "write_policy": record.write_policy(),
         });
@@ -517,6 +524,18 @@ fn locate_lists_every_carrier_across_pages_and_finds_a_copy_back_by_its_origin()
         assert_eq!(item["destination"], to, "{to}: {item:#}");
     }
     assert_eq!(*store.ledger.lock().unwrap(), 0, "Linear was never asked");
+
+    // The same board hosted over the stdio protocol is answered by the trait's default, as
+    // docs/plugin-protocol.md §4.9 says: where the board in process names the repository a
+    // create files in, the hosted one names none.
+    let item = only(
+        &store
+            .locate(&["drafts:plain"], "hosted", &["--no-counterpart"])
+            .answer(),
+    )
+    .clone();
+    assert_eq!(item["destination"], "hosted", "{item:#}");
+    assert_eq!(item["creates_in"], Value::Null, "{item:#}");
 
     // For a person: no route, nothing found, no carrier and no repository each said in words,
     // and a lookup not made not mentioned at all.

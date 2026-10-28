@@ -984,8 +984,9 @@ written against this document implements nothing more.
 Nor is the repository a create would file its issue in: for a hosted source the engine answers
 `TaskSource::creation_repository` by the trait's default, none, so `task locate` reports
 `creates_in` as `null` for a destination hosted over this protocol, and the plugin's own
-`write_task` decides where anything it creates is filed. A plugin written against this document
-implements nothing more.
+`write_task` decides where anything it creates is filed — which the `task locate` journey
+drives against a board hosted this way. A plugin written against this document implements
+nothing more.
 
 ### 4.9a Image assets on `write_task` and `write_document`
 
