@@ -1,0 +1,2 @@
+{"argv": ["project", "copy", "spike-md:<id>", "--to", "testboard", "--json"], "end": 1793164062.084, "program": "onetaskgraph", "returncode": 0, "start": 1793164058.273, "step": "project-copy"}
+{"argv": ["document", "copy", "spike-md:<id>", "--to", "testboard", "--json"], "end": 1793164064.558, "program": "onetaskgraph", "returncode": 0, "start": 1793164062.085, "step": "document-copy"}
