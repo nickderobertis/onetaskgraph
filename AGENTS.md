@@ -1500,7 +1500,7 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   and it cannot see this file to notice one moved or a sixth appeared. A name is one of
   the five when a dependent writes it down, which is why both SDKs are targets and neither
   is folded into the binary's: `sdk-npm` is to `npm` what `sdk-pypi` is to `pypi`.
-  Everything else this repository publishes — the three per-platform npm carriers, the
+  Everything else this repository publishes — the four per-platform npm carriers, the
   sibling crates — is covered by the target whose release carries it. Both rules go
   through `scripts/check-release-targets.sh`, the drift gate that makes the second
   spelling safe and that reconciles the declared set against the plan

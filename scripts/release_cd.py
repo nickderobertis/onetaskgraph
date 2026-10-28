@@ -997,7 +997,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     try:
         match args.command:
             case "plan":
-                print(json.dumps([artifact.record() for artifact in plan(args.platform, tag)], indent=2))
+                print(json.dumps([artifact.record() for artifact in plan(args.platform, tag)]))
             case "build":
                 build(args.platform, tag, dist)
             case "package":

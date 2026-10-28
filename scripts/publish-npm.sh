@@ -2,7 +2,7 @@
 # Publish this repository's npm packages: the platform carriers, the launcher that selects
 # between them, and the TypeScript SDK.
 #
-# Which of them is NPM_PUBLISH_SET's to say, because four jobs publish them: each
+# Which of them is NPM_PUBLISH_SET's to say, because more than one job publishes them: each
 # `build-<platform>` job of .github/workflows/release.yml sends its own carriers
 # (`carriers`, narrowed to NPM_PLATFORMS), and the `publish` job sends the launcher and the
 # SDK (`root`) only once every platform's carrier is there for the launcher to resolve.
