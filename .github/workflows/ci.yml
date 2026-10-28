@@ -976,8 +976,10 @@ jobs:
         run: just bootstrap --outputStyle=static
       - name: Build the binary the distribution journey packages
         run: bash scripts/nx.sh run onetaskgraph:build --outputStyle=static
+      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] This default-off workflow_dispatch diagnostic deliberately measures the distribution journey without contending suites as an experimental control; it never runs on pull requests and does not add a gate. The existing check contexts remain required by this migration's contract.
       - name: The distribution journey, alone
         run: just distribution-test
+      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
 
   # Skipped at the job level on release-plz's own release branch, so the release pull request
   # spends no Mac runner (`onetaskgraph-macos-runs-per-change`); a skipped job satisfies a
