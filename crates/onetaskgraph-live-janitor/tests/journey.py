@@ -440,7 +440,9 @@ class Github:
                 self.operation = operation
                 self.reply(None, operation['status'] if operation else 204)
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-        thread = threading.Thread(target=server.serve_forever)
+        # `shutdown` waits for the serving loop's next poll, half a second by default, and every
+        # janitor run ends with one: at the default the suite spent most of its time there.
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02})
         thread.start()
         return server, thread
 
