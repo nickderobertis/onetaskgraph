@@ -1656,6 +1656,14 @@ def writes_table(captures: Path) -> str:
     return table(head, body)
 
 
+@dataclass(frozen=True)
+class Usage:
+    """One `GET /rate_limit` reading of the two buckets the onevcs probe compares."""
+
+    core: int
+    graphql: int
+
+
 def probes_table(captures: Path) -> str:
     """The two hand probes: the idle background on each counter, and what onevcs's inspect spends."""
     path = captures / "probes" / "background-and-onevcs.json"
@@ -1678,9 +1686,15 @@ def probes_table(captures: Path) -> str:
         raise refuse(
             path, None, "an idle-background probe without timed readings on a counter"
         )
+    if any(b["at"] < a["at"] for a, b in zip(raw, raw[1:])):
+        raise refuse(
+            path,
+            None,
+            "idle-background probe readings out of the order they were taken",
+        )
     readings = [Reading(float(r["at"]), r["used"], r["reset"]) for r in raw]
 
-    def sides(name: str) -> list[dict]:
+    def sides(name: str) -> list[Usage]:
         value = inspect.get(name) if isinstance(inspect, dict) else None
         if (
             not isinstance(value, list)
@@ -1697,7 +1711,7 @@ def probes_table(captures: Path) -> str:
                 None,
                 f"an onevcs probe without its `{name}` readings of both buckets",
             )
-        return value
+        return [Usage(r["core_used"], r["graphql_used"]) for r in value]
 
     before, after = sides("before"), sides("after")
     inspects = inspect.get("inspects")
@@ -1716,8 +1730,8 @@ def probes_table(captures: Path) -> str:
                 rate,
             ]
         )
-    core = after[0]["core_used"] - before[-1]["core_used"]
-    graphql = after[0]["graphql_used"] - before[-1]["graphql_used"]
+    core = after[0].core - before[-1].core
+    graphql = after[0].graphql - before[-1].graphql
     body.append(
         [
             f"{inspects} × `onevcs boundary inspect`",

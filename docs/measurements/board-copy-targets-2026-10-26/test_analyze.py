@@ -842,6 +842,10 @@ def test_the_probes_give_the_background_rate_and_what_one_inspect_spends(measure
             ),
             "without timed readings",
         ),
+        (
+            lambda p: p["idle_background"]["readings"].reverse(),
+            "probe readings out of the order they were taken",
+        ),
     ],
 )
 def test_a_malformed_probe_is_refused(measured, change, why):
