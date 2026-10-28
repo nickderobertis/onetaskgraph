@@ -1352,3 +1352,20 @@ def test_a_record_of_a_kind_the_sanitizer_wrote_as_other_is_counted_as_what_it_i
     assert row["attribution"]["write screening: onevcs boundary other"] == 0.3
     assert not any("séance" in cause for cause in row["attribution"])
     assert round(sum(row["attribution"].values()), 2) == 6.0
+
+
+@pytest.mark.parametrize("returncode", [1, 4])
+def test_a_capture_whose_copy_failed_or_wrote_part_is_no_row(measured, returncode):
+    step = store_step("project-copy", 0.5, 3.0) | {"returncode": returncode}
+    retake(
+        measured,
+        "bare-unchanged",
+        {1: 1},
+        requests=[graphql(1, "SUB_ISSUES", 1.0, 2.0)],
+        steps=[step],
+    )
+    with pytest.raises(
+        SystemExit,
+        match=f"steps.jsonl:1: a step that exited {returncode}, so this capture is not a row",
+    ):
+        run(measured)

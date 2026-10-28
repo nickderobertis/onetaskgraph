@@ -669,6 +669,16 @@ class Capture:
 
 
 def load(path: Path) -> Capture:
+    """A row's capture. A row is a run whose every command succeeded: one that exited non-zero, a
+    partial copy's 4 included, was no measurement of its scenario and belongs in superseded/."""
+    for number, step in enumerate(steps_of(path / "steps.jsonl"), 1):
+        if step.returncode != 0:
+            raise refuse(
+                path / "steps.jsonl",
+                number,
+                f"a step that exited {step.returncode}, so this capture is not a row; move it to "
+                "captures/superseded/ and",
+            )
     return Capture(
         name=CaptureName(path.name),
         requests=tuple(requests_of(path / "requests.jsonl")),
