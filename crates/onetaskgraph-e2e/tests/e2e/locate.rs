@@ -475,6 +475,7 @@ fn locate_lists_every_carrier_across_pages_and_finds_a_copy_back_by_its_origin()
         board_item("TWIN-1", "drafts:twin"),
         board_item("TWIN-2", "drafts:twin"),
         board_item("BACK-1", ""),
+        board_item("RE-1", "drafts:repointed"),
     ]);
     // One row a page, fewer than the two carriers: the origin query is read to its last page.
     store.board.answer_search_pages_of(1);
@@ -529,6 +530,25 @@ fn locate_lists_every_carrier_across_pages_and_finds_a_copy_back_by_its_origin()
         "{report:#}"
     );
     assert_eq!(outcome(&report)["via"], "origin", "{report:#}");
+
+    // A link naming an item that names another task back is not believed: the item it names
+    // was re-pointed, so the lookup goes on to the origin query and finds the item carrying
+    // this task's origin, as the copy after it does.
+    store.task(
+        "drafts",
+        "repointed",
+        "classification: private\nmetadata: {onetaskgraph.copies: {board: \"board:TWIN-1\"}}",
+    );
+    let item = only(&store.locate(&["drafts:repointed"], "site", &[]).answer()).clone();
+    assert_eq!(
+        item["counterpart"],
+        json!({"id": "board:RE-1", "via": "scan"}),
+        "{item:#}"
+    );
+    assert_eq!(item["carriers"], json!(["board:RE-1"]), "{item:#}");
+    let report = store.copy("drafts:repointed", "site", &[]).answer();
+    assert_eq!(outcome(&report)["destination"], "board:RE-1", "{report:#}");
+    assert_eq!(outcome(&report)["via"], "scan", "{report:#}");
 
     // `--no-counterpart` sends the board nothing at all for a task in no project, and the
     // answer names neither a counterpart nor carriers.
@@ -612,6 +632,12 @@ fn locate_refuses_each_item_a_copy_of_it_refuses_with_the_copy_s_own_failure() {
         "stale",
         "metadata: {onetaskgraph.copies: {site: \"site:gone\"}}",
     );
+    // An origin naming an item `site` no longer holds: a copy-back whose counterpart is gone.
+    store.task(
+        "drafts",
+        "orphan",
+        "metadata: {onetaskgraph.origin: \"site:gone\"}",
+    );
     // A public task whose counterpart sits on `board`, where a route could have sent it, while
     // it routes to `site` now.
     store.task(
@@ -635,6 +661,7 @@ fn locate_refuses_each_item_a_copy_of_it_refuses_with_the_copy_s_own_failure() {
     );
     for (id, to, kind) in [
         ("drafts:stale", "site", "stale-link"),
+        ("drafts:orphan", "site", "stale-origin"),
         ("drafts:moved", "site", "misrouted"),
         ("drafts:marked", "mirror", "not-private-destination"),
         ("drafts:kept", "mirror", "not-private-destination"),
