@@ -864,6 +864,10 @@ REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "locate"): ("to",),
 }
 
+# Commands whose required options are keyword-only: named at every call rather than taken by
+# position after the operands, as the agreed `task_locate(ids, *, to, ...)` contract spells it.
+KEYWORD_ONLY_REQUIRED = {("task", "locate")}
+
 # The commands that read a body from standard input when `--body-file` is absent, which
 # generated methods expose as a `body` the client writes there — a body is never a word of
 # the command line, so a caller holding text needs no file to pass it.
@@ -1135,14 +1139,16 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
                 for positional in taken
             ]
             # A required option is typed as the operand of its name is, unless its command
-            # shapes it otherwise: `project create --id` is a native id, not a qualified one.
+            # shapes it otherwise: `project create --id` is a native id, not a qualified one. It
+            # follows the `*` for a command whose required options are keyword-only.
+            + (["*"] if command in KEYWORD_ONLY_REQUIRED else [])
             + [
                 f"{option}: {option_type(command, option)}"
                 if option in COMMAND_OPTIONS.get(command, {})
                 else f"{option}: {positional_types.get(option, 'str')}"
                 for option in required
             ]
-            + ["*"]
+            + ([] if command in KEYWORD_ONLY_REQUIRED else ["*"])
             + [f"{item}: {option_type(command, item)} | None = None" for item in keywords]
             + body
         )

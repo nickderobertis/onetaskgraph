@@ -1329,8 +1329,8 @@ class GeneratedClient:
     async def task_locate(
         self,
         ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
-        to: str,
         *,
+        to: str,
         default_sources: list[str] | tuple[str, ...] | None = None,
         no_counterpart: bool | None = None,
         page_size: int | None = None,

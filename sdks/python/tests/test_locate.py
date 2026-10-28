@@ -8,6 +8,7 @@ validated against the models generated from its own schema.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import sys
@@ -137,3 +138,18 @@ def test_a_refusal_whose_output_is_no_failure_document_carries_no_failure(
         asyncio.run(Client(sys.executable, cwd=tmp_path).task_locate(["plan:fresh"], to="site"))
     assert (refused.value.exit_code, str(refused.value)) == (1, "refused")
     assert refused.value.failure is None
+
+
+def test_to_is_keyword_only_as_the_contract_spells_task_locate(binary: Path) -> None:
+    """`task_locate(ids, *, to, no_counterpart=None, target_native=None)`: `to` is named."""
+    parameters = inspect.signature(Client.task_locate).parameters
+    assert parameters["ids"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    for name in ("to", "no_counterpart", "target_native"):
+        assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY, name
+    assert parameters["to"].default is inspect.Parameter.empty, "and it is required"
+    with pytest.raises(TypeError, match="positional argument"):
+        # Passing `to` by position is the mistake under test, so the checker's refusal of it is
+        # the point rather than a defect here.
+        asyncio.run(
+            Client(binary).task_locate(["plan:fresh"], "site")  # ty: ignore[too-many-positional-arguments, missing-argument]
+        )
