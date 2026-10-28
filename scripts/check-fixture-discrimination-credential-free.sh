@@ -85,14 +85,14 @@ while [ -e "$record/$index.names" ]; do index=$((index + 1)); done
 python3 -c 'import os, sys; sys.stdout.write("".join(name + "\n" for name in sorted(os.environ)))' \
   >"$record/$index.names"
 if [ "${1:-}" = metadata ]; then
-  printf '{"target_directory": "%s/../target", "workspace_members": ["member"], "packages": [{"id": "member", "name": "onetaskgraph-github-projects"}]}\n' "$here"
+  printf '{"target_directory": "%s/../build-dir", "workspace_members": ["member"], "packages": [{"id": "member", "name": "onetaskgraph-github-projects"}]}\n' "$here"
   exit 0
 fi
 : >"$record/$index.test"
 # What a real build leaves in the build directory: a dep-info file naming the suite's sources
 # by their path in the tree it was run from, which the step holds to the copy's own directory.
-mkdir -p "$here/../target/debug/deps"
-dep_info="$here/../target/debug/deps/plugin-standin$index.d"
+mkdir -p "$here/../build-dir/debug/deps"
+dep_info="$here/../build-dir/debug/deps/plugin-standin$index.d"
 {
   printf '%s:' "$dep_info"
   printf ' %s' crates/*/tests/plugin.rs
