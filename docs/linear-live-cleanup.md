@@ -51,3 +51,28 @@ Legacy residue is deliberately not swept by guessing at its title. The manager i
 one-time cleanup of the existing residue to the user separately. The live asset lane
 remains refused until that cleanup restores document capacity; this code does not claim
 to have emptied the team or verified a credentialed run.
+
+## Verification of the finished change
+
+On this branch, the following passed:
+
+- `bun nx run-many -p onetaskgraph-live-janitor,onetaskgraph-live,onetaskgraph-linear,onetaskgraph-linear-e2e,scripts,github-workflows -t test,lint,format-check --parallel=2`
+  completed all 20 tasks successfully (two lint tasks used Nx cache). This includes
+  146 Linear e2e tests, 95 workflow tests, the janitor HTTP journeys and schema checks,
+  and the script guard journeys. No Linear credential was available; contributor
+  declines are not evidence of a successful live API run.
+- `bun nx run-many -p github-workflows,onetaskgraph-live-janitor,onetaskgraph-live,onetaskgraph-linear,onetaskgraph-linear-e2e -t typecheck --parallel=2`
+  passed for all five projects.
+- `bash scripts/check-store-fixtures.sh`, `bash scripts/check-live-janitor.sh`, and
+  `git diff --check` passed.
+- The seven Linear janitor subprocess journeys also passed directly. Temporarily
+  replacing the stale machine document's ownership title with an ordinary title made
+  the removal assertion fail because that document was preserved; the fixture was
+  restored before the full Nx run completed.
+
+The previously reported publication assertion at `.github/tests/release-cd.test.mjs:814`
+did not recur. In a separate detached checkout of `main` at
+`057b6c30b35314d1c2a70daef1feec3f5b14ef67`, after installing the pinned `.github`
+dependencies, `node --test .github/tests/release-cd.test.mjs` passed all 12 tests.
+The full workflow suite on this branch also passed that publication journey. The
+separate checkout was removed afterward; no release tooling was changed.
