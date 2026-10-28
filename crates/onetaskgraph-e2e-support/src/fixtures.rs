@@ -1437,6 +1437,7 @@ impl GitHubBoardFields {
             .collect()
     }
 
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] These incremental reads belong to the loopback GitHub server that owns the private board ledger; AGENTS.md places that shared server here, and a plugin suite cannot implement reads of its private state.
     /// How many requests [`Self::served`] holds now: a mark to read [`Self::served_since`] from.
     #[must_use]
     pub fn served_count(&self) -> usize {
@@ -1455,6 +1456,8 @@ impl GitHubBoardFields {
             .zip(board.variables[mark..].iter().cloned())
             .collect()
     }
+
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     /// Every request this server answered for the source whose credential is `token`, as
     /// [`Self::served`] reports them — one board's requests out of the one log two boards
@@ -2964,6 +2967,7 @@ impl GitHubBoard {
         self.content_counted(item, None)
     }
 
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] Counting and rendering this loopback GitHub board reads its private items and comments; it belongs beside the server response methods here, where AGENTS.md places the loopback shared by the engine and plugin journeys.
     /// How many sub-issues and comments each issue holds, counted in one pass over the board —
     /// for a request answering a page of issues, where counting both for each issue in turn
     /// grows with the square of the board.
@@ -3011,6 +3015,8 @@ impl GitHubBoard {
                    .collect::<Vec<_>>(),
                    "pageInfo":{"hasNextPage":item["more_labels"] == json!(true)}}})
     }
+
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     /// The two halves of an origin lookup, answered the way GitHub answers each: the board's
     /// own item connection under its field filter — an exact match on the origin field, over
@@ -6349,6 +6355,7 @@ impl LinearWorkspace {
         self.answers.lock().unwrap().clone()
     }
 
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] These incremental reads expose the loopback Linear server's private request and answer ledgers; AGENTS.md places that shared server here, so a plugin suite cannot add these reads outside its handle.
     /// How many requests [`served`](Self::served) holds now: a mark to read
     /// [`served_since`](Self::served_since) and [`answered_since`](Self::answered_since) from.
     pub fn served_count(&self) -> usize {
@@ -6367,6 +6374,8 @@ impl LinearWorkspace {
     pub fn answered_since(&self, mark: usize) -> Vec<Value> {
         self.answers.lock().unwrap()[mark..].to_vec()
     }
+
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     /// The raw long-form field one held item carries — an issue's or a project's
     /// `description`, a document's `content` — exactly as this workspace would hand it back.
