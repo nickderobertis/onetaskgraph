@@ -36,6 +36,7 @@ def staging_tree(root: Path, tree: Path) -> None:
     """The files the production packaging phase reads."""
     shutil.copytree(root / 'scripts', tree / 'scripts')
     shutil.copytree(root / 'npm/platforms', tree / 'npm/platforms')
+    shutil.copy2(root / 'justfile', tree / 'justfile')
 
 
 def stage_only(binary: Path, target: RustTarget) -> None:
@@ -65,7 +66,7 @@ def stage_only(binary: Path, target: RustTarget) -> None:
         name = 'onetaskgraph.exe' if selected.extension == 'zip' else 'onetaskgraph'
         with zipfile.ZipFile(wheels / wheel_name, 'w', zipfile.ZIP_DEFLATED, compresslevel=FIXTURE_COMPRESSION) as wheel:
             wheel.write(binary, f'onetaskgraph_cli-{version}.data/scripts/{name}')
-        subprocess.run([PYTHON_EXECUTABLE, 'scripts/release_cd.py', '--platform', selected.platform,
+        subprocess.run(['just', f'release-{selected.platform}',
                         'package', '--tag', tag, '--dist', str(tree / 'dist')],
                        cwd=tree, check=True, stdout=subprocess.DEVNULL)
         asset = tree / 'dist/assets' / f'onetaskgraph-{tag}-{target}.{selected.extension}'
@@ -121,7 +122,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
                 raise ValueError('malformed wheel scripts were accepted by extraction')
         wheel_path.write_bytes(original_wheel)
         subprocess.run([PYTHON_EXECUTABLE, 'scripts/release-wheel-binary.py', '--wheels', str(wheels), '--binary', str(canonical)], cwd=tree, check=True, stdout=subprocess.DEVNULL)
-        package = [PYTHON_EXECUTABLE, 'scripts/release_cd.py', '--platform', selected.platform, 'package', '--tag', f'v{version}', '--dist', str(tree / 'dist')]
+        package = ['just', f'release-{selected.platform}', 'package', '--tag', f'v{version}', '--dist', str(tree / 'dist')]
         subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
         command = [PYTHON_EXECUTABLE, 'scripts/verify-release-products.py', '--target', target, '--npm', selected.npm_platform, '--tag', f'v{version}', '--ext', selected.extension, '--dist', str(tree / 'dist')]
         installed = subprocess.run(command + ['--install'], cwd=tree, capture_output=True, text=True)
