@@ -560,8 +560,17 @@ impl Engine {
     /// cannot be reached, [`EngineError::NotCreatable`] for one with no write side — neither is
     /// written — and [`EngineError::SourceFailed`] when the source refuses the task.
     pub async fn create_task(&self, request: &TaskCreate) -> Result<TaskCreated, EngineError> {
-        // Where its issue lands is read once, by the check and the create alike.
-        let _held = self.hold_visibility();
+        let mut result = None;
+        let mut operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
+            Box::pin(async { result = Some(self.create_task_in_scope(request).await) });
+        for source in self.ready() {
+            operation = source.source().scope_visibility(operation);
+        }
+        operation.await;
+        result.expect("the scoped operation completed")
+    }
+
+    async fn create_task_in_scope(&self, request: &TaskCreate) -> Result<TaskCreated, EngineError> {
         let record = format!("task {:?}", request.title);
         let carried = assets::settled(
             &record,
@@ -787,8 +796,20 @@ impl Engine {
         &self,
         request: &DocumentCreate,
     ) -> Result<Qualified<Document>, EngineError> {
-        // Where its issue lands is read once, by the check and the create alike.
-        let _held = self.hold_visibility();
+        let mut result = None;
+        let mut operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
+            Box::pin(async { result = Some(self.create_document_in_scope(request).await) });
+        for source in self.ready() {
+            operation = source.source().scope_visibility(operation);
+        }
+        operation.await;
+        result.expect("the scoped operation completed")
+    }
+
+    async fn create_document_in_scope(
+        &self,
+        request: &DocumentCreate,
+    ) -> Result<Qualified<Document>, EngineError> {
         let record = format!("document {:?}", request.title);
         let carried = assets::settled(
             &record,
@@ -967,8 +988,20 @@ impl Engine {
         &self,
         request: &ProjectCreate,
     ) -> Result<Qualified<Project>, EngineError> {
-        // Where its issue lands is read once, by the check and the create alike.
-        let _held = self.hold_visibility();
+        let mut result = None;
+        let mut operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
+            Box::pin(async { result = Some(self.create_project_in_scope(request).await) });
+        for source in self.ready() {
+            operation = source.source().scope_visibility(operation);
+        }
+        operation.await;
+        result.expect("the scoped operation completed")
+    }
+
+    async fn create_project_in_scope(
+        &self,
+        request: &ProjectCreate,
+    ) -> Result<Qualified<Project>, EngineError> {
         let source = self.creatable(&request.source, MetadataRecord::Project)?;
         let held = source
             .source()

@@ -1883,6 +1883,23 @@ pub trait TaskSource: Send + Sync {
         Ok(None)
     }
 
+    /// Read a create's visibility under a project this copy will create or update.
+    ///
+    /// `project` names the destination project, including a create whose id does not exist
+    /// yet. Backends whose placement depends on its repository predict that repository
+    /// with the same rule as the actual create. Other backends use `visibility` unchanged.
+    ///
+    /// # Errors
+    /// Returns the same failures as [`visibility`](Self::visibility).
+    async fn visibility_with_project(
+        &self,
+        target: &WriteTarget<'_>,
+        project: &WriteTarget<'_>,
+    ) -> Result<Visibility, SourceError> {
+        let _ = project;
+        self.visibility(target).await
+    }
+
     /// Told, once the configuration is read, who the configuration declares can read this
     /// source: [`Visibility::Private`] for a source declared `visibility: private`,
     /// [`Visibility::Public`] for one declared public, and [`Visibility::Unknown`] for one

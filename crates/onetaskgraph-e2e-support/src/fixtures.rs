@@ -1288,6 +1288,8 @@ struct GitHubBoard {
     /// The GraphQL error every read of the Project's `public` field is refused with, in place
     /// of an answer; `None` to answer it.
     project_visibility_error: Option<String>,
+    /// A one-shot rate limit on the Project visibility read, leaving other queries alone.
+    project_visibility_retry_after: Option<u64>,
     /// Whether the token lacks `read:project`, so a read of the Project's `public` field is
     /// refused the way GitHub refuses it: `INSUFFICIENT_SCOPES`, naming the scope.
     project_scope_withheld: bool,
@@ -1548,6 +1550,7 @@ impl GitHubBoardFields {
     /// Every item this server holds — on a board, or created and filed on none — as it holds
     /// them, in the order it came to.
     #[must_use]
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Reads the loopback board's private items and pending issues; this can only be a method of this handle. As GitHubBoard records, the agreed e2e layout puts every loopback server in this shared harness so the journey matrix and engine suite drive one model rather than copies in plugin suites.
     pub fn issues(&self) -> Vec<Value> {
         let board = self.board.lock().unwrap();
         board.items.iter().chain(&board.pending).cloned().collect()
@@ -1556,6 +1559,7 @@ impl GitHubBoardFields {
     /// The `owner/name` of the repository the issue `id` lives in, or `None` for a draft or an
     /// id this board does not hold.
     #[must_use]
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Reads an issue's repository from the loopback board's private items and pending issues; this can only be a method of this handle. As GitHubBoard records, the agreed e2e layout puts every loopback server in this shared harness so the journey matrix and engine suite drive one model rather than copies in plugin suites.
     pub fn repository_of(&self, id: &str) -> Option<String> {
         let board = self.board.lock().unwrap();
         board
@@ -1569,6 +1573,7 @@ impl GitHubBoardFields {
     /// The node id this board gives the repository `owner/name`: `REPO-1` for the one its source
     /// is configured with, and one naming it for every other of the same owner.
     #[must_use]
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Reads the loopback board's private configured repository to reproduce its node id; this can only be a method of this handle. As GitHubBoard records, the agreed e2e layout puts every loopback server in this shared harness so the journey matrix and engine suite drive one model rather than copies in plugin suites.
     pub fn repository_node_id(&self, slug: &str) -> String {
         repository_node_id(&self.board.lock().unwrap().repository, slug)
     }
@@ -1622,6 +1627,11 @@ impl GitHubBoardFields {
     /// read after them as public — a person making the board public part way through a command.
     pub fn make_public_after_visibility_reads(&self, reads: usize) {
         self.board.lock().unwrap().project_public_after_reads = Some(reads);
+    }
+
+    /// Rate-limit only the next Project visibility read, naming its reset in seconds.
+    pub fn rate_limit_project_visibility(&self, retry_after: u64) {
+        self.board.lock().unwrap().project_visibility_retry_after = Some(retry_after);
     }
 
     /// Withhold `read:project` from the token, so the Project's `public` field is refused.
@@ -3680,6 +3690,7 @@ fn github_projects_board_at(
         project_visibility_reads: 0,
         project_visibility_answer: None,
         project_visibility_error: None,
+        project_visibility_retry_after: None,
         project_scope_withheld: false,
         repository_visibility: std::collections::BTreeMap::new(),
         repository_visibility_after: Vec::new(),
@@ -3763,7 +3774,13 @@ fn github_projects_board_at(
                 }
             }
         }
-        if let Some(wait) = board.lock().unwrap().rate_limit_next.take() {
+        let visibility_wait = if query.contains("visibility:repositoryOwner") {
+            board.lock().unwrap().project_visibility_retry_after.take()
+        } else {
+            None
+        };
+        if let Some(wait) = visibility_wait.or_else(|| board.lock().unwrap().rate_limit_next.take())
+        {
             let body = r#"{"message":"API rate limit exceeded for this fixture"}"#;
             return Some(format!(
                 "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nretry-after: {wait}\r\nContent-Length: {}\r\n\r\n{body}",

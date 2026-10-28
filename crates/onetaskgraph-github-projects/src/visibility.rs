@@ -10,15 +10,14 @@
 //! **Each destination is read once per copy.** The engine scopes the copy future through
 //! [`TaskSource::scope_visibility`], giving it independent board and repository cells even
 //! when another copy overlaps on the same source. Dropping the future drops those reads;
-//! the next copy reads afresh. Other held operations use [`TaskSource::hold_visibility`].
-//! Outside an operation every write reads both again. A failed read leaves its cell empty.
+//! the next copy reads afresh. Outside a scoped copy every write reads both again, even
+//! while another operation holds visibility. A failed read leaves its cell empty.
 //!
 //! Reading a Project's `public` field needs the `read:project` scope. A credential without
 //! it cannot answer, and the read says so, naming the scope, rather than answering from
 //! anything else — an unread visibility is never guessed.
 //!
 //! [`TaskSource::scope_visibility`]: onetaskgraph_plugin_api::TaskSource::scope_visibility
-//! [`TaskSource::hold_visibility`]: onetaskgraph_plugin_api::TaskSource::hold_visibility
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -37,8 +36,6 @@ use crate::{GitHubProjectsSource, RepositoryTarget, accounting, graphql};
 /// that fails leaves its cell empty, so the next write asks again.
 #[derive(Default)]
 pub(crate) struct Hold {
-    /// How many holds are open: the reads are kept while any is.
-    depth: usize,
     board: Arc<OnceCell<Visibility>>,
     repositories: BTreeMap<RepositoryTarget, Arc<OnceCell<Visibility>>>,
 }
@@ -56,10 +53,7 @@ impl GitHubProjectsSource {
             let mut reads = OPERATION_READS.try_with(Clone::clone).unwrap_or_default();
             reads.insert(
                 std::ptr::from_ref(self) as usize,
-                Arc::new(std::sync::Mutex::new(Hold {
-                    depth: 1,
-                    ..Hold::default()
-                })),
+                Arc::new(std::sync::Mutex::new(Hold::default())),
             );
             OPERATION_READS.scope(reads, operation).await;
         })
@@ -70,32 +64,8 @@ impl GitHubProjectsSource {
         self.declared_private.load(Ordering::SeqCst)
     }
 
-    /// Open one more hold on this source's visibility reads.
-    pub(crate) fn hold_visibility_reads(&self) {
-        let mut hold = self.hold();
-        if hold.depth == 0 {
-            *hold = Hold::default();
-        }
-        hold.depth += 1;
-    }
-
-    /// Close one hold, dropping every read once none is open.
-    pub(crate) fn release_visibility_reads(&self) {
-        let mut hold = self.hold();
-        hold.depth = hold.depth.saturating_sub(1);
-        if hold.depth == 0 {
-            *hold = Hold::default();
-        }
-    }
-
-    fn hold(&self) -> std::sync::MutexGuard<'_, Hold> {
-        self.visibility_hold
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// The cell a held read of the board, or of `repository`, is kept in — `None` while no
-    /// hold is open, when every read is sent.
+    /// The cell a scoped read of the board, or of `repository`, is kept in — `None` outside
+    /// a copy scope, when every read is sent.
     fn held_cell(
         &self,
         repository: Option<&RepositoryTarget>,
@@ -103,16 +73,10 @@ impl GitHubProjectsSource {
         let scoped = OPERATION_READS
             .try_with(|reads| reads.get(&(std::ptr::from_ref(self) as usize)).cloned())
             .ok()
-            .flatten();
-        let mut hold = match &scoped {
-            Some(hold) => hold
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-            None => self.hold(),
-        };
-        if hold.depth == 0 {
-            return None;
-        }
+            .flatten()?;
+        let mut hold = scoped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Some(match repository {
             None => Arc::clone(&hold.board),
             Some(repository) => {
@@ -128,6 +92,30 @@ impl GitHubProjectsSource {
         target: &WriteTarget<'_>,
     ) -> Result<Visibility, SourceError> {
         let repository = self.visibility_repository(target).await?;
+        self.visibility_in_repository(repository).await
+    }
+
+    pub(crate) async fn write_visibility_with_project(
+        &self,
+        target: &WriteTarget<'_>,
+        project: &WriteTarget<'_>,
+    ) -> Result<Visibility, SourceError> {
+        match target {
+            WriteTarget::New { repositories, .. } => {
+                let parent = self.visibility_repository(project).await?;
+                let repository = self
+                    .creation_rule_in_repository(repositories, parent, "a new item")
+                    .await?;
+                self.visibility_in_repository(Some(repository)).await
+            }
+            WriteTarget::Existing(_) => self.write_visibility(target).await,
+        }
+    }
+
+    async fn visibility_in_repository(
+        &self,
+        repository: Option<RepositoryTarget>,
+    ) -> Result<Visibility, SourceError> {
         let (board, repository) = tokio::join!(self.board_visibility(), async {
             match &repository {
                 Some(repository) => self.repository_visibility(repository).await,

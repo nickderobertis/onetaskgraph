@@ -3834,8 +3834,6 @@ pub struct GitHubProjectsSource {
     /// [`TaskSource::declare_visibility`] told it: what decides where a new issue whose one
     /// named repository reads public is created — see [`Self::creation_rule`].
     declared_private: std::sync::atomic::AtomicBool,
-    /// The visibility reads one engine operation's hold has taken; see the `visibility` module.
-    visibility_hold: Mutex<visibility::Hold>,
     numeric_repositories: tokio::sync::Mutex<BTreeMap<RepositoryTarget, std::num::NonZeroU64>>,
     /// The board as this process last read it, for the length of one command — dropped by
     /// [`TaskSource::end_command`].
@@ -5056,7 +5054,6 @@ impl GitHubProjectsSource {
             held_updates: Mutex::new(Vec::new()),
             clock: system_clock(),
             declared_private: std::sync::atomic::AtomicBool::new(false),
-            visibility_hold: Mutex::new(visibility::Hold::default()),
             numeric_repositories: tokio::sync::Mutex::new(BTreeMap::new()),
             board_cache: Mutex::new(None),
             search_cache: Mutex::new(None),
@@ -9105,7 +9102,6 @@ impl GitHubProjectsSource {
         parent: Option<&NativeId>,
         what: &str,
     ) -> Result<RepositoryTarget, SourceError> {
-        let fallback = self.configured_repository()?;
         let parent = match parent {
             Some(parent) => Some(self.bound_item(parent).await?.ok_or_else(|| {
                 SourceError::Refused {
@@ -9157,6 +9153,17 @@ impl GitHubProjectsSource {
                     })
             })
             .transpose()?;
+        self.creation_rule_in_repository(repositories, parents_repository, what)
+            .await
+    }
+
+    async fn creation_rule_in_repository(
+        &self,
+        repositories: &[Repository],
+        parents_repository: Option<RepositoryTarget>,
+        what: &str,
+    ) -> Result<RepositoryTarget, SourceError> {
+        let fallback = self.configured_repository()?;
         match repositories {
             [named] => {
                 let target =
@@ -13227,6 +13234,13 @@ impl TaskSource for GitHubProjectsSource {
     ) -> Result<onetaskgraph_plugin_api::Visibility, SourceError> {
         self.write_visibility(target).await
     }
+    async fn visibility_with_project(
+        &self,
+        target: &onetaskgraph_plugin_api::WriteTarget<'_>,
+        project: &onetaskgraph_plugin_api::WriteTarget<'_>,
+    ) -> Result<onetaskgraph_plugin_api::Visibility, SourceError> {
+        self.write_visibility_with_project(target, project).await
+    }
     fn declare_visibility(&self, declared: onetaskgraph_plugin_api::Visibility) {
         self.declared_private.store(
             declared == onetaskgraph_plugin_api::Visibility::Private,
@@ -13240,12 +13254,6 @@ impl TaskSource for GitHubProjectsSource {
         self.scope_visibility_reads(operation)
     }
 
-    fn hold_visibility(&self) {
-        self.hold_visibility_reads();
-    }
-    fn release_visibility(&self) {
-        self.release_visibility_reads();
-    }
     /// Where a create of `target` would file its issue, by [`Self::creation_rule`] — the rule
     /// the create applies — reading the parent project's issue only when `target` names one.
     async fn creation_repository(

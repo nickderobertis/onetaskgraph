@@ -595,16 +595,35 @@ fn projects_titled(setup: &Setup, source: &str, title: &str) -> usize {
 #[test]
 fn a_copy_interrupted_after_a_canonical_issue_or_its_view_exists_runs_again_into_one_of_each() {
     // Failed once after the canonical issues exist, and once after the view does.
-    for (board, operation) in [(true, "mutation"), (false, "createIssue")] {
+    for (board, operation) in [(true, "mutation"), (false, "query($id0:ID!,$id1:ID!")] {
         let setup = Setup::mixed();
         setup.plan();
         let failing = if board { &setup.board } else { &setup.site };
-        // The private board's third mutation, after its issues are created; the public board's
-        // second create, after the `Public work` project's, which is the view's.
-        failing.refuse_after(operation, if board { 2 } else { 1 });
+        // The private board's third mutation follows its canonical creates. The public
+        // board's placement read follows both creates: Public work and the view already
+        // exist. Its id0/id1 signature is unique to the created-board-items read here.
+        failing.refuse_after(operation, if board { 2 } else { 0 });
         let copy = ["project", "copy", "plan:home", "--to", "board"];
-        let (output, _) = setup.run(&copy);
+        let (output, sent) = setup.run(&copy);
         assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+        if !board {
+            assert_eq!(
+                created_in(&sent.site).len(),
+                2,
+                "the project and view creates precede the refused placement read"
+            );
+            let last_create = sent
+                .site
+                .iter()
+                .rposition(|(document, _)| document.contains("createIssue("))
+                .expect("a view create");
+            let refused_read = sent
+                .site
+                .iter()
+                .rposition(|(document, _)| document.starts_with("query($id0:ID!,$id1:ID!"))
+                .expect("the refused placement read");
+            assert!(last_create < refused_read, "{:#?}", sent.site);
+        }
         setup.ok(&copy);
         assert_eq!(titled(&setup, "board", "Open step"), 1, "board: {board}");
         assert_eq!(titled(&setup, "board", "Secret step"), 1, "board: {board}");
@@ -881,11 +900,32 @@ fn overlapping_library_copies_read_visibility_independently() {
             .expect("overlapping copy lands");
             let sent = setup.board.served()[before..].to_vec();
             read_once_before_writing(&sent, &["project", VAULT]);
-            first.await.expect("paused copy completes");
+            // Cancel the still-live first copy. Its task-local reads must disappear.
+            drop(first);
+            setup.board.set_project_public(true);
+            let before_retry = setup.board.served().len();
+            let failure = engine
+                .copy(&first_request)
+                .await
+                .expect_err("the changed board refuses");
+            assert!(
+                matches!(
+                    failure,
+                    onetaskgraph_core::EngineError::DestinationNotPrivate { .. }
+                ),
+                "{failure}"
+            );
+            let retry = setup.board.served()[before_retry..].to_vec();
+            assert!(
+                visibility_reads(&retry)
+                    .iter()
+                    .any(|read| read == "project")
+            );
+            assert!(!retry.iter().any(|(document, _)| is_mutation(document)));
         });
     let reads = visibility_reads(&setup.board.served());
-    assert_eq!(reads.iter().filter(|read| *read == "project").count(), 2);
-    assert_eq!(reads.iter().filter(|read| *read == VAULT).count(), 2);
+    assert_eq!(reads.iter().filter(|read| *read == "project").count(), 3);
+    assert_eq!(reads.iter().filter(|read| *read == VAULT).count(), 3);
 }
 
 #[test]
@@ -957,4 +997,276 @@ fn private_locate_shares_named_repository_reads_and_refuses_an_unreadable_one() 
     }
     assert_eq!(visibility_reads(&sent.board), [OPEN]);
     assert!(!sent.board.iter().any(|(document, _)| is_mutation(document)));
+}
+
+#[test]
+fn overlapping_unscoped_holds_do_not_reuse_visibility() {
+    use onetaskgraph_plugin_api::{SourceName, SourcePlugin, Visibility, WriteTarget};
+
+    let mut config = Value::Null;
+    let setup = Setup::laid(false, |document| {
+        config = document["sources"]["board"]["config"].clone();
+    });
+    let environment = onetaskgraph_core::Environment::from_pairs([(
+        "XDG_CONFIG_HOME",
+        setup.sandbox.config_home().to_string_lossy().into_owned(),
+    )]);
+    let loaded = onetaskgraph_core::config::load(
+        &setup.sandbox.project(),
+        &environment,
+        &onetaskgraph_core::config::Layer::default(),
+    )
+    .expect("the configuration loads");
+    let source = onetaskgraph_github_projects::Plugin
+        .build(
+            &SourceName::new("board").expect("a name"),
+            &config,
+            &loaded.secrets,
+        )
+        .expect("the backend builds");
+    let target = WriteTarget::New {
+        repositories: &[],
+        project: None,
+    };
+    tokio::runtime::Runtime::new()
+        .expect("a runtime")
+        .block_on(async {
+            source.hold_visibility();
+            assert_eq!(
+                source.visibility(&target).await.expect("first read"),
+                Visibility::Private
+            );
+            // A second operation starts while the first hold remains open. It must see
+            // the repository's changed reality rather than the first operation's read.
+            setup
+                .board
+                .set_repository_visibility(CONFIGURED, RepositoryAnswer::Public);
+            let before = setup.board.served().len();
+            source.hold_visibility();
+            assert_eq!(
+                source.visibility(&target).await.expect("second read"),
+                Visibility::Public
+            );
+            source.release_visibility();
+            source.release_visibility();
+            let sent = setup.board.served()[before..].to_vec();
+            assert_eq!(visibility_reads(&sent).len(), 2, "{sent:#?}");
+            assert!(
+                sent.iter().all(|(_, body)| !body["query"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("mutation")),
+                "visibility checks never mutate"
+            );
+        });
+}
+
+#[test]
+fn a_public_task_uses_its_private_project_repository_with_and_without_caching() {
+    for cached in [false, true] {
+        let setup = Setup::laid(true, |document| {
+            document["sources"]["board"]["cache"] = json!({"enabled": cached});
+        });
+        setup.plan();
+        setup.record(
+            "projects",
+            "home",
+            &format!("title: Home\nrepositories: [github.com/{LOCKER}]"),
+            "The plan.",
+        );
+        let copy = ["project", "copy", "plan:home", "--to", "board", "--json"];
+        let (_, sent) = setup.ok(&copy);
+        read_once_before_writing(&sent.board, &["project", OPEN, VAULT, LOCKER]);
+        assert!(
+            !visibility_reads(&sent.board)
+                .iter()
+                .any(|read| read == CONFIGURED)
+        );
+        let open = setup.landed("task", "open", "board");
+        assert_eq!(setup.issue_repository(&open), LOCKER);
+        assert_eq!(
+            setup.shown("task", &open)["repositories"],
+            json!([format!("github.com/{OPEN}")])
+        );
+        assert_eq!(
+            created_in(&sent.board)
+                .iter()
+                .filter(|id| **id == setup.board.repository_node_id(LOCKER))
+                .count(),
+            2
+        );
+        // A cached source must still check the live destination on the next operation.
+        setup.board.set_project_public(true);
+        setup.record(
+            "tasks",
+            "open",
+            &format!(
+                "title: Open step\nstatus: todo\nproject: home\nrepositories: [github.com/{OPEN}]"
+            ),
+            "Public work, revised.",
+        );
+        let refusal_args: Vec<_> = copy.into_iter().filter(|arg| *arg != "--json").collect();
+        let (kind, _, refused) = setup.refused(&refusal_args);
+        assert_eq!(kind, "destination-not-private");
+        assert!(
+            !refused
+                .board
+                .iter()
+                .any(|(document, _)| is_mutation(document))
+        );
+    }
+}
+
+#[test]
+fn direct_project_and_document_creates_scope_their_private_placement_reads() {
+    for kind in ["project", "document"] {
+        let setup = Setup::laid(false, |_| {});
+        setup.record(
+            "projects",
+            "home",
+            "title: Home\nclassification: private",
+            "The plan.",
+        );
+        setup.ok(&["project", "copy", "plan:home", "--to", "board"]);
+        let project = setup.landed("project", "home", "board");
+        let native = project.strip_prefix("board:").expect("a board project");
+        let body = setup.root.join("body.md");
+        std::fs::write(&body, "Private coordination.").expect("a body");
+        let mut arguments = vec![
+            kind,
+            "create",
+            "board",
+            "--id",
+            "new-item",
+            "--title",
+            "New item",
+            "--classification",
+            "private",
+            "--repository",
+            "github.com/nickderobertis/openwidget",
+            "--body-file",
+            body.to_str().expect("a path"),
+            "--json",
+        ];
+        if kind == "document" {
+            arguments.extend(["--project", native]);
+        }
+        let (answer, sent) = setup.ok(&arguments);
+        assert!(answer.contains("New item"), "{answer}");
+        read_once_before_writing(&sent.board, &["project", OPEN, CONFIGURED]);
+        assert_eq!(
+            created_in(&sent.board),
+            [setup.board.repository_node_id(CONFIGURED)]
+        );
+        let issue = setup
+            .board
+            .issues()
+            .into_iter()
+            .find(|issue| {
+                issue["title"]
+                    .as_str()
+                    .is_some_and(|title| title.ends_with("New item"))
+            })
+            .expect("the created issue");
+        let id = issue["id"].as_str().expect("an issue id");
+        assert_eq!(
+            setup.shown(kind, &format!("board:{id}"))["repositories"],
+            json!([format!("github.com/{OPEN}")])
+        );
+        setup.board.set_project_public(true);
+        let refusal_args: Vec<_> = arguments
+            .into_iter()
+            .filter(|arg| *arg != "--json")
+            .collect();
+        let (refusal, _, sent) = setup.refused(&refusal_args);
+        assert_eq!(refusal, "destination-not-private");
+        assert!(
+            visibility_reads(&sent.board)
+                .iter()
+                .any(|read| read == "project")
+        );
+    }
+}
+
+#[test]
+fn a_project_copy_visibility_rate_limit_holds_off_later_reads() {
+    let setup = Setup::laid(false, |document| {
+        document["sources"]["board"]["config"]["pacing"]["retry_budget_ms"] = json!(0);
+    });
+    setup.record(
+        "projects",
+        "home",
+        "title: Home\nclassification: private",
+        "The plan.",
+    );
+    setup.record(
+        "tasks",
+        "step",
+        &format!("title: Step\nstatus: todo\nproject: home\nrepositories: [github.com/{VAULT}]"),
+        "Private work.",
+    );
+    setup.board.rate_limit_project_visibility(3_600);
+    let environment = onetaskgraph_core::Environment::from_pairs([(
+        "XDG_CONFIG_HOME",
+        setup.sandbox.config_home().to_string_lossy().into_owned(),
+    )]);
+    let loaded = onetaskgraph_core::config::load(
+        &setup.sandbox.project(),
+        &environment,
+        &onetaskgraph_core::config::Layer::default(),
+    )
+    .expect("the configuration loads");
+    let engine = onetaskgraph_core::Engine::build(&loaded.config, &loaded.secrets);
+    let request = onetaskgraph_core::CopyRequest {
+        items: onetaskgraph_core::CopyItems::new(vec!["plan:home".parse().expect("an id")])
+            .expect("one item"),
+        scope: onetaskgraph_core::CopyScope::Projects { tasks: true },
+        destination: onetaskgraph_plugin_api::SourceName::new("board").expect("a name"),
+        target_task: None,
+        match_by: None,
+        recreate: false,
+        create: false,
+        dry_run: false,
+        comments: false,
+        no_link: false,
+        expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
+        statuses: Vec::new(),
+    };
+    tokio::runtime::Runtime::new()
+        .expect("a runtime")
+        .block_on(async {
+            let failure = engine
+                .copy(&request)
+                .await
+                .expect_err("the task's visibility read is limited");
+            assert!(
+                matches!(
+                    failure,
+                    onetaskgraph_core::EngineError::VisibilityUnreadable {
+                        error: onetaskgraph_plugin_api::SourceError::RateLimited { .. },
+                        ..
+                    }
+                ),
+                "{failure}"
+            );
+            let sent = setup.board.served();
+            assert!(
+                visibility_reads(&sent).iter().any(|read| read == "project"),
+                "the private project preflight reached its board visibility check"
+            );
+            assert!(!sent.iter().any(|(document, _)| is_mutation(document)));
+            let before = sent.len();
+            let id = "board:missing".parse().expect("an id");
+            let refused = engine.project(&id).await.expect("a reported refusal");
+            assert!(matches!(
+                refused.errors[0].error,
+                onetaskgraph_plugin_api::SourceError::RateLimited { .. }
+            ));
+            assert_eq!(
+                setup.board.served().len(),
+                before,
+                "the recorded hold sends nothing"
+            );
+        });
 }

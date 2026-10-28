@@ -5274,7 +5274,7 @@ impl Engine {
         // Every item is placed first, and what each lands somewhere not verified private is then
         // put to the check together, before anything is written.
         let mut checked = Vec::new();
-        for item in planned {
+        for item in &planned {
             let destination = self.writable(&item.to)?;
             let target = match &item.target {
                 Target::Update { id, .. } => WriteTarget::Existing(id),
@@ -5301,8 +5301,34 @@ impl Engine {
             // the destination it lands — an issue's own repository on a board. Read here,
             // before anything is written, and held for the copy, so its writes read nothing
             // more and a dry run reports the refusal its copy would meet.
-            self.at_write(destination, &outbound.item, &outbound.target)
-                .await?;
+            let parent = match &item.item {
+                Item::Task(task) => task.project.as_ref(),
+                Item::Document(document) => document.project.as_ref(),
+                Item::Project(_) => None,
+            };
+            let project = parent
+                .and_then(|parent| {
+                    planned.iter().find(|candidate| {
+                        matches!(candidate.item, Item::Project(_))
+                            && candidate.source.source == item.source.source
+                            && candidate.source.native == *parent
+                            && candidate.to == item.to
+                    })
+                })
+                .map(|project| match &project.target {
+                    Target::Update { id, .. } => WriteTarget::Existing(id),
+                    Target::Create => WriteTarget::New {
+                        repositories: repositories_of(&project.item),
+                        project: None,
+                    },
+                });
+            self.verify_private_with_project(
+                destination,
+                &outbound.item,
+                &outbound.target,
+                project.as_ref(),
+            )
+            .await?;
         }
         self.check_all(&checked).await
     }

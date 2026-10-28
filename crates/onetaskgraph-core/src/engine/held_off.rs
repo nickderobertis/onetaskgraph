@@ -777,6 +777,15 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.creation_repository(target).await)
     }
 
+    async fn visibility_with_project(
+        &self,
+        target: &WriteTarget<'_>,
+        project: &WriteTarget<'_>,
+    ) -> Result<Visibility, SourceError> {
+        self.refused()?;
+        self.noted(self.inner.visibility_with_project(target, project).await)
+    }
+
     fn declare_visibility(&self, declared: Visibility) {
         self.inner.declare_visibility(declared);
     }

@@ -1221,7 +1221,30 @@ impl Engine {
         item: &str,
         target: &WriteTarget<'_>,
     ) -> Result<(), EngineError> {
-        match destination.source().visibility(target).await {
+        self.verify_private_with_project(destination, item, target, None)
+            .await
+    }
+
+    pub(super) async fn verify_private_with_project(
+        &self,
+        destination: &ResolvedSource,
+        item: &str,
+        target: &WriteTarget<'_>,
+        project: Option<&WriteTarget<'_>>,
+    ) -> Result<(), EngineError> {
+        if self.declared(destination.name()) != SourceVisibility::Private {
+            return Ok(());
+        }
+        let visibility = match project {
+            Some(project) => {
+                destination
+                    .source()
+                    .visibility_with_project(target, project)
+                    .await
+            }
+            None => destination.source().visibility(target).await,
+        };
+        match visibility {
             Ok(Visibility::Private) => Ok(()),
             Ok(reality) => Err(EngineError::DestinationNotPrivate {
                 item: item.to_owned(),

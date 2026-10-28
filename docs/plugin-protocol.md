@@ -964,6 +964,15 @@ source cannot represent, and a metadata key it cannot carry, are each a
 is refused the same way rather than created, because the engine established that id
 before asking.
 
+The in-process visibility hooks are not messages of this protocol.
+`TaskSource::declare_visibility` ignores the configured declaration through its default;
+a declaration cannot change a hosted plugin's placement. `TaskSource::scope_visibility`
+executes the operation unchanged through its default. `TaskSource::hold_visibility` and
+`TaskSource::release_visibility` do nothing through their defaults: a hosted source holds
+no visibility reads, and its `visibility` remains `unknown` as specified in §4.
+`TaskSource::visibility_with_project` uses that same `visibility` default; a project
+predicted for a create cannot change a hosted source's unknown visibility.
+
 `TaskSource::check_status_write` — whether a write of an item of one kind at one status
 category would have a status to write, asked by a copy before it records what an item held
 and overwrites it — is not a message of this protocol. For a hosted source the engine answers
