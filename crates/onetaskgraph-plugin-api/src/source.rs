@@ -1898,6 +1898,17 @@ pub trait TaskSource: Send + Sync {
         let _ = declared;
     }
 
+    /// Run an operation with isolated visibility reads, including when operations overlap.
+    ///
+    /// The default executes the future unchanged. Backends that hold visibility reads may
+    /// scope them to this future rather than sharing them with another operation.
+    fn scope_visibility<'a>(
+        &'a self,
+        operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        operation
+    }
+
     /// Begin one engine operation's hold on what [`visibility`](Self::visibility) reads: from
     /// now until the matching [`release_visibility`](Self::release_visibility), a source may
     /// answer each destination from its first read in that hold rather than reading it again.

@@ -808,3 +808,153 @@ fn the_library_copy_reads_each_destination_again_at_each_copy_over_the_same_sour
         "the second copy reuses nothing of the first"
     );
 }
+
+#[test]
+fn overlapping_library_copies_read_visibility_independently() {
+    use std::future::Future;
+    use std::task::Poll;
+
+    let setup = Setup::laid(false, |_| {});
+    for id in ["first", "second"] {
+        setup.record(
+            "tasks",
+            id,
+            &format!("title: {id}\nstatus: todo\nrepositories: [github.com/{VAULT}]"),
+            "Private work.",
+        );
+    }
+    let environment = onetaskgraph_core::Environment::from_pairs([(
+        "XDG_CONFIG_HOME",
+        setup.sandbox.config_home().to_string_lossy().into_owned(),
+    )]);
+    let loaded = onetaskgraph_core::config::load(
+        &setup.sandbox.project(),
+        &environment,
+        &onetaskgraph_core::config::Layer::default(),
+    )
+    .expect("the configuration loads");
+    let engine = onetaskgraph_core::Engine::build(&loaded.config, &loaded.secrets);
+    let request = |id: &str| onetaskgraph_core::CopyRequest {
+        items: onetaskgraph_core::CopyItems::new(vec![
+            format!("plan:{id}").parse().expect("an id"),
+        ])
+        .expect("one item"),
+        scope: onetaskgraph_core::CopyScope::Tasks,
+        destination: onetaskgraph_plugin_api::SourceName::new("board").expect("a name"),
+        target_task: None,
+        match_by: None,
+        recreate: false,
+        create: false,
+        dry_run: false,
+        comments: false,
+        no_link: false,
+        expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
+        statuses: Vec::new(),
+    };
+    let first_request = request("first");
+    let second_request = request("second");
+    tokio::runtime::Runtime::new()
+        .expect("a runtime")
+        .block_on(async {
+            let mut first = Box::pin(engine.copy(&first_request));
+            // Pause after both visibility requests, while the first operation is still live.
+            std::future::poll_fn(|cx| {
+                if visibility_reads(&setup.board.served()).len() == 2 {
+                    return Poll::Ready(());
+                }
+                assert!(
+                    first.as_mut().poll(cx).is_pending(),
+                    "first copy must still be running"
+                );
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            })
+            .await;
+            let before = setup.board.served().len();
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                engine.copy(&second_request),
+            )
+            .await
+            .expect("overlapping copy must not wait on the paused copy's visibility cells")
+            .expect("overlapping copy lands");
+            let sent = setup.board.served()[before..].to_vec();
+            read_once_before_writing(&sent, &["project", VAULT]);
+            first.await.expect("paused copy completes");
+        });
+    let reads = visibility_reads(&setup.board.served());
+    assert_eq!(reads.iter().filter(|read| *read == "project").count(), 2);
+    assert_eq!(reads.iter().filter(|read| *read == VAULT).count(), 2);
+}
+
+#[test]
+fn projects_and_documents_naming_a_public_repository_keep_their_issues_private() {
+    for (kind, folder) in [("project", "projects"), ("document", "documents")] {
+        let setup = Setup::laid(false, |_| {});
+        setup.record(
+            folder,
+            "named",
+            &format!("title: Named {kind}\nrepositories: [github.com/{OPEN}]"),
+            "Private coordination.",
+        );
+        setup
+            .board
+            .set_repository_visibility(OPEN, RepositoryAnswer::Unseen);
+        let arguments = [kind, "copy", "plan:named", "--to", "board"];
+        let (failure, message, _) = setup.refused(&arguments);
+        assert_eq!(failure, "visibility-unreadable", "{message}");
+        assert!(message.contains(OPEN), "{message}");
+        setup
+            .board
+            .set_repository_visibility(OPEN, RepositoryAnswer::Public);
+        let (_, sent) = setup.ok(&arguments);
+        read_once_before_writing(&sent.board, &["project", OPEN, CONFIGURED]);
+        assert_eq!(
+            created_in(&sent.board),
+            [setup.board.repository_node_id(CONFIGURED)]
+        );
+        let landed = setup.landed(kind, "named", "board");
+        assert_eq!(setup.issue_repository(&landed), CONFIGURED);
+        assert_eq!(
+            setup.shown(kind, &landed)["repositories"],
+            json!([format!("github.com/{OPEN}")])
+        );
+    }
+}
+
+#[test]
+fn private_locate_shares_named_repository_reads_and_refuses_an_unreadable_one() {
+    let setup = Setup::laid(false, |_| {});
+    for id in ["one", "two"] {
+        setup.record(
+            "tasks",
+            id,
+            &format!("title: {id}\nstatus: todo\nrepositories: [github.com/{OPEN}]"),
+            "Private coordination.",
+        );
+    }
+    let arguments = ["task", "locate", "plan:one", "plan:two", "--to", "board"];
+    setup
+        .board
+        .set_repository_visibility(OPEN, RepositoryAnswer::Unseen);
+    let (failure, message, _) = setup.refused(&arguments);
+    assert_eq!(failure, "unavailable", "{message}");
+    assert!(message.contains(OPEN), "{message}");
+    setup
+        .board
+        .set_repository_visibility(OPEN, RepositoryAnswer::Public);
+    let mut with_json = arguments.to_vec();
+    with_json.push("--json");
+    let (answer, sent) = setup.ok(&with_json);
+    let answer: Value = serde_json::from_str(&answer).expect("a locate answer");
+    assert_eq!(answer["items"].as_array().expect("located items").len(), 2);
+    for item in answer["items"].as_array().unwrap() {
+        assert_eq!(
+            item["creates_in"],
+            json!({"repository": format!("github.com/{CONFIGURED}")})
+        );
+    }
+    assert_eq!(visibility_reads(&sent.board), [OPEN]);
+    assert!(!sent.board.iter().any(|(document, _)| is_mutation(document)));
+}

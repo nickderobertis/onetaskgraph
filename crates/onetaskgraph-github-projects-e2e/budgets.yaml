@@ -57,7 +57,7 @@ budgets:
   # llmlint: ignore[budgets_track_product_owner_outcomes] The user's ruling 7 makes the read-once rule this task's own budget at threshold 1. Its figure is not part of any other budget's figure: the plan-copy points budgets record copies onto a public board, which reads no visibility, and they price REST at 0.
   - id: visibility-reads-per-destination
     description: >-
-      An inner measure of headroom on a shared board token that no check may reach: the most visibility reads any one destination — the board's Project, or one repository — receives during one copy, measured over a mixed plan's first project copy (1 project and 100 tasks, 101 writes), followed by its document copy (1 design document, 1 write), onto a GitHub board declared private. Of the tasks, 50 name one of 5 public repositories and 50 one of 5 private ones; each public task's view goes to a public board. The detail reports each command's reads per destination and the total across both commands. It protects that token's allowance from a read per write: one copy reads each destination once and shares that read across all of its writes.
+      The most visibility reads any one destination receives within either command of a mixed plan's first project copy (101 private-board writes) followed by its document copy (1 write), with public task views on a public board. It protects the shared board token from a visibility read per write by requiring each command to share its reads across writes.
     labels: [github]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_visibility_reads", "--exact", "--nocapture"]

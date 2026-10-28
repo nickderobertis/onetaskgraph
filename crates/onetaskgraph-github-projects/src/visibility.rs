@@ -7,17 +7,17 @@
 //! repository over REST. The two are sent together, so the time they add is one read's
 //! rather than two.
 //!
-//! **Each destination is read once per engine operation.** While the engine holds this
-//! source's reads ([`TaskSource::hold_visibility`]) — which a copy does for the length of the
-//! copy — the board and each repository are read the first time a write asks about them and
-//! answered from that read for every later write of the same operation; the hold's last
-//! release drops them all, so the next operation reads afresh. Outside a hold every write
-//! reads both again. A read that fails is never held, and is asked again.
+//! **Each destination is read once per copy.** The engine scopes the copy future through
+//! [`TaskSource::scope_visibility`], giving it independent board and repository cells even
+//! when another copy overlaps on the same source. Dropping the future drops those reads;
+//! the next copy reads afresh. Other held operations use [`TaskSource::hold_visibility`].
+//! Outside an operation every write reads both again. A failed read leaves its cell empty.
 //!
 //! Reading a Project's `public` field needs the `read:project` scope. A credential without
 //! it cannot answer, and the read says so, naming the scope, rather than answering from
 //! anything else — an unread visibility is never guessed.
 //!
+//! [`TaskSource::scope_visibility`]: onetaskgraph_plugin_api::TaskSource::scope_visibility
 //! [`TaskSource::hold_visibility`]: onetaskgraph_plugin_api::TaskSource::hold_visibility
 
 use std::collections::BTreeMap;
@@ -43,7 +43,28 @@ pub(crate) struct Hold {
     repositories: BTreeMap<RepositoryTarget, Arc<OnceCell<Visibility>>>,
 }
 
+tokio::task_local! {
+    static OPERATION_READS: BTreeMap<usize, Arc<std::sync::Mutex<Hold>>>;
+}
+
 impl GitHubProjectsSource {
+    pub(crate) fn scope_visibility_reads<'a>(
+        &'a self,
+        operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let mut reads = OPERATION_READS.try_with(Clone::clone).unwrap_or_default();
+            reads.insert(
+                std::ptr::from_ref(self) as usize,
+                Arc::new(std::sync::Mutex::new(Hold {
+                    depth: 1,
+                    ..Hold::default()
+                })),
+            );
+            OPERATION_READS.scope(reads, operation).await;
+        })
+    }
+
     /// Whether the configuration declares this source private.
     pub(crate) fn is_declared_private(&self) -> bool {
         self.declared_private.load(Ordering::SeqCst)
@@ -79,7 +100,16 @@ impl GitHubProjectsSource {
         &self,
         repository: Option<&RepositoryTarget>,
     ) -> Option<Arc<OnceCell<Visibility>>> {
-        let mut hold = self.hold();
+        let scoped = OPERATION_READS
+            .try_with(|reads| reads.get(&(std::ptr::from_ref(self) as usize)).cloned())
+            .ok()
+            .flatten();
+        let mut hold = match &scoped {
+            Some(hold) => hold
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            None => self.hold(),
+        };
         if hold.depth == 0 {
             return None;
         }

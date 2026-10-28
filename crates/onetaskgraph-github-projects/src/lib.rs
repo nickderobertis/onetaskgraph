@@ -13233,6 +13233,13 @@ impl TaskSource for GitHubProjectsSource {
             std::sync::atomic::Ordering::SeqCst,
         );
     }
+    fn scope_visibility<'a>(
+        &'a self,
+        operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        self.scope_visibility_reads(operation)
+    }
+
     fn hold_visibility(&self) {
         self.hold_visibility_reads();
     }

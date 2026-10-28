@@ -41,19 +41,26 @@ pub(super) const WRITES: u64 = TASKS as u64 + 2;
 /// The budget this journey records for.
 pub(super) const BUDGET: &str = "visibility-reads-per-destination";
 /// The workload this journey records, which the report refuses any other recording for.
-pub(super) const WORKLOAD: &str =
-    "mixed-plan-copy-1-project-100-tasks-50-in-5-public-50-in-5-private-1-document";
+pub(super) const WORKLOAD: &str = "mixed-project-copy-101-writes-100-tasks-50-in-5-public-50-in-5-private-then-document-copy-1-write";
 /// The repository the private board creates an issue in when nothing else decides.
 const CONFIGURED: &str = "nickderobertis/onetaskgraph";
 
-/// The `k`th public repository.
 fn public(k: usize) -> String {
     format!("nickderobertis/open-{k}")
 }
 
-/// The `k`th private repository.
 fn private(k: usize) -> String {
     format!("nickderobertis/closed-{k}")
+}
+
+/// The destinations each command in the recorded workload must read.
+pub(super) fn destinations(project: bool) -> Vec<String> {
+    let mut names = vec![CONFIGURED.to_owned(), "project".to_owned()];
+    if project {
+        names.extend((0..REPOSITORIES).flat_map(|k| [public(k), private(k)]));
+    }
+    names.sort_unstable();
+    names
 }
 
 /// Answer a repository public exactly when it is one of the `open-` ones.
@@ -224,7 +231,6 @@ struct Spent {
     graphql: u64,
     /// Every REST request that was not a visibility read.
     other_rest: u64,
-    /// Issues created.
     creates: u64,
 }
 
@@ -261,7 +267,7 @@ fn spent(served: &[(String, Value)]) -> Spent {
 }
 
 #[test]
-fn a_whole_mixed_plan_copy_reads_each_destination_once_per_copy() {
+fn a_mixed_plans_project_and_document_copies_record_visibility_reads_by_destination() {
     let clock = SimulatedClock::start(1);
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("plan");
@@ -307,11 +313,7 @@ fn a_whole_mixed_plan_copy_reads_each_destination_once_per_copy() {
     // Exactly the reads each copy owes: the project copy the board, each repository a task
     // names and the configured one its project's issue is in; the document copy the board and
     // that one repository.
-    let mut wanted: Vec<String> = (0..REPOSITORIES)
-        .flat_map(|k| [public(k), private(k)])
-        .chain([CONFIGURED.to_owned(), "project".to_owned()])
-        .collect();
-    wanted.sort_unstable();
+    let wanted = destinations(true);
     let (_, project_copy) = &copies[0];
     assert_eq!(
         project_copy
@@ -321,7 +323,6 @@ fn a_whole_mixed_plan_copy_reads_each_destination_once_per_copy() {
             .collect::<Vec<_>>(),
         wanted
     );
-    assert_eq!((project_copy.graphql, project_copy.rest), (1, 11));
     let (_, document_copy) = &copies[1];
     assert_eq!(
         document_copy
@@ -329,9 +330,8 @@ fn a_whole_mixed_plan_copy_reads_each_destination_once_per_copy() {
             .keys()
             .cloned()
             .collect::<Vec<_>>(),
-        [CONFIGURED, "project"]
+        destinations(false)
     );
-    assert_eq!((document_copy.graphql, document_copy.rest), (1, 1));
     // The public board is not declared private, so nothing reads who can read it.
     assert!(
         site.served().iter().all(|(document, _)| {

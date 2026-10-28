@@ -1880,6 +1880,13 @@ impl TaskSource for CachedSource {
         self.inner.declare_visibility(declared);
     }
 
+    fn scope_visibility<'a>(
+        &'a self,
+        operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        self.inner.scope_visibility(operation)
+    }
+
     fn hold_visibility(&self) {
         self.inner.hold_visibility();
     }

@@ -1873,6 +1873,17 @@ impl Engine {
     /// destination refuses the write — including a field or a metadata key it cannot
     /// carry, which it names rather than dropping.
     pub async fn copy(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
+        let mut result = None;
+        let mut operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
+            Box::pin(async { result = Some(self.copy_in_scope(request).await) });
+        for source in self.ready() {
+            operation = source.source().scope_visibility(operation);
+        }
+        operation.await;
+        result.expect("the scoped operation completed")
+    }
+
+    async fn copy_in_scope(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
         // Each destination's visibility is read once for the whole copy, and afresh by the next.
         let _held = self.hold_visibility();
         let _expecting = self.expecting_copy(request)?;
@@ -2889,7 +2900,8 @@ impl Engine {
             plans
                 .iter()
                 .flat_map(|(project, tasks, _, _)| std::iter::once(project).chain(tasks))
-                .filter(|item| !item.skipped),
+                .filter(|item| !item.skipped)
+                .collect(),
             running,
         )
         .await?;
@@ -4467,8 +4479,11 @@ impl Engine {
         // Once the content that lands is settled, and before anything — a member project
         // included — is written. A task skipped writes nothing, so it has nothing to hold.
         if !running.preflighted {
-            self.preflight_copy(planned.iter().filter(|item| !item.skipped), running)
-                .await?;
+            self.preflight_copy(
+                planned.iter().filter(|item| !item.skipped).collect(),
+                running,
+            )
+            .await?;
         }
 
         if project.is_none() {
@@ -5242,12 +5257,11 @@ impl Engine {
     /// that a carried dependency or delivery names, so a write anywhere not declared private
     /// withholds the id of a private one — and refuses, before anything is written, a
     /// reference whose classification it cannot establish.
-    async fn preflight_copy<'a>(
+    async fn preflight_copy(
         &self,
-        planned: impl Iterator<Item = &'a Planned>,
+        planned: Vec<&Planned>,
         running: &mut Running,
     ) -> Result<(), EngineError> {
-        let planned: Vec<&Planned> = planned.collect();
         for item in &planned {
             note_private(running, item);
         }
