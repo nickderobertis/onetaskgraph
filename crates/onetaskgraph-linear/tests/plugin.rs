@@ -2666,11 +2666,6 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
     );
 }
 
-/// A status Linear will not run a document under says which part of it Linear refused.
-///
-/// Linear answers a rejected document with 400 and its error envelope in the body, so a
-/// refusal reported as the status alone leaves nothing to act on. A long body is cut
-/// rather than carried whole.
 /// A request that never reached Linear names what the connection met: reqwest's own message
 /// stops at "error sending request", and the cause — refused, reset, no local port left — is
 /// only beneath it.
@@ -2691,6 +2686,11 @@ async fn a_request_that_never_reached_linear_names_the_operating_systems_cause()
     );
 }
 
+/// A status Linear will not run a document under says which part of it Linear refused.
+///
+/// Linear answers a rejected document with 400 and its error envelope in the body, so a
+/// refusal reported as the status alone leaves nothing to act on. A long body is cut
+/// rather than carried whole.
 #[tokio::test]
 async fn a_status_linear_refuses_under_carries_what_linear_said() {
     let (endpoint, _) = server(
