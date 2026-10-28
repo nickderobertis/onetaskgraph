@@ -1,13 +1,12 @@
 # Linear live document residue
 
 Hosted run [40741930571, test-linux](https://github.com/nickderobertis/onetaskgraph/actions/runs/40741930571/job/123005634093)
-failed on 2026-10-28 at 18:21:14 UTC. Its log names
-`linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy`,
-`linear_assets.rs:1194`, and Linear's `QUOTA_EXCEEDED` response with
-`quota: max-documents-per-team`: “Your team can have a maximum of 1000 documents.”
-The task's image reads returned HTTP 200, and the log subsequently confirms
-`live disposable issue … removed=true`. No document was created by that refused request.
-The main Linear live journey passed earlier in the same job, at 18:19:49 UTC.
+is the reported failure: `linear_assets.rs:1194` in
+`linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy`
+was refused by Linear's maximum of 1000 documents per team. A refused create
+cannot return an id for the journey's cleanup journal. This dispatch could not
+re-fetch the hosted log: `gh run view 40741930571 --log-failed` reported that
+the run was still in progress and its logs were unavailable.
 
 There are two live document producers:
 
@@ -29,7 +28,7 @@ positive evidence from the writing machine's registration locks; it cannot recov
 from a discarded hosted runner. The scheduled janitor enumerated GitHub artifacts only
 and explicitly never read Linear. Thus documents from interrupted live journeys could
 remain indefinitely, and the asset journey's old names were not sweepable even locally.
-Code and this failure log establish those paths, not the exact composition of the team's
+Code and the reported refusal establish those paths, not the exact composition of the team's
 1000 documents. No credential or captured account listing was available to this dispatch.
 
 The scheduled workflow now also invokes `onetaskgraph-live-janitor --linear` with only
