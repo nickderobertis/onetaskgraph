@@ -21,8 +21,18 @@ if [ -z "$names" ]; then
     echo "dump_documents.sh: no \`pub const NAME: &str\` document found in $crate/src/lib.rs; name a checkout of the measured tag, or update the pattern if the plugin moved its documents" >&2
     exit 1
 fi
-mkdir -p "$crate/examples"
-trap 'rm -rf "$crate/examples"' EXIT
+# The one example file this writes, removed again on exit; nothing else in the checkout is touched.
+example="$crate/examples/dump_documents.rs"
+if [ -e "$example" ]; then
+    echo "dump_documents.sh: $example already exists; move it aside, or use a fresh checkout of the measured tag" >&2
+    exit 1
+fi
+created_dir=
+if [ ! -d "$crate/examples" ]; then
+    mkdir "$crate/examples"
+    created_dir=1
+fi
+trap 'rm -f "$example"; if [ -n "$created_dir" ]; then rmdir "$crate/examples" 2>/dev/null || true; fi' EXIT
 {
     echo 'use onetaskgraph_github_projects::graphql::*;'
     echo 'fn main() { let mut m = serde_json::Map::new();'
@@ -30,6 +40,6 @@ trap 'rm -rf "$crate/examples"' EXIT
         echo "m.insert(\"$name\".into(), serde_json::Value::String($name.to_owned()));"
     done
     echo 'println!("{}", serde_json::to_string_pretty(&serde_json::Value::Object(m)).unwrap()); }'
-} > "$crate/examples/dump_documents.rs"
+} > "$example"
 (cd "$checkout" && cargo run -q -p onetaskgraph-github-projects --example dump_documents) \
     > "$here/documents.json"
