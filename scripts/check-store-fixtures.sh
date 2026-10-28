@@ -195,6 +195,13 @@ MANIFEST = {
 # reason. Recorded rather than skipped by pattern, so a store fixture cannot be added under
 # a name a pattern happens to exclude.
 NOT_A_STORE = {
+    "crates/onetaskgraph-linear/tests/fixtures/document-content-40721997875.json": (
+        "Not a store: it records before/after Markdown from hosted run 40721997875, "
+        "not a collection a query filters. "
+        "`recorded_document_content_is_returned_as_stored_including_rewrites` drives "
+        "the source's document write and read interfaces over these responses and asserts "
+        "exact content, including preserved code spans and rewritten prose."
+    ),
     "crates/onetaskgraph-live-janitor/tests/fixtures/rest-operations.json": (
         "Not a store: it holds no items and no query reads it. It pins GitHub's published "
         "description of the six REST operations the live janitor sends — paths, query "
