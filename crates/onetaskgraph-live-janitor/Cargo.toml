@@ -10,8 +10,9 @@ authors.workspace = true
 
 [dependencies]
 onetaskgraph-live.workspace = true
-# llmlint: ignore-next-line[new_command_or_client_gets_its_own_project] The existing scheduled janitor owns both hosted sweeps; this adds a source to that cleanup command, following its GitHub plugin dependency.
+# llmlint: ignore-block[new_command_or_client_gets_its_own_project] The existing scheduled janitor owns both hosted sweeps; this adds a source to that cleanup command, following its GitHub plugin dependency.
 onetaskgraph-linear.workspace = true
+# llmlint: ignore-end[new_command_or_client_gets_its_own_project]
 onetaskgraph-github-live.workspace = true
 onetaskgraph-github-projects.workspace = true
 reqwest.workspace = true

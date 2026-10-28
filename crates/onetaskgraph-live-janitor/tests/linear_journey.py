@@ -119,6 +119,7 @@ class Response:
 
 class FailureMode(StrEnum):
     DELETE = auto()
+    SECOND_DELETE = auto()
     LISTING = auto()
     CURSOR = auto()
     READ_LIMIT = auto()
@@ -130,6 +131,8 @@ class FailureMode(StrEnum):
 
 
 class Malformation(StrEnum):
+    NO_TEAM = auto()
+    NO_PROJECT = auto()
     NO_ID = auto()
     EMPTY_ID = auto()
     NO_TITLE = auto()
@@ -165,6 +168,8 @@ class Workspace:
             match self.failure:
                 case FailureMode.DELETE:
                     return {'data': {'documentDelete': {'success': False}}}
+                case FailureMode.SECOND_DELETE if len(self.deleted) == 1:
+                    return {'data': {'documentDelete': {'success': False}}}
                 case FailureMode.MALFORMED_DELETE:
                     return {'data': {'documentDelete': {}}}
             self.deleted.append(identifier)
@@ -192,6 +197,10 @@ class Workspace:
         answer = asdict(self.pages[0])
         page = answer['data']['documents']
         match self.malformed:
+            case Malformation.NO_TEAM:
+                page['nodes'][0].pop('team')
+            case Malformation.NO_PROJECT:
+                page['nodes'][0].pop('project')
             case Malformation.NO_ID:
                 page['nodes'][0].pop('id')
             case Malformation.EMPTY_ID:
@@ -356,6 +365,16 @@ class LinearJourneys(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(workspace.deleted, [f'residue-{index}' for index in range(150)])
         self.assertEqual(len(workspace.requests), 152)
+
+    def test_later_delete_failure_keeps_prior_removal_and_stops(self) -> None:
+        workspace = Workspace(FailureMode.SECOND_DELETE)
+        result = self.run_janitor(workspace)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(workspace.deleted, ['stale-machine'])
+        deletes = [cast(DeleteVariables, request['variables'])['id'] for request in workspace.requests
+                   if 'documentDelete(' in request['query']]
+        self.assertEqual(deletes, ['stale-machine', 'stale-ci'])
+        self.assertIn('did not confirm document deletion', result.stderr)
 
     def test_refused_or_malformed_delete_fails_and_stops_the_batch(self) -> None:
         for failure in [FailureMode.DELETE, FailureMode.MALFORMED_DELETE]:

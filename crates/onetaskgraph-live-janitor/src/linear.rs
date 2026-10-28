@@ -111,18 +111,24 @@ struct Project {
     teams: Teams,
 }
 #[derive(Deserialize)]
+#[serde(transparent)]
+struct Nullable<T>(Option<T>);
+
+#[derive(Deserialize)]
 struct Document {
     id: DocumentId,
     title: String,
-    team: Option<Team>,
-    project: Option<Project>,
+    #[serde(deserialize_with = "Nullable::deserialize")]
+    team: Nullable<Team>,
+    #[serde(deserialize_with = "Nullable::deserialize")]
+    project: Nullable<Project>,
 }
 impl Document {
     fn in_team(&self, nomination: &TeamKey) -> bool {
-        if let Some(team) = &self.team {
+        if let Some(team) = &self.team.0 {
             return team.key.matches(nomination);
         }
-        self.project.as_ref().is_some_and(|project| {
+        self.project.0.as_ref().is_some_and(|project| {
             !project.teams.page_info.has_next_page
                 && !project.teams.nodes.is_empty()
                 && project

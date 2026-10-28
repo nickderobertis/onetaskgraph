@@ -85,9 +85,9 @@ the janitor's Cargo and Nx dependencies agree. No GitHub lane depends on that pl
 
 The repair also validates incoming fixture-server requests, represents advancing
 pagination with a required cursor, and checks the actual listing filter and recorded
-delete acknowledgement against the pinned upstream schema. Eight Linear subprocess
+delete acknowledgement against the pinned upstream schema. Nine Linear subprocess
 journeys passed, including direct-team precedence, empty project ownership and a zero
-ownership timestamp. Temporarily removing the zero-timestamp guard made the new
+ownership timestamp, missing ownership fields and a failure after the first deletion. Temporarily removing the zero-timestamp guard made the new
 journey fail on the unexpected deletion; restoring it made the full suite pass.
 
 The main-branch release-CD recheck passed all 12 tests at
@@ -99,5 +99,14 @@ Two narrow lint exceptions retain established repository conventions: the schedu
 janitor already owns hosted sweeps, so its Cargo and Nx Linear dependency declarations
 carry `new_command_or_client_gets_its_own_project` markers; the shared fixture guard's
 central MANIFEST already inventories domain stores, so the Linear listing entry carries
-`code_lands_in_the_domain_that_owns_it`. The manager confirmed those placements and a
+`code_lands_in_the_domain_that_owns_it`. The non-store delete-acknowledgement
+registration carries the same marker because that central table also requires every
+fixture to be named. The manager confirmed those placements and a
 follow-up records the rule-applicability question. No lint configuration changed.
+
+The parallel verification run hit a packaging race: Maturin could not open its
+`target/maturin/onetaskgraph` intermediate while script and workflow publication
+journeys packaged the same tree. The manager confirmed the race is covered by a
+separate build-lock task. These targets are being rerun serially, with two Rust test
+threads and no committed configuration change. The busy host's load averages were
+25.67, 37.44 and 31.81; the first Linear e2e run passed all 146 tests in 803.92 seconds.
