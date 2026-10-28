@@ -96,7 +96,9 @@ def token() -> str:
 
 def binary() -> Path:
     if not STOCK_BINARY.exists():
-        sys.exit(f"run.py: no store binary at {STOCK_BINARY}; run `measure.sh provision`")
+        sys.exit(
+            f"run.py: no store binary at {STOCK_BINARY}; run `measure.sh provision`"
+        )
     version = subprocess.run(
         [STOCK_BINARY, "--version"], capture_output=True, text=True, check=False
     ).stdout
@@ -108,7 +110,13 @@ def binary() -> Path:
 def clean_env(**extra: str) -> dict[str, str]:
     """The caller's environment without any `ONETASKGRAPH_` layer of its own."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("ONETASKGRAPH_")}
-    for key in ("SPIKE_HOST_AUDIT", "HTTPS_PROXY", "https_proxy", "PYTHONPATH", "VIRTUAL_ENV"):
+    for key in (
+        "SPIKE_HOST_AUDIT",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "PYTHONPATH",
+        "VIRTUAL_ENV",
+    ):
         env.pop(key, None)
     env.update(extra)
     return env
@@ -119,7 +127,11 @@ def versions() -> dict[str, str]:
 
     def first_line(argv: list) -> str:
         done = subprocess.run(
-            [str(a) for a in argv], capture_output=True, text=True, check=False, cwd=CLONE
+            [str(a) for a in argv],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=CLONE,
         )
         return (done.stdout.strip().splitlines() or ["unavailable"])[0]
 
@@ -148,11 +160,15 @@ def versions() -> dict[str, str]:
 
 def cache_state(directory: Path) -> dict[str, int]:
     """How many files, and bytes, the store's cache directory holds: its state, not content."""
-    files = [p for p in directory.rglob("*") if p.is_file()] if directory.exists() else []
+    files = (
+        [p for p in directory.rglob("*") if p.is_file()] if directory.exists() else []
+    )
     return {"files": len(files), "bytes": sum(p.stat().st_size for p in files)}
 
 
-CONDITION = re.compile(r"sources\.[a-z-]+\.(plugin|visibility|cache\.enabled)|write_policy\.[a-z_]+")
+CONDITION = re.compile(
+    r"sources\.[a-z-]+\.(plugin|visibility|cache\.enabled)|write_policy\.[a-z_]+"
+)
 
 
 def conditions(env: dict, cwd: Path) -> dict:
@@ -363,7 +379,9 @@ def change_one(state: Path) -> None:
     (state / "variant").write_text(str(variant))
     sizes = json.loads((state / "rendered-sizes.json").read_text())
     sizes |= {
-        k: v for k, v in workload.rendered_sizes(state / "md", PLAN).items() if k != "document"
+        k: v
+        for k, v in workload.rendered_sizes(state / "md", PLAN).items()
+        if k != "document"
     }
     (state / "rendered-sizes.json").write_text(json.dumps(sizes, indent=1))
 
@@ -372,7 +390,9 @@ def bare_setup(scenario: str) -> None:
     state = BARE_STATE
     if scenario == "bare-first":
         if (state / "md").exists():
-            sys.exit(f"run.py: {state} already holds a copied plan; run `cleanup` first")
+            sys.exit(
+                f"run.py: {state} already holds a copied plan; run `cleanup` first"
+            )
         state.mkdir(parents=True, exist_ok=True)
         bare_config(UNREACHABLE, None)
         workload.main_args(state / "md", PLAN, state / "out", variant=0, rewrite=False)
@@ -389,7 +409,9 @@ def run_bare(run: Path, scenario: str, proxy: Proxy) -> Path:
     record_workload(run, BARE_STATE)
     bare_config(proxy.endpoint, run)
     env = bare_env() | proxy.env() | {"GH_PROJECTS_TOKEN": token()}
-    (run / "conditions.json").write_text(json.dumps(conditions(env, BARE_STATE), indent=1))
+    (run / "conditions.json").write_text(
+        json.dumps(conditions(env, BARE_STATE), indent=1)
+    )
     exe = binary()
     for verb, record in (("project", PLAN), ("document", f"{PLAN}-design")):
         step(
@@ -413,7 +435,9 @@ def host_env(proxy: Proxy | None, run: Path | None) -> dict[str, str]:
     state = HOST_STATE
     env = clean_env(
         ONETASKGRAPH_SOURCES__AUTHORING__CONFIG__ROOT=str(state / "md"),
-        ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT=proxy.endpoint if proxy else UNREACHABLE,
+        ONETASKGRAPH_SOURCES__PLANS__CONFIG__ENDPOINT=proxy.endpoint
+        if proxy
+        else UNREACHABLE,
         ONETASKGRAPH_SOURCES__PLANS__CONFIG__OWNER=TEST_OWNER,
         ONETASKGRAPH_SOURCES__PLANS__CONFIG__PROJECT_NUMBER=str(TEST_NUMBER),
         ONETASKGRAPH_SOURCES__PLANS__CONFIG__REPOSITORY=TEST_REPOSITORY,
@@ -425,7 +449,9 @@ def host_env(proxy: Proxy | None, run: Path | None) -> dict[str, str]:
     (state / "xdg-empty").mkdir(parents=True, exist_ok=True)
     env["XDG_CONFIG_HOME"] = str(state / "xdg-empty")
     policy = screening(run)
-    env["ONETASKGRAPH_WRITE_POLICY__VISIBILITY_COMMAND"] = ",".join(policy["visibility_command"])
+    env["ONETASKGRAPH_WRITE_POLICY__VISIBILITY_COMMAND"] = ",".join(
+        policy["visibility_command"]
+    )
     env["ONETASKGRAPH_WRITE_POLICY__CHECK_COMMAND"] = ",".join(policy["check_command"])
     if proxy:
         env |= proxy.env()
@@ -452,7 +478,9 @@ def host_setup() -> None:
 def stamp(env: dict) -> None:
     """Stamp the host plan's review records for its current content (no judged turn)."""
     argv = ["uv", "run", "python", HERE / "stamp_reviews.py", f"authoring:{PLAN}"]
-    clean = {k: v for k, v in env.items() if k not in ("SPIKE_HOST_AUDIT", "PYTHONPATH")}
+    clean = {
+        k: v for k, v in env.items() if k not in ("SPIKE_HOST_AUDIT", "PYTHONPATH")
+    }
     done = subprocess.run(
         [str(a) for a in argv], env=clean, cwd=CLONE, capture_output=True, check=False
     )
@@ -473,7 +501,9 @@ def board_project(state: Path, source: str) -> str:
 
 def run_host(run: Path, scenario: str, proxy: Proxy) -> Path:
     if scenario == "host-first" and (HOST_STATE / "md").exists():
-        sys.exit(f"run.py: {HOST_STATE} already holds a copied plan; run `cleanup` first")
+        sys.exit(
+            f"run.py: {HOST_STATE} already holds a copied plan; run `cleanup` first"
+        )
     if scenario != "host-first" and not (HOST_STATE / "md").exists():
         sys.exit("run.py: the host plan has not been copied; run `host-first` first")
     host_setup()
@@ -543,7 +573,9 @@ def main() -> None:
     parser.add_argument("scenario", choices=SCENARIOS)
     parser.add_argument("--no-sanitize", action="store_true")
     parser.add_argument(
-        "--only", choices=("bare", "host"), help="cleanup: only the issues one side's runs created"
+        "--only",
+        choices=("bare", "host"),
+        help="cleanup: only the issues one side's runs created",
     )
     args = parser.parse_args()
     binary()

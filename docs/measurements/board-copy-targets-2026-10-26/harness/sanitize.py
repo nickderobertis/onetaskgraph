@@ -167,7 +167,9 @@ def host(record: dict) -> dict:
         out["returncode"] = record["returncode"]
     elif record["kind"] == "subprocess":
         program = str(record.get("program", ""))
-        out["program"] = program if re.fullmatch(r"[A-Za-z0-9_.+-]{1,40}", program) else "other"
+        out["program"] = (
+            program if re.fullmatch(r"[A-Za-z0-9_.+-]{1,40}", program) else "other"
+        )
         out["returncode"] = record["returncode"]
     elif record["kind"] == "interpreter":
         out["name"] = record["name"] if record["name"] in ("start", "exit") else "other"
@@ -254,7 +256,13 @@ def write(run: Path, out: Path) -> Path:
                         else {}
                     )
                     | (
-                        {"reset_readings": [str(r) for r in v["reset_readings"] if re.fullmatch(r"[0-9T:Z-]{20}", str(r))]}
+                        {
+                            "reset_readings": [
+                                str(r)
+                                for r in v["reset_readings"]
+                                if re.fullmatch(r"[0-9T:Z-]{20}", str(r))
+                            ]
+                        }
                         if "reset_readings" in v
                         else {}
                     )
@@ -264,7 +272,10 @@ def write(run: Path, out: Path) -> Path:
     for name in ("burn-before", "burn-after"):
         if (run / f"{name}.json").exists():
             quota[name] = [
-                {"at": round(float(r["at"]), 3), **{k: int(r[k]) for k in ("used", "remaining", "reset")}}
+                {
+                    "at": round(float(r["at"]), 3),
+                    **{k: int(r[k]) for k in ("used", "remaining", "reset")},
+                }
                 for r in json.loads((run / f"{name}.json").read_text())
             ]
     if (run / "quota-events.json").exists():
@@ -272,9 +283,32 @@ def write(run: Path, out: Path) -> Path:
             {
                 "event": e["event"],
                 "at": e["at"],
-                **({"seconds": float(e["seconds"]), "buckets": [str(b) for b in e["buckets"]]} if e["event"] == "pause" else {}),
-                **({"buckets": {b: {k: int(v[k]) for k in LIMIT_FIELDS} | ({"readings": [int(r) for r in v["readings"]]} if "readings" in v else {}) for b, v in e["buckets"].items()},
-                    "verdicts": {b: bool(v["proceed"]) for b, v in e["verdicts"].items()}} if e["event"] == "reading" else {}),
+                **(
+                    {
+                        "seconds": float(e["seconds"]),
+                        "buckets": [str(b) for b in e["buckets"]],
+                    }
+                    if e["event"] == "pause"
+                    else {}
+                ),
+                **(
+                    {
+                        "buckets": {
+                            b: {k: int(v[k]) for k in LIMIT_FIELDS}
+                            | (
+                                {"readings": [int(r) for r in v["readings"]]}
+                                if "readings" in v
+                                else {}
+                            )
+                            for b, v in e["buckets"].items()
+                        },
+                        "verdicts": {
+                            b: bool(v["proceed"]) for b, v in e["verdicts"].items()
+                        },
+                    }
+                    if e["event"] == "reading"
+                    else {}
+                ),
             }
             for e in json.loads((run / "quota-events.json").read_text())
         ]
@@ -294,7 +328,9 @@ def write(run: Path, out: Path) -> Path:
                 str(k): v
                 for k, v in raw.items()
                 if re.fullmatch(r"[a-z_]{1,20}", str(k))
-                and (isinstance(v, int) or re.fullmatch(r"[A-Za-z0-9 ._-]{1,60}", str(v)))
+                and (
+                    isinstance(v, int) or re.fullmatch(r"[A-Za-z0-9 ._-]{1,60}", str(v))
+                )
             }
             (out / name).write_text(json.dumps(kept, indent=1, sort_keys=True) + "\n")
     if (run / "conditions.json").exists():
@@ -304,10 +340,15 @@ def write(run: Path, out: Path) -> Path:
             for k, v in raw.items()
             if re.fullmatch(r"[a-z_.-]{1,80}", k)
             and isinstance(v, dict)
-            and (isinstance(v.get("value"), bool) or re.fullmatch(r"[a-z-]{1,20}", str(v.get("value"))))
+            and (
+                isinstance(v.get("value"), bool)
+                or re.fullmatch(r"[a-z-]{1,20}", str(v.get("value")))
+            )
             and re.fullmatch(r"[a-z]{1,20}", str(v.get("layer")))
         }
-        (out / "conditions.json").write_text(json.dumps(kept, indent=1, sort_keys=True) + "\n")
+        (out / "conditions.json").write_text(
+            json.dumps(kept, indent=1, sort_keys=True) + "\n"
+        )
     for name in ("probes.json", "cleanup.json"):
         if (run / name).exists():
             (out / name).write_text(

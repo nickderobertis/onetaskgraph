@@ -180,10 +180,22 @@ def _store_argv(args) -> tuple[str, list[str]] | None:
 
 
 if LOG:
-    _emit({"kind": "interpreter", "name": "start", "start": time.time(), "pid": os.getpid()})
+    _emit(
+        {
+            "kind": "interpreter",
+            "name": "start",
+            "start": time.time(),
+            "pid": os.getpid(),
+        }
+    )
     atexit.register(
         lambda: _emit(
-            {"kind": "interpreter", "name": "exit", "start": time.time(), "pid": os.getpid()}
+            {
+                "kind": "interpreter",
+                "name": "exit",
+                "start": time.time(),
+                "pid": os.getpid(),
+            }
         )
     )
     sys.meta_path.insert(0, _Finder())

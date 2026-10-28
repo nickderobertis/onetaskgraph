@@ -34,7 +34,11 @@ OUT = Path(os.environ.get("SPIKE_LOGS") or HERE.parent / "captures") / "pricing.
 def dry_run(document: str) -> str:
     root = document.index("{")
     # Aliased, so a document that already selects `rateLimit` does not conflict with it.
-    return document[: root + 1] + "spikePrice:rateLimit(dryRun:true){cost} " + document[root + 1 :]
+    return (
+        document[: root + 1]
+        + "spikePrice:rateLimit(dryRun:true){cost} "
+        + document[root + 1 :]
+    )
 
 
 def records(log: Path) -> list[dict]:
@@ -51,7 +55,10 @@ def mutation_rises(log: Path) -> list[int]:
     previous: dict[str, dict] = {}
     for record in records(log):
         limits = record.get("limits") or {}
-        if record["host"] == "refused" or limits.get("x-ratelimit-resource") != "graphql":
+        if (
+            record["host"] == "refused"
+            or limits.get("x-ratelimit-resource") != "graphql"
+        ):
             continue
         used, reset = int(limits["x-ratelimit-used"]), limits["x-ratelimit-reset"]
         before = previous.get(reset)
@@ -65,9 +72,15 @@ def price(document: dict, token: str) -> int | None:
     request = urllib.request.Request(
         "https://api.github.com/graphql",
         data=json.dumps(
-            {"query": dry_run(document["query"]), "variables": document.get("variables") or {}}
+            {
+                "query": dry_run(document["query"]),
+                "variables": document.get("variables") or {},
+            }
         ).encode(),
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
     )
     with urllib.request.urlopen(request, timeout=60) as response:
         answer = json.load(response)
@@ -82,7 +95,9 @@ def main() -> None:
     requests: dict[str, int] = priced.get("requests", {})
     rises: dict[str, list[int]] = {}
     operations: dict[str, set[int]] = defaultdict(set)
-    for log in sorted((CACHE / os.environ.get("SPIKE_RUNS_DIR", "runs")).glob("*/proxy.jsonl")):
+    for log in sorted(
+        (CACHE / os.environ.get("SPIKE_RUNS_DIR", "runs")).glob("*/proxy.jsonl")
+    ):
         run = log.parent.name
         bodies = log.with_suffix(".bodies")
         for record in records(log):
@@ -91,9 +106,15 @@ def main() -> None:
             key = f"{run}/{record['seq']}"
             if key not in requests:
                 request = bodies / f"{record['seq']:06d}.req"
-                cost = price(json.loads(request.read_text()), token) if request.exists() else None
+                cost = (
+                    price(json.loads(request.read_text()), token)
+                    if request.exists()
+                    else None
+                )
                 if cost is None:
-                    sys.exit(f"pricing.py: GitHub returned no dry-run price for {key} ({record['op']})")
+                    sys.exit(
+                        f"pricing.py: GitHub returned no dry-run price for {key} ({record['op']})"
+                    )
                 requests[key] = cost
             operations[record["op"]].add(requests[key])
         rises[run] = mutation_rises(log)

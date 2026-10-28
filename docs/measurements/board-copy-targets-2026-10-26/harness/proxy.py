@@ -106,7 +106,11 @@ def mutation_count(body: bytes) -> int:
         data = json.loads(body).get("data") or {}
     except (ValueError, AttributeError):
         return 0
-    return sum(1 for value in data.values() if value is not None) if isinstance(data, dict) else 0
+    return (
+        sum(1 for value in data.values() if value is not None)
+        if isinstance(data, dict)
+        else 0
+    )
 
 
 def error_types(body: bytes) -> list[str]:

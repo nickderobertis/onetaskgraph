@@ -28,12 +28,25 @@ if args[:2] == ["boundary", "inspect"]:
         request["repository"] = STAND_IN
     data = json.dumps(request).encode()
 # The host's timing audit stays in the host's own process: onevcs is not a step of it.
-env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "SPIKE_HOST_AUDIT")}
+env = {
+    k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "SPIKE_HOST_AUDIT")
+}
 env["XDG_CONFIG_HOME"] = xdg
 start = time.time()
 code = subprocess.run([onevcs, *args], input=data, env=env, check=False).returncode
 log = LOG if LOG != "-" else None
 if log:
     with open(log, "a") as out:
-        out.write(json.dumps({"kind": "screen", "name": args[1], "start": start, "end": time.time(), "returncode": code}) + "\n")
+        out.write(
+            json.dumps(
+                {
+                    "kind": "screen",
+                    "name": args[1],
+                    "start": start,
+                    "end": time.time(),
+                    "returncode": code,
+                }
+            )
+            + "\n"
+        )
 sys.exit(code)

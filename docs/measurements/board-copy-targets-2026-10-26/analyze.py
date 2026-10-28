@@ -118,7 +118,9 @@ def price(request: dict, prices: dict[str, int], capture: str) -> int:
         return MUTATION_PRICE
     key = f"{capture}/{request['seq']}"
     if key not in prices:
-        raise SystemExit(f"analyze.py: no dry-run price for {key} ({request['op']}); run harness/pricing.py")
+        raise SystemExit(
+            f"analyze.py: no dry-run price for {key} ({request['op']}); run harness/pricing.py"
+        )
     return prices[key]
 
 
@@ -132,17 +134,35 @@ def slope(readings: list[dict]) -> tuple[float, float]:
     """The rise of `used` across one counter's readings, and the seconds it took."""
     if len(readings) < 2:
         return 0.0, 0.0
-    return float(readings[-1]["used"] - readings[0]["used"]), readings[-1]["at"] - readings[0]["at"]
+    return float(readings[-1]["used"] - readings[0]["used"]), readings[-1][
+        "at"
+    ] - readings[0]["at"]
 
 
-def points_of(quota: dict, requests: list[dict], prices: dict[str, int], capture: str) -> Points:
-    graphql = [r for r in requests if r["path"] == "/graphql" and r["host"] != "refused"]
+def points_of(
+    quota: dict, requests: list[dict], prices: dict[str, int], capture: str
+) -> Points:
+    graphql = [
+        r for r in requests if r["path"] == "/graphql" and r["host"] != "refused"
+    ]
     figure = sum(price(r, prices, capture) for r in graphql)
     mutations = sum(1 for r in graphql if r["kind"] == "mutation")
     before, after = quota.get("burn-before", []), quota.get("burn-after", [])
     counter = counter_of(before, after)
     if counter is None:
-        return Points(figure, len(graphql) - mutations, mutations, figure + mutations * 4, None, None, None, None, None, None, None)
+        return Points(
+            figure,
+            len(graphql) - mutations,
+            mutations,
+            figure + mutations * 4,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
     b = [r for r in before if r["reset"] == counter]
     a = [r for r in after if r["reset"] == counter]
     rise_b, time_b = slope(b)
@@ -174,7 +194,11 @@ def writes_of(requests: list[dict]) -> dict[str, int]:
     mutations = [r for r in sent if r["kind"] == "mutation"]
     uploads = [r for r in sent if r["op"] == UPLOAD]
     carried = sum(r.get("mutations", 1) for r in mutations)
-    created = sum(r.get("mutations", 1) for r in mutations if r["op"] in ("CREATE_ISSUE", "CREATE_ISSUES"))
+    created = sum(
+        r.get("mutations", 1)
+        for r in mutations
+        if r["op"] in ("CREATE_ISSUE", "CREATE_ISSUES")
+    )
     return {
         "requests": len([r for r in sent if r["kind"] != "tunnel"]),
         "issues_created": created,
@@ -185,9 +209,13 @@ def writes_of(requests: list[dict]) -> dict[str, int]:
     }
 
 
-def kinds_of(requests: list[dict], prices: dict[str, int], capture: str) -> dict[str, dict[str, int]]:
+def kinds_of(
+    requests: list[dict], prices: dict[str, int], capture: str
+) -> dict[str, dict[str, int]]:
     """Every request kind a row sent: how many, the points and the writes they carried."""
-    out: dict[str, dict[str, int]] = defaultdict(lambda: {"requests": 0, "points": 0, "writes": 0})
+    out: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"requests": 0, "points": 0, "writes": 0}
+    )
     for r in requests:
         if r["kind"] == "tunnel" or r["host"] == "refused":
             continue
@@ -235,7 +263,11 @@ class Interval:
 
 
 def store_label(argv: list[str]) -> str:
-    words = [w for w in argv if not w.startswith("<") and not w.startswith("--") and ":" not in w]
+    words = [
+        w
+        for w in argv
+        if not w.startswith("<") and not w.startswith("--") and ":" not in w
+    ]
     return "store invocation: " + " ".join(words[:2] or ["(unnamed)"])
 
 
@@ -246,37 +278,89 @@ def intervals_of(capture: dict) -> tuple[list[Interval], float, float]:
     rank = {name: index for index, name in enumerate(PRIORITY)}
     out: list[Interval] = []
     for r in capture["screen"]:
-        out.append(Interval(r["start"], r["end"], rank["write screening"], f"write screening: onevcs boundary {r['name']}"))
+        out.append(
+            Interval(
+                r["start"],
+                r["end"],
+                rank["write screening"],
+                f"write screening: onevcs boundary {r['name']}",
+            )
+        )
     for r in capture["requests"]:
         if r["host"] == "refused":
             continue
-        label = "network round trips: GitHub GraphQL" if r["path"] == "/graphql" else (
-            "network round trips: tunnelled HTTPS (the image upload's storage and its check)"
-            if r["kind"] == "tunnel"
-            else "network round trips: GitHub REST and uploads"
+        label = (
+            "network round trips: GitHub GraphQL"
+            if r["path"] == "/graphql"
+            else (
+                "network round trips: tunnelled HTTPS (the image upload's storage and its check)"
+                if r["kind"] == "tunnel"
+                else "network round trips: GitHub REST and uploads"
+            )
         )
         out.append(Interval(r["start"], r["end"], rank["network"], label))
     host = capture["host"]
     if host:
         interpreters = [h for h in host if h["kind"] == "interpreter"]
-        first = min((h["start"] for h in interpreters if h["name"] == "start"), default=start)
-        last = max((h["start"] for h in interpreters if h["name"] == "exit"), default=end)
+        first = min(
+            (h["start"] for h in interpreters if h["name"] == "start"), default=start
+        )
+        last = max(
+            (h["start"] for h in interpreters if h["name"] == "exit"), default=end
+        )
         events = [h for h in host if h["kind"] in ("store", "subprocess", "step")]
         first_event = min((h["start"] for h in events), default=first)
-        out.append(Interval(start, first, rank["launch"], "recipe launch: just, plan-store.sh and uv run"))
-        out.append(Interval(first, first_event, rank["launch"], "interpreter and SDK start-up"))
-        out.append(Interval(first_event, last, rank["python"], "host Python outside the named steps"))
-        out.append(Interval(last, end, rank["launch"], "interpreter exit and recipe teardown"))
+        out.append(
+            Interval(
+                start,
+                first,
+                rank["launch"],
+                "recipe launch: just, plan-store.sh and uv run",
+            )
+        )
+        out.append(
+            Interval(first, first_event, rank["launch"], "interpreter and SDK start-up")
+        )
+        out.append(
+            Interval(
+                first_event, last, rank["python"], "host Python outside the named steps"
+            )
+        )
+        out.append(
+            Interval(last, end, rank["launch"], "interpreter exit and recipe teardown")
+        )
         for h in host:
             if h["kind"] == "store":
-                out.append(Interval(h["start"], h["end"], rank["store"], store_label(h["argv"])))
+                out.append(
+                    Interval(
+                        h["start"], h["end"], rank["store"], store_label(h["argv"])
+                    )
+                )
             elif h["kind"] == "subprocess":
-                out.append(Interval(h["start"], h["end"], rank["subprocess"], f"host subprocess: {h['program']}"))
+                out.append(
+                    Interval(
+                        h["start"],
+                        h["end"],
+                        rank["subprocess"],
+                        f"host subprocess: {h['program']}",
+                    )
+                )
             elif h["kind"] == "step":
-                out.append(Interval(h["start"], h["end"], rank["step"], f"host step: {h['name']}"))
+                out.append(
+                    Interval(
+                        h["start"], h["end"], rank["step"], f"host step: {h['name']}"
+                    )
+                )
     else:
         for s in steps:
-            out.append(Interval(s["start"], s["end"], rank["store"], "store invocation: " + " ".join(s["argv"][:2])))
+            out.append(
+                Interval(
+                    s["start"],
+                    s["end"],
+                    rank["store"],
+                    "store invocation: " + " ".join(s["argv"][:2]),
+                )
+            )
     return out, start, end
 
 
@@ -284,7 +368,13 @@ def attribute(intervals: list[Interval], start: float, end: float) -> dict[str, 
     """Split [start, end] among the causes: each instant goes to the highest-priority cause under
     way then, the innermost (latest-starting) of equal ones; an instant none covers is
     `unattributed`. The shares therefore sum to the measured total exactly."""
-    points = sorted({start, end, *(t for i in intervals for t in (i.start, i.end) if start < t < end)})
+    points = sorted(
+        {
+            start,
+            end,
+            *(t for i in intervals for t in (i.start, i.end) if start < t < end),
+        }
+    )
     shares: dict[str, float] = defaultdict(float)
     for a, b in zip(points, points[1:]):
         middle = (a + b) / 2
@@ -297,7 +387,9 @@ def attribute(intervals: list[Interval], start: float, end: float) -> dict[str, 
     return dict(shares)
 
 
-def rounded(shares: dict[str, float], total: float, places: int = 2) -> dict[str, float]:
+def rounded(
+    shares: dict[str, float], total: float, places: int = 2
+) -> dict[str, float]:
     """`shares` rounded so that they still sum to `total` rounded the same way (largest
     remainder), which is how a table of them stays a true decomposition of its total."""
     unit = 10**places
@@ -309,9 +401,15 @@ def rounded(shares: dict[str, float], total: float, places: int = 2) -> dict[str
         floors[key] += 1
     # Causes that round to nothing are named together rather than listed at 0.00 s each.
     small = sorted(k for k, v in floors.items() if v == 0)
-    out = {k: v / unit for k, v in sorted(floors.items(), key=lambda kv: (-kv[1], kv[0])) if v}
+    out = {
+        k: v / unit
+        for k, v in sorted(floors.items(), key=lambda kv: (-kv[1], kv[0]))
+        if v
+    }
     if small:
-        out[f"{len(small)} further causes under 0.005 s each ({', '.join(small)})"] = 0.0
+        out[f"{len(small)} further causes under 0.005 s each ({', '.join(small)})"] = (
+            0.0
+        )
     return out
 
 
@@ -362,20 +460,29 @@ def load(path: Path) -> dict:
     }
 
 
-def owners_of(capture: dict, prices: dict[str, int], name: str) -> dict[str, dict[str, int]]:
+def owners_of(
+    capture: dict, prices: dict[str, int], name: str
+) -> dict[str, dict[str, int]]:
     """Each request kind's points and writes by who sent it: a request made inside the store's
     own `project copy` or `document copy` is the store's; one inside any other store invocation
     the host recipe made is the host's (it chose to make that call)."""
     calls = capture["host"] or [
-        {"kind": "store", "argv": s["argv"], "start": s["start"], "end": s["end"]} for s in capture["steps"]
+        {"kind": "store", "argv": s["argv"], "start": s["start"], "end": s["end"]}
+        for s in capture["steps"]
     ]
     stores = [c for c in calls if c["kind"] == "store"]
-    out: dict[str, dict[str, int]] = defaultdict(lambda: {"points": 0, "writes": 0, "requests": 0})
+    out: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"points": 0, "writes": 0, "requests": 0}
+    )
     for r in capture["requests"]:
         if r["kind"] == "tunnel" or r["host"] == "refused":
             continue
         inside = [c for c in stores if c["start"] <= r["start"] <= c["end"]]
-        verb = store_label(inside[-1]["argv"]).removeprefix("store invocation: ") if inside else "(no store invocation)"
+        verb = (
+            store_label(inside[-1]["argv"]).removeprefix("store invocation: ")
+            if inside
+            else "(no store invocation)"
+        )
         owner = "store" if tuple(verb.split()[:2]) in COPY_VERBS else "host"
         key = f"{owner} | {verb} | {r['op']}"
         out[key]["requests"] += 1
@@ -388,7 +495,9 @@ def owners_of(capture: dict, prices: dict[str, int], name: str) -> dict[str, dic
     return dict(sorted(out.items()))
 
 
-def row_of(scenario: str, operation: str, label: str, path: Path, prices: dict[str, int]) -> Row:
+def row_of(
+    scenario: str, operation: str, label: str, path: Path, prices: dict[str, int]
+) -> Row:
     capture = load(path)
     steps = capture["steps"]
     seconds = round(sum(s["end"] - s["start"] for s in steps), 3)
@@ -420,16 +529,25 @@ def row_of(scenario: str, operation: str, label: str, path: Path, prices: dict[s
         workload=capture["workload"],
         quota=capture["quota"],
         walk_pages={op: walk.get(op, 0) for op in WALK_PAGE_SECONDS},
-        walk_ms=sum(r["ms"] for r in capture["requests"] if r["op"] in WALK_PAGE_SECONDS),
+        walk_ms=sum(
+            r["ms"] for r in capture["requests"] if r["op"] in WALK_PAGE_SECONDS
+        ),
         refused=sum(1 for r in capture["requests"] if r["host"] == "refused"),
         returncodes=[s["returncode"] for s in steps],
     )
     target = TARGETS[operation]
-    figures = {"points": row.points.figure, "seconds": row.seconds, "writes": row.writes["writes"]}
-    row.verdicts = {
-        name: ("within" if figures[name] <= bar else "over") for name, bar in target.items()
+    figures = {
+        "points": row.points.figure,
+        "seconds": row.seconds,
+        "writes": row.writes["writes"],
     }
-    row.verdicts["points at 5 per mutation"] = "within" if row.points.at_five <= target["points"] else "over"
+    row.verdicts = {
+        name: ("within" if figures[name] <= bar else "over")
+        for name, bar in target.items()
+    }
+    row.verdicts["points at 5 per mutation"] = (
+        "within" if row.points.at_five <= target["points"] else "over"
+    )
     return row
 
 
@@ -438,7 +556,11 @@ def reference_seconds(row: Row, walked_ms: float) -> float:
     replaced by the pages the same walk takes there. With no walk page it is the measured figure."""
     if not any(row.walk_pages.values()):
         return row.seconds
-    extra = sum(WALK_PAGES_AT_REFERENCE[op] * WALK_PAGE_SECONDS[op] for op, n in row.walk_pages.items() if n)
+    extra = sum(
+        WALK_PAGES_AT_REFERENCE[op] * WALK_PAGE_SECONDS[op]
+        for op, n in row.walk_pages.items()
+        if n
+    )
     return round(row.seconds - walked_ms / 1000 + extra, 1)
 
 
@@ -453,15 +575,28 @@ def loopback(captures: Path) -> list[dict]:
         record = json.loads(path.read_text())
         detail = record.get("detail")
         detail = json.loads(detail) if isinstance(detail, str) else detail or {}
-        out.append({"file": path.name, "budget": record.get("budget"), "value": record.get("value"), "detail": detail})
+        out.append(
+            {
+                "file": path.name,
+                "budget": record.get("budget"),
+                "value": record.get("value"),
+                "detail": detail,
+            }
+        )
     return out
 
 
 SIZES = (
     ("unscreened", "unscreened, on a board of 20,000 items"),
     ("screened", "screened, on a board of 20,000 items"),
-    ("host configuration, private source", "host configuration, private source, on a board of 20,000 items"),
-    ("host configuration, public source", "host configuration, public source, on a board of 20,000 items"),
+    (
+        "host configuration, private source",
+        "host configuration, private source, on a board of 20,000 items",
+    ),
+    (
+        "host configuration, public source",
+        "host configuration, public source, on a board of 20,000 items",
+    ),
 )
 # What the plugin calls a page of a whole-board walk or of an issue search, in the loopback
 # recordings' operation names.
@@ -484,10 +619,21 @@ def size_pairs(recordings: list[dict]) -> list[dict]:
                 {
                     "budget": record["budget"],
                     "recording": small,
-                    "same": sent == b.get("requests by operation") and a.get("points") == b.get("points"),
-                    "requests": [sum(sent.values()), sum(b.get("requests by operation", {}).values())],
+                    "same": sent == b.get("requests by operation")
+                    and a.get("points") == b.get("points"),
+                    "requests": [
+                        sum(sent.values()),
+                        sum(b.get("requests by operation", {}).values()),
+                    ],
                     "points": [a.get("points"), b.get("points")],
-                    "walk_pages": sum(n for op, n in {**sent, **b.get("requests by operation", {})}.items() if any(w in op for w in WALK_WORDS)),
+                    "walk_pages": sum(
+                        n
+                        for op, n in {
+                            **sent,
+                            **b.get("requests by operation", {}),
+                        }.items()
+                        if any(w in op for w in WALK_WORDS)
+                    ),
                 }
             )
     return pairs
@@ -501,7 +647,10 @@ def fmt(value: object) -> str:
 
 
 def table(head: list[str], rows: list[list[str]]) -> str:
-    out = ["| " + " | ".join(head) + " |", "| " + " | ".join("---" for _ in head) + " |"]
+    out = [
+        "| " + " | ".join(head) + " |",
+        "| " + " | ".join("---" for _ in head) + " |",
+    ]
     out += ["| " + " | ".join(r) + " |" for r in rows]
     return "\n".join(out)
 
@@ -509,20 +658,47 @@ def table(head: list[str], rows: list[list[str]]) -> str:
 def targets_table(rows: list[Row]) -> str:
     body = []
     for row in rows:
-        target, before, earlier = TARGETS[row.operation], BEFORE.get(row.operation, {}), EARLIER[row.scenario]
+        target, before, earlier = (
+            TARGETS[row.operation],
+            BEFORE.get(row.operation, {}),
+            EARLIER[row.scenario],
+        )
         cells = [row.label]
-        values = {"seconds": f"{row.seconds:.1f}", "points": str(row.points.figure), "writes": str(row.writes["writes"])}
+        values = {
+            "seconds": f"{row.seconds:.1f}",
+            "points": str(row.points.figure),
+            "writes": str(row.writes["writes"]),
+        }
         for name in ("seconds", "points", "writes"):
             bar = target.get(name)
-            mark = f"target {fmt(bar)}: **{row.verdicts[name]}**" if bar is not None else "no target"
-            was = f"{fmt(before[name])} (loopback, 0.12.3)" if name in before else "none in the brief"
-            cells.append(f"**{values[name]}** — {mark}; before {was}; GitHub at 0.11.0 {fmt(earlier[name])}")
+            mark = (
+                f"target {fmt(bar)}: **{row.verdicts[name]}**"
+                if bar is not None
+                else "no target"
+            )
+            was = (
+                f"{fmt(before[name])} (loopback, 0.12.3)"
+                if name in before
+                else "none in the brief"
+            )
+            cells.append(
+                f"**{values[name]}** — {mark}; before {was}; GitHub at 0.11.0 {fmt(earlier[name])}"
+            )
         flip = row.verdicts.get("points at 5 per mutation")
         cells.append(
             f"{row.points.at_five} — {'**would flip to over**' if flip == 'over' and row.verdicts['points'] == 'within' else 'no flip'}"
         )
         body.append(cells)
-    return table(["row", "elapsed seconds", "GraphQL points", "writes (mutations + uploads)", "points if each mutation request cost 5"], body)
+    return table(
+        [
+            "row",
+            "elapsed seconds",
+            "GraphQL points",
+            "writes (mutations + uploads)",
+            "points if each mutation request cost 5",
+        ],
+        body,
+    )
 
 
 def detail_table(rows: list[Row]) -> str:
@@ -535,7 +711,8 @@ def detail_table(rows: list[Row]) -> str:
                 f"`{row.capture}`",
                 str(w["requests"]),
                 ", ".join(
-                    f"`{op}` {k['requests']}×/{k['points']} pt" + (f"/{k['writes']} w" if k["writes"] else "")
+                    f"`{op}` {k['requests']}×/{k['points']} pt"
+                    + (f"/{k['writes']} w" if k["writes"] else "")
                     for op, k in row.kinds.items()
                 ),
                 f"{row.points.queries} queries at their dry-run price + {row.points.mutation_requests} mutation requests at {MUTATION_PRICE} = {row.points.figure}",
@@ -544,14 +721,35 @@ def detail_table(rows: list[Row]) -> str:
                 f"{row.cache['before'].get('files', 0)} → {row.cache['after'].get('files', 0)} files",
             ]
         )
-    return table(["row", "capture", "requests", "request kinds (requests/points/writes)", "points", "writes", "screening calls", "store cache"], body)
+    return table(
+        [
+            "row",
+            "capture",
+            "requests",
+            "request kinds (requests/points/writes)",
+            "points",
+            "writes",
+            "screening calls",
+            "store cache",
+        ],
+        body,
+    )
 
 
 def seconds_table(rows: list[Row]) -> str:
     body = []
     for row in rows:
-        shares = "; ".join(f"{label} {value:.2f} s" for label, value in row.attribution.items())
-        body.append([row.label, f"{row.seconds:.2f} s", shares, f"{sum(row.attribution.values()):.2f} s"])
+        shares = "; ".join(
+            f"{label} {value:.2f} s" for label, value in row.attribution.items()
+        )
+        body.append(
+            [
+                row.label,
+                f"{row.seconds:.2f} s",
+                shares,
+                f"{sum(row.attribution.values()):.2f} s",
+            ]
+        )
     return table(["row", "measured", "attributed to", "sum of shares"], body)
 
 
@@ -560,13 +758,35 @@ def owners_table(rows: list[Row]) -> str:
     for row in rows:
         for key, value in row.owners.items():
             owner, verb, op = key.split(" | ")
-            body.append([row.label, owner, verb, f"`{op}`", str(value["requests"]), str(value["points"]), str(value["writes"])])
-    return table(["row", "owner", "sent inside", "request kind", "requests", "points", "writes"], body)
+            body.append(
+                [
+                    row.label,
+                    owner,
+                    verb,
+                    f"`{op}`",
+                    str(value["requests"]),
+                    str(value["points"]),
+                    str(value["writes"]),
+                ]
+            )
+    return table(
+        ["row", "owner", "sent inside", "request kind", "requests", "points", "writes"],
+        body,
+    )
 
 
 def over_table(rows: list[Row]) -> str:
-    over = [f"{row.label}: {name}" for row in rows for name in ("points", "writes") if row.verdicts.get(name) == "over"]
-    return "Over its target: " + "; ".join(over) + "." if over else "No points or writes figure is over its target."
+    over = [
+        f"{row.label}: {name}"
+        for row in rows
+        for name in ("points", "writes")
+        if row.verdicts.get(name) == "over"
+    ]
+    return (
+        "Over its target: " + "; ".join(over) + "."
+        if over
+        else "No points or writes figure is over its target."
+    )
 
 
 def burn_table(rows: list[Row]) -> str:
@@ -574,7 +794,17 @@ def burn_table(rows: list[Row]) -> str:
     for row in rows:
         pt = row.points
         if pt.counter is None:
-            body.append([row.label, "no counter read on both sides", "—", "—", "—", "—", str(pt.figure)])
+            body.append(
+                [
+                    row.label,
+                    "no counter read on both sides",
+                    "—",
+                    "—",
+                    "—",
+                    "—",
+                    str(pt.figure),
+                ]
+            )
             continue
         body.append(
             [
@@ -587,7 +817,18 @@ def burn_table(rows: list[Row]) -> str:
                 f"{pt.residual:+.1f}",
             ]
         )
-    return table(["row", "GraphQL `rateLimit` used, last idle read before → first after", "rise", "idle background burn bracketing the row", "background expected over the row", "the row's own priced points", "residual (rise − own − background)"], body)
+    return table(
+        [
+            "row",
+            "GraphQL `rateLimit` used, last idle read before → first after",
+            "rise",
+            "idle background burn bracketing the row",
+            "background expected over the row",
+            "the row's own priced points",
+            "residual (rise − own − background)",
+        ],
+        body,
+    )
 
 
 def quota_table(rows: list[Row]) -> str:
@@ -608,11 +849,27 @@ def quota_table(rows: list[Row]) -> str:
                 f"remaining {', '.join(map(str, rl_a['readings']))}",
                 f"{before['graphql (GET /rate_limit)']['remaining']} → {after['graphql (GET /rate_limit)']['remaining']}",
                 f"{before['core']['remaining']} → {after['core']['remaining']}",
-                "proceed (≥ 40%)" if gate and all(gate[0]["verdicts"].values()) else "paused",
-                f"{len(pauses)} pause(s), {sum(p['seconds'] for p in pauses):.0f} s" if pauses else "none",
+                "proceed (≥ 40%)"
+                if gate and all(gate[0]["verdicts"].values())
+                else "paused",
+                f"{len(pauses)} pause(s), {sum(p['seconds'] for p in pauses):.0f} s"
+                if pauses
+                else "none",
             ]
         )
-    return table(["row", "gate figure (least reading)", "GraphQL `rateLimit` before (three reads)", "GraphQL `rateLimit` after (three reads)", "`GET /rate_limit` graphql before → after", "REST core before → after", "gate", "pauses"], body)
+    return table(
+        [
+            "row",
+            "gate figure (least reading)",
+            "GraphQL `rateLimit` before (three reads)",
+            "GraphQL `rateLimit` after (three reads)",
+            "`GET /rate_limit` graphql before → after",
+            "REST core before → after",
+            "gate",
+            "pauses",
+        ],
+        body,
+    )
 
 
 def conditions_table(rows: list[Row]) -> str:
@@ -622,14 +879,39 @@ def conditions_table(rows: list[Row]) -> str:
         sources = sorted({k.split(".")[1] for k in c if k.startswith("sources.")})
         declared = "; ".join(
             f"`{s}` {c.get(f'sources.{s}.plugin', {}).get('value', '?')}, {c.get(f'sources.{s}.visibility', {}).get('value', 'undeclared')}"
-            + (", cache on" if c.get(f"sources.{s}.cache.enabled", {}).get("value") else "")
+            + (
+                ", cache on"
+                if c.get(f"sources.{s}.cache.enabled", {}).get("value")
+                else ""
+            )
             for s in sources
         )
         layers = sorted({v["layer"] for v in c.values()})
-        policy = ", ".join(f"`{k.split('.')[1]}` {v['value']} ({v['layer']})" for k, v in sorted(c.items()) if k.startswith("write_policy."))
+        policy = ", ".join(
+            f"`{k.split('.')[1]}` {v['value']} ({v['layer']})"
+            for k, v in sorted(c.items())
+            if k.startswith("write_policy.")
+        )
         v = row.versions
-        body.append([row.label, declared, policy, ", ".join(layers), f"{v.get('store')}; {v.get('engine')}; {v.get('sdk')}; {v.get('onevcs')}; host `{v.get('host_commit')}`; harness `{v.get('harness_commit')}`"])
-    return table(["row", "sources (plugin, visibility, cache)", "write_policy", "configuration layers present", "versions"], body)
+        body.append(
+            [
+                row.label,
+                declared,
+                policy,
+                ", ".join(layers),
+                f"{v.get('store')}; {v.get('engine')}; {v.get('sdk')}; {v.get('onevcs')}; host `{v.get('host_commit')}`; harness `{v.get('harness_commit')}`",
+            ]
+        )
+    return table(
+        [
+            "row",
+            "sources (plugin, visibility, cache)",
+            "write_policy",
+            "configuration layers present",
+            "versions",
+        ],
+        body,
+    )
 
 
 def workload_table(rows: list[Row]) -> str:
@@ -646,7 +928,10 @@ def workload_table(rows: list[Row]) -> str:
                 f"{w.get('image', [0])[0]:,}",
             ]
         )
-    return table(["row", "project bytes", "task bytes (tasks)", "document bytes", "PNG bytes"], body)
+    return table(
+        ["row", "project bytes", "task bytes (tasks)", "document bytes", "PNG bytes"],
+        body,
+    )
 
 
 def size_table(pairs: list[dict]) -> str:
@@ -661,7 +946,17 @@ def size_table(pairs: list[dict]) -> str:
         ]
         for p in pairs
     ]
-    return table(["loopback recording", "configuration", "requests at 2,000 / 20,000 items", "requests by operation", "points at 2,000 / 20,000", "walk pages"], body)
+    return table(
+        [
+            "loopback recording",
+            "configuration",
+            "requests at 2,000 / 20,000 items",
+            "requests by operation",
+            "points at 2,000 / 20,000",
+            "walk pages",
+        ],
+        body,
+    )
 
 
 def reference_table(rows: list[Row]) -> str:
@@ -673,32 +968,71 @@ def reference_table(rows: list[Row]) -> str:
             if not any(pages.values())
             else f"**{reference_seconds(row, row.walk_ms):.1f} s**"
         )
-        body.append([row.label, f"{pages['BOARD']} BOARD + {pages['SEARCH_ISSUES']} SEARCH_ISSUES", arithmetic, str(row.points.figure)])
-    return table(["row", "walk pages sent", "seconds at the `plans` board's size", "points at that size"], body)
+        body.append(
+            [
+                row.label,
+                f"{pages['BOARD']} BOARD + {pages['SEARCH_ISSUES']} SEARCH_ISSUES",
+                arithmetic,
+                str(row.points.figure),
+            ]
+        )
+    return table(
+        [
+            "row",
+            "walk pages sent",
+            "seconds at the `plans` board's size",
+            "points at that size",
+        ],
+        body,
+    )
 
 
 def writes_table(captures: Path) -> str:
     body = []
-    named = [p for p in captures.iterdir() if p.is_dir() and re.fullmatch(r".+-\d{8}T\d{6}", p.name)]
+    named = [
+        p
+        for p in captures.iterdir()
+        if p.is_dir() and re.fullmatch(r".+-\d{8}T\d{6}", p.name)
+    ]
     superseded = captures / "superseded"
-    named += [p for p in superseded.iterdir() if p.is_dir()] if superseded.exists() else []
+    named += (
+        [p for p in superseded.iterdir() if p.is_dir()] if superseded.exists() else []
+    )
     for path in sorted(named, key=lambda p: p.name.rsplit("-", 1)[-1]):
         requests = lines(path / "requests.jsonl")
         w = writes_of(requests)
-        cleanup = json.loads((path / "cleanup.json").read_text()) if (path / "cleanup.json").exists() else {}
+        cleanup = (
+            json.loads((path / "cleanup.json").read_text())
+            if (path / "cleanup.json").exists()
+            else {}
+        )
         refused = sum(1 for r in requests if r["host"] == "refused")
         body.append(
             [
-                f"`{path.name}`" + (" (superseded)" if path.parent == superseded else ""),
+                f"`{path.name}`"
+                + (" (superseded)" if path.parent == superseded else ""),
                 str(w["mutation_requests"]),
                 str(w["mutations"]),
                 str(w["uploads"]),
                 str(w["issues_created"]),
-                f"{cleanup['deleted']} ({cleanup.get('only', 'all')})" if cleanup else "—",
+                f"{cleanup['deleted']} ({cleanup.get('only', 'all')})"
+                if cleanup
+                else "—",
                 str(refused),
             ]
         )
-    return table(["capture", "mutation requests", "mutations", "uploads", "issues created", "issues deleted by cleanup", "requests the guard refused"], body)
+    return table(
+        [
+            "capture",
+            "mutation requests",
+            "mutations",
+            "uploads",
+            "issues created",
+            "issues deleted by cleanup",
+            "requests the guard refused",
+        ],
+        body,
+    )
 
 
 def probes_table(captures: Path) -> str:
@@ -712,47 +1046,133 @@ def probes_table(captures: Path) -> str:
     for reset in sorted({r["reset"] for r in readings}):
         on = [r for r in readings if r["reset"] == reset]
         rise, seconds = slope(on)
-        body.append([f"idle background, counter resetting {reset}", f"{len(on)} reads over {seconds:.1f} s", f"{rise:g} points", f"{rise / seconds:.2f} points/s" if seconds else "—"])
+        body.append(
+            [
+                f"idle background, counter resetting {reset}",
+                f"{len(on)} reads over {seconds:.1f} s",
+                f"{rise:g} points",
+                f"{rise / seconds:.2f} points/s" if seconds else "—",
+            ]
+        )
     inspect = probe["onevcs_inspect"]
     core = inspect["after"][0]["core_used"] - inspect["before"][-1]["core_used"]
-    graphql = inspect["after"][0]["graphql_used"] - inspect["before"][-1]["graphql_used"]
-    body.append([f"{inspect['inspects']} × `onevcs boundary inspect`", "`GET /rate_limit` last read before → first after", f"REST core {core:+d}, GraphQL {graphql:+d}", f"{core / inspect['inspects']:g} REST request and {graphql / inspect['inspects']:g} GraphQL points per inspect"])
+    graphql = (
+        inspect["after"][0]["graphql_used"] - inspect["before"][-1]["graphql_used"]
+    )
+    body.append(
+        [
+            f"{inspect['inspects']} × `onevcs boundary inspect`",
+            "`GET /rate_limit` last read before → first after",
+            f"REST core {core:+d}, GraphQL {graphql:+d}",
+            f"{core / inspect['inspects']:g} REST request and {graphql / inspect['inspects']:g} GraphQL points per inspect",
+        ]
+    )
     return table(["probe", "readings", "rise", "rate"], body)
 
 
 def spend_table(captures: Path, priced: int) -> str:
     """What every capture sent, and the quota reads around it, with the total."""
-    named = [p for p in captures.iterdir() if p.is_dir() and re.fullmatch(r".+-\d{8}T\d{6}", p.name)]
+    named = [
+        p
+        for p in captures.iterdir()
+        if p.is_dir() and re.fullmatch(r".+-\d{8}T\d{6}", p.name)
+    ]
     superseded = captures / "superseded"
-    named += [p for p in superseded.iterdir() if p.is_dir()] if superseded.exists() else []
+    named += (
+        [p for p in superseded.iterdir() if p.is_dir()] if superseded.exists() else []
+    )
     body, totals = [], Counter()
     for path in sorted(named, key=lambda p: p.name.rsplit("-", 1)[-1]):
         requests = [r for r in lines(path / "requests.jsonl") if r["host"] != "refused"]
-        q = json.loads((path / "quota.json").read_text()) if (path / "quota.json").exists() else {}
+        q = (
+            json.loads((path / "quota.json").read_text())
+            if (path / "quota.json").exists()
+            else {}
+        )
         figures = Counter(
             queries=sum(1 for r in requests if r["kind"] == "query"),
             mutation_requests=sum(1 for r in requests if r["kind"] == "mutation"),
             rest=sum(1 for r in requests if r["kind"] == "rest"),
             tunnels=sum(1 for r in requests if r["kind"] == "tunnel"),
             screening=len(lines(path / "screen.jsonl")),
-            rate_limit_reads=sum(len(q.get(k, {}).get("buckets", {}).get("graphql (rateLimit)", {}).get("readings", [])) for k in ("quota-before", "quota-after"))
-            + len(q.get("burn-before", [])) + len(q.get("burn-after", [])),
-            rest_rate_limit_reads=sum(1 for k in ("quota-before", "quota-after") if k in q),
+            rate_limit_reads=sum(
+                len(
+                    q.get(k, {})
+                    .get("buckets", {})
+                    .get("graphql (rateLimit)", {})
+                    .get("readings", [])
+                )
+                for k in ("quota-before", "quota-after")
+            )
+            + len(q.get("burn-before", []))
+            + len(q.get("burn-after", [])),
+            rest_rate_limit_reads=sum(
+                1 for k in ("quota-before", "quota-after") if k in q
+            ),
         )
         totals += figures
-        body.append([f"`{path.name}`"] + [str(figures[k]) for k in ("queries", "mutation_requests", "rest", "tunnels", "screening", "rate_limit_reads", "rest_rate_limit_reads")])
-    body.append(["**total**"] + [f"**{totals[k]}**" for k in ("queries", "mutation_requests", "rest", "tunnels", "screening", "rate_limit_reads", "rest_rate_limit_reads")])
-    table_text = table(["capture", "GraphQL queries", "mutation requests", "REST requests", "tunnels (onevcs and the upload's storage)", "onevcs calls", "GraphQL `rateLimit` reads (free)", "`GET /rate_limit` reads (free)"], body)
-    return table_text + f"\n\nBeside these, `harness/pricing.py` sent {priced} dry-run pricings, one per GraphQL query of every run it read."
+        body.append(
+            [f"`{path.name}`"]
+            + [
+                str(figures[k])
+                for k in (
+                    "queries",
+                    "mutation_requests",
+                    "rest",
+                    "tunnels",
+                    "screening",
+                    "rate_limit_reads",
+                    "rest_rate_limit_reads",
+                )
+            ]
+        )
+    body.append(
+        ["**total**"]
+        + [
+            f"**{totals[k]}**"
+            for k in (
+                "queries",
+                "mutation_requests",
+                "rest",
+                "tunnels",
+                "screening",
+                "rate_limit_reads",
+                "rest_rate_limit_reads",
+            )
+        ]
+    )
+    table_text = table(
+        [
+            "capture",
+            "GraphQL queries",
+            "mutation requests",
+            "REST requests",
+            "tunnels (onevcs and the upload's storage)",
+            "onevcs calls",
+            "GraphQL `rateLimit` reads (free)",
+            "`GET /rate_limit` reads (free)",
+        ],
+        body,
+    )
+    return (
+        table_text
+        + f"\n\nBeside these, `harness/pricing.py` sent {priced} dry-run pricings, one per GraphQL query of every run it read."
+    )
 
 
 def tables(captures: Path) -> tuple[dict[str, str], dict]:
-    pricing = json.loads((captures / "pricing.json").read_text()) if (captures / "pricing.json").exists() else {}
+    pricing = (
+        json.loads((captures / "pricing.json").read_text())
+        if (captures / "pricing.json").exists()
+        else {}
+    )
     prices = {key: int(value) for key, value in pricing.get("requests", {}).items()}
     latest = latest_captures(captures)
     missing = [s for s, _, _ in ROWS if s not in latest]
     if missing:
-        raise SystemExit(f"analyze.py: no capture of {', '.join(missing)} under {captures}; take them with measure.sh")
+        raise SystemExit(
+            f"analyze.py: no capture of {', '.join(missing)} under {captures}; take them with measure.sh"
+        )
     rows = [row_of(s, op, label, latest[s], prices) for s, op, label in ROWS]
     pairs = size_pairs(loopback(captures))
     out = {
@@ -791,12 +1211,16 @@ def tables(captures: Path) -> tuple[dict[str, str], dict]:
             for r in rows
         ],
         "board_size_pairs": pairs,
-        "mutation_rises": {k: v for k, v in pricing.get("mutation_rises", {}).items() if v},
+        "mutation_rises": {
+            k: v for k, v in pricing.get("mutation_rises", {}).items() if v
+        },
     }
     return out, summary
 
 
-BLOCK = re.compile(r"<!-- analyze:begin ([a-z-]+) -->\n(.*?)\n?<!-- analyze:end \1 -->", re.S)
+BLOCK = re.compile(
+    r"<!-- analyze:begin ([a-z-]+) -->\n(.*?)\n?<!-- analyze:end \1 -->", re.DOTALL
+)
 
 
 def reconcile(report: str, computed: dict[str, str]) -> tuple[str, list[str]]:
@@ -816,18 +1240,24 @@ def reconcile(report: str, computed: dict[str, str]) -> tuple[str, list[str]]:
         return f"<!-- analyze:begin {name} -->\n{computed[name]}\n<!-- analyze:end {name} -->"
 
     updated = BLOCK.sub(replace, report)
-    drifted += [f"{name} (missing from the report)" for name in computed if name not in seen]
+    drifted += [
+        f"{name} (missing from the report)" for name in computed if name not in seen
+    ]
     return updated, drifted
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--write", action="store_true", help="rewrite the report's tables")
+    parser.add_argument(
+        "--write", action="store_true", help="rewrite the report's tables"
+    )
     parser.add_argument("--captures", type=Path, default=CAPTURES)
     parser.add_argument("--report", type=Path, default=REPORT)
     args = parser.parse_args(argv)
     computed, summary = tables(args.captures)
-    (args.captures / "summary.json").write_text(json.dumps(summary, indent=1, sort_keys=True) + "\n")
+    (args.captures / "summary.json").write_text(
+        json.dumps(summary, indent=1, sort_keys=True) + "\n"
+    )
     updated, drifted = reconcile(args.report.read_text(), computed)
     if args.write:
         args.report.write_text(updated)

@@ -16,7 +16,12 @@ import urllib.request
 from pathlib import Path
 
 REPOSITORIES = {"nickderobertis/onetaskgraph-live-scratch"}
-TITLES = ("feat(spike): seeded task ", "Spike workload bcs-", "Design: bcs-", "DESIGN: Design: bcs-")
+TITLES = (
+    "feat(spike): seeded task ",
+    "Spike workload bcs-",
+    "Design: bcs-",
+    "DESIGN: Design: bcs-",
+)
 # Deletes are content-changing requests: spaced well inside GitHub's secondary limit.
 SPACING = 2.0
 
@@ -33,7 +38,10 @@ class Client:
         request = urllib.request.Request(
             self.endpoint,
             data=json.dumps({"query": query, "variables": variables}).encode(),
-            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"},
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json",
+            },
         )
         try:
             with urllib.request.urlopen(request, timeout=120) as response:
@@ -71,7 +79,9 @@ def _creates(record: dict, bodies: Path) -> bool:
     return "createIssue" in json.loads(request.read_text()).get("query", "")
 
 
-def run(run_dir: Path, endpoint: str, token: str, state: Path, only: str | None = None) -> None:
+def run(
+    run_dir: Path, endpoint: str, token: str, state: Path, only: str | None = None
+) -> None:
     client = Client(endpoint, token)
     outcome = {"deleted": 0, "refused": 0, "gone": 0, "failed": 0}
     for issue_id in created_ids(run_dir.parent, only):
@@ -85,7 +95,9 @@ def run(run_dir: Path, endpoint: str, token: str, state: Path, only: str | None 
             outcome["gone"] += 1
             continue
         repository = node.get("repository", {}).get("nameWithOwner", "").lower()
-        if repository not in REPOSITORIES or not node.get("title", "").startswith(TITLES):
+        if repository not in REPOSITORIES or not node.get("title", "").startswith(
+            TITLES
+        ):
             outcome["refused"] += 1
             continue
         body = client.send(
@@ -95,11 +107,15 @@ def run(run_dir: Path, endpoint: str, token: str, state: Path, only: str | None 
             write=True,
         )
         outcome["failed" if body.get("errors") else "deleted"] += 1
-    (run_dir / "cleanup.json").write_text(json.dumps(outcome | {"only": only or "all"}, indent=1))
+    (run_dir / "cleanup.json").write_text(
+        json.dumps(outcome | {"only": only or "all"}, indent=1)
+    )
     print(f"  cleanup: {outcome}", flush=True)
     if outcome["failed"] == 0:
         # Retire every cleaned plan's folder, so its next first copy starts afresh.
         stamp = run_dir.name.rsplit("-", 1)[-1]
-        for plan in sorted(p for p in state.iterdir() if p.is_dir() and ".cleaned" not in p.name):
+        for plan in sorted(
+            p for p in state.iterdir() if p.is_dir() and ".cleaned" not in p.name
+        ):
             if only in (None, plan.name):
                 plan.rename(plan.with_name(f"{plan.name}.cleaned-{stamp}"))

@@ -72,12 +72,19 @@ def read(token: str, base: str = "https://api.github.com") -> dict:
     }
     if own["remaining"] < out["graphql"]["remaining"]:
         out["graphql"] = {
-            k: v for k, v in out["graphql (rateLimit)"].items() if not k.endswith("readings")
+            k: v
+            for k, v in out["graphql (rateLimit)"].items()
+            if not k.endswith("readings")
         }
     return out
 
 
-def burn(token: str, reads: int = 5, spacing: float = 2.0, base: str = "https://api.github.com") -> list[dict]:
+def burn(
+    token: str,
+    reads: int = 5,
+    spacing: float = 2.0,
+    base: str = "https://api.github.com",
+) -> list[dict]:
     """GraphQL's own `rateLimit`, read `reads` times `spacing` seconds apart while this harness
     sends nothing else: how fast every other session drawing on the same user's allowance is
     spending it, around a row. A `rateLimit` read costs nothing."""
@@ -86,7 +93,9 @@ def burn(token: str, reads: int = 5, spacing: float = 2.0, base: str = "https://
         "User-Agent": "board-copy-targets-measurement",
         "Content-Type": "application/json",
     }
-    query = json.dumps({"query": "query SpikeBurn { rateLimit { used remaining resetAt } }"}).encode()
+    query = json.dumps(
+        {"query": "query SpikeBurn { rateLimit { used remaining resetAt } }"}
+    ).encode()
     out = []
     for index in range(reads):
         if index:
@@ -95,9 +104,18 @@ def burn(token: str, reads: int = 5, spacing: float = 2.0, base: str = "https://
         with urllib.request.urlopen(request, timeout=60) as response:
             value = json.load(response)["data"]["rateLimit"]
         reset = int(
-            datetime.datetime.fromisoformat(value["resetAt"].replace("Z", "+00:00")).timestamp()
+            datetime.datetime.fromisoformat(
+                value["resetAt"].replace("Z", "+00:00")
+            ).timestamp()
         )
-        out.append({"at": time.time(), "used": value["used"], "remaining": value["remaining"], "reset": reset})
+        out.append(
+            {
+                "at": time.time(),
+                "used": value["used"],
+                "remaining": value["remaining"],
+                "reset": reset,
+            }
+        )
     return out
 
 
