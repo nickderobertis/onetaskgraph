@@ -1574,3 +1574,87 @@ fn a_combined_route_spelled_by_flags_or_the_environment_places_as_a_documents_do
         );
     }
 }
+
+/// The README's example of the three kinds of route entry is what the loader reads, and
+/// places as the bullets beneath it say: `example-org/special`'s private work at
+/// `example-special`, the rest of `example-org`'s at `example-private`, any other private work
+/// at `vault`, and a public item of `example-org` by a repository entry wherever it is written.
+#[test]
+fn the_readmes_combined_route_example_loads_and_places_as_it_says() {
+    use onetaskgraph_core::config::Placement;
+    use onetaskgraph_plugin_api::{Classification, Repository};
+
+    let readme =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md"))
+            .expect("the README is readable");
+    let section = readme
+        .split_once("## Routing, and plans that span sources")
+        .expect("the README has a routing section")
+        .1;
+    let example = section
+        .split_once("a **combined** entry naming both")
+        .expect("the routing section names the combined entry")
+        .1
+        .split_once("```yaml\n")
+        .expect("the combined entry has an example")
+        .1
+        .split_once("```")
+        .expect("the example is closed")
+        .0;
+    let mut routes: Value = serde_saphyr::from_str(example).expect("the example is YAML");
+    let mut entries = routes["routes"].take();
+    // A public item of `example-org`, placed by a repository entry written below the
+    // combined ones, as the README's second bullet says.
+    entries
+        .as_array_mut()
+        .expect("a list of entries")
+        .push(json!({"repositories": ["github.com/example-org/*"], "to": "example-public"}));
+    let private = json!({"plugin": "in-memory", "visibility": "private"});
+    let loaded = Config::from_document(json!({"sources": {
+        "site": {"plugin": "in-memory", "routes": entries},
+        "example-special": private,
+        "example-private": private,
+        "vault": private,
+        "example-team": {"plugin": "in-memory"},
+        "example-public": {"plugin": "in-memory"},
+    }}))
+    .expect("the README's example loads");
+
+    let routes = loaded.routes();
+    let site = SourceName::new("site".to_owned()).expect("a name");
+    let at = |name: &str, route: u32| Placement {
+        destination: SourceName::new(name.to_owned()).expect("a name"),
+        route: Some(route),
+    };
+    let repository =
+        |name: &str| [Repository::try_from(format!("github.com/{name}")).expect("an origin")];
+    for (classification, named, placed) in [
+        (
+            Classification::Private,
+            "example-org/special",
+            at("example-special", 0),
+        ),
+        (
+            Classification::Private,
+            "example-org/api",
+            at("example-private", 1),
+        ),
+        (Classification::Private, "example-team/api", at("vault", 2)),
+        (
+            Classification::Public,
+            "example-team/api",
+            at("example-team", 3),
+        ),
+        (
+            Classification::Public,
+            "example-org/special",
+            at("example-public", 4),
+        ),
+    ] {
+        assert_eq!(
+            routes.place_classified(&site, classification, &repository(named)),
+            placed,
+            "{classification:?} {named}"
+        );
+    }
+}
