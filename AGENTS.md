@@ -924,7 +924,9 @@ them do; this is the inventory of what is owed, not a status board.
     origin that is not a qualified id are each refused naming the flag.
 70. A source's `routes` are refused at load, naming the source and the entry, for an unknown
     `to`, a `to` naming the source itself or a source with routes of its own, an empty
-    `repositories` and a malformed pattern; set by `--set` or the environment alone they route
+    `repositories` and a malformed pattern — a combined `{repositories, classification, to}`
+    entry's as a repository entry's, and a combined `classification: private` entry whose `to`
+    is not declared private; set by `--set` or the environment alone they route
     `sources route` and a copy, and `config show` names their layer; `sources route` answers
     from configuration alone and refuses an unknown source and a malformed origin by name.
 71. A mixed plan copied to a GitHub board routing `github.com/widgetco/*` to Linear lands its
@@ -1046,7 +1048,14 @@ them do; this is the inventory of what is owed, not a status board.
     terms are derived, a malformed third identity making only an unscoped check unavailable.
 88. A mixed project goes, with every task and document in it, wholly to the private source a
     `classification: private` route names, over any repository route; with none reachable it is
-    refused whole; a private member is refused by a project held public; a task's classification
+    refused whole. A combined entry matches an item of its classification every one of whose
+    repositories it names, never one naming none, and is tried before every classification and
+    repository entry wherever written: two owners' private work, routed by combined entries to two
+    private sources beside a repository entry, is answered by `sources route --classification
+    private` and lands by `task copy` each in its own private source, the mixed owner's public
+    task where the repository entry sends it, a plan of both homing in the combined entry's
+    private source with its public task seen only as a view there, and `config show` prints the
+    entry with both fields and its layer; a private member is refused by a project held public; a task's classification
     is its own, never tightened by its project, while a project and its documents stay private
     by what they hold; and a project stays private after its private members are removed.
 89. A copy out of a private source into a public one records no origin naming it, and keeps

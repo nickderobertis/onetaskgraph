@@ -1809,14 +1809,49 @@ sources:
 
 **An entry matches an item when every one of the item's repositories matches at least one of
 its patterns.** A pattern is a normalized origin, `host/owner/name`, where `*` matches exactly
-one whole segment. An item naming no repository matches nothing. The first entry that
-matches wins, and an item no entry matches stays in the source itself. A configuration with
-no `routes` writes exactly where it always did.
+one whole segment. An item naming no repository matches nothing. Among entries of one kind the
+first that matches wins, and an item no entry matches stays in the source itself. A
+configuration with no `routes` writes exactly where it always did.
+
+An entry comes in three kinds: `{repositories, to}` above; `{classification, to}`, matching
+every item of that classification (see [Routing by
+classification](#the-public-boundary)); and a **combined** entry naming both, which matches an
+item of that classification every one of whose repositories matches one of its patterns — and,
+like a repository entry, never an item naming no repository:
+
+```yaml
+routes:
+  - repositories: ["github.com/example-org/special"]
+    classification: private
+    to: example-special
+  - repositories: ["github.com/example-org/*"]
+    classification: private
+    to: example-private
+  - classification: private
+    to: vault
+  - repositories: ["github.com/example-team/*"]
+    to: example-team
+```
+
+**The kind decides the order, wherever an entry is written.** Among the entries an item may
+try, combined entries are tried first, then classification entries, then repository entries,
+each kind in the order written, then the source itself. A private item may try only entries
+whose `to` is declared private, or names a source no layer gives a plugin; when none places it,
+it stays in the source itself — and is refused there when that source is not private. A
+placement still names the entry by its index as written. So:
+
+- **A private repository is sent elsewhere by a combined entry naming it, written above the
+  organization-wide one** — above, `example-org/special`'s private work goes to
+  `example-special` and the rest of `example-org`'s private work to `example-private`.
+- **A public repository is sent elsewhere by a repository entry**, which a combined private
+  entry never shadows: a public item of `example-org` is placed by `{repositories:
+  ["github.com/example-org/*"], to: …}` wherever that entry is written.
 
 Each of these is refused when the configuration loads, naming the source and the entry: a
 `to` naming no configured source, a `to` naming the source itself, a `to` naming a source
 that has routes of its own (a route never chains), an entry whose `repositories` is empty,
-and a malformed pattern.
+and a malformed pattern — for a repository entry and a combined entry alike — and a
+`classification: private` entry, combined or not, whose `to` is not declared private.
 
 `routes` is set at every layer. A document writes it as a list; `--set` and the environment
 address one entry by its index, because neither can spell a list of objects:
@@ -1828,15 +1863,18 @@ ONETASKGRAPH_SOURCES__PLANS__ROUTES__0__REPOSITORIES='github.com/example-org/*' 
 ONETASKGRAPH_SOURCES__PLANS__ROUTES__0__TO=example-team  onetaskgraph sources route plans
 ```
 
-A comma in a `repositories` value makes it a list of patterns, as a comma does everywhere
-else. Entries are
+A combined entry is spelled the same way, one field at a time —
+`--set sources.plans.routes.0.classification=private` beside its `repositories` and `to`, or
+`ONETASKGRAPH_SOURCES__PLANS__ROUTES__0__CLASSIFICATION=private`. A comma in a `repositories`
+value makes it a list of patterns, as a comma does everywhere else. Entries are
 numbered from 0 with no gaps, and an entry one layer sets replaces the whole `routes` a lower
 layer set rather than merging into it. `config show` prints `routes` with the layer it came
 from — the document's list as one row, a flag's or a variable's entries one row per field.
 
 `onetaskgraph sources route <SOURCE> --repository <R>...` answers where an item would go —
 `{"source": "plans", "destination": "example-team", "route": 0}`, with `route` null when no
-entry matched — from configuration alone.
+entry matched — from configuration alone; `--classification private` asks for a private item,
+which combined private entries place.
 
 ### Which writes route, and where each item lands
 
@@ -1845,7 +1883,7 @@ without its tasks, and with `--member`) and `document copy --to <SOURCE>` all pl
 by the named source's routes. So does the engine's own member copy, which is what a running
 engine's write-back uses.
 
-- **A task** goes where its own repositories route it.
+- **A task** goes where its own repositories and classification route it.
 - **A project's home** is placed by its **voters**: every task the copy carries that names at
   least one repository, and the project's own `repositories` when it names any. A task naming
   no repository, and every document, never votes.
@@ -1865,7 +1903,9 @@ engine's write-back uses.
     project's own repositories can vote.
   - A `{classification: private, to: <source>}` entry keeps its precedence: a project holding
     anything private goes there whole, with every task and document in it, its public tasks
-    projected where their own placement is.
+    projected where their own placement is. A combined entry never does this — it matches no
+    item naming no repository, and a project is asked whole — so without a classification-only
+    entry the home goes by its voters, its private voters placed through combined entries.
   - **A home that already exists stays where it is**, found by the project's link or origin
     and naming it back: a task added later that routes elsewhere goes into a member project
     there. A private plan whose existing home sits in a source not declared private is refused
@@ -2029,13 +2069,20 @@ visibility.** Active:
   reads nothing more.
 
 **Routing by classification.** A route entry may match on `classification` instead of
-`repositories`: `{classification: private, to: <source>}`, whose `to` must be declared private.
-Safety is decided before matching — a private item is only ever placed in a source declared
-private, classification entries are tried before repository entries, and otherwise the order
-is the one written. A project holding anything private goes, with every task and document in
-it, wholly to the private source a classification entry names, whatever its tasks'
-repositories would say. Without one, its home goes where its private tasks' repositories route
-it — see [Which writes route, and where each item lands](#which-writes-route-and-where-each-item-lands);
+`repositories`: `{classification: private, to: <source>}`, whose `to` must be declared private —
+or on both together, `{repositories: [github.com/example-org/*], classification: private, to:
+<source>}`, a **combined** entry matching an item of that classification every one of whose
+repositories its patterns match, held to the same rule about its `to` and to every refusal a
+repository entry gets. Safety is decided before matching — a private item is only ever placed in
+a source declared private — and then the kind decides the order wherever an entry is written:
+combined entries, then classification entries, then repository entries, each in the order
+written. So an owner whose repositories are partly private routes its private work by one
+combined entry, a single private repository is sent elsewhere by a combined entry naming it
+written above that one, and its public work by a repository entry no combined private entry
+shadows — see [Routing, and plans that span sources](#routing-and-plans-that-span-sources). A
+project holding anything private goes, with every task and document in it, wholly to the
+private source a classification entry names, whatever its tasks' repositories would say. Without one, its home goes where its private tasks' repositories route
+it, through combined entries as through repository ones — see [Which writes route, and where each item lands](#which-writes-route-and-where-each-item-lands);
 with no private source reachable, the whole copy is refused before anything is written. Either
 way every task of the plan lands canonically beside that private home, and its public tasks are
 seen publicly only through the views below. `sources route <SOURCE> --classification private`
