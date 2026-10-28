@@ -24,24 +24,25 @@ python="$(command -v python3)" || {
 case "$python" in /*) ;; *) python="$(cd "$(dirname "$python")" && pwd)/python3" ;; esac
 # Where raw runs live and which host commit is measured are the runner's to say.
 cache="$("$python" "$here/harness/run.py" --print cache)"
+clone="$("$python" "$here/harness/run.py" --print clone)"
 host_commit="$("$python" "$here/harness/run.py" --print host-commit)"
 if [ "${1:-}" = "" ]; then
     echo "usage: $0 provision | all | <scenario>" >&2
     exit 2
 fi
 if [ "$1" = "provision" ]; then
-    mkdir -p "$cache"
-    if [ ! -d "$cache/ai-orchestrator" ] && ! git clone -q \
-        https://github.com/nickderobertis/ai-orchestrator.git "$cache/ai-orchestrator"; then
-        echo "measure.sh: cloning ai-orchestrator failed; check the network and your GitHub access, remove any partial $cache/ai-orchestrator, and run provision again" >&2
+    mkdir -p "$(dirname "$clone")"
+    if [ ! -d "$clone" ] && ! git clone -q \
+        https://github.com/nickderobertis/ai-orchestrator.git "$clone"; then
+        echo "measure.sh: cloning ai-orchestrator failed; check the network and your GitHub access, remove any partial $clone, and run provision again" >&2
         exit 1
     fi
-    if ! (cd "$cache/ai-orchestrator" && { git checkout -q "$host_commit" 2>/dev/null \
+    if ! (cd "$clone" && { git checkout -q "$host_commit" 2>/dev/null \
         || { git fetch -q origin && git checkout -q "$host_commit"; }; }); then
-        echo "measure.sh: the host commit $host_commit is not in $cache/ai-orchestrator even after a fetch; set SPIKE_HOST_COMMIT to a commit of ai-orchestrator and run provision again" >&2
+        echo "measure.sh: the host commit $host_commit is not in $clone even after a fetch; set SPIKE_HOST_COMMIT to a commit of ai-orchestrator and run provision again" >&2
         exit 1
     fi
-    if ! (cd "$cache/ai-orchestrator" && uv sync -q --frozen && bun install --frozen-lockfile >/dev/null); then
+    if ! (cd "$clone" && uv sync -q --frozen && bun install --frozen-lockfile >/dev/null); then
         echo "measure.sh: installing the host clone's locked environment failed (uv sync --frozen, bun install --frozen-lockfile); its output is above, fix what it names and run provision again" >&2
         exit 1
     fi
