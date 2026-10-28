@@ -17,8 +17,9 @@ use onetaskgraph_core::{
 };
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, Direction, Document, DocumentQuery, Health, ItemWrite, Label,
-    MetadataKey, NativeId, Page, PageRequest, Project, ProjectQuery, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Task, TaskQuery, TaskSource, WriteSupport,
+    Location, MetadataKey, MetadataRecord, NativeId, Page, PageRequest, Project, ProjectQuery,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Task, TaskQuery, TaskSource,
+    WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -49,8 +50,26 @@ struct Watched {
     inner: Box<dyn TaskSource>,
     pages: Arc<AtomicU32>,
     faults: Vec<(NativeId, Fault)>,
-    /// Every item whose metadata write has reached the source, for [`Fault::Unrestorable`].
-    written: std::sync::Mutex<Vec<NativeId>>,
+    /// How one item's `onetaskgraph.copy_locations` write goes wrong, its link's left alone.
+    location_faults: Vec<(NativeId, Fault)>,
+    /// Whether this source says where it wrote each item, as a hosted one's create answers.
+    locates: bool,
+    /// How this source answers a batch of creates, when it creates several in one request.
+    batches: Option<Batched>,
+    /// Every item and key whose metadata write has reached the source, for
+    /// [`Fault::Unrestorable`].
+    written: std::sync::Mutex<Vec<(NativeId, MetadataKey)>>,
+}
+
+/// How a source creating several tasks in one request answers what it created.
+#[derive(Clone, Copy)]
+enum Batched {
+    /// With every id, as a source does.
+    Whole,
+    /// With one id fewer than it was asked to create.
+    Short,
+    /// With the first id answered twice in place of the second.
+    Repeated,
 }
 
 /// How one item's metadata write goes wrong.
@@ -69,16 +88,21 @@ enum Fault {
 }
 
 impl Watched {
-    /// What the write of `id` does before it reaches the source: the answer it gives in
-    /// place of the source's, the failure, or nothing.
-    fn before<T>(&self, id: &NativeId) -> Result<Option<Option<T>>, SourceError> {
+    /// What the write of `key` on `id` does before it reaches the source: the answer it gives
+    /// in place of the source's, the failure, or nothing.
+    fn before<T>(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<T>>, SourceError> {
         let dropped = || SourceError::Unavailable {
             message: format!("the backend dropped the metadata write of {id}"),
         };
         let mut written = self.written.lock().expect("the record of writes");
-        let again = written.contains(id);
-        written.push(id.clone());
-        match self.fault_of(id) {
+        let written_now = (id.clone(), key.clone());
+        let again = written.contains(&written_now);
+        written.push(written_now);
+        match self.fault_of(id, key) {
             Some(Fault::Gone) => Ok(Some(None)),
             Some(Fault::Unavailable) => Err(dropped()),
             Some(Fault::Unrestorable) if again => Err(dropped()),
@@ -86,9 +110,14 @@ impl Watched {
         }
     }
 
-    /// What the write of `id` answers once the source has made it.
-    fn after<T>(&self, id: &NativeId, written: Option<T>) -> Result<Option<T>, SourceError> {
-        match self.fault_of(id) {
+    /// What the write of `key` on `id` answers once the source has made it.
+    fn after<T>(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        written: Option<T>,
+    ) -> Result<Option<T>, SourceError> {
+        match self.fault_of(id, key) {
             Some(Fault::Malformed) => Err(SourceError::Malformed {
                 message: format!("the reserved key sent for {id} is not a caller's own"),
             }),
@@ -96,8 +125,13 @@ impl Watched {
         }
     }
 
-    fn fault_of(&self, id: &NativeId) -> Option<Fault> {
-        self.faults
+    fn fault_of(&self, id: &NativeId, key: &MetadataKey) -> Option<Fault> {
+        let faults = if key.is_copy_locations() {
+            &self.location_faults
+        } else {
+            &self.faults
+        };
+        faults
             .iter()
             .find(|(faulty, _)| faulty == id)
             .map(|(_, fault)| *fault)
@@ -201,11 +235,11 @@ impl TaskSource for Watched {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Task>, SourceError> {
-        if let Some(answer) = self.before(id)? {
+        if let Some(answer) = self.before(id, key)? {
             return Ok(answer);
         }
         let written = self.inner.set_task_metadata(id, key, value).await?;
-        self.after(id, written)
+        self.after(id, key, written)
     }
 
     async fn set_project_metadata(
@@ -214,11 +248,11 @@ impl TaskSource for Watched {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Project>, SourceError> {
-        if let Some(answer) = self.before(id)? {
+        if let Some(answer) = self.before(id, key)? {
             return Ok(answer);
         }
         let written = self.inner.set_project_metadata(id, key, value).await?;
-        self.after(id, written)
+        self.after(id, key, written)
     }
 
     async fn set_document_metadata(
@@ -227,15 +261,36 @@ impl TaskSource for Watched {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Document>, SourceError> {
-        if let Some(answer) = self.before(id)? {
+        if let Some(answer) = self.before(id, key)? {
             return Ok(answer);
         }
         let written = self.inner.set_document_metadata(id, key, value).await?;
-        self.after(id, written)
+        self.after(id, key, written)
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         self.inner.delete_task(id).await
+    }
+
+    fn create_batch_limit(&self) -> usize {
+        if self.batches.is_some() { 11 } else { 1 }
+    }
+
+    async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        let mut ids = self.inner.write_tasks(writes).await?;
+        match self.batches {
+            Some(Batched::Short) => {
+                ids.pop();
+            }
+            Some(Batched::Repeated) if ids.len() > 1 => ids[1] = ids[0].clone(),
+            Some(Batched::Whole | Batched::Repeated) | None => {}
+        }
+        Ok(ids)
+    }
+
+    fn written_location(&self, _record: MetadataRecord, id: &NativeId) -> Option<Location> {
+        self.locates
+            .then(|| Location::Url(format!("https://into.example/{}", id.0)))
     }
 
     async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
@@ -253,6 +308,39 @@ fn watched(
     config: &Value,
     faults: &[(&str, Fault)],
 ) -> (ConfiguredSource, Arc<AtomicU32>) {
+    watched_locating(source, config, faults, &[], false)
+}
+
+/// An engine copying out of `from` into `into`, which creates several tasks in one request and
+/// answers each batch as `batches` says.
+fn engine_batching(from: &Value, into: &Value, batches: Batched) -> Engine {
+    let (from, _) = watched("from", from, &[]);
+    let pages = Arc::new(AtomicU32::new(0));
+    let inner = onetaskgraph_in_memory::Plugin
+        .build(&name("into"), into, &NoSecrets)
+        .expect("the in-memory plugin builds");
+    let into = Watched {
+        inner,
+        pages,
+        faults: Vec::new(),
+        location_faults: Vec::new(),
+        locates: false,
+        batches: Some(batches),
+        written: std::sync::Mutex::new(Vec::new()),
+    };
+    let into = ConfiguredSource::Ready(ResolvedSource::adopt(name("into"), Box::new(into)));
+    Engine::new(vec![from, into], vec![name("from"), name("into")])
+}
+
+/// [`watched`], answering each `onetaskgraph.copy_locations` write named in `location_faults`
+/// as it says, and saying where it wrote each item when `locates`.
+fn watched_locating(
+    source: &str,
+    config: &Value,
+    faults: &[(&str, Fault)],
+    location_faults: &[(&str, Fault)],
+    locates: bool,
+) -> (ConfiguredSource, Arc<AtomicU32>) {
     let pages = Arc::new(AtomicU32::new(0));
     let inner = onetaskgraph_in_memory::Plugin
         .build(&name(source), config, &NoSecrets)
@@ -264,6 +352,12 @@ fn watched(
             .iter()
             .map(|(id, fault)| (NativeId((*id).to_owned()), *fault))
             .collect(),
+        location_faults: location_faults
+            .iter()
+            .map(|(id, fault)| (NativeId((*id).to_owned()), *fault))
+            .collect(),
+        locates,
+        batches: None,
         written: std::sync::Mutex::new(Vec::new()),
     };
     (
@@ -292,6 +386,35 @@ fn engine_failing(
     )
 }
 
+/// An engine copying out of `from`, whose `onetaskgraph.copy_locations` writes go as
+/// `location_faults` says, into `into`, which says where it wrote each item.
+fn engine_locating(from: &Value, into: &Value, location_faults: &[(&str, Fault)]) -> Engine {
+    engine_locating_failing(from, into, &[], location_faults)
+}
+
+/// [`engine_locating`], with `from` also answering each link write named in `faults` as it
+/// says.
+fn engine_locating_failing(
+    from: &Value,
+    into: &Value,
+    faults: &[(&str, Fault)],
+    location_faults: &[(&str, Fault)],
+) -> Engine {
+    let (from, _) = watched_locating("from", from, faults, location_faults, false);
+    let (into, _) = watched_locating("into", into, &[], &[], true);
+    Engine::new(vec![from, into], vec![name("from"), name("into")])
+}
+
+/// What one task records at `onetaskgraph.copy_locations`, or `Value::Null` when it records
+/// none.
+async fn locations_of(engine: &Engine, item: &str) -> Value {
+    task_metadata(engine, item)
+        .await
+        .get(MetadataKey::COPY_LOCATIONS_KEY)
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 /// One task, as an `in-memory` source holds it, recording `metadata`.
 fn task(id: &str, title: &str, metadata: &Value) -> Value {
     json!({
@@ -311,6 +434,7 @@ fn copy_of(items: &[&str], scope: CopyScope) -> CopyRequest {
             .expect("a copy names at least one item"),
         scope,
         destination: name("into"),
+        target_task: None,
         match_by: None,
         recreate: false,
         create: false,
@@ -318,6 +442,7 @@ fn copy_of(items: &[&str], scope: CopyScope) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
     }
 }
@@ -1058,4 +1183,245 @@ async fn a_link_the_source_will_not_take_back_is_named_as_left_behind() {
         json!({"elsewhere": "elsewhere:E", "into": "into:T-1"}),
         "and T-1 holds what the copy wrote, as the refusal says"
     );
+}
+
+#[tokio::test]
+async fn a_location_the_source_will_not_hold_leaves_the_link_recorded() {
+    // The location beside a link is what a later document copy saves a read with, and nothing
+    // more: a source that refuses it, answers that it no longer holds the item, or answers as
+    // a plugin predating the key does, leaves the copy landed and its link recorded.
+    let located = json!({"into": {"id": "into:T-1",
+                                  "location": {"url": "https://into.example/T-1"}}});
+    for (why, capabilities, fault, held) in [
+        ("holds it", json!({}), None, located.clone()),
+        (
+            "refuses the key",
+            json!({"unwritable_metadata_keys": [MetadataKey::COPY_LOCATIONS_KEY]}),
+            None,
+            Value::Null,
+        ),
+        (
+            "no longer holds the item",
+            json!({}),
+            Some(Fault::Gone),
+            Value::Null,
+        ),
+        // Written before the answer, as far as the copy can tell: kept, not taken back.
+        (
+            "answers malformed",
+            json!({}),
+            Some(Fault::Malformed),
+            located.clone(),
+        ),
+    ] {
+        let from = json!({"capabilities": capabilities,
+                          "tasks": [task("T-1", "Alpha", &json!({}))]});
+        let faults: Vec<(&str, Fault)> = fault.into_iter().map(|fault| ("T-1", fault)).collect();
+        let engine = engine_locating(&from, &json!({}), &faults);
+        let report = copied(&engine, &one("from:T-1")).await;
+        assert_eq!(
+            said(&report.items[0]),
+            landed("into:T-1", "created", "created", CopyLink::Recorded),
+            "a source that {why}"
+        );
+        assert_eq!(
+            links_of(&engine, "from:T-1").await,
+            json!({"into": "into:T-1"}),
+            "{why}"
+        );
+        assert_eq!(locations_of(&engine, "from:T-1").await, held, "{why}");
+    }
+}
+
+#[tokio::test]
+async fn a_location_write_that_fails_undoes_every_location_link_and_item_the_copy_wrote() {
+    // Three items, and the third one's location write is dropped after the first two items'
+    // links and locations, and its own link, landed: the one that held a location for another
+    // destination before holds it again, and the ones that held none hold none.
+    let elsewhere = json!({"elsewhere": {"id": "elsewhere:E-1",
+                                         "location": {"url": "https://elsewhere.example/E-1"}}});
+    let from = json!({"tasks": [
+        task("T-1", "Alpha", &json!({
+            MetadataKey::COPIES_KEY: {"elsewhere": "elsewhere:E-1"},
+            MetadataKey::COPY_LOCATIONS_KEY: elsewhere,
+        })),
+        task("T-3", "Gamma", &json!({"caller.kept": [1, "two"]})),
+        task("T-2", "Beta", &json!({})),
+    ]});
+    let engine = engine_locating(&from, &json!({}), &[("T-2", Fault::Unavailable)]);
+
+    let refused = engine
+        .copy(&copy_of(
+            &["from:T-1", "from:T-3", "from:T-2"],
+            CopyScope::Tasks,
+        ))
+        .await
+        .expect_err("the third location write fails");
+    assert!(
+        refused
+            .to_string()
+            .contains("dropped the metadata write of T-2"),
+        "the copy names what failed: {refused}"
+    );
+    assert!(held(&engine, "into").await.is_empty(), "{refused}");
+    assert_eq!(
+        links_of(&engine, "from:T-1").await,
+        json!({"elsewhere": "elsewhere:E-1"})
+    );
+    assert_eq!(locations_of(&engine, "from:T-1").await, elsewhere);
+    for item in ["from:T-3", "from:T-2"] {
+        let untouched = task_metadata(&engine, item).await;
+        assert!(
+            !untouched.contains_key(MetadataKey::COPIES_KEY)
+                && !untouched.contains_key(MetadataKey::COPY_LOCATIONS_KEY),
+            "{item}: {untouched:?}"
+        );
+    }
+    assert_eq!(
+        task_metadata(&engine, "from:T-3").await["caller.kept"],
+        json!([1, "two"])
+    );
+}
+
+#[tokio::test]
+async fn a_batch_of_creates_answered_with_the_wrong_ids_leaves_the_destination_uncertain() {
+    // Created together, the tasks are only as known as the ids their batch answers with: an
+    // answer one short, or naming one id twice, cannot say which item is which, so the copy
+    // records no link and refuses naming the destination and the method, rather than
+    // journalling items it cannot name.
+    let from = json!({"tasks": [
+        task("T-1", "Alpha", &json!({})),
+        task("T-2", "Beta", &json!({})),
+    ]});
+    let whole = engine_batching(&from, &json!({}), Batched::Whole);
+    let report = copied(
+        &whole,
+        &copy_of(&["from:T-1", "from:T-2"], CopyScope::Tasks),
+    )
+    .await;
+    assert_eq!(report.items.len(), 2);
+    assert_eq!(held(&whole, "into").await.len(), 2, "both created together");
+
+    for batched in [Batched::Short, Batched::Repeated] {
+        let engine = engine_batching(&from, &json!({}), batched);
+        let refused = engine
+            .copy(&copy_of(&["from:T-1", "from:T-2"], CopyScope::Tasks))
+            .await
+            .expect_err("an answer that cannot name each task created");
+        let EngineError::CopyDestinationUncertain {
+            destination,
+            operation,
+            ..
+        } = &refused
+        else {
+            panic!("not an uncertain destination: {refused}");
+        };
+        assert_eq!(
+            (destination.as_str(), operation.as_str()),
+            ("into", "write_tasks")
+        );
+        for item in ["from:T-1", "from:T-2"] {
+            assert_eq!(links_of(&engine, item).await, Value::Null, "{item}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_location_the_source_will_not_take_back_is_named_as_left_behind() {
+    // T-1's link and location land beside the ones it held for another destination, T-2's
+    // link write fails, and T-1's source then refuses to put its location back: the copy says
+    // it could not be undone, names T-1 as holding what it wrote, and still takes back the
+    // items it created.
+    let elsewhere =
+        json!({"id": "elsewhere:E", "location": {"url": "https://elsewhere.example/E"}});
+    let from = json!({"tasks": [
+        task("T-1", "Alpha", &json!({
+            MetadataKey::COPIES_KEY: {"elsewhere": "elsewhere:E"},
+            MetadataKey::COPY_LOCATIONS_KEY: {"elsewhere": elsewhere},
+        })),
+        task("T-2", "Beta", &json!({})),
+    ]});
+    let engine = engine_locating_failing(
+        &from,
+        &json!({}),
+        &[("T-2", Fault::Unavailable)],
+        &[("T-1", Fault::Unrestorable)],
+    );
+    let refused = engine
+        .copy(&copy_of(&["from:T-1", "from:T-2"], CopyScope::Tasks))
+        .await
+        .expect_err("the second link write fails");
+    let EngineError::CopyNotUndone { left_behind, .. } = &refused else {
+        panic!("the copy could not be undone, and says so: {refused:?}");
+    };
+    assert_eq!(
+        left_behind
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["from:T-1"]
+    );
+    assert!(held(&engine, "into").await.is_empty(), "{refused}");
+    assert_eq!(
+        locations_of(&engine, "from:T-1").await,
+        json!({"elsewhere": elsewhere,
+               "into": {"id": "into:T-1", "location": {"url": "https://into.example/T-1"}}}),
+        "T-1 holds the location the copy wrote, as the refusal says"
+    );
+    assert_eq!(
+        links_of(&engine, "from:T-1").await,
+        json!({"elsewhere": "elsewhere:E"}),
+        "and its link, which it would take back, is put back"
+    );
+}
+
+#[tokio::test]
+async fn a_rust_caller_selects_a_verified_target_before_a_stale_link_without_scanning() {
+    let (engine, pages) = engine(
+        &json!({"tasks": [task("T-1", "Alpha", &json!({"onetaskgraph.copies": {"into": "into:withdrawn"}}))]}),
+        &json!({"tasks": [
+            task("first", "First duplicate", &json!({"onetaskgraph.origin": "from:T-1"})),
+            task("second", "Second duplicate", &json!({"onetaskgraph.origin": "from:T-1"})),
+        ]}),
+    );
+    let mut request = one("from:T-1");
+    request.target_task = Some(id("into:second"));
+    let report = copied(&engine, &request).await;
+    assert_eq!(
+        said(&report.items[0]),
+        landed("into:second", "updated", "target-task", CopyLink::Recorded)
+    );
+    assert_eq!(
+        links_of(&engine, "from:T-1").await,
+        json!({"into": "into:second"})
+    );
+    let next = copied(&engine, &one("from:T-1")).await;
+    assert_eq!(
+        said(&next.items[0]),
+        landed("into:second", "unchanged", "link", CopyLink::Unchanged)
+    );
+    assert_eq!(pages.load(Ordering::Relaxed), 0);
+
+    request.target_task = Some(id("into:missing"));
+    assert!(matches!(
+        engine.copy(&request).await,
+        Err(EngineError::TargetTaskMissing { .. })
+    ));
+    assert_eq!(
+        links_of(&engine, "from:T-1").await,
+        json!({"into": "into:second"})
+    );
+}
+
+#[tokio::test]
+async fn an_explicit_target_refuses_non_task_scopes_before_reading() {
+    let engine = Engine::new(Vec::new(), Vec::new());
+    for scope in [CopyScope::Documents, CopyScope::Projects { tasks: false }] {
+        let mut request = copy_of(&["from:T-1"], scope);
+        request.target_task = Some(id("into:second"));
+        assert!(matches!(
+            engine.copy(&request).await,
+            Err(EngineError::TargetTaskNeedsOne)
+        ));
+    }
 }

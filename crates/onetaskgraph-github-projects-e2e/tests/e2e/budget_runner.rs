@@ -171,7 +171,398 @@ fn report_metadata_fields() {
     let (value, detail) = metadata_field_share(&budget).unwrap_or_else(|error| refuse(&error));
     hand_over(value, &detail);
 }
+// llmlint: ignore-block[budget_commands_measure_directly] This entry reports the telemetry the `approval` journey measured in the crate's test run, refusing any other recording; onebudgetspec judges the figure.
+#[test]
+fn report_approval_calls() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) =
+        approval_calls_of(&recorded(&budget).unwrap_or_else(|error| refuse(&error)))
+            .unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering the plan-copy budgets names this one entry for all seven of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's ordinary test run, refuses a recording of another plan, board size or scenario, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_plan_copy() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = plan_copy_figure(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-end[tests_assert_real_behavior]
+
+// llmlint: ignore-block[tests_assert_real_behavior] As the block of `report_*` entries above: each is a report-only command entry point budgets.yaml selects, which reports nothing without ONEBUDGETSPEC_BUDGET_ID; `a_store_cost_report_hands_over_the_larger_scale_and_refuses_another_workload` below asserts what they hand over and refuse.
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering these three names each entry. Each reads only the telemetry `store_cost.rs` recorded during the crate's ordinary test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_dependency_read() {
+    report_store_cost(super::store_cost::DEPENDENCY_WORKLOAD);
+}
+#[test]
+fn report_status_write() {
+    report_store_cost(super::store_cost::STATUS_WORKLOAD);
+}
+#[test]
+fn report_settlement_update() {
+    report_store_cost(super::store_cost::SETTLEMENT_WORKLOAD);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
+// llmlint: ignore-end[tests_assert_real_behavior]
+
+fn report_store_cost(workload: &str) {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = recorded(&budget)
+        .and_then(|value| store_cost_of(&value, workload))
+        .unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+
+/// What `store_cost` recorded, refused unless it is `workload`'s recording measured at both
+/// scales the budget states, the figure the larger of the two.
+fn store_cost_of(value: &Value, workload: &str) -> Result<(f64, String), String> {
+    if value["workload"].as_str() != Some(workload) {
+        return Err("the recording is not of the workload the budget states".into());
+    }
+    let figure = value["value"]
+        .as_u64()
+        .ok_or("missing whole-number figure")?;
+    let mut largest = None;
+    for (scale, _) in super::store_cost::SCALES {
+        let at = value["scales"][scale]["value"]
+            .as_u64()
+            .ok_or_else(|| format!("the {scale} scale is not measured"))?;
+        largest = Some(largest.map_or(at, |held: u64| held.max(at)));
+    }
+    if largest != Some(figure) {
+        return Err(format!(
+            "the figure {figure} is not the larger scale's, {largest:?}"
+        ));
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
+}
+
+#[test]
+fn a_store_cost_report_hands_over_the_larger_scale_and_refuses_another_workload() {
+    use super::store_cost::STATUS_WORKLOAD;
+    let valid = serde_json::json!({"budget": "github-requests-per-status-write", "value": 2,
+        "workload": STATUS_WORKLOAD, "detail": "measured",
+        "scales": {"1x": {"value": 1}, "10x": {"value": 2}}});
+    assert_eq!(
+        store_cost_of(&valid, STATUS_WORKLOAD),
+        Ok((2.0, "measured".to_owned()))
+    );
+    let with = |pointer: &str, replaced: Value| {
+        let mut changed = valid.clone();
+        *changed.pointer_mut(pointer).expect("the member") = replaced;
+        changed
+    };
+    for (name, recording, reason) in [
+        (
+            "another workload",
+            with("/workload", serde_json::json!("one write")),
+            "workload",
+        ),
+        ("no figure", with("/value", Value::Null), "whole-number"),
+        (
+            "a smaller figure",
+            with("/value", serde_json::json!(1)),
+            "larger scale",
+        ),
+        (
+            "one scale",
+            with("/scales/10x", serde_json::json!({})),
+            "10x",
+        ),
+        ("no detail", with("/detail", Value::Null), "detail"),
+    ] {
+        let refused = store_cost_of(&recording, STATUS_WORKLOAD).expect_err(name);
+        assert!(refused.contains(reason), "{name}: {refused}");
+    }
+}
+
+/// The scenario a plan-copy budget measures, read off its own id: the scenario its id ends
+/// with, or the first copy for one naming none — the writes a first copy makes.
+fn plan_copy_scenario(budget: &str) -> &'static str {
+    super::plan_copy::SCENARIOS
+        .iter()
+        .find(|scenario| budget.ends_with(&format!("-{scenario}")))
+        .copied()
+        .unwrap_or(super::plan_copy::SCENARIOS[0])
+}
+
+/// What `plan_copy.rs` recorded for `budget`, refused unless the recording states the plan, the
+/// board size and the scenario the budget's workload names: its figure, and its detail.
+fn plan_copy_figure(budget: &str) -> Result<(f64, String), String> {
+    let value = recorded(budget)?;
+    if value["plan"].as_str() != Some(super::plan_copy::WORKLOAD) {
+        return Err("the recording is not of the generated 10-item plan".into());
+    }
+    if value["board"].as_u64() != Some(super::plan_copy::SMALL as u64) {
+        return Err("the recording is not of a board of 2000 items".into());
+    }
+    if value["scenario"].as_str() != Some(plan_copy_scenario(budget)) {
+        return Err(format!(
+            "the recording is not of the {} scenario",
+            plan_copy_scenario(budget)
+        ));
+    }
+    let figure = value["value"]
+        .as_f64()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or("missing nonnegative figure")?;
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    Ok((figure, detail))
+}
+
+#[test]
+fn the_plan_copy_report_hands_over_the_recorded_figure_and_refuses_another_workload() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use serde_json::json;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("plan-copy");
+    let run = |budget: &str, recorded: Option<Value>| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
+        let _ = std::fs::remove_file(&path);
+        if let Some(recorded) = recorded {
+            std::fs::write(&path, recorded.to_string()).unwrap();
+        }
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["budget_runner::report_plan_copy", "--exact", "--nocapture"])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        (output, std::fs::read_to_string(&result).ok())
+    };
+    for (budget, scenario) in [
+        ("github-plan-copy-seconds-unchanged", "unchanged"),
+        ("github-plan-copy-points-changed", "changed"),
+        ("github-plan-copy-content-creations", "first"),
+    ] {
+        let valid = json!({"budget": budget, "value": 5.25, "detail": "recorded",
+            "plan": super::plan_copy::WORKLOAD, "board": super::plan_copy::SMALL,
+            "scenario": scenario});
+        let with = |field: &str, value: Value| {
+            let mut changed = valid.clone();
+            changed[field] = value;
+            Some(changed)
+        };
+        let other = if scenario == "first" {
+            "unchanged"
+        } else {
+            "first"
+        };
+        for (recorded, message) in [
+            (None, "no telemetry"),
+            (
+                with("plan", json!("a 24-image bundle")),
+                "not of the generated 10-item plan",
+            ),
+            (
+                with("board", json!(super::plan_copy::LARGE)),
+                "not of a board of 2000 items",
+            ),
+            (with("scenario", json!(other)), "scenario"),
+            (with("budget", json!("another-budget")), "different budget"),
+            (with("value", json!(-1.0)), "missing nonnegative figure"),
+            (with("detail", json!(null)), "missing detail"),
+        ] {
+            let (output, written) = run(budget, recorded);
+            assert!(!output.status.success(), "{budget}: accepted {message}");
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains(message),
+                "{budget}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(written, None, "{budget}: reported a figure over {message}");
+        }
+        let (output, written) = run(budget, Some(valid));
+        assert!(
+            output.status.success(),
+            "{budget}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let written: Value = serde_json::from_str(&written.expect("a figure")).unwrap();
+        assert_eq!(written["value"], json!(5.25), "{budget}: {written}");
+    }
+}
+
+/// What `approval.rs` recorded, refused unless it is that journey's recording of the approval
+/// sequence on a board of 2,000 items over a plan of eight tasks and one document, with each
+/// call of the sequence in its breakdown and their points adding up to the figure.
+fn approval_calls_of(value: &Value) -> Result<(f64, String), String> {
+    use super::approval::{CALLS, WORKLOAD};
+    if value["workload"].as_str() != Some(WORKLOAD) {
+        return Err("the recording is not of the approval sequence".into());
+    }
+    if value["board"].as_u64() != Some(super::plan_copy::SMALL as u64)
+        || value["tasks"].as_u64() != Some(super::plan_copy::TASKS as u64)
+        || value["documents"].as_u64() != Some(1)
+    {
+        return Err(
+            "the recording is not of a project of 8 tasks and 1 document on a board of 2000 items"
+                .into(),
+        );
+    }
+    let figure = value["value"]
+        .as_u64()
+        .ok_or("missing whole-number figure")?;
+    let calls = value["calls"].as_array().ok_or("missing call breakdown")?;
+    if calls.len() != CALLS.len() {
+        return Err("the breakdown does not name the approval's calls in order".into());
+    }
+    let mut points = 0;
+    for (call, named) in calls.iter().zip(CALLS) {
+        if call["call"].as_str() != Some(named) {
+            return Err("the breakdown does not name the approval's calls in order".into());
+        }
+        let (Some(_), Some(spent)) = (call["requests"].as_u64(), call["points"].as_u64()) else {
+            return Err("a call of the breakdown has no whole requests and points".into());
+        };
+        points = u64::checked_add(points, spent).ok_or("the breakdown's points overflow")?;
+    }
+    if points != figure {
+        return Err("the breakdown does not add up to the figure".into());
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
+}
+
+#[test]
+fn the_approval_report_entry_hands_over_only_a_recording_of_the_approval() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    use serde_json::json;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("approval");
+    std::fs::create_dir_all(&directory).unwrap();
+    let budget = super::approval::BUDGET;
+    let run = |recorded: &Value| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
+        std::fs::write(&path, recorded.to_string()).unwrap();
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_approval_calls",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        (output, std::fs::read_to_string(&result).ok())
+    };
+    let calls: Vec<Value> = super::approval::CALLS
+        .iter()
+        .map(|call| json!({"call": call, "requests": 1, "points": 1}))
+        .collect();
+    let valid = json!({"budget": budget, "value": calls.len(), "detail": "recorded",
+        "workload": super::approval::WORKLOAD, "board": super::plan_copy::SMALL,
+        "tasks": super::plan_copy::TASKS, "documents": 1, "calls": calls});
+    let (output, written) = run(&valid);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let written: Value = serde_json::from_str(&written.expect("a figure")).unwrap();
+    assert_eq!(
+        written["value"].as_f64(),
+        Some(super::approval::CALLS.len() as f64),
+        "{written}"
+    );
+
+    let mut other = valid.clone();
+    other["workload"] = json!("a plan copy");
+    let (output, written) = run(&other);
+    assert!(!output.status.success(), "accepted another workload");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("not of the approval sequence"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(written, None, "reported a figure over another workload");
+}
+
+#[test]
+fn the_approval_report_hands_over_the_recorded_figure_and_refuses_another_workload() {
+    use serde_json::json;
+    let calls: Vec<Value> = super::approval::CALLS
+        .iter()
+        .map(|call| {
+            // The guarded write is a read and the write, each a point.
+            let spent = if call.starts_with("document metadata set") {
+                2
+            } else {
+                1
+            };
+            json!({"call": call, "requests": spent, "points": spent})
+        })
+        .collect();
+    let valid = json!({"budget": super::approval::BUDGET, "value": 5, "detail": "recorded",
+        "workload": super::approval::WORKLOAD, "board": super::plan_copy::SMALL,
+        "tasks": super::plan_copy::TASKS, "documents": 1, "calls": calls});
+    assert_eq!(approval_calls_of(&valid), Ok((5.0, "recorded".to_owned())));
+    let with = |pointer: &str, replaced: Value| {
+        let mut changed = valid.clone();
+        *changed.pointer_mut(pointer).unwrap() = replaced;
+        changed
+    };
+    for (recorded, refusal) in [
+        (
+            with("/workload", json!("a plan copy")),
+            "not of the approval sequence",
+        ),
+        (
+            with("/board", json!(super::plan_copy::LARGE)),
+            "board of 2000 items",
+        ),
+        (with("/tasks", json!(9)), "8 tasks and 1 document"),
+        (
+            with("/calls/1/call", json!("project list")),
+            "calls in order",
+        ),
+        (with("/calls/1/call", json!(null)), "calls in order"),
+        (
+            {
+                let mut longer = valid.clone();
+                longer["calls"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"requests": 1, "points": 0}));
+                longer
+            },
+            "calls in order",
+        ),
+        (
+            with("/calls/2/requests", json!(-1)),
+            "no whole requests and points",
+        ),
+        (
+            with("/calls/3/points", json!(null)),
+            "no whole requests and points",
+        ),
+        (with("/value", json!(4)), "does not add up"),
+        (with("/value", json!(5.5)), "whole-number figure"),
+        (with("/detail", json!(null)), "missing detail"),
+    ] {
+        let refused = approval_calls_of(&recorded).expect_err(refusal);
+        assert!(refused.contains(refusal), "{refused}");
+    }
+}
 
 /// The workload `metadata_fields.rs` records: one follow-up copied once and re-copied twice
 /// unchanged, with a projected host and without one.

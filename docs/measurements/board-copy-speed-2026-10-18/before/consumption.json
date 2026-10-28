@@ -1,0 +1,291 @@
+{
+ "direct": {
+  "GET /rate_limit (quota readings, free)": 54,
+  "GET /rate_limit and GraphQL rateLimit by hand while diagnosing": 4,
+  "GraphQL dry runs (pricing.py), one per priced query": 7,
+  "GraphQL id lookup of the test board and its repository": 1,
+  "GraphQL rateLimit (quota readings, one request per query)": 14
+ },
+ "quota_readings": {
+  "GET /rate_limit": 54,
+  "GraphQL rateLimit": 14,
+  "after-run readings": 27,
+  "gate readings": 27
+ },
+ "runs": {
+  "adhoc-boardcheck-20261018T2057": {
+   "content_creating": 0,
+   "mutations": 0,
+   "points": 14,
+   "refused_by_proxy": 0,
+   "requests": 4,
+   "tunnels": 0,
+   "wall_seconds": 0.0
+  },
+  "cleanup-stock-20261018T202751": {
+   "content_creating": 0,
+   "mutations": 0,
+   "points": 1,
+   "refused_by_proxy": 0,
+   "requests": 1,
+   "tunnels": 0,
+   "wall_seconds": 0.0
+  },
+  "cleanup-stock-20261018T202916": {
+   "content_creating": 0,
+   "mutations": 18,
+   "points": 38,
+   "refused_by_proxy": 0,
+   "requests": 38,
+   "tunnels": 0,
+   "wall_seconds": 0.0
+  },
+  "cleanup-stock-20261018T203051": {
+   "content_creating": 0,
+   "mutations": 2,
+   "points": 22,
+   "refused_by_proxy": 0,
+   "requests": 22,
+   "tunnels": 0,
+   "wall_seconds": 0.0
+  },
+  "cleanup-stock-20261018T204448": {
+   "content_creating": 0,
+   "mutations": 10,
+   "points": 60,
+   "refused_by_proxy": 0,
+   "requests": 60,
+   "tunnels": 0,
+   "wall_seconds": 0.0
+  },
+  "cleanup-stock-20261018T204905": {
+   "content_creating": 0,
+   "mutations": 10,
+   "points": 70,
+   "refused_by_proxy": 0,
+   "requests": 70,
+   "tunnels": 0,
+   "wall_seconds": 0.0
+  },
+  "cleanup-stock-20261018T210922": {
+   "content_creating": 0,
+   "mutations": 30,
+   "points": 109,
+   "refused_by_proxy": 0,
+   "requests": 109,
+   "tunnels": 0,
+   "wall_seconds": 0.0
+  },
+  "host-approve-stock-20261018T204819": {
+   "content_creating": 0,
+   "mutations": 0,
+   "points": 8,
+   "refused_by_proxy": 0,
+   "requests": 4,
+   "tunnels": 0,
+   "wall_seconds": 10.7
+  },
+  "host-approve-stock-20261018T205238": {
+   "content_creating": 0,
+   "mutations": 1,
+   "points": 11,
+   "refused_by_proxy": 0,
+   "requests": 7,
+   "tunnels": 0,
+   "wall_seconds": 12.5
+  },
+  "host-copy-stock-20261018T204127": {
+   "content_creating": 0,
+   "mutations": 0,
+   "points": 0,
+   "refused_by_proxy": 0,
+   "requests": 0,
+   "tunnels": 0,
+   "wall_seconds": 1.9
+  },
+  "host-copy-stock-20261018T204218": {
+   "content_creating": 11,
+   "mutations": 49,
+   "points": 73,
+   "refused_by_proxy": 0,
+   "requests": 66,
+   "tunnels": 2,
+   "wall_seconds": 97.6
+  },
+  "host-copy-stock-20261018T204548": {
+   "content_creating": 11,
+   "mutations": 49,
+   "points": 73,
+   "refused_by_proxy": 0,
+   "requests": 66,
+   "tunnels": 2,
+   "wall_seconds": 104.7
+  },
+  "host-copy-stock-20261018T205013": {
+   "content_creating": 11,
+   "mutations": 49,
+   "points": 73,
+   "refused_by_proxy": 0,
+   "requests": 66,
+   "tunnels": 2,
+   "wall_seconds": 98.9
+  },
+  "host-recopy-stock-20261018T204737": {
+   "content_creating": 0,
+   "mutations": 9,
+   "points": 36,
+   "refused_by_proxy": 0,
+   "requests": 26,
+   "tunnels": 0,
+   "wall_seconds": 40.7
+  },
+  "host-recopy-stock-20261018T205156": {
+   "content_creating": 0,
+   "mutations": 9,
+   "points": 36,
+   "refused_by_proxy": 0,
+   "requests": 26,
+   "tunnels": 0,
+   "wall_seconds": 41.2
+  },
+  "plans-board-walk-stock-20261018T210253": {
+   "content_creating": 0,
+   "mutations": 0,
+   "points": 40,
+   "refused_by_proxy": 1,
+   "requests": 20,
+   "tunnels": 0,
+   "wall_seconds": 141.0
+  },
+  "plans-walk-stock-20261018T205305": {
+   "content_creating": 0,
+   "mutations": 0,
+   "points": 50,
+   "refused_by_proxy": 0,
+   "requests": 10,
+   "tunnels": 0,
+   "wall_seconds": 69.2
+  },
+  "probe-body-limit-stock-20261018T212430": {
+   "content_creating": 2,
+   "mutations": 3,
+   "points": 4,
+   "refused_by_proxy": 0,
+   "requests": 4,
+   "tunnels": 0,
+   "wall_seconds": 0.0
+  },
+  "probes-stock-20261018T205744": {
+   "content_creating": 9,
+   "mutations": 18,
+   "points": 20,
+   "refused_by_proxy": 0,
+   "requests": 20,
+   "tunnels": 0,
+   "wall_seconds": 0.0
+  },
+  "tb-changed-span-20261018T203717": {
+   "content_creating": 0,
+   "mutations": 10,
+   "points": 35,
+   "refused_by_proxy": 0,
+   "requests": 25,
+   "tunnels": 0,
+   "wall_seconds": 51.3
+  },
+  "tb-changed-stock-20261018T203638": {
+   "content_creating": 0,
+   "mutations": 10,
+   "points": 35,
+   "refused_by_proxy": 0,
+   "requests": 25,
+   "tunnels": 0,
+   "wall_seconds": 38.7
+  },
+  "tb-first-span-20261018T202215": {
+   "content_creating": 11,
+   "mutations": 49,
+   "points": 71,
+   "refused_by_proxy": 0,
+   "requests": 64,
+   "tunnels": 2,
+   "wall_seconds": 94.5
+  },
+  "tb-first-span-20261018T203458": {
+   "content_creating": 11,
+   "mutations": 49,
+   "points": 72,
+   "refused_by_proxy": 0,
+   "requests": 65,
+   "tunnels": 2,
+   "wall_seconds": 98.5
+  },
+  "tb-first-stock-20261018T201850": {
+   "content_creating": 11,
+   "mutations": 49,
+   "points": 71,
+   "refused_by_proxy": 0,
+   "requests": 64,
+   "tunnels": 2,
+   "wall_seconds": 97.4
+  },
+  "tb-first-stock-20261018T203321": {
+   "content_creating": 11,
+   "mutations": 49,
+   "points": 72,
+   "refused_by_proxy": 0,
+   "requests": 65,
+   "tunnels": 2,
+   "wall_seconds": 94.9
+  },
+  "tb-list-pages-stock-20261018T205548": {
+   "content_creating": 0,
+   "mutations": 0,
+   "points": 40,
+   "refused_by_proxy": 0,
+   "requests": 8,
+   "tunnels": 0,
+   "wall_seconds": 51.8
+  },
+  "tb-unchanged-span-20261018T203848": {
+   "content_creating": 0,
+   "mutations": 9,
+   "points": 34,
+   "refused_by_proxy": 0,
+   "requests": 24,
+   "tunnels": 0,
+   "wall_seconds": 41.6
+  },
+  "tb-unchanged-stock-20261018T203810": {
+   "content_creating": 0,
+   "mutations": 9,
+   "points": 34,
+   "refused_by_proxy": 0,
+   "requests": 24,
+   "tunnels": 0,
+   "wall_seconds": 36.9
+  }
+ },
+ "totals": {
+  "all_points": 1228,
+  "all_requests": 1063,
+  "content_creating": 88,
+  "direct_points": 26,
+  "direct_requests": 80,
+  "hand_counted_requests": 5,
+  "mutations": 491,
+  "points": 1202,
+  "requests": 983,
+  "wall_seconds": 1224.0
+ },
+ "writes": {
+  "issue_or_item_ids_named": 1047,
+  "mutations_naming": {
+   "core repository": 20,
+   "other repository or project": 0,
+   "scratch repository": 58,
+   "test board project": 645
+  },
+  "named_ids_this_spike_did_not_create": 0
+ }
+}

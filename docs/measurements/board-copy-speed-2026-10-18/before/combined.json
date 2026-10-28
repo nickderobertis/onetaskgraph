@@ -1,0 +1,65 @@
+{
+ "plans": {
+  "approval_listing_processes": 3,
+  "board_page_seconds": 6.948,
+  "board_pages_per_walk": 20,
+  "search_page_seconds": 6.791,
+  "search_pages_per_walk": 10
+ },
+ "scenarios": {
+  "host-approve-stock-20261018T205238": {
+   "arithmetic": "12.5 s measured - 4.2 s of 0 BOARD + 1 SEARCH test-board pages + 0 x 6.95 s + 30 x 6.79 s = 212 s",
+   "board_pages": 0,
+   "points": 156,
+   "requests": 36,
+   "search_pages": 30,
+   "seconds": 212.0,
+   "walk_share": 0.961
+  },
+  "host-copy-stock-20261018T205013": {
+   "arithmetic": "98.9 s measured - 13.1 s of 1 BOARD + 2 SEARCH test-board pages + 20 x 6.95 s + 20 x 6.79 s = 361 s",
+   "board_pages": 20,
+   "points": 201,
+   "requests": 103,
+   "search_pages": 20,
+   "seconds": 360.6,
+   "walk_share": 0.762
+  },
+  "host-recopy-stock-20261018T205156": {
+   "arithmetic": "41.2 s measured - 15.3 s of 2 BOARD + 2 SEARCH test-board pages + 40 x 6.95 s + 20 x 6.79 s = 440 s",
+   "board_pages": 40,
+   "points": 202,
+   "requests": 82,
+   "search_pages": 20,
+   "seconds": 439.5,
+   "walk_share": 0.941
+  },
+  "tb-changed-span-20261018T203717": {
+   "arithmetic": "51.3 s measured - 24.2 s of 2 BOARD + 2 SEARCH test-board pages + 40 x 6.95 s + 20 x 6.79 s = 441 s",
+   "board_pages": 40,
+   "points": 201,
+   "requests": 81,
+   "search_pages": 20,
+   "seconds": 440.8,
+   "walk_share": 0.938
+  },
+  "tb-first-span-20261018T203458": {
+   "arithmetic": "98.5 s measured - 13.6 s of 1 BOARD + 2 SEARCH test-board pages + 20 x 6.95 s + 20 x 6.79 s = 360 s",
+   "board_pages": 20,
+   "points": 200,
+   "requests": 102,
+   "search_pages": 20,
+   "seconds": 359.6,
+   "walk_share": 0.764
+  },
+  "tb-unchanged-span-20261018T203848": {
+   "arithmetic": "41.6 s measured - 19.9 s of 2 BOARD + 2 SEARCH test-board pages + 40 x 6.95 s + 20 x 6.79 s = 435 s",
+   "board_pages": 40,
+   "points": 200,
+   "requests": 80,
+   "search_pages": 20,
+   "seconds": 435.4,
+   "walk_share": 0.95
+  }
+ }
+}

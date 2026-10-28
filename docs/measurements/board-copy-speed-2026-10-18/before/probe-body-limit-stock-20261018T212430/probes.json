@@ -1,0 +1,81 @@
+{
+ "findings": [
+  {
+   "probe": "createIssue Wide77KB",
+   "shape": {
+    "data": {
+     "createIssue": {
+      "issue": {
+       "id": "str",
+       "number": "int"
+      }
+     }
+    }
+   },
+   "errors": [],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "3931",
+    "x-ratelimit-reset": "1792361720",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "1069"
+   },
+   "body": {
+    "bytes": 77000,
+    "chars": 63500
+   }
+  },
+  {
+   "probe": "createIssue Ascii66000",
+   "shape": {
+    "data": {
+     "createIssue": {
+      "issue": null
+     }
+    },
+    "errors": [
+     {
+      "type": "str",
+      "path": [
+       "str",
+       "... 1 items"
+      ],
+      "locations": [
+       {
+        "line": "int",
+        "column": "int"
+       },
+       "... 1 items"
+      ],
+      "message": "str"
+     },
+     "... 1 items"
+    ]
+   },
+   "errors": [
+    {
+     "type": "UNPROCESSABLE",
+     "path": [
+      "createIssue"
+     ],
+     "message": "Body is too long (maximum is 65536 characters)"
+    }
+   ],
+   "limits": {
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-remaining": "3929",
+    "x-ratelimit-reset": "1792361720",
+    "x-ratelimit-resource": "graphql",
+    "x-ratelimit-used": "1071"
+   },
+   "body": {
+    "bytes": 66000,
+    "chars": 66000
+   }
+  },
+  {
+   "probe": "deleted",
+   "left": 0
+  }
+ ]
+}

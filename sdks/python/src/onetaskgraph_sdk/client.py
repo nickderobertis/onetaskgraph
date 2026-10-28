@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import shutil
 import subprocess
@@ -116,6 +115,11 @@ class Client(GeneratedClient):
         a body there must never block on the caller's own terminal, and one given no body reads
         an empty one and says so rather than waiting.
         """
+        # Imported here rather than with the module: a caller that only validates a document
+        # the binary printed never starts a process, and asyncio is a large share of the
+        # import a short-lived caller would otherwise pay for nothing.
+        import asyncio
+
         process = await asyncio.create_subprocess_exec(
             *arguments,
             cwd=self.cwd,

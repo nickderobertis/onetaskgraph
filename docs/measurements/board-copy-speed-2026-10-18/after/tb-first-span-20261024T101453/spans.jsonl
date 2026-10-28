@@ -1,0 +1,210 @@
+{"attrs": {}, "end": 1792836896.693494, "span": "copy.readings", "start": 1792836896.693475}
+{"attrs": {}, "end": 1792836896.706799, "span": "copy.project_tasks", "start": 1792836896.693674}
+{"attrs": {}, "end": 1792836896.706933, "span": "copy.project_members", "start": 1792836896.693664}
+{"attrs": {}, "end": 1792836896.707407, "span": "copy.read_for_copy", "start": 1792836896.707007}
+{"attrs": {}, "end": 1792836896.707493, "span": "copy.prefetch", "start": 1792836896.707493}
+{"attrs": {}, "end": 1792836896.707869, "span": "copy.read_for_copy", "start": 1792836896.707552}
+{"attrs": {}, "end": 1792836896.714905, "span": "copy.read_for_copy", "start": 1792836896.707928}
+{"attrs": {}, "end": 1792836896.715338, "span": "copy.read_for_copy", "start": 1792836896.715}
+{"attrs": {}, "end": 1792836896.715709, "span": "copy.read_for_copy", "start": 1792836896.715398}
+{"attrs": {}, "end": 1792836896.716147, "span": "copy.read_for_copy", "start": 1792836896.715766}
+{"attrs": {}, "end": 1792836896.716515, "span": "copy.read_for_copy", "start": 1792836896.716219}
+{"attrs": {}, "end": 1792836896.716853, "span": "copy.read_for_copy", "start": 1792836896.716576}
+{"attrs": {}, "end": 1792836896.72234, "span": "copy.read_for_copy", "start": 1792836896.716903}
+{"attrs": {"attempt": "1", "kind": "query"}, "end": 1792836899.291079, "span": "send_once", "start": 1792836896.722672}
+{"attrs": {}, "end": 1792836899.291949, "span": "copy.scan", "start": 1792836899.291927}
+{"attrs": {}, "end": 1792836899.298117, "span": "copy.target", "start": 1792836899.291922}
+{"attrs": {}, "end": 1792836899.298187, "span": "copy.aim", "start": 1792836899.291433}
+{"attrs": {}, "end": 1792836899.298245, "span": "copy.plan_read", "start": 1792836899.291423}
+{"attrs": {}, "end": 1792836899.306292, "span": "copy.scan", "start": 1792836899.306241}
+{"attrs": {}, "end": 1792836899.30638, "span": "copy.target", "start": 1792836899.306234}
+{"attrs": {}, "end": 1792836899.30643, "span": "copy.aim", "start": 1792836899.298319}
+{"attrs": {}, "end": 1792836899.306487, "span": "copy.plan_read", "start": 1792836899.298304}
+{"attrs": {}, "end": 1792836899.315673, "span": "copy.scan", "start": 1792836899.315647}
+{"attrs": {}, "end": 1792836899.315765, "span": "copy.target", "start": 1792836899.315642}
+{"attrs": {}, "end": 1792836899.315815, "span": "copy.aim", "start": 1792836899.306546}
+{"attrs": {}, "end": 1792836899.31587, "span": "copy.plan_read", "start": 1792836899.306539}
+{"attrs": {}, "end": 1792836899.32379, "span": "copy.scan", "start": 1792836899.323764}
+{"attrs": {}, "end": 1792836899.32388, "span": "copy.target", "start": 1792836899.323758}
+{"attrs": {}, "end": 1792836899.32393, "span": "copy.aim", "start": 1792836899.315927}
+{"attrs": {}, "end": 1792836899.324137, "span": "copy.plan_read", "start": 1792836899.315921}
+{"attrs": {}, "end": 1792836899.330604, "span": "copy.scan", "start": 1792836899.330578}
+{"attrs": {}, "end": 1792836899.330686, "span": "copy.target", "start": 1792836899.330572}
+{"attrs": {}, "end": 1792836899.330728, "span": "copy.aim", "start": 1792836899.324196}
+{"attrs": {}, "end": 1792836899.330789, "span": "copy.plan_read", "start": 1792836899.324188}
+{"attrs": {}, "end": 1792836899.335218, "span": "copy.scan", "start": 1792836899.335191}
+{"attrs": {}, "end": 1792836899.3353, "span": "copy.target", "start": 1792836899.335186}
+{"attrs": {}, "end": 1792836899.335343, "span": "copy.aim", "start": 1792836899.330865}
+{"attrs": {}, "end": 1792836899.335388, "span": "copy.plan_read", "start": 1792836899.330858}
+{"attrs": {}, "end": 1792836899.347662, "span": "copy.scan", "start": 1792836899.347631}
+{"attrs": {}, "end": 1792836899.347765, "span": "copy.target", "start": 1792836899.347626}
+{"attrs": {}, "end": 1792836899.352094, "span": "copy.aim", "start": 1792836899.335441}
+{"attrs": {}, "end": 1792836899.352301, "span": "copy.plan_read", "start": 1792836899.335434}
+{"attrs": {}, "end": 1792836899.369293, "span": "copy.scan", "start": 1792836899.369267}
+{"attrs": {}, "end": 1792836899.369413, "span": "copy.target", "start": 1792836899.369263}
+{"attrs": {}, "end": 1792836899.369452, "span": "copy.aim", "start": 1792836899.352381}
+{"attrs": {}, "end": 1792836899.369489, "span": "copy.plan_read", "start": 1792836899.352362}
+{"attrs": {}, "end": 1792836899.37971, "span": "copy.scan", "start": 1792836899.379678}
+{"attrs": {}, "end": 1792836899.379787, "span": "copy.target", "start": 1792836899.379673}
+{"attrs": {}, "end": 1792836899.37983, "span": "copy.aim", "start": 1792836899.369534}
+{"attrs": {}, "end": 1792836899.379871, "span": "copy.plan_read", "start": 1792836899.369527}
+{"attrs": {}, "end": 1792836899.37995, "span": "copy.carried", "start": 1792836899.379936}
+{"attrs": {}, "end": 1792836899.38108, "span": "copy.outgoing", "start": 1792836899.379936}
+{"attrs": {}, "end": 1792836899.381167, "span": "copy.carried", "start": 1792836899.38116}
+{"attrs": {}, "end": 1792836899.381216, "span": "copy.outgoing", "start": 1792836899.38116}
+{"attrs": {}, "end": 1792836899.381302, "span": "copy.carried", "start": 1792836899.381299}
+{"attrs": {}, "end": 1792836899.38135, "span": "copy.outgoing", "start": 1792836899.381299}
+{"attrs": {}, "end": 1792836899.381395, "span": "copy.carried", "start": 1792836899.381393}
+{"attrs": {}, "end": 1792836899.381441, "span": "copy.outgoing", "start": 1792836899.381393}
+{"attrs": {}, "end": 1792836899.381483, "span": "copy.carried", "start": 1792836899.381481}
+{"attrs": {}, "end": 1792836899.381529, "span": "copy.outgoing", "start": 1792836899.381481}
+{"attrs": {}, "end": 1792836899.381569, "span": "copy.carried", "start": 1792836899.381568}
+{"attrs": {}, "end": 1792836899.381616, "span": "copy.outgoing", "start": 1792836899.381568}
+{"attrs": {}, "end": 1792836899.381668, "span": "copy.carried", "start": 1792836899.381666}
+{"attrs": {}, "end": 1792836899.384047, "span": "copy.outgoing", "start": 1792836899.381665}
+{"attrs": {}, "end": 1792836899.3842, "span": "copy.carried", "start": 1792836899.384191}
+{"attrs": {}, "end": 1792836899.38426, "span": "copy.outgoing", "start": 1792836899.38419}
+{"attrs": {}, "end": 1792836899.384309, "span": "copy.carried", "start": 1792836899.384306}
+{"attrs": {}, "end": 1792836899.384367, "span": "copy.outgoing", "start": 1792836899.384306}
+{"attrs": {}, "end": 1792836899.384417, "span": "copy.preflight_copy", "start": 1792836899.379928}
+{"attrs": {}, "end": 1792836899.38456, "span": "copy.carried", "start": 1792836899.384554}
+{"attrs": {}, "end": 1792836899.384613, "span": "copy.outgoing", "start": 1792836899.384554}
+{"attrs": {}, "end": 1792836899.384941, "span": "compose_body", "start": 1792836899.384892}
+{"attrs": {"attempt": "1", "kind": "mutation"}, "end": 1792836900.138099, "span": "send_once", "start": 1792836899.385142}
+{"attrs": {}, "end": 1792836900.138552, "span": "copy.write", "start": 1792836899.384551}
+{"attrs": {}, "end": 1792836900.138639, "span": "copy.land", "start": 1792836899.384547}
+{"attrs": {}, "end": 1792836900.138736, "span": "copy.copy_items", "start": 1792836899.384524}
+{"attrs": {}, "end": 1792836900.138972, "span": "copy.carried", "start": 1792836900.138958}
+{"attrs": {}, "end": 1792836900.139039, "span": "copy.outgoing", "start": 1792836900.138957}
+{"attrs": {}, "end": 1792836900.139146, "span": "copy.carried", "start": 1792836900.139143}
+{"attrs": {}, "end": 1792836900.139214, "span": "copy.outgoing", "start": 1792836900.139143}
+{"attrs": {}, "end": 1792836900.139296, "span": "copy.carried", "start": 1792836900.139294}
+{"attrs": {}, "end": 1792836900.139366, "span": "copy.outgoing", "start": 1792836900.139294}
+{"attrs": {}, "end": 1792836900.139444, "span": "copy.carried", "start": 1792836900.139441}
+{"attrs": {}, "end": 1792836900.139522, "span": "copy.outgoing", "start": 1792836900.13944}
+{"attrs": {}, "end": 1792836900.139654, "span": "copy.carried", "start": 1792836900.13965}
+{"attrs": {}, "end": 1792836900.139758, "span": "copy.outgoing", "start": 1792836900.13965}
+{"attrs": {}, "end": 1792836900.139836, "span": "copy.carried", "start": 1792836900.139833}
+{"attrs": {}, "end": 1792836900.139942, "span": "copy.outgoing", "start": 1792836900.139833}
+{"attrs": {}, "end": 1792836900.140095, "span": "copy.carried", "start": 1792836900.140092}
+{"attrs": {}, "end": 1792836900.140213, "span": "copy.outgoing", "start": 1792836900.140092}
+{"attrs": {}, "end": 1792836900.14032, "span": "copy.carried", "start": 1792836900.140318}
+{"attrs": {}, "end": 1792836900.140438, "span": "copy.outgoing", "start": 1792836900.140317}
+{"attrs": {}, "end": 1792836900.140869, "span": "compose_body", "start": 1792836900.14082}
+{"attrs": {}, "end": 1792836900.14112, "span": "compose_body", "start": 1792836900.141056}
+{"attrs": {}, "end": 1792836900.141433, "span": "compose_body", "start": 1792836900.141362}
+{"attrs": {}, "end": 1792836900.141768, "span": "compose_body", "start": 1792836900.141689}
+{"attrs": {}, "end": 1792836900.14211, "span": "compose_body", "start": 1792836900.142036}
+{"attrs": {}, "end": 1792836900.142458, "span": "compose_body", "start": 1792836900.142384}
+{"attrs": {}, "end": 1792836900.142775, "span": "compose_body", "start": 1792836900.142699}
+{"attrs": {}, "end": 1792836900.143107, "span": "compose_body", "start": 1792836900.143032}
+{"attrs": {"attempt": "1", "kind": "mutation"}, "end": 1792836905.644552, "span": "send_once", "start": 1792836900.144429}
+{"attrs": {}, "end": 1792836905.645937, "span": "copy.carried", "start": 1792836905.645925}
+{"attrs": {}, "end": 1792836905.646025, "span": "copy.outgoing", "start": 1792836905.645924}
+{"attrs": {}, "end": 1792836905.646416, "span": "compose_body", "start": 1792836905.646402}
+{"attrs": {}, "end": 1792836905.646664, "span": "copy.write", "start": 1792836905.645923}
+{"attrs": {}, "end": 1792836905.646724, "span": "copy.land", "start": 1792836905.645918}
+{"attrs": {}, "end": 1792836905.646796, "span": "copy.carried", "start": 1792836905.64679}
+{"attrs": {}, "end": 1792836905.646849, "span": "copy.outgoing", "start": 1792836905.646789}
+{"attrs": {}, "end": 1792836905.647153, "span": "compose_body", "start": 1792836905.647146}
+{"attrs": {}, "end": 1792836905.647343, "span": "copy.write", "start": 1792836905.646789}
+{"attrs": {}, "end": 1792836905.647382, "span": "copy.land", "start": 1792836905.646788}
+{"attrs": {}, "end": 1792836905.647433, "span": "copy.carried", "start": 1792836905.64743}
+{"attrs": {}, "end": 1792836905.647505, "span": "copy.outgoing", "start": 1792836905.64743}
+{"attrs": {}, "end": 1792836905.647855, "span": "compose_body", "start": 1792836905.647841}
+{"attrs": {}, "end": 1792836905.650826, "span": "copy.write", "start": 1792836905.647429}
+{"attrs": {}, "end": 1792836905.650913, "span": "copy.land", "start": 1792836905.647429}
+{"attrs": {}, "end": 1792836905.650998, "span": "copy.carried", "start": 1792836905.650989}
+{"attrs": {}, "end": 1792836905.651055, "span": "copy.outgoing", "start": 1792836905.650988}
+{"attrs": {}, "end": 1792836905.651461, "span": "compose_body", "start": 1792836905.651438}
+{"attrs": {}, "end": 1792836905.651672, "span": "copy.write", "start": 1792836905.650987}
+{"attrs": {}, "end": 1792836905.651714, "span": "copy.land", "start": 1792836905.650984}
+{"attrs": {}, "end": 1792836905.651777, "span": "copy.carried", "start": 1792836905.651774}
+{"attrs": {}, "end": 1792836905.651828, "span": "copy.outgoing", "start": 1792836905.651773}
+{"attrs": {}, "end": 1792836905.652252, "span": "compose_body", "start": 1792836905.652246}
+{"attrs": {}, "end": 1792836905.652489, "span": "copy.write", "start": 1792836905.651773}
+{"attrs": {}, "end": 1792836905.652543, "span": "copy.land", "start": 1792836905.651772}
+{"attrs": {}, "end": 1792836905.652604, "span": "copy.carried", "start": 1792836905.6526}
+{"attrs": {}, "end": 1792836905.652655, "span": "copy.outgoing", "start": 1792836905.6526}
+{"attrs": {}, "end": 1792836905.652984, "span": "compose_body", "start": 1792836905.652975}
+{"attrs": {}, "end": 1792836905.653322, "span": "copy.write", "start": 1792836905.652599}
+{"attrs": {}, "end": 1792836905.65337, "span": "copy.land", "start": 1792836905.652598}
+{"attrs": {}, "end": 1792836905.653431, "span": "copy.carried", "start": 1792836905.653427}
+{"attrs": {}, "end": 1792836905.653524, "span": "copy.outgoing", "start": 1792836905.653427}
+{"attrs": {}, "end": 1792836905.653955, "span": "compose_body", "start": 1792836905.653951}
+{"attrs": {}, "end": 1792836905.65431, "span": "copy.write", "start": 1792836905.653427}
+{"attrs": {}, "end": 1792836905.654357, "span": "copy.land", "start": 1792836905.653425}
+{"attrs": {}, "end": 1792836905.654425, "span": "copy.carried", "start": 1792836905.654418}
+{"attrs": {}, "end": 1792836905.654484, "span": "copy.outgoing", "start": 1792836905.654418}
+{"attrs": {}, "end": 1792836905.654862, "span": "compose_body", "start": 1792836905.654857}
+{"attrs": {}, "end": 1792836905.655066, "span": "copy.write", "start": 1792836905.654418}
+{"attrs": {}, "end": 1792836905.655112, "span": "copy.land", "start": 1792836905.654416}
+{"attrs": {}, "end": 1792836905.655189, "span": "copy.copy_items", "start": 1792836900.138812}
+{"attrs": {}, "end": 1792836905.655245, "span": "copy.copy_project", "start": 1792836899.384468}
+{"attrs": {}, "end": 1792836905.655293, "span": "copy.copy_projects", "start": 1792836896.707006}
+{"attrs": {}, "end": 1792836905.655365, "span": "copy.repair", "start": 1792836905.655363}
+{"attrs": {}, "end": 1792836905.655422, "span": "copy.record_dependents", "start": 1792836905.655417}
+{"attrs": {}, "end": 1792836905.655466, "span": "copy.record_members", "start": 1792836905.655466}
+{"attrs": {"attempt": "1", "kind": "query"}, "end": 1792836905.973372, "span": "send_once", "start": 1792836905.655557}
+{"attrs": {"attempt": "1", "kind": "query"}, "end": 1792836907.289504, "span": "send_once", "start": 1792836906.984186}
+{"attrs": {"attempt": "1", "kind": "mutation"}, "end": 1792836911.12457, "span": "send_once", "start": 1792836907.289766}
+{"attrs": {"attempt": "1", "kind": "mutation"}, "end": 1792836911.944583, "span": "send_once", "start": 1792836911.124823}
+{"attrs": {"attempt": "1", "kind": "mutation"}, "end": 1792836915.188549, "span": "send_once", "start": 1792836911.944837}
+{"attrs": {}, "end": 1792836916.036658, "span": "copy.link", "start": 1792836915.188791}
+{"attrs": {}, "end": 1792836916.036757, "span": "copy.copy_all", "start": 1792836896.693663}
+{"attrs": {}, "end": 1792836916.036813, "span": "copy.deliver", "start": 1792836916.036812}
+{"attrs": {}, "end": 1792836916.036863, "span": "copy.deliver", "start": 1792836916.036863}
+{"attrs": {}, "end": 1792836916.036936, "span": "copy.deliver", "start": 1792836916.036936}
+{"attrs": {}, "end": 1792836916.036984, "span": "copy.deliver", "start": 1792836916.036984}
+{"attrs": {}, "end": 1792836916.037029, "span": "copy.deliver", "start": 1792836916.037029}
+{"attrs": {}, "end": 1792836916.037077, "span": "copy.deliver", "start": 1792836916.037077}
+{"attrs": {}, "end": 1792836916.037118, "span": "copy.deliver", "start": 1792836916.037117}
+{"attrs": {}, "end": 1792836916.037162, "span": "copy.deliver", "start": 1792836916.037162}
+{"attrs": {}, "end": 1792836916.03726, "span": "copy.readings", "start": 1792836916.037212}
+{"attrs": {}, "end": 1792836916.037371, "span": "copy.copy", "start": 1792836896.693426}
+{"attrs": {}, "end": 1792836916.042659, "span": "cli.run", "start": 1792836896.599005}
+{"attrs": {}, "end": 1792836916.042851, "span": "process", "start": 1792836896.580026}
+{"attrs": {}, "end": 1792836916.145848, "span": "copy.readings", "start": 1792836916.145814}
+{"attrs": {}, "end": 1792836916.145966, "span": "copy.prefetch", "start": 1792836916.145966}
+{"attrs": {}, "end": 1792836916.146544, "span": "copy.read_for_copy", "start": 1792836916.146012}
+{"attrs": {"attempt": "1", "kind": "query"}, "end": 1792836917.63641, "span": "send_once", "start": 1792836916.146932}
+{"attrs": {"attempt": "1", "kind": "query"}, "end": 1792836919.218292, "span": "send_once", "start": 1792836917.651606}
+{"attrs": {"attempt": "1", "kind": "query"}, "end": 1792836920.128691, "span": "send_once", "start": 1792836919.219048}
+{"attrs": {"attempt": "1", "kind": "query"}, "end": 1792836920.824688, "span": "send_once", "start": 1792836920.129394}
+{"attrs": {"attempt": "1", "kind": "query"}, "end": 1792836921.730327, "span": "send_once", "start": 1792836920.825881}
+{"attrs": {}, "end": 1792836921.731392, "span": "copy.scan", "start": 1792836921.731374}
+{"attrs": {}, "end": 1792836921.731454, "span": "copy.target", "start": 1792836921.731371}
+{"attrs": {}, "end": 1792836921.731507, "span": "copy.aim", "start": 1792836921.730608}
+{"attrs": {}, "end": 1792836921.73156, "span": "copy.plan_read", "start": 1792836921.73058}
+{"attrs": {}, "end": 1792836921.748734, "span": "copy.project_tasks", "start": 1792836921.736883}
+{"attrs": {}, "end": 1792836921.749509, "span": "copy.project_documents", "start": 1792836921.748933}
+{"attrs": {}, "end": 1792836921.74959, "span": "copy.referents", "start": 1792836921.731632}
+{"attrs": {}, "end": 1792836921.759577, "span": "copy.counterparts", "start": 1792836921.759555}
+{"attrs": {}, "end": 1792836921.771009, "span": "copy.substitute", "start": 1792836921.75969}
+{"attrs": {}, "end": 1792836921.771267, "span": "copy.rewrite_references", "start": 1792836921.731629}
+{"attrs": {}, "end": 1792836921.771375, "span": "copy.carried", "start": 1792836921.771368}
+{"attrs": {}, "end": 1792836921.771437, "span": "copy.outgoing", "start": 1792836921.771368}
+{"attrs": {}, "end": 1792836921.771511, "span": "copy.preflight_copy", "start": 1792836921.771359}
+{"attrs": {"attempt": "1", "kind": "query"}, "end": 1792836922.314335, "span": "send_once", "start": 1792836921.771634}
+{"attrs": {}, "end": 1792836922.314868, "span": "copy.carried", "start": 1792836922.314852}
+{"attrs": {}, "end": 1792836922.314964, "span": "copy.outgoing", "start": 1792836922.314851}
+{"attrs": {"operation": "upload"}, "end": 1792836923.24277, "span": "asset_request", "start": 1792836922.315505}
+{"attrs": {"operation": "verification"}, "end": 1792836924.160412, "span": "asset_request", "start": 1792836923.242896}
+{"attrs": {}, "end": 1792836924.164354, "span": "upload_assets", "start": 1792836922.315292}
+{"attrs": {}, "end": 1792836924.164885, "span": "compose_body", "start": 1792836924.16486}
+{"attrs": {"attempt": "1", "kind": "mutation"}, "end": 1792836925.299217, "span": "send_once", "start": 1792836924.165035}
+{"attrs": {}, "end": 1792836925.299573, "span": "copy.write", "start": 1792836922.314849}
+{"attrs": {}, "end": 1792836925.299639, "span": "copy.land", "start": 1792836922.314845}
+{"attrs": {}, "end": 1792836925.299711, "span": "copy.copy_items", "start": 1792836921.731629}
+{"attrs": {}, "end": 1792836925.299773, "span": "copy.repair", "start": 1792836925.29977}
+{"attrs": {}, "end": 1792836925.299837, "span": "copy.record_dependents", "start": 1792836925.299836}
+{"attrs": {}, "end": 1792836925.299886, "span": "copy.record_members", "start": 1792836925.299885}
+{"attrs": {"attempt": "1", "kind": "query"}, "end": 1792836925.616965, "span": "send_once", "start": 1792836925.300096}
+{"attrs": {"attempt": "1", "kind": "query"}, "end": 1792836926.987401, "span": "send_once", "start": 1792836926.618205}
+{"attrs": {"attempt": "1", "kind": "mutation"}, "end": 1792836927.756604, "span": "send_once", "start": 1792836926.987644}
+{"attrs": {}, "end": 1792836927.80445, "span": "copy.link", "start": 1792836927.756845}
+{"attrs": {}, "end": 1792836927.804514, "span": "copy.copy_all", "start": 1792836916.145945}
+{"attrs": {}, "end": 1792836927.804589, "span": "copy.readings", "start": 1792836927.804553}
+{"attrs": {}, "end": 1792836927.804639, "span": "copy.copy", "start": 1792836916.145784}
+{"attrs": {}, "end": 1792836927.805989, "span": "cli.run", "start": 1792836916.081855}
+{"attrs": {}, "end": 1792836927.806108, "span": "process", "start": 1792836916.061785}

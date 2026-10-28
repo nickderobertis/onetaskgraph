@@ -110,6 +110,16 @@ fn a_shared_board_smaller_than_the_measured_one_runs_and_bills_within_the_budget
 }
 
 #[test]
+fn a_task_the_search_index_reports_late_within_the_bound_is_waited_for_and_the_journey_proceeds() {
+    run_pair("search-behind");
+}
+
+#[test]
+fn a_task_the_search_index_never_reports_ends_the_wait_at_its_bound_naming_that_task() {
+    run_pair("search-never");
+}
+
+#[test]
 fn missing_or_unadmitted_board_observations_never_start_the_fixture_or_make_a_bill() {
     for scenario in ["missing-items", "missing-fields", "board-91", "board-50"] {
         run_pair(scenario);
@@ -221,6 +231,53 @@ fn run_pair(scenario: &str) {
         assert!(!records.join("assets.json").exists());
         return;
     }
+    if scenario == "search-never" {
+        assert_eq!(outputs.len(), 1);
+        assert!(!outputs[0].status.success());
+        let said = String::from_utf8_lossy(&outputs[0].stderr);
+        // How long the wait really took is the stand-in's to measure, against
+        // `journey::STAND_IN_FIXTURE_WAIT`'s 3-second deadline, so its verdict comes first.
+        assert!(
+            fixture_status.success(),
+            "{}",
+            std::fs::read_to_string(directory.join("fixture.log")).unwrap()
+        );
+        assert!(
+            said.contains("the live fixture never became readable: after waiting ")
+                && said.contains(
+                    "s against a deadline of 3s, GitHub's issue search for titles \
+                     onetaskgraph live cleanup ci-37616803489-2-*"
+                )
+                // The stand-in parks every search after the first attempt, so the deadline always
+                // falls inside one.
+                && said.contains("a search still unanswered at the deadline was abandoned"),
+            "{said}"
+        );
+        assert!(
+            said.contains("never reported the task \"onetaskgraph live cleanup ci-37616803489-2-")
+                && said.contains(
+                    "which a read by its own id finds on the board, so the index was behind on it"
+                ),
+            "{said}"
+        );
+        assert_eq!(
+            said.matches("which a read by its own id").count(),
+            1,
+            "only the one task the search left out is named: {said}"
+        );
+        // When each item it did report first appeared, for the bound to be read against.
+        assert!(
+            said.contains("the last search it answered, attempt ")
+                && said.contains("each item reported was first reported at \"onetaskgraph live cleanup ci-37616803489-2-"),
+            "{said}"
+        );
+        let main: SessionRecord =
+            serde_json::from_slice(&std::fs::read(records.join("main.json")).unwrap()).unwrap();
+        assert!(!main.complete);
+        assert!(main.calls.iter().any(|call| call.phase == Phase::Cleanup));
+        assert!(!records.join("assets.json").exists());
+        return;
+    }
     if scenario == "malformed-ceiling" {
         assert_eq!(outputs.len(), 1);
         assert!(!outputs[0].status.success());
@@ -310,7 +367,7 @@ fn run_pair(scenario: &str) {
         // Every read document of `graphql::DOCUMENTS` is reconciled, the closed-items read of
         // `task status reconcile` and the read by issue reference of `task status complete` among
         // them.
-        assert!(said.contains("20 documents agreed"));
+        assert!(said.contains("26 documents agreed"), "{said}");
         assert!(!outputs[1].status.success());
         assert!(
             String::from_utf8_lossy(&outputs[1].stderr)
@@ -323,12 +380,25 @@ fn run_pair(scenario: &str) {
         );
         let main: SessionRecord =
             serde_json::from_slice(&std::fs::read(records.join("main.json")).unwrap()).unwrap();
-        let probes: Vec<_> = main
+        // The phase opens with its recheck, which reads the budgets again under the 40% rule
+        // with the two reads the session's admission made first; what is counted here is what
+        // follows, the reconciliation's own.
+        let budget_reads: Vec<&str> = main.calls[..2]
+            .iter()
+            .map(|call| call.operation_sha256.as_str())
+            .collect();
+        let phase: Vec<_> = main
             .calls
             .iter()
             .filter(|call| call.phase == Phase::Reconciliation)
             .collect();
-        assert_eq!(probes.len(), 23);
+        let rechecked = phase
+            .iter()
+            .take(budget_reads.len())
+            .take_while(|call| budget_reads.contains(&call.operation_sha256.as_str()))
+            .count();
+        let probes: Vec<_> = phase[rechecked..].to_vec();
+        assert_eq!(probes.len(), 29);
         assert_eq!(
             probes[1].outcome,
             if scenario == "aliases" {
@@ -387,6 +457,42 @@ fn run_pair(scenario: &str) {
                 .unwrap();
         assert!(read_bill(&records, &current).is_err());
         return;
+    }
+    if scenario == "search-behind" {
+        // A passing run prints when the search reported each item, which is what the bound
+        // is checked against; the late task is reported at an attempt after the first.
+        let said = String::from_utf8_lossy(&outputs[0].stderr);
+        let converged = said
+            .lines()
+            .find(|line| line.starts_with("the live fixture converged: "))
+            .unwrap_or_else(|| panic!("no convergence record: {said}"));
+        assert!(
+            converged.contains("reported all 5 of its items at attempt ")
+                && !converged.contains("at attempt 1,"),
+            "{converged}"
+        );
+        // Each item's first report, measured from when its own write was answered: the task
+        // the stand-in held back for 1.2s after creating it is the latest, at least 1s on.
+        let lags = converged
+            .split_once("this long after its own write was answered: ")
+            .map_or_else(Vec::new, |(_, figures)| {
+                figures
+                    .split(", ")
+                    .map(|figure| {
+                        figure
+                            .rsplit(' ')
+                            .next()
+                            .and_then(|seconds| seconds.strip_suffix('s'))
+                            .and_then(|seconds| seconds.parse::<f64>().ok())
+                            .unwrap_or_else(|| panic!("no lag in {figure:?}: {converged}"))
+                    })
+                    .collect()
+            });
+        assert_eq!(lags.len(), 5, "{converged}");
+        assert!(
+            lags.iter().copied().fold(0.0, f64::max) >= 1.0,
+            "{converged}"
+        );
     }
     for output in outputs {
         assert!(

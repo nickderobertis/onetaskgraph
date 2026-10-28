@@ -13,7 +13,7 @@
 //! against every source kind — `scripts/check-journey-matrix.sh` fails when a plugin the
 //! registry knows has no row in it.
 
-use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary};
+use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary, onevcs};
 
 // Image assets on tasks and documents: stored, listed, rendered and copied through the
 // binary against folders of Markdown and the Python asset store over a real pipe.
@@ -32,9 +32,6 @@ mod assets;
 // configuration's, so they cannot sit behind one plugin crate's edge, which AGENTS.md forbids
 // depending on the engine at any depth.
 mod boundary;
-// The released onevcs boundary commands and the onevcs home `boundary` registers its synthetic
-// identities in, used by those journeys alone.
-mod onevcs;
 // The simulated clock: its coordinator driven by real client processes over loopback, and the
 // binary attaching to it. No source and no third party; nothing waits in real time but the
 // deliberate few hundred milliseconds of computing a scenario needs to prove time holds still.
@@ -100,6 +97,13 @@ mod document_store;
 // cannot sit behind a plugin crate's edge, which AGENTS.md forbids depending on the engine at
 // any depth; the protocol's half is proven in `onetaskgraph-core`'s own `tests/subprocess.rs`.
 mod end_command;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against folders of Markdown and
+// loopback Linear workspaces, with no credential and no network, in a few seconds. Which sources
+// a dependency read asks, and how a public write names a private prerequisite, are the engine's
+// rules, so they cannot sit behind a plugin crate's edge, which AGENTS.md forbids depending on
+// the engine at any depth.
+mod edge_scope;
 mod failures;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown, with
@@ -132,6 +136,14 @@ mod priority;
 // seconds. Creating and regenerating a project is the engine's, so it cannot sit behind a
 // plugin crate's edge, which AGENTS.md forbids depending on the engine at any depth.
 mod project_render;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against folders of Markdown, in
+// process and over the stdio plugin protocol, and an in-memory source, with no credential and no
+// network, in about a second. `project status set` and its refusals are the engine's and the
+// binary's, so they cannot sit behind a plugin crate's edge, which AGENTS.md forbids depending on
+// the engine at any depth; the GitHub board's and the Linear workspace's halves are proven behind
+// their own plugins' edges, in their e2e suites.
+mod project_status;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown, an
 // in-memory source and the loopback GitHub board, with no credential and no network, in a few

@@ -33,12 +33,17 @@ fn open_issue(id: &str, title: &str, status: &str) -> Value {
 
 impl Setup {
     fn new(items: Vec<Value>) -> Self {
+        Self::mapped(items, json!({"todo":"Todo","in-progress":"In Progress"}))
+    }
+
+    /// The same setup with the board's `status_mapping` set to `mapping`.
+    fn mapped(items: Vec<Value>, mapping: Value) -> Self {
         let sandbox = Sandbox::new();
         let snapshot = sandbox.subdirectory("snapshot");
         std::fs::create_dir_all(snapshot.join("tasks")).expect("the snapshot's task folder");
         let (mut config, board) = github_projects_with_items(&sandbox, items);
         board.with_status_option("OPT-in-progress", "In Progress");
-        config["status_mapping"] = json!({"todo":"Todo","in-progress":"In Progress"});
+        config["status_mapping"] = mapping;
         sandbox.project_document(&document(&json!({
             "board": {"plugin":"github-projects","config":config},
             "snapshot": {"plugin":"local-md","config":{"root":snapshot,"status_mapping":{
@@ -207,4 +212,216 @@ fn an_issue_closed_as_completed_in_an_option_the_mapping_does_not_name_keeps_tha
     );
     assert!(setup.listed("done").contains(&"C-5".to_owned()));
     assert_eq!(setup.copied_status("C-5"), "Shipped");
+}
+
+/// One project issue on the board — open, at `status` — whose issue holds `sub` as its one
+/// sub-issue, which is what makes it a project item; and that sub-issue, an open task at `Todo`.
+fn home_with_sub_issue(id: &str, sub: &str, status: &str) -> [Value; 2] {
+    let mut task = open_issue(sub, &format!("Task of {id}"), "Todo");
+    task["parent"] = json!(id);
+    [open_issue(id, &format!("Plan {id}"), status), task]
+}
+
+/// A board for the reconcile journeys: a project closed as completed at `In Progress` (`H-1`), a
+/// project closed as not planned at `Todo` (`H-2`), a task closed as completed at `Todo` (`C-7`),
+/// an open project at `In Progress` (`H-3`) and a project closed as completed already at `Done`
+/// (`H-4`) — the project kind's `cancelled` mapped to its own `Abandoned` option, so each card's
+/// destination is its own kind's.
+fn reconcile_setup() -> Setup {
+    let mut items = Vec::new();
+    items.extend(home_with_sub_issue("H-1", "S-1", "In Progress"));
+    items.extend(home_with_sub_issue("H-2", "S-2", "Todo"));
+    items.push(open_issue("C-7", "Closed against its card", "Todo"));
+    items.extend(home_with_sub_issue("H-3", "S-3", "In Progress"));
+    items.extend(home_with_sub_issue("H-4", "S-4", "Done"));
+    let setup = Setup::mapped(
+        items,
+        json!({"todo":"Todo","in-progress":"In Progress",
+               "cancelled":{"task":"Cancelled","project":"Abandoned"}}),
+    );
+    setup.board.with_status_option("OPT-abandoned", "Abandoned");
+    // The shared dataset's one closed task sits at an option the mapping does not name;
+    // reopened, so every closed item on this board is one this journey put there.
+    setup.board.reopen("T-2");
+    setup.board.close("H-1", Some("COMPLETED"));
+    setup.board.close("H-2", Some("NOT_PLANNED"));
+    setup.board.close("C-7", Some("COMPLETED"));
+    setup.board.close("H-4", Some("COMPLETED"));
+    setup
+}
+
+/// Every item [`reconcile_setup`] holds, by id.
+const RECONCILED: [&str; 9] = [
+    "H-1", "S-1", "H-2", "S-2", "C-7", "H-3", "S-3", "H-4", "S-4",
+];
+
+/// What a reconcile of [`reconcile_setup`] owes, each item at `action`.
+fn reconcile_owed(action: &str) -> Value {
+    json!({"items": [
+        {"source":"board:H-1","kind":"project","from":"In Progress",
+         "to":{"category":"done","name":"Done"},"action":action},
+        {"source":"board:H-2","kind":"project","from":"Todo",
+         "to":{"category":"cancelled","name":"Abandoned"},"action":action},
+        {"source":"board:C-7","kind":"task","from":"Todo",
+         "to":{"category":"done","name":"Done"},"action":action},
+    ]})
+}
+
+/// One item as the board holds it: its id, its card's option, and its issue's state and reason.
+type Held = (String, Option<String>, (String, Option<String>));
+
+impl Setup {
+    /// Each item's card and its issue's state and reason.
+    fn held(&self, ids: &[&str]) -> Vec<Held> {
+        ids.iter()
+            .map(|id| {
+                (
+                    (*id).to_owned(),
+                    self.board.status(id),
+                    self.board.state(id),
+                )
+            })
+            .collect()
+    }
+
+    /// Every request the board was sent: each read's document, and each mutation as its root
+    /// field and the board item it writes.
+    fn requests(&self) -> (Vec<String>, Vec<(String, Value)>) {
+        let (mutations, reads): (Vec<_>, Vec<_>) = self
+            .board
+            .served()
+            .into_iter()
+            .partition(|(document, _)| document.trim_start().starts_with("mutation"));
+        (
+            reads.into_iter().map(|(document, _)| document).collect(),
+            mutations
+                .into_iter()
+                .map(|(document, variables)| {
+                    if document.contains("updateProjectV2ItemFieldValue(input:") {
+                        ("option".to_owned(), variables["input"]["itemId"].clone())
+                    } else {
+                        (document, variables)
+                    }
+                })
+                .collect(),
+        )
+    }
+}
+
+#[test]
+fn a_reconcile_brings_each_closed_project_and_task_card_in_line_with_its_own_kinds_option() {
+    let setup = reconcile_setup();
+    let before = setup.held(&RECONCILED);
+    let answer = setup.json(&["--json", "task", "status", "reconcile", "--source", "board"]);
+    assert_eq!(answer, reconcile_owed("updated"), "{answer:#}");
+
+    let after = setup.held(&RECONCILED);
+    for ((id, card, state), (_, was, was_state)) in after.iter().zip(&before) {
+        let owed = match id.as_str() {
+            "H-1" | "C-7" => Some("Done".to_owned()),
+            "H-2" => Some("Abandoned".to_owned()),
+            _ => was.clone(),
+        };
+        assert_eq!(card, &owed, "{id}'s card");
+        assert_eq!(state, was_state, "{id}'s issue keeps its state and reason");
+    }
+    let (reads, mutations) = setup.requests();
+    assert!(!reads.is_empty(), "the reconcile read the board");
+    assert!(
+        reads
+            .iter()
+            .all(|read| read == onetaskgraph_github_projects::graphql::CLOSED_ITEMS),
+        "only the board's is:closed filtered read, never its unfiltered items: {reads:#?}"
+    );
+    assert_eq!(
+        mutations,
+        vec![
+            ("option".to_owned(), json!("ITEM-H-1")),
+            ("option".to_owned(), json!("ITEM-H-2")),
+            ("option".to_owned(), json!("ITEM-C-7")),
+        ],
+        "one option write per listed item, and no write of any issue"
+    );
+
+    let human = reconcile_setup();
+    let output = human.run(&["task", "status", "reconcile", "--source", "board"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let said = stdout(&output);
+    assert!(
+        said.contains("project board:H-1: In Progress -> Done (done): updated")
+            && said.contains("project board:H-2: Todo -> Abandoned (cancelled): updated")
+            && said.contains("\nboard:C-7: Todo -> Done (done): updated")
+            && said.contains("3 updated, 0 would update, 0 failed"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_dry_run_reconcile_answers_would_update_for_the_same_items_and_writes_nothing() {
+    let setup = reconcile_setup();
+    let before = setup.held(&RECONCILED);
+    let answer = setup.json(&[
+        "--json",
+        "task",
+        "status",
+        "reconcile",
+        "--source",
+        "board",
+        "--dry-run",
+    ]);
+    assert_eq!(answer, reconcile_owed("would-update"), "{answer:#}");
+    assert_eq!(setup.held(&RECONCILED), before);
+    let (reads, mutations) = setup.requests();
+    assert!(
+        mutations.is_empty(),
+        "a dry run writes nothing: {mutations:?}"
+    );
+    assert!(
+        reads
+            .iter()
+            .all(|read| read == onetaskgraph_github_projects::graphql::CLOSED_ITEMS),
+        "{reads:#?}"
+    );
+}
+
+#[test]
+fn the_library_reconcile_answers_what_the_command_line_answers() {
+    let cli = reconcile_setup();
+    let answer = cli.json(&["--json", "task", "status", "reconcile", "--source", "board"]);
+
+    let library = reconcile_setup();
+    let environment = onetaskgraph_core::Environment::from_pairs([(
+        "XDG_CONFIG_HOME",
+        library.sandbox.config_home().to_string_lossy().into_owned(),
+    )]);
+    let loaded = onetaskgraph_core::config::load(
+        &library.sandbox.project(),
+        &environment,
+        &onetaskgraph_core::config::Layer::default(),
+    )
+    .expect("the configuration loads");
+    let engine = onetaskgraph_core::Engine::build(&loaded.config, &loaded.secrets);
+    let board = onetaskgraph_plugin_api::SourceName::new("board").expect("a name");
+    let reconciled = tokio::runtime::Runtime::new()
+        .expect("a runtime")
+        .block_on(engine.reconcile_statuses(&board, false))
+        .expect("the reconcile runs")
+        .expect("a board declares reconcile_status");
+    assert_eq!(
+        reconciled
+            .items
+            .iter()
+            .map(|item| item.kind)
+            .collect::<Vec<_>>(),
+        [
+            onetaskgraph_plugin_api::ItemKind::Project,
+            onetaskgraph_plugin_api::ItemKind::Project,
+            onetaskgraph_plugin_api::ItemKind::Task,
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(&reconciled).expect("it serialises"),
+        answer
+    );
+    assert_eq!(library.board.status("H-2").as_deref(), Some("Abandoned"));
 }

@@ -25,8 +25,8 @@
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{
-    DependencyEdge, DependencyEndpoint, DependencyKind, ItemKind, MetadataMatch, NativeId,
-    SourceError, SourceName, Task,
+    DependencyEdge, DependencyEndpoint, DependencyKind, ItemKind, MetadataKey, MetadataMatch,
+    NativeId, SourceError, SourceName, Task,
 };
 use serde_json::{Map, Value};
 
@@ -204,7 +204,7 @@ pub(crate) fn recorded_edges(task: &Task) -> Result<Vec<DependencyEdge>, SourceE
 /// Whether `error` says a source could not be asked at all — its credential absent or refused,
 /// it unreachable, or it asking to be asked later — rather than that it answered: with a record
 /// that cannot be read, a refusal of the request, or word that its configuration is wrong.
-fn could_not_answer(error: &SourceError) -> bool {
+pub(crate) fn could_not_answer(error: &SourceError) -> bool {
     matches!(
         error,
         SourceError::Auth { .. }
@@ -239,6 +239,44 @@ impl Engine {
         &failure.source != subject
             && could_not_answer(&failure.error)
             && self.recording_sources(subject).contains(&failure.source)
+    }
+
+    /// Whether a dependency read of `task`, held by `source`, asks the sources declared private
+    /// what they record of it: only when `source` is not declared private itself, `task` was
+    /// landed by a copy — it carries [`MetadataKey::COPIED_DESTINATION_VERSION_KEY`] — and that
+    /// copy did not mark every edge of it as on its own record, with
+    /// [`MetadataKey::EDGES_ON_RECORD_KEY`]. Nothing else can have had an edge of it kept on a
+    /// private source's side, so nothing else costs a private source a request.
+    pub(crate) fn reads_recorded_for(&self, source: &SourceName, task: &Task) -> bool {
+        self.declared(source) != SourceVisibility::Private
+            && task
+                .metadata
+                .contains_key(MetadataKey::COPIED_DESTINATION_VERSION_KEY)
+            && !task.metadata.contains_key(MetadataKey::EDGES_ON_RECORD_KEY)
+    }
+
+    /// The sources a forward dependency read of task `native` of `near` asks what they record of
+    /// it: [`recording_sources`](Self::recording_sources) when
+    /// [`reads_recorded_for`](Self::reads_recorded_for) holds of the task as `near` reads it now,
+    /// and none otherwise. A task `near` cannot be asked for is asked of every one, because
+    /// what it records cannot then be ruled out.
+    pub(crate) async fn recording_sources_for(
+        &self,
+        near: &SourceName,
+        native: &NativeId,
+    ) -> Vec<SourceName> {
+        let recording = self.recording_sources(near);
+        if recording.is_empty() {
+            return recording;
+        }
+        let Some(source) = self.ready_source(near) else {
+            return recording;
+        };
+        match source.get_task(native).await {
+            Ok(Some(task)) if self.reads_recorded_for(near, &task) => recording,
+            Ok(_) => Vec::new(),
+            Err(_) => recording,
+        }
     }
 
     /// Every configured source that may record a dependent from `near`: each one declared

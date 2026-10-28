@@ -36,7 +36,7 @@ use super::{
 ///
 /// `tests/context.rs` pins it beside the shape [`context_shapes`] answers, so a change to what a
 /// context holds that does not move this number fails there.
-pub const CONTEXT_VERSION: u64 = 3;
+pub const CONTEXT_VERSION: u64 = 4;
 
 /// The JSON Schema of the task context and the board context this source hands the store.
 #[must_use]
@@ -75,6 +75,10 @@ pub(super) struct Held {
     learnt: Mutex<BTreeMap<NativeId, BTreeMap<NativeId, String>>>,
     /// The comments a primed context says each issue holds, `None` where it read none.
     primed: Mutex<BTreeMap<NativeId, Option<BTreeMap<NativeId, String>>>>,
+    /// The design documents this process read by id, as it resolved them: what a write of one
+    /// the engine has just held to that read's version takes instead of reading it again, handed
+    /// back through [`GitHubProjectsSource::context_of`]. Dropped with the command.
+    documents: Mutex<BTreeMap<NativeId, Resolved>>,
     /// Issues an expected write was primed for and then let go of — to read afresh after a
     /// stale id — which still send only what differs from what they read, so a part that
     /// already landed is not sent again. Dropped with the command.
@@ -140,15 +144,19 @@ impl Held {
         held(&self.learnt).insert(issue.clone(), comments);
     }
 
-    /// Whether a write of `id` was primed from the store's cache: a write expecting a version,
-    /// which sends only what differs from it.
-    pub(super) fn is_primed(&self, id: &NativeId) -> bool {
-        held(&self.primed).contains_key(id) || held(&self.narrowed).contains(id)
-    }
-
-    /// Forget every issue an expected write let go of: a new command writes as it always did.
+    /// Forget every issue an expected write let go of, and every document read: a new command
+    /// writes as it always did.
     pub(super) fn end_command(&self) {
         held(&self.narrowed).clear();
+        held(&self.documents).clear();
+    }
+
+    /// Keep `item`, a design document a read by id resolved, as what an expected write of it
+    /// may take.
+    pub(super) fn read_document(&self, item: &Resolved) {
+        if item.kind == BoardKind::Document {
+            held(&self.documents).insert(item.id.clone(), item.clone());
+        }
     }
 
     /// The body comment `comment` holds on `issue`, by a primed context: `Some(Some(body))`
@@ -246,12 +254,24 @@ fn outcome(sent: &Result<Value, SourceError>) -> PartOutcome {
 
 impl GitHubProjectsSource {
     /// The context of `id`: the record this process last resolved for it, and the comments it
-    /// read on it.
+    /// read on it — or, for a design document, the record its last read by id resolved, which
+    /// carries no comments because a document's write never touches one.
     pub(super) fn context_of(&self, id: &NativeId) -> Option<Value> {
-        let item = self.resolved_cache().ok()?.get(id).cloned()?;
-        if item.kind != BoardKind::Work(ItemKind::Task) {
-            return None;
-        }
+        let task = self
+            .resolved_cache()
+            .ok()?
+            .get(id)
+            .filter(|item| item.kind == BoardKind::Work(ItemKind::Task))
+            .cloned();
+        let Some(item) = task else {
+            let item = held(&self.expected.documents).get(id).cloned()?;
+            return serde_json::to_value(Context {
+                version: CONTEXT_VERSION,
+                item,
+                comments: None,
+            })
+            .ok();
+        };
         let comments = held(&self.expected.learnt).get(id).cloned();
         serde_json::to_value(Context {
             version: CONTEXT_VERSION,
@@ -286,11 +306,15 @@ impl GitHubProjectsSource {
         let Ok(context) = serde_json::from_value::<Context>(context.clone()) else {
             return false;
         };
-        // Only a task of this board primes a task's write: a context naming a project or a
-        // document is not one this write may take.
+        // Only a task or a design document of this board primes a write: a context naming a
+        // project is not one any write may take. A write of the other kind than the context's
+        // finds no item of its own kind in it, and answers exactly as it would after a read.
         if context.version != CONTEXT_VERSION
             || context.item.id != *id
-            || context.item.kind != BoardKind::Work(ItemKind::Task)
+            || !matches!(
+                context.item.kind,
+                BoardKind::Work(ItemKind::Task) | BoardKind::Document
+            )
         {
             return false;
         }

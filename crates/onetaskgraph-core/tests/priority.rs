@@ -40,6 +40,7 @@ fn copy_to(destination: &str, items: &[&str]) -> CopyRequest {
         items: CopyItems::new(items.iter().map(|item| id(item)).collect()).expect("items"),
         scope: CopyScope::Tasks,
         destination: SourceName::new(destination).expect("a name"),
+        target_task: None,
         match_by: None,
         recreate: false,
         create: false,
@@ -47,6 +48,7 @@ fn copy_to(destination: &str, items: &[&str]) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
     }
 }
@@ -219,6 +221,8 @@ async fn a_narrow_priority_or_content_write_answers_the_task_and_refuses_what_ca
             .expect("sets"),
         TaskContentSet {
             id: id("work:T-1"),
+            // A source that reports nothing of what it stores holds exactly the bytes sent.
+            content: "new body\n".to_owned(),
             result: None,
             fallback: None,
             spent: None,

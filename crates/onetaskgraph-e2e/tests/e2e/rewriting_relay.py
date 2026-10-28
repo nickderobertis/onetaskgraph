@@ -15,10 +15,18 @@ answer, so the engine reads the handshake of a plugin written before that member
 must never send it the method the member declares — which `log` lets a journey prove, as the
 name of every method the engine sent, one per line.
 
+It can also be the engine being interrupted: given `"interrupt": <method>, "interrupt_skip": <n>,
+"interrupt_marker": <path>` together, once the host has answered that method the `n + 1`th time —
+so whatever it was asked to write is written — the relay ends the engine that spawned it before
+the engine reads the answer, exactly as a process killed part way through a command is, and
+writes the marker. A marker already there turns the interruption off, so the next invocation
+over the same configuration is the run that resumes.
+
 Its settings, handed over in the `initialize` request (§3), are
 `{"host": <path>, "kind": <plugin>, "config": <its block>}`, the last two being what the host is
 initialized with, and optionally `"after": <method>, "skip": <n>, "file": <path>,
-"text": <string>` together, `"forget": [<member>, ...]` and `"log": <path>`.
+"text": <string>` together, the three interruption members together, `"forget": [<member>, ...]`
+and `"log": <path>`.
 
 It imports nothing outside the standard library and uses no syntax newer than Python 3.8,
 because the engine spawns it with a cleared environment (§3.1) through whichever `python3` or
@@ -35,6 +43,8 @@ because the engine spawns it with a cleared environment (§3.1) through whicheve
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -84,11 +94,46 @@ class Rewrite:
 
 
 @dataclass(frozen=True)
+class Interruption:
+    """The engine ended once the host has answered `method` `skip + 1` times, unless `marker` is there."""
+
+    method: str
+    skip: int
+    marker: str
+
+    @classmethod
+    def taken_from(cls, settings):
+        """Remove the interruption's members from `settings`, or `None` when it names none."""
+        if "interrupt" not in settings:
+            return None
+        skip = settings.pop("interrupt_skip", None)
+        if not isinstance(skip, int) or isinstance(skip, bool) or skip < 0:
+            raise SystemExit(
+                "rewriting relay: setting 'interrupt_skip' must be a count of zero or more, "
+                f"got {skip!r}"
+            )
+        return cls(
+            method=text_setting(settings, "interrupt"),
+            skip=skip,
+            marker=text_setting(settings, "interrupt_marker"),
+        )
+
+    def end_engine(self):
+        """Record that the interruption happened, then end the engine that spawned this relay."""
+        with open(self.marker, "w", encoding="utf-8", newline="\n") as marker:
+            marker.write("interrupted\n")
+        # There is no SIGKILL on Windows, where SIGTERM is `TerminateProcess` and as abrupt.
+        os.kill(os.getppid(), getattr(signal, "SIGKILL", signal.SIGTERM))
+        raise SystemExit(0)
+
+
+@dataclass(frozen=True)
 class Relay:
     """The relay's own settings, taken out of the `initialize` request before it is forwarded."""
 
     host: str
     rewrite: Rewrite | None
+    interruption: Interruption | None
     forget: tuple[str, ...]
     log: str | None
 
@@ -111,6 +156,7 @@ class Relay:
         return cls(
             host=text_setting(settings, "host"),
             rewrite=Rewrite.taken_from(settings),
+            interruption=Interruption.taken_from(settings),
             forget=tuple(forget),
             log=log,
         )
@@ -155,6 +201,10 @@ def main():
     )
     answered = 0
     written = False
+    interrupting = relay.interruption is not None and not os.path.exists(
+        relay.interruption.marker
+    )
+    asked = 0
 
     def relayed(line):
         host.stdin.write(line)
@@ -191,6 +241,10 @@ def main():
                     rewritten.write(rewrite.text)
                 written = True
             answered += 1
+        if interrupting and method == relay.interruption.method:
+            if asked == relay.interruption.skip:
+                relay.interruption.end_engine()
+            asked += 1
         sys.stdout.write(answer)
         sys.stdout.flush()
     host.stdin.close()

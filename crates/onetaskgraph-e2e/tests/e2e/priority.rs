@@ -358,7 +358,9 @@ fn a_content_set_replaces_the_body_with_the_files_bytes_and_moves_no_other_membe
                 file.to_str().expect("a UTF-8 path"),
             ],
         );
-        assert_eq!(set, json!({"id": id}), "{}", row.name);
+        // The content the task then holds: exactly the bytes sent, from a source that reports
+        // nothing else of what it stores.
+        assert_eq!(set, json!({"id": id, "content": body}), "{}", row.name);
         let human = exits(
             row.name,
             &sandbox,
@@ -664,6 +666,21 @@ fn priority_writes(board: &GitHubBoardFields) -> Vec<String> {
                                 .unwrap()
                                 .to_owned()
                         });
+                    }
+                }
+            } else if query == onetaskgraph_github_projects::graphql::WRITE_FIELD_VALUES {
+                // A copy's batch of the values of the items it created, each slot its own.
+                for slot in 0..onetaskgraph_github_projects::MUTATION_BATCH {
+                    let value = &variables[format!("field{slot}")];
+                    if variables[format!("send{slot}")] == true
+                        && value["fieldId"] == "FIELD-priority"
+                    {
+                        writes.push(
+                            value["value"]["singleSelectOptionId"]
+                                .as_str()
+                                .unwrap()
+                                .to_owned(),
+                        );
                     }
                 }
             } else if query.contains("clearProjectV2ItemFieldValue(input:$input)") {

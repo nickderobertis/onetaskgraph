@@ -84,6 +84,7 @@ fn many(items: &[&str], scope: CopyScope) -> CopyRequest {
             .expect("a copy names at least one item"),
         scope,
         destination: name("into"),
+        target_task: None,
         match_by: None,
         recreate: false,
         create: false,
@@ -91,6 +92,7 @@ fn many(items: &[&str], scope: CopyScope) -> CopyRequest {
         comments: false,
         no_link: false,
         expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
     }
 }
@@ -455,10 +457,13 @@ async fn every_reserved_key_has_the_owner_docs_metadata_states_on_an_update() {
         .clone();
     for (key, owner) in &owners {
         let expected = match owner.as_str() {
-            // The record this copy wrote: no token, because an in-memory source gives none, and
-            // no `copied_with_comments`, because this copy carried none — but a digest of what
-            // it left.
-            "the copy" if key == MetadataKey::COPIED_DESTINATION_VERSION_KEY => {
+            // The record this copy wrote: no `copied_with_comments`, because this copy carried
+            // none, but a digest of what it left — and, an in-memory source giving no token, a
+            // digest of what it composed of the source.
+            "the copy"
+                if key == MetadataKey::COPIED_DESTINATION_VERSION_KEY
+                    || key == MetadataKey::COPIED_VERSION_KEY =>
+            {
                 let held = metadata
                     .get(key)
                     .and_then(Value::as_str)
@@ -1082,6 +1087,113 @@ async fn a_task_copied_on_its_own_is_filed_under_the_destinations_own_counterpar
         copied.items[0].item.project,
         Some(onetaskgraph_plugin_api::NativeId::from("P-1"))
     );
+}
+
+/// `from:P-1`, whose copy in `home` is the plan's home, and `into:M`, the member that home
+/// names in `into`.
+fn plan_with_a_member() -> Engine {
+    plan_with_a_linked(
+        json!({GlobalId::ORIGIN_KEY: "from:P-1", "onetaskgraph.members": ["into:M"]}),
+    )
+}
+
+/// `from:P-1`, linked to `home:H` holding `home`, and `into:M` naming `home:H` as its home.
+fn plan_with_a_linked(home: Value) -> Engine {
+    let todo = json!({"category": "todo", "name": "Todo"});
+    engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {"projects": [{
+            "id": "P-1", "title": "Goal", "status": todo, "labels": [],
+            "metadata": {"onetaskgraph.copies": {"home": "home:H"}},
+        }]}},
+        "home": {"plugin": "in-memory", "config": {"projects": [{
+            "id": "H", "title": "Goal", "status": todo, "labels": [],
+            "metadata": home,
+        }]}},
+        "into": {"plugin": "in-memory", "config": {"projects": [{
+            "id": "M", "title": "Goal", "status": todo, "labels": [],
+            "metadata": {"onetaskgraph.member_of": "home:H"},
+        }]}},
+    }))
+}
+
+/// A Rust caller's project copy takes over the member of the plan its destination already
+/// holds, as the command line's does — unless the caller sets `create`, which says there is
+/// nothing at the destination to look for and is believed.
+#[tokio::test]
+async fn a_rust_caller_s_project_copy_takes_over_the_plan_s_member_unless_it_asks_to_create() {
+    let request = many(&["from:P-1"], CopyScope::Projects { tasks: false });
+    let engine = plan_with_a_member();
+    let copied = engine.copy(&request).await.expect("the copy runs");
+    assert_eq!(
+        landed(&copied.items[0]),
+        (Some("into:M".to_owned()), "updated".to_owned())
+    );
+    let held = &engine
+        .project(&id("into:M"))
+        .await
+        .expect("the show verb answers")
+        .items[0]
+        .item;
+    assert!(
+        !held.metadata.contains_key("onetaskgraph.member_of"),
+        "{held:?}"
+    );
+    assert_eq!(held.metadata[GlobalId::ORIGIN_KEY], json!("from:P-1"));
+
+    let engine = plan_with_a_member();
+    let created = engine
+        .copy(&CopyRequest {
+            create: true,
+            ..request
+        })
+        .await
+        .expect("the copy runs");
+    let (destination, action) = landed(&created.items[0]);
+    assert_eq!(action, "created");
+    assert_ne!(destination.as_deref(), Some("into:M"));
+    let member = &engine
+        .project(&id("into:M"))
+        .await
+        .expect("the show verb answers")
+        .items[0]
+        .item;
+    assert_eq!(member.metadata["onetaskgraph.member_of"], json!("home:H"));
+}
+
+/// A project the copied one links to is the plan's home only when it names that project back
+/// and is no member itself; otherwise the member it lists is somebody else's, and a project is
+/// created beside it rather than taking it over.
+#[tokio::test]
+async fn a_linked_project_that_is_not_the_plan_s_home_lends_no_member_to_take_over() {
+    for home in [
+        json!({GlobalId::ORIGIN_KEY: "from:OTHER", "onetaskgraph.members": ["into:M"]}),
+        json!({"onetaskgraph.members": ["into:M"]}),
+        json!({
+            GlobalId::ORIGIN_KEY: "from:P-1",
+            "onetaskgraph.members": ["into:M"],
+            "onetaskgraph.member_of": "elsewhere:X",
+        }),
+    ] {
+        let engine = plan_with_a_linked(home.clone());
+        let copied = engine
+            .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: false }))
+            .await
+            .expect("the copy runs");
+        let (destination, action) = landed(&copied.items[0]);
+        assert_eq!(action, "created", "{home}");
+        assert_ne!(destination.as_deref(), Some("into:M"), "{home}");
+        let member = &engine
+            .project(&id("into:M"))
+            .await
+            .expect("the show verb answers")
+            .items[0]
+            .item;
+        assert_eq!(
+            member.metadata["onetaskgraph.member_of"],
+            json!("home:H"),
+            "{home}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -2495,6 +2607,9 @@ struct Misbehaving {
     project: bool,
     /// Whether it declares documents, without which a copy never names it at either end.
     documents: bool,
+    /// Whether it declares `filter_by_origin`, which sends a copy's search for the records
+    /// copied from one origin to it as that one question rather than walking it.
+    origins: bool,
     /// The largest page it serves.
     ceiling: u32,
     /// Every page it has served, of any kind, counted so a test can show the walk stopped
@@ -2520,6 +2635,7 @@ impl Misbehaving {
             onset,
             project: false,
             documents: false,
+            origins: false,
             ceiling: 2,
             pages_served: Arc::new(AtomicU32::new(0)),
             tasks_written: AtomicU32::new(0),
@@ -2548,6 +2664,14 @@ impl Misbehaving {
     fn with_documents(self) -> Self {
         Self {
             documents: true,
+            ..self
+        }
+    }
+
+    /// The same source, declaring that it answers a question about one origin natively.
+    fn filtering_by_origin(self) -> Self {
+        Self {
+            origins: true,
             ..self
         }
     }
@@ -2710,7 +2834,11 @@ impl TaskSource for Misbehaving {
             filter_by_priority: Support::Unsupported,
             filter_by_comment_activity: Support::Unsupported,
             filter_by_metadata: Support::Unsupported,
-            filter_by_origin: Support::Unsupported,
+            filter_by_origin: if self.origins {
+                Support::Native
+            } else {
+                Support::Unsupported
+            },
             reconcile_status: Support::Unsupported,
             complete_by_issue: Support::Unsupported,
             orphan_tasks: Support::Native,
@@ -3407,6 +3535,96 @@ fn figures(report: &onetaskgraph_core::CopyReport) -> (u64, u64, u64) {
 }
 
 #[tokio::test]
+async fn a_reference_whose_link_no_longer_names_its_counterpart_is_found_by_its_origin() {
+    // Alpha's link names a record the destination no longer holds, and Beta's names one a
+    // person re-pointed at something else. Neither link is believed: each referent is asked
+    // for by its origin instead, and the document names the records that really are theirs.
+    let mut from = authoring_store(Some(("root:P-1", "root:A", "root:B")));
+    from["tasks"][0]["metadata"][MetadataKey::COPIES_KEY] = json!({"into": "into:GONE"});
+    from["tasks"][1]["metadata"][MetadataKey::COPIES_KEY] = json!({"into": "into:X"});
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": from},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", "/srv/into/board/A.md", Some("root:A")),
+                located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+                located("X", "Someone else's", "/srv/into/board/X.md", Some("elsewhere:X")),
+            ],
+        }},
+    }));
+    let report = copy_document(&engine, "from:D-1").await;
+    let landed = report.items[0]
+        .destination()
+        .expect("the document landed")
+        .to_string();
+    let content = body(&engine, &landed).await;
+    assert!(content.contains("`/srv/into/board/A.md`"), "{content}");
+    assert!(content.contains("`/srv/into/board/B.md`"), "{content}");
+    assert!(!content.contains("/srv/into/board/X.md"), "{content}");
+    assert_eq!(
+        figures(&report).0,
+        3,
+        "both tasks and the project are rewritten"
+    );
+}
+
+#[tokio::test]
+async fn a_reference_whose_link_is_answered_with_another_record_is_found_by_its_origin() {
+    // Alpha's link names X, and the destination answers a read of X with A1 — a record that
+    // does record Alpha's origin, but is not the one the link names. That answer says nothing
+    // about the link, so Alpha is asked for by its origin, which two records answer: the
+    // reference is ambiguous and left as it was, rather than pointed at whichever record the
+    // destination happened to answer with.
+    let mut from = authoring_store(Some(("root:P-1", "root:A", "root:B")));
+    from["tasks"][0]["metadata"][MetadataKey::COPIES_KEY] = json!({"into": "into:X"});
+    let into = json!({
+        "capabilities": {"documents": "native"},
+        "projects": [located_project("/srv/into/board", Some("root:P-1"))],
+        "tasks": [
+            located("A1", "Alpha", "/srv/into/board/A1.md", Some("root:A")),
+            located("A2", "Alpha again", "/srv/into/board/A2.md", Some("root:A")),
+            located("B", "Beta", "/srv/into/board/B.md", Some("root:B")),
+            located("X", "Someone else's", "/srv/into/board/X.md", Some("elsewhere:X")),
+        ],
+    });
+    let built = |source: &str, config: &Value| {
+        onetaskgraph_in_memory::Plugin
+            .build(&name(source), config, &NoSecrets)
+            .expect("the in-memory plugin builds")
+    };
+    let engine = Engine::new(
+        vec![
+            ConfiguredSource::Ready(ResolvedSource::adopt(name("from"), built("from", &from))),
+            ConfiguredSource::Ready(ResolvedSource::adopt(
+                name("into"),
+                Box::new(Careless {
+                    inner: built("into", &into),
+                    malformed: &[],
+                    misread: Some(("X", "A1")),
+                }),
+            )),
+        ],
+        vec![name("from"), name("into")],
+    );
+    let report = copy_document(&engine, "from:D-1").await;
+    let landed = report.items[0]
+        .destination()
+        .expect("the document landed")
+        .to_string();
+    let content = body(&engine, &landed).await;
+    assert!(!content.contains("/srv/into/board/A1.md"), "{content}");
+    assert!(content.contains("`/srv/from/plans/P-1/A.md`"), "{content}");
+    assert!(content.contains("`/srv/into/board/B.md`"), "{content}");
+    assert!(
+        figures(&report).2 >= 1,
+        "Alpha's reference is counted ambiguous: {:?}",
+        figures(&report)
+    );
+}
+
+#[tokio::test]
 async fn a_document_arrives_naming_the_destinations_own_records_across_a_one_level_fan_out() {
     // The fan-out: `root` is where all three records were authored, `from` and `into` are
     // the two stores they were copied into, and the document travels by the `from` route
@@ -3825,7 +4043,7 @@ fn board_holding_counterparts() -> Value {
 }
 
 #[tokio::test]
-async fn the_destination_is_walked_once_for_a_whole_invocation_and_not_at_all_for_nothing() {
+async fn each_referent_is_asked_for_once_for_a_whole_invocation_and_nothing_for_nothing() {
     let (engine, task_pages) =
         into_counting(two_documents_of_one_project(), board_holding_counterparts());
 
@@ -3833,13 +4051,15 @@ async fn the_destination_is_walked_once_for_a_whole_invocation_and_not_at_all_fo
         .copy(&many(&["from:D-1", "from:D-2"], CopyScope::Documents))
         .await
         .expect("the document copy runs");
-    // Three references apiece, and one walk serving both documents and every referent.
+    // Three references apiece. The destination is asked about each referent's two keys once
+    // for the whole invocation — Alpha's own id and its recorded origin, and Beta's — however
+    // many documents name them, and never walked: it answers a question about one origin.
     assert_eq!(figures(&report), (6, 0, 0));
     assert_eq!(
         task_pages.load(Ordering::Relaxed),
-        1,
-        "the destination is walked for counterparts once per copy invocation, not once \
-         per document"
+        4,
+        "the destination is asked for each referent's counterparts once per copy \
+         invocation, not once per document"
     );
 
     // A copy whose documents hold no candidate reference makes no such walk at all: the
@@ -4365,6 +4585,68 @@ async fn a_destination_whose_cursors_cycle_stops_the_walk_for_a_documents_refere
     );
 }
 
+/// A document copy into a destination answering a question about one origin natively, so the
+/// counterparts its references name are asked for one origin at a time rather than walked —
+/// and that question's own guards are what stop a destination misbehaving under it.
+async fn origin_question_refusal(fault: Fault) -> (String, u32) {
+    let (engine, pages) = into_misbehaving_over(
+        naming_every_level(),
+        Misbehaving::new(At::Tasks, fault, Onset::FirstRead)
+            .with_documents()
+            .filtering_by_origin(),
+    );
+    let refused = document_refusal(&engine).await;
+    // The pages the copy was served before its task level was asked are the same whatever
+    // the fault, so what each case adds to them is the walk it is about.
+    (
+        refused,
+        pages.load(Ordering::Relaxed) - ANSWERED_BEFORE_THE_TASK_LEVEL,
+    )
+}
+
+/// The pages a document copy over [`naming_every_level`] is served before its task level's
+/// question about one origin is asked.
+const ANSWERED_BEFORE_THE_TASK_LEVEL: u32 = 3;
+
+#[tokio::test]
+async fn a_destination_overrunning_its_page_under_the_origin_question_stops_the_copy() {
+    let (refused, pages) = origin_question_refusal(Fault::OverrunsThePage).await;
+    assert!(
+        refused.contains("the source returned 3 rows for a page of at most 2"),
+        "{refused}"
+    );
+    // The task level's first page, and nothing after it.
+    assert_eq!(pages, 1, "the question stopped at the page it refused");
+}
+
+#[tokio::test]
+async fn a_destination_repeating_its_cursor_under_the_origin_question_stops_the_copy() {
+    let (refused, pages) = origin_question_refusal(Fault::RepeatsTheCursor).await;
+    assert!(
+        refused.contains("the records copied from one origin a document's references name"),
+        "the refusal names what the question was for: {refused}"
+    );
+    // The first page, and the one answering with the cursor it was given.
+    assert_eq!(pages, 2, "the question stopped at the cursor it repeated");
+}
+
+#[tokio::test]
+async fn a_destination_whose_cursors_cycle_under_the_origin_question_stops_the_copy() {
+    // Two cursors answering each other: every page advances, so only the question's memory
+    // of every cursor it has sent can see it.
+    let (refused, pages) = origin_question_refusal(Fault::CyclesItsCursors).await;
+    assert!(
+        refused.contains(
+            "cursor it had already been given while it was being asked for the \
+                          records copied from one origin"
+        ),
+        "the refusal says the question would never end: {refused}"
+    );
+    // The full half, the empty half and the full half again, whose next cursor is refused
+    // before it is sent.
+    assert_eq!(pages, 3, "the question stopped rather than cycling");
+}
+
 #[tokio::test]
 async fn routes_a_rust_caller_builds_place_a_copy_exactly_as_a_configuration_does() {
     // A caller holding sources it built itself states the routes in code, and they are
@@ -4550,10 +4832,12 @@ async fn a_destination_never_keeps_the_change_token_a_copied_task_arrives_with()
 
 /// A source that answers exactly as the `in-memory` source it wraps, except that a write of an
 /// item titled one of `malformed` is applied and then answered malformed — the plugin that
-/// stored what it was asked to and then could not say under which id.
+/// stored what it was asked to and then could not say under which id — and that a read of the
+/// task `misread` names first is answered with the task it names second.
 struct Careless {
     inner: Box<dyn TaskSource>,
     malformed: &'static [&'static str],
+    misread: Option<(&'static str, &'static str)>,
 }
 
 impl Careless {
@@ -4588,7 +4872,12 @@ impl TaskSource for Careless {
     }
 
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
-        self.inner.get_task(id).await
+        match self.misread {
+            Some((asked, answered)) if id.0 == asked => {
+                self.inner.get_task(&NativeId(answered.to_owned())).await
+            }
+            _ => self.inner.get_task(id).await,
+        }
     }
 
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
@@ -4692,6 +4981,7 @@ fn careless_engine(config: &Value, malformed: &'static [&'static str]) -> Engine
                 Box::new(Careless {
                     inner: built("into", config),
                     malformed,
+                    misread: None,
                 }),
             )),
         ],
@@ -4846,5 +5136,210 @@ async fn a_malformed_create_whose_undo_is_refused_names_both_what_it_left_and_wh
     assert_eq!(
         held(&engine, "into").await,
         vec!["into:P-1 Engine".to_owned(), "into:T-2 Beta".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn members_only_routes_into_an_existing_member_project_and_refuses_a_missing_one() {
+    for present in [false, true] {
+        let mut filed = task("T-1", "Routed task");
+        filed["project"] = json!("P-1");
+        let project = |native: &str, metadata: Value| {
+            json!({
+                "id": native, "title": "Project", "labels": [],
+                "status": {"category": "todo", "name": "Todo"}, "metadata": metadata
+            })
+        };
+        let member_projects = if present {
+            vec![project(
+                "MEMBER",
+                json!({"onetaskgraph.member_of": "into:HOME"}),
+            )]
+        } else {
+            vec![]
+        };
+        let engine = engine_over(json!({
+            "from": {"plugin": "in-memory", "config": {
+                "projects": [project("P-1", json!({"onetaskgraph.copies": {"into": "into:HOME"}}))],
+                "tasks": [filed]
+            }},
+            "into": {"plugin": "in-memory", "config": {"projects": [project("HOME", json!({}))]}},
+            "team": {"plugin": "in-memory", "config": {"projects": member_projects}}
+        }))
+        .with_routes(
+            onetaskgraph_core::config::Routes::new(
+                std::collections::BTreeMap::from([(
+                    name("into"),
+                    vec![(vec!["github.com/nickderobertis/*".to_owned()], name("team"))],
+                )]),
+                &[name("from"), name("into"), name("team")],
+            )
+            .expect("valid routes"),
+        );
+        let mut request = one("from:P-1");
+        request.scope =
+            CopyScope::MembersOnly(CopyItems::new(vec![id("from:T-1")]).expect("one member"));
+        let result = engine.copy(&request).await;
+        if present {
+            let report = result.expect("the routed member lands");
+            assert_eq!(report.items.len(), 1);
+            assert_eq!(report.items[0].destination(), Some(&id("team:T-1")));
+            let shown = engine.task(&id("team:T-1")).await.expect("the copied task");
+            assert_eq!(shown.items[0].item.project, Some(NativeId::from("MEMBER")));
+        } else {
+            assert!(
+                matches!(result, Err(EngineError::NoProjectCounterpart { missing, .. }) if missing == name("team"))
+            );
+            assert!(listed(&engine, "team").await.is_empty());
+        }
+        assert!(listed(&engine, "into").await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_members_only_task_without_repositories_follows_its_project_into_a_routed_source() {
+    let project = |native: &str, metadata: Value| {
+        json!({"id": native, "title": "Project", "labels": [],
+        "status": {"category": "todo", "name": "Todo"}, "metadata": metadata})
+    };
+    let mut filed = task("T-1", "No repository");
+    filed["project"] = json!("P-1");
+    filed["repositories"] = json!([]);
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {"tasks": [filed],
+            "projects": [project("P-1", json!({"onetaskgraph.copies": {"team": "team:HOME"}}))]}},
+        "into": {"plugin": "in-memory", "config": {}},
+        "team": {"plugin": "in-memory", "config": {"projects": [project("HOME", json!({}))]}}
+    }))
+    .with_routes(
+        onetaskgraph_core::config::Routes::new(
+            std::collections::BTreeMap::from([(
+                name("into"),
+                vec![(vec!["github.com/nickderobertis/*".to_owned()], name("team"))],
+            )]),
+            &[name("from"), name("into"), name("team")],
+        )
+        .expect("routes"),
+    );
+    let mut request = one("from:P-1");
+    request.scope = CopyScope::MembersOnly(CopyItems::new(vec![id("from:T-1")]).expect("member"));
+    let report = engine.copy(&request).await.expect("copy lands");
+    assert_eq!(report.items[0].destination(), Some(&id("team:T-1")));
+    assert_eq!(
+        engine.task(&id("team:T-1")).await.expect("task").items[0]
+            .item
+            .project,
+        Some(NativeId::from("HOME"))
+    );
+    assert!(listed(&engine, "into").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_rust_caller_preserves_status_then_intentionally_copies_it_with_the_same_source_token() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir(directory.path().join("tasks")).unwrap();
+    std::fs::write(
+        directory.path().join("tasks/T-1.md"),
+        "---\ntitle: Step\nstatus: todo\n---\noriginal body\n",
+    )
+    .unwrap();
+    let engine = engine_over(json!({
+        "from": {"plugin": "local-md", "config": {"root": directory.path()}},
+        "into": {"plugin": "in-memory", "config": {"capabilities": {"comments": "native"}}},
+    }));
+    let mut request = one("from:T-1");
+    request.comments = true;
+    request.no_link = true;
+    request.status_policy = onetaskgraph_core::StatusPolicy::PreserveDestination;
+    engine.copy(&request).await.unwrap();
+    engine
+        .set_task_status(&id("into:T-1"), StatusCategory::Done)
+        .await
+        .unwrap();
+    engine
+        .set_task_content(&id("from:T-1"), "a revised body")
+        .await
+        .unwrap();
+    engine.copy(&request).await.unwrap();
+    let held = engine.task(&id("into:T-1")).await.unwrap();
+    assert_eq!(held.items[0].item.status.category, StatusCategory::Done);
+    assert_eq!(
+        held.items[0].item.content.as_deref(),
+        Some("a revised body")
+    );
+    assert!(
+        engine.copy(&request).await.unwrap().items[0]
+            .action
+            .skipped()
+    );
+    request.status_policy = onetaskgraph_core::StatusPolicy::default();
+    engine.copy(&request).await.unwrap();
+    let held = engine.task(&id("into:T-1")).await.unwrap();
+    assert_eq!(held.items[0].item.status.category, StatusCategory::Todo);
+}
+
+/// A linking caller's write policy that finds nothing private in any write: what leaves the
+/// copy's own withholding as the only thing keeping a private id off a public write.
+struct NothingPrivate;
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for NothingPrivate {
+    async fn repository_visibility(
+        &self,
+        _repository: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        Ok(onetaskgraph_core::boundary::RepositoryVisibility::Public)
+    }
+
+    async fn check_public_write(
+        &self,
+        _input: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        Ok(onetaskgraph_core::boundary::WriteVerdict::Pass)
+    }
+}
+
+#[tokio::test]
+async fn the_edges_a_copy_withheld_are_taken_once_and_each_copy_reports_its_own() {
+    // `T-1` depends on an item of `ledger`, a source declared private: a copy into the public
+    // `into` leaves that edge out and notes it, and a Rust caller taking the notes twice gets
+    // them once — the next copy's notes are its own, not the first's again beside them.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "visibility": "public", "config": {
+            "tasks": [{"id": "T-1", "title": "Consumer",
+                       "status": {"category": "todo", "name": "Todo"}, "labels": []}],
+            "task_dependencies": [
+                {"from": {"id": "T-1", "kind": "task"},
+                 "to": {"id": "ledger:LED-1", "kind": "task"}, "kind": "blocks"},
+            ],
+        }},
+        "into": {"plugin": "in-memory", "visibility": "public", "config": {}},
+        "ledger": {"plugin": "in-memory", "visibility": "private", "config": {}},
+    }))
+    .with_write_policy(Arc::new(NothingPrivate));
+    let withheld = "withheld from:T-1's dependency on ledger:LED-1 from into: its source \
+                    ledger is declared private, and its source named no tracker an opaque \
+                    reference to it could point into";
+
+    engine.copy(&one("from:T-1")).await.expect("the copy runs");
+    assert_eq!(engine.take_withheld_edges(), vec![withheld.to_owned()]);
+    assert_eq!(
+        engine.take_withheld_edges(),
+        Vec::<String>::new(),
+        "nothing is left to take once taken"
+    );
+
+    engine
+        .copy(&one("from:T-1"))
+        .await
+        .expect("the re-copy runs");
+    assert_eq!(
+        engine.take_withheld_edges(),
+        vec![withheld.to_owned()],
+        "the re-copy reports its own withheld edge alone"
     );
 }

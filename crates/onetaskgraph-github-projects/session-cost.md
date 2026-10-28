@@ -675,17 +675,16 @@ node count, **not points**:
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: the copy-cost test in `crates/onetaskgraph-github-projects-e2e/tests/e2e/copy_cost.rs` measures (g) and (h), holds `tests/fixtures/copy-cost.txt` to them, and fails unless this table's two rows state the same figures. -->
 |                    | (h) found by searching | (g) found by the link |
 | ------------------ | ---------------------: | --------------------: |
-| **requests**       |                      6 |                     4 |
-| **node count**     |                  21971 |                   912 |
+| **requests**       |                      4 |                     3 |
+| **node count**     |                   4471 |                   912 |
 
-(h) asks the board once for the item whose origin is the task (`looking up the items copied
-from one origin`, the lookup described under *Asking GitHub the narrower question* below)
-and searches the board's issues once to find the project the task is filed under (`searching
-this board's issues`), and that search grows with the board. (g) sends neither: it
-reads the task's issue and its project's issue by their node ids — one `reading one issue`
-more than (h) — and writes exactly what (h) writes. The test asserts on its own that (g)
-sends no board read and no board-scoped search, that (h) sends the one origin lookup and no
-board read, and that both copies update the one item.
+(h) asks the board once for the item whose origin is the task and once for the item whose
+origin is the project the task is filed under (`looking up the items copied from one origin`,
+the lookup described under *Asking GitHub the narrower question* below), and neither grows
+with the board. (g) sends neither: it reads the task's issue and its project's issue by their
+node ids — one `reading one issue` more than (h) — and writes exactly what (h) writes. The test asserts on its own that (g)
+sends no board read and no board-scoped search, that (h) sends the two origin lookups and no
+board read or board-scoped search, and that both copies update the one item.
 
 Rows (a) to (f) do not move. The link a whole copy records is written to the Markdown
 folder the plan lives in, which sends the board nothing, and every copy in (b) to (f) is of
@@ -1138,3 +1137,222 @@ hold, so it is sent afresh.
 **`session-cost.txt`** moves by that one search: the live journey's read of the tasks in its
 board's first column is such a read, so its searches 11 → 12, its request total 192 → 193 and
 its node count by that page's 4,080 nodes, 288,769 → 292,849.
+
+## A copy reads what its plan holds, never the whole board
+
+A copy used to walk its destination twice over: a project copy's orphan check listed every task
+the board holds to find those filed under the copied project, and a project's or a document's
+counterpart was found by the board-scoped issue search (`SEARCH_ISSUES`) or the whole-board read
+(`BOARD`), each growing with everything the board has accumulated. The orphan check now asks the
+destination project for its own members — one `reading a project's tasks` (`SUB_ISSUES`) — and a
+project or a document is found by `TaskSource::query_projects_by_origin` and
+`TaskSource::query_documents_by_origin`, which this source answers with the same
+`ORIGIN_LOOKUP` a task's origin is asked with. A document's references are mapped from each
+referent's own `onetaskgraph.copies` link, the record it names read by id, and only a referent
+with no confirmed link is asked for by origin.
+
+**A copy reads its counterparts together.** Every item of a copy is read at its source before
+any is aimed, so the destination is read for all of their counterparts at once, by
+`TaskSource::read_ahead_for_copy`: this source answers it with `ISSUE_COPY_DETAILS`,
+`COPY_DETAIL_BATCH` (21) items to a request, each held for that item's next read by id in the
+command and dropped by any mutation naming it. A destination with one counterpart to read is
+read by its own `ISSUE` as before, and so is a copy expecting a version of its one target.
+
+**`copy-cost.txt`** moves (a) to (d), (h) and (i). (a), a whole copy of 10 tasks, keeps its 55
+requests and goes from 29,600 worst-case nodes to **10,115**: the project's own origin lookup
+(915) replaces the board-scoped search (20,400). (b), the unchanged repeat, goes from 13
+requests and 35,566 nodes to **2 and 30,734**: one read of the project's sub-issues (25,400)
+replaces the board read (10,150) and the search (20,400), and one batched read of the project
+and its ten tasks (5,334) replaces eleven reads of one issue (5,016) — its node count is the
+project's worst case and one batch's, neither of which grows with the board, where the two
+walks did. (c) and (d), a member copy naming one task, go from 4 requests and 912 nodes to
+**3 and 5,334**: the project and the member are read in one batch instead of two reads of one
+issue, one request and one point fewer, at the batch document's worst case. (h) goes from 6
+requests and 21,971 nodes to **5 and 2,286**, and (i) keeps its 3 requests and goes from 21,771
+to **2,286**: each finds the task's project by the project's origin lookup instead of the
+search, and (h)'s one read of an issue's dependencies is no longer sent beside it. (e) to (g)
+and (j) do not move.
+
+## The live lane pauses under 40% of a budget, on the least of three readings
+
+A live session no longer decides on `GET /rate_limit` alone. Every decision — admission and
+each recheck — reads that endpoint, GraphQL's own `rateLimit` object and the object's answer's
+`x-ratelimit-*` headers, beside the headers of the session's own last real answer, and decides
+on the least of them (`onetaskgraph_live::pace`): a budget under 40% of its limit is waited for
+until its reset, unless the burn rate since its window began says it resets before the session
+would exhaust it, and is read again after the wait; only then is the retained buffer applied.
+
+**`session-cost.txt`** moves by those reads alone: the admission and the eight rechecks of the
+reduced session each read `GET /rate_limit` and `the GraphQL rateLimit object` once, so the
+endpoint's row goes 1 → 9, a row of 9 rateLimit reads is added, and the request total goes
+193 → 210. The rateLimit document has no connection, so the node count does not move; the
+session's estimate, derived from this record, grows by those rows' charge.
+
+## A project's members listing carries the project, and holds what it carried
+
+`SUB_ISSUES` now selects the project issue itself — its `BoardIssue` fields and a page of
+`$nestedFirst` blockers — beside its sub-issues, and once the walk has ended this source keeps
+the project and every sub-issue it carried for `read_ahead_for_copy`, which holds each one it is
+asked for as its own batch would have — for the copy's read of it by id and, where the whole of
+what blocks it came with it, the dependency read after that — instead of reading it again. A
+copy writing a plan reads the project and its tasks before it writes them, and the project's
+own edges are a part no GitHub change token vouches for, so before this the project was read
+again on every cached re-copy, by one `ISSUE_COPY_DETAILS` batch naming it, whatever the cache
+held. Each item is answered at the state GitHub returned in this command, a mutation naming one
+drops what was kept for it, and no read outside a copy's read-before-write is answered from a
+listing: the boundary's re-reads of a project still see it as it is.
+
+**`SUB_ISSUES`** goes from 25,400 worst-case nodes to **25,653**: the project issue's labels,
+board memberships and their field values, and its fifty blockers — one issue rather than a
+page of them. Its price stays **6** points.
+
+**`session-cost.txt`** moves on two lines and its node total: the two `reading a project's
+tasks` requests grow by 253 nodes each (50,800 → 51,306), and the reconciliation of that
+document grows by the same 253 nodes. Nodes go 292,849 → **293,608**. Requests stay **210**,
+including 37 `reading one issue` requests: this journey reads through the ordinary interface,
+which still reaches GitHub even after a project listing. Only a copy's `read_ahead_for_copy`
+takes the records that listing carried; the plan-copy journey proves that reuse.
+
+**`copy-cost.txt`** moves only (b), the uncached unchanged repeat, whose one `reading a
+project's tasks` grows by the same 253 nodes (30,734 → **30,987**) and whose two requests do
+not move: with no cache there is no listing before the read-ahead, so the batch still reads the
+project and its tasks.
+
+## A copy writes only what changed, creates its items together, and paces by GitHub's windows
+
+<!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As the sections above: the request and node figures are differences between two committed states of `tests/fixtures/copy-cost.txt` and `tests/fixtures/session-cost.txt`, each held by its own test, which fails on any change to that record and names this file as the place to say what moved; the batch sizes and limits are named here by the constants and the `tests/fixtures/rate-limits.json` entries that hold them, not restated. -->
+`updateIssue` is sent only with the title, body and state that differ from what the board
+holds, and not at all when none does; a priority the board already holds is not written. A
+copy's items with no counterpart are created together: one `ORIGIN_LOOKUPS` asks for up to
+`ORIGIN_BATCH` origins with the board's fields and the destination repository, a
+`CREATE_ISSUES` request creates up to `MUTATION_BATCH` issues already filed under their parent
+and on the board (`parentIssueId`, `projectV2Ids`), one `CREATED_BOARD_ITEMS` reads their board
+item ids, and their field values, closures and blockers follow in aliased requests of at most
+`MUTATION_BATCH` mutations. Mutations are no longer spaced by a fixed interval: they are held
+only when GitHub's documented secondary windows — the content-creation and point limits
+`tests/fixtures/rate-limits.json` pins — would otherwise be crossed.
+`pacing.min_mutation_interval_ms`, when set, still spaces them.
+
+**`copy-cost.txt`** moves (a) to (d) and (g) to (j). (a), a whole copy of 10 tasks, goes from
+55 requests to **7**: two origin lookups (18,400 worst-case nodes, 2 points each) replace eleven
+of one origin and the fields read, one `CREATE_ISSUES` and one `CREATE_ISSUE` replace eleven
+creations, eleven board adds and ten filings, and one `CREATED_BOARD_ITEMS` and two aliased
+field writes replace eleven field writes; its node count goes 10,115 → **18,463**. (b), the
+unchanged repeat, goes from 2 requests to **1**: the orphan check is answered from the batched
+read, whose document grows by the project's sub-issue page (5,334 → **5,384**), so the 25,653
+nodes of `reading a project's tasks` are no longer sent. (c), (d) and (g) each lose their
+`updateIssue`, which only re-sent what the issue held. (h) and (i) ask for the task's origin by
+the batched `ORIGIN_LOOKUPS` (9,200 nodes, 2 points) rather than a second single lookup (915),
+so their node counts grow to **10,571** and (h) loses its `updateIssue`; (j) goes from 5
+requests to **4**, its creation filed on the board in the same request.
+
+**`session-cost.txt`** gains the reconciliation of the two documents the live journey now
+prices — `ORIGIN_LOOKUPS` (9,200 nodes) and `CREATED_BOARD_ITEMS` (63) — and the copy batch's
+sub-issue page (7,413 → **7,463**): requests go 210 → **212** and nodes 293,608 → **302,921**.
+
+## A project's members listing is paged at what one point buys
+
+`SUB_ISSUES` pages a project's sub-issues at `$memberFirst`, bound to `MEMBER_PAGE_SIZE` (23),
+rather than at `$first` (100). GitHub charges a page once per row for each connection under it:
+six per sub-issue — its labels, its board memberships, their three field-value pages and its
+`blockedBy` — and seven for the project issue beside them. A hundred rows came to 607, six
+points, which listing a plan's project of a handful of tasks and its design document paid in
+full; twenty-three come to 145, **one** point, and twenty-four would be two. A project of more
+than twenty-three members costs one request and one point per page, never more per row than the
+hundred-row page did. Nothing selected moves, so every record and its order are as before.
+
+**`SUB_ISSUES`** goes from 25,653 worst-case nodes to **6,095** and from 6 points to **1**.
+
+**`session-cost.txt`** moves on two lines and its node total: the reconciliation of that
+document goes 25,653 → **6,095** and the two `reading a project's tasks` requests 51,306 →
+**12,190**. Nodes go 302,921 → **244,247**. Requests stay **212**: the live journey's projects
+hold fewer than twenty-three members, so each is still listed in one page.
+
+## A dependency read asks for the one direction it answers
+
+A task's dependency read sends `ISSUE_DEPENDS_ON` — `blockedBy` and the body its recorded far
+ends live in, and for a board draft its body, its one board item and this board's id — or
+`ISSUE_DEPENDED_ON_BY`, `blocking` alone, where it sent `ISSUE_DEPENDENCIES` with both
+connections. The recorded far ends ride on the last page of `blockedBy` as far as the page has
+room, so an item recording edges no longer pays a second request for them, and a draft's are
+read off that same answer rather than off a draft read and a board read after it.
+
+**`session-cost.txt`** moves on six lines: four of the seven `reading an issue's dependencies`
+requests are now two of each new document (1,000 → **600** nodes on the old one, **106** and
+**100** on the new), and the live journey reconciles each newly sent document's node count
+once (**103** and **100**). Requests go 212 → **214** — the two reconciliations, which the
+session pays once per document; the dependency reads themselves stay seven — and nodes go
+244,247 → **244,256**.
+
+## A copy's field values and edges share requests of nineteen
+
+A copy's held-back field values and blocked-by edges are one ordered list, sent nineteen aliases
+to a request — the most the board-copy feasibility spike
+(`board-copy-gaps-2026-10-24-spike-feasibility-report`) saw GitHub price at the one point every
+mutation request costs — so a request holding both kinds is `WRITE_FIELDS_AND_EDGES`, one holding
+only field values `WRITE_FIELD_VALUES` and one holding only edges `ADD_BLOCKED_BYS`, each now of
+nineteen slots where they were eleven. Closes follow, in requests of eleven as before.
+
+**`copy-cost.txt`** moves on (a): the whole copy of a project of ten tasks writes its twenty field
+values in one request where it took two, so requests go 7 → **6**; its nodes stay **18,463**,
+since a mutation counts none.
+
+## A document is read with its project and the project's members
+
+A document read by its id sends `DOCUMENT_IN_PROJECT`: the document as `ISSUE` reads it, with the
+project issue it is filed under and a page of that project's members, each without a page of
+what blocks it. A write the public boundary screens is held to who may read the document — its
+project's and every member's classification as much as its own — so the one read a guarded
+metadata write already makes, to hold the version, answers the project and its members too,
+rather than a read of each after it. It is priced at one point, as `ISSUE` is.
+
+**`session-cost.txt`** moves on three lines and its totals: four of the live journey's
+`reading one issue` requests are document reads, now `DOCUMENT_IN_PROJECT` (37 → **33**, and
+**4** of the new document at 21,404 nodes), and the session reconciles the new document's node
+count once (**5,351**). Requests go 214 → **215**, the reconciliation; nodes go 244,256 →
+**269,187**.
+
+## A batched origin lookup asks one carrier of each origin
+
+`ORIGIN_LOOKUPS` asks each origin's two connections for a page of one carrier (`$lookupFirst`,
+`ORIGIN_LOOKUPS_PAGE_SIZE`) where it asked for three. An origin names one item, and a second
+still shows: that page then says there is more, and the origin is left to its own
+`ORIGIN_LOOKUP`, which walks every page of three as before — so a duplicate is found exactly as
+it was. The board-copy feasibility spike priced ten origins at two points with a page of three
+and at one with a page of one, and the plugin's own model now agrees: one point.
+
+**`copy-cost.txt`** moves on (a), (h), (i) and (j): each `looking up the items copied from
+several origins` request goes from 9,200 nodes to **3,100**, so (a) goes 18,463 → **6,263**,
+(h) and (i) 10,571 → **4,471**, and (j) 9,263 → **3,163**; no request count moves.
+**`session-cost.txt`** moves on that document's reconciliation, 9,200 → **3,100**, and its node
+total, 269,187 → **263,087**.
+
+## A screened document copy's lookup carries its project's members
+
+Where the public boundary screens a document's first copy onto a board, the document is held to
+who may read its project — the project's members' classification as much as its own — and the
+batched origin lookup is sent as `ORIGIN_LOOKUPS_WITH_MEMBERS`: the same lookup, with a page of
+that project's members trimmed to their id, parent, body and repository. GitHub's own dry run
+prices it at the one point the lookup costs alone
+(`docs/measurements/board-copy-gaps-2026-10-24/coalesced-members-dry-run`), and the plugin's
+model agrees, so the separate listing of the members the screened copy sent is gone. A page that
+says there is more, or any member it cannot read, is no answer, and the members are listed whole
+as before.
+
+**`session-cost.txt`** moves on one line and its totals: the live journey reconciles the new
+document's node count once (**3,123**), so requests go 215 → **216** and nodes 263,087 →
+**266,210**.
+
+## The board pre-flight reads the board's field names
+
+The live lane's measurement of the nominated board, `BOARD_WORKLOAD_DOCUMENT` in
+`onetaskgraph-github-live`, now selects every field's id and name beside its count, so a field a
+finished CI run left — a cancelled run's scratch field held every branch red on 2026-10-25 —
+is removed by the janitor's ownership rule before the board is judged against the registered
+workload rather than counted as the board's. On a board holding no such field it sends nothing
+more; one holding some adds one run read per run and one removal per field, which no record
+here measures.
+
+**`session-cost.txt`** moves on one line and its node total: the `nominated board lookup` goes
+2 → **101** worst-case nodes, its `fields(first:100)` page. Requests stay **216**, and nodes go
+266,210 → **266,309**.

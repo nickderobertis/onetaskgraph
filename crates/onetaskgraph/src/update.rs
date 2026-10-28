@@ -9,8 +9,8 @@ use std::io::Write;
 
 use onetaskgraph_core::{Failure, GlobalId, Loaded};
 use onetaskgraph_plugin_api::{
-    DependencyEdge, DependencyEndpoint, DependencyKind, ItemKind, MetadataKey, Status, TaskRef,
-    TaskUpdate,
+    DependencyEdge, DependencyEndpoint, DependencyKind, EndpointRefusal, ItemKind, MetadataKey,
+    Status, TaskRef, TaskUpdate,
 };
 
 use crate::cli::TaskUpdateArgs;
@@ -83,18 +83,24 @@ fn request(id: &GlobalId, args: &TaskUpdateArgs) -> Result<TaskUpdate, Failure> 
             .map(|task| TaskRef::qualified(&task.source, &task.native))
             .collect()
     });
-    let depends_on = list(&args.depends_on, args.no_depends_on)?.map(|tasks| {
-        tasks
-            .iter()
-            .map(|far| DependencyEdge {
-                from: DependencyEndpoint::from_native(id.native.clone(), ItemKind::Task),
-                to: DependencyEndpoint::new(far.to_string(), ItemKind::Task).unwrap_or_else(|_| {
-                    DependencyEndpoint::from_native(far.native.clone(), ItemKind::Task)
-                }),
-                kind: DependencyKind::Blocks,
-            })
-            .collect()
-    });
+    let depends_on = if args.no_depends_on {
+        Some(Vec::new())
+    } else if args.depends_on.is_empty() {
+        None
+    } else {
+        Some(
+            args.depends_on
+                .iter()
+                .map(|given| {
+                    Ok(DependencyEdge {
+                        from: DependencyEndpoint::from_native(id.native.clone(), ItemKind::Task),
+                        to: far_end(given)?,
+                        kind: DependencyKind::Blocks,
+                    })
+                })
+                .collect::<Result<_, Failure>>()?,
+        )
+    };
     Ok(TaskUpdate {
         title: args.title.clone(),
         content: args.body_file.as_deref().map(body).transpose()?,
@@ -105,6 +111,49 @@ fn request(id: &GlobalId, args: &TaskUpdateArgs) -> Result<TaskUpdate, Failure> 
         delivers,
         depends_on,
     })
+}
+
+/// One `--depends-on`: a qualified task id, or a dependency endpoint object — `{"id":
+/// "<source>:<native>", "kind": "task"}`, or the opaque `{"designator", "id", "kind"}` — whose
+/// keys are refused by name, never by value, when they are any beyond those three.
+fn far_end(given: &str) -> Result<DependencyEndpoint, Failure> {
+    if !given.trim_start().starts_with('{') {
+        let far = qualified(given)?;
+        return Ok(DependencyEndpoint::new(far.to_string(), ItemKind::Task)
+            .unwrap_or_else(|_| DependencyEndpoint::from_native(far.native, ItemKind::Task)));
+    }
+    let object: serde_json::Value = serde_json::from_str(given).map_err(|_| {
+        Failure::decided(
+            "invalid-dependency",
+            "--depends-on: an argument starting with `{` is not a JSON object\n\
+             next: give a qualified task id, or a JSON object of `designator`, `id` and `kind`.",
+        )
+    })?;
+    let endpoint = DependencyEndpoint::from_value(&object).map_err(|refusal| match refusal {
+        EndpointRefusal::Key(key) => Failure::decided(
+            "private-reference-content",
+            format!(
+                "--depends-on: the dependency endpoint object carries `{key}`, which would \
+                 write what the item it names is, so nothing was written\n\
+                 next: give only `designator`, `id` and `kind`, or the qualified native id \
+                 `<source>:<native id>`."
+            ),
+        ),
+        EndpointRefusal::Malformed => Failure::decided(
+            "invalid-dependency",
+            "--depends-on: the object is no dependency endpoint\n\
+             next: give `{\"id\": \"<source>:<native id>\", \"kind\": \"task\"}` or a qualified \
+             task id.",
+        ),
+    })?;
+    if endpoint.is_native() {
+        return Err(Failure::decided(
+            "invalid-dependency",
+            "--depends-on: an endpoint object's `id` is qualified, `<source>:<native id>`\n\
+             next: qualify it with the source that holds the task.",
+        ));
+    }
+    Ok(endpoint)
 }
 
 /// One replaceable list of qualified task ids: the ids given, none at all under its `--no-…`

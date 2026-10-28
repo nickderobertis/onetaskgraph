@@ -144,7 +144,9 @@ pub struct ExpectArgs {
     /// the write takes the task's ids and current values from the source's local cache at
     /// that version or a later one, and sends only its mutations — one read first when the
     /// cache does not hold them. Not a precondition: a person's edit to a field this write
-    /// sets is overwritten. Needs the source's `cache.enabled`.
+    /// sets is overwritten. Needs the source's `cache.enabled`. On `document metadata set` it
+    /// is the document's version, held as a precondition: the document is read first, and the
+    /// write refused, writing nothing, when it is at another version. That needs no cache.
     ///
     /// llmlint: ignore[invalid_states_unrepresentable] — a version is the source's own opaque
     /// token, which only the source that spelled it reads; there is no narrower type.
@@ -424,6 +426,25 @@ pub enum TaskCommand {
     Render(ItemRenderArgs),
     /// Print the template answers stored beside one task.
     Answers(AnswersArgs),
+    /// Write every image asset one task holds into a directory, each as `<DIR>/<name>` under
+    /// the name its content references it by.
+    ///
+    /// Read through the task's source, so it works the same on every store that keeps assets;
+    /// a task holding none writes nothing. Under --json it prints the names it wrote, as a list.
+    Assets(TaskAssetsArgs),
+}
+
+/// `onetaskgraph task assets`.
+#[derive(Debug, Args)]
+pub struct TaskAssetsArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    // llmlint: ignore[invalid_states_unrepresentable] As `ShowArgs::id`: `qualified` in `main` converts it through `GlobalId::from_str` before anything is read, with the next action a user typing an unqualified id needs.
+    #[arg(value_name = "SOURCE:ID")]
+    pub id: String,
+    /// The directory each asset is written into, created when it is not there. A file already
+    /// there under an asset's name is replaced.
+    #[arg(long, value_name = "DIR")]
+    pub output_dir: std::path::PathBuf,
 }
 
 /// Where a created item's body comes from: exactly one of a template file, a loader
@@ -777,8 +798,11 @@ pub struct TaskUpdateArgs {
     #[arg(long = "no-delivers")]
     pub no_delivers: bool,
 
-    /// A task it depends on, qualified. Repeat for several; together they replace its
-    /// dependencies.
+    /// A task it depends on, qualified, or a dependency endpoint as a JSON object of `id` and
+    /// `kind` — and `designator` for the opaque form. Repeat for several; together they replace
+    /// its dependencies. Onto a source not declared private, one naming a task of a source that
+    /// is, by its native id, is written as that source's designator and the id; an object
+    /// carrying any other key is refused naming the key.
     #[arg(
         long = "depends-on",
         value_name = "ID",
@@ -897,7 +921,9 @@ pub struct MetadataSetArgs {
     #[arg(value_name = "VALUE", allow_hyphen_values = true)]
     pub value: String,
 
-    /// As `--expect` on every task write; a project's or a document's metadata takes none.
+    /// As `--expect` on every task write, for a task's metadata; a project's takes none. A
+    /// document's write is made only while the document is at that version: it is read first,
+    /// and refused, writing nothing, when it is at another.
     #[command(flatten)]
     pub expect: ExpectArgs,
 
@@ -1014,6 +1040,41 @@ pub struct StatusSetArgs {
 
     #[command(flatten)]
     pub expect: ExpectArgs,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
+}
+
+/// What `onetaskgraph project status` can do.
+#[derive(Debug, Subcommand)]
+pub enum ProjectStatusCommand {
+    /// Set one project's status to a category, and nothing else about it — its title, content,
+    /// labels, metadata, repositories, dependencies and tasks stay as they are.
+    ///
+    /// The category lands where the source's own mapping sends it for a project. On a GitHub
+    /// board a terminal category selects the project kind's option and then closes the
+    /// project's issue — as completed for `done`, as not planned for `cancelled` — leaving an
+    /// issue already closed with a reason that reads that category as it is, and an open
+    /// category reopens a closed issue and then selects its option. A project delivers no task,
+    /// so nothing is kept in step after it.
+    ///
+    /// Exits 0 when the status was written, and 1 when the write was refused.
+    Set(ProjectStatusSetArgs),
+}
+
+/// `onetaskgraph project status set`.
+#[derive(Debug, Args)]
+pub struct ProjectStatusSetArgs {
+    /// The project's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `StatusSetArgs::id`: `qualified` in
+    /// `main` converts it immediately, with the next action a user needs.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// The status category to set — the categories `task status set` takes.
+    #[arg(value_name = "CATEGORY")]
+    pub category: StatusArg,
 
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
@@ -1152,6 +1213,11 @@ pub enum ProjectCommand {
     Metadata {
         #[command(subcommand)]
         command: MetadataCommand,
+    },
+    /// Set one project's status, and nothing else about it.
+    Status {
+        #[command(subcommand)]
+        command: ProjectStatusCommand,
     },
     /// Create — or, with --id naming one it holds, replace — a project, its description
     /// rendered from a template or given as it is.
@@ -1413,6 +1479,14 @@ pub struct ProjectListArgs {
 
     #[command(flatten)]
     pub filters: FilterArgs,
+
+    /// Keep projects copied from this item: those whose recorded copy origin is exactly this
+    /// qualified id, `<source>:<native-id>`. Zero, one or several may match.
+    ///
+    /// Each source is asked for that origin's copies rather than listing every project it
+    /// holds, where it can be.
+    #[arg(long = "origin", value_name = "SOURCE:ID", value_parser = origin)]
+    pub origin: Option<GlobalId>,
 
     #[command(flatten)]
     pub paging: PageArgs,
@@ -1779,9 +1853,31 @@ pub struct CopyArgs {
     pub term_scope: TermScopeArgs,
 }
 
+/// How a copy treats the status of an existing destination item.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum StatusPolicyArgs {
+    /// Copy the source status.
+    Source,
+    /// Keep the destination status on updates; creates use the source status.
+    PreserveDestination,
+}
+
+impl From<StatusPolicyArgs> for onetaskgraph_core::StatusPolicy {
+    fn from(value: StatusPolicyArgs) -> Self {
+        match value {
+            StatusPolicyArgs::Source => Self::Source,
+            StatusPolicyArgs::PreserveDestination => Self::PreserveDestination,
+        }
+    }
+}
+
 /// `onetaskgraph task copy`.
 #[derive(Debug, Args)]
 pub struct TaskCopyArgs {
+    /// Which status to use for existing destination items. Creates use the source status.
+    #[arg(long, value_enum, default_value = "source")]
+    pub status_policy: StatusPolicyArgs,
+
     /// The qualified ids to copy, `<source>:<native-id>` — or none, and the narrowing below
     /// names the tasks instead.
     ///
@@ -1821,6 +1917,10 @@ pub struct TaskCopyArgs {
     #[arg(long)]
     pub create: bool,
     // llmlint: ignore-end[invalid_states_unrepresentable]
+    /// Update this existing destination task after verifying its origin names the source task.
+    #[arg(long, value_name = "QUALIFIED-ID")]
+    // llmlint: ignore[invalid_states_unrepresentable] As TaskCopyArgs::id, parse through qualified in main so a malformed target receives the product's exit-1 failure and next action; a GlobalId field here would instead make clap report an exit-2 invocation error. Engine::copy validates the destination and origin before writing.
+    pub target_task: Option<String>,
     /// The version of the destination task this copy is bound to that the caller knows, as
     /// `--expect` on every task write: the copy of one task then sends only the fields whose
     /// value differs from that version, and no read of it.
@@ -1896,6 +1996,10 @@ impl CopyQueryArgs {
 /// `onetaskgraph project copy`.
 #[derive(Debug, Args)]
 pub struct ProjectCopyArgs {
+    /// Which status to use for existing destination items. Creates use the source status.
+    #[arg(long, value_enum, default_value = "source")]
+    pub status_policy: StatusPolicyArgs,
+
     /// The qualified id to copy, `<source>:<native-id>`.
     ///
     /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCopyArgs::id`.
@@ -1913,6 +2017,14 @@ pub struct ProjectCopyArgs {
     /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCopyArgs::id`.
     #[arg(long = "member", value_name = "TASK-ID", conflicts_with = "no_tasks")]
     pub member: Vec<String>,
+
+    /// Copy the named members into the project the destination already holds, leaving that
+    /// project as it is: it is found by the link or origin it records, or by a lookup of its
+    /// origin, and is never read for comparison, written or reported. A project the
+    /// destination does not hold yet is refused, naming the `project copy` that creates it.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap rejects this flag without a member at parse; the command conversion then constructs MembersOnly with nonempty CopyItems. Keeping the clap argument beside member follows this boundary's existing flag representation.
+    #[arg(long = "members-only", requires = "member")]
+    pub members_only: bool,
 
     /// Keep the destination's copies of each copied task's comments in step with the
     /// source's, as `task copy --comments` does.

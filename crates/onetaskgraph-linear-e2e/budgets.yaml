@@ -5,8 +5,9 @@ schema_version: 1
 budgets:
   - id: linear-requests-per-status-write-cold
     description: >-
-      The requests one status write sends on a fresh source instance, as one command line is.
-      It protects headroom on the production Linear key every manager of a host shares.
+      The requests one status write sends on a fresh source instance, as one command line is, the
+      larger over workspaces of 60 and of 600 issues. It protects headroom on the production
+      Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
@@ -15,8 +16,9 @@ budgets:
     threshold: 2
   - id: linear-requests-per-status-write-warm
     description: >-
-      The requests each status write after the first sends on one long-lived source instance.
-      It protects headroom on the production Linear key every manager of a host shares.
+      The requests each status write after the first sends on one long-lived source instance, the
+      larger over workspaces of 60 and of 600 issues. It protects headroom on the production
+      Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
@@ -26,24 +28,38 @@ budgets:
   - id: linear-requests-per-settlement-update-cold
     description: >-
       The requests the first update of a status and one metadata key sends on a fresh source
-      instance. It protects headroom on the production Linear key every manager of a host shares.
-    labels: [linear]
-    measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
-    unit: requests
-    direction: max
-    threshold: 3
-  - id: linear-requests-per-settlement-update-warm
-    description: >-
-      The requests each later update of a status and one metadata key sends on one long-lived
-      source instance. It protects headroom on the production Linear key every manager of a host
-      shares.
+      instance, the larger over workspaces of 60 and of 600 issues. It protects headroom on the
+      production Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
     unit: requests
     direction: max
     threshold: 2
+  - id: linear-requests-per-settlement-update-warm
+    description: >-
+      The requests each later update of a status and one metadata key sends on one long-lived
+      source instance, the larger over workspaces of 60 and of 600 issues. It protects headroom on
+      the production Linear key every manager of a host shares.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 2
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The user ruled that every store operation the engine uses carries its own per-backend request bound, paired with the engine's backend-agnostic store-operation budgets (its hold loop with the dependency reads, each dispatch with the status writes); a session or hourly total cannot show one operation's requests regressing, which is what this bound is for.
+  - id: linear-requests-per-dependency-read
+    description: >-
+      The most requests any one necessarily consulted Linear source receives in one complete
+      dependency read through the binary, across the cases the detail lists, at 60 and at 600
+      issues. It protects headroom on the production Linear key every manager of a host shares.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 2
+  # llmlint: ignore[budgets_track_product_owner_outcomes] Kept beside linear-requests-per-plan-copy on the manager's ruling: it guards image uploads on every issue and document write, a journey the plan-copy budget does not measure, so the two budgets measure different things.
   - id: linear-asset-requests-per-new-asset
     description: >-
       An inner measure of the requests added by new document and issue images protects headroom on a production Linear key every manager of a host shares, which no check may reach.
@@ -169,3 +185,15 @@ budgets:
     unit: points
     direction: max
     threshold: 675000
+  - id: linear-requests-per-plan-copy
+    description: >-
+      The requests one first copy of a realistic plan — 1 project, 5 tasks and 1 design document
+      with 2 new images — sends an empty Linear that rewrites every long form, end to end through
+      the binary. It protects headroom on the production Linear key every manager of a host
+      shares.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: requests
+    direction: max
+    threshold: 20

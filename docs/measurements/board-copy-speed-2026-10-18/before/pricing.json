@@ -1,0 +1,94 @@
+{
+ "ADD_BLOCKED_BY": {
+  "method": "smallest header rise",
+  "observations": 40,
+  "points": 1
+ },
+ "ADD_SUB_ISSUE": {
+  "method": "smallest header rise",
+  "observations": 36,
+  "points": 1
+ },
+ "ADD_TO_BOARD": {
+  "method": "smallest header rise",
+  "observations": 40,
+  "points": 1
+ },
+ "BOARD": {
+  "method": "dry run",
+  "points": 2,
+  "variables": {
+   "first": 100,
+   "nestedFirst": 50
+  }
+ },
+ "CREATE_ISSUE": {
+  "method": "smallest header rise",
+  "observations": 40,
+  "points": 1
+ },
+ "CREATION_CONTEXT": {
+  "method": "dry run",
+  "points": 1,
+  "variables": {
+   "nestedFirst": 50
+  }
+ },
+ "CleanupDelete": {
+  "method": "smallest header rise",
+  "observations": 19,
+  "points": 1
+ },
+ "CleanupRead": {
+  "method": "dry run",
+  "points": 1,
+  "variables": {}
+ },
+ "ISSUE": {
+  "method": "dry run",
+  "points": 1,
+  "variables": {
+   "boardItems": 3,
+   "first": 100,
+   "nestedFirst": 50
+  }
+ },
+ "ORIGIN_LOOKUP": {
+  "method": "dry run",
+  "points": 1,
+  "variables": {
+   "boardItems": 3,
+   "nestedFirst": 50,
+   "originFirst": 3
+  }
+ },
+ "REPOSITORY": {
+  "method": "dry run",
+  "points": 1,
+  "variables": {}
+ },
+ "SEARCH_ISSUES": {
+  "method": "dry run",
+  "points": 5,
+  "variables": {
+   "boardItems": 3,
+   "first": 100,
+   "nestedFirst": 50
+  }
+ },
+ "UPDATE_FIELD": {
+  "method": "smallest header rise",
+  "observations": 4,
+  "points": 1
+ },
+ "UPDATE_FIELDS": {
+  "method": "smallest header rise",
+  "observations": 36,
+  "points": 1
+ },
+ "UPDATE_ISSUE": {
+  "method": "smallest header rise",
+  "observations": 37,
+  "points": 1
+ }
+}

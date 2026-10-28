@@ -96,47 +96,84 @@ fn graphql_headers(remaining: u64, used: u64) -> String {
     )
 }
 
+/// One whole request off `stream` — its head and as much body as its `Content-Length` says —
+/// so what it asks for is read whatever the client's writes split it into.
+fn whole_request(stream: &mut std::net::TcpStream) -> String {
+    let mut held = Vec::new();
+    let mut chunk = [0_u8; 16384];
+    loop {
+        let read = stream.read(&mut chunk).expect("a stand-in request");
+        held.extend_from_slice(&chunk[..read]);
+        let text = String::from_utf8_lossy(&held).into_owned();
+        let Some(end) = text.find("\r\n\r\n") else {
+            if read == 0 {
+                return text;
+            }
+            continue;
+        };
+        let length = text[..end]
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length:")
+                    .and_then(|length| length.trim().parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+        if read == 0 || held.len() >= end + 4 + length {
+            return text;
+        }
+    }
+}
+
+/// What the stand-in answers every path it does not serve with.
+fn refused() -> (&'static str, String, String) {
+    (
+        "404 Not Found",
+        String::new(),
+        json!({"message": "this stand-in answers the allowance reads and the first real call alone"})
+            .to_string(),
+    )
+}
+
 /// The one stand-in this binary drives the journey against.
 struct Standin {
     host: String,
-    first_call: Arc<Mutex<FirstCall>>,
+    /// What the next run's first real call is answered with — taken by that call, so every
+    /// later GraphQL document of the run is refused like any other path.
+    first_call: Arc<Mutex<Option<FirstCall>>>,
     asked: Arc<Mutex<Vec<String>>>,
 }
+
+/// How the stand-in records the read of GraphQL's own rateLimit object, which it answers
+/// with the whole allowance and never counts as a session's first real call.
+const OBJECT_READ: &str = "POST /graphql rateLimit";
 
 impl Standin {
     fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a stand-in listener");
         let host = format!("http://{}", listener.local_addr().unwrap());
-        let first_call = Arc::new(Mutex::new(FirstCall::reporting(LIMIT)));
+        let first_call = Arc::new(Mutex::new(None));
         let asked = Arc::new(Mutex::new(Vec::new()));
         let (scripted, recorded) = (Arc::clone(&first_call), Arc::clone(&asked));
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let mut stream = stream.expect("a stand-in connection");
-                let mut request = [0_u8; 16384];
-                let read = stream.read(&mut request).expect("a stand-in request");
-                let head = String::from_utf8_lossy(&request[..read]).into_owned();
+                let head = whole_request(&mut stream);
                 let line = head.lines().next().unwrap_or_default().to_owned();
                 let mut parts = line.split(' ');
-                let called = format!(
+                let mut called = format!(
                     "{} {}",
                     parts.next().unwrap_or_default(),
                     parts.next().unwrap_or_default()
                 );
-                let mut asked = recorded.lock().unwrap();
-                asked.push(called.clone());
-                // The endpoint claims the whole allowance of both budgets every time; only
-                // the FIRST GraphQL call of a run is answered as scripted, and every later
-                // one is refused like any other path, so a journey that got past the
-                // re-check goes no further than that.
-                let first_graphql_of_this_run = asked
-                    .iter()
-                    .rev()
-                    .take_while(|call| *call != "GET /rate_limit")
-                    .filter(|call| *call == "POST /graphql")
-                    .count()
-                    == 1;
-                drop(asked);
+                if called == "POST /graphql" && head.contains(budget::RATE_LIMIT_OBJECT) {
+                    called = OBJECT_READ.to_owned();
+                }
+                recorded.lock().unwrap().push(called.clone());
+                // The endpoint and the rateLimit object claim the whole allowance of both
+                // budgets every time; only the FIRST real GraphQL call of a run is answered as
+                // scripted, and every later one is refused like any other path, so a journey
+                // that got past the re-check goes no further than that.
                 let (status, headers, body) = match called.as_str() {
                     "GET /rate_limit" => (
                         "200 OK",
@@ -146,22 +183,28 @@ impl Standin {
                         ),
                         budget::documented_answer(LIMIT, LIMIT, LIMIT, RESETS_AT).to_string(),
                     ),
-                    "POST /graphql" if first_graphql_of_this_run => {
-                        match scripted.lock().unwrap().clone() {
-                            FirstCall::Answer {
-                                status,
-                                headers,
-                                body,
-                            } => (status, headers, body),
-                            FirstCall::HangUp => continue,
-                        }
-                    }
-                    _ => (
-                        "404 Not Found",
-                        String::new(),
-                        json!({"message": "this stand-in answers the allowance read and the first real call alone"})
-                            .to_string(),
+                    OBJECT_READ => (
+                        "200 OK",
+                        format!(
+                            "x-ratelimit-limit: {LIMIT}\r\nx-ratelimit-used: 0\r\n\
+                             x-ratelimit-remaining: {LIMIT}\r\nx-ratelimit-reset: {RESETS_AT}\r\n\
+                             x-ratelimit-resource: graphql\r\n"
+                        ),
+                        json!({"data": {"rateLimit": {"limit": LIMIT, "remaining": LIMIT,
+                            "resetAt": chrono::DateTime::from_timestamp(
+                                i64::try_from(RESETS_AT).unwrap(), 0).unwrap().to_rfc3339()}}})
+                        .to_string(),
                     ),
+                    "POST /graphql" => match scripted.lock().unwrap().take() {
+                        Some(FirstCall::Answer {
+                            status,
+                            headers,
+                            body,
+                        }) => (status, headers, body),
+                        Some(FirstCall::HangUp) => continue,
+                        None => refused(),
+                    },
+                    _ => refused(),
                 };
                 let response = format!(
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{headers}\
@@ -186,6 +229,7 @@ static STANDIN: LazyLock<Standin> = LazyLock::new(|| {
         rest_host: standin.host.clone(),
         source: Some(json!({"endpoint": format!("{}/graphql", standin.host)})),
         settle: std::time::Duration::ZERO,
+        fixture_wait: journey::STAND_IN_FIXTURE_WAIT,
     });
     standin
 });
@@ -221,7 +265,7 @@ impl Drive {
 fn drive(first_call: FirstCall) -> (Drive, MutexGuard<'static, ()>) {
     let turn = take_the_turn();
     let standin = &*STANDIN;
-    *standin.first_call.lock().unwrap() = first_call;
+    *standin.first_call.lock().unwrap() = Some(first_call);
     let before = standin.asked.lock().unwrap().len();
     let panic = thread::spawn(|| {
         block_on(journey::run(journey::Nomination {
@@ -264,10 +308,23 @@ fn estimated() -> u64 {
     budget::estimate()[&Budget::Graphql]
 }
 
-/// The free read and the first real call, and nothing else: what a session declined on its
-/// second reading has sent.
-fn the_free_read_and_one_real_call() -> Vec<String> {
-    vec!["GET /rate_limit".to_owned(), "POST /graphql".to_owned()]
+/// Both admission reads — the free `GET /rate_limit` and GraphQL's own `rateLimit` object —
+/// and the first real call, and nothing else: what a session declined on its second reading
+/// has sent.
+fn the_admission_reads_and_one_real_call() -> Vec<String> {
+    vec![
+        "GET /rate_limit".to_owned(),
+        OBJECT_READ.to_owned(),
+        "POST /graphql".to_owned(),
+    ]
+}
+
+/// [`the_admission_reads_and_one_real_call`], and the two reads a recheck under the 40% rule makes
+/// of the budgets again before it decides on the least of every reading.
+fn and_the_recheck_reads() -> Vec<String> {
+    let mut asked = the_admission_reads_and_one_real_call();
+    asked.extend(["GET /rate_limit".to_owned(), OBJECT_READ.to_owned()]);
+    asked
 }
 
 #[test]
@@ -307,9 +364,10 @@ fn a_journey_whose_first_call_carries_less_than_the_endpoint_claimed_does_not_ru
             "{figure} is missing from {message}"
         );
     }
-    // The free read, the one real call, and nothing else — so nothing was written and there
+    // The admission's reads and the one real call, and nothing else — the answer's own headers
+    // already decline it, so the recheck reads nothing more — so nothing was written and there
     // is no partial artifact for anything to leave behind.
-    assert_eq!(drive.asked, the_free_read_and_one_real_call());
+    assert_eq!(drive.asked, the_admission_reads_and_one_real_call());
 
     if std::env::var_os(budget::FOLLOW_THROUGH).is_some() {
         std::panic::resume_unwind(drive.panic);
@@ -351,7 +409,7 @@ fn a_journey_whose_first_call_is_refused_for_a_rate_limit_is_declined_rather_tha
         )),
         "{message}"
     );
-    assert_eq!(drive.asked, the_free_read_and_one_real_call());
+    assert_eq!(drive.asked, the_admission_reads_and_one_real_call());
 }
 
 #[test]
@@ -373,7 +431,7 @@ fn a_first_call_refused_with_the_budget_still_showing_room_is_declined_as_the_se
         )),
         "{message}"
     );
-    assert_eq!(drive.asked, the_free_read_and_one_real_call());
+    assert_eq!(drive.asked, the_admission_reads_and_one_real_call());
 }
 
 #[test]
@@ -398,7 +456,7 @@ fn an_answered_first_call_carrying_no_readable_allowance_declines_rather_than_as
             "{headers:?}: {message}"
         );
         assert!(message.contains("not one it may assume"), "{message}");
-        assert_eq!(drive.asked, the_free_read_and_one_real_call());
+        assert_eq!(drive.asked, the_admission_reads_and_one_real_call());
     }
 }
 
@@ -416,7 +474,7 @@ fn a_first_call_that_never_reached_the_host_fails_as_itself_rather_than_declinin
     assert!(!message.contains("DID NOT RUN"), "{message}");
     // The stand-in recorded the call before hanging up on it, and the journey did not
     // retry it: one free read, one real call.
-    assert_eq!(drive.asked, the_free_read_and_one_real_call());
+    assert_eq!(drive.asked, the_admission_reads_and_one_real_call());
 }
 
 #[test]
@@ -431,11 +489,14 @@ fn a_first_call_carrying_the_allowance_the_endpoint_claimed_lets_the_session_go_
     assert!(message.contains("contract schema drifted"), "{message}");
     assert!(!message.contains("DID NOT RUN"), "{message}");
     assert!(
-        drive.asked.len() > 2,
+        drive.asked.len() > 3,
         "a session the second reading affords goes on past its first real call: {:?}",
         drive.asked
     );
-    assert_eq!(drive.asked[..2], the_free_read_and_one_real_call()[..]);
+    assert_eq!(
+        drive.asked[..3],
+        the_admission_reads_and_one_real_call()[..]
+    );
 }
 
 /// A recorded first real call, for the cases below that need no journey to reach.
@@ -485,7 +546,7 @@ fn the_second_reading_is_decided_on_the_call_recorded_right_after_the_allowance_
             ("x-ratelimit-resource", "graphql"),
         ],
     ));
-    let declined = budget::recheck(&admitted, &into)
+    let declined = block_on(budget::recheck(&admitted, &into))
         .expect_err("nothing left on the second reading declines the session");
     let Some(Unaffordable::Contradicted(readings)) = declined.unaffordable_because() else {
         panic!("a second reading that refuses is a contradiction: {declined:?}");
@@ -520,10 +581,10 @@ fn the_second_reading_is_decided_on_the_call_recorded_right_after_the_allowance_
             ("x-ratelimit-resource", "graphql"),
         ],
     ));
-    budget::recheck(&again, &into).expect("the call after the second read affords it");
+    block_on(budget::recheck(&again, &into)).expect("the call after the second read affords it");
     // And the first admission, re-checked now, still reads the call that followed its own
     // read rather than the latest one.
-    assert!(budget::recheck(&admitted, &into).is_err());
+    assert!(block_on(budget::recheck(&admitted, &into)).is_err());
 }
 
 #[test]
@@ -546,7 +607,8 @@ fn a_first_call_refused_for_something_other_than_a_rate_limit_is_decided_on_its_
             ("x-ratelimit-resource", "graphql"),
         ],
     ));
-    budget::recheck(&admitted, &into).expect("headers with room let the refusal be a refusal");
+    block_on(budget::recheck(&admitted, &into))
+        .expect("headers with room let the refusal be a refusal");
 
     let admitted = admitted_on_the_whole_allowance(&into);
     into.record(recorded_first_call(
@@ -559,7 +621,7 @@ fn a_first_call_refused_for_something_other_than_a_rate_limit_is_decided_on_its_
         ],
     ));
     assert!(
-        budget::recheck(&admitted, &into).is_err(),
+        block_on(budget::recheck(&admitted, &into)).is_err(),
         "headers reporting nothing left decline the session whatever refused the call"
     );
 
@@ -567,7 +629,7 @@ fn a_first_call_refused_for_something_other_than_a_rate_limit_is_decided_on_its_
     // goes on, and that refusal is its own failure to report.
     let admitted = admitted_on_the_whole_allowance(&into);
     into.record(recorded_first_call(Outcome::Refused, &[]));
-    budget::recheck(&admitted, &into)
+    block_on(budget::recheck(&admitted, &into))
         .expect("a refusal that says nothing about the budget does not decline on it");
 }
 
@@ -593,7 +655,13 @@ fn a_reported_first_query_price_retires_demand_before_the_header_recheck() {
                 "{message}"
             );
         }
-        let mut expected = the_free_read_and_one_real_call();
+        // Declined on the answer's own headers with no further read; afforded, the recheck
+        // reads the budgets again before the session goes on.
+        let mut expected = if declined {
+            the_admission_reads_and_one_real_call()
+        } else {
+            and_the_recheck_reads()
+        };
         if !declined {
             expected.push("POST /graphql".into());
         }

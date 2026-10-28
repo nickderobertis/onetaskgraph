@@ -319,6 +319,7 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
             Some(include_str!("fixtures/issues.json")),
         ),
         (graphql::ISSUE, None, None),
+        (graphql::DOCUMENT_IN_PROJECT, None, None),
         (graphql::BOARD_FIELDS, None, None),
         (
             graphql::ORIGIN_LOOKUP,
@@ -338,10 +339,30 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         ),
         (graphql::REPOSITORY, None, None),
         (graphql::CREATION_CONTEXT, None, None),
+        (graphql::ORIGIN_LOOKUPS, None, None),
+        (graphql::ORIGIN_LOOKUPS_WITH_MEMBERS, None, None),
+        (graphql::CREATED_BOARD_ITEMS, None, None),
+        (graphql::CREATE_ISSUES, None, None),
+        (graphql::WRITE_FIELD_VALUES, None, None),
+        (graphql::CLOSE_ISSUES, None, None),
+        (graphql::UPDATE_ISSUES, None, None),
+        (graphql::ADD_BLOCKED_BYS, None, None),
+        (graphql::WRITE_FIELDS_AND_EDGES, None, None),
+        (graphql::DELETE_ISSUES, None, None),
         (
             graphql::ISSUE_DEPENDENCIES,
             Some("/data/node"),
             Some(include_str!("fixtures/dependencies.json")),
+        ),
+        (
+            graphql::ISSUE_DEPENDS_ON,
+            Some("/data"),
+            Some(include_str!("fixtures/dependencies-depends-on.json")),
+        ),
+        (
+            graphql::ISSUE_DEPENDED_ON_BY,
+            Some("/data"),
+            Some(include_str!("fixtures/dependencies-depended-on-by.json")),
         ),
         (graphql::CREATE_ISSUE, None, None),
         (graphql::ADD_TO_BOARD, None, None),
@@ -600,10 +621,10 @@ fn documents_are_all_inventoried_with_what_the_source_is_doing_when_it_sends_one
 
 #[test]
 fn the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact() {
-    // GitHub's refusal wordings and its published ceiling on content creation are
-    // GitHub's contract, not this source's, and this source restates both: the wordings
-    // are what `Limiter::classify` matches a refusal on, and the per-minute ceiling is
-    // what `MIN_MUTATION_INTERVAL_MS` is derived from. Restating an external contract
+    // GitHub's refusal wordings and its published secondary limits are GitHub's contract,
+    // not this source's, and this source restates both: the wordings are what
+    // `Limiter::classify` matches a refusal on, and the limits are the windows this source
+    // paces under, the per-minute one also what `MIN_MUTATION_INTERVAL_MS` is derived from. Restating an external contract
     // without a gate is how the restatement quietly stops being true, so
     // `fixtures/rate-limits.json` is the pin — recorded with its provenance in the README
     // beside it — and this reconciles the two **both ways**: a wording the source matches
@@ -669,6 +690,39 @@ fn the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact() 
         pinned["content_creation"]["per_hour"].as_u64(),
         Some(onetaskgraph_github_projects::CONTENT_CREATION_PER_HOUR),
         "the shipped per-hour ceiling is not the one pinned from GitHub's documentation"
+    );
+    for (key, shipped) in [
+        (
+            "per_minute",
+            onetaskgraph_github_projects::SECONDARY_POINTS_PER_MINUTE,
+        ),
+        (
+            "per_mutation_request",
+            onetaskgraph_github_projects::SECONDARY_POINTS_PER_MUTATION,
+        ),
+        (
+            "per_query_request",
+            onetaskgraph_github_projects::SECONDARY_POINTS_PER_QUERY,
+        ),
+    ] {
+        assert_eq!(
+            pinned["secondary_points"][key].as_u64(),
+            Some(shipped),
+            "the shipped secondary points {key} is not the one pinned from GitHub's \
+             documentation"
+        );
+    }
+    let pinned_points: HashSet<&str> = pinned["secondary_points"]
+        .as_object()
+        .expect("the pin records the secondary points")
+        .keys()
+        .map(String::as_str)
+        .filter(|key| *key != "read")
+        .collect();
+    assert_eq!(
+        pinned_points,
+        HashSet::from(["per_minute", "per_mutation_request", "per_query_request"]),
+        "fixtures/rate-limits.json pins a secondary points figure this source does not pace by"
     );
     // And the derivation itself, because the pin is only worth having if the value this
     // source actually paces at moves with it.
@@ -885,4 +939,98 @@ fn a_configuration_round_trips_and_leaves_its_empty_lists_out() {
         "metadata_fields": [{"field": "Host", "key": "orchestrator.follow-up", "path": ["host"]}],
     }));
     assert_eq!(read(&written(&full)), full);
+}
+
+#[test]
+fn every_batch_document_declares_and_sends_exactly_the_slots_its_constant_counts() {
+    // The batch documents spell their slots out one by one, and the source fills and reads them
+    // by the constants: each prefix's input variable, its include variable and its alias are
+    // declared exactly that many times, numbered from nought, and no more.
+    use onetaskgraph_github_projects::{DELETE_BATCH, MUTATION_BATCH, WRITE_BATCH, graphql};
+    // Each document by name, the document, each kind's slot prefix and include prefix, and how
+    // many slots its constant counts.
+    type Batch<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)], usize);
+    let batches: [Batch<'_>; 7] = [
+        (
+            "CREATE_ISSUES",
+            graphql::CREATE_ISSUES,
+            &[("create", "send")],
+            MUTATION_BATCH,
+        ),
+        (
+            "CLOSE_ISSUES",
+            graphql::CLOSE_ISSUES,
+            &[("close", "send")],
+            MUTATION_BATCH,
+        ),
+        (
+            "UPDATE_ISSUES",
+            graphql::UPDATE_ISSUES,
+            &[("update", "send")],
+            MUTATION_BATCH,
+        ),
+        (
+            "WRITE_FIELD_VALUES",
+            graphql::WRITE_FIELD_VALUES,
+            &[("field", "send")],
+            WRITE_BATCH,
+        ),
+        (
+            "ADD_BLOCKED_BYS",
+            graphql::ADD_BLOCKED_BYS,
+            &[("block", "send")],
+            WRITE_BATCH,
+        ),
+        (
+            "WRITE_FIELDS_AND_EDGES",
+            graphql::WRITE_FIELDS_AND_EDGES,
+            &[("field", "sendField"), ("block", "sendBlock")],
+            WRITE_BATCH,
+        ),
+        (
+            "DELETE_ISSUES",
+            graphql::DELETE_ISSUES,
+            &[("delete", "send")],
+            DELETE_BATCH,
+        ),
+    ];
+    for (name, document, kinds, slots) in batches {
+        for (prefix, send) in kinds {
+            let numbered = |pattern: &str| -> Vec<usize> {
+                let mut found = Vec::new();
+                let mut rest = document;
+                while let Some(at) = rest.find(pattern) {
+                    rest = &rest[at + pattern.len()..];
+                    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                    if !digits.is_empty() && rest[digits.len()..].starts_with([':', ')']) {
+                        found.push(digits.parse().unwrap());
+                    }
+                }
+                found.sort_unstable();
+                found
+            };
+            let expected: Vec<usize> = (0..slots).collect();
+            assert_eq!(
+                numbered(&format!("${prefix}")),
+                expected
+                    .iter()
+                    .flat_map(|slot| [*slot, *slot])
+                    .collect::<Vec<_>>(),
+                "{name} declares and passes `${prefix}<n>` other than once each for {slots} slots"
+            );
+            assert_eq!(
+                numbered(&format!("${send}")),
+                expected
+                    .iter()
+                    .flat_map(|slot| [*slot, *slot])
+                    .collect::<Vec<_>>(),
+                "{name} declares and reads `${send}<n>` other than once each for {slots} slots"
+            );
+            assert_eq!(
+                numbered(&format!(" {prefix}")),
+                expected,
+                "{name} aliases `{prefix}<n>` other than once each for {slots} slots"
+            );
+        }
+    }
 }

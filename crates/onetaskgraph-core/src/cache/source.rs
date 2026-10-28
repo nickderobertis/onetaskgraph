@@ -38,11 +38,11 @@ use std::sync::Arc;
 use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Comment, CommentBody, CommentCopy,
     DependencyEdge, Direction, Document, DocumentQuery, DocumentVersionCoverage, Health,
-    IssueHolding, IssueRef, ItemKind, ItemWrite, Label, MetadataKey, Metering, NativeId,
-    NewComment, Page, PageRequest, PartOutcome, Priority, Project, ProjectQuery,
-    ProjectVersionCoverage, SourceError, Status, StatusCategory, StatusContradiction, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, VersionCoverage,
-    Visibility, WriteJournal, WriteSupport, WriteTarget,
+    IssueHolding, IssueRef, ItemKind, ItemWrite, Label, Location, MetadataKey, MetadataRecord,
+    Metering, NativeId, NewComment, Page, PageRequest, PartOutcome, Priority, Project,
+    ProjectQuery, ProjectVersionCoverage, SourceError, Status, StatusCategory, StatusContradiction,
+    Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
+    VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget,
 };
 use serde_json::Value;
 
@@ -994,6 +994,10 @@ impl TaskSource for CachedSource {
         self.inner.health().await
     }
 
+    async fn designator(&self) -> Result<Option<onetaskgraph_plugin_api::Designator>, SourceError> {
+        self.inner.designator().await
+    }
+
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
         self.prime_expected(id);
         match self.servable(id, false) {
@@ -1056,6 +1060,75 @@ impl TaskSource for CachedSource {
         .await
     }
 
+    /// Only what the cache cannot answer is read ahead: an id whose task or document entry a
+    /// pin in this command vouches for is served by its own read with no request, so reading
+    /// it again ahead of that would spend a request on an answer already held. A task or a
+    /// project is served only when the cache holds its forward edges too, which a copy reads of
+    /// it next: where the token does not cover them, or the entry holds none, its edge reads
+    /// would each be a request of their own, and reading it ahead carries them in the one
+    /// request instead.
+    async fn read_ahead_for_copy(&self, ids: &[NativeId]) -> Result<(), SourceError> {
+        let unserved: Vec<NativeId> = ids
+            .iter()
+            .filter(|id| {
+                let task = self.servable(id, false).is_ok() && self.held_edges(id).is_some();
+                let project = self.servable_project(id).is_some()
+                    && self.cache.project_coverage.forward_edges.reason().is_none()
+                    && self.held_project_edges(id).is_some();
+                !(task || project || self.servable_document(id).is_some())
+            })
+            .cloned()
+            .collect();
+        // Handed on even when the cache answers every id: what the source holds back for the
+        // read ahead — the origins asked just before — is sent by this call.
+        self.inner.read_ahead_for_copy(&unserved).await
+    }
+
+    async fn read_ahead_origins_for_copy(&self, origins: &[String]) -> Result<(), SourceError> {
+        self.inner.read_ahead_origins_for_copy(origins).await
+    }
+
+    async fn member_classifications(
+        &self,
+        project: &NativeId,
+    ) -> Result<
+        Option<
+            Vec<(
+                onetaskgraph_plugin_api::Classification,
+                Vec<onetaskgraph_plugin_api::Repository>,
+            )>,
+        >,
+        SourceError,
+    > {
+        self.inner.member_classifications(project).await
+    }
+
+    fn create_batch_limit(&self) -> usize {
+        self.inner.create_batch_limit()
+    }
+
+    async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        // Every one a create, so nothing of this cache names an item they land on; what they can
+        // change of it is the reverse edges of the tasks they name, as one create's can.
+        self.relating(EdgeKind::TaskReverse, self.inner.write_tasks(writes))
+            .await
+    }
+
+    fn begin_deferred_writes(&self) {
+        self.inner.begin_deferred_writes();
+    }
+
+    async fn finish_writes(&self) -> Result<(), SourceError> {
+        // What was held back includes the edges of the tasks it created, which move the reverse
+        // edges of the tasks they name, exactly as a write landing them whole would.
+        self.relating(EdgeKind::TaskReverse, self.inner.finish_writes())
+            .await
+    }
+
+    fn written_location(&self, record: MetadataRecord, id: &NativeId) -> Option<Location> {
+        self.inner.written_location(record, id)
+    }
+
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
         if let Some(project) = self.servable_project(id) {
             return Ok(Some(project));
@@ -1093,6 +1166,24 @@ impl TaskSource for CachedSource {
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         let listed = self.inner.query_projects(query, page).await?;
+        let mut command = self.cache.command();
+        for project in &listed.items {
+            if let Some(version) = &project.version {
+                command
+                    .project_listed
+                    .insert(project.id.clone(), version.clone());
+            }
+        }
+        drop(command);
+        Ok(listed)
+    }
+
+    async fn query_projects_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        let listed = self.inner.query_projects_by_origin(origin, page).await?;
         let mut command = self.cache.command();
         for project in &listed.items {
             if let Some(version) = &project.version {
@@ -1168,6 +1259,14 @@ impl TaskSource for CachedSource {
         self.inner.writes()
     }
 
+    async fn stored_status(&self, kind: ItemKind, status: &Status) -> Result<Status, SourceError> {
+        self.inner.stored_status(kind, status).await
+    }
+
+    fn stored_content(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        self.inner.stored_content(record, id)
+    }
+
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.relating(
             EdgeKind::TaskReverse,
@@ -1196,6 +1295,10 @@ impl TaskSource for CachedSource {
             self.prime_expected(target);
         }
         self.inner.check_status_write(kind, category, target).await
+    }
+
+    fn status_as_written(&self, kind: ItemKind, status: &Status) -> Status {
+        self.inner.status_as_written(kind, status)
     }
 
     async fn set_task_status(
@@ -1314,6 +1417,15 @@ impl TaskSource for CachedSource {
         }
     }
 
+    async fn set_project_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        self.retiring(Some(id), self.inner.set_project_status(id, category))
+            .await
+    }
+
     async fn set_project_metadata(
         &self,
         id: &NativeId,
@@ -1400,6 +1512,24 @@ impl TaskSource for CachedSource {
         page: &PageRequest,
     ) -> Result<Page<Document>, SourceError> {
         let listed = self.inner.query_documents(query, page).await?;
+        let mut command = self.cache.command();
+        for document in &listed.items {
+            if let Some(version) = &document.version {
+                command
+                    .document_listed
+                    .insert(document.id.clone(), version.clone());
+            }
+        }
+        drop(command);
+        Ok(listed)
+    }
+
+    async fn query_documents_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        let listed = self.inner.query_documents_by_origin(origin, page).await?;
         let mut command = self.cache.command();
         for document in &listed.items {
             if let Some(version) = &document.version {
@@ -2926,12 +3056,14 @@ mod tests {
             repositories: Vec::new(),
             classification: Default::default(),
         });
-        let Some(_refusing) = refusing_in(&dir.path().join("projects-v2")) else {
+        let Some(_refusing) =
+            refusing_in(&dir.path().join(format!("projects-v{}", KIND_ENTRY_SCHEMA)))
+        else {
             return;
         };
         let _read_only = Mode::set(
             &dir.path()
-                .join("projects-v2")
+                .join(format!("projects-v{}", KIND_ENTRY_SCHEMA))
                 .join(format!("{}.json", super::super::digest("P-1"))),
             0o444,
         );

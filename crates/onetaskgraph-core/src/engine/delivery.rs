@@ -50,6 +50,19 @@ pub struct TaskStatusSet {
     /// fallback read included — absent for a write made without `--expect`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spent: Option<Spent>,
+    /// The public projection the new status category was mirrored to — absent for a task
+    /// with none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection: Option<GlobalId>,
+}
+
+/// What `project status set` and [`Engine::set_project_status`] answer with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectStatusSet {
+    /// The project whose status was set.
+    pub id: GlobalId,
+    /// Its status as its source reads it back.
+    pub status: Status,
 }
 
 /// What keeping one delivered task in step with one deliverer came to.
@@ -163,6 +176,7 @@ impl Engine {
                 &delivers,
             )
             .await;
+        let projection = self.mirror_status(id, &task, status.category).await?;
         Ok(TaskStatusSet {
             id: id.clone(),
             status,
@@ -170,6 +184,58 @@ impl Engine {
             result,
             fallback,
             spent,
+            projection,
+        })
+    }
+
+    /// Set one project's status, and nothing else about it.
+    ///
+    /// A project delivers no task, so nothing is kept in step after it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::UnknownSource`] for a source nothing configures,
+    /// [`EngineError::StatusNotWritable`] for one with no write side,
+    /// [`EngineError::NoSuchProject`] when the project is not there, and
+    /// [`EngineError::SourceFailed`] when the source refuses — a category it has disabled
+    /// included.
+    pub async fn set_project_status(
+        &self,
+        id: &GlobalId,
+        category: StatusCategory,
+    ) -> Result<ProjectStatusSet, EngineError> {
+        let source = self.status_writable(&id.source)?;
+        self.admit_existing(
+            source,
+            &id.to_string(),
+            &id.native,
+            Held::Project,
+            &Exposure::metadata([category_name(category)]),
+        )
+        .await?;
+        let status = source
+            .source()
+            .set_project_status(&id.native, category)
+            .await
+            .map_err(|error| source_failed(source, error))?
+            .ok_or_else(|| EngineError::NoSuchProject { id: id.to_string() })?;
+        // What a plugin answers is input: a write that reads back as another category did not
+        // land as asked, and is refused as malformed rather than reported as having written it.
+        if status.category != category {
+            return Err(source_failed(
+                source,
+                SourceError::Malformed {
+                    message: format!(
+                        "a write of {id} to {} read back as {}",
+                        category_name(category),
+                        category_name(status.category)
+                    ),
+                },
+            ));
+        }
+        Ok(ProjectStatusSet {
+            id: id.clone(),
+            status,
         })
     }
 
@@ -296,31 +362,9 @@ impl Engine {
             .iter()
             .filter(|other| !self.withholds(&ticket.source, other, private))
             .collect();
-        // The ticket is held to what it inherits as well as its record: while the boundary is
-        // active, the project it is filed under.
-        let ticket_class = match &task.project {
-            Some(filed) if self.boundary_active() => {
-                match self
-                    .source_project_class(
-                        &GlobalId::new(ticket.source.clone(), filed.clone()),
-                        &mut std::collections::HashMap::new(),
-                    )
-                    .await
-                {
-                    Ok(inherited) => task.classification.strictest(inherited),
-                    // Unclassified is held private where the ticket's source is, and refused
-                    // anywhere else.
-                    Err(EngineError::ProjectUnclassified { .. })
-                        if self.declared(&ticket.source)
-                            == crate::config::SourceVisibility::Private =>
-                    {
-                        Classification::Private
-                    }
-                    Err(error) => return entry(failed(Some(from), &error), Vec::new()),
-                }
-            }
-            _ => task.classification,
-        };
+        // The ticket is held to its own record alone: a task inherits nothing from the project
+        // it is filed under.
+        let ticket_class = task.classification;
         if !written.iter().copied().eq(&held) {
             let list: Vec<TaskRef> = written
                 .iter()
@@ -377,13 +421,20 @@ impl Engine {
             return entry(failed(Some(from), &error), pruned);
         }
         match source.source().set_task_status(&ticket.native, to).await {
-            Ok(Some(status)) => entry(
-                DeliveryOutcome::Written {
-                    from,
-                    to: status.category,
-                },
-                pruned,
-            ),
+            // A ticket with a public projection hands it the category too; a mirror that could
+            // not be made is this ticket's failure, its own status written.
+            Ok(Some(status)) => {
+                match Box::pin(self.mirror_status(ticket, &task, status.category)).await {
+                    Ok(_) => entry(
+                        DeliveryOutcome::Written {
+                            from,
+                            to: status.category,
+                        },
+                        pruned,
+                    ),
+                    Err(error) => entry(failed(Some(from), &error), pruned),
+                }
+            }
             Ok(None) => entry(failed(Some(from), &no_such_task()), pruned),
             Err(error) => entry(failed(Some(from), &source_failed(source, error)), pruned),
         }

@@ -283,6 +283,7 @@ async fn disposable_task_and_document_asset_copies() {
         &ledger,
         journey::budget::assets_remaining_design_points(),
     )
+    .await
     .unwrap_or_else(|declined| declined.refuse());
     let config = journey::source_config(lane::live_write_config(
         &owner,
@@ -354,6 +355,7 @@ async fn disposable_task_and_document_asset_copies() {
                     CopyScope::Documents
                 },
                 destination: name("board"),
+                target_task: None,
                 match_by: None,
                 recreate: false,
                 create: true,
@@ -361,6 +363,7 @@ async fn disposable_task_and_document_asset_copies() {
                 comments: false,
                 no_link: false,
                 expect: None,
+                status_policy: onetaskgraph_core::StatusPolicy::Source,
                 statuses: Vec::new(),
             };
             let report = engine
@@ -464,7 +467,8 @@ async fn disposable_task_and_document_asset_copies() {
         &admitted,
         &ledger,
         journey::budget::assets_remaining_design_points(),
-    );
+    )
+    .await;
     let cleanup = Plugin
         .build_recording_into(&name("board"), &config, &secrets, ledger.clone())
         .unwrap();
@@ -528,6 +532,101 @@ async fn status_option_names(
         .collect())
 }
 
+/// Every issue id the board's own `is:closed` filter answers, page by page: ids alone, so the
+/// wait in [`wait_until_closed_filter_answers`] costs one point a read.
+const CLOSED_ISSUE_IDS: &str = r#"query($owner:String!,$number:Int!,$after:String){
+      closedIds:repositoryOwner(login:$owner){
+        ... on ProjectV2Owner{projectV2(number:$number){
+          items(first:100,after:$after,query:"is:closed"){
+            nodes{content{... on Issue{id}}} pageInfo{hasNextPage endCursor}
+          }
+        }}
+      }
+    }"#;
+
+/// How long the reconcile journey waits for the board's `is:closed` filter to answer the two
+/// issues it has just closed.
+///
+/// GitHub answers `ProjectV2.items`, filtered or not, from an index that trails the board by
+/// many minutes, while the item read by its own id is already there. A reconcile reads the
+/// filter alone by design, so the journey waits for the index to answer what it closed
+/// rather than assert against it, and a run that outwaits this fails naming the lag.
+const CLOSED_INDEX_WAIT: std::time::Duration = std::time::Duration::from_secs(45 * 60);
+
+/// How often the wait in [`wait_until_closed_filter_answers`] reads the filter again.
+const CLOSED_INDEX_POLL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Waits until the board's `is:closed` filter answers every issue in `ids`, reading it whole
+/// once per [`CLOSED_INDEX_POLL`] for at most [`CLOSED_INDEX_WAIT`], and fails naming the ids
+/// it still lacks.
+async fn wait_until_closed_filter_answers(
+    endpoint: &str,
+    token: &str,
+    owner: &str,
+    number: u32,
+    ids: &[&str],
+    ledger: &Accounting,
+) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    loop {
+        let mut answered = std::collections::BTreeSet::new();
+        let mut after: Option<String> = None;
+        loop {
+            let page = asset_graphql(
+                endpoint,
+                token,
+                CLOSED_ISSUE_IDS,
+                &json!({"owner":owner,"number":number,"after":after}),
+                ledger,
+            )
+            .await?;
+            let items = &page["data"]["closedIds"]["projectV2"]["items"];
+            for node in items["nodes"]
+                .as_array()
+                .ok_or("the closed filter answered no items")?
+            {
+                if let Some(id) = node["content"]["id"].as_str() {
+                    answered.insert(id.to_owned());
+                }
+            }
+            if !items["pageInfo"]["hasNextPage"]
+                .as_bool()
+                .ok_or("the closed filter answered no hasNextPage")?
+            {
+                break;
+            }
+            after = Some(
+                items["pageInfo"]["endCursor"]
+                    .as_str()
+                    .ok_or("the closed filter answered a next page and no cursor")?
+                    .to_owned(),
+            );
+        }
+        let missing: Vec<&str> = ids
+            .iter()
+            .copied()
+            .filter(|id| !answered.contains(*id))
+            .collect();
+        let waited = started.elapsed();
+        if missing.is_empty() {
+            journey::say(&format!(
+                "the board's is:closed filter answered both closed tasks after {}s",
+                waited.as_secs()
+            ));
+            return Ok(());
+        }
+        if waited >= CLOSED_INDEX_WAIT {
+            return Err(format!(
+                "GitHub's is:closed filter on the board still did not answer {missing:?} {}s \
+                 after they were closed: its index trails the board by more than this journey \
+                 waits, so the reconcile could not be asked to find them",
+                waited.as_secs()
+            ));
+        }
+        tokio::time::sleep(CLOSED_INDEX_POLL).await;
+    }
+}
+
 /// `task status reconcile --dry-run` against the live lane's own board: one task closed as
 /// completed outside the stack while its card still reads the board's first option, and one
 /// written `done` through the source, card and closure in line.
@@ -535,8 +634,9 @@ async fn status_option_names(
 /// It reads the board through its own `is:closed` filter, so what GitHub answers that filter
 /// with is the fact this journey re-takes on every run: every item the filtered read returns is
 /// a closed issue. The dry run then has to list the contradicting task, from its option to the
-/// `done` option, and not the one in line — and writes nothing. Both tasks are taken back
-/// afterwards, whatever came of the assertions.
+/// `done` option, and not the one in line — and writes nothing. It first waits for GitHub's
+/// index of that filter to answer both tasks (see [`CLOSED_INDEX_WAIT`]). Both tasks are taken
+/// back afterwards, whatever came of the assertions.
 #[tokio::test]
 async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alone() {
     if !onetaskgraph_github_live::quota::live_selected().unwrap() {
@@ -634,6 +734,7 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
             .unwrap(),
             scope: CopyScope::Tasks,
             destination: name("board"),
+            target_task: None,
             match_by: None,
             recreate: false,
             create: true,
@@ -641,6 +742,7 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
             comments: false,
             no_link: true,
             expect: None,
+            status_policy: onetaskgraph_core::StatusPolicy::Source,
             statuses: Vec::new(),
         };
         let report = engine
@@ -672,6 +774,15 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
             .end_command()
             .await
             .map_err(|error| error.to_string())?;
+        wait_until_closed_filter_answers(
+            &graphql_endpoint,
+            token,
+            &owner,
+            number,
+            &[in_line.native.0.as_str(), contradicting.native.0.as_str()],
+            &ledger,
+        )
+        .await?;
         // What GitHub answers the board's closed filter with: closed issues, and nothing else.
         let closed = asset_graphql(
             &graphql_endpoint,

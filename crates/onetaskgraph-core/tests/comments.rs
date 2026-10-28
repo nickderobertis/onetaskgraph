@@ -179,6 +179,7 @@ async fn copies_on_a_source_keeping_the_marker_read_back_as_copies_and_stay_so_t
         items: CopyItems::new(vec![id("memory:T-1")]).expect("one item"),
         scope: CopyScope::Tasks,
         destination: name("into"),
+        target_task: None,
         match_by: None,
         recreate: false,
         create: false,
@@ -186,6 +187,7 @@ async fn copies_on_a_source_keeping_the_marker_read_back_as_copies_and_stay_so_t
         comments: true,
         no_link: true,
         expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
     };
     let counts = |report: &CopyReport| report.items[0].comments().copied();

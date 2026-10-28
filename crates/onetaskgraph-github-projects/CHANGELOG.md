@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.7](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.12.6...onetaskgraph-github-projects-v0.12.7) - 2026-10-27
+
+### Performance
+
+- *(copy)* batch a private source's origin lookups and reuse carried dependency edges ([#3775](https://github.com/nickderobertis/onetaskgraph/pull/3775))
+
+## [0.12.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.12.2...onetaskgraph-github-projects-v0.12.3) - 2026-10-25
+
+### Fixed
+
+- *(live)* never let a finished run's board residue block the live suite ([#3761](https://github.com/nickderobertis/onetaskgraph/pull/3761))
+
+### Performance
+
+- *(copy)* remove redundant screening and hosted reads ([#3749](https://github.com/nickderobertis/onetaskgraph/pull/3749))
+
+## [0.12.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.12.1...onetaskgraph-github-projects-v0.12.2) - 2026-10-25
+
+### Performance
+
+- *(cli)* cut store start-up and plan loading ([#3746](https://github.com/nickderobertis/onetaskgraph/pull/3746))
+
+## [0.12.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.12.0...onetaskgraph-github-projects-v0.12.1) - 2026-10-24
+
+### Added
+
+- support task-owned visibility and private coordination projections ([#3725](https://github.com/nickderobertis/onetaskgraph/pull/3725))
+
+## [0.12.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.11.1...onetaskgraph-github-projects-v0.12.0) - 2026-10-24
+
+### Added
+
+- [**breaking**] read dependencies from a task's own record, naming private ones opaquely ([#3724](https://github.com/nickderobertis/onetaskgraph/pull/3724))
+
+### Performance
+
+- cut backend requests per dependency read, status write and settlement ([#3727](https://github.com/nickderobertis/onetaskgraph/pull/3727))
+
+## [0.9.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.9.2...onetaskgraph-github-projects-v0.9.3) - 2026-10-21
+
+### Fixed
+
+- *(e2e)* make the loopback board and the live journey's readiness wait reliable ([#3695](https://github.com/nickderobertis/onetaskgraph/pull/3695))
+
+### Performance
+
+- *(github-projects)* list a project's members and write metadata in one request each ([#3711](https://github.com/nickderobertis/onetaskgraph/pull/3711))
+
+## [0.9.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.9.1...onetaskgraph-github-projects-v0.9.2) - 2026-10-20
+
+### Added
+
+- *(copy)* [**breaking**] home a plan where its repository-naming tasks route, and reuse its member project ([#3685](https://github.com/nickderobertis/onetaskgraph/pull/3685))
+
+### Performance
+
+- *(github-projects)* write a copied item in fewer requests ([#3692](https://github.com/nickderobertis/onetaskgraph/pull/3692))
+
+## [0.9.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.9.0...onetaskgraph-github-projects-v0.9.1) - 2026-10-20
+
+### Performance
+
+- *(copy)* copy and list a plan without reading the whole board ([#3679](https://github.com/nickderobertis/onetaskgraph/pull/3679))
+
+## [0.9.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.8.0...onetaskgraph-github-projects-v0.9.0) - 2026-10-19
+
+### Added
+
+- *(status)* [**breaking**] move a project item with its issue's closure and set a project's status ([#3681](https://github.com/nickderobertis/onetaskgraph/pull/3681))
+
 ## [0.8.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.7.3...onetaskgraph-github-projects-v0.8.0) - 2026-10-19
 
 ### Added

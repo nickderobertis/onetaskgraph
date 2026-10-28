@@ -214,9 +214,17 @@ impl Engine {
             running.linking.push(Linking {
                 item: listed.id.clone(),
                 level: Level::Task,
-                found: Some(*found),
+                found: Some(found.clone()),
                 destination: landed.clone(),
                 held: listed.item.metadata.get(MetadataKey::COPIES_KEY).cloned(),
+                held_locations: listed
+                    .item
+                    .metadata
+                    .get(MetadataKey::COPY_LOCATIONS_KEY)
+                    .cloned(),
+                // A task skipped by its tokens was not read at the destination, so where it is
+                // is not known here; whatever its own entry records is kept.
+                location: None,
             });
         }
         let counts = request.comments.then(|| {

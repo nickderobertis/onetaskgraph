@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.7](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.12.6...onetaskgraph-core-v0.12.7) - 2026-10-27
+
+### Performance
+
+- *(copy)* batch a private source's origin lookups and reuse carried dependency edges ([#3775](https://github.com/nickderobertis/onetaskgraph/pull/3775))
+
+## [0.12.5](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.12.4...onetaskgraph-core-v0.12.5) - 2026-10-25
+
+### Fixed
+
+- *(copy)* carry an anchor naming no destination into a public projection ([#3769](https://github.com/nickderobertis/onetaskgraph/pull/3769))
+
+## [0.12.4](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.12.3...onetaskgraph-core-v0.12.4) - 2026-10-25
+
+### Fixed
+
+- *(linear)* [**breaking**] take what Linear stores from each write's own answer ([#3762](https://github.com/nickderobertis/onetaskgraph/pull/3762))
+
+## [0.12.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.12.2...onetaskgraph-core-v0.12.3) - 2026-10-25
+
+### Performance
+
+- *(copy)* remove redundant screening and hosted reads ([#3749](https://github.com/nickderobertis/onetaskgraph/pull/3749))
+
+## [0.12.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.12.0...onetaskgraph-core-v0.12.1) - 2026-10-24
+
+### Added
+
+- support task-owned visibility and private coordination projections ([#3725](https://github.com/nickderobertis/onetaskgraph/pull/3725))
+
+## [0.12.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.11.1...onetaskgraph-core-v0.12.0) - 2026-10-24
+
+### Added
+
+- [**breaking**] read dependencies from a task's own record, naming private ones opaquely ([#3724](https://github.com/nickderobertis/onetaskgraph/pull/3724))
+
+### Performance
+
+- cut backend requests per dependency read, status write and settlement ([#3727](https://github.com/nickderobertis/onetaskgraph/pull/3727))
+
+## [0.11.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.10.0...onetaskgraph-core-v0.11.0) - 2026-10-22
+
+### Added
+
+- *(copy)* [**breaking**] bind a copy to an existing destination task the caller names ([#3721](https://github.com/nickderobertis/onetaskgraph/pull/3721))
+- *(copy)* [**breaking**] keep a destination item's status on update when the caller asks ([#3718](https://github.com/nickderobertis/onetaskgraph/pull/3718))
+
+## [0.10.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.4...onetaskgraph-core-v0.10.0) - 2026-10-22
+
+### Added
+
+- *(copy)* [**breaking**] copy named members into an existing project without reading or writing the project ([#3714](https://github.com/nickderobertis/onetaskgraph/pull/3714))
+
+## [0.9.4](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.3...onetaskgraph-core-v0.9.4) - 2026-10-22
+
+### Added
+
+- *(engine)* read the image assets a task holds ([#3713](https://github.com/nickderobertis/onetaskgraph/pull/3713))
+
+## [0.9.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.2...onetaskgraph-core-v0.9.3) - 2026-10-21
+
+### Performance
+
+- *(github-projects)* list a project's members and write metadata in one request each ([#3711](https://github.com/nickderobertis/onetaskgraph/pull/3711))
+
+## [0.9.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.1...onetaskgraph-core-v0.9.2) - 2026-10-20
+
+### Added
+
+- *(copy)* [**breaking**] home a plan where its repository-naming tasks route, and reuse its member project ([#3685](https://github.com/nickderobertis/onetaskgraph/pull/3685))
+- *(copy)* [**breaking**] record the body_digest of what Linear stores ([#3687](https://github.com/nickderobertis/onetaskgraph/pull/3687))
+
+### Performance
+
+- *(github-projects)* write a copied item in fewer requests ([#3692](https://github.com/nickderobertis/onetaskgraph/pull/3692))
+
+## [0.9.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.9.0...onetaskgraph-core-v0.9.1) - 2026-10-20
+
+### Performance
+
+- *(copy)* copy and list a plan without reading the whole board ([#3679](https://github.com/nickderobertis/onetaskgraph/pull/3679))
+
+## [0.9.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.8.0...onetaskgraph-core-v0.9.0) - 2026-10-19
+
+### Added
+
+- *(status)* [**breaking**] move a project item with its issue's closure and set a project's status ([#3681](https://github.com/nickderobertis/onetaskgraph/pull/3681))
+
 ## [0.8.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.7.3...onetaskgraph-core-v0.8.0) - 2026-10-19
 
 ### Added

@@ -66,12 +66,13 @@ use cleanup::{
 };
 
 // `settle` is shared with `tests/settle_gate.rs`, which drives these reads against a loopback
-// workspace whose index lags.
+// workspace whose index lags, and the read after a change against a replica that lags.
 mod settle;
 
 use settle::{
-    LINEAR_DOCUMENT_LISTING, LINEAR_INDEX, settled, settled_document_absent, settled_documents,
-    settled_label, settled_tasks, settled_walk, task_titles, walked_task_titles,
+    LINEAR_DOCUMENT_LISTING, LINEAR_INDEX, LINEAR_REPLICA, settled, settled_document_absent,
+    settled_documents, settled_label, settled_tasks, settled_walk, task_titles, token_moved,
+    walked_task_titles,
 };
 
 /// The two workflow states this fixture files its issues under.
@@ -267,6 +268,19 @@ async fn drive_every_declared_capability(
     ensure!(
         missing.is_none(),
         "a status mutation to a nonexistent issue was not not-found"
+    );
+    // And the same for a project, whose spelling `PROJECT_NOT_FOUND_MESSAGE` and its
+    // presentable alternative record: a project status write to no project is no such project.
+    let missing = source
+        .set_project_status(
+            &NativeId("00000000-0000-0000-0000-000000000000".into()),
+            StatusCategory::Todo,
+        )
+        .await
+        .map_err(|error| format!("the live missing-project status contract drifted: {error}"))?;
+    ensure!(
+        missing.is_none(),
+        "a status mutation to a nonexistent project was not not-found"
     );
     // Every listing below is scoped by the label all three issues carry, because Linear's
     // `issues` connection is the whole workspace: without it these would be containments
@@ -662,37 +676,6 @@ async fn every_field_change_moves_a_linear_tasks_token(
         );
         Ok::<Task, String>(held)
     };
-    // Whether a change to a member the token covers moved it: never to an equal or an earlier
-    // token, which would let a cache serve the task as it was.
-    let moved = |kind: &str, before: &Task, after: &Task| {
-        let (Some(was), Some(now)) = (before.version.as_deref(), after.version.as_deref()) else {
-            return Ok(());
-        };
-        let order = source.order_versions(was, now);
-        ensure!(
-            !matches!(
-                order,
-                Some(std::cmp::Ordering::Equal | std::cmp::Ordering::Greater)
-            ),
-            "{kind} left the task's token at or before {was}: it read {now} ({order:?}); \
-             updatedAt {:?} → {:?}, content {}, metadata {} — a read whose members are all \
-             unchanged is older than the write, and one whose content or metadata changed is \
-             Linear not moving updatedAt for it",
-            before.updated_at,
-            after.updated_at,
-            if before.content == after.content {
-                "unchanged"
-            } else {
-                "changed"
-            },
-            if before.metadata == after.metadata {
-                "unchanged"
-            } else {
-                "changed"
-            },
-        );
-        Ok::<(), String>(())
-    };
     let pause = || tokio::time::sleep(std::time::Duration::from_millis(1_100));
     let mut evidence = Vec::new();
     let mut before = read().await?;
@@ -762,8 +745,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
         .await
         .map_err(|error| format!("live content write failed: {error}"))?
         .ok_or_else(|| "the task to edit was not there".to_owned())?;
-    let after = read().await?;
-    moved("a body edit", &before, &after)?;
+    let after = token_moved(source, LINEAR_REPLICA, "a body edit", &before, &read).await?;
     note("a body edit", &before, &after);
     before = after;
 
@@ -779,8 +761,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
         .await
         .map_err(|error| format!("live title write failed: {error}"))?
         .ok_or_else(|| "the task to rename was not there".to_owned())?;
-    let after = read().await?;
-    moved("a title edit", &before, &after)?;
+    let after = token_moved(source, LINEAR_REPLICA, "a title edit", &before, &read).await?;
     note("a title edit", &before, &after);
     before = after;
 
@@ -800,8 +781,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
         })
         .await
         .map_err(|error| format!("live label write failed: {error}"))?;
-    let after = read().await?;
-    moved("a label change", &before, &after)?;
+    let after = token_moved(source, LINEAR_REPLICA, "a label change", &before, &read).await?;
     note("a label change", &before, &after);
     before = after;
 
@@ -815,8 +795,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
         .await
         .map_err(|error| format!("live metadata write failed: {error}"))?
         .ok_or_else(|| "the task to annotate was not there".to_owned())?;
-    let after = read().await?;
-    moved("a metadata change", &before, &after)?;
+    let after = token_moved(source, LINEAR_REPLICA, "a metadata change", &before, &read).await?;
     note("a metadata change", &before, &after);
     before = after;
 
@@ -826,8 +805,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
         .await
         .map_err(|error| format!("live priority write failed: {error}"))?
         .ok_or_else(|| "the task to prioritise was not there".to_owned())?;
-    let after = read().await?;
-    moved("a priority change", &before, &after)?;
+    let after = token_moved(source, LINEAR_REPLICA, "a priority change", &before, &read).await?;
     note("a priority change", &before, &after);
     before = after;
 
@@ -862,8 +840,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
         .await
         .map_err(|error| format!("live status write failed: {error}"))?
         .ok_or_else(|| "the task to finish was not there".to_owned())?;
-    let after = read().await?;
-    moved("a status change", &before, &after)?;
+    let after = token_moved(source, LINEAR_REPLICA, "a status change", &before, &read).await?;
     note("a status change", &before, &after);
 
     eprintln!(
@@ -914,6 +891,22 @@ const PROBE: &str = "P.\n\n<!-- probe {\"site\":\"example.com\",\"list\":[1]} --
 /// comment the domain-like value is autolinked and the array's brackets escaped, the second
 /// comment's closing line is escaped, and the code span comes back as it was written.
 const PROBE_STORED: &str = "P.\n\n<!-- probe {\"site\":\"[example.com](<http://example.com>)\",\"list\":\\[1\\]} -->\n\n<!-- probe\n{\"k\":\"v\"}\n\\-->\n\n<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->";
+
+/// One instance of each rewrite Linear was observed to make of Markdown on write but the lone
+/// image, which `linear_assets`' live journey writes with real uploads: a
+/// bullet the next lines run on from, a URL, two domain-like tokens, brackets, a tilde, an
+/// underscore emphasis, an escaped quote, a backslash before a letter, a line opening `-->`, a
+/// fenced block and a line after it, each set apart, the same text inside the fence and an
+/// inline code span, where it is kept, a run of blank lines, and last a table, whose delimiter
+/// row is one only outside a list item and which ends the content with no line break after it.
+const MARKDOWN_PROBE: &str = "- bullet\n| a | b |\n| --- | --- |\nsee https://example.com/a.\nexample.com and \"caller.live\"\n[x] done ~5 _y_\nsay \\\"hi\\\" a \\d b\n-->\n```\n- [x] _y_ example.com ~\n```\nkept `- [x] _y_ example.com ~` span\n\n\n\n| a | b |\n| --- | --- |\n";
+
+/// What Linear stores [`MARKDOWN_PROBE`] as, and what the live leg asserts Linear hands back: byte
+/// for byte what real Linear handed back from an issue's description in CI run 39375395042, of
+/// this probe as it was then — one blank line where it now holds a run of them, and no line
+/// break after the table. The plugin predicts none of it; it reads what Linear stores off each
+/// write's own answer.
+const MARKDOWN_PROBE_STORED: &str = "* bullet\n  | a | b |\n  | --- | --- |\n  see [https://example.com/a](<https://example.com/a>).\n  [example.com](<http://example.com>) and \"[caller.live](<http://caller.live>)\"\n  \\[x\\] done \\~5 *y*\n  say \"hi\" a \\\\d b\n  \\-->\n\n```\n- [x] _y_ example.com ~\n```\n\nkept `- [x] _y_ example.com ~` span\n\n| a | b |\n| -- | -- |\n";
 
 /// What the follow-up flow rests on, against Linear itself: what Linear does to an HTML comment
 /// in an issue's description, a comment's body and a document's content, recorded in the
@@ -1109,6 +1102,89 @@ async fn drive_follow_ups(
     ensure!(
         content == PROBE_STORED,
         "a document's HTML comments came back as {content:?}, not as recorded"
+    );
+
+    // What Linear does to Markdown on write, rule by rule, in both long-form fields.
+    linear(
+        &run.key,
+        "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success} }",
+        json!({"id":probe_id.0,"input":{"description":MARKDOWN_PROBE}}),
+        "live Markdown description probe",
+    )
+    .await?;
+    let stored = raw_description(run, &probe_id).await?;
+    ensure!(
+        stored == MARKDOWN_PROBE_STORED,
+        "an issue description's Markdown came back as {stored:?}, not as the ruling declares"
+    );
+    let read = source
+        .get_task(&probe_id)
+        .await
+        .map_err(|error| format!("the Markdown probe's issue could not be read: {error}"))?
+        .and_then(|task| task.content);
+    ensure!(
+        read.as_deref() == Some(MARKDOWN_PROBE_STORED),
+        "a read of the Markdown probe's issue handed back {read:?}, not its stored form"
+    );
+    linear(
+        &run.key,
+        "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success} }",
+        json!({"id":document_id.0,"input":{"content":MARKDOWN_PROBE}}),
+        "live Markdown content probe",
+    )
+    .await?;
+    let content = raw_content(run, &document_id).await?;
+    ensure!(
+        content == MARKDOWN_PROBE_STORED,
+        "a document's Markdown came back as {content:?}, not as the ruling declares"
+    );
+    let read = source
+        .get_document(&document_id)
+        .await
+        .map_err(|error| format!("the Markdown probe's document could not be read: {error}"))?
+        .and_then(|document| document.content);
+    ensure!(
+        read.as_deref() == Some(MARKDOWN_PROBE_STORED),
+        "a read of the Markdown probe's document handed back {read:?}, not its stored form"
+    );
+    // And with this source's metadata slot after it: the table keeps its line break, and the
+    // slot follows one blank line later, so a read hands the content back as it was written.
+    let tabled = "Owners:\n\n| a | b |\n| -- | -- |\n".to_owned();
+    source
+        .write_document(&ItemWrite {
+            target: Some(document_id.clone()),
+            item: Document {
+                version: None,
+                id: document_id.clone(),
+                title: document_title.to_owned(),
+                content: Some(tabled.clone()),
+                project: None,
+                labels: Vec::new(),
+                url: None,
+                location: None,
+                created_at: None,
+                updated_at: None,
+                metadata: serde_json::from_value(json!({"caller.live": tag})).unwrap_or_default(),
+                repositories: Vec::new(),
+                classification: Default::default(),
+            },
+            depends_on: Vec::new(),
+        })
+        .await
+        .map_err(|error| format!("live table document write failed: {error}"))?;
+    let read = source
+        .get_document(&document_id)
+        .await
+        .map_err(|error| format!("the table document could not be read: {error}"))?;
+    ensure!(
+        read.as_ref()
+            .and_then(|document| document.content.as_deref())
+            == Some(tabled.as_str())
+            && read
+                .as_ref()
+                .and_then(|document| document.metadata.get("caller.live"))
+                == Some(&json!(tag)),
+        "a document ending in a table, written with a slot, read back as {read:?}, not as {tabled:?}"
     );
 
     // Each follow-up search, narrowed by Linear and confirmed here: the decoy's prose carries

@@ -22,7 +22,8 @@
 //! `rateLimit(dryRun: true)` probe `tests/journey/mod.rs` already sends per read document.
 
 use onetaskgraph_github_projects::{
-    COPY_DETAIL_BATCH, DETAIL_BATCH, graphql, worst_case_point_cost,
+    COPY_DETAIL_BATCH, DETAIL_BATCH, MEMBER_PAGE_SIZE, Variables, graphql, largest_page_sizes,
+    worst_case_point_cost,
 };
 
 /// What each document this source sends costs, in points, under the largest page sizes it
@@ -43,7 +44,7 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::ISSUE, 1),
     (graphql::ISSUE_BOARD_ITEMS, 1),
     // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The price is the instrument, not a threshold: the module documentation records that GitHub publishes no per-call point limit to sweep against, so the pin is the check that a document's price moved. This change moved it deliberately, and `session-cost.md` says why.
-    (graphql::SUB_ISSUES, 6),
+    (graphql::SUB_ISSUES, 1),
     (graphql::BOARD, 2),
     (graphql::ORIGIN_LOOKUP, 1),
     // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. `task status reconcile` reads the board's closed items and `task status complete` reads issues by reference, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; the second's one point per fifty references is what the `github-landing-closure-points` budget's figure rests on, and onebudgetspec judges that budget.
@@ -56,7 +57,25 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::PROJECT_VISIBILITY, 1),
     (graphql::CREATION_CONTEXT, 1),
     (graphql::ISSUE_DEPENDENCIES, 1),
+    // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; these are the two one-direction dependency reads, and what a dependency read spends is the dependency-read budgets', judged by onebudgetspec.
+    (graphql::ISSUE_DEPENDS_ON, 1),
+    (graphql::ISSUE_DEPENDED_ON_BY, 1),
+    // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     (graphql::CREATE_ISSUE, 1),
+    // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. These are the documents a copy now reads its origins and writes its created items with, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; what a plan copy spends is the `github-plan-copy-points-*` budgets', judged by onebudgetspec.
+    (graphql::ORIGIN_LOOKUPS, 1),
+    // GitHub's own dry run, beside the model's: `docs/measurements/board-copy-gaps-2026-10-24/coalesced-members-dry-run`.
+    (graphql::ORIGIN_LOOKUPS_WITH_MEMBERS, 1),
+    (graphql::CREATE_ISSUES, 1),
+    (graphql::CREATED_BOARD_ITEMS, 1),
+    (graphql::WRITE_FIELD_VALUES, 1),
+    (graphql::CLOSE_ISSUES, 1),
+    (graphql::UPDATE_ISSUES, 1),
+    (graphql::ADD_BLOCKED_BYS, 1),
+    (graphql::WRITE_FIELDS_AND_EDGES, 1),
+    (graphql::DELETE_ISSUES, 1),
+    (graphql::DOCUMENT_IN_PROJECT, 1),
+    // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     (graphql::ADD_TO_BOARD, 1),
     (graphql::UPDATE_ISSUE, 1),
     (graphql::UPDATE_DRAFT, 1),
@@ -195,7 +214,7 @@ fn the_check_reports_a_failure_naming_a_document_nobody_priced() {
 /// half: the same document grown by one aliased item — written the way every alias in it is —
 /// is priced at two, so a batch constant left below what one point buys fails here rather
 /// than spending a request a caller did not need to.
-// llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] These hold each batch constant to GitHub's own pricing model rather than to a budget: the constant is the number of items the plugin puts in one request, and the check is that it is the largest batch one point buys — one item more costs two — which is a property of the constant against the published model, not a cost ceiling a test invented. `DETAIL_BATCH`'s check predates this change; the helper generalises it so `COPY_DETAIL_BATCH`, the copy's batch read, is held to the same property.
+// llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] These hold each batch constant to GitHub's own pricing model rather than to a budget: the constant is the number of items the plugin puts in one request, and the check is that it is the largest batch one point buys — one item more costs two — which is a property of the constant against the published model, not a cost ceiling a test invented. `DETAIL_BATCH`'s check predates this change; the helper generalises it so `COPY_DETAIL_BATCH`, the copy's batch read, is held to the same property. `MEMBER_PAGE_SIZE` is held to the same property over a page size: the most sub-issues one point lists.
 #[test]
 fn the_batch_read_is_the_largest_one_point_buys() {
     const {
@@ -220,6 +239,30 @@ fn the_copy_batch_read_is_the_largest_one_point_buys() {
         graphql::ISSUE_COPY_DETAILS,
         COPY_DETAIL_BATCH,
         "COPY_DETAIL_BATCH",
+    );
+}
+
+/// A project's sub-issue page is one point, and its size is the largest that is: one row more
+/// would cost two.
+///
+/// The same property as the batch reads above, over a page size rather than a count of
+/// aliases: the document is priced again with `$memberFirst` one larger, and that price is two.
+#[test]
+fn the_member_page_is_the_largest_one_point_buys() {
+    const {
+        assert!(
+            MEMBER_PAGE_SIZE >= 10,
+            "a page this small does not list a plan's project in one request"
+        )
+    };
+    assert_eq!(worst_case_point_cost(graphql::SUB_ISSUES).unwrap(), 1);
+    let mut grown: Variables = largest_page_sizes();
+    grown.insert("memberFirst".to_owned(), MEMBER_PAGE_SIZE + 1);
+    assert_eq!(
+        github_graphql_node_count::point_cost(graphql::SUB_ISSUES, &grown).unwrap(),
+        2,
+        "one row more than MEMBER_PAGE_SIZE is still one point, so MEMBER_PAGE_SIZE is not the \
+         largest page one point buys"
     );
 }
 

@@ -289,6 +289,7 @@ fn copy() -> CopyRequest {
         items: CopyItems::new(vec![id("from:T-1")]).expect("one item"),
         scope: CopyScope::Tasks,
         destination: name("into"),
+        target_task: None,
         match_by: None,
         recreate: false,
         create: false,
@@ -296,6 +297,7 @@ fn copy() -> CopyRequest {
         comments: true,
         no_link: true,
         expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
     }
 }

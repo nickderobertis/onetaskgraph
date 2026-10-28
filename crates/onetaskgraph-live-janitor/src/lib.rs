@@ -5,6 +5,15 @@
 //! period, so a finished run's artifacts go on the first pass after it completes, whatever
 //! their age. A board refused for its item count by the live lane must not wait a day for
 //! residue whose run is already over. Machine stamps stay the writing machine's lock sweep's.
+//!
+//! Every kind of artifact the GitHub Projects lane writes under a CI stamp is listed: its
+//! issues, their board items, its repository label, and its scratch board field — which
+//! matters because the lane refuses a board whose field count differs from its registered
+//! workload.
+//!
+//! [`Ownership::CancelledRun`] is the same cleanup asked by a run about itself: the step
+//! `ci.yml` runs when a live run is cancelled removes exactly that run attempt's stamps,
+//! while its run still reads in progress, and reads no ownership at all.
 //! Linear keeps its machine stamps and lock sweep everywhere; this janitor never reads it.
 //!
 //! Every REST route, query parameter and response field this crate uses is held to GitHub's
@@ -22,10 +31,11 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use onetaskgraph_github_live::{
-    BOARD_NUMBER, BOARD_OWNER, CORE_REPOSITORY, SCRATCH_REPOSITORY, labelled_stamp, titled_stamp,
+    BOARD_NUMBER, BOARD_OWNER, DELETE_FIELD_DOCUMENT, RunStatus, SCRATCH_REPOSITORY, fielded_stamp,
+    labelled_stamp, run_path, titled_stamp,
 };
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
-use onetaskgraph_live::artifact::CiStamp;
+use onetaskgraph_live::artifact::{CiRun, CiStamp};
 use onetaskgraph_live::{Allowance, Credential, Demand, Metered, affordable};
 use serde_json::{Value, json};
 
@@ -69,25 +79,46 @@ impl Clock for VirtualClock {
     }
 }
 
+/// What authorises a listed artifact's removal.
+pub enum Ownership {
+    /// The scheduled pass: an artifact goes once its run reads `completed` — succeeded,
+    /// failed or cancelled alike — in a read made with this Actions token immediately before
+    /// its delete batch.
+    CompletedRuns { actions_token: Credential },
+    /// A cancelled run cleaning up after itself: exactly the artifacts stamped with this run
+    /// and attempt go, and no other run's, whatever its status. No ownership read is made,
+    /// because the run asking is the one that wrote them and still reads in progress.
+    CancelledRun(CiRun),
+}
+
+impl Ownership {
+    /// The scheduled pass's rule, reading runs with `actions_token`.
+    pub fn completed_runs(actions_token: &str) -> Result<Self, String> {
+        Ok(Self::CompletedRuns {
+            actions_token: Credential::new(actions_token).ok_or("GITHUB_TOKEN is required")?,
+        })
+    }
+}
+
 /// Endpoints and credentials validated together before an invocation can reach GitHub.
 /// Construction admits the production host or an explicitly selected loopback origin.
 pub struct Config {
     rest: reqwest::Url,
     graphql: reqwest::Url,
     write_token: Credential,
-    actions_token: Credential,
+    ownership: Ownership,
 }
 
 impl Config {
-    pub fn github(write_token: &str, actions_token: &str) -> Result<Self, String> {
+    pub fn github(write_token: &str, ownership: Ownership) -> Result<Self, String> {
         Self::at(
             reqwest::Url::parse("https://api.github.com/").map_err(|e| e.to_string())?,
             write_token,
-            actions_token,
+            ownership,
         )
     }
 
-    pub fn loopback(origin: &str, write_token: &str, actions_token: &str) -> Result<Self, String> {
+    pub fn loopback(origin: &str, write_token: &str, ownership: Ownership) -> Result<Self, String> {
         let origin = reqwest::Url::parse(origin).map_err(|e| e.to_string())?;
         if origin.scheme() != "http"
             || origin.host_str() != Some("127.0.0.1")
@@ -99,15 +130,15 @@ impl Config {
         {
             return Err("offline endpoint must be an HTTP IPv4 loopback origin".into());
         }
-        Self::at(origin, write_token, actions_token)
+        Self::at(origin, write_token, ownership)
     }
 
-    fn at(rest: reqwest::Url, write_token: &str, actions_token: &str) -> Result<Self, String> {
+    fn at(rest: reqwest::Url, write_token: &str, ownership: Ownership) -> Result<Self, String> {
         Ok(Self {
             graphql: rest.join("graphql").map_err(|e| e.to_string())?,
             rest,
             write_token: Credential::new(write_token).ok_or("GH_PROJECTS_TOKEN is required")?,
-            actions_token: Credential::new(actions_token).ok_or("GITHUB_TOKEN is required")?,
+            ownership,
         })
     }
 }
@@ -144,67 +175,24 @@ struct IssueId(String);
 #[derive(Clone)]
 struct ItemId(String);
 #[derive(Clone)]
+struct FieldId(String);
+#[derive(Clone)]
 struct BoardId(String);
 #[derive(Clone)]
 struct LabelName(String);
 /// A board page's `endCursor`: present and non-empty, or there is no next page to ask for.
 struct Cursor(String);
 
-// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] GitHub publishes no machine-readable vocabulary of a run's `status` (the OpenAPI schema types it as a bare string), so there is no artifact to derive this from. The six words are pinned with their provenance below, the offline journeys derive theirs from this one declaration, and the drift gate is the janitor itself: a word GitHub adds is undecodable, fails the scheduled run red naming that word, and deletes nothing.
-/// A workflow run's `status`, as GitHub documents it. Anything else is undecodable, and the
-/// janitor's failure names it, which is how a word GitHub adds is noticed.
+/// One page of the nominated board's items, with what recognising residue needs of each, and
+/// the board's fields, which are read off the first page alone.
 ///
-/// The six statuses of the `status` values GitHub lists for "List workflow runs for a
-/// workflow" (<https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2022-11-28>,
-/// read 2026-10-07); the rest of that list — `action_required`, `cancelled`, `failure`,
-/// `neutral`, `skipped`, `stale`, `success`, `timed_out` — are conclusions, which a run's
-/// `status` never holds. This is the one declaration: the offline journeys derive theirs
-/// from it.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RunStatus {
-    Completed,
-    Queued,
-    InProgress,
-    Waiting,
-    Requested,
-    Pending,
-}
-impl RunStatus {
-    /// Every status a run that has not finished can have: used to decode ownership reads.
-    const ACTIVE: [Self; 5] = [
-        Self::Queued,
-        Self::InProgress,
-        Self::Waiting,
-        Self::Requested,
-        Self::Pending,
-    ];
-
-    /// GitHub's spelling, in a run's `status` and in an ownership read.
-    fn spelling(self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::Queued => "queued",
-            Self::InProgress => "in_progress",
-            Self::Waiting => "waiting",
-            Self::Requested => "requested",
-            Self::Pending => "pending",
-        }
-    }
-
-    fn read(value: &Value) -> Option<Self> {
-        let spelled = value.get("status")?.as_str()?;
-        std::iter::once(Self::Completed)
-            .chain(Self::ACTIVE)
-            .find(|status| status.spelling() == spelled)
-    }
-}
-// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
-
-/// One page of the nominated board's items, with what recognising residue needs of each.
+/// The field connection does not page with the items, so a later page answers the same
+/// fields again and they are not listed twice. GitHub caps a board below a hundred fields;
+/// a connection reporting another page fails closed.
 ///
-/// This and the two mutations below are validated against the GitHub Projects plugin's
+/// This and the mutations below are validated against the GitHub Projects plugin's
 /// pinned schema by `tests/schema.rs`, so a field GitHub does not have fails offline.
-pub const BOARD_DOCUMENT: &str = "query($owner:String!,$number:Int!,$after:String){board:repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id items(first:100,after:$after){nodes{id content{__typename ... on Issue{title repository{nameWithOwner}}}} pageInfo{hasNextPage endCursor}}}}}}";
+pub const BOARD_DOCUMENT: &str = "query($owner:String!,$number:Int!,$after:String){board:repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id fields(first:100){nodes{... on ProjectV2Field{id name} ... on ProjectV2SingleSelectField{id name}} pageInfo{hasNextPage}} items(first:100,after:$after){nodes{id content{__typename ... on Issue{title repository{nameWithOwner}}}} pageInfo{hasNextPage endCursor}}}}}}";
 /// Deletes one issue, answering with the repository it was deleted from.
 pub const DELETE_ISSUE_DOCUMENT: &str =
     "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){repository{nameWithOwner}}}";
@@ -217,6 +205,7 @@ enum GraphqlOperation {
     Board { after: Option<Cursor> },
     DeleteIssue { id: IssueId },
     DeleteItem { board: BoardId, id: ItemId },
+    DeleteField { id: FieldId },
 }
 impl GraphqlOperation {
     fn payload(&self) -> (&'static str, Value) {
@@ -232,6 +221,7 @@ impl GraphqlOperation {
                 DELETE_ITEM_DOCUMENT,
                 json!({"input":{"projectId":board.0,"itemId":id.0}}),
             ),
+            Self::DeleteField { id } => (DELETE_FIELD_DOCUMENT, json!({"input":{"fieldId":id.0}})),
         }
     }
     fn confirm(&self, value: &Value) -> Result<(), String> {
@@ -246,6 +236,12 @@ impl GraphqlOperation {
             Self::DeleteItem { id, .. } => {
                 value
                     .pointer("/data/deleteProjectV2Item/deletedItemId")
+                    .and_then(Value::as_str)
+                    == Some(id.0.as_str())
+            }
+            Self::DeleteField { id } => {
+                value
+                    .pointer("/data/deleteProjectV2Field/projectV2Field/id")
                     .and_then(Value::as_str)
                     == Some(id.0.as_str())
             }
@@ -282,6 +278,7 @@ enum Delete {
     Issue(IssueId),
     Item(ItemId),
     Label(LabelName),
+    Field(FieldId),
 }
 
 /// One listed artifact owned by the scratch CI run that wrote it.
@@ -326,9 +323,14 @@ impl Janitor {
         path: &str,
         role: CredentialRole,
     ) -> Result<(Value, Option<String>), String> {
-        let token = match role {
-            CredentialRole::Actions => &self.config.actions_token,
-            CredentialRole::Write => &self.config.write_token,
+        let token = match (role, &self.config.ownership) {
+            (CredentialRole::Actions, Ownership::CompletedRuns { actions_token }) => actions_token,
+            (CredentialRole::Actions, Ownership::CancelledRun(_)) => {
+                return Err(format!(
+                    "read {path}: a cancelled run's cleanup reads no run"
+                ));
+            }
+            (CredentialRole::Write, _) => &self.config.write_token,
         };
         let response = self
             .client
@@ -372,9 +374,9 @@ impl Janitor {
                 }
                 self.report.graphql_queries += 1;
             }
-            GraphqlOperation::DeleteIssue { .. } | GraphqlOperation::DeleteItem { .. } => {
-                self.pace().await?
-            }
+            GraphqlOperation::DeleteIssue { .. }
+            | GraphqlOperation::DeleteItem { .. }
+            | GraphqlOperation::DeleteField { .. } => self.pace().await?,
         }
         let (query, variables) = operation.payload();
         let response = self
@@ -505,6 +507,9 @@ impl Janitor {
                 .pointer("/data/board/projectV2")
                 .ok_or("board #1 missing")?;
             self.board = Some(BoardId(identifier(board, "id")?));
+            if cursors.is_empty() {
+                self.fields(board, listed)?;
+            }
             let items = board.get("items").ok_or("board items missing")?;
             for node in items
                 .get("nodes")
@@ -552,6 +557,34 @@ impl Janitor {
         }
     }
 
+    /// Lists the board's stamped fields. A field of a kind the document selects nothing of
+    /// answers `{}`, and the lane creates none of those kinds, so it is nobody's residue.
+    fn fields(&self, board: &Value, listed: &mut Listed) -> Result<(), String> {
+        let fields = board.get("fields").ok_or("board fields missing")?;
+        match fields
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+        {
+            Some(false) => {}
+            Some(true) => return Err("board fields span more than one page".into()),
+            None => return Err("board fields pageInfo missing".into()),
+        }
+        for node in fields
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or("board field nodes missing")?
+        {
+            if node.as_object().is_some_and(serde_json::Map::is_empty) {
+                continue;
+            }
+            let id = FieldId(identifier(node, "id")?);
+            if let Some(stamp) = fielded_stamp(text(node, "name")?) {
+                self.list(stamp, Delete::Field(id), listed);
+            }
+        }
+        Ok(())
+    }
+
     async fn delete(&mut self, delete: &Delete) -> Result<(), String> {
         match delete {
             Delete::Issue(id) => {
@@ -564,6 +597,10 @@ impl Janitor {
                     id: id.clone(),
                 })
                 .await?;
+            }
+            Delete::Field(id) => {
+                self.graphql(GraphqlOperation::DeleteField { id: id.clone() })
+                    .await?;
             }
             Delete::Label(name) => {
                 self.pace().await?;
@@ -588,6 +625,31 @@ impl Janitor {
         Ok(())
     }
 
+    /// Whether `run` reads `completed`, in a read made now. Anything undecodable or failed
+    /// ends the invocation: no further writes.
+    async fn owner_completed(&mut self, run: u64) -> Result<bool, String> {
+        // No write intervenes between this fresh read and the batch it permits.
+        let status = self.rest(&run_path(run), CredentialRole::Actions).await;
+        match status.as_ref().map(RunStatus::read) {
+            Ok(Some(RunStatus::Completed)) => Ok(true),
+            Ok(Some(_)) => Ok(false),
+            Err(ReadError::LimitExhausted(error)) => Err(error.clone()),
+            Err(ReadError::Failed(error)) => Err(format!(
+                "ownership read for run {run} failed: {error}; no further writes"
+            )),
+            Ok(None) => {
+                let sent = status
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.get("status"))
+                    .map_or_else(|| "no status".to_owned(), Value::to_string);
+                Err(format!(
+                    "ownership read for run {run} returned an undecodable status ({sent}); no further writes"
+                ))
+            }
+        }
+    }
+
     async fn scratch_pass(&mut self, artifacts: Vec<Artifact>) -> Result<(), String> {
         let mut groups: BTreeMap<u64, Vec<Artifact>> = BTreeMap::new();
         for artifact in artifacts {
@@ -601,33 +663,13 @@ impl Janitor {
                 if self.report.writes == WRITE_LIMIT {
                     return Ok(());
                 }
-                // No write intervenes between this fresh read and the batch it permits.
-                let status = self
-                    .rest(
-                        &format!("/repos/{CORE_REPOSITORY}/actions/runs/{run}"),
-                        CredentialRole::Actions,
-                    )
-                    .await;
-                match status.as_ref().map(RunStatus::read) {
-                    Ok(Some(RunStatus::Completed)) => {}
+                // A cancelled run's own list holds its own stamps alone (see `run_with_clock`),
+                // and the run that wrote them is the one asking, so there is nothing to read.
+                if let Ownership::CompletedRuns { .. } = self.config.ownership
+                    && !self.owner_completed(run).await?
+                {
                     // A run still going, a re-run of it included, owns every attempt's work.
-                    Ok(Some(_)) => break,
-                    Err(ReadError::LimitExhausted(error)) => return Err(error.clone()),
-                    Err(ReadError::Failed(error)) => {
-                        return Err(format!(
-                            "ownership read for run {run} failed: {error}; no further writes"
-                        ));
-                    }
-                    Ok(None) => {
-                        let sent = status
-                            .as_ref()
-                            .ok()
-                            .and_then(|value| value.get("status"))
-                            .map_or_else(|| "no status".to_owned(), Value::to_string);
-                        return Err(format!(
-                            "ownership read for run {run} returned an undecodable status ({sent}); no further writes"
-                        ));
-                    }
+                    break;
                 }
                 for artifact in batch {
                     if self.report.writes == WRITE_LIMIT {
@@ -765,6 +807,11 @@ pub async fn run_with_clock(config: Config, clock: Arc<dyn Clock>) -> Result<Rep
     let mut listed = Listed::default();
     janitor.board(&mut listed).await?;
     janitor.repositories(&mut listed).await?;
+    // A cancelled run removes exactly its own attempt's stamps: another run's, and another
+    // attempt of its own, are the scheduled pass's once their run reads `completed`.
+    if let Ownership::CancelledRun(own) = janitor.config.ownership {
+        listed.retain(|artifact| artifact.owner.run() == own);
+    }
     // Remove board items before their issues; issue deletion also removes its board item.
     listed.sort_by_key(|a| (!matches!(a.delete, Delete::Item(_)), a.owner.to_string()));
     janitor.scratch_pass(listed).await?;

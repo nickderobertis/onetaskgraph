@@ -26,6 +26,7 @@ from onetaskgraph_sdk import (
     OnetaskgraphError,
     Priority,
     ProjectGraph,
+    ProjectStatusSet,
     SourceName,
     StatusCategory,
     StatusesReconciled,
@@ -42,6 +43,7 @@ from onetaskgraph_sdk._generated.copy_report import (
     CopyOutcomeFailed,
     CopyOutcomeSkipped,
     CopyOutcomeUnchanged,
+    CopyOutcomeUpdated,
 )
 from onetaskgraph_sdk._generated.copy_report import GlobalId as LandedAt
 from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
@@ -395,6 +397,7 @@ def test_copy_drives_the_binary_and_reports_each_item(binary: Path, tmp_path: Pa
     # The destination really holds it, read back through the same binary.
     assert without_record(run(client.task_show(id="into:T-1")).items[0].item.metadata) == {
         "caller.count": 3,
+        "onetaskgraph.edges_on_record": 1,
         "onetaskgraph.origin": "from:T-1",
     }
 
@@ -486,7 +489,8 @@ def test_task_copy_create_drives_the_binary(binary: Path, tmp_path: Path) -> Non
         ("from:T-2", "into:T-2", "created")
     ]
     assert without_record(run(client.task_show(id="into:T-2")).items[0].item.metadata) == {
-        "onetaskgraph.origin": "from:T-2"
+        "onetaskgraph.edges_on_record": 1,
+        "onetaskgraph.origin": "from:T-2",
     }
 
     # The copy recorded its link on the source task, so asserting there is no counterpart
@@ -541,6 +545,34 @@ def test_project_copy_drives_the_binary(binary: Path, tmp_path: Path) -> None:
         run(client.project_copy(id="from:P-1", to="into", member=["from:T-9"]))
     assert refused.value.exit_code == 1
     assert "from:T-9 is not a task of from:P-1" in str(refused.value)
+
+    # Members only: the project already there is left exactly as it is, though its source moved.
+    (root / "from" / "projects" / "P-1.md").write_text(
+        "---\ntitle: Engine, renamed\nstatus: todo\n---\nthe engine\n", encoding="utf-8"
+    )
+    (root / "from" / "tasks" / "T-2.md").write_text(
+        "---\ntitle: Beta engine\nstatus: todo\nproject: P-1\n---\nmore core\n",
+        encoding="utf-8",
+    )
+    held = (root / "into" / "projects" / "P-1.md").read_bytes()
+    only = run(
+        client.project_copy(id="from:P-1", to="into", member=["from:T-2"], members_only=True)
+    )
+    assert [(item.root.source.root, item.root.action) for item in only.items] == [
+        ("from:T-2", "created"),
+    ]
+    assert (root / "into" / "projects" / "P-1.md").read_bytes() == held
+    (root / "from" / "projects" / "P-2.md").write_text(
+        "---\ntitle: Not copied\nstatus: todo\n---\n", encoding="utf-8"
+    )
+    (root / "from" / "tasks" / "T-3.md").write_text(
+        "---\ntitle: Gamma\nstatus: todo\nproject: P-2\n---\n", encoding="utf-8"
+    )
+    with pytest.raises(OnetaskgraphError) as lacking:
+        run(client.project_copy(id="from:P-2", to="into", member=["from:T-3"], members_only=True))
+    assert lacking.value.exit_code == 1
+    assert "`onetaskgraph project copy from:P-2 --to into`" in str(lacking.value)
+    assert not (root / "into" / "tasks" / "T-3.md").exists()
 
 
 def test_project_graph_drives_the_binary(binary: Path, tmp_path: Path) -> None:
@@ -598,7 +630,11 @@ def test_a_dependency_read_answers_without_a_private_source_it_cannot_authentica
         "---\ntitle: Engine\n---\n", encoding="utf-8"
     )
     (tmp_path / "work" / "tasks" / "T-1.md").write_text(
-        "---\ntitle: Ship\nproject: P-1\n---\n", encoding="utf-8"
+        # Landed by a copy that kept its edge on the private side: only such a task's read asks
+        # the private source what it records of it.
+        "---\ntitle: Ship\nproject: P-1\nmetadata:\n"
+        "  onetaskgraph.copied_destination_version: sha256:00\n---\n",
+        encoding="utf-8",
     )
     (tmp_path / "vault" / "tasks" / "V-1.md").write_text(
         "---\ntitle: Approve\nmetadata:\n  onetaskgraph.depended_on_by:\n"
@@ -625,15 +661,15 @@ def test_a_dependency_read_answers_without_a_private_source_it_cannot_authentica
     graph = run(client.project_graph(id="work:P-1"))
     assert [(edge.from_.root, edge.to.root) for edge in graph.edges] == [("vault:V-1", "work:T-1")]
     assert graph.unanswered is not None
-    assert [(failure.source.root, failure.error.root.kind) for failure in graph.unanswered] == [
-        ("ledger", "auth")
-    ]
+    # Each entry is a source not asked, or a designator no source is: here, a source.
+    unasked = [entry.model_dump(mode="json") for entry in graph.unanswered]
+    assert [(entry["source"], entry["error"]["kind"]) for entry in unasked] == [("ledger", "auth")]
     deps = run(client.task_deps(id="work:T-1"))
     assert [(edge.from_.id.root, edge.to.id.root) for edge in deps.items] == [
         ("work:T-1", "vault:V-1")
     ]
     assert deps.errors == []
-    assert [failure.source.root for failure in deps.unanswered] == ["ledger"]
+    assert [entry.model_dump(mode="json")["source"] for entry in deps.unanswered] == ["ledger"]
 
     with pytest.raises(OnetaskgraphError) as refused:
         run(client.project_graph(id="work:P-1", complete=True))
@@ -690,6 +726,10 @@ def test_document_copy_drives_the_binary_and_refuses_a_destination_with_no_docum
     # strings does not.
     located = Path(dumped.pop("location")["path"])
     assert located.samefile(root / "markdown" / "documents" / "D-1.md")
+    # The copy's record of itself, each a digest, which a later copy reads to write nothing to
+    # a document unchanged at both ends.
+    for key in ("onetaskgraph.copied_version", "onetaskgraph.copied_destination_version"):
+        assert dumped["metadata"].pop(key).startswith("sha256:")
     assert dumped == {
         "id": "D-1",
         "title": "Memory document",
@@ -882,6 +922,98 @@ def test_reconcile_and_complete_drive_the_binary_over_a_source_whose_status_is_i
         run(client.task_status_complete(issue=["onetaskgraph#3"]))
     assert refused.value.exit_code == 2
     assert '"onetaskgraph#3" is not an issue reference' in str(refused.value)
+
+
+def closure_folder(tmp_path: Path) -> Path:
+    """A folder of Markdown `work` holding project `P-1`, beside `closures`, a stdio peer.
+
+    `closures` answers both closure methods with a plan's home project `home` and a task `t1`
+    (see `closure_source.py`), and the folder outlives each invocation, so what a project
+    status write lands there the next one reads back.
+    """
+    projects = tmp_path / "work" / "projects"
+    projects.mkdir(parents=True)
+    (projects / "P-1.md").write_text(
+        "---\ntitle: Engine\nstatus: todo\n---\nPlan.\n", encoding="utf-8"
+    )
+    sources = {
+        "work": {"plugin": "local-md", "config": {"root": str(tmp_path / "work")}},
+        "closures": {
+            "plugin": "subprocess",
+            "config": {
+                # Absolute, because the engine spawns a plugin with a cleared environment and
+                # so no PATH to resolve a bare name against.
+                "command": sys.executable,
+                "args": [str(Path(__file__).with_name("closure_source.py"))],
+            },
+        },
+    }
+    (tmp_path / "onetaskgraph.yaml").write_text(json.dumps({"sources": sources}), encoding="utf-8")
+    return tmp_path
+
+
+def test_each_closure_item_names_its_kind_through_the_binary(binary: Path, tmp_path: Path) -> None:
+    """A reconcile and a completion decode a project item and a task item, each by its kind."""
+    client = Client(binary, cwd=closure_folder(tmp_path))
+
+    reconciled = run(client.task_status_reconcile(source="closures"))
+    assert isinstance(reconciled, StatusesReconciled)
+    assert [
+        (item.root.source.root, item.root.kind, item.root.to.category, item.root.to.name)
+        for item in reconciled.items
+    ] == [
+        ("closures:home", "project", "done", "Done"),
+        ("closures:t1", "task", "cancelled", "Cancelled"),
+    ]
+    assert [item.root.action for item in reconciled.items] == ["updated", "updated"]
+
+    completed = run(
+        client.task_status_complete(
+            issue=["acme/plan#1", "acme/plan#2", "acme/plan#3"], source=["closures"]
+        )
+    )
+    assert isinstance(completed, IssuesCompleted)
+    assert [
+        (item.issue.root, item.task.root if item.task else None, item.kind, item.action)
+        for item in completed.items
+    ] == [
+        ("acme/plan#1", "closures:home", "project", "updated"),
+        ("acme/plan#2", "closures:t1", "task", "updated"),
+        ("acme/plan#3", None, "task", "absent"),
+    ]
+    assert completed.items[0].delivered == [], "a project delivers no task"
+
+
+def test_project_status_set_drives_the_binary(binary: Path, tmp_path: Path) -> None:
+    """Set one project's status through the real binary, read it back, and be refused by name."""
+    cwd = closure_folder(tmp_path)
+    client = Client(binary, cwd=cwd)
+
+    answer = run(
+        client.project_status_set(id="work:P-1", category=StatusCategory.StatusCategoryDone)
+    )
+    assert isinstance(answer, ProjectStatusSet)
+    assert (answer.id.root, answer.status.category, answer.status.name) == (
+        "work:P-1",
+        "done",
+        "done",
+    )
+    assert (cwd / "work" / "projects" / "P-1.md").read_text(encoding="utf-8") == (
+        "---\ntitle: Engine\nstatus: done\n---\nPlan.\n"
+    )
+    shown = run(client.project_show(id="work:P-1")).items[0].item
+    assert shown.status.category == "done"
+
+    over_the_protocol = run(client.project_status_set(id="closures:home", category="cancelled"))
+    assert (over_the_protocol.status.category, over_the_protocol.status.name) == (
+        "cancelled",
+        "Cancelled",
+    )
+
+    with pytest.raises(OnetaskgraphError) as refused:
+        run(client.project_status_set(id="work:P-404", category="done"))
+    assert refused.value.exit_code == 1
+    assert "no project with the id work:P-404" in str(refused.value)
 
 
 def test_task_status_set_answers_when_a_delivered_task_could_not_be_kept_in_step(
@@ -1710,3 +1842,51 @@ def test_copy_with_comments_carries_them_and_a_repeat_by_query_skips(
     assert isinstance(skipped, CopyOutcomeUnchanged)
     assert skipped.skipped is True
     assert skipped.link == "skipped"
+
+
+def test_task_copy_target_task_selects_a_duplicate_and_records_its_link(
+    binary: Path, tmp_path: Path
+) -> None:
+    """A typed explicit target wins over the first duplicate; a missing target writes nothing."""
+    client = Client(binary, cwd=folders(tmp_path))
+    source = tmp_path / "from" / "tasks" / "T-1.md"
+    source.write_text(
+        "---\ntitle: Alpha engine\nstatus: todo\nmetadata:\n  caller.count: 3\n---\nthe core\n",
+        encoding="utf-8",
+    )
+    tasks = tmp_path / "into" / "tasks"
+    tasks.mkdir()
+    carrier = (
+        "---\ntitle: Duplicate\nstatus: todo\nmetadata:\n"
+        "  onetaskgraph.origin: from:T-1\n---\nold body\n"
+    )
+    first = tasks / "first.md"
+    second = tasks / "second.md"
+    first.write_text(carrier, encoding="utf-8")
+    second.write_text(carrier, encoding="utf-8")
+
+    report = run(client.task_copy(["from:T-1"], to="into", target_task=GlobalId("into:second")))
+    [selected] = report.items
+    assert isinstance(selected.root, CopyOutcomeUpdated)
+    assert landed(selected) == "into:second"
+    assert selected.root.via == "target-task"
+    assert selected.root.link == "recorded"
+    assert first.read_text(encoding="utf-8") == carrier
+    assert "Alpha engine" in second.read_text(encoding="utf-8")
+    assert run(client.task_show("from:T-1")).items[0].item.metadata["onetaskgraph.copies"] == {
+        "into": "into:second"
+    }
+
+    linked = source.read_bytes()
+    survivor = second.read_bytes()
+    with pytest.raises(OnetaskgraphError) as missing:
+        run(client.task_copy(["from:T-1"], to="into", target_task="into:missing"))
+    assert missing.value.exit_code == 1
+    assert "target task into:missing does not exist" in str(missing.value)
+    assert source.read_bytes() == linked
+    assert second.read_bytes() == survivor
+
+    [again] = run(client.task_copy(["from:T-1"], to="into")).items
+    assert isinstance(again.root, CopyOutcomeUnchanged)
+    assert landed(again) == "into:second"
+    assert again.root.via == "link"

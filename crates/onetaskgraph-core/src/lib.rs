@@ -61,12 +61,14 @@ pub use engine::{
     ConfiguredSource, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome, CopyReport,
     CopyRequest, CopyScope, CopyVia, DeletedComment, Delivered, DeliveryOutcome, DependencyRequest,
     DocumentDetail, DocumentFilters, DocumentRequest, Engine, EngineError, Filters, GraphDirection,
-    GraphEdge, GraphNode, GroupKey, IssueCompleted, IssuesCompleted, LabelRequest, LeftBehind,
-    MatchBy, MetadataSet, NoCounterpart, PROJECT_GRAPH_SCHEMA_VERSION, Paging, ProjectGraph,
-    ProjectGraphRequest, ProjectRequest, ProjectSelector, Qualified, QualifiedEdge,
-    QualifiedEndpoint, ReconcileOutcome, SearchHit, SearchKind, SearchRequest, SourceListing,
-    SourceState, Spent, StatusReconciled, StatusesReconciled, TaskContentSet, TaskDetail,
-    TaskDetails, TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, graph_label, settled,
+    GraphEdge, GraphNode, GroupKey, HeldAsset, IssueCompleted, IssuesCompleted, LabelRequest,
+    LeftBehind, MatchBy, MetadataSet, MirrorTarget, NoCounterpart, PROJECT_GRAPH_SCHEMA_VERSION,
+    Paging, ProjectGraph, ProjectGraphRequest, ProjectRequest, ProjectSelector, ProjectStatusSet,
+    PublicProjection, PublicProjections, Qualified, QualifiedEdge, QualifiedEndpoint,
+    ReconcileOutcome, SearchHit, SearchKind, SearchRequest, SourceListing, SourceState, Spent,
+    StatusPolicy, StatusReconciled, StatusesReconciled, TaskAssetNames, TaskAssetsError,
+    TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet, TaskRequest, TaskStatusSet,
+    TaskUpdated, graph_label, settled,
 };
 pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,
@@ -80,7 +82,10 @@ pub use global_id::GlobalId;
 ///
 /// [`TaskSource::update_task`]: onetaskgraph_plugin_api::TaskSource::update_task
 pub use onetaskgraph_plugin_api::UpdatedField;
-pub use plan::{PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan};
+pub use plan::{
+    PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan, Unanswered,
+    UnresolvedDesignator, UnresolvedReason,
+};
 pub use registry::{PluginKind, plugin_for, plugin_kinds, registry};
 pub use resolve::{
     ResolvedSource, UnavailableSource, resolve, resolve_available, resolve_available_with_clock,

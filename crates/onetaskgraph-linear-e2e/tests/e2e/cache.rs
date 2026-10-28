@@ -343,7 +343,7 @@ fn a_projects_tasks_listed_then_their_forward_edges_are_answered_from_the_cache_
 fn edges_kept(cached: &Cached) -> Vec<String> {
     let mut kept: Vec<String> = cached
         .dir()
-        .map(|dir| walk(&dir.join("edges-v2")))
+        .map(|dir| walk(&dir.join("edges-v4")))
         .unwrap_or_default()
         .iter()
         .filter_map(|path| std::fs::read(path).ok())
@@ -945,14 +945,14 @@ fn every_linear_write_takes_the_entries_naming_its_item_out_of_service() {
             (
                 "project",
                 "linear:P-1",
-                "projects-v2",
+                "projects-v4",
                 words("project metadata set linear:P-1 caller.note \"noted\""),
                 "noted",
             ),
             (
                 "document",
                 "linear:D-1",
-                "documents-v2",
+                "documents-v4",
                 words("document metadata set linear:D-1 caller.note \"noted\""),
                 "noted",
             ),
@@ -1016,4 +1016,51 @@ fn every_linear_write_takes_the_entries_naming_its_item_out_of_service() {
     let (shown, sent) = cached.ok(&strs(&pinned("task", &landed, &held)));
     assert_eq!(sent.len(), 1, "the copied-over issue is read from Linear");
     assert_eq!(shown["items"][0]["item"]["title"], "Copied in again");
+}
+
+/// A task recording an opaque far end is kept in the cache with the far end as it was recorded
+/// — its designator, id and kind — and a pinned read served from the entry resolves it as the
+/// read that filled it did, the task's own edges read from Linear no second time.
+#[test]
+fn a_cached_task_keeps_and_serves_its_opaque_far_end() {
+    use sha2::{Digest, Sha256};
+    let digest: String = Sha256::digest(b"linear\nfixture-organization")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let designator = format!("linear/{digest}");
+    let mut held = dataset();
+    held["tasks"][2]["metadata"] = json!({"onetaskgraph.depends_on": [
+        {"designator": designator, "id": "L-1", "kind": "task"}
+    ]});
+    let cached = Cached::new(held);
+    let pin = cached.listed("task", "linear:L-3").expect("a token");
+    let read = ["task", "deps", "linear:L-3", "--pin", &pin, "--json"];
+
+    let (filled, _) = cached.ok(&read);
+    let edge = json!({"from": {"id": "linear:L-3", "kind": "task"},
+                      "to": {"id": "linear:L-1", "kind": "task"}, "kind": "blocks"});
+    assert_eq!(filled["items"], json!([edge]), "{filled}");
+    let dir = cached.dir().expect("a cache");
+    let kept: Vec<String> = walk(&dir.join("edges-v4"))
+        .iter()
+        .map(|path| std::fs::read_to_string(path).expect("an entry"))
+        .collect();
+    assert!(
+        kept.iter().any(|entry| entry.contains(&designator)),
+        "the entry keeps the far end opaquely: {kept:?}"
+    );
+
+    let before = cached.workspace.served().len();
+    let (served, _) = cached.ok(&read);
+    assert_eq!(served["items"], json!([edge]), "{served}");
+    let read_ids: Vec<Value> = cached.workspace.served()[before..]
+        .iter()
+        .map(|(_, variables)| variables["id"].clone())
+        .collect();
+    assert_eq!(
+        read_ids,
+        [json!("L-1")],
+        "the task's own edges are served from its entry; only the far end is read"
+    );
 }

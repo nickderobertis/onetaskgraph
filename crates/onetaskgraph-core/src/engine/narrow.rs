@@ -9,7 +9,7 @@
 //! would leave the refusal to each plugin's own wording — or, for a plugin written before
 //! priorities existed, to a write that drops it in silence.
 
-use onetaskgraph_plugin_api::Priority;
+use onetaskgraph_plugin_api::{MetadataRecord, Priority};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -47,6 +47,11 @@ pub struct TaskPrioritySet {
 pub struct TaskContentSet {
     /// The task whose content was replaced.
     pub id: GlobalId,
+    /// The content the task holds after the write: what its source's backend stores, as the
+    /// write's own answer reported it, where the source reports one — a backend may normalize
+    /// the spelling of the Markdown it is written while keeping its rendered meaning — and
+    /// otherwise exactly the bytes sent. An answer, never stored.
+    pub content: String,
     /// What each mutation an expected write sent came to — present when the write was made
     /// with `--expect` on a source that reports its writes' parts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -115,6 +120,9 @@ impl Engine {
 
     /// Replace one task's content with `content`, byte for byte, and nothing else about it.
     ///
+    /// Answers with the content the task then holds, taken from the write's own answer where
+    /// the source reports what its backend stores, with no read of the task after the write.
+    ///
     /// # Errors
     ///
     /// Returns [`EngineError::UnknownSource`] for a source nothing configures,
@@ -141,15 +149,21 @@ impl Engine {
             &Exposure::text(content),
         )
         .await?;
+        super::stored::forget(source, MetadataRecord::Task, &id.native);
         source
             .source()
             .set_task_content(&id.native, content)
             .await
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
+        let held = source
+            .source()
+            .stored_content(MetadataRecord::Task, &id.native)
+            .unwrap_or_else(|| content.to_owned());
         let (result, fallback, spent) = self.expected_parts(id);
         Ok(TaskContentSet {
             id: id.clone(),
+            content: held,
             result,
             fallback,
             spent,

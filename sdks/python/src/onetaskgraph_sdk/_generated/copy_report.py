@@ -43,6 +43,7 @@ class CopyLink(StrEnum):
 
 
 class CopyVia(StrEnum):
+    CopyViaTargetTask = "target-task"
     CopyViaLink = "link"
     CopyViaOrigin = "origin"
     CopyViaScan = "scan"

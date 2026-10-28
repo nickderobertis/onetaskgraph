@@ -1,0 +1,19 @@
+# The CPU measurement varies with developer-host load: budgets-host warns on its over
+# verdict, while direct onebudgetspec checks (including CI) retain the strict threshold.
+schema_version: 1
+budgets:
+  # Workload: one fresh interpreter per plan-store recipe, about 60 a day on this host, against
+  # the SDK as generated, with about 700 model classes across its generated modules.
+  # measure_import.py says what each figure in its detail is.
+  - id: sdk-import-cpu-seconds
+    description: >-
+      Median user+system CPU seconds, over 15 runs, of a fresh interpreter of the SDK's own
+      environment importing onetaskgraph_sdk, validating one copy report the binary produced
+      into CopyReport and exiting normally. It protects the start-up every SDK consumer pays,
+      which only this repository can hold.
+    labels: [host, host-variable]
+    measure: reported
+    command: ["uv", "run", "--frozen", "python", "measure_import.py"]
+    unit: seconds
+    direction: max
+    threshold: 0.35

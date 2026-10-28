@@ -63,7 +63,14 @@
         "command": "uv run --frozen pytest -q --no-cov",
         "cwd": "sdks/python"
       },
-      "//": "The tests spawn target/debug/onetaskgraph, on the same terms as generate-check."
+      "//": "The tests spawn target/debug/onetaskgraph, on the same terms as generate-check. onebudgetspec is an input because tests/test_measure_import.py checks the import budget through it.",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "externalDependencies": ["@onebudgetspec/cli"]
+        }
+      ]
     },
     "coverage": {
       "executor": "nx:run-commands",
@@ -72,7 +79,28 @@
         "command": "uv run --frozen pytest -q",
         "cwd": "sdks/python"
       },
-      "//": "The same tests as `test`, measured."
+      "//": "The same tests as `test`, measured.",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "externalDependencies": ["@onebudgetspec/cli"]
+        }
+      ]
+    },
+    "budgets-host": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash sdks/python/budgets-host.sh sdks/python/budgets.yaml"
+      },
+      "cache": false,
+      "inputs": [
+        "default",
+        {
+          "externalDependencies": ["@onebudgetspec/cli"]
+        }
+      ],
+      "//": "CPU time varies with host load, so an over host-variable reading warns here. Other host budgets and measurement errors fail; direct onebudgetspec checks remain strict."
     }
   }
 }

@@ -16,10 +16,10 @@ use onetaskgraph_core::{
     MAX_LINE, RequestDeadline, SubprocessConfig, SubprocessSource, plugin_for, serve,
 };
 use onetaskgraph_plugin_api::{
-    Cursor, Direction, Document, DocumentQuery, ItemWrite, LabelFilter, Location, MetadataKey,
-    NativeId, PageRequest, Priority, ProjectFilter, ProjectQuery, SecretResolver, SourceError,
-    SourceName, Status, StatusCategory, Support, Task, TaskQuery, TaskRef, TaskSource,
-    WriteSupport,
+    AssetWrite, Cursor, Direction, Document, DocumentQuery, ItemKind, ItemWrite, LabelFilter,
+    Location, MetadataKey, MetadataRecord, NativeId, PageRequest, Priority, ProjectFilter,
+    ProjectQuery, SecretResolver, SourceError, SourceName, Status, StatusCategory, Support, Task,
+    TaskQuery, TaskRef, TaskSource, WriteSupport,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -294,6 +294,88 @@ async fn a_write_crosses_the_wire_and_lands_in_the_source_on_the_other_side() {
     );
 }
 
+#[test]
+fn a_project_status_write_is_answered_with_the_status_itself_or_null() {
+    // §4.17a: unlike a task's (§4.17), the result is the `Status` with no `status` member
+    // around it, and `null` — present, not absent — for a project the plugin does not hold.
+    let request = |id: &str, project: &str| {
+        json!({"id": id, "method": "set_project_status",
+               "params": {"id": project, "category": "done"}})
+    };
+    let answers = served(&[
+        handshake(2, hosted_settings()),
+        request("1", "P-1"),
+        request("2", "nope"),
+        request("3", "T-1"),
+    ]);
+
+    assert_eq!(answers[0]["result"]["project_status"], json!(true));
+    assert_eq!(
+        answers[1],
+        json!({"id": "1", "result": {"category": "done", "name": "done"}})
+    );
+    assert_eq!(answers[2], json!({"id": "2", "result": null}));
+    assert_eq!(
+        answers[3],
+        json!({"id": "3", "result": null}),
+        "a task's id names no project"
+    );
+}
+
+#[tokio::test]
+async fn a_project_status_read_back_across_the_wire_is_the_status_or_none() {
+    let there = a_process_away(hosted_settings()).expect("the handshake succeeds");
+    let written = there
+        .set_project_status(&NativeId("P-1".to_owned()), StatusCategory::Done)
+        .await
+        .expect("the plugin takes the write");
+    assert_eq!(
+        written,
+        in_process()
+            .set_project_status(&NativeId("P-1".to_owned()), StatusCategory::Done)
+            .await
+            .expect("the same write in process"),
+    );
+    assert_eq!(
+        written.map(|status| status.category),
+        Some(StatusCategory::Done)
+    );
+    assert_eq!(
+        there
+            .get_project(&NativeId("P-1".to_owned()))
+            .await
+            .unwrap()
+            .unwrap()
+            .status
+            .category,
+        StatusCategory::Done
+    );
+    assert_eq!(
+        there
+            .set_project_status(&NativeId("nope".to_owned()), StatusCategory::Done)
+            .await,
+        Ok(None),
+        "a `null` result is no such project, not a protocol violation"
+    );
+
+    // A plugin answering the wrapped shape `set_task_status` uses is not answering §4.17a.
+    let wrapped = scripted(vec![
+        json!({"id": "0", "result": {"protocol_version": 2, "kind": "made-up",
+               "capabilities": capabilities(), "writes": "supported",
+               "project_status": true}})
+        .to_string(),
+        json!({"id": "1", "result": {"status": {"category": "done", "name": "Done"}}}).to_string(),
+    ])
+    .expect("the handshake succeeds");
+    let Err(SourceError::Malformed { message }) = wrapped
+        .set_project_status(&NativeId("P-1".to_owned()), StatusCategory::Done)
+        .await
+    else {
+        panic!("a wrapped status is not the shape §4.17a promises");
+    };
+    assert!(message.contains("set_project_status"), "{message}");
+}
+
 #[tokio::test]
 async fn a_plugin_that_says_nothing_about_writing_is_read_as_one_that_cannot() {
     // §3.3: the member is optional, and absent means unsupported — which is what a
@@ -308,6 +390,188 @@ async fn a_plugin_that_says_nothing_about_writing_is_read_as_one_that_cannot() {
     ])
     .expect("the handshake succeeds");
     assert_eq!(silent.writes(), WriteSupport::Unsupported);
+}
+
+/// A handshake answer from a plugin that can be written through, with `stored_forms` as given.
+fn writable_handshake(stored_forms: bool) -> String {
+    let mut result = json!({"protocol_version":2,"kind":"rewriting","writes":"supported",
+        "capabilities":{
+            "projects":"native","orphan_tasks":"native","filter_by_label":"native",
+            "filter_by_status":"native","search_title":"native","search_content":"native",
+            "task_dependencies":"both-directions","project_dependencies":"both-directions",
+            "max_page_size":10}});
+    if stored_forms {
+        result["stored_forms"] = json!(true);
+    }
+    json!({"id":"0","result":result}).to_string()
+}
+
+/// A task to write, holding `content`.
+fn task_holding(content: &str) -> ItemWrite<Task> {
+    ItemWrite {
+        target: None,
+        item: serde_json::from_value(json!({
+            "id": "T-1", "title": "Rewritten", "content": content,
+            "status": {"category": "done", "name": "done"}, "labels": []
+        }))
+        .expect("a task"),
+        depends_on: Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn a_plugin_that_says_nothing_about_stored_forms_is_never_asked_and_its_answer_never_read() {
+    // §3.16: absent means the plugin stores what it is given. The peer answers the handshake and
+    // one write, and nothing else — so a `stored_status` sent to it would find no answer and
+    // fail rather than read as the status given.
+    let silent = scripted(vec![
+        writable_handshake(false),
+        r#"{"id":"1","result":{"id":"I-1","stored_content":"* one"}}"#.to_owned(),
+    ])
+    .expect("the handshake succeeds");
+    let status = Status {
+        category: StatusCategory::Done,
+        name: "done".to_owned(),
+    };
+    assert_eq!(
+        silent.stored_status(ItemKind::Task, &status).await.unwrap(),
+        status
+    );
+    let id = silent.write_task(&task_holding("- one")).await.unwrap();
+    assert_eq!(silent.stored_content(MetadataRecord::Task, &id), None);
+}
+
+#[tokio::test]
+async fn a_plugin_declaring_stored_forms_is_asked_and_what_its_write_says_it_stores_is_kept_once() {
+    // The peer answers `stored_status` and three writes, and nothing else: the retired
+    // `stored_form` is never sent, so a request for it would find no answer and fail.
+    let declaring = scripted(vec![
+        writable_handshake(true),
+        r#"{"id":"1","result":{"status":{"category":"done","name":"Shipped"}}}"#.to_owned(),
+        r#"{"id":"2","result":{"id":"I-1","stored_content":"* one"}}"#.to_owned(),
+        r#"{"id":"3","result":{"id":"I-2"}}"#.to_owned(),
+        r#"{"id":"4","result":{"id":"I-3","stored_content":7}}"#.to_owned(),
+    ])
+    .expect("the handshake succeeds");
+    let status = Status {
+        category: StatusCategory::Done,
+        name: "done".to_owned(),
+    };
+    assert_eq!(
+        declaring
+            .stored_status(ItemKind::Project, &status)
+            .await
+            .unwrap()
+            .name,
+        "Shipped"
+    );
+    let id = declaring.write_task(&task_holding("* one")).await.unwrap();
+    assert_eq!(
+        declaring
+            .stored_content(MetadataRecord::Task, &id)
+            .as_deref(),
+        Some("* one")
+    );
+    // Taken: a second ask answers nothing until the next write says something.
+    assert_eq!(declaring.stored_content(MetadataRecord::Task, &id), None);
+    let quiet = declaring.write_task(&task_holding("* two")).await.unwrap();
+    assert_eq!(declaring.stored_content(MetadataRecord::Task, &quiet), None);
+    let Err(SourceError::Malformed { message }) =
+        declaring.write_task(&task_holding("* three")).await
+    else {
+        panic!("a stored_content that is not a string is malformed");
+    };
+    assert!(message.contains("write_task"), "{message}");
+}
+
+#[tokio::test]
+async fn an_asset_write_keeps_what_its_answer_says_is_stored_and_refuses_one_not_a_string() {
+    // §4.9a: an asset-carrying write's answer is `{id, content}`, and §4.9 puts `stored_content`
+    // beside them for a plugin declaring `stored_forms` — taken out before the rest is read, so
+    // it is held to the same shape as an ordinary write's.
+    let mut handshake: Value = serde_json::from_str(&writable_handshake(true)).expect("JSON");
+    handshake["result"]["capabilities"]["assets"] = json!("native");
+    let declaring = scripted(vec![
+        handshake.to_string(),
+        r#"{"id":"1","result":{"id":"I-1","content":"* one","stored_content":"* one"}}"#.to_owned(),
+        r#"{"id":"2","result":{"id":"I-2","content":"* two","stored_content":["* two"]}}"#
+            .to_owned(),
+    ])
+    .expect("the handshake succeeds");
+    let assets = AssetWrite::default();
+    let written = declaring
+        .write_task_with_assets(&task_holding("* one"), None, &assets)
+        .await
+        .expect("a well-formed answer");
+    assert_eq!(
+        declaring
+            .stored_content(MetadataRecord::Task, &written.id)
+            .as_deref(),
+        Some("* one")
+    );
+    let Err(SourceError::Malformed { message }) = declaring
+        .write_task_with_assets(&task_holding("* two"), None, &assets)
+        .await
+    else {
+        panic!("a stored_content that is not a string is malformed");
+    };
+    assert!(message.contains("write_task"), "{message}");
+    assert_eq!(
+        declaring.stored_content(MetadataRecord::Task, &NativeId("I-2".into())),
+        None,
+        "nothing is kept of an answer that was refused"
+    );
+}
+
+#[test]
+fn the_reference_host_answers_the_stored_forms_golden_exactly() {
+    // The checked-in golden of the members added to version 2 without a bump (§6): this
+    // build's own host speaks exactly those shapes, its handshake still version 2 — so a
+    // version-2 engine and plugin keep shaking hands — and a write it has nothing to say about
+    // carries no `stored_content` at all.
+    let golden: Value = serde_json::from_str(include_str!("fixtures/stored-forms-wire.json"))
+        .expect("the golden is JSON");
+    let expected = &golden["reference_host"];
+    let requests = &golden["requests"];
+    let answers = served(&[
+        handshake(2, hosted_settings()),
+        json!({"id":"1","method":"stored_status","params":requests["stored_status"]}),
+        json!({"id":"2","method":"stored_status","params":{
+            "kind":"task","status":{"category":"done","name":"Finished"}}}),
+        json!({"id":"3","method":"write_task","params":{"write":{"target":null,"item":{
+            "id":"T-9","title":"Golden","content":"- one",
+            "status":{"category":"todo","name":"Todo"},"labels":[]}}}}),
+    ]);
+    let mut initialize = answers[0]["result"].clone();
+    initialize
+        .as_object_mut()
+        .expect("a handshake result")
+        .remove("capabilities");
+    assert_eq!(initialize, expected["initialize"]);
+    assert_eq!(
+        answers[1]["result"],
+        json!({"status": {"category": "done", "name": "done"}})
+    );
+    assert_eq!(answers[2]["result"], expected["stored_status"]);
+    assert_eq!(answers[3]["result"], expected["write_task"]);
+}
+
+#[test]
+fn the_reference_host_declares_stored_forms_and_answers_stored_status_but_not_the_retired_stored_form()
+ {
+    let answers = served(&[
+        handshake(2, hosted_settings()),
+        json!({"id":"1","method":"stored_form","params":{"content":"- one"}}),
+        json!({"id":"2","method":"stored_status","params":{
+            "kind":"task","status":{"category":"done","name":"Finished"}}}),
+    ]);
+    assert_eq!(answers[0]["result"]["stored_forms"], json!(true));
+    // `stored_form` is retired (§4.25): the host no longer answers it, as no engine sends it.
+    assert!(answers[1].get("error").is_some(), "{}", answers[1]);
+    assert_eq!(
+        answers[2]["result"],
+        json!({"status": {"category": "done", "name": "Finished"}})
+    );
 }
 
 #[tokio::test]
@@ -2647,6 +2911,50 @@ fn a_served_plugin_takes_the_copy_link_key_only_with_a_value_that_is_links() {
                "params": {"id": "T-1", "key": "onetaskgraph.origin", "value": "x:y"}}),
     ]);
     assert_eq!(refusal(&other[1]), "malformed", "{:#}", other[1]);
+}
+
+#[test]
+fn a_served_plugin_takes_the_copy_location_key_only_with_a_value_that_is_locations() {
+    // `onetaskgraph.copy_locations` is the other reserved key §4.18 admits, and only as an
+    // object of destination source names to an id of that source and a location: anything else
+    // is refused at the boundary, before the hosted source is asked.
+    let write = |value: Value| {
+        json!({"id": "1", "method": "set_task_metadata",
+               "params": {"id": "T-1", "key": "onetaskgraph.copy_locations", "value": value}})
+    };
+    for value in [
+        json!("notes:T-1"),
+        json!({"notes": "notes:T-1"}),
+        json!({"notes": {"id": "elsewhere:T-1", "location": {"path": "/tmp/T-1.md"}}}),
+        json!({"notes": {"id": "notes:T-1"}}),
+        json!({"notes": {"id": "notes:T-1", "location": "/tmp/T-1.md"}}),
+    ] {
+        let answers = served(&[handshake(2, hosted_settings()), write(value.clone())]);
+        assert_eq!(
+            refusal(&answers[1]),
+            "malformed",
+            "{value}: {:#}",
+            answers[1]
+        );
+    }
+
+    // The documented example, taken from `docs/metadata.md` rather than restated.
+    let page = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata.md"),
+    )
+    .expect("docs/metadata.md is readable");
+    let section = &page[page
+        .find("### `onetaskgraph.copy_locations`")
+        .expect("the section on the locations")..];
+    let example = &section[section.find("```json\n").expect("its example") + "```json\n".len()..];
+    let documented: Value = serde_json::from_str(&example[..example.find("```").unwrap()])
+        .expect("the documented example is JSON");
+    let answers = served(&[handshake(2, hosted_settings()), write(documented.clone())]);
+    assert_eq!(
+        answers[1]["result"]["task"]["metadata"]["onetaskgraph.copy_locations"], documented,
+        "the documented example is refused: {:#}",
+        answers[1]
+    );
 }
 
 #[test]

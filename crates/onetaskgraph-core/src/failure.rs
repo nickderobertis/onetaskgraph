@@ -12,7 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::config::ConfigError;
-use crate::engine::EngineError;
+use crate::engine::{EngineError, TaskAssetsError};
 
 /// Whether repeating a failed request unchanged could change the answer.
 ///
@@ -221,10 +221,16 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         }
         EngineError::NotCached { name } => ("not-cached".to_owned(), configured(name), None),
         EngineError::ExpectOneTask => ("expect-one-task".to_owned(), None, None),
+        EngineError::VersionMoved { .. } => ("version-moved".to_owned(), None, None),
         EngineError::NoComments { name, .. } | EngineError::CommentlessDestination { name, .. } => {
             ("no-comments".to_owned(), configured(name), None)
         }
         EngineError::ChangedWhileCopied { .. } => ("changed-while-copied".to_owned(), None, None),
+        EngineError::StoredContentDiverged { item, .. } => (
+            "stored-content-diverged".to_owned(),
+            Some(item.source.clone()),
+            None,
+        ),
         EngineError::QueryNotTasks => ("query-not-tasks".to_owned(), None, None),
         EngineError::StatusesNotTasks => ("statuses-not-tasks".to_owned(), None, None),
         EngineError::CommentsNotDocuments => ("comments-not-documents".to_owned(), None, None),
@@ -262,11 +268,20 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::MalformedProvenance { .. } => ("malformed-provenance".to_owned(), None, None),
         EngineError::StaleOrigin { .. } => ("stale-origin".to_owned(), None, None),
         EngineError::StaleLink { .. } => ("stale-link".to_owned(), None, None),
+        EngineError::TargetTaskWith { .. } => ("target-task-with".to_owned(), None, None),
+        EngineError::TargetTaskNeedsOne => ("target-task-needs-one".to_owned(), None, None),
+        EngineError::TargetTaskSource { .. } => ("target-task-source".to_owned(), None, None),
+        EngineError::TargetTaskMissing { .. } => ("target-task-missing".to_owned(), None, None),
+        EngineError::TargetTaskOrigin { .. } => ("target-task-origin".to_owned(), None, None),
         EngineError::CreateWith { .. } => ("create-with".to_owned(), None, None),
         EngineError::CreateCarried { .. } => ("create-carried".to_owned(), None, None),
         EngineError::NotAMember { .. } => ("not-a-member".to_owned(), None, None),
+        EngineError::NoProjectCounterpart { .. } => {
+            ("no-project-counterpart".to_owned(), None, None)
+        }
         EngineError::UnrecordedMember { .. } => ("unrecorded-member".to_owned(), None, None),
         EngineError::Misrouted { .. } => ("misrouted".to_owned(), None, None),
+        EngineError::SplitPrivateHome { .. } => ("split-private-home".to_owned(), None, None),
         EngineError::NotPrivateDestination { destination, .. } => (
             "not-private-destination".to_owned(),
             configured(destination),
@@ -297,6 +312,14 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
             configured(destination),
             None,
         ),
+        EngineError::DesignatorNotConfigured { .. } => {
+            ("designator-not-configured".to_owned(), None, None)
+        }
+        EngineError::PrivateReferenceContent { destination, .. } => (
+            "private-reference-content".to_owned(),
+            configured(destination),
+            None,
+        ),
         EngineError::PrivateItemReference { destination, .. } => (
             "private-reference".to_owned(),
             configured(destination),
@@ -310,6 +333,13 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::ProjectUnclassified { .. } => ("project-unclassified".to_owned(), None, None),
         EngineError::PrivateMemberOfPublicProject { .. } => {
             ("private-member".to_owned(), None, None)
+        }
+        EngineError::ProjectionReference { .. } => ("projection-reference".to_owned(), None, None),
+        EngineError::ProjectionsMalformed { .. } => {
+            ("projections-malformed".to_owned(), None, None)
+        }
+        EngineError::ProjectionNotMirrored { .. } => {
+            ("projection-not-mirrored".to_owned(), None, None)
         }
         EngineError::DestinationUnavailable { name, error }
         | EngineError::SourceRefused { name, error }
@@ -325,6 +355,15 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
 impl From<&EngineError> for Failure {
     fn from(error: &EngineError) -> Self {
         let (kind, source, caused_by) = cause(error);
+        Self::caused(kind, source, caused_by, error.to_string())
+    }
+}
+
+impl From<&TaskAssetsError> for Failure {
+    /// Classed by what stopped the read, and written as the read's own message, which names
+    /// the task as well as that cause.
+    fn from(error: &TaskAssetsError) -> Self {
+        let (kind, source, caused_by) = cause(&error.error);
         Self::caused(kind, source, caused_by, error.to_string())
     }
 }

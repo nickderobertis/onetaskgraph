@@ -78,7 +78,7 @@ class Document(BaseModel):
     classification: Annotated[
         Classification,
         Field(
-            description="Who may read this document, as it was declared, on the terms of\n[`Task::classification`]."
+            description="Who may read this document, as it was declared, on the terms of\n[`Task::classification`] — except that a document filed under a private project is\nprivate, however this reads."
         ),
     ] = Classification.ClassificationPublic
     content: Annotated[

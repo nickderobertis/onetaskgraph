@@ -21,6 +21,7 @@
 //! and kept out of the figure.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use onetaskgraph_e2e_support::{
     clock::SimulatedClock,
@@ -132,6 +133,10 @@ struct Workload {
     github: GitHubBoardFields,
     board: Board,
     clock: SimulatedClock,
+    /// Held across each command. Every command attaches as the clock's one client, so two run
+    /// side by side would make the second wait in its attach — in real time, for the clock's
+    /// reattach grace — until the first exits, and be refused when the first outlasts it.
+    turn: Mutex<()>,
     cache_home: PathBuf,
     scale: Scale,
     template: PathBuf,
@@ -214,6 +219,7 @@ impl Workload {
             github,
             board,
             clock,
+            turn: Mutex::new(()),
             cache_home: PathBuf::new(),
             scale,
             template,
@@ -282,19 +288,18 @@ impl Workload {
     }
 
     /// One command that had to succeed: what it printed and what the ledgers took while it ran
-    /// — its own spend, as long as no other command runs beside it.
+    /// — its own spend, because no other command runs beside it.
     fn run(&self, arguments: &[&str]) -> (Value, Spent) {
-        self.run_on(&self.clock, arguments)
-    }
-
-    /// `run`, as the one client of `clock`.
-    fn run_on(&self, clock: &SimulatedClock, arguments: &[&str]) -> (Value, Spent) {
+        let _turn = self
+            .turn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mark = self.mark();
         let output = self
             .sandbox
             .command()
             .env("XDG_CACHE_HOME", &self.cache_home)
-            .envs(clock.client_env(0))
+            .envs(self.clock.client_env(0))
             .args(arguments)
             .assert()
             .get_output()
@@ -336,16 +341,6 @@ impl Workload {
         kind: &str,
         pins: Option<&[(String, String)]>,
     ) -> (Spent, Vec<(String, String)>) {
-        self.load_on(&self.clock, kind, pins)
-    }
-
-    /// `load`, its every command the one client of `clock`.
-    fn load_on(
-        &self,
-        clock: &SimulatedClock,
-        kind: &str,
-        pins: Option<&[(String, String)]>,
-    ) -> (Spent, Vec<(String, String)>) {
         let ids = self.loaded(kind);
         let pin_of = |id: &str| {
             pins.and_then(|pins| pins.iter().find(|(pinned, _)| pinned == id))
@@ -367,7 +362,7 @@ impl Workload {
                 }
                 arguments.push("--json".to_owned());
                 let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-                let (read, cost) = self.run_on(clock, &arguments);
+                let (read, cost) = self.run(&arguments);
                 spent.add(cost);
                 for detail in read["details"].as_array().expect("details") {
                     let task = &detail["items"][0];
@@ -394,8 +389,9 @@ impl Workload {
             }
             arguments.push("--json".to_owned());
             let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-            let (read, cost) = self.run_on(clock, &arguments);
-            // Said by the answer itself, so it holds while another pass runs beside this one.
+            let (read, cost) = self.run(&arguments);
+            // Said by the answer itself, so it holds while another pass is interleaved with
+            // this one.
             if read["cache"]["served"] == "cache" {
                 spent.hits += 1;
             }
@@ -534,19 +530,14 @@ impl Workload {
         }
         let loads = if kind == "manifests" { "imaged" } else { kind };
         let (cold, held) = self.load(loads, None);
-        // Two passes at once, each pinned to what the cold load returned. Each command's slice
-        // of the ledgers would hold the other's requests too, so the two are measured as one
-        // span, every request once; the hits are what each answer said of itself. Each pass is
-        // the one client of a clock of its own: two live processes cannot both be client 0 of
-        // one clock, which would refuse whichever lost the race to reattach for its whole grace.
+        // Two passes, each pinned to what the cold load returned, from two threads whose
+        // commands take turns at the clock's one client rather than running at once. They are
+        // measured as one span, every request once; the hits are what each answer said of
+        // itself.
         let mark = self.mark();
         let hits: u64 = std::thread::scope(|scope| {
             let passes: Vec<_> = (0..2)
-                .map(|_| {
-                    let clock = SimulatedClock::start(1);
-                    let held = &held;
-                    scope.spawn(move || self.load_on(&clock, loads, Some(held)).0.hits)
-                })
+                .map(|_| scope.spawn(|| self.load(loads, Some(&held)).0.hits))
                 .collect();
             passes
                 .into_iter()
@@ -578,7 +569,7 @@ fn measured(scale: Scale, cache: bool) -> Vec<Vec<Spent>> {
     let workload = Workload::new(scale, cache);
     let measured: Vec<Vec<Spent>> = KINDS.iter().map(|kind| workload.sequences(kind)).collect();
     if !cache {
-        // With nothing kept, each of the two concurrent passes makes exactly the cold load's
+        // With nothing kept, each of the two interleaved passes makes exactly the cold load's
         // reads, so a span that counted any request twice — or missed one — reads otherwise.
         for (kind, sequences) in KINDS.iter().zip(&measured) {
             if *kind == "asset-bytes" {
@@ -588,7 +579,7 @@ fn measured(scale: Scale, cache: bool) -> Vec<Vec<Spent>> {
             assert_eq!(
                 (unchanged.requests, unchanged.points),
                 (2 * cold.requests, 2 * cold.points),
-                "{kind}: two concurrent passes are counted once each"
+                "{kind}: two interleaved passes are counted once each"
             );
         }
     }

@@ -241,6 +241,21 @@ jobs:
           NX_HEAD: HEAD
         run: just gate-generated
 
+      # A cancelled run's live journey dies before its own cleanup, and what it wrote would
+      # make the next session refuse the shared board. On cancellation, on the credentialed
+      # leg alone, this removes exactly this run attempt's stamped artifacts and opens no
+      # session; the hourly janitor takes anything left once the run reads completed.
+      # scripts/check-live-janitor.sh holds this step to that shape.
+      - name: Remove this run's live artifacts after a cancellation
+        if: cancelled() && matrix.os == 'ubuntu-latest' && !github.event.pull_request.head.repo.fork
+        timeout-minutes: 15
+        env:
+          GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
+          GH_PROJECTS_OWNER: nickderobertis
+          GH_PROJECTS_NUMBER: "1"
+          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
+        run: cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run
+
   macos:
     name: macOS check and install proofs
     needs: [macos-lanes]

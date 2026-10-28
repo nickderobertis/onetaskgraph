@@ -16,10 +16,10 @@ use std::path::Path;
 
 use onetaskgraph_plugin_api::{
     AssetWrite, Capabilities, Comment, CommentBody, CommentCopy, Direction, Document,
-    DocumentQuery, IssueHolding, IssueRef, ItemWrite, MetadataKey, Metering, NativeId, NewComment,
-    Page, PageRequest, Priority, Project, ProjectQuery, SourceError, Status, StatusCategory,
-    StatusContradiction, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome,
-    WriteSupport,
+    DocumentQuery, IssueHolding, IssueRef, ItemKind, ItemWrite, MetadataKey, Metering, NativeId,
+    NewComment, Page, PageRequest, Priority, Project, ProjectQuery, SourceError, Status,
+    StatusCategory, StatusContradiction, Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate,
+    TaskUpdateOutcome, WriteSupport,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -109,11 +109,28 @@ pub(crate) struct Response {
     /// The request's `id`, echoed.
     pub(crate) id: String,
     /// Present on success.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// A `result` of `null` is present, not absent: `set_project_status` (§4.17a) answers
+    /// `null` for no such project, and reading it as "neither" would refuse that answer.
+    #[serde(
+        default,
+        deserialize_with = "held_whatever_its_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) result: Option<Value>,
     /// Present on failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) error: Option<SourceError>,
+}
+
+/// A member that is there, whatever its value — `null` included.
+///
+/// `#[serde(default)]` supplies `None` only when the member is missing, so this is called
+/// exactly when it is present.
+fn held_whatever_its_value<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
 }
 
 impl Response {
@@ -331,6 +348,21 @@ pub(crate) struct InitializeResult {
     /// cannot takes the whole copy back, as before. Omitted when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) write_checks: bool,
+    /// Whether this plugin answers `set_project_status` (§3.15).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent the method, and a
+    /// project status write naming it is refused before anything is sent, in the words the
+    /// contract's default refuses it with. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) project_status: bool,
+    /// Whether this plugin answers `stored_status`, and says in each content write's result
+    /// what its backend stores (§3.16).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent `stored_status`, the
+    /// engine writes the status it was given, and nothing is written again after a write.
+    /// Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) stored_forms: bool,
 }
 
 /// The `metering` result (§4.14).
@@ -848,12 +880,14 @@ pub(crate) struct DeliveredByResult {
 pub(crate) struct MetadataParams {
     /// The record whose metadata key is set.
     id: NativeId,
-    /// The key: a caller's own dotted key outside the `onetaskgraph.` namespace, or the one
-    /// reserved key a copy records where an item landed under, [`MetadataKey::COPIES_KEY`].
+    /// The key: a caller's own dotted key outside the `onetaskgraph.` namespace, or one of the
+    /// two reserved keys a copy records where an item landed under, [`MetadataKey::COPIES_KEY`]
+    /// and [`MetadataKey::COPY_LOCATIONS_KEY`].
     key: MetadataKey,
     /// The value to hold under it: any JSON, `null` included — and for
     /// [`MetadataKey::COPIES_KEY`], only an object of destination source names to qualified
-    /// ids of that source.
+    /// ids of that source, and for [`MetadataKey::COPY_LOCATIONS_KEY`] only one of destination
+    /// source names to an id and a location.
     value: Value,
 }
 
@@ -866,6 +900,11 @@ impl MetadataParams {
     pub(crate) fn new(id: NativeId, key: MetadataKey, value: Value) -> Result<Self, String> {
         if key.is_copies()
             && let Some(malformed) = crate::engine::malformed_links(&value)
+        {
+            return Err(malformed);
+        }
+        if key.is_copy_locations()
+            && let Some(malformed) = crate::engine::malformed_locations(&value)
         {
             return Err(malformed);
         }
@@ -906,14 +945,17 @@ impl TryFrom<UncheckedMetadataParams> for MetadataParams {
 }
 
 /// A narrow metadata write's key as §4.18 admits it: any key [`MetadataKey::new`] accepts,
-/// and [`MetadataKey::COPIES_KEY`], which the engine alone sends and nothing a caller types
-/// can name.
+/// and [`MetadataKey::COPIES_KEY`] and [`MetadataKey::COPY_LOCATIONS_KEY`], which the engine
+/// alone sends and nothing a caller types can name.
 fn caller_or_copies<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<MetadataKey, D::Error> {
     let key = String::deserialize(deserializer)?;
     if key == MetadataKey::COPIES_KEY {
         return Ok(MetadataKey::copies());
+    }
+    if key == MetadataKey::COPY_LOCATIONS_KEY {
+        return Ok(MetadataKey::copy_locations());
     }
     MetadataKey::new(key).map_err(serde::de::Error::custom)
 }
@@ -924,6 +966,26 @@ fn caller_or_copies<'de, D: serde::Deserializer<'de>>(
 pub(crate) struct WriteResult {
     /// The destination's own id for the item that was written.
     pub(crate) id: NativeId,
+    /// The content the write's own answer says the backend stores (§4.9), from a plugin that
+    /// declared `stored_forms`. Omitted when the plugin has nothing to say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stored_content: Option<String>,
+}
+
+/// The `params` of `stored_status` (§4.25): the status an item of one kind would be written at.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredStatusParams {
+    /// Whether the item written is a task or a project.
+    pub(crate) kind: ItemKind,
+    /// The status it would be written at.
+    pub(crate) status: Status,
+}
+
+/// The result of `stored_status` (§4.25): the status the backend would hold.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredStatusResult {
+    /// The status, as the backend would hold it.
+    pub(crate) status: Status,
 }
 
 #[cfg(test)]
@@ -1064,5 +1126,89 @@ mod tests {
             orphaned.to_string().contains("recorded_assets"),
             "{orphaned}"
         );
+    }
+
+    /// The checked-in golden of the members `docs/plugin-protocol.md` §3.16, §4.9 and §4.25
+    /// added to version 2 without a bump — `stored_form` among them no longer, since the engine
+    /// retired it.
+    fn stored_forms_golden() -> Value {
+        serde_json::from_str(include_str!("../../tests/fixtures/stored-forms-wire.json"))
+            .expect("the golden is JSON")
+    }
+
+    /// `value` read as `T` and written back, without the `capabilities` a handshake carries:
+    /// §4.2 reconciles those on their own, and they are written back with every default.
+    fn round_trip<T: serde::Serialize + for<'de> serde::Deserialize<'de>>(value: &Value) -> Value {
+        let read: T = serde_json::from_value(value.clone()).expect("the golden reads");
+        uncapable(serde_json::to_value(read).expect("it writes back"))
+    }
+
+    /// `value` without its `capabilities` member.
+    fn uncapable(mut value: Value) -> Value {
+        if let Some(members) = value.as_object_mut() {
+            members.remove("capabilities");
+        }
+        value
+    }
+
+    #[test]
+    fn the_stored_forms_wire_shapes_round_trip_byte_for_byte_and_omit_what_is_absent() {
+        use super::{InitializeResult, StoredStatusParams, StoredStatusResult, WriteResult};
+        let golden = stored_forms_golden();
+        for plugin in ["declaring_plugin", "silent_plugin"] {
+            for (member, written) in [
+                (
+                    "initialize",
+                    round_trip::<InitializeResult>(&golden[plugin]["initialize"]),
+                ),
+                (
+                    "write_task",
+                    round_trip::<WriteResult>(&golden[plugin]["write_task"]),
+                ),
+            ] {
+                assert_eq!(
+                    written,
+                    uncapable(golden[plugin][member].clone()),
+                    "{plugin} {member}"
+                );
+            }
+        }
+        let declaring = &golden["declaring_plugin"];
+        assert_eq!(
+            round_trip::<StoredStatusResult>(&declaring["stored_status"]),
+            declaring["stored_status"]
+        );
+        let requests = &golden["requests"];
+        assert_eq!(
+            round_trip::<StoredStatusParams>(&requests["stored_status"]),
+            requests["stored_status"]
+        );
+
+        // A plugin written before the members omits them and is read as declaring nothing:
+        // `stored_forms` false, no `stored_content` — and written back without either.
+        let silent: InitializeResult =
+            serde_json::from_value(golden["silent_plugin"]["initialize"].clone()).unwrap();
+        assert!(!silent.stored_forms);
+        let quiet: WriteResult =
+            serde_json::from_value(golden["silent_plugin"]["write_task"].clone()).unwrap();
+        assert_eq!(quiet.stored_content, None);
+        // An explicit `null` reads as absent, and a `false` as not declaring; neither is
+        // written back.
+        let nulled: WriteResult =
+            serde_json::from_value(json!({"id": "I-3", "stored_content": null})).unwrap();
+        assert_eq!(serde_json::to_value(nulled).unwrap(), json!({"id": "I-3"}));
+        let mut declared_false = golden["silent_plugin"]["initialize"].clone();
+        declared_false["stored_forms"] = json!(false);
+        assert_eq!(
+            round_trip::<InitializeResult>(&declared_false),
+            uncapable(golden["silent_plugin"]["initialize"].clone())
+        );
+        // And a declaring plugin's members come back as it sent them.
+        let declaring: InitializeResult =
+            serde_json::from_value(golden["declaring_plugin"]["initialize"].clone()).unwrap();
+        assert!(declaring.stored_forms);
+        let stored: WriteResult =
+            serde_json::from_value(golden["declaring_plugin"]["write_task"].clone()).unwrap();
+        assert_eq!(stored.stored_content.as_deref(), Some("* one"));
     }
 }

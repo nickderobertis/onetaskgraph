@@ -13,6 +13,10 @@
 //! No credential and no third-party API: every issue and document below is one this file
 //! answered with. A short bound stands in for [`settle::LINEAR_INDEX`], because what is proven
 //! is what happens when a bound is spent, and nothing about that depends on its length.
+//!
+//! `settle::token_moved` is driven the same way, against a workspace whose single-issue read
+//! answers from a replica that has not caught up with a change — older than the read before the
+//! change for a number of reads, or never moving at all.
 
 use std::io::{Read, Write as _};
 use std::net::{TcpListener, TcpStream};
@@ -22,8 +26,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use onetaskgraph_plugin_api::{
-    DocumentQuery, NativeId, ProjectFilter, SecretResolver, SourceName, SourcePlugin, TaskQuery,
-    TaskSource,
+    DocumentQuery, NativeId, ProjectFilter, SecretResolver, SourceName, SourcePlugin, Task,
+    TaskQuery, TaskSource,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
@@ -35,6 +39,7 @@ mod settle;
 use settle::{
     Bound, DocumentListingBudget, LABEL_CONNECTION, LABEL_STEADY, LABEL_VARIABLE,
     settled_document_absent, settled_documents, settled_label, settled_tasks, settled_walk,
+    token_moved,
 };
 
 /// Room for the late listings below, which agree on their third read, with reads to spare, so
@@ -957,4 +962,103 @@ async fn a_document_listing_that_outlasts_its_time_budget_is_budget_exhaustion()
         "time exhaustion is named as budget exhaustion with the pages read: {refusal}"
     );
     assert_eq!(answered.load(Ordering::SeqCst), 1);
+}
+
+/// One issue as `get_task` reads it, last changed at `updated` seconds past 18:57.
+fn issue_at(updated: u32, title: &str) -> Value {
+    let mut issue = issue("i1", title, "p1");
+    issue["updatedAt"] = json!(format!("2026-10-19T18:57:{updated:02}Z"));
+    json!({"issue": issue})
+}
+
+/// The task `i1`, read through the plugin as the live journey reads it after each change.
+async fn read_i1(source: &dyn TaskSource) -> Result<Task, String> {
+    source
+        .get_task(&NativeId("i1".into()))
+        .await
+        .map_err(|error| format!("the read failed: {error}"))?
+        .ok_or_else(|| "the task was not there".to_owned())
+}
+
+/// The run that failed `check (ubuntu-latest)`: the read before a title edit at :24, and the
+/// reads after it answered at :06 by a lagging replica, twice, before one that holds the edit.
+#[tokio::test]
+async fn a_read_after_a_change_that_a_lagging_replica_answers_older_passes_once_it_catches_up() {
+    let (source, answered) = workspace(|n, request| {
+        assert!(
+            request.contains("issue("),
+            "only the issue is asked for: {request}"
+        );
+        match n {
+            1 => issue_at(24, "first"),
+            2 | 3 => issue_at(6, "first"),
+            _ => issue_at(30, "renamed"),
+        }
+    });
+    let before = read_i1(source.as_ref()).await.unwrap();
+    assert!(
+        before
+            .version
+            .as_deref()
+            .is_some_and(|token| token.starts_with("lin1|")),
+        "the stand-in's issue carries a `lin1` token, or nothing below is ordered: {:?}",
+        before.version
+    );
+    let after = token_moved(source.as_ref(), BOUND, "a title edit", &before, || {
+        read_i1(source.as_ref())
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        after.title, "renamed",
+        "the answer is the read that holds the edit"
+    );
+    assert_eq!(
+        answered.load(Ordering::SeqCst),
+        4,
+        "the read before, the two stale reads, and the one that caught up — and not once more"
+    );
+}
+
+#[tokio::test]
+async fn a_read_after_a_change_whose_token_moves_at_once_is_read_once() {
+    let (source, answered) = workspace(|n, _| issue_at(if n == 1 { 24 } else { 30 }, "t"));
+    let before = read_i1(source.as_ref()).await.unwrap();
+    token_moved(source.as_ref(), BOUND, "a body edit", &before, || {
+        read_i1(source.as_ref())
+    })
+    .await
+    .unwrap();
+    assert_eq!(answered.load(Ordering::SeqCst), 2);
+}
+
+/// A token that stays where it was — or behind it — on every read is Linear not moving it for
+/// the change, and the bound turns that into the journey's failure rather than a wait.
+#[tokio::test]
+async fn a_read_after_a_change_whose_token_never_moves_fails_within_the_bound_naming_both() {
+    for (after, order) in [(24, "Equal"), (6, "Greater")] {
+        let (source, answered) =
+            workspace(move |n, _| issue_at(if n == 1 { 24 } else { after }, "t"));
+        let before = read_i1(source.as_ref()).await.unwrap();
+        let started = Instant::now();
+        let refusal = token_moved(source.as_ref(), BOUND, "a title edit", &before, || {
+            read_i1(source.as_ref())
+        })
+        .await
+        .unwrap_err();
+        let waited = started.elapsed();
+        assert!(
+            refusal.starts_with(
+                "a title edit left the task's token at or before lin1|2026-10-19T18:57:24Z|"
+            ) && refusal.contains(&format!("it read lin1|2026-10-19T18:57:{after:02}Z|"))
+                && refusal.contains(&format!("(Some({order})) on each of 5 reads")),
+            "the failure names both tokens, their order and the reads it spent: {refusal}"
+        );
+        assert_eq!(answered.load(Ordering::SeqCst), 1 + BOUND.reads);
+        assert!(
+            waited >= BOUND.interval * (BOUND.reads - 1)
+                && waited < BOUND.interval * BOUND.reads + SLACK,
+            "a token that never moves fails once the bound is spent, and waited {waited:?}"
+        );
+    }
 }

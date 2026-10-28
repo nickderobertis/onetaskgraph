@@ -85,12 +85,12 @@ use chrono::{DateTime, Utc};
 use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Classification, Comment,
     CommentBody, CommentCopy, CommentOrigin, Cursor, DependencyEdge, DependencyEndpoint,
-    DependencyKind, DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind,
-    ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment, Page, PageRequest,
-    Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver, SourceError,
-    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskDetailRead, TaskQuery,
-    TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField,
-    Visibility, WriteSupport, WriteTarget,
+    DependencyKind, DependencySupport, Designator, Direction, Document, DocumentQuery, Health,
+    ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment, Page,
+    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
+    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskDetailRead,
+    TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
+    UpdatedField, Visibility, WriteSupport, WriteTarget,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -348,6 +348,10 @@ enum Dependency {
         kind: EdgeKind,
         /// What the far end is, when it is not the same kind of item as the near one.
         item: Option<EndpointKind>,
+        /// The tracker an opaque far end is in, when it is one: `id` is then that tracker's
+        /// native id, and names nothing of this folder.
+        #[serde(default)]
+        designator: Option<Designator>,
     },
 }
 /// What an expanded dependency endpoint names.
@@ -838,13 +842,24 @@ impl LocalMdSource {
                     to: DependencyEndpoint::from_native(NativeId(id), item_kind),
                     kind: DependencyKind::Blocks,
                 }),
-                Dependency::Detailed { id, kind, item } => Ok(DependencyEdge {
+                Dependency::Detailed {
+                    id,
+                    kind,
+                    item,
+                    designator,
+                } => Ok(DependencyEdge {
                     from: DependencyEndpoint::from_native(from.clone(), item_kind),
-                    to: DependencyEndpoint::new(id, item.map_or(item_kind, Into::into)).map_err(
-                        |message| SourceError::Malformed {
-                            message: format!("{}: {message}", path.display()),
-                        },
-                    )?,
+                    to: match designator {
+                        Some(designator) => DependencyEndpoint::opaque(
+                            designator,
+                            id,
+                            item.map_or(item_kind, Into::into),
+                        ),
+                        None => DependencyEndpoint::new(id, item.map_or(item_kind, Into::into)),
+                    }
+                    .map_err(|message| SourceError::Malformed {
+                        message: format!("{}: {message}", path.display()),
+                    })?,
                     kind: match kind {
                         EdgeKind::Blocks => DependencyKind::Blocks,
                         EdgeKind::Related => DependencyKind::Related,
@@ -1006,6 +1021,61 @@ impl LocalMdSource {
             });
         }
         Ok(Some(canonical))
+    }
+
+    /// The record `id` names under `kind`, found by the rule [`Self::paths`] lists by: its
+    /// folder resolved and confined, the file itself resolved only when it is a link. Another
+    /// process may be renaming a replacement over that file, and Windows can spell a plain
+    /// file resolved in that instant with a path outside the root; a file gone in between is
+    /// not held, as a listing would skip it. A link that leads nowhere is malformed, as the
+    /// listing reports it.
+    fn find_listed(&self, kind: WorkKind, id: &NativeId) -> Result<Option<Entry>, SourceError> {
+        // Not there, or under a segment that is a file rather than a folder: no record.
+        let absent = |path: &Path, e: &std::io::Error| {
+            gone(path, e) || e.kind() == std::io::ErrorKind::NotADirectory
+        };
+        let unreadable = |path: &Path, e: std::io::Error| SourceError::Unavailable {
+            message: format!("cannot read {}: {e}", path.display()),
+        };
+        let base = self.directory(kind.kind())?;
+        let candidate = base.join(&id.0).with_extension("md");
+        let (Some(folder), Some(name)) = (candidate.parent(), candidate.file_name()) else {
+            return Ok(None);
+        };
+        let folder = match fs::canonicalize(folder) {
+            Err(e) if absent(folder, &e) => return Ok(None),
+            folder_path => folder_path.map_err(|e| unreadable(folder, e))?,
+        };
+        let confined = |path: &Path| {
+            if path.starts_with(&base) {
+                Ok(())
+            } else {
+                Err(SourceError::Config {
+                    message: format!(
+                        "{} escapes configured root {}",
+                        candidate.display(),
+                        self.root.display()
+                    ),
+                })
+            }
+        };
+        confined(&folder)?;
+        let path = folder.join(name);
+        let path = match fs::symlink_metadata(&path) {
+            Err(e) if absent(&path, &e) => return Ok(None),
+            Err(e) => return Err(unreadable(&path, e)),
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let canonical = fs::canonicalize(&path).map_err(|e| SourceError::Malformed {
+                    message: format!("{}: {e}", path.display()),
+                })?;
+                confined(&canonical)?;
+                canonical
+            }
+            Ok(_) => path,
+        };
+        Self::read_listed(&path)?
+            .map(|text| self.parse_text(kind, &path, &text))
+            .transpose()
     }
 
     fn find(&self, kind: WorkKind, id: &NativeId) -> Result<Option<Entry>, SourceError> {
@@ -1277,6 +1347,21 @@ impl TaskSource for LocalMdSource {
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.write_task_with(write, None)
     }
+    /// The file the record is, as a read reports it: its canonical absolute path, found without
+    /// reading it.
+    fn written_location(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+    ) -> Option<Location> {
+        let kind = match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => Kind::Task,
+            onetaskgraph_plugin_api::MetadataRecord::Project => Kind::Project,
+            onetaskgraph_plugin_api::MetadataRecord::Document => Kind::Document,
+        };
+        let path = self.locate(kind, id).ok()??;
+        Some(Location::Path(path.to_str()?.to_owned()))
+    }
     /// Every refusal [`write_task`](TaskSource::write_task) makes of what a task carries — its
     /// two task lists, its status against this folder's mapping, its content against the
     /// sections this folder reads out of a file — made without touching a file.
@@ -1367,23 +1452,17 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
-        let Some(path) = self.locate(Kind::Task, id)? else {
-            return Ok(None);
-        };
-        let entry = self.parse(WorkKind::Task, &path)?;
-        if entry.status.category == category {
-            return Ok(Some(entry.status));
-        }
-        let word = self.word_for(category);
-        let status = Status {
-            category,
-            name: word,
-        };
-        self.representable_status(&status, &StatusHolder::own(id))?;
-        // A string always renders as a YAML scalar.
-        let rendered = yaml::to_string(&status.name).expect("a status word renders");
-        self.rewrite_front_entry(&path, "status", Some(rendered.trim_end()))?;
-        Ok(Some(status))
+        self.set_status(WorkKind::Task, id, category)
+    }
+
+    /// Rewrite the one `status:` entry of the project file's front matter, and nothing else,
+    /// on exactly the terms [`set_task_status`](TaskSource::set_task_status) rewrites a task's.
+    async fn set_project_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        self.set_status(WorkKind::Project, id, category)
     }
 
     /// Rewrite the one `priority:` entry of the task's front matter, and nothing else —
@@ -2158,7 +2237,8 @@ impl TaskFile {
     ///
     /// The one blank line that separates a section from the content is added with the section
     /// and removed with it, so a task that gains and then loses its only comment reads back
-    /// with the content it had.
+    /// with the content it had. The file is replaced through a staging file and a rename, so a
+    /// reader sees the section as it was or as it is now and never part of either.
     fn rewrite(&self) -> Result<(), SourceError> {
         let above = &self.text[self.body_at..self.section_at];
         let had_section = self.section_at < self.text.len();
@@ -2173,9 +2253,7 @@ impl TaskFile {
             written.push_str(&framed(content, true));
             written.push_str(&rendered_section(&self.comments));
         }
-        fs::write(&self.path, written).map_err(|e| SourceError::Unavailable {
-            message: format!("cannot write {}: {e}", self.path.display()),
-        })
+        write_atomically(&self.path, &written)
     }
 }
 
@@ -2985,8 +3063,13 @@ impl LocalMdSource {
         d: Direction,
         p: &PageRequest,
     ) -> Result<Page<DependencyEdge>, SourceError> {
-        let edges = self
-            .parse_work_records(kind, &ProjectFilter::Any)?
+        // Every edge a file holds is `from` that file's own record, so what one item depends on
+        // is in its file alone; what depends on it can be in any file, and is scanned for.
+        let records = match d {
+            Direction::DependsOn => self.find_listed(kind, id)?.into_iter().collect(),
+            Direction::DependedOnBy => self.parse_work_records(kind, &ProjectFilter::Any)?,
+        };
+        let edges = records
             .into_iter()
             .flat_map(|x| x.dependencies)
             .filter(|e| match d {
@@ -3177,6 +3260,10 @@ struct WrittenLabel {
 /// rather than left to the shorthand's defaults.
 #[derive(Serialize)]
 struct WrittenDependency {
+    /// First for an opaque far end, and absent for every other, so one is written exactly as
+    /// it was before this source held any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    designator: Option<Designator>,
     id: String,
     kind: &'static str,
     item: &'static str,
@@ -3186,6 +3273,7 @@ impl WrittenDependency {
     /// The far end of `edge`, as a front matter writes it.
     fn of(edge: &DependencyEdge) -> Self {
         Self {
+            designator: edge.to.designator().cloned(),
             id: edge.to.id().to_owned(),
             kind: match edge.kind {
                 DependencyKind::Blocks => "blocks",
@@ -3253,9 +3341,9 @@ impl LocalMdSource {
     /// The content is written exactly as it is, with or without `answers`, and the answers
     /// are stored after it, so a read answers exactly that content and those answers — none,
     /// for a plain write; the whole file is read back before anything is written and refused,
-    /// naming the field, when it would not. A rendering write then goes through a staging
-    /// file and a rename, so a failed write leaves the file that was there — or none — and no
-    /// staging file behind.
+    /// naming the field, when it would not. Every write then goes through a staging file and
+    /// a rename, so a reader sees the file that was there — or none — or the whole new one,
+    /// and a failed write leaves the first and no staging file behind.
     fn write_entry(
         &self,
         target: Option<&NativeId>,
@@ -3336,12 +3424,6 @@ impl LocalMdSource {
         }
         let content = outgoing.fields().content.unwrap_or_default();
         self.reads_back(kind, &path, &document, content, answers)?;
-        if answers.is_none() {
-            fs::write(&path, document).map_err(|e| SourceError::Unavailable {
-                message: format!("cannot write {}: {e}", path.display()),
-            })?;
-            return Ok(id);
-        }
         write_atomically(&path, &document)?;
         Ok(id)
     }
@@ -3791,6 +3873,33 @@ impl LocalMdSource {
                 base.display()
             ),
         })
+    }
+
+    /// Rewrite the one `status:` entry of the task's or project's front matter, and nothing
+    /// else — the shared body of the two status writes.
+    fn set_status(
+        &self,
+        work: WorkKind,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        let Some(path) = self.locate(work.kind(), id)? else {
+            return Ok(None);
+        };
+        let entry = self.parse(work, &path)?;
+        if entry.status.category == category {
+            return Ok(Some(entry.status));
+        }
+        let word = self.word_for(category);
+        let status = Status {
+            category,
+            name: word,
+        };
+        self.representable_status(&status, &StatusHolder::own(id))?;
+        // A string always renders as a YAML scalar.
+        let rendered = yaml::to_string(&status.name).expect("a status word renders");
+        self.rewrite_front_entry(&path, "status", Some(rendered.trim_end()))?;
+        Ok(Some(status))
     }
 
     /// Refuse a status this folder would read back as another category, in the one wording a

@@ -4,49 +4,55 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import Literal
+from functools import cache
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import JsonValue, TypeAdapter
 
-from .models import (
-    CacheCleared,
-    CommentList,
-    CommentWritten,
-    CopyReport,
-    DeletedComment,
-    DocumentDetail,
-    EffectiveConfig,
-    FieldsReport,
-    GlobalId,
-    IssuesCompleted,
-    MetadataSet,
-    NativeId,
-    Priority,
-    ProjectGraph,
-    QueryResponseOfQualifiedDocument,
-    QueryResponseOfQualifiedEdge,
-    QueryResponseOfQualifiedLabel,
-    QueryResponseOfQualifiedProject,
-    QueryResponseOfQualifiedTask,
-    QueryResponseOfSearchHit,
-    Regenerated,
-    RenderedTemplate,
-    SourceListing,
-    SourceName,
-    SourceRoute,
-    StatusCategory,
-    StatusesReconciled,
-    StatusNamesReport,
-    StatusOptionsReport,
-    TaskContentSet,
-    TaskDetail,
-    TaskDetails,
-    TaskPrioritySet,
-    TaskStatusSet,
-    TaskUpdated,
-    TemplateAnswers,
-    TemplateVariables,
-)
+from . import models as _models
+
+if TYPE_CHECKING:
+    from .models import (
+        CacheCleared,
+        CommentList,
+        CommentWritten,
+        CopyReport,
+        DeletedComment,
+        DocumentDetail,
+        EffectiveConfig,
+        FieldsReport,
+        GlobalId,
+        IssuesCompleted,
+        MetadataSet,
+        NativeId,
+        Priority,
+        ProjectGraph,
+        ProjectStatusSet,
+        QueryResponseOfQualifiedDocument,
+        QueryResponseOfQualifiedEdge,
+        QueryResponseOfQualifiedLabel,
+        QueryResponseOfQualifiedProject,
+        QueryResponseOfQualifiedTask,
+        QueryResponseOfSearchHit,
+        Regenerated,
+        RenderedTemplate,
+        SourceListing,
+        SourceName,
+        SourceRoute,
+        StatusCategory,
+        StatusesReconciled,
+        StatusNamesReport,
+        StatusOptionsReport,
+        TaskAssetNames,
+        TaskContentSet,
+        TaskDetail,
+        TaskDetails,
+        TaskPrioritySet,
+        TaskStatusSet,
+        TaskUpdated,
+        TemplateAnswers,
+        TemplateVariables,
+    )
 
 POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("cache", "clear"): ("source",),
@@ -64,11 +70,13 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("project", "metadata", "set"): ("id", "key", "value"),
     ("project", "render"): ("id",),
     ("project", "show"): ("id",),
+    ("project", "status", "set"): ("id", "category"),
     ("search",): ("text",),
     ("sources", "fields"): ("source",),
     ("sources", "route"): ("source",),
     ("sources", "status-options"): ("source",),
     ("task", "answers"): ("id",),
+    ("task", "assets"): ("id",),
     ("task", "comment", "add"): ("id",),
     ("task", "comment", "delete"): ("id", "comment_id"),
     ("task", "comment", "edit"): ("id", "comment_id"),
@@ -102,7 +110,11 @@ Opaque: only the source that spelled one reads inside it. A read pinned to one, 
 write expecting one, hand it back to the binary as it came.
 """
 
-_ANSWERS = TypeAdapter(dict[str, JsonValue])
+
+@cache
+def _answers() -> TypeAdapter[dict[str, JsonValue]]:
+    """The validator of an answers mapping, built the first time a call passes one."""
+    return TypeAdapter(dict[str, JsonValue])
 
 
 def _answers_document(method: str, answers: Mapping[str, JsonValue]) -> str:
@@ -118,7 +130,7 @@ def _answers_document(method: str, answers: Mapping[str, JsonValue]) -> str:
         message = f"{method}: answers are a {kind}, not a mapping"
         raise TypeError(message)
     try:
-        checked = _ANSWERS.validate_python(dict(answers), strict=True)
+        checked = _answers().validate_python(dict(answers), strict=True)
         return json.dumps(checked, allow_nan=False)
     except ValueError as error:
         message = f"{method}: answers are not a JSON mapping: {error}"
@@ -224,7 +236,7 @@ class GeneratedClient:
         """Run ``onetaskgraph cache clear``."""
         return await self._invoke(
             ["cache", "clear"],
-            CacheCleared,
+            _models.CacheCleared,
             source=source,
             default_sources=default_sources,
             page_size=page_size,
@@ -241,7 +253,7 @@ class GeneratedClient:
         """Run ``onetaskgraph config show``."""
         return await self._invoke(
             ["config", "show"],
-            EffectiveConfig,
+            _models.EffectiveConfig,
             default_sources=default_sources,
             page_size=page_size,
             set=set,
@@ -258,7 +270,7 @@ class GeneratedClient:
         """Run ``onetaskgraph document answers``."""
         return await self._invoke(
             ["document", "answers"],
-            TemplateAnswers,
+            _models.TemplateAnswers,
             id=id,
             default_sources=default_sources,
             page_size=page_size,
@@ -282,7 +294,7 @@ class GeneratedClient:
         """Run ``onetaskgraph document copy``."""
         return await self._invoke(
             ["document", "copy"],
-            CopyReport,
+            _models.CopyReport,
             ids=ids,
             default_sources=default_sources,
             dry_run=dry_run,
@@ -322,7 +334,7 @@ class GeneratedClient:
         """Run ``onetaskgraph document create``."""
         return await self._invoke(
             ["document", "create"],
-            DocumentDetail,
+            _models.DocumentDetail,
             source=source,
             project=project,
             title=title,
@@ -371,7 +383,7 @@ class GeneratedClient:
         """Run ``onetaskgraph document list``."""
         return await self._invoke(
             ["document", "list"],
-            QueryResponseOfQualifiedDocument,
+            _models.QueryResponseOfQualifiedDocument,
             allow_partial=allow_partial,
             default_sources=default_sources,
             explain=explain,
@@ -403,7 +415,7 @@ class GeneratedClient:
         """Run ``onetaskgraph document metadata set``."""
         return await self._invoke(
             ["document", "metadata", "set"],
-            MetadataSet,
+            _models.MetadataSet,
             id=id,
             key=key,
             value=value,
@@ -434,7 +446,7 @@ class GeneratedClient:
         """Run ``onetaskgraph document render``."""
         return await self._invoke(
             ["document", "render"],
-            Regenerated,
+            _models.Regenerated,
             id=id,
             asset=asset,
             default_sources=default_sources,
@@ -465,7 +477,7 @@ class GeneratedClient:
         """Run ``onetaskgraph document show``."""
         return await self._invoke(
             ["document", "show"],
-            DocumentDetail,
+            _models.DocumentDetail,
             id=id,
             allow_partial=allow_partial,
             default_sources=default_sources,
@@ -490,7 +502,7 @@ class GeneratedClient:
         """Run ``onetaskgraph label list``."""
         return await self._invoke(
             ["label", "list"],
-            QueryResponseOfQualifiedLabel,
+            _models.QueryResponseOfQualifiedLabel,
             allow_partial=allow_partial,
             default_sources=default_sources,
             explain=explain,
@@ -512,7 +524,7 @@ class GeneratedClient:
         """Run ``onetaskgraph project answers``."""
         return await self._invoke(
             ["project", "answers"],
-            TemplateAnswers,
+            _models.TemplateAnswers,
             id=id,
             default_sources=default_sources,
             page_size=page_size,
@@ -528,29 +540,33 @@ class GeneratedClient:
         dry_run: bool | None = None,
         match_by: str | None = None,
         member: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        members_only: bool | None = None,
         no_link: bool | None = None,
         no_tasks: bool | None = None,
         page_size: int | None = None,
         recreate: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        status_policy: Literal["source", "preserve-destination"] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
     ) -> CopyReport:
         """Run ``onetaskgraph project copy``."""
         return await self._invoke(
             ["project", "copy"],
-            CopyReport,
+            _models.CopyReport,
             id=id,
             comments=comments,
             default_sources=default_sources,
             dry_run=dry_run,
             match_by=match_by,
             member=member,
+            members_only=members_only,
             no_link=no_link,
             no_tasks=no_tasks,
             page_size=page_size,
             recreate=recreate,
             set=set,
+            status_policy=status_policy,
             term_scope=_strings("project_copy", "term_scope", term_scope),
             to=to,
         )
@@ -584,7 +600,7 @@ class GeneratedClient:
         """Run ``onetaskgraph project create``."""
         return await self._invoke(
             ["project", "create"],
-            QueryResponseOfQualifiedProject,
+            _models.QueryResponseOfQualifiedProject,
             source=source,
             id=id,
             title=title,
@@ -628,7 +644,7 @@ class GeneratedClient:
         """Run ``onetaskgraph project deps``."""
         return await self._invoke(
             ["project", "deps"],
-            QueryResponseOfQualifiedEdge,
+            _models.QueryResponseOfQualifiedEdge,
             id=id,
             allow_partial=allow_partial,
             default_sources=default_sources,
@@ -655,7 +671,7 @@ class GeneratedClient:
         """Run ``onetaskgraph project graph``."""
         return await self._invoke(
             ["project", "graph"],
-            ProjectGraph,
+            _models.ProjectGraph,
             id=id,
             complete=complete,
             default_sources=default_sources,
@@ -676,6 +692,7 @@ class GeneratedClient:
         label: list[str] | tuple[str, ...] | None = None,
         limit: int | None = None,
         not_label: list[str] | tuple[str, ...] | None = None,
+        origin: GlobalId | str | None = None,
         page: str | None = None,
         page_size: int | None = None,
         search: str | None = None,
@@ -697,7 +714,7 @@ class GeneratedClient:
         """Run ``onetaskgraph project list``."""
         return await self._invoke(
             ["project", "list"],
-            QueryResponseOfQualifiedProject,
+            _models.QueryResponseOfQualifiedProject,
             allow_partial=allow_partial,
             default_sources=default_sources,
             explain=explain,
@@ -705,6 +722,7 @@ class GeneratedClient:
             label=label,
             limit=limit,
             not_label=not_label,
+            origin=origin,
             page=page,
             page_size=page_size,
             search=search,
@@ -728,7 +746,7 @@ class GeneratedClient:
         """Run ``onetaskgraph project metadata set``."""
         return await self._invoke(
             ["project", "metadata", "set"],
-            MetadataSet,
+            _models.MetadataSet,
             id=id,
             key=key,
             value=value,
@@ -758,7 +776,7 @@ class GeneratedClient:
         """Run ``onetaskgraph project render``."""
         return await self._invoke(
             ["project", "render"],
-            Regenerated,
+            _models.Regenerated,
             id=id,
             default_sources=default_sources,
             dry_run=dry_run,
@@ -788,7 +806,7 @@ class GeneratedClient:
         """Run ``onetaskgraph project show``."""
         return await self._invoke(
             ["project", "show"],
-            QueryResponseOfQualifiedProject,
+            _models.QueryResponseOfQualifiedProject,
             id=id,
             allow_partial=allow_partial,
             default_sources=default_sources,
@@ -796,6 +814,28 @@ class GeneratedClient:
             page_size=page_size,
             pin=pin,
             set=set,
+        )
+
+    async def project_status_set(
+        self,
+        id: GlobalId | str,
+        category: StatusCategory | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> ProjectStatusSet:
+        """Run ``onetaskgraph project status set``."""
+        return await self._invoke(
+            ["project", "status", "set"],
+            _models.ProjectStatusSet,
+            id=id,
+            category=category,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+            term_scope=_strings("project_status_set", "term_scope", term_scope),
         )
 
     async def search(
@@ -816,7 +856,7 @@ class GeneratedClient:
         """Run ``onetaskgraph search``."""
         return await self._invoke(
             ["search"],
-            QueryResponseOfSearchHit,
+            _models.QueryResponseOfSearchHit,
             text=text,
             allow_partial=allow_partial,
             default_sources=default_sources,
@@ -842,7 +882,7 @@ class GeneratedClient:
         """Run ``onetaskgraph sources fields``."""
         return await self._invoke(
             ["sources", "fields"],
-            FieldsReport | StatusNamesReport,
+            _models.FieldsReport | _models.StatusNamesReport,
             source=source,
             apply=apply,
             default_sources=default_sources,
@@ -860,7 +900,7 @@ class GeneratedClient:
         """Run ``onetaskgraph sources list``."""
         return await self._invoke(
             ["sources", "list"],
-            list[SourceListing],
+            list[_models.SourceListing],
             default_sources=default_sources,
             page_size=page_size,
             set=set,
@@ -879,7 +919,7 @@ class GeneratedClient:
         """Run ``onetaskgraph sources route``."""
         return await self._invoke(
             ["sources", "route"],
-            SourceRoute,
+            _models.SourceRoute,
             source=source,
             classification=classification,
             default_sources=default_sources,
@@ -900,7 +940,7 @@ class GeneratedClient:
         """Run ``onetaskgraph sources status-options``."""
         return await self._invoke(
             ["sources", "status-options"],
-            StatusOptionsReport,
+            _models.StatusOptionsReport,
             source=source,
             apply=apply,
             default_sources=default_sources,
@@ -919,8 +959,28 @@ class GeneratedClient:
         """Run ``onetaskgraph task answers``."""
         return await self._invoke(
             ["task", "answers"],
-            TemplateAnswers,
+            _models.TemplateAnswers,
             id=id,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
+        )
+
+    async def task_assets(
+        self,
+        id: GlobalId | str,
+        output_dir: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskAssetNames:
+        """Run ``onetaskgraph task assets``."""
+        return await self._invoke(
+            ["task", "assets"],
+            _models.TaskAssetNames,
+            id=id,
+            output_dir=output_dir,
             default_sources=default_sources,
             page_size=page_size,
             set=set,
@@ -942,7 +1002,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task comment add``."""
         return await self._invoke(
             ["task", "comment", "add"],
-            CommentWritten,
+            _models.CommentWritten,
             id=id,
             author=author,
             body_file=body_file,
@@ -967,7 +1027,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task comment delete``."""
         return await self._invoke(
             ["task", "comment", "delete"],
-            DeletedComment,
+            _models.DeletedComment,
             id=id,
             comment_id=comment_id,
             default_sources=default_sources,
@@ -992,7 +1052,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task comment edit``."""
         return await self._invoke(
             ["task", "comment", "edit"],
-            CommentWritten,
+            _models.CommentWritten,
             id=id,
             comment_id=comment_id,
             body_file=body_file,
@@ -1016,7 +1076,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task comment list``."""
         return await self._invoke(
             ["task", "comment", "list"],
-            CommentList,
+            _models.CommentList,
             id=id,
             default_sources=default_sources,
             page_size=page_size,
@@ -1038,7 +1098,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task content set``."""
         return await self._invoke(
             ["task", "content", "set"],
-            TaskContentSet,
+            _models.TaskContentSet,
             id=id,
             file=file,
             default_sources=default_sources,
@@ -1077,13 +1137,15 @@ class GeneratedClient:
             ...,
         ]
         | None = None,
+        status_policy: Literal["source", "preserve-destination"] | None = None,
+        target_task: GlobalId | str | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
     ) -> CopyReport:
         """Run ``onetaskgraph task copy``."""
         return await self._invoke(
             ["task", "copy"],
-            CopyReport,
+            _models.CopyReport,
             ids=ids,
             commented_since=commented_since,
             comments=comments,
@@ -1099,6 +1161,8 @@ class GeneratedClient:
             set=set,
             source=source,
             status=status,
+            status_policy=status_policy,
+            target_task=target_task,
             term_scope=_strings("task_copy", "term_scope", term_scope),
             to=to,
         )
@@ -1135,7 +1199,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task create``."""
         return await self._invoke(
             ["task", "create"],
-            TaskDetail,
+            _models.TaskDetail,
             source=source,
             project=project,
             title=title,
@@ -1183,7 +1247,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task deps``."""
         return await self._invoke(
             ["task", "deps"],
-            QueryResponseOfQualifiedEdge,
+            _models.QueryResponseOfQualifiedEdge,
             id=id,
             allow_partial=allow_partial,
             complete=complete,
@@ -1237,7 +1301,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task list``."""
         return await self._invoke(
             ["task", "list"],
-            QueryResponseOfQualifiedTask,
+            _models.QueryResponseOfQualifiedTask,
             allow_partial=allow_partial,
             commented_since=commented_since,
             default_sources=default_sources,
@@ -1275,7 +1339,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task metadata set``."""
         return await self._invoke(
             ["task", "metadata", "set"],
-            MetadataSet,
+            _models.MetadataSet,
             id=id,
             key=key,
             value=value,
@@ -1300,7 +1364,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task priority set``."""
         return await self._invoke(
             ["task", "priority", "set"],
-            TaskPrioritySet,
+            _models.TaskPrioritySet,
             id=id,
             priority=priority,
             default_sources=default_sources,
@@ -1330,7 +1394,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task render``."""
         return await self._invoke(
             ["task", "render"],
-            Regenerated,
+            _models.Regenerated,
             id=id,
             asset=asset,
             default_sources=default_sources,
@@ -1362,7 +1426,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task show``."""
         return await self._invoke(
             ["task", "show"],
-            TaskDetail,
+            _models.TaskDetail,
             id=id,
             allow_partial=allow_partial,
             default_sources=default_sources,
@@ -1386,7 +1450,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task show-many``."""
         return await self._invoke(
             ["task", "show-many"],
-            TaskDetails,
+            _models.TaskDetails,
             ids=ids,
             default_sources=default_sources,
             no_comments=no_comments,
@@ -1409,7 +1473,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task status complete``."""
         return await self._invoke(
             ["task", "status", "complete"],
-            IssuesCompleted,
+            _models.IssuesCompleted,
             default_sources=default_sources,
             dry_run=dry_run,
             issue=issue,
@@ -1432,7 +1496,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task status reconcile``."""
         return await self._invoke(
             ["task", "status", "reconcile"],
-            StatusesReconciled,
+            _models.StatusesReconciled,
             source=source,
             default_sources=default_sources,
             dry_run=dry_run,
@@ -1455,7 +1519,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task status set``."""
         return await self._invoke(
             ["task", "status", "set"],
-            TaskStatusSet,
+            _models.TaskStatusSet,
             id=id,
             category=category,
             default_sources=default_sources,
@@ -1492,7 +1556,7 @@ class GeneratedClient:
         """Run ``onetaskgraph task update``."""
         return await self._invoke(
             ["task", "update"],
-            TaskUpdated,
+            _models.TaskUpdated,
             id=id,
             body_file=body_file,
             default_sources=default_sources,
@@ -1527,7 +1591,7 @@ class GeneratedClient:
         """Run ``onetaskgraph template render``."""
         return await self._invoke(
             ["template", "render"],
-            RenderedTemplate,
+            _models.RenderedTemplate,
             file=_template_file("template_render", file),
             default_sources=default_sources,
             page_size=page_size,
@@ -1552,7 +1616,7 @@ class GeneratedClient:
         """Run ``onetaskgraph template variables``."""
         return await self._invoke(
             ["template", "variables"],
-            TemplateVariables,
+            _models.TemplateVariables,
             file=_template_file("template_variables", file),
             default_sources=default_sources,
             page_size=page_size,

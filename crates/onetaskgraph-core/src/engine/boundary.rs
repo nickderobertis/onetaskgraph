@@ -394,6 +394,56 @@ pub(crate) struct Boundary {
     active: bool,
     policy: Arc<dyn WritePolicy>,
     scope: Option<Vec<String>>,
+    /// What the policy has answered in this command, until [`Engine::end_command`].
+    screened: Arc<std::sync::Mutex<Screened>>,
+    /// One line per dependency edge a write left out because it names something private,
+    /// until [`Engine::take_withheld_edges`] takes them.
+    withheld: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+/// What one command has learned from the policy, so it asks nothing twice: each repository's
+/// visibility it answered, and every input a check passed whole.
+///
+/// Nothing here outlives the command — [`Engine::end_command`] empties it — and nothing is
+/// kept that the policy did not affirmatively answer: a repository it could not answer is
+/// asked again, and an unavailable or refused check passes nothing. A write is taken as passed
+/// only when one input a check passed held every value it exposes, so values that passed apart
+/// are never taken as having passed together, and an exposure that changes later in the command
+/// is screened again.
+#[derive(Default)]
+struct Screened {
+    visibility: std::collections::HashMap<Repository, RepositoryVisibility>,
+    passed: Vec<PassedInput>,
+}
+
+/// The values of one input a check passed, by surface.
+#[derive(Default)]
+struct PassedInput {
+    text: std::collections::HashSet<String>,
+    paths: std::collections::HashSet<String>,
+    metadata: std::collections::HashSet<String>,
+}
+
+impl PassedInput {
+    fn of(exposure: &Exposure) -> Self {
+        Self {
+            text: exposure.text.iter().cloned().collect(),
+            paths: exposure.paths.iter().cloned().collect(),
+            metadata: exposure.metadata.iter().cloned().collect(),
+        }
+    }
+
+    fn covers(&self, exposure: &Exposure) -> bool {
+        exposure.text.iter().all(|value| self.text.contains(value))
+            && exposure
+                .paths
+                .iter()
+                .all(|value| self.paths.contains(value))
+            && exposure
+                .metadata
+                .iter()
+                .all(|value| self.metadata.contains(value))
+    }
 }
 
 impl Default for Boundary {
@@ -402,6 +452,8 @@ impl Default for Boundary {
             active: false,
             policy: Arc::new(MissingWritePolicy),
             scope: None,
+            screened: Arc::default(),
+            withheld: Arc::default(),
         }
     }
 }
@@ -422,6 +474,39 @@ impl Boundary {
                 None => Arc::new(MissingWritePolicy),
             },
             scope: None,
+            screened: Arc::default(),
+            withheld: Arc::default(),
+        }
+    }
+
+    /// Forget everything the policy answered: what [`Engine::end_command`] does, so the next
+    /// command asks again.
+    pub(crate) fn forget(&self) {
+        if let Ok(mut screened) = self.screened.lock() {
+            *screened = Screened::default();
+        }
+    }
+
+    /// Note one edge a write left out, once however often it is shown.
+    pub(crate) fn withheld(&self, line: String) {
+        if let Ok(mut withheld) = self.withheld.lock()
+            && !withheld.contains(&line)
+        {
+            withheld.push(line);
+        }
+    }
+
+    /// Whether one input a check of this scope passed in this command held every value of
+    /// `exposure`.
+    fn passed(&self, exposure: &Exposure) -> bool {
+        self.screened
+            .lock()
+            .is_ok_and(|screened| screened.passed.iter().any(|input| input.covers(exposure)))
+    }
+
+    fn pass(&self, exposure: &Exposure) {
+        if let Ok(mut screened) = self.screened.lock() {
+            screened.passed.push(PassedInput::of(exposure));
         }
     }
 }
@@ -622,7 +707,8 @@ fn strings(value: &Value, exposure: &mut Exposure) {
 pub(crate) struct Outbound<'a> {
     /// How the write names the item, for a refusal: a qualified id, or "the new task".
     pub(crate) item: String,
-    /// The item's classification, already tightened by its repositories and its project.
+    /// The item's classification, already tightened by its repositories — and, for a document
+    /// or a project, by what it inherits. A task's is its own.
     pub(crate) classification: Classification,
     /// Where in the destination it lands.
     pub(crate) target: WriteTarget<'a>,
@@ -632,20 +718,38 @@ pub(crate) struct Outbound<'a> {
 
 impl Engine {
     /// The same engine, asking `policy` about the public boundary — which makes the boundary
-    /// active, whatever the configuration says.
+    /// active, whatever the configuration says. What an earlier policy answered is forgotten,
+    /// so none of it stands in for this one's answer.
     #[must_use]
     pub fn with_write_policy(mut self, policy: Arc<dyn WritePolicy>) -> Self {
         self.boundary.active = true;
         self.boundary.policy = policy;
+        self.boundary.forget();
         self
     }
 
     /// The same engine, deriving every check's terms from `scope`: `None` for every private
-    /// identity the policy knows of, an empty list for none.
+    /// identity the policy knows of, an empty list for none. A check passed under an earlier
+    /// scope is forgotten, because it derived other terms.
     #[must_use]
     pub fn with_term_scope(mut self, scope: Option<Vec<String>>) -> Self {
         self.boundary.scope = scope;
+        self.boundary.forget();
         self
+    }
+
+    /// Take the edges a copy left out of what it wrote because each names something private —
+    /// an item of a source declared private, or one classified private, whose source named no
+    /// tracker an opaque reference could point into — one line each, naming the item, the far
+    /// end and why, in the order they were left out. What the command line prints on standard
+    /// error after a copy; nothing is left to take afterwards.
+    #[must_use]
+    pub fn take_withheld_edges(&self) -> Vec<String> {
+        self.boundary
+            .withheld
+            .lock()
+            .map(|mut withheld| std::mem::take(&mut *withheld))
+            .unwrap_or_default()
     }
 
     /// Whether the boundary is active for this engine (see the module documentation).
@@ -714,6 +818,187 @@ impl Engine {
         Ok(())
     }
 
+    /// `edges`, as a write to `destination` at the caller's own request holds them: each far
+    /// end naming a private item rewritten to the opaque form — its source's designator and its
+    /// native id — and every other refused before anything is written.
+    ///
+    /// A far end is private when its source is declared private, or — while the boundary is
+    /// active — when it reads as classified private (see [`Engine::reference_class`]). One
+    /// whose source has a designator is written opaque, once the id it names is confirmed as the
+    /// item's own native id by one read of it there: a prefixed human key, a URL or a slug would
+    /// carry what the item is called, and is refused with
+    /// [`EngineError::PrivateReferenceContent`] naming the form and never its value. One whose
+    /// source has no designator is refused as [`refuse_private_references`] refuses it. An end
+    /// given opaque already is held to the same test at the source its designator resolves to,
+    /// and refused when none does. One in `destination` itself and every one written somewhere
+    /// declared private are held as given.
+    ///
+    /// [`refuse_private_references`]: Self::refuse_private_references
+    pub(crate) async fn publicly_named(
+        &self,
+        destination: &onetaskgraph_plugin_api::SourceName,
+        item: &str,
+        edges: Vec<onetaskgraph_plugin_api::DependencyEdge>,
+    ) -> Result<Vec<onetaskgraph_plugin_api::DependencyEdge>, EngineError> {
+        if self.declared(destination) == SourceVisibility::Private {
+            return Ok(edges);
+        }
+        let mut known = std::collections::HashMap::new();
+        let mut held = Vec::with_capacity(edges.len());
+        for mut edge in edges {
+            if edge.to.is_native() {
+                held.push(edge);
+                continue;
+            }
+            // Given opaque already, it is held to the same test as one this write makes opaque:
+            // its id the native id of an item the tracker its designator names really holds.
+            if let Some(designator) = edge.to.designator().cloned() {
+                let (found, _) = self.designated(&designator).await;
+                let Some(source) = found else {
+                    return Err(EngineError::PrivateReferenceContent {
+                        item: item.to_owned(),
+                        destination: destination.to_string(),
+                        form: ReferenceForm::Unconfirmed,
+                    });
+                };
+                let far = crate::GlobalId::new(
+                    source,
+                    onetaskgraph_plugin_api::NativeId(edge.to.id().to_owned()),
+                );
+                self.native_or_refused(destination, item, &far, edge.to.kind)
+                    .await?;
+                held.push(edge);
+                continue;
+            }
+            let far: crate::GlobalId =
+                edge.to
+                    .id()
+                    .parse()
+                    .map_err(|_| EngineError::ReferenceUnclassified {
+                        item: item.to_owned(),
+                        reference: edge.to.id().to_owned(),
+                        destination: destination.to_string(),
+                        why: "it is not a qualified id".to_owned(),
+                    })?;
+            if &far.source == destination {
+                held.push(edge);
+                continue;
+            }
+            let declared = self.declared(&far.source) == SourceVisibility::Private;
+            let private = declared
+                || (self.boundary.active
+                    && match self.reference_class(&far, edge.to.kind, &mut known).await {
+                        Ok(class) => class == Classification::Private,
+                        Err(why) => {
+                            return Err(EngineError::ReferenceUnclassified {
+                                item: item.to_owned(),
+                                reference: far.to_string(),
+                                destination: destination.to_string(),
+                                why,
+                            });
+                        }
+                    });
+            if !private {
+                held.push(edge);
+                continue;
+            }
+            let designator = self.designator(&far.source).await.map_err(|error| {
+                EngineError::ReferenceUnclassified {
+                    item: item.to_owned(),
+                    reference: far.to_string(),
+                    destination: destination.to_string(),
+                    why: format!("its source could not say which tracker it is: {error}"),
+                }
+            })?;
+            let Some(designator) = designator else {
+                return Err(if declared {
+                    EngineError::PrivateReference {
+                        item: item.to_owned(),
+                        destination: destination.to_string(),
+                        named: far.source.to_string(),
+                    }
+                } else {
+                    EngineError::PrivateItemReference {
+                        item: item.to_owned(),
+                        destination: destination.to_string(),
+                        reference: far.to_string(),
+                    }
+                });
+            };
+            self.native_or_refused(destination, item, &far, edge.to.kind)
+                .await?;
+            edge.to = onetaskgraph_plugin_api::DependencyEndpoint::opaque(
+                designator,
+                far.native.0,
+                edge.to.kind,
+            )
+            .expect("a qualified id names a native id that is not empty");
+            held.push(edge);
+        }
+        Ok(held)
+    }
+
+    /// Refuse `far` unless it names a private item by its own native id, naming the form
+    /// [`native_form`](Self::native_form) found instead.
+    async fn native_or_refused(
+        &self,
+        destination: &onetaskgraph_plugin_api::SourceName,
+        item: &str,
+        far: &crate::GlobalId,
+        kind: onetaskgraph_plugin_api::ItemKind,
+    ) -> Result<(), EngineError> {
+        match self.native_form(far, kind).await? {
+            None => Ok(()),
+            Some(form) => Err(EngineError::PrivateReferenceContent {
+                item: item.to_owned(),
+                destination: destination.to_string(),
+                form,
+            }),
+        }
+    }
+
+    /// `None` when `far` names a private item by its own native id, and otherwise the form it
+    /// names it by instead: a URL and a prefixed human key by their form alone, and anything
+    /// else unless one read of it at its source answers an item whose id is exactly that.
+    ///
+    /// # Errors
+    ///
+    /// A source that is not configured, or that failed the read.
+    pub(crate) async fn native_form(
+        &self,
+        far: &crate::GlobalId,
+        kind: onetaskgraph_plugin_api::ItemKind,
+    ) -> Result<Option<ReferenceForm>, EngineError> {
+        let id = far.native.as_str();
+        if let Some(form) = plainly_not_native(id) {
+            return Ok(Some(form));
+        }
+        let failed = |error| EngineError::SourceFailed {
+            name: far.source.to_string(),
+            error,
+        };
+        let source = self.readable(&far.source)?;
+        let read = match kind {
+            onetaskgraph_plugin_api::ItemKind::Task => source
+                .source()
+                .get_task(&far.native)
+                .await
+                .map_err(failed)?
+                .map(|task| task.id),
+            onetaskgraph_plugin_api::ItemKind::Project => source
+                .source()
+                .get_project(&far.native)
+                .await
+                .map_err(failed)?
+                .map(|project| project.id),
+        };
+        Ok(match read {
+            Some(native) if native == far.native => None,
+            _ if slug(id) => Some(ReferenceForm::Slug),
+            _ => Some(ReferenceForm::NotNative),
+        })
+    }
+
     /// Whether a write to `destination` withholds an id naming `far`: an item of another source
     /// declared private, or one of the items in `private` — those this command knows are
     /// classified private — while `destination` is not itself declared private.
@@ -753,12 +1038,25 @@ impl Engine {
             return declared;
         }
         for repository in repositories {
-            let visibility = self
+            let known = self
                 .boundary
-                .policy
-                .repository_visibility(repository)
-                .await
-                .unwrap_or(RepositoryVisibility::Unknown);
+                .screened
+                .lock()
+                .ok()
+                .and_then(|screened| screened.visibility.get(repository).copied());
+            let visibility = match known {
+                Some(visibility) => visibility,
+                None => match self.boundary.policy.repository_visibility(repository).await {
+                    Ok(visibility) => {
+                        if let Ok(mut screened) = self.boundary.screened.lock() {
+                            screened.visibility.insert(repository.clone(), visibility);
+                        }
+                        visibility
+                    }
+                    // Never held: a repository the policy could not answer is asked again.
+                    Err(_) => RepositoryVisibility::Unknown,
+                },
+            };
             if !visibility.is_public() {
                 return Classification::Private;
             }
@@ -790,6 +1088,20 @@ impl Engine {
         destination: &ResolvedSource,
         outbound: &Outbound<'_>,
     ) -> Result<(), EngineError> {
+        if self.placed(destination, outbound)? {
+            self.check(destination, &outbound.item, outbound.exposure)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// [`preflight`](Self::preflight)'s half that asks nothing: a private item refused where it
+    /// is not declared private, and whether the write still has to be put to the check.
+    pub(crate) fn placed(
+        &self,
+        destination: &ResolvedSource,
+        outbound: &Outbound<'_>,
+    ) -> Result<bool, EngineError> {
         let name = destination.name();
         let declared = self.declared(name);
         if outbound.classification == Classification::Private
@@ -801,11 +1113,76 @@ impl Engine {
                 declared,
             });
         }
-        if declared == SourceVisibility::Private || !self.boundary.active {
+        Ok(declared != SourceVisibility::Private && self.boundary.active)
+    }
+
+    /// Put every write of `writes` — each its destination, how it names its item, and what it
+    /// exposes — to the caller's check before any of them is made: one check of all of them
+    /// together, every check's arrays concatenated element by element under the one scope they
+    /// share. A union one earlier check of this command passed whole is not checked again.
+    ///
+    /// Only a union the check refuses is checked again write by write, so the refusal names the
+    /// write it is about — and those checks pass nothing, since a write passing alone says nothing
+    /// of the union; a union the check cannot decide is the first write's own unavailability. A
+    /// union it passes passes every write of it.
+    pub(crate) async fn check_all(
+        &self,
+        writes: &[(&ResolvedSource, String, Exposure)],
+    ) -> Result<(), EngineError> {
+        let Some((first, first_item, _)) = writes.first() else {
+            return Ok(());
+        };
+        if let [(destination, item, exposure)] = writes {
+            return self.check(destination, item, exposure).await;
+        }
+        let mut union = Exposure::default();
+        for (_, _, exposure) in writes {
+            union = union.and(exposure.clone());
+        }
+        // Passed already only when one check passed all of it together.
+        if self.boundary.passed(&union) {
             return Ok(());
         }
-        self.check(destination, &outbound.item, outbound.exposure)
-            .await
+        match self.verdict(&union).await {
+            WriteVerdict::Pass => {
+                self.boundary.pass(&union);
+                Ok(())
+            }
+            WriteVerdict::Refuse { reason } => {
+                // Asked only to name the write refused: a write passing here passed alone, which
+                // says nothing of the union, so nothing of it is kept as passed.
+                for (destination, item, exposure) in writes {
+                    match self.verdict(exposure).await {
+                        WriteVerdict::Pass => {}
+                        WriteVerdict::Refuse { reason } => {
+                            return Err(EngineError::BoundaryRefused {
+                                item: item.clone(),
+                                destination: destination.name().to_string(),
+                                reason,
+                            });
+                        }
+                        WriteVerdict::Unavailable { reason } => {
+                            return Err(EngineError::BoundaryUnavailable {
+                                item: item.clone(),
+                                destination: destination.name().to_string(),
+                                reason,
+                            });
+                        }
+                    }
+                }
+                // Each passed alone: the union is still refused, and it is the first write's.
+                Err(EngineError::BoundaryRefused {
+                    item: first_item.clone(),
+                    destination: first.name().to_string(),
+                    reason,
+                })
+            }
+            WriteVerdict::Unavailable { reason } => Err(EngineError::BoundaryUnavailable {
+                item: first_item.clone(),
+                destination: first.name().to_string(),
+                reason,
+            }),
+        }
     }
 
     /// The check every write makes immediately before its first mutation: a destination
@@ -846,29 +1223,23 @@ impl Engine {
     }
 
     /// Put one write to a destination not verified private to the caller's check.
+    ///
+    /// A write every value of whose exposure a check already passed in this command is not put
+    /// to it again.
     pub(crate) async fn check(
         &self,
         destination: &ResolvedSource,
         item: &str,
         exposure: &Exposure,
     ) -> Result<(), EngineError> {
-        let input = PublicWriteInput {
-            destination: RepositoryVisibility::Public,
-            text: exposure.text.clone(),
-            paths: exposure.paths.clone(),
-            metadata: exposure.metadata.clone(),
-            scope: self.boundary.scope.clone(),
-        };
-        let verdict = self
-            .boundary
-            .policy
-            .check_public_write(&input)
-            .await
-            .unwrap_or_else(|error| WriteVerdict::Unavailable {
-                reason: error.message,
-            });
-        match verdict {
-            WriteVerdict::Pass => Ok(()),
+        if self.boundary.passed(exposure) {
+            return Ok(());
+        }
+        match self.verdict(exposure).await {
+            WriteVerdict::Pass => {
+                self.boundary.pass(exposure);
+                Ok(())
+            }
             WriteVerdict::Refuse { reason } => Err(EngineError::BoundaryRefused {
                 item: item.to_owned(),
                 destination: destination.name().to_string(),
@@ -882,9 +1253,33 @@ impl Engine {
         }
     }
 
-    /// `classification`, tightened by the project `project` of `source` it is filed under —
+    /// What the caller's check says of `exposure`, a check that could not be asked unavailable.
+    async fn verdict(&self, exposure: &Exposure) -> WriteVerdict {
+        let input = PublicWriteInput {
+            destination: RepositoryVisibility::Public,
+            text: exposure.text.clone(),
+            paths: exposure.paths.clone(),
+            metadata: exposure.metadata.clone(),
+            scope: self.boundary.scope.clone(),
+        };
+        self.boundary
+            .policy
+            .check_public_write(&input)
+            .await
+            .unwrap_or_else(|error| WriteVerdict::Unavailable {
+                reason: error.message,
+            })
+    }
+
+    /// `classification`, held against the project `project` of `source` it is filed under —
     /// refused when it is private and the project is held public, because a public project
-    /// never holds a private member.
+    /// never holds a private member — and, for a document (`held` [`Held::Document`]),
+    /// tightened by that project.
+    ///
+    /// **A task is never tightened by its project**: who may read a task is its own
+    /// declaration and its own repositories, so a public task stays public under a private
+    /// project and makes that project private by nothing. A document is the project's own
+    /// prose, and is as private as the project it is filed under.
     ///
     /// The project is read always while the boundary is active, and for a private item while it
     /// is not, which is refused under a public project either way. A public item in an inactive
@@ -905,11 +1300,19 @@ impl Engine {
         project: &NativeId,
         item: &str,
         classification: Classification,
+        held: Held,
         absent: Absent,
     ) -> Result<Classification, EngineError> {
         if !self.boundary.active && classification.is_public() {
             return Ok(classification);
         }
+        let inherited = |filed: Classification| {
+            if held == Held::Task {
+                classification
+            } else {
+                classification.strictest(filed)
+            }
+        };
         if self.boundary.active && self.declared(source.name()) != SourceVisibility::Private {
             let filed = match self
                 .source_project_class(
@@ -929,9 +1332,9 @@ impl Engine {
                     project: format!("{}:{}", source.name(), project),
                 });
             }
-            return Ok(classification.strictest(filed));
+            return Ok(inherited(filed));
         }
-        let Some(held) = source
+        let Some(record) = source
             .source()
             .get_project(project)
             .await
@@ -942,14 +1345,16 @@ impl Engine {
         else {
             return Ok(classification);
         };
-        let filed = self.classify(held.classification, &held.repositories).await;
+        let filed = self
+            .classify(record.classification, &record.repositories)
+            .await;
         if classification == Classification::Private && filed.is_public() {
             return Err(EngineError::PrivateMemberOfPublicProject {
                 item: item.to_owned(),
                 project: format!("{}:{}", source.name(), project),
             });
         }
-        Ok(classification.strictest(filed))
+        Ok(inherited(filed))
     }
 
     /// Admit one narrow write to an item `destination` already holds.
@@ -994,15 +1399,53 @@ impl Engine {
             name: destination.name().to_string(),
             error,
         })?;
+        self.admit_stored(destination, item, id, held, stored, exposure)
+            .await
+    }
+
+    /// [`admit_existing`](Self::admit_existing), for an item this command has just read
+    /// itself: `stored` is its classification, repositories and project as that read answered
+    /// them, so the item is not read again. What it inherits is read as there.
+    pub(crate) async fn admit_read(
+        &self,
+        destination: &ResolvedSource,
+        item: &str,
+        id: &NativeId,
+        held: Held,
+        stored: (Classification, Vec<Repository>, Option<NativeId>),
+        exposure: &Exposure,
+    ) -> Result<(), EngineError> {
+        if self.declared(destination.name()) == SourceVisibility::Private {
+            return self
+                .verify_private(destination, item, &WriteTarget::Existing(id))
+                .await;
+        }
+        if !self.boundary.active {
+            return Ok(());
+        }
+        self.admit_stored(destination, item, id, held, Some(stored), exposure)
+            .await
+    }
+
+    async fn admit_stored(
+        &self,
+        destination: &ResolvedSource,
+        item: &str,
+        id: &NativeId,
+        held: Held,
+        stored: Option<(Classification, Vec<Repository>, Option<NativeId>)>,
+        exposure: &Exposure,
+    ) -> Result<(), EngineError> {
         // An item the source does not hold is the write's own refusal to make, in its own
         // words; nothing of it can be private.
         let Some((declared, repositories, filed)) = stored else {
             return Ok(());
         };
-        // What it inherits tightens it too: a task's or a document's project, and a project's
-        // own tasks and documents.
+        // What it inherits tightens it too: a document's project, and a project's own tasks
+        // and documents. A task inherits nothing: it is as private as its own record says.
         let mut known = std::collections::HashMap::new();
         let inherited = match (held, filed) {
+            (Held::Task, _) => Classification::Public,
             (Held::Project, _) => {
                 self.source_project_class(
                     &crate::GlobalId::new(destination.name().clone(), id.clone()),
@@ -1072,4 +1515,69 @@ pub(crate) enum Absent {
     /// A copy carries it as its source's opaque project id, and the item was already
     /// classified at its source.
     Carried,
+}
+
+/// The form `id` names an item by when that form alone says it is no native id — an address,
+/// or a human key with a prefix — and `None` when only a read of it can say.
+pub(crate) fn plainly_not_native(id: &str) -> Option<ReferenceForm> {
+    if id.contains("://") || id.starts_with("www.") {
+        Some(ReferenceForm::Url)
+    } else if prefixed_key(id) {
+        Some(ReferenceForm::PrefixedKey)
+    } else {
+        None
+    }
+}
+
+/// Whether `id` reads as a human key with a team or project prefix: letters and digits, a
+/// dash, and a number — `ABC-123`.
+fn prefixed_key(id: &str) -> bool {
+    id.split_once('-').is_some_and(|(prefix, number)| {
+        prefix
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+            && prefix.chars().all(|c| c.is_ascii_alphanumeric())
+            && !number.is_empty()
+            && number.chars().all(|c| c.is_ascii_digit())
+    })
+}
+
+/// Whether `id` reads as a slug: words of lower-case letters and digits joined by dashes.
+fn slug(id: &str) -> bool {
+    id.contains('-')
+        && id.split('-').all(|word| {
+            !word.is_empty()
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
+}
+
+/// How a reference names a private item when it is not by the item's own native id — the whole
+/// of what a refusal says about it, never what it held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceForm {
+    /// A human key with a team or project prefix: `ABC-123`.
+    PrefixedKey,
+    /// An address.
+    Url,
+    /// Words joined by dashes that name no item by its native id.
+    Slug,
+    /// Something else its source holds no item under as its native id.
+    NotNative,
+    /// An opaque id whose tracker no source this host configures is, so nothing can confirm it.
+    Unconfirmed,
+}
+
+impl std::fmt::Display for ReferenceForm {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::PrefixedKey => "a prefixed key",
+            Self::Url => "a URL",
+            Self::Slug => "a slug",
+            Self::NotNative => "an id that is not the item's native id",
+            Self::Unconfirmed => "an opaque id that no source this host configures can confirm",
+        })
+    }
 }
