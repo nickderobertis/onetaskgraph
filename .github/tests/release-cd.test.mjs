@@ -79,7 +79,7 @@ function shims(directory, extra = {}) {
     const path = join(directory, name);
     writeFileSync(
       path,
-      `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*" >> "${log}"\n${extra[name] || ""}\n${name === "cargo" ? cargoPublication : ""}\nexec "${real}" "$@"\n`,
+      `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*" >> "${log}"\n${typeof extra[name] === "function" ? extra[name](real) : extra[name] || ""}\n${name === "cargo" ? cargoPublication : ""}\nexec "${real}" "$@"\n`,
     );
     chmodSync(path, 0o755);
   }
@@ -97,6 +97,35 @@ function recipe(job, args, env = {}) {
   });
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
+function runAsync(command, args, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd: checkout, env: { ...process.env, ...env } });
+    let output = "";
+    child.stdout.on("data", (data) => {
+      output += data;
+    });
+    child.stderr.on("data", (data) => {
+      output += data;
+    });
+    child.on("error", reject);
+    child.on("close", (status) => resolve({ status, output }));
+  });
+}
+
+function wheelBuildProbe(real) {
+  return `case "$*" in
+  *"maturin build"*)
+    mkdir "${scratch}/wheel-active" || { echo 'CLI wheel builds overlapped' >&2; exit 97; }
+    trap 'rmdir "${scratch}/wheel-active"' EXIT
+    printf '%s\\n' "$WHEEL_BUILD_CALLER" >> "${scratch}/wheel-builds.log"
+    [ "\${FAIL_CLI_WHEEL_BUILD:-}" != 1 ] || exit 37
+    sleep 1
+    "${real}" "$@"
+    exit $?
+    ;;
+esac`;
+}
+
 function expectStatus(result, status, what) {
   assert.equal(result.status, status, `${what}:\n${result.output.slice(-4000)}`);
 }
@@ -159,12 +188,37 @@ after(() => {
 
 test("the Linux recipe builds once, packages every artifact from that binary, installs them and publishes nothing in its dry run", {
   skip,
-}, () => {
-  const result = recipe("linux", ["run", "--tag", tag, "--dry-run", "--dist", dist]);
-  expectStatus(result, 0, "the Linux recipe's dry run");
-  const commands = invocations();
+}, async () => {
+  const probePath = `${shims(join(scratch, "wheel-probe"), { uv: wheelBuildProbe })}:${process.env.PATH}`;
+  const refused = recipe("linux", ["build", "--tag", tag, "--dist", dist], {
+    PATH: probePath,
+    WHEEL_BUILD_CALLER: "failed",
+    FAIL_CLI_WHEEL_BUILD: "1",
+  });
+  expectStatus(refused, 1, "a failed CLI-wheel build");
+  assert.match(refused.output, /maturin.*exit 37/);
+  const commandOffset = invocations().length;
+  const [result, distribution] = await Promise.all([
+    runAsync("just", ["release-linux", "run", "--tag", tag, "--dry-run", "--dist", dist], {
+      PATH: probePath,
+      WHEEL_BUILD_CALLER: "release",
+    }),
+    runAsync("bash", ["scripts/test-distribution.sh", "--release-build-only"], {
+      PATH: probePath,
+      WHEEL_BUILD_CALLER: "distribution",
+      ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER: "",
+      ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED: "",
+    }),
+  ]);
+  expectStatus(result, 0, "the Linux recipe's dry run beside the distribution build");
+  expectStatus(distribution, 0, "the concurrent distribution build after a failure");
+  assert.deepEqual(
+    readFileSync(join(scratch, "wheel-builds.log"), "utf8").trim().split("\n").sort(),
+    ["distribution", "failed", "release"],
+  );
+  const commands = invocations().slice(commandOffset);
   const builds = commands.filter((line) => /^uv tool run .* maturin build /.test(line));
-  assert.equal(builds.length, 1, "one target, built once");
+  assert.equal(builds.length, 2, "one build per consumer, without overlap");
   assert.match(builds[0], /--target x86_64-unknown-linux-gnu/);
   assert.ok(
     !commands.some((line) => /^(uv publish|npm publish|cargo publish|gh |curl )/.test(line)),

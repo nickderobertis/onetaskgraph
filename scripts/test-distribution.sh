@@ -105,7 +105,7 @@ name="onetaskgraph-${tag}-${target}.${ext}"
 # (.github/workflows/rust-cache-warm.yml) runs it alone, `--release-build-only`, so the units
 # it leaves for the pull-request jobs to restore are exactly the ones built here.
 build_release_wheel() {
-  (cd "$root" && uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$1")
+  (cd "$root" && "$python_bin" scripts/cli_wheel_lock.py uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$1")
 }
 # `--interpreter-only` is this journey's own call sites for scripts/test-python-call-sites.sh:
 # every one of them starts "$python_bin", resolved above, and runs it from inside a scratch
