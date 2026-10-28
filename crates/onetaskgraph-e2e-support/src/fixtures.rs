@@ -1116,6 +1116,7 @@ struct BoardPlacement {
 /// The board this fixture keeps, and everything a request may change on it.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 struct GitHubBoard {
+    canonical_issue_urls: bool,
     items: Vec<Value>,
     /// Every comment on every issue this board holds, oldest first.
     ///
@@ -1687,6 +1688,12 @@ impl GitHubBoardFields {
     /// Move the issue `id` to the repository `repository`, as a person transferring it on
     /// GitHub would — the issue keeps its node id and its board item, and the one thing this
     /// board says moved is its `repository`.
+    /// Return canonical issue URLs at the tracker boundary, for card-link journeys.
+    /// Other journeys retain their placeholder addresses.
+    pub fn use_canonical_issue_urls(&self) {
+        self.board.lock().unwrap().canonical_issue_urls = true;
+    }
+
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own record of each issue's repository, which every read of it answers from: that state is the board's private state, so a suite transferring an issue can only do it through this handle, beside `file_under`.
     pub fn transfer(&self, id: &str, repository: &str) {
         self.board.lock().unwrap().find(&json!(id))["repo"] = json!(repository);
@@ -2625,6 +2632,17 @@ fn board_client(endpoint: &str) -> Arc<Mutex<loopback::Upstream>> {
 }
 
 impl GitHubBoard {
+    fn issue_url(&self, id: &str, repository: &str) -> String {
+        if self.canonical_issue_urls {
+            format!(
+                "https://github.com/{repository}/issues/{}",
+                github_number(id)
+            )
+        } else {
+            format!("https://example.invalid/{id}")
+        }
+    }
+
     fn options(&self) -> Value {
         Value::Array(self.status_options.clone())
     }
@@ -2950,7 +2968,7 @@ impl GitHubBoard {
         }
         json!({"__typename":"Issue","id":item["id"],"title":item["title"],"body":item["body"],
                "number":github_number(item["id"].as_str().unwrap()),
-               "url":format!("https://example.invalid/{}", item["id"].as_str().unwrap()),
+               "url":self.issue_url(item["id"].as_str().unwrap(), item["repo"].as_str().unwrap()),
                "createdAt":item["createdAt"],"updatedAt":item["updatedAt"],
                "commentCount":{"totalCount":self.comment_count(&item["id"])},
                "relationshipEvents":{"totalCount":self.timeline_count(item)},
@@ -3536,6 +3554,7 @@ fn github_projects_board_at(
         }
     }
     let board = Arc::new(Mutex::new(GitHubBoard {
+        canonical_issue_urls: false,
         items,
         comments: Vec::new(),
         comment_ticks: 0,
@@ -4872,7 +4891,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         // number, which is the only place a run learns where an item it just created is,
         // and what that item's short handle is, before this board's read catches up.
         return json!({"createIssue":{"issue":{"id":id,"number":github_number(&id),
-            "url":format!("https://example.invalid/{id}")}}});
+            "url":board.issue_url(&id, &board.repository)}}});
     }
     if query.contains("addProjectV2ItemById(input:$input)") {
         assert_eq!(input["projectId"], "PVT-board");

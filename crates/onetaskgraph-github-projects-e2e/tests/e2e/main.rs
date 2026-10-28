@@ -36,6 +36,7 @@ mod plan_pacing;
 mod plan_reads;
 mod plan_writes;
 mod project_status;
+mod projection_spike;
 mod status_complete;
 mod status_reconcile;
 mod store_cost;

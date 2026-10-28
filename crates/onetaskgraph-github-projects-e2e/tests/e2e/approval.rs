@@ -568,3 +568,108 @@ fn a_screened_approval_of_a_project_holding_more_members_than_one_page_lists_the
     );
     assert_eq!(slot(&plan, &document)[KEY], json!(true));
 }
+
+/// Planning spike: the existing sequence, then the same sequence enclosing an ordinary task.
+/// This deliberately uses today's CLI, not an unimplemented `project-human` command.
+pub(super) fn spike_approval(screened: bool) -> Value {
+    let lay = || {
+        if screened {
+            copied_screened()
+        } else {
+            copied(false)
+        }
+    };
+    let (baseline, project, document) = lay();
+    baseline.github.use_canonical_issue_urls();
+    let baseline_setup = baseline.board.calls();
+    let existing = approve(&baseline, &project, &document);
+    let (plan, project, document) = lay();
+    plan.github.use_canonical_issue_urls();
+    let review_setup = plan.board.calls();
+    let (created, mut calls) = plan.measured(&[
+        "task",
+        "create",
+        "board",
+        "--project",
+        &project,
+        "--title",
+        "Review the synthetic design",
+        "--metadata",
+        "human.item_id=\"design-review\"",
+        "--json",
+    ]);
+    let task = created["items"][0]["id"].as_str().unwrap();
+    let (_, priority_calls) =
+        plan.measured(&["task", "update", task, "--priority", "high", "--json"]);
+    calls.extend(priority_calls);
+    let review_url = created["items"][0]["item"]["url"].clone();
+    assert!(
+        review_url
+            .as_str()
+            .is_some_and(|url| url.contains("/issues/")),
+        "{created}"
+    );
+    let (shown, mut stale_calls) =
+        plan.measured(&["document", "show", &format!("board:{document}"), "--json"]);
+    let old_version = version_of(&shown);
+    let body = plan.github.body(&document).as_str().unwrap().to_owned();
+    plan.github
+        .edit_body(&document, &format!("Public revision.\n{body}"));
+    let (refused, refusal_calls) =
+        set_expecting(&plan, &format!("board:{document}"), KEY, &old_version);
+    stale_calls.extend(refusal_calls);
+    assert!(!refused.status.success(), "a stale approval landed");
+    assert!(slot(&plan, &document).get(KEY).is_none());
+    assert_eq!(
+        plan.github.state(task.strip_prefix("board:").unwrap()).0,
+        "OPEN",
+        "a refused approval resolved the review"
+    );
+    let approved = approve(&plan, &project, &document);
+    assert_eq!(slot(&plan, &document)[KEY], json!("approved"));
+    let (_, resolved) = plan.measured(&[
+        "task",
+        "update",
+        task,
+        "--status",
+        "done",
+        "--metadata",
+        "human.state=\"completed\"",
+        "--json",
+    ]);
+    let lifecycle = vec![
+        Step {
+            what: "review create",
+            report: created,
+            calls,
+            screening: Vec::new(),
+        },
+        Step {
+            what: "review resolve",
+            report: Value::Null,
+            calls: resolved,
+            screening: Vec::new(),
+        },
+    ];
+    let price = |steps: &[Step]| {
+        steps
+            .iter()
+            .flat_map(|step| &step.calls)
+            .map(points)
+            .sum::<u64>()
+    };
+    let consumed: Vec<_> = baseline
+        .board
+        .calls()
+        .into_iter()
+        .chain(plan.board.calls())
+        .collect();
+    let setup: Vec<_> = baseline_setup.into_iter().chain(review_setup).collect();
+    json!({"consumed_requests":consumed.len(),"consumed_points":consumed.iter().map(points).sum::<u64>(),
+        "setup_requests":setup.len(),"setup_points":setup.iter().map(points).sum::<u64>(),
+        "stale_version_recovery_requests":stale_calls.len(),"stale_version_recovery_points":stale_calls.iter().map(points).sum::<u64>(),
+        "stale_version_recovery_operations":stale_calls.iter().map(operation).collect::<Vec<_>>(),"screened":screened,"board":SMALL,"existing":breakdown(&existing),
+        "existing_points":price(&existing),"with_review":breakdown(&approved),
+        "review":breakdown(&lifecycle),"review_url":review_url,
+        "increment_points":price(&lifecycle),"complete_points":price(&approved)+price(&lifecycle)})
+}

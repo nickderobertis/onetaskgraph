@@ -29,6 +29,7 @@ mod linear_status;
 mod origin_batch;
 mod pinning_walk;
 mod plan_copy;
+mod projection_spike;
 mod store_cost;
 mod stored_digest;
 mod telemetry;
