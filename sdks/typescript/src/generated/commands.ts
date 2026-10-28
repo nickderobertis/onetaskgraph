@@ -12,6 +12,7 @@ export const binaryCommands = [
   "task show-many",
   "task deps",
   "task copy",
+  "task locate",
   "task comment add",
   "task comment list",
   "task comment edit",

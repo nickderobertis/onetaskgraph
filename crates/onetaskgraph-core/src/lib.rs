@@ -63,7 +63,7 @@ pub use engine::{
     DependencyRequest, DocumentDetail, DocumentFilters, DocumentRequest, Engine, EngineError,
     Filters, GraphDirection, GraphEdge, GraphNode, GroupKey, HeldAsset, IssueCompleted,
     IssuesCompleted, LabelRequest, LeftBehind, LocateLookup, LocateReport, LocateRequest, Located,
-    LocatedCounterpart, LocatedLookup, MatchBy, MetadataSet, MirrorTarget, NoCounterpart,
+    LocatedCounterpart, MatchBy, MetadataSet, MirrorTarget, NoCounterpart,
     PROJECT_GRAPH_SCHEMA_VERSION, Paging, ProjectGraph, ProjectGraphRequest, ProjectRequest,
     ProjectSelector, ProjectStatusSet, PublicProjection, PublicProjections, Qualified,
     QualifiedEdge, QualifiedEndpoint, ReconcileOutcome, SearchHit, SearchKind, SearchRequest,

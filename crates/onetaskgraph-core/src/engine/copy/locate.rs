@@ -72,32 +72,42 @@ pub struct LocateReport {
 pub struct Located {
     /// The qualified id the task was read from.
     pub source: GlobalId,
-    /// The class it was placed as: its own declaration, its source's declared visibility and,
-    /// while the store's boundary is active, its repositories' visibility.
+    /// The class it was placed as, as a copy classifies it: its own declaration and, while the
+    /// store's boundary is active, its repositories' visibility. A source declared private does
+    /// not by itself make it private; it withholds the task's provenance instead.
     pub classification: Classification,
     /// Where a copy to the destination named would write it, and the index of the route entry
     /// that sent it there — `null` when none matched, exactly as a copy's report says it.
     #[serde(flatten)]
     pub placement: Placement,
-    /// The counterpart a copy would update and every destination item carrying the task's
-    /// origin — absent under `--no-counterpart`, which looks for neither.
-    #[serde(flatten)]
-    pub lookup: Option<LocatedLookup>,
+    /// The item a copy would update, and the rule that found it — `null` when a copy would
+    /// create one, and absent under `--no-counterpart`, which looks for none.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<LocatedCounterpart>")]
+    pub counterpart: Option<Option<LocatedCounterpart>>,
+    /// Every destination item the origin query found carrying this task's origin, in listing
+    /// order — `[]` when the query did not run, and absent under `--no-counterpart`. When it ran,
+    /// `counterpart` is the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub carriers: Option<Vec<GlobalId>>,
     /// The repository a create there would file the task's issue in, or `null` where the
     /// destination files no issue in a repository. Where a create would file, whether or not a
     /// counterpart exists: an existing issue is never moved.
     pub creates_in: Option<CreatesIn>,
 }
 
-/// What one task's counterpart lookup found.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct LocatedLookup {
-    /// The item a copy would update, and the rule that found it — `null` when a copy would
-    /// create one.
-    pub counterpart: Option<LocatedCounterpart>,
-    /// Every destination item the origin query found carrying this task's origin, in listing
-    /// order, and `[]` when the query did not run. When it ran, `counterpart` is the first.
-    pub carriers: Vec<GlobalId>,
+/// A member present in a document, `null` included: what tells `counterpart: null` — a copy
+/// would create — from no `counterpart` at all.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// The destination item a copy would update.
@@ -216,18 +226,18 @@ impl Engine {
                 .map_or(Classification::Public, |held| classification_of(&held.item)),
         );
         self.refuse_private_landing(&placement.destination, &id.to_string(), landing)?;
-        let lookup = carriers.map(|carriers| LocatedLookup {
-            counterpart: match &target {
-                Target::Update { id: native, found } => Some(LocatedCounterpart {
-                    id: GlobalId::new(placement.destination.clone(), native.clone()),
-                    via: found.via(),
-                }),
-                Target::Create => None,
-            },
-            carriers: carriers
+        let counterpart = carriers.as_ref().map(|_| match &target {
+            Target::Update { id: native, found } => Some(LocatedCounterpart {
+                id: GlobalId::new(placement.destination.clone(), native.clone()),
+                via: found.via(),
+            }),
+            Target::Create => None,
+        });
+        let carriers = carriers.map(|carriers| {
+            carriers
                 .into_iter()
                 .map(|native| GlobalId::new(placement.destination.clone(), native))
-                .collect(),
+                .collect()
         });
         let Item::Task(task) = &read.item else {
             unreachable!("read_task reads tasks alone");
@@ -282,7 +292,8 @@ impl Engine {
             source: id.clone(),
             classification,
             placement,
-            lookup,
+            counterpart,
+            carriers,
             creates_in: repository.map(|repository| CreatesIn { repository }),
         })
     }
@@ -313,5 +324,44 @@ impl Engine {
             });
         }
         Err(missing)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A located task's counterpart reads back as it was written: looked up and found, looked up
+    /// and not found — `null` — and not looked up at all, which writes no member.
+    #[test]
+    fn a_counterpart_round_trips_found_absent_and_not_looked_up() {
+        let located = |counterpart, carriers| Located {
+            source: "drafts:t".parse().unwrap(),
+            classification: Classification::Public,
+            placement: Placement {
+                destination: SourceName::new("site".to_owned()).unwrap(),
+                route: None,
+            },
+            counterpart,
+            carriers,
+            creates_in: None,
+        };
+        let found = LocatedCounterpart {
+            id: "site:t".parse().unwrap(),
+            via: CopyVia::Link,
+        };
+        for (item, members) in [
+            (located(Some(Some(found)), Some(Vec::new())), 2),
+            (located(Some(None), Some(Vec::new())), 2),
+            (located(None, None), 0),
+        ] {
+            let written = serde_json::to_value(&item).unwrap();
+            let present = ["counterpart", "carriers"]
+                .iter()
+                .filter(|key| written.get(**key).is_some())
+                .count();
+            assert_eq!(present, members, "{written}");
+            assert_eq!(serde_json::from_value::<Located>(written).unwrap(), item);
+        }
     }
 }

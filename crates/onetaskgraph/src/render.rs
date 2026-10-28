@@ -1085,21 +1085,22 @@ pub fn locate(report: &LocateReport) -> String {
                     },
                 ],
             ];
-            if let Some(lookup) = &item.lookup {
+            if let Some(counterpart) = &item.counterpart {
                 rows.push(vec![
                     "counterpart:".to_owned(),
-                    lookup.counterpart.as_ref().map_or_else(
+                    counterpart.as_ref().map_or_else(
                         || "none: a copy would create one".to_owned(),
                         |counterpart| format!("{} via {}", counterpart.id, wire(&counterpart.via)),
                     ),
                 ]);
+            }
+            if let Some(carriers) = &item.carriers {
                 rows.push(vec![
                     "carriers:".to_owned(),
-                    if lookup.carriers.is_empty() {
+                    if carriers.is_empty() {
                         "none".to_owned()
                     } else {
-                        lookup
-                            .carriers
+                        carriers
                             .iter()
                             .map(ToString::to_string)
                             .collect::<Vec<_>>()

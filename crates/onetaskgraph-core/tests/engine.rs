@@ -3525,7 +3525,7 @@ const FORTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 134] = [
     ("ItemType", 0x417523fd8e62d46a),
     ("Label", 0x07555503d77a90c7),
     ("LinearConfig", 0x10a5b658053e0912),
-    ("LocateReport", 0x0711ba033e408be2),
+    ("LocateReport", 0x8af64af6dd02ab00),
     ("Location", 0x0690620b049c989a),
     ("MetadataSet", 0x4c828982de7fcea8),
     ("NativeId", 0x0150d4025c258cb8),

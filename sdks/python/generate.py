@@ -27,6 +27,8 @@ RESPONSE_ROOTS = {
     "task_show_many": "TaskDetails",
     "task_deps": "QueryResponseOfQualifiedEdge",
     "task_copy": "CopyReport",
+    # Where a copy would land each task, what it would update and where it would file an issue.
+    "task_locate": "LocateReport",
     # The comment as written, with what a write made with `expect` came to beside it.
     "task_comment_add": "CommentWritten",
     "task_comment_list": "CommentList",
@@ -165,6 +167,7 @@ OPTION_TYPES = {
     "no_comments": "bool",
     "comments": "bool",
     "no_link": "bool",
+    "no_counterpart": "bool",
     "answers": "answers",
     "asset": "list[str] | tuple[str, ...]",
     "author": "str",
@@ -173,6 +176,8 @@ OPTION_TYPES = {
     "commented_since": "str",
     "origin": "GlobalId | str",
     "target_task": "GlobalId | str",
+    # A source's own id for the item a `task locate` names as the one task's counterpart.
+    "target_native": "str",
     "dry_run": "bool",
     "default_sources": "list[str] | tuple[str, ...]",
     "delivers": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
@@ -236,6 +241,7 @@ OPTION_PLACEHOLDERS = {
     "no_comments": None,
     "comments": None,
     "no_link": None,
+    "no_counterpart": None,
     "answers": "FILE",
     "asset": "PATH",
     "author": "NAME",
@@ -244,6 +250,7 @@ OPTION_PLACEHOLDERS = {
     "commented_since": "RFC3339",
     "origin": "SOURCE:ID",
     "target_task": "QUALIFIED-ID",
+    "target_native": "NATIVE-ID",
     "dry_run": None,
     "default_sources": "NAMES",
     "delivers": "ID",
@@ -805,7 +812,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("text",)
         case ("sources", "status-options" | "fields" | "route"):
             return ("source",)
-        case ("task" | "document", "copy") | ("task", "show-many"):
+        case ("task" | "document", "copy") | ("task", "show-many" | "locate"):
             return ("ids",)
         case ("task", "comment", "add" | "list"):
             return ("id",)
@@ -853,6 +860,8 @@ REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {
     # A reconcile has no source to bring in line without `--source`.
     ("task", "status", "reconcile"): ("source",),
     ("task", "assets"): ("output_dir",),
+    # A locate answers where a copy into one source would land, so it names that source.
+    ("task", "locate"): ("to",),
 }
 
 # The commands that read a body from standard input when `--body-file` is absent, which
@@ -1085,8 +1094,8 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     ]
     positional_types = {
         "id": "GlobalId | str",
-        # `task copy`, `document copy` and `task show-many` take one or more ids, the variadic
-        # positionals the command surface has; the client passes each of them through.
+        # `task copy`, `document copy`, `task show-many` and `task locate` take one or more ids,
+        # the variadic positionals the command surface has; the client passes each through.
         "ids": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
         # `task status set` takes the category it sets as its second operand, spelled as the
         # binary's status vocabulary spells it — which is exactly the generated enum's values.
