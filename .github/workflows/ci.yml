@@ -519,6 +519,10 @@ jobs:
       # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit. An
       # entry is never re-saved under its key, so a key whose entry holds no build is retired
       # by naming a new one here.
+      # rust-cache hashes every installed compiler; exclude the unused floating one.
+      - name: Exclude the unused floating compiler from the build cache
+        shell: bash
+        run: rustup toolchain uninstall stable
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache-key: lint-afresh
@@ -703,6 +707,11 @@ jobs:
       # run cut short by the timeout still saves what it built, which the next run starts from.
       # The shared key is the one .github/workflows/rust-cache-warm.yml saves on main, which is
       # the only cache a new pull request can restore.
+      # rust-cache hashes every installed compiler; exclude the unused floating one.
+      - name: Exclude the unused floating compiler from the build cache
+        if: steps.release.outputs.tests == 'run'
+        shell: bash
+        run: rustup toolchain uninstall stable
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         if: steps.release.outputs.tests == 'run'
         with:
@@ -845,6 +854,11 @@ jobs:
         if: steps.release.outputs.tests == 'run'
         with:
           enable-cache: true
+      # rust-cache hashes every installed compiler; exclude the unused floating one.
+      - name: Exclude the unused floating compiler from the build cache
+        if: steps.release.outputs.tests == 'run'
+        shell: bash
+        run: rustup toolchain uninstall stable
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         if: steps.release.outputs.tests == 'run'
         with:
@@ -1009,6 +1023,11 @@ jobs:
         if: steps.release.outputs.tests == 'run'
         with:
           enable-cache: true
+      # rust-cache hashes every installed compiler; exclude the unused floating one.
+      - name: Exclude the unused floating compiler from the build cache
+        if: steps.release.outputs.tests == 'run'
+        shell: bash
+        run: rustup toolchain uninstall stable
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         if: steps.release.outputs.tests == 'run'
         with:

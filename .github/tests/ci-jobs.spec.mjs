@@ -179,6 +179,23 @@ function warmerProblems(all, jobs) {
     JSON.stringify(warmer.on.push?.branches) !== '["main"]'
   )
     found.push("the Rust cache warmer runs on something other than a push to main");
+  // The cache action hashes every installed Rust version, even the runner's unused
+  // floating compiler. Its removal must happen before the restore, in every producer
+  // and consumer, and under the same condition as the pinned toolchain step.
+  for (const [id, job] of [
+    ...Object.keys(FOUR).map((id) => [id, jobs[id]]),
+    ["warm", warm],
+    ["warm-macos", warmer.jobs["warm-macos"]],
+  ]) {
+    const toolchain = toolchainOf(job);
+    const before = steps(job).slice(0, steps(job).indexOf(toolchain));
+    if (
+      !before.some(
+        (step) => step.run === "rustup toolchain uninstall stable" && step.if === toolchain?.if,
+      )
+    )
+      found.push(`${id} must exclude the unused stable toolchain before restoring the build cache`);
+  }
   const legs = [...(warm.strategy?.matrix?.include ?? [])];
   if (toolchainOf(warm)?.with?.["cache-shared-key"] !== `\${{ matrix.job }}`)
     found.push("the Rust cache warmer does not save under its leg's job key");
@@ -356,6 +373,29 @@ test("the Rust cache warmer parting from the key a test job restores is refused"
   refuses((all) => {
     delete all["rust-cache-warm.yml"];
   }, /has no job `warm`/);
+});
+
+test("the unused floating compiler cannot invalidate a pinned build cache", () => {
+  for (const [file, id] of [
+    ...Object.keys(FOUR).map((id) => ["ci.yml", id]),
+    ["rust-cache-warm.yml", "warm"],
+    ["rust-cache-warm.yml", "warm-macos"],
+  ]) {
+    refuses((all) => {
+      const job = all[file].jobs[id];
+      job.steps = job.steps.filter((step) => step.run !== "rustup toolchain uninstall stable");
+    }, /must exclude the unused stable toolchain before restoring the build cache/);
+  }
+  refuses((all) => {
+    const job = all["ci.yml"].jobs["test-linux"];
+    const at = job.steps.findIndex((step) => step.run === "rustup toolchain uninstall stable");
+    job.steps.push(...job.steps.splice(at, 1));
+  }, /must exclude the unused stable toolchain before restoring the build cache/);
+  refuses((all) => {
+    all["ci.yml"].jobs["test-linux"].steps.find(
+      (step) => step.run === "rustup toolchain uninstall stable",
+    ).if = "false";
+  }, /must exclude the unused stable toolchain before restoring the build cache/);
 });
 
 // The contract's own inputs are this directory alone: nothing outside it re-runs it, so it may

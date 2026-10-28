@@ -3363,6 +3363,7 @@ impl GitHubBoard {
     }
 }
 
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] Private counts consumed by GitHubBoard's response rendering: the agreed loopback layout places that board in this shared harness (see its own directive), and moving this helper alone would expose private board state across a crate boundary.
 /// [`GitHubBoard::tallies`]: each issue's sub-issue and comment counts, by its id.
 #[derive(Default)]
 struct Tallies {
