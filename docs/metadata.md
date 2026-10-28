@@ -171,10 +171,11 @@ collapsed.
 A source with a native notion of it reads it from there. `github-projects` derives it
 from an issue's own repository, and records the key **only** when the item's list is not
 exactly that one repository. The list also decides **where** that source creates an issue,
-under one rule: exactly one entry, and the issue is created in that repository; zero
-entries or two or more, and a task's or a document's issue is created in the repository
-its parent project's issue lives in, while a project's issue — or a task's or document's
-written with no parent — is created in the source's configured `repository:`. So a task
+under one rule: exactly one entry, and the issue is created in that repository — on a source
+declared `visibility: private`, only when that repository reads private, and otherwise as for
+zero entries; zero entries or two or more, and a task's or a document's issue is created in
+the repository its parent project's issue lives in, while a project's issue — or a task's or
+document's written with no parent — is created in the source's configured `repository:`. So a task
 naming the one repository its work changes is filed where a person looks for it, and the
 read side and the write side agree by construction: one entry that is where the issue
 lives is derived and never written down, none is recorded as `[]`, and several are
