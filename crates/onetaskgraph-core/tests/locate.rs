@@ -3,10 +3,15 @@
 //! user does, against the copy after it, are in `crates/onetaskgraph-e2e/tests/e2e/locate.rs`.
 
 use onetaskgraph_core::{
-    Config, CopyItems, CopyRequest, CopyScope, CopyVia, Engine, EngineError, GlobalId,
-    LocateLookup, LocateRequest, LocatedCounterpart, NotATask, StatusPolicy,
+    Config, ConfiguredSource, CopyItems, CopyRequest, CopyScope, CopyVia, Engine, EngineError,
+    GlobalId, LocateLookup, LocateRequest, LocatedCounterpart, NotATask, ResolvedSource,
+    StatusPolicy,
 };
-use onetaskgraph_plugin_api::{SecretResolver, SourceName};
+use onetaskgraph_plugin_api::{
+    Capabilities, DependencyEdge, Direction, Health, Label, NativeId, Page, PageRequest, Project,
+    ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Task, TaskQuery,
+    TaskSource, WriteSupport,
+};
 use secrecy::SecretString;
 use serde_json::{Value, json};
 
@@ -144,4 +149,111 @@ async fn naming_no_task_answers_none_and_a_project_a_missing_id_and_two_targets_
         .await
         .expect_err("--target-native names one task's counterpart");
     assert_eq!(several, EngineError::TargetNativeNeedsOne { count: 2 });
+}
+
+/// An `in-memory` source whose every project read fails as unreachable.
+struct ProjectsUnreachable(Box<dyn TaskSource>);
+
+#[async_trait::async_trait]
+impl TaskSource for ProjectsUnreachable {
+    fn kind(&self) -> &'static str {
+        self.0.kind()
+    }
+    fn capabilities(&self) -> Capabilities {
+        self.0.capabilities()
+    }
+    fn writes(&self) -> WriteSupport {
+        self.0.writes()
+    }
+    async fn health(&self) -> Result<Health, SourceError> {
+        self.0.health().await
+    }
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        self.0.get_task(id).await
+    }
+    async fn get_project(&self, _id: &NativeId) -> Result<Option<Project>, SourceError> {
+        Err(SourceError::Unavailable {
+            message: "the projects could not be reached".to_owned(),
+        })
+    }
+    async fn query_tasks(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        self.0.query_tasks(query, page).await
+    }
+    async fn query_projects(
+        &self,
+        query: &ProjectQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        self.0.query_projects(query, page).await
+    }
+    async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        self.0.labels(page).await
+    }
+    async fn task_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.0.task_dependencies(id, direction, page).await
+    }
+    async fn project_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.0.project_dependencies(id, direction, page).await
+    }
+}
+
+#[tokio::test]
+async fn an_id_naming_no_task_whose_project_read_fails_is_refused_by_that_failure() {
+    let built = |name: &str| {
+        onetaskgraph_in_memory::Plugin
+            .build(
+                &SourceName::new(name).unwrap(),
+                &json!({"tasks": [task("T-1", json!({}))]}),
+                &NoSecrets,
+            )
+            .expect("the in-memory plugin builds")
+    };
+    let unreachable = ConfiguredSource::Ready(ResolvedSource::adopt(
+        SourceName::new("from").unwrap(),
+        Box::new(ProjectsUnreachable(built("from"))),
+    ));
+    let into = ConfiguredSource::Ready(ResolvedSource::adopt(
+        SourceName::new("into").unwrap(),
+        built("into"),
+    ));
+    let engine = Engine::new(
+        vec![unreachable, into],
+        vec![
+            SourceName::new("from").unwrap(),
+            SourceName::new("into").unwrap(),
+        ],
+    );
+    let refused = engine
+        .locate(&locating(&["from:P-1"], LocateLookup::NoCounterpart))
+        .await
+        .expect_err("whether it names a project cannot be read");
+    let message = refused.to_string();
+    assert!(
+        message.contains("the projects could not be reached"),
+        "{message}"
+    );
+    assert!(
+        !matches!(refused, EngineError::NoSuchItem { .. }),
+        "never answered as naming nothing: {refused:?}"
+    );
+    // A task it holds is still located.
+    let located = engine
+        .locate(&locating(&["from:T-1"], LocateLookup::NoCounterpart))
+        .await
+        .expect("a task is read without the probe");
+    assert_eq!(located.items.len(), 1);
 }

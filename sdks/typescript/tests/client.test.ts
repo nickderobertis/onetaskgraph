@@ -1837,6 +1837,14 @@ test("taskLocate answers where a copy lands each task through the real binary", 
     await locateClient.taskCopy(["plan:fresh"], "site");
     const linked = await locateClient.taskLocate(["plan:fresh"], { to: "site" });
     expect(linked.items[0]?.counterpart?.via).toBe("link");
+    // `noCounterpart` looks nothing up, so the answer names neither a counterpart nor carriers.
+    const placed = await locateClient.taskLocate(["plan:fresh"], {
+      to: "site",
+      noCounterpart: true,
+    });
+    expect(placed.items[0]?.destination).toBe("site");
+    expect(placed.items[0] && "counterpart" in placed.items[0]).toBe(false);
+    expect(placed.items[0] && "carriers" in placed.items[0]).toBe(false);
 
     // The stale link refuses a plain lookup; the named counterpart answers without following it.
     await expect(locateClient.taskLocate(["plan:pinned"], { to: "site" })).rejects.toThrow(

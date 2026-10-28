@@ -316,8 +316,9 @@ impl Engine {
         })
     }
 
-    /// The task `id` names, or — for an id naming nothing of the kind — the refusal saying it
-    /// names a project or a document, when it does.
+    /// The task `id` names, or — for an id naming no task — the refusal saying it names a
+    /// project or a document, when it does. A probe the source cannot answer fails as itself:
+    /// whether the id names something else is then not known.
     async fn read_task(&self, id: &GlobalId) -> Result<Read, EngineError> {
         let missing = match self.read(Level::Task, id).await {
             Err(missing @ EngineError::NoSuchItem { .. }) => missing,
@@ -326,7 +327,12 @@ impl Engine {
         let source = self.readable(&id.source)?;
         let capabilities = source.source().capabilities();
         if capabilities.projects.is_native()
-            && matches!(source.source().get_project(&id.native).await, Ok(Some(_)))
+            && source
+                .source()
+                .get_project(&id.native)
+                .await
+                .map_err(|error| refused(source, error))?
+                .is_some()
         {
             return Err(EngineError::NotATask {
                 id: id.clone(),
@@ -334,7 +340,12 @@ impl Engine {
             });
         }
         if capabilities.documents.is_native()
-            && matches!(source.source().get_document(&id.native).await, Ok(Some(_)))
+            && source
+                .source()
+                .get_document(&id.native)
+                .await
+                .map_err(|error| refused(source, error))?
+                .is_some()
         {
             return Err(EngineError::NotATask {
                 id: id.clone(),
