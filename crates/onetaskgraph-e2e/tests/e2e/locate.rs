@@ -265,6 +265,14 @@ impl Store {
                 }
                 if path.is_dir() {
                     pending.push(path);
+                // LLVM's coverage runtime, rather than the engine, writes these profiler
+                // artifacts into the working directory of an instrumented run. Match only
+                // its two exact extensions so every other file remains evidence of a write.
+                } else if matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("profraw" | "profdata")
+                ) {
+                    continue;
                 } else {
                     let bytes = std::fs::read(&path).expect("a file");
                     held.insert(display(&path), String::from_utf8_lossy(&bytes).into_owned());
