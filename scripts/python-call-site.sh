@@ -44,7 +44,6 @@ python_call_site_record() {
     index=$((index + 1))
   done
   [ -n "$caller" ] || caller=unknown
-  # The program: the first argument that is not one of python's own options.
   while [ "$#" -gt 0 ]; do
     case "$1" in
       -c) program="-c $(printf '%s' "${2:-}" | digest_of)"; break ;;
@@ -56,7 +55,7 @@ python_call_site_record() {
     esac
   done
   if [ -z "$program" ]; then
-    # The code comes on standard input: kept, digested and handed on as it arrived.
+    # Recording must leave stdin intact for the real interpreter that runs next.
     local code="$probe/stdin.$$"
     cat >"$code" || recording_failed "save the Python input to $code"
     program="stdin $(digest_of <"$code")"
