@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -119,3 +120,20 @@ def test_sources_route_names_every_source_a_source_reaches(client: Client) -> No
         route = asyncio.run(client.sources_route("site", repository=repositories))
         assert [name.root for name in route.reachable] == ["site", "team"]
     assert [name.root for name in asyncio.run(client.sources_route("team")).reachable] == ["team"]
+
+
+@pytest.mark.parametrize("written", ["", "not a document", '{"failure": {"kind": 7}}'])
+def test_a_refusal_whose_output_is_no_failure_document_carries_no_failure(
+    tmp_path: Path, written: str
+) -> None:
+    """Only a document the binary's schema describes becomes the error's `failure`."""
+    # The interpreter as the binary: it runs the file named by the client's first word, `task`,
+    # from the working directory, which answers as a refusing binary would on every platform.
+    (tmp_path / "task").write_text(
+        f"import sys\nsys.stdout.write({written!r})\nsys.stderr.write('refused')\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(OnetaskgraphError) as refused:
+        asyncio.run(Client(sys.executable, cwd=tmp_path).task_locate(["plan:fresh"], to="site"))
+    assert (refused.value.exit_code, str(refused.value)) == (1, "refused")
+    assert refused.value.failure is None

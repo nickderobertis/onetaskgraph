@@ -442,7 +442,15 @@ fn locate_lists_every_carrier_across_pages_and_finds_a_copy_back_by_its_origin()
         "classification: private\nmetadata: {onetaskgraph.origin: \"board:BACK-1\"}",
     );
 
-    let item = only(&store.locate(&["drafts:twin"], "site", &[]).answer()).clone();
+    let answer = store.locate(&["drafts:twin"], "site", &[]).answer();
+    // The board meters its own requests, and the answer says what they were.
+    assert!(
+        answer["spent"]["requests"]
+            .as_u64()
+            .is_some_and(|sent| sent > 0),
+        "{answer:#}"
+    );
+    let item = only(&answer).clone();
     assert_eq!(
         item["carriers"],
         json!(["board:TWIN-1", "board:TWIN-2"]),
@@ -529,10 +537,23 @@ fn locate_refuses_each_item_a_copy_of_it_refuses_with_the_copy_s_own_failure() {
     );
     // A private task bound for `mirror`, which is not declared private.
     store.task("drafts", "marked", "classification: private");
+    // A public task whose counterpart on `mirror` is private: what it would update is private,
+    // and `mirror` is not declared so.
+    store.task(
+        "drafts",
+        "kept",
+        "metadata: {onetaskgraph.copies: {mirror: \"mirror:held\"}}",
+    );
+    store.task(
+        "mirror",
+        "held",
+        "classification: private\nmetadata: {onetaskgraph.origin: \"drafts:kept\"}",
+    );
     for (id, to, kind) in [
         ("drafts:stale", "site", "stale-link"),
         ("drafts:moved", "site", "misrouted"),
         ("drafts:marked", "mirror", "not-private-destination"),
+        ("drafts:kept", "mirror", "not-private-destination"),
     ] {
         let located = store.locate(&[id], to, &[]).refusal();
         let before = store.tree();
@@ -546,14 +567,17 @@ fn locate_refuses_each_item_a_copy_of_it_refuses_with_the_copy_s_own_failure() {
         );
         assert_eq!(located.0, Some(1), "{id}");
     }
-    // A project is no task to locate.
+    // A project and a document are no task to locate.
     store.record("drafts", "projects", "goal", "title: Goal\nstatus: todo");
-    let (code, kind, message) = store.locate(&["drafts:goal"], "site", &[]).refusal();
-    assert_eq!((code, kind.as_str()), (Some(1), "not-a-task"), "{message}");
-    assert!(
-        message.contains("drafts:goal") && message.contains("project"),
-        "{message}"
-    );
+    store.record("drafts", "documents", "notes", "title: Notes");
+    for (id, named) in [("drafts:goal", "project"), ("drafts:notes", "document")] {
+        let (code, kind, message) = store.locate(&[id], "site", &[]).refusal();
+        assert_eq!((code, kind.as_str()), (Some(1), "not-a-task"), "{message}");
+        assert!(
+            message.contains(id) && message.contains(&format!("is a {named}")),
+            "{message}"
+        );
+    }
 }
 
 #[test]

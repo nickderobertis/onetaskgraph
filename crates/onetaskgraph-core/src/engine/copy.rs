@@ -48,7 +48,7 @@ mod query;
 mod record;
 mod snapshot;
 pub use locate::{
-    CreatesIn, LocateLookup, LocateReport, LocateRequest, Located, LocatedCounterpart,
+    CreatesIn, LocateLookup, LocateReport, LocateRequest, Located, LocatedCounterpart, NotATask,
 };
 pub use projections::{MirrorTarget, PublicProjection, PublicProjections};
 pub(super) use snapshot::single as single_detail;

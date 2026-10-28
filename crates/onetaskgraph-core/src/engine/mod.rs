@@ -77,7 +77,7 @@ pub(crate) use copy::spent_between;
 pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
     CopyReport, CopyRequest, CopyScope, CopyVia, CreatesIn, LocateLookup, LocateReport,
-    LocateRequest, Located, LocatedCounterpart, MatchBy, NoCounterpart, PublicProjection,
+    LocateRequest, Located, LocatedCounterpart, MatchBy, NoCounterpart, NotATask, PublicProjection,
     PublicProjections, Spent, StatusPolicy,
 };
 pub(crate) use copy::{malformed_links, malformed_locations};
@@ -1218,8 +1218,8 @@ pub enum EngineError {
     NotATask {
         /// The id named.
         id: GlobalId,
-        /// What it names instead: `project` or `document`.
-        kind: &'static str,
+        /// What it names instead.
+        kind: NotATask,
     },
     /// The target must belong to the configured destination.
     #[error(

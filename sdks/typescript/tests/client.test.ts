@@ -1885,6 +1885,23 @@ test("taskLocate answers where a copy lands each task through the real binary", 
         noCounterpart: JSON.parse('"yes"'),
       }),
     ).toThrow("noCounterpart must be a boolean");
+
+    // Only a document the binary's schema describes becomes the error's `failure`.
+    for (const written of ["", "not a document", '{"failure": {"kind": 7}}']) {
+      const refusing = executableFixture(locateRoot, "refusing", written, "refused", 1);
+      const refusingClient = new OnetaskgraphClient({ binaryPath: refusing, cwd: locateRoot });
+      const refused = await refusingClient.taskLocate(["plan:fresh"], { to: "site" }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(refused).toBeInstanceOf(OnetaskgraphExecutionError);
+      if (!(refused instanceof OnetaskgraphExecutionError)) throw new Error("not refused");
+      expect([refused.exitCode, refused.stderr, refused.failure]).toEqual([
+        1,
+        "refused",
+        undefined,
+      ]);
+    }
   } finally {
     rmSync(locateRoot, { recursive: true, force: true });
   }

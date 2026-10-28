@@ -119,6 +119,24 @@ pub struct LocatedCounterpart {
     pub via: CopyVia,
 }
 
+/// What an id `task locate` was named holds instead of a task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotATask {
+    /// A project.
+    Project,
+    /// A document.
+    Document,
+}
+
+impl std::fmt::Display for NotATask {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Project => "project",
+            Self::Document => "document",
+        })
+    }
+}
+
 /// Where a create would file a task's issue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CreatesIn {
@@ -312,7 +330,7 @@ impl Engine {
         {
             return Err(EngineError::NotATask {
                 id: id.clone(),
-                kind: "project",
+                kind: NotATask::Project,
             });
         }
         if capabilities.documents.is_native()
@@ -320,7 +338,7 @@ impl Engine {
         {
             return Err(EngineError::NotATask {
                 id: id.clone(),
-                kind: "document",
+                kind: NotATask::Document,
             });
         }
         Err(missing)
