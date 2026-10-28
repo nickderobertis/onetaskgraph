@@ -833,7 +833,55 @@ fn overlapping_library_copies_read_visibility_independently() {
     use std::future::Future;
     use std::task::Poll;
 
-    let setup = Setup::laid(false, |_| {});
+    use std::io::Write;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use onetaskgraph_e2e_support::loopback::{self, After, Upstream};
+
+    // Hold the first board response at the wire boundary. Merely stopping polling
+    // after observing its reads can leave a mutation in flight on the HTTP worker.
+    let paused = Arc::new(AtomicBool::new(false));
+    let (release, released) = std::sync::mpsc::channel();
+    let released = Arc::new(std::sync::Mutex::new(released));
+    let setup = Setup::laid(false, |configured| {
+        let endpoint = configured["sources"]["board"]["config"]["endpoint"]
+            .as_str()
+            .expect("an endpoint");
+        let address = endpoint
+            .strip_prefix("http://")
+            .and_then(|rest| rest.split('/').next())
+            .and_then(|address| address.parse().ok())
+            .expect("a loopback address");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
+        configured["sources"]["board"]["config"]["endpoint"] =
+            json!(format!("http://{}/graphql", listener.local_addr().unwrap()));
+        let paused = Arc::clone(&paused);
+        loopback::serve_each(listener, move || {
+            let mut upstream = Upstream::new(address);
+            let paused = Arc::clone(&paused);
+            let released = Arc::clone(&released);
+            move |sent: &loopback::Request, stream: &mut std::net::TcpStream| {
+                let response = upstream.forward(&sent.bytes());
+                if serde_json::from_slice::<Value>(sent.body()).is_ok_and(|request| {
+                    request["query"] == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY
+                }) && !paused.swap(true, Ordering::SeqCst)
+                {
+                    released
+                        .lock()
+                        .expect("not poisoned")
+                        .recv_timeout(std::time::Duration::from_secs(30))
+                        .expect("the first copy is released");
+                }
+                // Cancellation closes the client before its held response is released.
+                if stream.write_all(&response).is_ok() {
+                    After::KeepOpen
+                } else {
+                    After::Close
+                }
+            }
+        });
+    });
     for id in ["first", "second"] {
         setup.record(
             "tasks",
@@ -877,9 +925,9 @@ fn overlapping_library_copies_read_visibility_independently() {
         .expect("a runtime")
         .block_on(async {
             let mut first = Box::pin(engine.copy(&first_request));
-            // Pause after both visibility requests, while the first operation is still live.
+            // Pause while the first operation waits for its board response.
             std::future::poll_fn(|cx| {
-                if visibility_reads(&setup.board.served()).len() == 2 {
+                if paused.load(Ordering::SeqCst) {
                     return Poll::Ready(());
                 }
                 assert!(
@@ -902,6 +950,7 @@ fn overlapping_library_copies_read_visibility_independently() {
             read_once_before_writing(&sent, &["project", VAULT]);
             // Cancel the still-live first copy. Its task-local reads must disappear.
             drop(first);
+            release.send(()).expect("release the cancelled copy");
             setup.board.set_project_public(true);
             let before_retry = setup.board.served().len();
             let failure = engine
