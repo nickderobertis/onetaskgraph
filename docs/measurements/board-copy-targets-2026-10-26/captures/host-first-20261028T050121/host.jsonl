@@ -1,0 +1,53 @@
+{"end": 1793163699.233, "kind": "interpreter", "name": "start", "pid": 1377895, "start": 1793163699.233}
+{"argv": ["project", "show", "authoring:<id>", "--json", "--no-interactive"], "end": 1793163700.283, "kind": "store", "pid": 1377895, "returncode": 0, "start": 1793163700.257}
+{"end": 1793163700.286, "kind": "step", "name": "plan_store.project_record", "pid": 1377895, "start": 1793163700.256}
+{"argv": ["task", "list", "--project", "bcs-span", "--source", "authoring", "--json", "--no-interactive"], "end": 1793163700.317, "kind": "store", "pid": 1377895, "returncode": 0, "start": 1793163700.288}
+{"end": 1793163700.319, "kind": "step", "name": "plan_store.plan_listing", "pid": 1377895, "start": 1793163700.286}
+{"argv": ["project", "graph", "authoring:<id>", "--complete", "--format", "json", "--json", "--no-interactive"], "end": 1793163700.387, "kind": "store", "pid": 1377895, "returncode": 0, "start": 1793163700.348}
+{"end": 1793163700.388, "kind": "step", "name": "plan_store.read_tasks", "pid": 1377895, "start": 1793163700.286}
+{"end": 1793163700.396, "kind": "subprocess", "pid": 1377895, "program": "git", "returncode": 0, "start": 1793163700.39}
+{"end": 1793163700.397, "kind": "step", "name": "plan_review.bar_fingerprint", "pid": 1377895, "start": 1793163700.389}
+{"end": 1793163700.407, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.397}
+{"end": 1793163700.418, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.408}
+{"end": 1793163700.429, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.418}
+{"end": 1793163700.44, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.429}
+{"end": 1793163700.454, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.44}
+{"end": 1793163700.463, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.454}
+{"end": 1793163700.47, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.463}
+{"end": 1793163700.477, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.471}
+{"end": 1793163700.478, "kind": "step", "name": "plan_review.unreviewed", "pid": 1377895, "start": 1793163700.389}
+{"end": 1793163700.478, "kind": "step", "name": "plan_store.read_plan", "pid": 1377895, "start": 1793163700.478}
+{"end": 1793163700.478, "kind": "step", "name": "plan_review.owned_by_node", "pid": 1377895, "start": 1793163700.478}
+{"end": 1793163700.483, "kind": "subprocess", "pid": 1377895, "program": "git", "returncode": 0, "start": 1793163700.478}
+{"end": 1793163700.484, "kind": "step", "name": "plan_review.bar_fingerprint", "pid": 1377895, "start": 1793163700.478}
+{"end": 1793163700.518, "kind": "subprocess", "pid": 1377895, "program": "llmlint", "returncode": 0, "start": 1793163700.484}
+{"end": 1793163700.518, "kind": "step", "name": "plan_review.checklist_fingerprint", "pid": 1377895, "start": 1793163700.484}
+{"end": 1793163700.521, "kind": "step", "name": "plan_review.plan_bar_fingerprint", "pid": 1377895, "start": 1793163700.478}
+{"end": 1793163700.521, "kind": "step", "name": "plan_review.plan_answers", "pid": 1377895, "start": 1793163700.521}
+{"end": 1793163700.528, "kind": "subprocess", "pid": 1377895, "program": "git", "returncode": 0, "start": 1793163700.522}
+{"end": 1793163700.528, "kind": "step", "name": "plan_review.bar_fingerprint", "pid": 1377895, "start": 1793163700.521}
+{"end": 1793163700.539, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.529}
+{"end": 1793163700.547, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.54}
+{"end": 1793163700.555, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.548}
+{"end": 1793163700.561, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.555}
+{"end": 1793163700.567, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.562}
+{"end": 1793163700.572, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.567}
+{"end": 1793163700.578, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.572}
+{"end": 1793163700.584, "kind": "step", "name": "plan_review.review_key", "pid": 1377895, "start": 1793163700.578}
+{"end": 1793163700.585, "kind": "step", "name": "plan_review.plan_key", "pid": 1377895, "start": 1793163700.521}
+{"end": 1793163700.585, "kind": "step", "name": "plan_review.plan_unreviewed", "pid": 1377895, "start": 1793163700.478}
+{"argv": ["document", "list", "--project", "bcs-span", "--source", "authoring", "--json", "--no-interactive"], "end": 1793163700.608, "kind": "store", "pid": 1377895, "returncode": 0, "start": 1793163700.586}
+{"end": 1793163700.609, "kind": "step", "name": "task_body.document_bodies", "pid": 1377895, "start": 1793163700.609}
+{"end": 1793163700.61, "kind": "step", "name": "task_body.serve", "pid": 1377895, "start": 1793163700.609}
+{"end": 1793163700.61, "kind": "step", "name": "task_body.measure", "pid": 1377895, "start": 1793163700.61}
+{"end": 1793163700.61, "kind": "step", "name": "task_body.document_bodies", "pid": 1377895, "start": 1793163700.61}
+{"end": 1793163700.61, "kind": "step", "name": "task_body.serve", "pid": 1377895, "start": 1793163700.61}
+{"end": 1793163700.61, "kind": "step", "name": "task_body.measure", "pid": 1377895, "start": 1793163700.61}
+{"end": 1793163700.61, "kind": "step", "name": "task_body.document_refusals", "pid": 1377895, "start": 1793163700.61}
+{"end": 1793163700.61, "kind": "step", "name": "plan_copy._measure_documents", "pid": 1377895, "start": 1793163700.585}
+{"end": 1793163700.611, "kind": "step", "name": "plan_copy._copy_options", "pid": 1377895, "start": 1793163700.611}
+{"argv": ["project", "copy", "authoring:<id>", "--status-policy", "preserve-destination", "--to", "plans", "--json", "--no-interactive"], "end": 1793163718.461, "kind": "store", "pid": 1377895, "returncode": 0, "start": 1793163700.612}
+{"end": 1793163718.462, "kind": "step", "name": "plan_copy._report", "pid": 1377895, "start": 1793163718.462}
+{"argv": ["document", "copy", "authoring:<id>", "--to", "plans", "--json", "--no-interactive"], "end": 1793163727.046, "kind": "store", "pid": 1377895, "returncode": 0, "start": 1793163718.463}
+{"end": 1793163727.047, "kind": "step", "name": "plan_copy._report", "pid": 1377895, "start": 1793163727.047}
+{"end": 1793163727.047, "kind": "interpreter", "name": "exit", "pid": 1377895, "start": 1793163727.047}

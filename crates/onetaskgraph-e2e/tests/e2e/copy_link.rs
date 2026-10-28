@@ -935,3 +935,119 @@ fn an_explicit_target_is_not_reinterpreted_in_a_routed_source() {
         assert_eq!(std::fs::read_to_string(path).unwrap(), carrier);
     }
 }
+
+/// `folder` spelled as a configuration may name it rather than as the filesystem resolves it,
+/// as far as this platform can spell one directory twice: through a link standing in for an
+/// 8.3 short name such as the Windows runner's `RUNNER~1`, with a detour of `..` and a `.`;
+/// on Windows, verbatim and in upper case, the spellings `\\?\` and a case-blind filesystem
+/// give the same directory there.
+fn respelled(sandbox: &Sandbox, folder: &std::path::Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        let _ = sandbox;
+        let plain = folder.to_str().expect("a UTF-8 sandbox").to_uppercase();
+        std::path::PathBuf::from(format!(r"\\?\{plain}"))
+    }
+    #[cfg(not(windows))]
+    {
+        let project = sandbox.project();
+        sandbox.subdirectory("detour");
+        let alias = project.join("RUNNER~1");
+        std::os::unix::fs::symlink(&project, &alias).expect("a second spelling of the project");
+        alias
+            .join("detour/..")
+            .join(
+                folder
+                    .strip_prefix(&project)
+                    .expect("a folder in the project"),
+            )
+            .join(".")
+    }
+}
+
+#[test]
+fn concurrent_project_copies_out_of_a_folder_configured_under_another_spelling_of_its_root_land() {
+    // Three processes copy one plan out of the same folder at once, each recording its link
+    // in that folder's task files while the others read them, which is when Windows resolved
+    // a task's folder in a spelling the root was not resolved in and refused the copy as
+    // escaping a root the task was inside.
+    let sandbox = Sandbox::new();
+    let folder = sandbox.subdirectory("local-md");
+    for (relative, text) in [
+        (
+            "projects/P-1.md",
+            "---\ntitle: Launch\nstatus: doing\n---\nthe launch\n",
+        ),
+        (
+            "tasks/issue-1.md",
+            "---\ntitle: One\nstatus: todo\nproject: P-1\n---\none\n",
+        ),
+        (
+            "tasks/issue-2.md",
+            "---\ntitle: Two\nstatus: todo\nproject: P-1\n---\ntwo\n",
+        ),
+    ] {
+        let path = folder.join(relative);
+        std::fs::create_dir_all(path.parent().expect("a folder")).expect("a folder");
+        std::fs::write(path, text).expect("a record");
+    }
+    let destinations = ["one", "two", "three"];
+    let mut source = empty_folder(&sandbox, "local-md");
+    source["root"] = json!(respelled(&sandbox, &folder));
+    let mut sources = json!({SOURCE: {"plugin": "local-md", "config": source}});
+    for destination in destinations {
+        sources[destination] =
+            json!({"plugin": "local-md", "config": empty_folder(&sandbox, destination)});
+    }
+    sandbox.project_document(&document(&sources));
+
+    let plan = qualified(SOURCE, "P-1");
+    let children: Vec<_> = destinations
+        .iter()
+        .map(|destination| {
+            sandbox
+                .subprocess(onetaskgraph_e2e_support::binary())
+                .current_dir(sandbox.project())
+                .args(["--json", "project", "copy", &plan, "--to", destination])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .expect("the binary starts")
+        })
+        .collect();
+    for (destination, child) in destinations.iter().zip(children) {
+        let output = child.wait_with_output().expect("the copy ends");
+        assert!(
+            output.status.success(),
+            "the copy into {destination} was refused ({}):\n{}",
+            output.status,
+            stderr(&output)
+        );
+    }
+    for destination in destinations {
+        let listed = parsed(&exits(
+            &sandbox,
+            &["task", "list", "--source", destination, "--json"],
+            0,
+        ));
+        let mut titles: Vec<_> = listed["items"]
+            .as_array()
+            .expect("a listing")
+            .iter()
+            .map(|row| row["item"]["title"].clone())
+            .collect();
+        titles.sort_by_key(ToString::to_string);
+        assert_eq!(titles, [json!("One"), json!("Two")], "{destination}");
+    }
+
+    // The folder's own records take the link a copy writes back, through the same spelling.
+    exits(
+        &sandbox,
+        &["project", "copy", &plan, "--to", "one", "--json"],
+        0,
+    );
+    assert_eq!(
+        metadata(&sandbox, "task", &qualified(SOURCE, "issue-1"))["onetaskgraph.copies"]["one"],
+        json!(qualified("one", "issue-1"))
+    );
+}

@@ -271,7 +271,10 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 47
+    assert emitted_bundle["version"] == 48
+    assert "LocateReport" in bundle["roots"]
+    assert "reachable" in emitted_bundle["roots"]["SourceRoute"]["required"]
+    assert "task locate" in emitted_bundle["commands"]
     # Version 47 adds `content` to `TaskContentSet`: the content the task then holds.
     # Version 45 adds the opaque dependency endpoint, `{designator, id, kind}`, and lets a
     # dependency read name a designator no configured source is.

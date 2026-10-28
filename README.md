@@ -85,6 +85,9 @@ onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--cr
                        [--status CATEGORY]... [--expect VERSION]  # --expect: one task, caching destination
 onetaskgraph task copy --to <SOURCE> [--source S]... [--commented-since RFC3339]
                        [--metadata KEY[/SEGMENT...]=VALUE]... [--status CATEGORY]...  # by query
+onetaskgraph task locate <ID>... --to <SOURCE> [--no-counterpart | --target-native NATIVE-ID]
+                         # where that copy would land each task; writes nothing — see
+                         # "Where a copy would land: task locate"
 onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME] [--expect VERSION]
 onetaskgraph task comment list   <ID> [--pin VERSION]
 onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH] [--expect VERSION]
@@ -1872,9 +1875,12 @@ layer set rather than merging into it. `config show` prints `routes` with the la
 from — the document's list as one row, a flag's or a variable's entries one row per field.
 
 `onetaskgraph sources route <SOURCE> --repository <R>...` answers where an item would go —
-`{"source": "plans", "destination": "example-team", "route": 0}`, with `route` null when no
-entry matched — from configuration alone; `--classification private` asks for a private item,
-which combined private entries place.
+`{"source": "plans", "destination": "example-team", "route": 0, "reachable": ["plans",
+"example-team"]}`, with `route` null when no entry matched — from configuration alone;
+`--classification private` asks for a private item, which combined private entries place.
+`reachable` is every source an item written to SOURCE could land in, whatever its
+repositories and classification: SOURCE itself first, then each source its routes name as
+`to`, in the order they are written, each once. It is the set a routed copy reads ahead from.
 
 ### Which writes route, and where each item lands
 
@@ -1970,6 +1976,97 @@ of a home prints its members, and of a member its home. The SDKs spell it
 `project copy` of a home reads its tasks the same way, so the home copied on carries every
 member's tasks with it, and the destination's own routes file each one — under the home there,
 or under the member they create or find.
+
+### Where a copy would land: task locate
+
+```bash
+onetaskgraph task locate drafts:run-1/root-cause --to example-store --json
+```
+
+answers, for each task named, what `task copy --to example-store` of it would do, and writes
+nothing anywhere:
+
+```json
+{
+  "items": [
+    {
+      "source": "drafts:run-1/root-cause",
+      "classification": "private",
+      "destination": "example-private",
+      "route": 0,
+      "counterpart": {"id": "example-private:ABC-12", "via": "scan"},
+      "carriers": ["example-private:ABC-12", "example-private:ABC-9"],
+      "creates_in": {"repository": "github.com/example-org/store"}
+    }
+  ],
+  "spent": {"requests": 2, "budgets": []}
+}
+```
+
+**It and `task copy` share one placement and one lookup.** Each task is read from its source
+and classified exactly as a copy classifies it before a write — its own recorded classification
+and, while the [public boundary](#the-public-boundary) is active, each of its repositories put to
+the `write_policy`'s `visibility_command`. A source declared private withholds its tasks'
+provenance and does not by itself classify them private, for either verb. The task is then
+placed through the very function a copy places through, over `--to`'s routes, and its
+counterpart there is looked up by the copy's own rules in the copy's order: its
+`onetaskgraph.copies` link read by id, then its own `onetaskgraph.origin` read by id, then the
+destination's origin query — run only when neither answers, and read to its last page. So a
+locate and the copy after it cannot disagree, and every refusal that lookup makes before a copy
+writes is made here with the copy's own error kind, message and exit code: a stale link or
+origin, a counterpart sitting where the task no longer routes, and a private task bound for a
+source not declared private. `--match-by` and `--target-task` are not taken; `--target-native`
+below is the mirror of the second.
+
+- `destination` and `route` are where the copy would write the task and the index of the
+  route entry that sent it there, `null` when none matched, as a copy's `placed` says them.
+- `counterpart` is the item the copy would update and the rule that found it — `link`,
+  `origin` or `scan`, as a copy's `via` spells them — or `null` when the copy would create one.
+- `carriers` is every destination item the origin query found carrying the task's origin, in
+  listing order, or `[]` when the query did not run; when it ran, `counterpart` is the first of
+  them, which is the one a copy picks.
+- `creates_in` is the repository a create there would file the task's issue in, whether or not
+  a counterpart exists — an existing issue is never moved — and `null` where the destination
+  files no issue in a repository.
+- `spent` is as a copy reports it, and absent when no source meters its requests.
+
+**In a private destination, a counterpart is found by the origin query.** The store writes no
+`onetaskgraph.copies` link naming a private landing on a source not declared private, so a task
+of a public source copied into a private one has no link to follow: the next locate, and the
+next copy, find it by the destination's own record of where it came from, and answer it `via:
+scan`.
+
+`--no-counterpart` looks no counterpart up: no link, origin or origin-query read at the
+destination, and no `counterpart` or `carriers` in the answer. The one destination read it may
+make is that of the project issue a task in a project would be filed under, which
+`creates_in` needs.
+
+`--target-native NATIVE-ID` is how to locate a task whose counterpart the caller already knows
+— the general mirror of `task copy --target-task`. It is taken beside exactly one id. The task
+is placed as usual, and its counterpart is the item with that native id where it is placed,
+read by id and verified by its `onetaskgraph.origin` naming the task back; the task's link, its
+origin and the origin query are not followed, so a stale or re-pointed link neither refuses nor
+misleads. The answer is that item `via: target-task` with `carriers: []`; an item missing there,
+or one not naming the task back, is refused as `task copy --target-task` refuses it. Beside
+several ids or beside `--no-counterpart` it is refused before anything is read.
+
+What a locate never does is what a copy does only to write: it never runs the boundary's
+`check_command`, never reads a destination's live visibility, and reads no asset and no forward
+edge. A project or a document id is refused, naming it.
+
+`creates_in` is the destination's own answer, through `TaskSource::creation_repository`, a
+defaulted method of the plugin contract answering `None` — no repository — for every source that
+does not say otherwise. A GitHub Projects source answers it from the same rule its create
+applies: a task naming one repository is filed there; one naming none or several is filed in its
+parent project issue's repository, else in the source's configured `repository`; and a target the
+create would refuse — a repository of another owner than its parent issue's, a parent the board
+does not hold, no configured repository — is refused the same way. It reads the parent project's
+issue only when the task is in a project. Linear, a folder of Markdown and an in-memory source
+answer `null`.
+
+The SDKs spell it `task_locate(ids, to=..., no_counterpart=..., target_native=...)` and
+`taskLocate(ids, { to, noCounterpart, targetNative })`; a refusal's failure document, with its
+`kind`, is on the error each raises, as `failure`.
 
 ## The public boundary
 

@@ -1868,6 +1868,13 @@ impl TaskSource for CachedSource {
     async fn visibility(&self, target: &WriteTarget<'_>) -> Result<Visibility, SourceError> {
         self.inner.visibility(target).await
     }
+
+    async fn creation_repository(
+        &self,
+        target: &WriteTarget<'_>,
+    ) -> Result<Option<onetaskgraph_plugin_api::Repository>, SourceError> {
+        self.inner.creation_repository(target).await
+    }
 }
 
 #[cfg(test)]

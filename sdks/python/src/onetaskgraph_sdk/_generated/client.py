@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         FieldsReport,
         GlobalId,
         IssuesCompleted,
+        LocateReport,
         MetadataSet,
         NativeId,
         Priority,
@@ -85,6 +86,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "copy"): ("ids",),
     ("task", "create"): ("source",),
     ("task", "deps"): ("id",),
+    ("task", "locate"): ("ids",),
     ("task", "metadata", "set"): ("id", "key", "value"),
     ("task", "priority", "set"): ("id", "priority"),
     ("task", "render"): ("id",),
@@ -1322,6 +1324,30 @@ class GeneratedClient:
             set=set,
             source=source,
             status=status,
+        )
+
+    async def task_locate(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        to: str,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        no_counterpart: bool | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        target_native: str | None = None,
+    ) -> LocateReport:
+        """Run ``onetaskgraph task locate``."""
+        return await self._invoke(
+            ["task", "locate"],
+            _models.LocateReport,
+            ids=ids,
+            to=to,
+            default_sources=default_sources,
+            no_counterpart=no_counterpart,
+            page_size=page_size,
+            set=set,
+            target_native=target_native,
         )
 
     async def task_metadata_set(

@@ -1,0 +1,30 @@
+{
+ "sources.spike-md.plugin": {
+  "layer": "file",
+  "value": "local-md"
+ },
+ "sources.spike-md.visibility": {
+  "layer": "file",
+  "value": "private"
+ },
+ "sources.testboard.cache.enabled": {
+  "layer": "file",
+  "value": true
+ },
+ "sources.testboard.plugin": {
+  "layer": "file",
+  "value": "github-projects"
+ },
+ "sources.testboard.visibility": {
+  "layer": "file",
+  "value": "public"
+ },
+ "write_policy.check_command": {
+  "layer": "file",
+  "value": "set"
+ },
+ "write_policy.visibility_command": {
+  "layer": "file",
+  "value": "set"
+ }
+}

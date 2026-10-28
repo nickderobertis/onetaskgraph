@@ -1,0 +1,143 @@
+{
+ "gate": [
+  {
+   "at": 1793163535.209683,
+   "buckets": {
+    "core": {
+     "limit": 5000,
+     "remaining": 4771,
+     "reset": 1793165970,
+     "used": 229
+    },
+    "graphql": {
+     "limit": 5000,
+     "remaining": 4437,
+     "reset": 1793166051,
+     "used": 563
+    },
+    "graphql (GET /rate_limit)": {
+     "limit": 5000,
+     "remaining": 4598,
+     "reset": 1793165131,
+     "used": 402
+    },
+    "graphql (last headers)": {
+     "limit": 5000,
+     "remaining": 4461,
+     "reset": 1793166051,
+     "used": 539
+    },
+    "graphql (rateLimit)": {
+     "limit": 5000,
+     "readings": [
+      4438,
+      4597,
+      4437
+     ],
+     "remaining": 4437,
+     "reset": 1793166051,
+     "used": 563
+    }
+   },
+   "event": "reading",
+   "verdicts": {
+    "core": true,
+    "graphql": true
+   }
+  }
+ ],
+ "quota-after": {
+  "at": 1793163545.6819353,
+  "buckets": {
+   "core": {
+    "limit": 5000,
+    "remaining": 4769,
+    "reset": 1793165970,
+    "used": 231
+   },
+   "graphql": {
+    "limit": 5000,
+    "remaining": 4426,
+    "reset": 1793166051,
+    "used": 574
+   },
+   "graphql (GET /rate_limit)": {
+    "limit": 5000,
+    "remaining": 4591,
+    "reset": 1793165131,
+    "used": 409
+   },
+   "graphql (rateLimit)": {
+    "limit": 5000,
+    "readings": [
+     4430,
+     4591,
+     4426
+    ],
+    "remaining": 4426,
+    "reset": 1793166051,
+    "reset_readings": [
+     "2026-10-28T05:40:51Z",
+     "2026-10-28T05:25:31Z",
+     "2026-10-28T05:40:51Z"
+    ],
+    "used": 574,
+    "used_readings": [
+     570,
+     409,
+     574
+    ]
+   }
+  }
+ },
+ "quota-before": {
+  "at": 1793163535.209683,
+  "buckets": {
+   "core": {
+    "limit": 5000,
+    "remaining": 4771,
+    "reset": 1793165970,
+    "used": 229
+   },
+   "graphql": {
+    "limit": 5000,
+    "remaining": 4437,
+    "reset": 1793166051,
+    "used": 563
+   },
+   "graphql (GET /rate_limit)": {
+    "limit": 5000,
+    "remaining": 4598,
+    "reset": 1793165131,
+    "used": 402
+   },
+   "graphql (last headers)": {
+    "limit": 5000,
+    "remaining": 4461,
+    "reset": 1793166051,
+    "used": 539
+   },
+   "graphql (rateLimit)": {
+    "limit": 5000,
+    "readings": [
+     4438,
+     4597,
+     4437
+    ],
+    "remaining": 4437,
+    "reset": 1793166051,
+    "reset_readings": [
+     "2026-10-28T05:40:51Z",
+     "2026-10-28T05:25:31Z",
+     "2026-10-28T05:40:51Z"
+    ],
+    "used": 563,
+    "used_readings": [
+     562,
+     403,
+     563
+    ]
+   }
+  }
+ }
+}

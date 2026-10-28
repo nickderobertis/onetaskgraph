@@ -1246,6 +1246,24 @@ them do; this is the inventory of what is owed, not a status board.
 119. A view naming private material in its title or content, or linking a local path, a private
     plan copied to a public home, and a projection map naming a private source are each refused,
     writing nothing.
+120. `task locate --to` answers, for a task classified private by its recorded classification or
+    by a repository the write policy answers private, and for a public one — a task of a source
+    declared private, naming none, included — the destination, route and class the `task copy`
+    after it lands it with; its counterpart `via` link in a public destination and `via` scan in
+    a private one, every carrier across origin-query pages, a copy-back `via` origin and none for
+    a task never copied, each the item that copy then updates; a stale link, a misrouted
+    counterpart and a private task bound for a public source refused with that copy's kind,
+    message and exit code; `--target-native` answering the named item `via` target-task past a
+    stale or withdrawn link, refused as `--target-task` refuses it, and beside two ids or
+    `--no-counterpart` before anything is read; and `creates_in`, by
+    `TaskSource::creation_repository`, the repository a GitHub board's create then files the issue
+    in — a task naming one, a parentless task naming several, a task under a project issue in
+    another repository — `null` for Linear and a folder of Markdown, `--no-counterpart` reading
+    nothing but that project issue. It writes no file, runs no boundary check and reads no live
+    visibility.
+121. `sources route` answers `reachable`: the source itself, then each route target in written
+    order, each once, whatever the repositories and classification asked about, and the source
+    alone for one with no routes.
 
 ## The public boundary
 

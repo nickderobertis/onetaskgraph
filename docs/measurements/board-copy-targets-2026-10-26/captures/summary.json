@@ -1,0 +1,1026 @@
+{
+ "board_size_pairs": [
+  {
+   "budget": "github-plan-copy-points-changed",
+   "points": [
+    3,
+    3
+   ],
+   "recording": "unscreened",
+   "requests": [
+    3,
+    3
+   ],
+   "same": true,
+   "walk_pages": [
+    0,
+    0
+   ]
+  },
+  {
+   "budget": "github-plan-copy-points-changed",
+   "points": [
+    3,
+    3
+   ],
+   "recording": "screened",
+   "requests": [
+    3,
+    3
+   ],
+   "same": true,
+   "walk_pages": [
+    0,
+    0
+   ]
+  },
+  {
+   "budget": "github-plan-copy-points-changed",
+   "points": [
+    3,
+    3
+   ],
+   "recording": "host configuration, private source",
+   "requests": [
+    3,
+    3
+   ],
+   "same": true,
+   "walk_pages": [
+    0,
+    0
+   ]
+  },
+  {
+   "budget": "github-plan-copy-points-changed",
+   "points": [
+    3,
+    3
+   ],
+   "recording": "host configuration, public source",
+   "requests": [
+    3,
+    3
+   ],
+   "same": true,
+   "walk_pages": [
+    0,
+    0
+   ]
+  },
+  {
+   "budget": "github-plan-copy-points-first",
+   "points": [
+    12,
+    12
+   ],
+   "recording": "unscreened",
+   "requests": [
+    14,
+    14
+   ],
+   "same": true,
+   "walk_pages": [
+    0,
+    0
+   ]
+  },
+  {
+   "budget": "github-plan-copy-points-first",
+   "points": [
+    12,
+    12
+   ],
+   "recording": "screened",
+   "requests": [
+    14,
+    14
+   ],
+   "same": true,
+   "walk_pages": [
+    0,
+    0
+   ]
+  },
+  {
+   "budget": "github-plan-copy-points-first",
+   "points": [
+    11,
+    11
+   ],
+   "recording": "host configuration, private source",
+   "requests": [
+    13,
+    13
+   ],
+   "same": true,
+   "walk_pages": [
+    0,
+    0
+   ]
+  },
+  {
+   "budget": "github-plan-copy-points-first",
+   "points": [
+    12,
+    12
+   ],
+   "recording": "host configuration, public source",
+   "requests": [
+    14,
+    14
+   ],
+   "same": true,
+   "walk_pages": [
+    0,
+    0
+   ]
+  },
+  {
+   "budget": "github-plan-copy-points-unchanged",
+   "points": [
+    2,
+    2
+   ],
+   "recording": "unscreened",
+   "requests": [
+    2,
+    2
+   ],
+   "same": true,
+   "walk_pages": [
+    0,
+    0
+   ]
+  },
+  {
+   "budget": "github-plan-copy-points-unchanged",
+   "points": [
+    2,
+    2
+   ],
+   "recording": "screened",
+   "requests": [
+    2,
+    2
+   ],
+   "same": true,
+   "walk_pages": [
+    0,
+    0
+   ]
+  },
+  {
+   "budget": "github-plan-copy-points-unchanged",
+   "points": [
+    2,
+    2
+   ],
+   "recording": "host configuration, private source",
+   "requests": [
+    2,
+    2
+   ],
+   "same": true,
+   "walk_pages": [
+    0,
+    0
+   ]
+  },
+  {
+   "budget": "github-plan-copy-points-unchanged",
+   "points": [
+    2,
+    2
+   ],
+   "recording": "host configuration, public source",
+   "requests": [
+    2,
+    2
+   ],
+   "same": true,
+   "walk_pages": [
+    0,
+    0
+   ]
+  }
+ ],
+ "mutation_rises": {
+  "bare-changed1-20261028T045854": [
+   2
+  ],
+  "bare-changed1-20261028T050726": [
+   1
+  ],
+  "bare-first-20261028T045736": [
+   1,
+   1,
+   1,
+   5
+  ],
+  "bare-first-20261028T050631": [
+   5,
+   2,
+   1,
+   7
+  ],
+  "cleanup-20261028T050514": [
+   1,
+   1,
+   3,
+   1,
+   1,
+   3,
+   1,
+   1,
+   1,
+   1
+  ],
+  "host-approve-20261028T050343": [
+   6
+  ],
+  "host-changed1-20261028T050232": [
+   13
+  ],
+  "host-first-20261028T050121": [
+   3,
+   1,
+   2,
+   7
+  ]
+ },
+ "rows": [
+  {
+   "attribution": {
+    "network round trips: GitHub GraphQL": 22.5,
+    "network round trips: GitHub REST and uploads": 1.03,
+    "network round trips: tunnelled HTTPS (the image upload's storage and its check)": 2.26,
+    "store invocation: document copy": 0.47,
+    "store invocation: project copy": 1.63,
+    "write screening: onevcs boundary check": 0.08,
+    "write screening: onevcs boundary inspect": 1.85
+   },
+   "capture": "bare-first-20261028T050631",
+   "kinds": {
+    "CREATED_BOARD_ITEMS": {
+     "points": 4,
+     "requests": 4,
+     "writes": 0
+    },
+    "CREATE_ISSUE": {
+     "points": 2,
+     "requests": 2,
+     "writes": 2
+    },
+    "CREATE_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 8
+    },
+    "ISSUE_COPY_DETAILS": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "ORIGIN_LOOKUPS": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "ORIGIN_LOOKUPS_WITH_MEMBERS": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "POST /user-attachments/assets": {
+     "points": 0,
+     "requests": 1,
+     "writes": 1
+    },
+    "WRITE_FIELDS_AND_EDGES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 14
+    }
+   },
+   "owners": {
+    "store | document copy | CREATED_BOARD_ITEMS": {
+     "points": 2,
+     "requests": 2,
+     "writes": 0
+    },
+    "store | document copy | CREATE_ISSUE": {
+     "points": 1,
+     "requests": 1,
+     "writes": 1
+    },
+    "store | document copy | ISSUE_COPY_DETAILS": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "store | document copy | ORIGIN_LOOKUPS_WITH_MEMBERS": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "store | document copy | POST /user-attachments/assets": {
+     "points": 0,
+     "requests": 1,
+     "writes": 1
+    },
+    "store | project copy | CREATED_BOARD_ITEMS": {
+     "points": 2,
+     "requests": 2,
+     "writes": 0
+    },
+    "store | project copy | CREATE_ISSUE": {
+     "points": 1,
+     "requests": 1,
+     "writes": 1
+    },
+    "store | project copy | CREATE_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 8
+    },
+    "store | project copy | ORIGIN_LOOKUPS": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "store | project copy | WRITE_FIELDS_AND_EDGES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 14
+    }
+   },
+   "points": {
+    "after_used": 1029,
+    "at_five": 27,
+    "background": 43.9,
+    "background_rate": 1.24,
+    "before_used": 978,
+    "counter": 1793166051,
+    "delta": 51,
+    "figure": 11,
+    "mutation_requests": 4,
+    "queries": 7,
+    "residual": -3.9
+   },
+   "refused": 0,
+   "returncodes": [
+    0,
+    0
+   ],
+   "scenario": "bare-first",
+   "screening": {
+    "check": 2,
+    "inspect": 2,
+    "seconds": 1.93
+   },
+   "seconds": 29.822,
+   "verdicts": {
+    "points": "within",
+    "points at 5 per mutation": "over",
+    "seconds": "within",
+    "writes": "within"
+   },
+   "walk_pages": {
+    "BOARD": 0,
+    "SEARCH_ISSUES": 0
+   },
+   "writes": {
+    "issues_created": 10,
+    "mutation_requests": 4,
+    "mutations": 24,
+    "requests": 12,
+    "uploads": 1,
+    "writes": 25
+   }
+  },
+  {
+   "attribution": {
+    "network round trips: GitHub GraphQL": 4.19,
+    "store invocation: document copy": 0.15,
+    "store invocation: project copy": 0.2,
+    "write screening: onevcs boundary check": 0.06,
+    "write screening: onevcs boundary inspect": 1.68
+   },
+   "capture": "bare-changed1-20261028T050726",
+   "kinds": {
+    "DOCUMENT_IN_PROJECT": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "SUB_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "UPDATE_ISSUE": {
+     "points": 1,
+     "requests": 1,
+     "writes": 1
+    }
+   },
+   "owners": {
+    "store | document copy | DOCUMENT_IN_PROJECT": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "store | project copy | SUB_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "store | project copy | UPDATE_ISSUE": {
+     "points": 1,
+     "requests": 1,
+     "writes": 1
+    }
+   },
+   "points": {
+    "after_used": 1047,
+    "at_five": 7,
+    "background": 2.4,
+    "background_rate": 0.278,
+    "before_used": 1043,
+    "counter": 1793166051,
+    "delta": 4,
+    "figure": 3,
+    "mutation_requests": 1,
+    "queries": 2,
+    "residual": -1.4
+   },
+   "refused": 0,
+   "returncodes": [
+    0,
+    0
+   ],
+   "scenario": "bare-changed1",
+   "screening": {
+    "check": 2,
+    "inspect": 2,
+    "seconds": 1.74
+   },
+   "seconds": 6.284,
+   "verdicts": {
+    "points": "within",
+    "points at 5 per mutation": "over",
+    "seconds": "within"
+   },
+   "walk_pages": {
+    "BOARD": 0,
+    "SEARCH_ISSUES": 0
+   },
+   "writes": {
+    "issues_created": 0,
+    "mutation_requests": 1,
+    "mutations": 1,
+    "requests": 3,
+    "uploads": 0,
+    "writes": 1
+   }
+  },
+  {
+   "attribution": {
+    "network round trips: GitHub GraphQL": 3.23,
+    "store invocation: document copy": 0.22,
+    "store invocation: project copy": 0.4,
+    "write screening: onevcs boundary check": 0.09,
+    "write screening: onevcs boundary inspect": 1.73
+   },
+   "capture": "bare-unchanged-20261028T050756",
+   "kinds": {
+    "DOCUMENT_IN_PROJECT": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "SUB_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    }
+   },
+   "owners": {
+    "store | document copy | DOCUMENT_IN_PROJECT": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "store | project copy | SUB_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    }
+   },
+   "points": {
+    "after_used": 1054,
+    "at_five": 2,
+    "background": 1.7,
+    "background_rate": 0.208,
+    "before_used": 1052,
+    "counter": 1793166051,
+    "delta": 2,
+    "figure": 2,
+    "mutation_requests": 0,
+    "queries": 2,
+    "residual": -1.7
+   },
+   "refused": 0,
+   "returncodes": [
+    0,
+    0
+   ],
+   "scenario": "bare-unchanged",
+   "screening": {
+    "check": 2,
+    "inspect": 2,
+    "seconds": 1.817
+   },
+   "seconds": 5.672,
+   "verdicts": {
+    "points": "within",
+    "points at 5 per mutation": "within",
+    "seconds": "within"
+   },
+   "walk_pages": {
+    "BOARD": 0,
+    "SEARCH_ISSUES": 0
+   },
+   "writes": {
+    "issues_created": 0,
+    "mutation_requests": 0,
+    "mutations": 0,
+    "requests": 2,
+    "uploads": 0,
+    "writes": 0
+   }
+  },
+  {
+   "attribution": {
+    "6 further causes under 0.005 s each (host step: plan_copy._measure_documents, host step: plan_review.plan_bar_fingerprint, host step: plan_review.unreviewed, host step: plan_store.plan_listing, host step: plan_store.project_record, host step: task_body.serve)": 0.0,
+    "host Python outside the named steps": 0.01,
+    "host step: plan_review.bar_fingerprint": 0.01,
+    "host step: plan_review.plan_key": 0.01,
+    "host step: plan_review.review_key": 0.13,
+    "host step: plan_store.read_tasks": 0.03,
+    "host subprocess: git": 0.02,
+    "host subprocess: llmlint": 0.03,
+    "interpreter and SDK start-up": 1.02,
+    "interpreter exit and recipe teardown": 0.15,
+    "network round trips: GitHub GraphQL": 19.92,
+    "network round trips: GitHub REST and uploads": 1.02,
+    "network round trips: tunnelled HTTPS (the image upload's storage and its check)": 2.15,
+    "recipe launch: just, plan-store.sh and uv run": 0.23,
+    "store invocation: document copy": 0.18,
+    "store invocation: document list": 0.02,
+    "store invocation: project copy": 1.5,
+    "store invocation: project graph": 0.04,
+    "store invocation: project show": 0.03,
+    "store invocation: task list": 0.03,
+    "write screening: onevcs boundary check": 0.06,
+    "write screening: onevcs boundary inspect": 1.6
+   },
+   "capture": "host-first-20261028T050121",
+   "kinds": {
+    "CREATED_BOARD_ITEMS": {
+     "points": 4,
+     "requests": 4,
+     "writes": 0
+    },
+    "CREATE_ISSUE": {
+     "points": 2,
+     "requests": 2,
+     "writes": 2
+    },
+    "CREATE_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 8
+    },
+    "ISSUE_COPY_DETAILS": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "ORIGIN_LOOKUPS": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "ORIGIN_LOOKUPS_WITH_MEMBERS": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "POST /user-attachments/assets": {
+     "points": 0,
+     "requests": 1,
+     "writes": 1
+    },
+    "WRITE_FIELDS_AND_EDGES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 14
+    }
+   },
+   "owners": {
+    "store | document copy | CREATED_BOARD_ITEMS": {
+     "points": 2,
+     "requests": 2,
+     "writes": 0
+    },
+    "store | document copy | CREATE_ISSUE": {
+     "points": 1,
+     "requests": 1,
+     "writes": 1
+    },
+    "store | document copy | ISSUE_COPY_DETAILS": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "store | document copy | ORIGIN_LOOKUPS_WITH_MEMBERS": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "store | document copy | POST /user-attachments/assets": {
+     "points": 0,
+     "requests": 1,
+     "writes": 1
+    },
+    "store | project copy | CREATED_BOARD_ITEMS": {
+     "points": 2,
+     "requests": 2,
+     "writes": 0
+    },
+    "store | project copy | CREATE_ISSUE": {
+     "points": 1,
+     "requests": 1,
+     "writes": 1
+    },
+    "store | project copy | CREATE_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 8
+    },
+    "store | project copy | ORIGIN_LOOKUPS": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "store | project copy | WRITE_FIELDS_AND_EDGES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 14
+    }
+   },
+   "points": {
+    "after_used": 787,
+    "at_five": 27,
+    "background": 36.7,
+    "background_rate": 1.083,
+    "before_used": 742,
+    "counter": 1793166051,
+    "delta": 45,
+    "figure": 11,
+    "mutation_requests": 4,
+    "queries": 7,
+    "residual": -2.7
+   },
+   "refused": 0,
+   "returncodes": [
+    0
+   ],
+   "scenario": "host-first",
+   "screening": {
+    "check": 2,
+    "inspect": 2,
+    "seconds": 1.665
+   },
+   "seconds": 28.192,
+   "verdicts": {
+    "points": "within",
+    "points at 5 per mutation": "over",
+    "seconds": "within",
+    "writes": "within"
+   },
+   "walk_pages": {
+    "BOARD": 0,
+    "SEARCH_ISSUES": 0
+   },
+   "writes": {
+    "issues_created": 10,
+    "mutation_requests": 4,
+    "mutations": 24,
+    "requests": 12,
+    "uploads": 1,
+    "writes": 25
+   }
+  },
+  {
+   "attribution": {
+    "7 further causes under 0.005 s each (host step: plan_copy._measure_documents, host step: plan_copy._report, host step: plan_review.bar_fingerprint, host step: plan_review.plan_key, host step: plan_review.unreviewed, host step: plan_store.project_record, host step: task_body.serve)": 0.0,
+    "host Python outside the named steps": 0.01,
+    "host step: plan_review.review_key": 0.11,
+    "host step: plan_store.plan_listing": 0.01,
+    "host step: plan_store.read_tasks": 0.03,
+    "host subprocess: git": 0.01,
+    "host subprocess: llmlint": 0.02,
+    "interpreter and SDK start-up": 0.51,
+    "interpreter exit and recipe teardown": 0.21,
+    "network round trips: GitHub GraphQL": 6.16,
+    "recipe launch: just, plan-store.sh and uv run": 0.12,
+    "store invocation: document copy": 0.24,
+    "store invocation: document list": 0.02,
+    "store invocation: project copy": 0.41,
+    "store invocation: project graph": 0.02,
+    "store invocation: project show": 0.02,
+    "store invocation: task list": 0.03,
+    "write screening: onevcs boundary check": 0.08,
+    "write screening: onevcs boundary inspect": 2.0
+   },
+   "capture": "host-changed1-20261028T050232",
+   "kinds": {
+    "DOCUMENT_IN_PROJECT": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "SUB_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "UPDATE_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 2
+    }
+   },
+   "owners": {
+    "store | document copy | DOCUMENT_IN_PROJECT": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "store | project copy | SUB_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "store | project copy | UPDATE_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 2
+    }
+   },
+   "points": {
+    "after_used": 864,
+    "at_five": 7,
+    "background": 17.2,
+    "background_rate": 1.02,
+    "before_used": 833,
+    "counter": 1793166051,
+    "delta": 31,
+    "figure": 3,
+    "mutation_requests": 1,
+    "queries": 2,
+    "residual": 10.8
+   },
+   "refused": 0,
+   "returncodes": [
+    0
+   ],
+   "scenario": "host-changed1",
+   "screening": {
+    "check": 2,
+    "inspect": 2,
+    "seconds": 2.086
+   },
+   "seconds": 10.01,
+   "verdicts": {
+    "points": "within",
+    "points at 5 per mutation": "over",
+    "seconds": "over"
+   },
+   "walk_pages": {
+    "BOARD": 0,
+    "SEARCH_ISSUES": 0
+   },
+   "writes": {
+    "issues_created": 0,
+    "mutation_requests": 1,
+    "mutations": 2,
+    "requests": 3,
+    "uploads": 0,
+    "writes": 2
+   }
+  },
+  {
+   "attribution": {
+    "9 further causes under 0.005 s each (host Python outside the named steps, host step: plan_copy._measure_documents, host step: plan_review.bar_fingerprint, host step: plan_review.checklist_fingerprint, host step: plan_review.unreviewed, host step: plan_store.plan_listing, host step: plan_store.project_record, host step: plan_store.read_plan, host step: task_body.serve)": 0.0,
+    "host step: plan_review.plan_key": 0.01,
+    "host step: plan_review.review_key": 0.11,
+    "host step: plan_store.read_tasks": 0.02,
+    "host subprocess: git": 0.01,
+    "host subprocess: llmlint": 0.02,
+    "interpreter and SDK start-up": 0.55,
+    "interpreter exit and recipe teardown": 0.21,
+    "network round trips: GitHub GraphQL": 3.32,
+    "recipe launch: just, plan-store.sh and uv run": 0.12,
+    "store invocation: document copy": 0.19,
+    "store invocation: document list": 0.02,
+    "store invocation: project copy": 0.35,
+    "store invocation: project graph": 0.03,
+    "store invocation: project show": 0.02,
+    "store invocation: task list": 0.03,
+    "write screening: onevcs boundary check": 0.07,
+    "write screening: onevcs boundary inspect": 2.28
+   },
+   "capture": "host-unchanged-20261028T050310",
+   "kinds": {
+    "DOCUMENT_IN_PROJECT": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "SUB_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    }
+   },
+   "owners": {
+    "store | document copy | DOCUMENT_IN_PROJECT": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "store | project copy | SUB_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    }
+   },
+   "points": {
+    "after_used": 892,
+    "at_five": 2,
+    "background": 5.4,
+    "background_rate": 0.559,
+    "before_used": 889,
+    "counter": 1793166051,
+    "delta": 3,
+    "figure": 2,
+    "mutation_requests": 0,
+    "queries": 2,
+    "residual": -4.4
+   },
+   "refused": 0,
+   "returncodes": [
+    0
+   ],
+   "scenario": "host-unchanged",
+   "screening": {
+    "check": 2,
+    "inspect": 2,
+    "seconds": 2.347
+   },
+   "seconds": 7.357,
+   "verdicts": {
+    "points": "within",
+    "points at 5 per mutation": "within",
+    "seconds": "over"
+   },
+   "walk_pages": {
+    "BOARD": 0,
+    "SEARCH_ISSUES": 0
+   },
+   "writes": {
+    "issues_created": 0,
+    "mutation_requests": 0,
+    "mutations": 0,
+    "requests": 2,
+    "uploads": 0,
+    "writes": 0
+   }
+  },
+  {
+   "attribution": {
+    "5 further causes under 0.005 s each (host step: design_approval.asset_digests, host step: design_chain.plan_repository, host step: plan_store.plan_listing, host step: plan_store.project_record, host step: plan_store.read_projects)": 0.0,
+    "host step: design_approval.approve": 0.02,
+    "host step: design_approval.body_digest": 0.02,
+    "host subprocess: onepipeline": 0.02,
+    "interpreter and SDK start-up": 0.35,
+    "interpreter exit and recipe teardown": 0.19,
+    "network round trips: GitHub GraphQL": 7.48,
+    "recipe launch: just, plan-store.sh and uv run": 0.09,
+    "store invocation: config show": 0.01,
+    "store invocation: document list": 0.07,
+    "store invocation: document metadata": 0.19,
+    "store invocation: project list": 0.02,
+    "store invocation: project show": 0.05,
+    "store invocation: task list": 0.07,
+    "write screening: onevcs boundary check": 0.03,
+    "write screening: onevcs boundary inspect": 0.85
+   },
+   "capture": "host-approve-20261028T050343",
+   "kinds": {
+    "DOCUMENT_IN_PROJECT": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "ISSUE": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "SUB_ISSUES": {
+     "points": 2,
+     "requests": 2,
+     "writes": 0
+    },
+    "UPDATE_ISSUE": {
+     "points": 1,
+     "requests": 1,
+     "writes": 1
+    }
+   },
+   "owners": {
+    "host | document list | SUB_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "host | document metadata | DOCUMENT_IN_PROJECT": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "host | document metadata | UPDATE_ISSUE": {
+     "points": 1,
+     "requests": 1,
+     "writes": 1
+    },
+    "host | project show | ISSUE": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    },
+    "host | task list | SUB_ISSUES": {
+     "points": 1,
+     "requests": 1,
+     "writes": 0
+    }
+   },
+   "points": {
+    "after_used": 905,
+    "at_five": 9,
+    "background": 3.6,
+    "background_rate": 0.293,
+    "before_used": 896,
+    "counter": 1793166051,
+    "delta": 9,
+    "figure": 5,
+    "mutation_requests": 1,
+    "queries": 4,
+    "residual": 0.4
+   },
+   "refused": 0,
+   "returncodes": [
+    0
+   ],
+   "scenario": "host-approve",
+   "screening": {
+    "check": 1,
+    "inspect": 1,
+    "seconds": 0.881
+   },
+   "seconds": 9.462,
+   "verdicts": {
+    "points": "within",
+    "points at 5 per mutation": "over",
+    "seconds": "over"
+   },
+   "walk_pages": {
+    "BOARD": 0,
+    "SEARCH_ISSUES": 0
+   },
+   "writes": {
+    "issues_created": 0,
+    "mutation_requests": 1,
+    "mutations": 1,
+    "requests": 5,
+    "uploads": 0,
+    "writes": 1
+   }
+  }
+ ]
+}

@@ -1,0 +1,25 @@
+{"end": 1793163836.255, "kind": "interpreter", "name": "start", "pid": 1490479, "start": 1793163836.255}
+{"argv": ["document", "list", "--project", "<value>", "--source", "plans", "--json", "--no-interactive"], "end": 1793163838.752, "kind": "store", "pid": 1490479, "returncode": 0, "start": 1793163836.604}
+{"end": 1793163838.754, "kind": "step", "name": "design_approval.one_document", "pid": 1490479, "start": 1793163838.754}
+{"argv": ["project", "show", "plans:<id>", "--json", "--no-interactive"], "end": 1793163839.552, "kind": "store", "pid": 1490479, "returncode": 0, "start": 1793163838.755}
+{"end": 1793163839.553, "kind": "step", "name": "plan_store.project_record", "pid": 1490479, "start": 1793163838.754}
+{"end": 1793163839.553, "kind": "step", "name": "spike_plan.current_visual_report", "pid": 1490479, "start": 1793163839.553}
+{"argv": ["task", "list", "--project", "<value>", "--source", "plans", "--json", "--no-interactive"], "end": 1793163841.345, "kind": "store", "pid": 1490479, "returncode": 0, "start": 1793163839.554}
+{"end": 1793163841.347, "kind": "step", "name": "plan_store.plan_listing", "pid": 1490479, "start": 1793163839.554}
+{"end": 1793163841.348, "kind": "step", "name": "design_chain.chosen", "pid": 1490479, "start": 1793163841.348}
+{"end": 1793163841.348, "kind": "step", "name": "design_chain.plan_repository", "pid": 1490479, "start": 1793163839.554}
+{"end": 1793163841.371, "kind": "subprocess", "pid": 1490479, "program": "onepipeline", "returncode": 0, "start": 1793163841.348}
+{"end": 1793163841.371, "kind": "step", "name": "design_approval.resolved_loader", "pid": 1490479, "start": 1793163841.348}
+{"end": 1793163841.371, "kind": "step", "name": "design_approval.resolved_digest", "pid": 1490479, "start": 1793163841.348}
+{"argv": ["config", "show", "--json", "--no-interactive"], "end": 1793163841.396, "kind": "store", "pid": 1490479, "returncode": 0, "start": 1793163841.382}
+{"argv": ["project", "list", "--source", "authoring", "--json", "--no-interactive"], "end": 1793163841.415, "kind": "store", "pid": 1490479, "returncode": 0, "start": 1793163841.399}
+{"end": 1793163841.416, "kind": "step", "name": "plan_store.read_projects", "pid": 1490479, "start": 1793163841.398}
+{"argv": ["document", "list", "--project", "bcs-span", "--source", "authoring", "--json", "--no-interactive"], "end": 1793163841.434, "kind": "store", "pid": 1490479, "returncode": 0, "start": 1793163841.417}
+{"end": 1793163841.435, "kind": "step", "name": "design_approval.body_digest", "pid": 1490479, "start": 1793163841.371}
+{"end": 1793163841.436, "kind": "step", "name": "design_approval.asset_digests", "pid": 1490479, "start": 1793163841.435}
+{"end": 1793163841.436, "kind": "step", "name": "design_approval.approval_key", "pid": 1490479, "start": 1793163841.371}
+{"end": 1793163841.436, "kind": "step", "name": "design_approval.planned_rows", "pid": 1490479, "start": 1793163841.436}
+{"end": 1793163841.436, "kind": "step", "name": "design_approval.ungraphed", "pid": 1490479, "start": 1793163841.436}
+{"argv": ["document", "metadata", "set", "plans:<id>", "<value>", "<source>:<id>", "--expect", "<source>:<id>", "--json", "--no-interactive"], "end": 1793163845.445, "kind": "store", "pid": 1490479, "returncode": 0, "start": 1793163841.455}
+{"end": 1793163845.445, "kind": "step", "name": "design_approval.approve", "pid": 1490479, "start": 1793163836.603}
+{"end": 1793163845.445, "kind": "interpreter", "name": "exit", "pid": 1490479, "start": 1793163845.445}

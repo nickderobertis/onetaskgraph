@@ -172,11 +172,10 @@ impl Engine {
             return Ok(None);
         }
         let destination = self.writable(&request.destination)?;
-        let withheld = self.declared(&listed.id.source) == crate::config::SourceVisibility::Private
-            && self.declared(destination.name()) != crate::config::SourceVisibility::Private;
+        let withheld = self.withholds_provenance(&listed.id.source, destination.name());
         let item = Item::Task(Box::new(listed.item.clone()));
         let (target, held) = self
-            .target(destination, request, &listed.id, &item, withheld)
+            .target(destination, request, &listed.id, &item, withheld, None)
             .await?;
         let skip = match (&target, &held) {
             (Target::Update { .. }, Some(held)) => {

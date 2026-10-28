@@ -1795,6 +1795,126 @@ test("the reference figures round-trip absent, zero and non-zero through the gen
   expect(validate({ items: [], references_rewritten: -1 })).toBe(false);
 });
 
+test("taskLocate answers where a copy lands each task through the real binary", async () => {
+  const locateRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-locate-"));
+  try {
+    const record = (folder: string, name: string, front: string) => {
+      mkdirSync(resolve(locateRoot, folder, "tasks"), { recursive: true });
+      writeFileSync(
+        resolve(locateRoot, folder, "tasks", `${name}.md`),
+        `---\ntitle: ${name}\nstatus: todo\n${front}\n---\nBody of ${name}.\n`,
+      );
+    };
+    record("plan", "fresh", "");
+    // A link naming an item `site` no longer holds, and the item that names the task back.
+    record("plan", "pinned", 'metadata: {onetaskgraph.copies: {site: "site:gone"}}');
+    record("site", "held", 'metadata: {onetaskgraph.origin: "plan:pinned"}');
+    const folder = { status_mapping: { todo: "todo" } };
+    writeFileSync(
+      resolve(locateRoot, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          plan: { plugin: "local-md", config: { root: resolve(locateRoot, "plan"), ...folder } },
+          site: { plugin: "local-md", config: { root: resolve(locateRoot, "site"), ...folder } },
+        },
+      }),
+    );
+    const locateClient = new OnetaskgraphClient({ binaryPath: binary, cwd: locateRoot });
+
+    // A plain lookup: placed on `site` by no route, nothing found, so a copy would create.
+    const fresh = await locateClient.taskLocate(["plan:fresh"], { to: "site" });
+    expect(fresh.items).toEqual([
+      {
+        source: "plan:fresh",
+        classification: "public",
+        destination: "site",
+        route: null,
+        counterpart: null,
+        carriers: [],
+        creates_in: null,
+      },
+    ]);
+    await locateClient.taskCopy(["plan:fresh"], "site");
+    const linked = await locateClient.taskLocate(["plan:fresh"], { to: "site" });
+    expect(linked.items[0]?.counterpart?.via).toBe("link");
+    // `noCounterpart` looks nothing up, so the answer names neither a counterpart nor carriers.
+    const placed = await locateClient.taskLocate(["plan:fresh"], {
+      to: "site",
+      noCounterpart: true,
+    });
+    expect(placed.items[0]?.destination).toBe("site");
+    expect(placed.items[0] && "counterpart" in placed.items[0]).toBe(false);
+    expect(placed.items[0] && "carriers" in placed.items[0]).toBe(false);
+
+    // The stale link refuses a plain lookup; the named counterpart answers without following it.
+    await expect(locateClient.taskLocate(["plan:pinned"], { to: "site" })).rejects.toThrow(
+      "site:gone",
+    );
+    const targeted = await locateClient.taskLocate(["plan:pinned"], {
+      to: "site",
+      targetNative: "held",
+    });
+    expect(targeted.items[0]?.counterpart).toEqual({ id: "site:held", via: "target-task" });
+    expect(targeted.items[0]?.carriers).toEqual([]);
+
+    // Each refusal carries the binary's own failure kind.
+    const kindOf = async (call: Promise<unknown>) => {
+      try {
+        await call;
+      } catch (error) {
+        if (error instanceof OnetaskgraphExecutionError) return error.failure?.kind;
+        throw error;
+      }
+      throw new Error("expected a refusal");
+    };
+    expect(
+      await kindOf(
+        locateClient.taskLocate(["plan:pinned"], {
+          to: "site",
+          targetNative: "held",
+          noCounterpart: true,
+        }),
+      ),
+    ).toBe("target-native-with");
+    expect(
+      await kindOf(
+        locateClient.taskLocate(["plan:pinned", "plan:fresh"], {
+          to: "site",
+          targetNative: "held",
+        }),
+      ),
+    ).toBe("target-native-needs-one");
+    expect(await kindOf(locateClient.taskLocate(["plan:pinned"], { to: "site" }))).toBe(
+      "stale-link",
+    );
+    expect(() =>
+      locateClient.taskLocate(["plan:fresh"], {
+        to: "site",
+        noCounterpart: JSON.parse('"yes"'),
+      }),
+    ).toThrow("noCounterpart must be a boolean");
+
+    // Only a document the binary's schema describes becomes the error's `failure`.
+    for (const written of ["", "not a document", '{"failure": {"kind": 7}}']) {
+      const refusing = executableFixture(locateRoot, "refusing", written, "refused", 1);
+      const refusingClient = new OnetaskgraphClient({ binaryPath: refusing, cwd: locateRoot });
+      const refused = await refusingClient.taskLocate(["plan:fresh"], { to: "site" }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(refused).toBeInstanceOf(OnetaskgraphExecutionError);
+      if (!(refused instanceof OnetaskgraphExecutionError)) throw new Error("not refused");
+      expect([refused.exitCode, refused.stderr, refused.failure]).toEqual([
+        1,
+        "refused",
+        undefined,
+      ]);
+    }
+  } finally {
+    rmSync(locateRoot, { recursive: true, force: true });
+  }
+});
+
 test("sources route answers from configuration, and a home reads with its members", async () => {
   const routeRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-route-"));
   try {
@@ -1838,12 +1958,15 @@ test("sources route answers from configuration, and a home reads with its member
       source: "notes",
       destination: "team",
       route: 0,
+      reachable: ["notes", "team"],
     });
     expect(await routeClient.sourcesRoute("notes")).toEqual({
       source: "notes",
       destination: "notes",
       route: null,
+      reachable: ["notes", "team"],
     });
+    expect((await routeClient.sourcesRoute("team")).reachable).toEqual(["team"]);
     await expect(routeClient.sourcesRoute("nowhere")).rejects.toThrow('"nowhere"');
 
     const copied = await routeClient.projectCopy("plan:goal", "notes");

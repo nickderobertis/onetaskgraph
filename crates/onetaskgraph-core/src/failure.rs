@@ -270,6 +270,10 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::StaleLink { .. } => ("stale-link".to_owned(), None, None),
         EngineError::TargetTaskWith { .. } => ("target-task-with".to_owned(), None, None),
         EngineError::TargetTaskNeedsOne => ("target-task-needs-one".to_owned(), None, None),
+        EngineError::TargetNativeNeedsOne { .. } => {
+            ("target-native-needs-one".to_owned(), None, None)
+        }
+        EngineError::NotATask { .. } => ("not-a-task".to_owned(), None, None),
         EngineError::TargetTaskSource { .. } => ("target-task-source".to_owned(), None, None),
         EngineError::TargetTaskMissing { .. } => ("target-task-missing".to_owned(), None, None),
         EngineError::TargetTaskOrigin { .. } => ("target-task-origin".to_owned(), None, None),

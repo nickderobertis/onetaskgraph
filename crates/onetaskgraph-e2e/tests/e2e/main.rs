@@ -113,6 +113,9 @@ mod failures;
 // plugin owes it is proven behind that plugin's own edge, in its e2e suite.
 mod graph;
 mod journeys;
+// `task locate` against the copy after it: placement, counterpart and refusals.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the journeys drive the binary against folders of Markdown, the loopback board and a counting Linear stand-in, with the released onevcs boundary commands behind a recorder, in seconds. What they prove — that locate places and looks up through the copy's own path — is the engine's, so no plugin crate's edge is narrower, and AGENTS.md forbids any plugin crate to depend on the engine.
+mod locate;
 mod machine;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown and

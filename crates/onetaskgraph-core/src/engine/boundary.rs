@@ -1103,17 +1103,28 @@ impl Engine {
         outbound: &Outbound<'_>,
     ) -> Result<bool, EngineError> {
         let name = destination.name();
-        let declared = self.declared(name);
-        if outbound.classification == Classification::Private
-            && declared != SourceVisibility::Private
-        {
+        self.refuse_private_landing(name, &outbound.item, outbound.classification)?;
+        Ok(self.declared(name) != SourceVisibility::Private && self.boundary.active)
+    }
+
+    /// Refuse an item of `classification`, named `item`, landing in `destination` when it is
+    /// private and `destination` is not declared private — the half of
+    /// [`placed`](Self::placed) that a write and `task locate` both make, asking nothing.
+    pub(crate) fn refuse_private_landing(
+        &self,
+        destination: &onetaskgraph_plugin_api::SourceName,
+        item: &str,
+        classification: Classification,
+    ) -> Result<(), EngineError> {
+        let declared = self.declared(destination);
+        if classification == Classification::Private && declared != SourceVisibility::Private {
             return Err(EngineError::NotPrivateDestination {
-                item: outbound.item.clone(),
-                destination: name.to_string(),
+                item: item.to_owned(),
+                destination: destination.to_string(),
                 declared,
             });
         }
-        Ok(declared != SourceVisibility::Private && self.boundary.active)
+        Ok(())
     }
 
     /// Put every write of `writes` — each its destination, how it names its item, and what it

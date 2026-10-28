@@ -42,10 +42,14 @@
 //! read back to answer a query. That is what makes it a write and not a cache.
 
 mod comments;
+mod locate;
 mod projections;
 mod query;
 mod record;
 mod snapshot;
+pub use locate::{
+    CreatesIn, LocateLookup, LocateReport, LocateRequest, Located, LocatedCounterpart, NotATask,
+};
 pub use projections::{MirrorTarget, PublicProjection, PublicProjections};
 pub(super) use snapshot::single as single_detail;
 
@@ -913,6 +917,15 @@ impl Wanted {
             _ => TaskQuery::default(),
         }
     }
+}
+
+/// How far a walk of the destination for what is [`Wanted`] reads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Walk {
+    /// To the first item found — what a copy needs to pick its counterpart.
+    First,
+    /// To the last page, for every item found — what `task locate` lists as carriers.
+    Every,
 }
 
 /// Whether `terms` holds a letter or a digit — a word a search that indexes words can find.
@@ -1923,32 +1936,7 @@ impl Engine {
                 }
             }
         }
-        // The sources this command names, each read once before and once after, so what it
-        // spent is the difference between two of each one's own running totals.
-        let mut metered = vec![destination];
-        for routed in self.routes.reachable(&request.destination) {
-            if let Some(source) = self.ready().find(|source| source.name() == &routed)
-                && !metered.iter().any(|held| held.name() == source.name())
-            {
-                metered.push(source);
-            }
-        }
-        let mut reading: Vec<SourceName> = request
-            .items
-            .as_slice()
-            .iter()
-            .map(|id| id.source.clone())
-            .collect();
-        if let Some(query) = request.items.query() {
-            reading.extend(self.resolve_selection(&query.sources)?);
-        }
-        for name in reading {
-            if let Some(source) = self.ready().find(|source| source.name() == &name)
-                && !metered.iter().any(|held| held.name() == source.name())
-            {
-                metered.push(source);
-            }
-        }
+        let metered = self.metered(request, destination)?;
         let before = readings(&metered).await;
         let mut journal = Journal::default();
         let holding = self.hold_back(request);
@@ -1982,6 +1970,41 @@ impl Engine {
                 Err(error)
             }
         }
+    }
+
+    /// The sources `request` names — `destination`, every source its routes reach and every
+    /// source it reads from — each read once before and once after, so what the command spent
+    /// is the difference between two of each one's own running totals.
+    fn metered<'a>(
+        &'a self,
+        request: &CopyRequest,
+        destination: &'a ResolvedSource,
+    ) -> Result<Vec<&'a ResolvedSource>, EngineError> {
+        let mut metered = vec![destination];
+        for routed in self.routes.reachable(&request.destination) {
+            if let Some(source) = self.ready().find(|source| source.name() == &routed)
+                && !metered.iter().any(|held| held.name() == source.name())
+            {
+                metered.push(source);
+            }
+        }
+        let mut reading: Vec<SourceName> = request
+            .items
+            .as_slice()
+            .iter()
+            .map(|id| id.source.clone())
+            .collect();
+        if let Some(query) = request.items.query() {
+            reading.extend(self.resolve_selection(&query.sources)?);
+        }
+        for name in reading {
+            if let Some(source) = self.ready().find(|source| source.name() == &name)
+                && !metered.iter().any(|held| held.name() == source.name())
+            {
+                metered.push(source);
+            }
+        }
+        Ok(metered)
     }
 
     /// Every destination `request` can write, each told it may hold back the parts of the
@@ -4884,7 +4907,29 @@ impl Engine {
         running: &mut Running,
     ) -> Result<Planned, EngineError> {
         let id = read.source.clone();
-        let classification = self.copied_classification(request, &read, running).await?;
+        let (classification, placement) = self.placement_of(request, &read, running).await?;
+        let aimed = running.aimed.remove(&id.to_string());
+        self.aim(
+            request,
+            read,
+            placement,
+            classification,
+            aimed,
+            &mut running.home_members,
+        )
+        .await
+    }
+
+    /// Who may read one item read for a copy, and where a copy into `request`'s destination
+    /// places it: the one placement every copy and `task locate` make, so the two cannot
+    /// disagree about where an item lands.
+    async fn placement_of(
+        &self,
+        request: &CopyRequest,
+        read: &Read,
+        running: &mut Running,
+    ) -> Result<(Classification, Placement), EngineError> {
+        let classification = self.copied_classification(request, read, running).await?;
         let placement = match &read.item {
             Item::Task(task) => self.routes.place_classified(
                 &request.destination,
@@ -4901,16 +4946,7 @@ impl Engine {
                 &project.repositories,
             ),
         };
-        let aimed = running.aimed.remove(&id.to_string());
-        self.aim(
-            request,
-            read,
-            placement,
-            classification,
-            aimed,
-            &mut running.home_members,
-        )
-        .await
+        Ok((classification, placement))
     }
 
     /// Who may read one item read for a copy: its own declaration, tightened by its
@@ -5916,9 +5952,7 @@ impl Engine {
             item,
             comments,
         } = read;
-        // Provenance naming a private source stays out of anywhere not declared private.
-        let withheld = self.declared(&id.source) == crate::config::SourceVisibility::Private
-            && self.declared(&placement.destination) != crate::config::SourceVisibility::Private;
+        let withheld = self.withholds_provenance(&id.source, &placement.destination);
         let destination = self.writable(&placement.destination)?;
         if item.level() == Level::Document {
             documentary(destination)?;
@@ -5968,7 +6002,7 @@ impl Engine {
         let (mut target, mut held) = match aimed {
             Some(aimed) => aimed,
             None => {
-                self.target(destination, request, &id, &item, withheld)
+                self.target(destination, request, &id, &item, withheld, None)
                     .await?
             }
         };
@@ -6003,6 +6037,13 @@ impl Engine {
             comment_plan: None,
             skipped: false,
         })
+    }
+
+    /// Whether an item of `source` landing in `to` leaves its provenance behind: provenance
+    /// naming a private source stays out of anywhere not declared private.
+    fn withholds_provenance(&self, source: &SourceName, to: &SourceName) -> bool {
+        self.declared(source) == crate::config::SourceVisibility::Private
+            && self.declared(to) != crate::config::SourceVisibility::Private
     }
 
     /// The project `destination` already holds of the plan the project `id` is the source of,
@@ -6172,6 +6213,11 @@ impl Engine {
 
     /// Which destination item this one corresponds to, by the link the item records, the
     /// two origin rules and the caller's escape, and what the destination holds there.
+    ///
+    /// Given `carriers`, the origin query is read to its last page and every item it finds
+    /// carrying this one's origin is put there in listing order — the counterpart still the
+    /// first, as a copy picks it. That is what `task locate` reports; a copy passes `None`
+    /// and stops at the first.
     async fn target(
         &self,
         destination: &ResolvedSource,
@@ -6179,6 +6225,7 @@ impl Engine {
         id: &GlobalId,
         item: &Item,
         withheld: bool,
+        carriers: Option<&mut Vec<NativeId>>,
     ) -> Result<(Target, Option<Prior>), EngineError> {
         let (title, metadata) = described(item);
         // A caller asserting there is nothing to find is believed, and nothing is looked for —
@@ -6281,10 +6328,17 @@ impl Engine {
                 });
             }
         }
-        if let Some(found) = self
-            .scan(destination, item.level(), &Wanted::Origin(id.to_string()))
-            .await?
-        {
+        let wanted = Wanted::Origin(id.to_string());
+        let scanned = match carriers {
+            Some(carriers) => {
+                *carriers = self
+                    .walk(destination, item.level(), &wanted, Walk::Every)
+                    .await?;
+                carriers.first().cloned()
+            }
+            None => self.scan(destination, item.level(), &wanted).await?,
+        };
+        if let Some(found) = scanned {
             let held = self
                 .prior_reading(destination, item.level(), &found, comments)
                 .await?;
@@ -6330,6 +6384,23 @@ impl Engine {
         kind: Level,
         wanted: &Wanted,
     ) -> Result<Option<NativeId>, EngineError> {
+        Ok(self
+            .walk(destination, kind, wanted, Walk::First)
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    /// Walk the destination one page at a time for the items `wanted` finds, in listing order,
+    /// as far as `walk` says: to the first, or to the last page for every one.
+    async fn walk(
+        &self,
+        destination: &ResolvedSource,
+        kind: Level,
+        wanted: &Wanted,
+        walk: Walk,
+    ) -> Result<Vec<NativeId>, EngineError> {
+        let mut found = Vec::new();
         let mut cursor: Option<Cursor> = None;
         let tasks = wanted.task_query(&destination.source().capabilities());
         loop {
@@ -6346,7 +6417,10 @@ impl Engine {
                         .map_err(|error| refused(destination, error))?;
                     for task in &page.items {
                         if wanted.found(&task.title, &task.metadata) {
-                            return Ok(Some(task.id.clone()));
+                            found.push(task.id.clone());
+                            if walk == Walk::First {
+                                return Ok(found);
+                            }
                         }
                     }
                     page.next
@@ -6373,7 +6447,10 @@ impl Engine {
                         .map_err(|error| refused(destination, error))?;
                     for project in &page.items {
                         if wanted.found(&project.title, &project.metadata) {
-                            return Ok(Some(project.id.clone()));
+                            found.push(project.id.clone());
+                            if walk == Walk::First {
+                                return Ok(found);
+                            }
                         }
                     }
                     page.next
@@ -6398,7 +6475,10 @@ impl Engine {
                         .map_err(|error| refused(destination, error))?;
                     for document in &page.items {
                         if wanted.found(&document.title, &document.metadata) {
-                            return Ok(Some(document.id.clone()));
+                            found.push(document.id.clone());
+                            if walk == Walk::First {
+                                return Ok(found);
+                            }
                         }
                     }
                     page.next
@@ -6412,7 +6492,7 @@ impl Engine {
             .map_err(|error| refused(destination, error))?;
             match next {
                 Some(next) => cursor = Some(next),
-                None => return Ok(None),
+                None => return Ok(found),
             }
         }
     }
