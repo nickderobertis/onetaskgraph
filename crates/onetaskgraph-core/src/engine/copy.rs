@@ -1873,6 +1873,8 @@ impl Engine {
     /// destination refuses the write — including a field or a metadata key it cannot
     /// carry, which it names rather than dropping.
     pub async fn copy(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
+        // Each destination's visibility is read once for the whole copy, and afresh by the next.
+        let _held = self.hold_visibility();
         let _expecting = self.expecting_copy(request)?;
         // Before anything is read: `--create` says there is nothing to look for, and the other
         // two say how to look.
@@ -2884,7 +2886,6 @@ impl Engine {
         // Every item of every project held to the public boundary before any is written, so
         // a refusal leaves nothing anywhere — not even a project its tasks never reached.
         self.preflight_copy(
-            request,
             plans
                 .iter()
                 .flat_map(|(project, tasks, _, _)| std::iter::once(project).chain(tasks))
@@ -4466,12 +4467,8 @@ impl Engine {
         // Once the content that lands is settled, and before anything — a member project
         // included — is written. A task skipped writes nothing, so it has nothing to hold.
         if !running.preflighted {
-            self.preflight_copy(
-                request,
-                planned.iter().filter(|item| !item.skipped),
-                running,
-            )
-            .await?;
+            self.preflight_copy(planned.iter().filter(|item| !item.skipped), running)
+                .await?;
         }
 
         if project.is_none() {
@@ -5237,8 +5234,9 @@ impl Engine {
 
     /// Hold every item a copy lands to the public boundary before any is written: a private
     /// one refused anywhere not declared private, and every one landing anywhere not declared
-    /// private put to the caller's check. A dry run, which writes nothing, also reads each
-    /// destination declared private once, so it reports the refusal its copy would meet.
+    /// private put to the caller's check. Every destination declared private is read here,
+    /// once for the copy, so a dry run reports the refusal its copy would meet and the copy's
+    /// writes read nothing more.
     ///
     /// While the boundary is active it first learns who may read every item outside the copy
     /// that a carried dependency or delivery names, so a write anywhere not declared private
@@ -5246,7 +5244,6 @@ impl Engine {
     /// reference whose classification it cannot establish.
     async fn preflight_copy<'a>(
         &self,
-        request: &CopyRequest,
         planned: impl Iterator<Item = &'a Planned>,
         running: &mut Running,
     ) -> Result<(), EngineError> {
@@ -5287,11 +5284,11 @@ impl Engine {
                 checked.push((destination, outbound.item.clone(), exposure.clone()));
             }
             // Every item, not one per destination: who can read a write depends on where in
-            // the destination it lands — an issue's own repository on a board.
-            if request.dry_run {
-                self.at_write(destination, &outbound.item, &outbound.target)
-                    .await?;
-            }
+            // the destination it lands — an issue's own repository on a board. Read here,
+            // before anything is written, and held for the copy, so its writes read nothing
+            // more and a dry run reports the refusal its copy would meet.
+            self.at_write(destination, &outbound.item, &outbound.target)
+                .await?;
         }
         self.check_all(&checked).await
     }
@@ -7829,10 +7826,10 @@ impl Engine {
         if let Some(record) = &record {
             record.stamp(metadata_of(&mut landing));
         }
-        // Immediately before anything is sent: a destination declared private is read again
-        // for this write, whatever an earlier write read — except the write that completes a
-        // task created together with others, which is the same write its create was checked
-        // for a moment before, finished once the others it names exist.
+        // Before anything is sent: a destination declared private is held to what this copy
+        // read of it, before its first write, for this write's destination — except the write
+        // that completes a task created together with others, which is the same write its
+        // create was checked for a moment before, finished once the others it names exist.
         if stamping != Stamping::Never {
             self.at_write(
                 destination,

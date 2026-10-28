@@ -5,8 +5,9 @@
 //!
 //! - **Where it lands.** A source's configuration declares its `visibility`, and a source
 //!   declared private is held to its backend's own live answer at every write
-//!   ([`TaskSource::visibility`]). An item that may only be written somewhere private is
-//!   written only there.
+//!   ([`TaskSource::visibility`]) — read once per destination for a whole copy, before its
+//!   first write, and held for its writes ([`Engine::hold_visibility`]). An item that may
+//!   only be written somewhere private is written only there.
 //! - **What it says.** A write reaching a destination that is not verified private is put to
 //!   the caller's [`WritePolicy`], which decides whether its text names anything private.
 //!   The store never derives a term itself, and never decides a repository's visibility
@@ -1196,9 +1197,11 @@ impl Engine {
         }
     }
 
-    /// The check every write makes immediately before its first mutation: a destination
-    /// declared private is read live, every time, because nothing read for an earlier write
-    /// says what the backend is now.
+    /// The check every write makes before its first mutation: a destination declared private
+    /// is read live — outside a copy, at every write, because nothing read for an earlier
+    /// write says what the backend is now; inside one, once per destination for the whole
+    /// copy, its preflight's read held for every write of it, so a destination whose
+    /// visibility changes during a copy is seen by the next.
     pub(crate) async fn at_write(
         &self,
         destination: &ResolvedSource,

@@ -776,6 +776,18 @@ impl TaskSource for HeldOff {
         self.refused()?;
         self.noted(self.inner.creation_repository(target).await)
     }
+
+    fn declare_visibility(&self, declared: Visibility) {
+        self.inner.declare_visibility(declared);
+    }
+
+    fn hold_visibility(&self) {
+        self.inner.hold_visibility();
+    }
+
+    fn release_visibility(&self) {
+        self.inner.release_visibility();
+    }
 }
 
 #[cfg(test)]

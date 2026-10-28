@@ -1840,9 +1840,11 @@ pub trait TaskSource: Send + Sync {
     /// This is the destination's reality, which the engine holds a declaration against
     /// before it lets a write through: a source a configuration declares private receives an
     /// item that may only be written somewhere private only while this answers
-    /// [`Visibility::Private`]. The engine asks immediately before the write it is about, so
-    /// a source must not answer from anything it read for an earlier write unless its
-    /// backend's visibility cannot change in between.
+    /// [`Visibility::Private`]. The engine asks before the write it is about. A source must
+    /// not answer from anything it read for an earlier write unless its backend's visibility
+    /// cannot change in between — or the read was taken while the engine held this source's
+    /// reads for one operation ([`hold_visibility`](Self::hold_visibility)), which a copy
+    /// does so each destination is read once for the whole copy rather than once per write.
     ///
     /// Defaulted to [`Visibility::Unknown`], which is the answer of a source that cannot say
     /// and is never treated as private. A source on this machine answers `Private` — what it
@@ -1880,6 +1882,35 @@ pub trait TaskSource: Send + Sync {
         let _ = target;
         Ok(None)
     }
+
+    /// Told, once the configuration is read, who the configuration declares can read this
+    /// source: [`Visibility::Private`] for a source declared `visibility: private`,
+    /// [`Visibility::Public`] for one declared public, and [`Visibility::Unknown`] for one
+    /// that declares nothing.
+    ///
+    /// A declaration, never the backend's reality, which [`visibility`](Self::visibility)
+    /// reads. A source whose backend places a new item somewhere decided per item may place
+    /// it differently on a source declared private — a GitHub board files an issue whose one
+    /// named repository reads public in a private repository instead — and must place it
+    /// exactly as before on every other. Defaulted to ignoring it, which is what every source
+    /// that places an item the same way whoever may read it does.
+    fn declare_visibility(&self, declared: Visibility) {
+        let _ = declared;
+    }
+
+    /// Begin one engine operation's hold on what [`visibility`](Self::visibility) reads: from
+    /// now until the matching [`release_visibility`](Self::release_visibility), a source may
+    /// answer each destination from its first read in that hold rather than reading it again.
+    ///
+    /// Holds nest: only the release matching the outermost hold ends it, and that release
+    /// drops everything read. A copy holds every source for the length of the copy, so a
+    /// destination whose visibility changes during one copy is seen by the next. Defaulted to
+    /// doing nothing, which is right for a source that reads nothing to answer.
+    fn hold_visibility(&self) {}
+
+    /// End the hold [`hold_visibility`](Self::hold_visibility) began, dropping every
+    /// visibility read in it once the outermost hold ends. Defaulted to doing nothing.
+    fn release_visibility(&self) {}
 }
 
 /// The factory that turns one configuration block into a live [`TaskSource`].
