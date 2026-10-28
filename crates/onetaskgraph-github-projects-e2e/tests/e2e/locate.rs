@@ -206,3 +206,53 @@ fn locate_names_the_repository_the_copy_after_it_creates_each_issue_in() {
         }
     }
 }
+
+#[test]
+fn locate_refuses_a_create_the_board_would_refuse_as_the_copy_after_it_is_refused() {
+    let setup = Setup::new(false);
+    // Filed under `GOAL-1`, whose issue is the fixture owner's, while naming another owner's
+    // repository: GitHub files a sub-issue only under its parent's owner.
+    setup.record(
+        "tasks",
+        "elsewhere",
+        "title: Elsewhere\nstatus: todo\nproject: goal\nrepositories: [github.com/contoso/work]",
+    );
+    let refused = |arguments: &[&str]| {
+        let (output, served) = setup.run(arguments);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{arguments:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            !served
+                .iter()
+                .any(|(document, _)| document.trim_start().starts_with("mutation")),
+            "{arguments:?} wrote nothing: {served:#?}"
+        );
+        let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+        (
+            failure["failure"]["kind"].clone(),
+            failure["failure"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        )
+    };
+    let (located, said) = refused(&[
+        "task",
+        "locate",
+        "plan:elsewhere",
+        "--to",
+        "board",
+        "--no-counterpart",
+        "--json",
+    ]);
+    let (copied, _) = refused(&["task", "copy", "plan:elsewhere", "--to", "board", "--json"]);
+    assert_eq!(located, copied, "{said}");
+    assert!(
+        said.contains("contoso/work") && said.contains(OWNER),
+        "{said}"
+    );
+}

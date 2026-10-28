@@ -596,6 +596,14 @@ fn locate_refuses_each_item_a_copy_of_it_refuses_with_the_copy_s_own_failure() {
         );
         assert_eq!(located.0, Some(1), "{id}");
     }
+    // A destination that cannot be a source's name is refused naming the flag.
+    let (code, kind, message) = store.locate(&["drafts:stale"], "not a name", &[]).refusal();
+    assert_eq!(
+        (code, kind.as_str()),
+        (Some(1), "invalid-source-name"),
+        "{message}"
+    );
+    assert!(message.contains("--to not a name"), "{message}");
     // A project and a document are no task to locate.
     store.record("drafts", "projects", "goal", "title: Goal\nstatus: todo");
     store.record("drafts", "documents", "notes", "title: Notes");
