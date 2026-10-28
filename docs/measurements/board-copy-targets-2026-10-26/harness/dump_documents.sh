@@ -21,7 +21,8 @@ if [ -z "$names" ]; then
     echo "dump_documents.sh: no \`pub const NAME: &str\` document found in $crate/src/lib.rs; name a checkout of the measured tag, or update the pattern if the plugin moved its documents" >&2
     exit 1
 fi
-# The one example file this writes, removed again on exit; nothing else in the checkout is touched.
+# The one example file this writes, removed again on exit; of the checkout's sources nothing else is touched
+# (cargo still builds into its target directory).
 example="$crate/examples/dump_documents.rs"
 if [ -e "$example" ]; then
     echo "dump_documents.sh: $example already exists; move it aside, or use a fresh checkout of the measured tag" >&2
