@@ -518,7 +518,8 @@ def test_a_row_whose_idle_samples_share_no_counter_reports_its_priced_figure_alo
         and points["counter"] is None
         and points["residual"] is None
     )
-    expected = "| bare store: re-copy, one task's body changed | no counter read on both sides |"
+    # Each column in its place: no reading, rise, rate or background; the priced points; no residual.
+    expected = "| bare store: re-copy, one task's body changed | no counter read on both sides | — | — | — | 1 | — |"
     assert expected in measured[1].read_text()
 
 

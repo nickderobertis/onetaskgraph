@@ -1431,8 +1431,8 @@ def burn_table(rows: list[Row]) -> str:
                     "—",
                     "—",
                     "—",
-                    "—",
                     str(pt.figure),
+                    "—",
                 ]
             )
             continue
