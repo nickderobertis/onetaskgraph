@@ -103,9 +103,13 @@ re-copies and the approval. The unchanged re-copies send none, so their verdict 
   where the adopted releases, the private source or the rulings below required. It ran from this
   worktree before it was committed, so the `harness` commit each row's `versions.json` records,
   `c9dbca3e`, is the commit it ran on top of. The runner it committed as, in `2c21737b`, is the one
-  that ran. Later commits reformatted it and changed only what no measured row reached: a failed
-  step or delete now exits non-zero, `measure.sh` prints one line, two names say what they do, and
-  the proxy lost an unrestricted write mode no run used. The changes that ran:
+  that ran. Later commits reformatted it and changed only what no measured row reached: a step
+  exiting non-zero (a partial copy's 4 included) now fails its run, and cleanup now counts an
+  unanswered read or delete as failed; every step of every run exited 0 and all 30 deletes were
+  answered (the raw logs under the cache). `measure.sh` prints one line and reads its scenarios,
+  cache directory, clone and host commit from the runner, two helpers are renamed for what they do,
+  `dump_documents.sh` touches only its own file, and the proxy lost an unrestricted write mode no
+  run used. The changes that ran:
   1. **Version and documents.** It expects `onetaskgraph 0.12.7`. The proxy's operation table
      (`harness/documents.json`) was regenerated from `v0.12.7` by `harness/dump_documents.sh`.
   2. **A private source.** The bare store reads the plan out of a `local-md` folder declared
