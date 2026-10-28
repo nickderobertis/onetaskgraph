@@ -825,26 +825,67 @@ fn selected() -> Option<String> {
 }
 
 /// What `visibility_cost` recorded for `budget`, refused unless it is that journey's recording
-/// at that journey's workload: its figure, and the detail it reports beside it.
+/// of the mixed 102-write plan copy, every copy's reads adding up — by destination, and REST and
+/// GraphQL apart — to the totals it states, and the figure the most reads any one destination
+/// received in one copy.
 fn read_visibility(budget: &str) -> Result<(f64, String), String> {
+    visibility_of(&recorded(budget)?)
+}
+
+/// [`read_visibility`]'s judgement of one recording, `value`.
+fn visibility_of(value: &Value) -> Result<(f64, String), String> {
     use super::visibility_cost::{WORKLOAD, WRITES};
-    let value = recorded(budget)?;
     if value["workload"].as_str() != Some(WORKLOAD) || value["writes"].as_u64() != Some(WRITES) {
-        return Err("workload does not match the 102-write plan copy".into());
+        return Err("workload does not match the 102-write mixed plan copy".into());
     }
     let figure = value["value"]
         .as_u64()
         .ok_or("missing whole-number figure")?;
-    // Every entry of a breakdown is a whole count: one that is not is no breakdown at all,
-    // rather than an entry left out of the sum.
-    let sum = |key: &str| {
-        value[key]
+    let copies = value["copies"]
+        .as_array()
+        .filter(|copies| !copies.is_empty())
+        .ok_or("missing the copies' reads")?;
+    let count = |of: &Value, key: &str| of[key].as_u64().ok_or(format!("missing {key}"));
+    let (mut total, mut rest, mut graphql, mut most) = (0, 0, 0, 0);
+    let mut destinations = std::collections::BTreeSet::new();
+    for copy in copies {
+        // Every entry is a whole count: one that is not is no breakdown at all, rather than an
+        // entry left out of the sum.
+        let by_destination = copy["by_destination"]
             .as_object()
-            .and_then(|counts| counts.values().map(Value::as_u64).sum::<Option<u64>>())
-    };
-    if sum("by_write") != Some(figure) || sum("by_read") != Some(figure) {
-        return Err("the breakdown does not add up to the figure".into());
+            .ok_or("missing reads by destination")?;
+        let reads = by_destination
+            .values()
+            .map(Value::as_u64)
+            .sum::<Option<u64>>()
+            .ok_or("the breakdown does not add up to the reads")?;
+        if reads != count(copy, "reads")? || count(copy, "rest")? + count(copy, "graphql")? != reads
+        {
+            return Err("the breakdown does not add up to the reads".into());
+        }
+        most = most.max(
+            by_destination
+                .values()
+                .filter_map(Value::as_u64)
+                .max()
+                .unwrap_or(0),
+        );
+        destinations.extend(by_destination.keys().cloned());
+        total += reads;
+        rest += count(copy, "rest")?;
+        graphql += count(copy, "graphql")?;
     }
+    if figure != most {
+        return Err("the figure is not the most reads of one destination in one copy".into());
+    }
+    if count(value, "total")? != total
+        || count(value, "rest")? != rest
+        || count(value, "graphql")? != graphql
+        || count(value, "distinct")? != destinations.len() as u64
+    {
+        return Err("the totals do not add up to the copies' reads".into());
+    }
+    count(value, "other_rest")?;
     if !value["simulated_seconds"]
         .as_f64()
         .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
@@ -1024,7 +1065,7 @@ fn the_landing_closure_report_hands_over_the_recorded_figure_and_refuses_what_it
         (output, reported)
     };
     let mut foreign = valid.clone();
-    foreign["budget"] = json!("visibility-write-requests");
+    foreign["budget"] = json!("visibility-reads-per-destination");
     let mut unbalanced = valid.clone();
     unbalanced["scales"]["10x"]["points"] = json!(3);
     for (recorded, message) in [
@@ -1326,9 +1367,13 @@ fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
     let sandbox = Sandbox::new();
     let directory = sandbox.subdirectory("visibility");
     let budget = super::visibility_cost::BUDGET;
-    let valid = json!({"budget":budget,"value":204,"detail":"recorded","workload":super::visibility_cost::WORKLOAD,
-        "writes":102,"by_write":{"project":2,"task":200,"document":2},
-        "by_read":{"project":102,"repository":102},"simulated_seconds":38.76});
+    let valid = json!({"budget":budget,"value":1,"detail":"recorded",
+        "workload":super::visibility_cost::WORKLOAD,"writes":102,"total":3,"distinct":3,
+        "rest":2,"graphql":1,"other_rest":0,"simulated_seconds":1.14,
+        "copies":[{"copy":"project copy","reads":3,"rest":2,"graphql":1,"other_rest":0,
+                   "by_destination":{"project":1,"a/b":1,"a/c":1}}]});
+    // The report hands over what a valid recording says, and nothing it does not.
+    assert_eq!(visibility_of(&valid), Ok((1.0, "recorded".to_owned())));
     let run = |recorded: Option<Value>| {
         let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
         let _ = std::fs::remove_file(&path);
@@ -1351,14 +1396,19 @@ fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
         (output, result.exists())
     };
     let mut foreign = valid.clone();
-    foreign["workload"] = json!("plan-copy-1-project-10-tasks-1-document");
+    foreign["workload"] = json!("plan-copy-1-project-100-tasks-1-document");
     let mut fewer = valid.clone();
     fewer["writes"] = json!(12);
     let mut unbalanced = valid.clone();
-    unbalanced["by_read"] = json!({"project":102,"repository":101});
-    // An entry that is no count, beside entries that still add up to the figure on their own.
+    unbalanced["copies"][0]["rest"] = json!(1);
+    // An entry that is no count, beside entries that still add up to the reads on their own.
     let mut uncounted = valid.clone();
-    uncounted["by_write"] = json!({"project":2,"task":200,"document":2,"note":"extra"});
+    uncounted["copies"][0]["by_destination"]["note"] = json!("extra");
+    // A figure smaller than the most reads one destination received.
+    let mut understated = valid.clone();
+    understated["copies"][0]["by_destination"] = json!({"project":2,"a/b":1});
+    let mut miscounted = valid.clone();
+    miscounted["distinct"] = json!(4);
     let with = |field: &str, value: Value| {
         let mut changed = valid.clone();
         changed[field] = value;
@@ -1367,17 +1417,25 @@ fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
     // A figure past what one budget can report, its breakdown made to add up so the range is
     // what refuses it.
     let mut huge = valid.clone();
-    huge["value"] = json!(u64::from(u32::MAX) + 1);
-    huge["by_write"] = json!({"task": u64::from(u32::MAX) + 1});
-    huge["by_read"] = json!({"project": u64::from(u32::MAX) + 1});
+    let big = u64::from(u32::MAX) + 1;
+    huge["value"] = json!(big);
+    huge["total"] = json!(big);
+    huge["rest"] = json!(big);
+    huge["graphql"] = json!(0);
+    huge["distinct"] = json!(1);
+    huge["copies"] = json!([{"copy":"project copy","reads":big,"rest":big,"graphql":0,
+        "other_rest":0,"by_destination":{"a/b":big}}]);
     for (recorded, message) in [
         (None, "no telemetry"),
         (Some(foreign), "workload does not match"),
         (Some(fewer), "workload does not match"),
         (Some(unbalanced), "does not add up"),
         (Some(uncounted), "does not add up"),
+        (Some(understated), "the figure is not the most reads"),
+        (Some(miscounted), "the totals do not add up"),
+        (with("copies", json!([])), "missing the copies' reads"),
         (with("value", json!(null)), "missing whole-number figure"),
-        (with("value", json!(204.5)), "missing whole-number figure"),
+        (with("value", json!(1.5)), "missing whole-number figure"),
         (
             with("simulated_seconds", json!(null)),
             "missing simulated seconds",

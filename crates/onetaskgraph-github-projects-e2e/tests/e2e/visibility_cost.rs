@@ -1,23 +1,25 @@
-//! What a whole plan copy spends learning who can read a board declared private: the recording
-//! behind the `visibility-write-requests` budget.
+//! What a whole first copy of a mixed plan spends learning who can read a board declared
+//! private: the recording behind the `visibility-reads-per-destination` budget.
 //!
-//! The workload is the realistic one a plan copy is: one project, its 100 tasks — each
-//! depending on the one before it — and its design document, 102 writes in all, copied out of
-//! a private folder of Markdown onto one GitHub board declared private, so every write reads
-//! the Project's visibility and the visibility of the repository its issue is created in. The
-//! loopback board answers each of those reads after 0.38 simulated seconds — what one took on
-//! the real API — and every other request at once, with a write's two reads overlapping, as the
-//! plugin sends them together. The journey records the reads the whole copy spent, preflights
-//! included, with their breakdown per write, by write kind (project, task, document) and by
-//! read kind (Project, issue repository), and the simulated seconds they added, which is
-//! telemetry with no threshold of its own; `budget_runner::report_visibility_reads` reports the
-//! figure with that breakdown and those seconds as its detail, and runs no copy.
+//! The workload is the realistic one a plan copy is: one project, its 100 tasks — each depending
+//! on the one before it — and its design document, 102 writes onto one GitHub board declared
+//! private, copied out of a private folder of Markdown. Half the tasks name only one of five
+//! repositories the loopback serves public, ten each, and half one of five it serves private.
+//! Each public task's view goes to a public board, whose writes read no visibility. The plan is
+//! copied as a person copies one: `project copy`, then `document copy` of its design document —
+//! two copies, each reading each destination it writes to once. The loopback answers each
+//! visibility read after 0.38 simulated seconds — what one took on the real API — and every other
+//! request at once. The journey records every read each copy spent, by destination, REST and
+//! GraphQL apart, with every other REST request, which is telemetry with no threshold of its own;
+//! `budget_runner::report_visibility_reads` reports the largest number of reads any one
+//! destination received in one copy, with the rest as its detail, and runs no copy.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::process::Output;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use onetaskgraph_e2e_support::binary;
@@ -26,38 +28,47 @@ use onetaskgraph_e2e_support::loopback::{self, After, Upstream};
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{document, github_projects_with_board};
+use crate::fixtures::{RepositoryAnswer, document, github_projects_with_board};
 
 /// How long one visibility read took on the real API.
 const READ: Duration = Duration::from_millis(380);
 /// The tasks of the plan copied.
 const TASKS: usize = 100;
-/// The writes the copy makes: the project, its tasks and its design document.
+/// The repositories of each visibility the tasks name, ten tasks to each.
+const REPOSITORIES: usize = 5;
+/// The writes the copy makes onto the private board: the project, its tasks and its document.
 pub(super) const WRITES: u64 = TASKS as u64 + 2;
 /// The budget this journey records for.
-pub(super) const BUDGET: &str = "visibility-write-requests";
+pub(super) const BUDGET: &str = "visibility-reads-per-destination";
 /// The workload this journey records, which the report refuses any other recording for.
-pub(super) const WORKLOAD: &str = "plan-copy-1-project-100-tasks-1-document";
+pub(super) const WORKLOAD: &str =
+    "mixed-plan-copy-1-project-100-tasks-50-in-5-public-50-in-5-private-1-document";
+/// The repository the private board creates an issue in when nothing else decides.
+const CONFIGURED: &str = "nickderobertis/onetaskgraph";
 
-/// The visibility reads in flight and not yet paired, so a write's two start their delay
-/// together: a read held here counts as computing, and virtual time does not move.
-#[derive(Default)]
-struct Pairing {
-    waiting: usize,
-    /// The pairs of reads that were in flight together, one per write that sent its two at once.
-    generation: u64,
-    /// The reads that waited for a partner and none arrived: a write that sent them one after
-    /// the other.
-    alone: u64,
-    /// The virtual intervals the reads were delayed over, one per pair.
-    intervals: Vec<(Duration, Duration)>,
+/// The `k`th public repository.
+fn public(k: usize) -> String {
+    format!("nickderobertis/open-{k}")
 }
 
-/// A loopback in front of the fixture board, delaying each visibility read on the simulated
+/// The `k`th private repository.
+fn private(k: usize) -> String {
+    format!("nickderobertis/closed-{k}")
+}
+
+/// Answer a repository public exactly when it is one of the `open-` ones.
+const VISIBILITY: &str = "import json,sys; r=json.load(sys.stdin)['repository']; \
+     print(json.dumps({'visibility': 'public' if r.startswith('github.com/nickderobertis/open-') \
+     else 'private'}))";
+/// Pass every write: what is measured is where the reads go, not what a view says.
+const CHECK: &str = "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')";
+
+/// A loopback in front of the private board, delaying each visibility read on the simulated
 /// clock and passing every other request through at once.
 struct VisibilityBoard {
     endpoint: String,
-    pairing: Arc<(Mutex<Pairing>, Condvar)>,
+    /// The virtual intervals the reads were delayed over.
+    intervals: Arc<Mutex<Vec<(Duration, Duration)>>>,
     /// The connections the binary opened to this proxy.
     accepted: Arc<AtomicUsize>,
 }
@@ -74,12 +85,11 @@ impl VisibilityBoard {
             .and_then(|rest| rest.split('/').next())
             .and_then(|address| address.parse().ok())
             .expect("the fixture board's address");
-        let pairing = Arc::new((Mutex::new(Pairing::default()), Condvar::new()));
-        let held = Arc::clone(&pairing);
+        let intervals = Arc::new(Mutex::new(Vec::new()));
+        let held = Arc::clone(&intervals);
         let clock = clock.clone();
         // Each connection the binary keeps alive to this proxy keeps one of its own to the board
-        // behind it, and connections are answered side by side, so a write's two visibility
-        // reads, sent together on two connections, are both held here at once.
+        // behind it, so no request costs the board a connection of its own.
         let accepted = loopback::serve_each(listener, move || {
             let (clock, held) = (clock.clone(), Arc::clone(&held));
             let mut upstream = Upstream::new(upstream);
@@ -89,21 +99,14 @@ impl VisibilityBoard {
         });
         Self {
             endpoint,
-            pairing,
+            intervals,
             accepted,
         }
     }
 
-    /// How many pairs of reads were in flight together, and how many reads arrived alone.
-    fn overlap(&self) -> (u64, u64) {
-        let pairing = self.pairing.0.lock().expect("not poisoned");
-        (pairing.generation, pairing.alone)
-    }
-
-    /// The simulated seconds the visibility reads held the copy for.
+    /// The simulated seconds the visibility reads held the copies for, overlapping reads once.
     fn seconds(&self) -> f64 {
-        let pairing = self.pairing.0.lock().expect("not poisoned");
-        let mut intervals = pairing.intervals.clone();
+        let mut intervals = self.intervals.lock().expect("not poisoned").clone();
         intervals.sort_unstable();
         let mut total = Duration::ZERO;
         let mut reach = Duration::ZERO;
@@ -123,7 +126,7 @@ fn serve(
     stream: &mut TcpStream,
     clock: &SimulatedClock,
     upstream: &mut Upstream,
-    pairing: &Arc<(Mutex<Pairing>, Condvar)>,
+    intervals: &Arc<Mutex<Vec<(Duration, Duration)>>>,
 ) -> After {
     let request = clock.request(0);
     let visibility = sent.line().starts_with("GET /repos/")
@@ -137,42 +140,31 @@ fn serve(
         return After::Close;
     }
     if visibility {
-        let (lock, paired) = &**pairing;
-        let mut state = lock.lock().expect("not poisoned");
-        state.waiting += 1;
-        if state.waiting == 2 {
-            state.waiting = 0;
-            state.generation += 1;
-            paired.notify_all();
-        } else {
-            let generation = state.generation;
-            let (held, _) = paired
-                .wait_timeout_while(state, Duration::from_secs(5), |state| {
-                    state.generation == generation
-                })
-                .expect("not poisoned");
-            state = held;
-            if state.generation == generation {
-                // Alone after all: it is delayed alone.
-                state.waiting = 0;
-                state.alone += 1;
-            }
-        }
-        drop(state);
         let started = clock.now();
         tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
             .expect("a runtime")
             .block_on(request.delay(READ));
-        lock.lock()
+        intervals
+            .lock()
             .expect("not poisoned")
-            .intervals
             .push((started, clock.now()));
     }
     match stream.write_all(&response) {
         Ok(()) => After::KeepOpen,
         Err(error) => panic!("the answer could not be written to the binary: {error}"),
+    }
+}
+
+/// The repository task `index` names: the even ones a public repository, the odd ones a private
+/// one, ten tasks to each repository.
+fn named(index: usize) -> String {
+    let k = (index / 2) % REPOSITORIES;
+    if index % 2 == 0 {
+        public(k)
+    } else {
+        private(k)
     }
 }
 
@@ -195,8 +187,9 @@ fn author(root: &std::path::Path) {
         write(
             &format!("tasks/t-{index:03}.md"),
             format!(
-                "---\ntitle: Task {index:03}\nstatus: todo\nproject: plan\n{depends}---\n\
-                 Step {index} of the plan.\n"
+                "---\ntitle: Task {index:03}\nstatus: todo\nproject: plan\n\
+                 repositories: [github.com/{}]\n{depends}---\nStep {index} of the plan.\n",
+                named(index)
             ),
         );
     }
@@ -223,140 +216,207 @@ fn copy(sandbox: &Sandbox, clock: &SimulatedClock, kind: &str, id: &str) -> Outp
     output
 }
 
-/// Which write each visibility read was spent on, in the order the board served them: every
-/// read before a write's first mutation is that write's — and the reads before a request
-/// creating several issues together are theirs, two to each, in the order it creates them.
-fn attributed(served: &[(String, Value)]) -> Vec<(&'static str, &'static str)> {
-    let kind_of = |title: &str| {
-        if title == "Plan" {
-            "project"
-        } else if title.starts_with("Task ") {
-            "task"
-        } else {
-            "document"
-        }
-    };
-    let mut reads = Vec::new();
-    let mut pending = Vec::new();
+/// What one copy sent the private board, counted.
+struct Spent {
+    /// The visibility reads each destination received: `project` for the board's.
+    by_destination: BTreeMap<String, u64>,
+    rest: u64,
+    graphql: u64,
+    /// Every REST request that was not a visibility read.
+    other_rest: u64,
+    /// Issues created.
+    creates: u64,
+}
+
+fn spent(served: &[(String, Value)]) -> Spent {
+    let mut by_destination = BTreeMap::new();
+    let (mut rest, mut graphql, mut other_rest, mut creates) = (0, 0, 0, 0);
     for (document, variables) in served {
         if document == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY {
-            pending.push("project");
-        } else if document.starts_with("GET /repos/") {
-            pending.push("repository");
+            graphql += 1;
+            *by_destination.entry("project".to_owned()).or_insert(0) += 1;
+        } else if let Some(repository) = document.strip_prefix("GET /repos/") {
+            rest += 1;
+            *by_destination.entry(repository.to_owned()).or_insert(0) += 1;
+        } else if document.starts_with("GET ")
+            || document.starts_with("POST /")
+            || document.starts_with("PUT ")
+        {
+            other_rest += 1;
         } else if document == onetaskgraph_github_projects::graphql::CREATE_ISSUES {
-            let created: Vec<&str> = (0..onetaskgraph_github_projects::MUTATION_BATCH)
+            creates += (0..onetaskgraph_github_projects::MUTATION_BATCH)
                 .filter(|slot| variables[format!("send{slot}")] == true)
-                .map(|slot| {
-                    variables[format!("create{slot}")]["title"]
-                        .as_str()
-                        .unwrap_or_default()
-                })
-                .collect();
-            let each = pending.len() / created.len().max(1);
-            for title in created {
-                reads.extend(
-                    pending
-                        .drain(..each.min(pending.len()))
-                        .map(|read| (kind_of(title), read)),
-                );
-            }
+                .count() as u64;
         } else if document.contains("createIssue(input:$input)") {
-            let title = variables["input"]["title"].as_str().unwrap_or_default();
-            reads.extend(pending.drain(..).map(|read| (kind_of(title), read)));
+            creates += 1;
         }
     }
-    assert!(
-        pending.is_empty(),
-        "every read was spent on a write: {pending:?}"
-    );
-    reads
+    Spent {
+        by_destination,
+        rest,
+        graphql,
+        other_rest,
+        creates,
+    }
 }
 
 #[test]
-fn a_whole_plan_copy_spends_two_visibility_reads_per_write() {
+fn a_whole_mixed_plan_copy_reads_each_destination_once_per_copy() {
     let clock = SimulatedClock::start(1);
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("plan");
     author(&root);
     let (mut config, board) = github_projects_with_board(&sandbox);
+    for k in 0..REPOSITORIES {
+        board.set_repository_visibility(&public(k), RepositoryAnswer::Public);
+    }
     let front = VisibilityBoard::new(config["endpoint"].as_str().expect("an endpoint"), &clock);
     config["endpoint"] = json!(front.endpoint);
-    sandbox.project_document(&document(&json!({
+    // The public board the views go to: a loopback of its own, filing in a public repository.
+    let (mut site_config, site) = github_projects_with_board(&sandbox);
+    site_config["repository"] = json!(public(0));
+    site.use_repository(&public(0));
+    let mut configured: Value = serde_json::from_str(&document(&json!({
         "plan": {"plugin": "local-md", "config": {"root": root}, "visibility": "private"},
-        "board": {"plugin": "github-projects", "config": config, "visibility": "private"},
-    })));
-    let before = board.served().len();
+        "board": {"plugin": "github-projects", "config": config, "visibility": "private",
+                  "routes": [{"repositories": (0..REPOSITORIES)
+                      .map(|k| format!("github.com/{}", public(k)))
+                      .collect::<Vec<_>>(), "to": "site"}]},
+        "site": {"plugin": "github-projects", "config": site_config, "visibility": "public"},
+    })))
+    .expect("a configuration document");
+    configured["write_policy"] = json!({
+        "visibility_command": ["python3", "-c", VISIBILITY],
+        "check_command": ["python3", "-c", CHECK],
+    });
+    sandbox.project_document(&configured.to_string());
     let lease = clock.lease(0);
-    copy(&sandbox, &clock, "project", "plan:plan");
-    lease.wait_for_detach();
-    copy(&sandbox, &clock, "document", "plan:design");
-    lease.wait_for_detach();
+    let mut copies = Vec::new();
+    for (kind, id) in [("project", "plan:plan"), ("document", "plan:design")] {
+        let before = board.served().len();
+        copy(&sandbox, &clock, kind, id);
+        lease.wait_for_detach();
+        copies.push((format!("{kind} copy"), spent(&board.served()[before..])));
+    }
     drop(lease);
-    let served = board.served()[before..].to_vec();
-    let creates: usize = served
-        .iter()
-        .map(|(document, variables)| {
-            if document == onetaskgraph_github_projects::graphql::CREATE_ISSUES {
-                (0..onetaskgraph_github_projects::MUTATION_BATCH)
-                    .filter(|slot| variables[format!("send{slot}")] == true)
-                    .count()
-            } else {
-                usize::from(document.contains("createIssue(input:$input)"))
-            }
-        })
-        .sum();
     assert_eq!(
-        creates as u64, WRITES,
+        copies.iter().map(|(_, spent)| spent.creates).sum::<u64>(),
+        WRITES,
         "the workload is the 102 writes it names"
     );
-    let reads = attributed(&served);
-    let count = |kind: Option<&str>, read: Option<&str>| {
-        reads
-            .iter()
-            .filter(|(of, by)| {
-                kind.is_none_or(|kind| kind == *of) && read.is_none_or(|read| read == *by)
-            })
-            .count() as u64
-    };
-    let total = count(None, None);
+    // Exactly the reads each copy owes: the project copy the board, each repository a task
+    // names and the configured one its project's issue is in; the document copy the board and
+    // that one repository.
+    let mut wanted: Vec<String> = (0..REPOSITORIES)
+        .flat_map(|k| [public(k), private(k)])
+        .chain([CONFIGURED.to_owned(), "project".to_owned()])
+        .collect();
+    wanted.sort_unstable();
+    let (_, project_copy) = &copies[0];
+    assert_eq!(
+        project_copy
+            .by_destination
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        wanted
+    );
+    assert_eq!((project_copy.graphql, project_copy.rest), (1, 11));
+    let (_, document_copy) = &copies[1];
+    assert_eq!(
+        document_copy
+            .by_destination
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        [CONFIGURED, "project"]
+    );
+    assert_eq!((document_copy.graphql, document_copy.rest), (1, 1));
+    // The public board is not declared private, so nothing reads who can read it.
+    assert!(
+        site.served().iter().all(|(document, _)| {
+            document != onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY
+                && !document.starts_with("GET /repos/")
+        }),
+        "the public board was asked who can read it"
+    );
+    let figure = copies
+        .iter()
+        .flat_map(|(_, spent)| spent.by_destination.values().copied())
+        .max()
+        .expect("a read");
+    let total: u64 = copies
+        .iter()
+        .map(|(_, spent)| spent.rest + spent.graphql)
+        .sum();
+    let rest: u64 = copies.iter().map(|(_, spent)| spent.rest).sum();
+    let graphql: u64 = copies.iter().map(|(_, spent)| spent.graphql).sum();
+    let other_rest: u64 = copies.iter().map(|(_, spent)| spent.other_rest).sum();
+    let distinct = copies
+        .iter()
+        .flat_map(|(_, spent)| spent.by_destination.keys())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
     let seconds = front.seconds();
-    let by_write = json!({
-        "project": count(Some("project"), None),
-        "task": count(Some("task"), None),
-        "document": count(Some("document"), None),
-    });
-    let by_read = json!({
-        "project": count(None, Some("project")),
-        "repository": count(None, Some("repository")),
-    });
+    let recorded: Vec<Value> = copies
+        .iter()
+        .map(|(copy, spent)| {
+            json!({
+                "copy": copy,
+                "reads": spent.rest + spent.graphql,
+                "rest": spent.rest,
+                "graphql": spent.graphql,
+                "other_rest": spent.other_rest,
+                "by_destination": spent.by_destination,
+            })
+        })
+        .collect();
+    let per_copy = copies
+        .iter()
+        .map(|(copy, spent)| {
+            format!(
+                "{copy}: {} reads of {} destinations ({} GraphQL, {} REST), {}",
+                spent.rest + spent.graphql,
+                spent.by_destination.len(),
+                spent.graphql,
+                spent.rest,
+                spent
+                    .by_destination
+                    .iter()
+                    .map(|(destination, reads)| format!("{destination} {reads}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
     let directory = super::budget_runner::directory();
     std::fs::create_dir_all(&directory).expect("the telemetry directory");
     std::fs::write(
         onetaskgraph_e2e_support::telemetry::file_in(&directory, BUDGET),
         serde_json::to_vec(&json!({
             "budget": BUDGET,
-            "value": total,
+            "value": figure,
             "detail": format!(
-                "{total} visibility requests over {WRITES} writes ({:.2} per write): by write \
-                 {by_write}; by read {by_read}; the reads added {seconds:.2} simulated seconds \
-                 at 0.38 s each, a write's two overlapping",
-                total as f64 / WRITES as f64
+                "at most {figure} visibility read(s) of one destination in one copy, over \
+                 {WRITES} writes onto a board declared private: {total} reads in all of \
+                 {distinct} distinct destinations, {graphql} GraphQL and {rest} REST, and \
+                 {other_rest} other REST requests; {per_copy}; the reads added {seconds:.2} \
+                 simulated seconds at 0.38 s each"
             ),
             "workload": WORKLOAD,
             "writes": WRITES,
-            "by_write": by_write,
-            "by_read": by_read,
+            "total": total,
+            "distinct": distinct,
+            "rest": rest,
+            "graphql": graphql,
+            "other_rest": other_rest,
+            "copies": recorded,
             "simulated_seconds": seconds,
         }))
         .expect("JSON"),
     )
     .expect("the telemetry is written");
-    // What the copy spent is onebudgetspec's to judge, and the reads each write sends are the
-    // boundary journeys'; what this journey holds is how they are sent: each write's two
-    // together, both in flight at once, and never one after the other.
-    let (paired, alone) = front.overlap();
-    assert!(paired > 0, "the copy read who can read the board");
-    assert_eq!(alone, 0, "a read waited for its partner and none came");
     assert_eq!(
         board.connections(),
         front.accepted.load(Ordering::SeqCst),
