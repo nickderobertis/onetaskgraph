@@ -222,18 +222,26 @@ if [ "${GITHUB_ACTIONS:-}" = true ] && ! "$select_only"; then
   cpu_sampler=$!
   trap 'kill "$cpu_sampler" 2>/dev/null; rm -rf "$scratch"' EXIT
 fi
+# The phases are waited for by their own process ids, so nothing else this script starts in the
+# background is waited for with them.
 phase=0
 group=
+running=""
+wait_for_phases() {
+  for pid in $running; do wait "$pid"; done
+  running=""
+}
 while IFS=' ' read -r in_group kind targets excluded flags; do
   [ -n "$kind" ] || continue
-  [ "$in_group" = "$group" ] || wait
+  [ "$in_group" = "$group" ] || wait_for_phases
   group="$in_group"
   phase=$((phase + 1))
   record_phase "$phase" "$kind" "$targets" "$excluded" "$flags" &
+  running="$running $!"
 done <<EOF
 $phases
 EOF
-wait
+wait_for_phases
 status=0
 for index in $(seq 1 "$phase"); do
   phase="$index"
