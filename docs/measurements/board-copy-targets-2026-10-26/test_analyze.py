@@ -265,18 +265,19 @@ def captures(root: Path) -> Path:
     loopback = root / "loopback"
     loopback.mkdir()
     sent = {"requests by operation": {"reading a project's tasks": 1}, "points": 1}
-    (loopback / "github-plan-copy-points-unchanged.json").write_text(
-        json.dumps(
-            {
-                "budget": "github-plan-copy-points-unchanged",
-                "value": 1,
-                "detail": json.dumps(
-                    {name: sent for name in analyze.CONFIGURATIONS}
-                    | {"host configuration, private beside public": {"points": 1}}
-                ),
-            }
+    for budget in analyze.LOOPBACK_POINTS:
+        (loopback / f"{budget}.json").write_text(
+            json.dumps(
+                {
+                    "budget": budget,
+                    "value": 1,
+                    "detail": json.dumps(
+                        {name: sent for name in analyze.CONFIGURATIONS}
+                        | {"host configuration, private beside public": {"points": 1}}
+                    ),
+                }
+            )
         )
-    )
     return root
 
 
@@ -887,7 +888,12 @@ def test_the_board_size_pairs_compare_requests_by_operation_at_both_sizes(measur
     path.write_text(json.dumps(record))
     run(measured, "--write")
     pairs = json.loads((root / "summary.json").read_text())["board_size_pairs"]
-    (pair,) = [p for p in pairs if p["recording"] == "unscreened"]
+    (pair,) = [
+        p
+        for p in pairs
+        if p["recording"] == "unscreened"
+        and p["budget"] == "github-plan-copy-points-unchanged"
+    ]
     assert pair["same"] is False
     assert pair["walk_pages"] == [0, 1]
     assert "**differ**" in measured[1].read_text()
@@ -1270,3 +1276,68 @@ def test_a_points_recording_whose_configuration_carries_no_requests_is_refused(
     path.write_text(json.dumps(record | {"detail": json.dumps(detail)}))
     with pytest.raises(SystemExit, match="screened: no requests by operation"):
         run(measured)
+
+
+def test_a_missing_loopback_recording_is_refused_naming_it(measured):
+    (measured[0] / "loopback" / "github-plan-copy-points-first.json").unlink()
+    with pytest.raises(
+        SystemExit, match="no loopback recording github-plan-copy-points-first"
+    ):
+        run(measured)
+
+
+def test_overlapping_steps_are_refused(measured):
+    retake(
+        measured,
+        "bare-unchanged",
+        {1: 1},
+        requests=[graphql(1, "SUB_ISSUES", 1.0, 2.0)],
+        steps=[
+            store_step("project-copy", 0.5, 3.0),
+            store_step("document-copy", 2.0, 4.0),
+        ],
+    )
+    with pytest.raises(
+        SystemExit,
+        match="steps.jsonl:2: a step that starts before the one before it ended",
+    ):
+        run(measured)
+
+
+def test_a_record_of_a_kind_the_sanitizer_wrote_as_other_is_counted_as_what_it_is(
+    measured,
+):
+    # The sanitizer writes any kind it does not know as `other`: such a request is a request but
+    # no write, a host event is no cause of its own, and a screening call is timed but neither
+    # an inspect nor a check.
+    events = host_events() + [
+        {"kind": "séance", "name": "x", "start": 1.6, "end": 1.7, "pid": 7}
+    ]
+    retake(
+        measured,
+        "host-changed1",
+        {1: 1, 2: 1},
+        requests=[
+            graphql(1, "SUB_ISSUES", 3.0, 4.0),
+            graphql(2, "SUB_ISSUES", 4.0, 4.2, kind="carrier"),
+        ],
+        steps=[store_step("copy-plan", 0.0, 6.0)],
+        host=events,
+        screen=[
+            {
+                "kind": "screen",
+                "name": "audit",
+                "start": 2.6,
+                "end": 2.9,
+                "returncode": 0,
+            }
+        ],
+    )
+    run(measured, "--write")
+    row = summary(measured)["host-changed1"]
+    assert row["writes"]["requests"] == 2 and row["writes"]["writes"] == 0
+    assert row["points"]["figure"] == 2
+    assert row["screening"] == {"inspect": 0, "check": 0, "seconds": 0.3}
+    assert row["attribution"]["write screening: onevcs boundary other"] == 0.3
+    assert not any("séance" in cause for cause in row["attribution"])
+    assert round(sum(row["attribution"].values()), 2) == 6.0

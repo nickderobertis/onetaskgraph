@@ -382,6 +382,11 @@ def steps_of(path: Path) -> list[Step]:
         out.append(Step(tuple(r["argv"]), start, end, r["returncode"]))
     if not out:
         raise refuse(path, None, "no timed step")
+    for number, (a, b) in enumerate(zip(out, out[1:]), 2):
+        if b.start < a.end:
+            raise refuse(
+                path, number, "a step that starts before the one before it ended"
+            )
     return out
 
 
@@ -1133,7 +1138,21 @@ class Loopback:
     recordings: dict[str, Recording]
 
 
+# The three loopback recordings the board-size table compares, one per copy the targets name.
+LOOPBACK_POINTS = tuple(
+    f"github-plan-copy-points-{copy}" for copy in ("first", "changed", "unchanged")
+)
+
+
 def loopback(captures: Path) -> list[Loopback]:
+    missing = [
+        b for b in LOOPBACK_POINTS if not (captures / "loopback" / f"{b}.json").exists()
+    ]
+    if missing:
+        raise SystemExit(
+            f"analyze.py: no loopback recording {', '.join(missing)} under {captures / 'loopback'}; "
+            "record the board-size journey again at the measured tag"
+        )
     out = []
     for path in sorted((captures / "loopback").glob("*.json")):
         record = document(path)
