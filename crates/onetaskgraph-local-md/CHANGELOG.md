@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.9](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.12.8...onetaskgraph-local-md-v0.12.9) - 2026-10-28
+
+### Fixed
+
+- *(store)* accept a path inside the configured root on Windows whatever its spelling ([#3793](https://github.com/nickderobertis/onetaskgraph/pull/3793))
+
 ## [0.12.8](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.12.7...onetaskgraph-local-md-v0.12.8) - 2026-10-28
 
 ### Added
