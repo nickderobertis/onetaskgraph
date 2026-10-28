@@ -2187,6 +2187,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 hasher.finish()
             });
         }
+        eprintln!("DBGSEARCH {search:?} visible={visible} total={} matched={:?} all={:?}", state.items.len(), matched.iter().map(|i| (&i.content_id,&i.title,i.state)).collect::<Vec<_>>(), indexed.iter().filter(|i| i.title.contains("this run") || i.content_id.starts_with("I_new")).map(|i| (&i.content_id,&i.title,i.state,i.listed,&i.typename)).collect::<Vec<_>>());
         let end = (offset + first).min(matched.len());
         let nodes = matched[offset.min(end)..end]
             .iter()
