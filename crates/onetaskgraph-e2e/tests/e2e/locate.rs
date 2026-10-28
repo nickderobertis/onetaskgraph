@@ -3,7 +3,8 @@
 //! Every store here holds two public folders of Markdown, `drafts` and `mirror`, a private one,
 //! `secrets`, a public folder `site` routing every private item to `board` — the loopback
 //! GitHub board, declared private — and a Linear source `ledger` whose every request is counted
-//! and refused. Its `write_policy` is the released onevcs boundary commands behind a recorder,
+//! and refused, and `hosted`, the same board served over the stdio plugin protocol. Its
+//! `write_policy` is the released onevcs boundary commands behind a recorder,
 //! over an onevcs home holding synthetic identities: `hiddenco/quietharbor` private,
 //! `openco/openwidget` public.
 //!
@@ -155,7 +156,6 @@ impl Store {
                 "board": {"plugin": "github-projects", "config": board_config,
                           "visibility": "private"},
                 "ledger": {"plugin": "linear", "config": ledger_config},
-                // The same board, hosted over the stdio plugin protocol.
                 "hosted": {"plugin": "subprocess", "config": {
                     "command": onetaskgraph_e2e_support::binary(),
                     "args": ["plugin-serve", "github-projects"],
