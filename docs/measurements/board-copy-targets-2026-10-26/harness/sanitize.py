@@ -1,0 +1,392 @@
+# llmlint: ignore-file[new_code_lands_in_a_project] This is the measurement record beside the captures it produced: run by hand against GitHub through measure.sh, never by a target. docs/measurements is no Nx project (nor is coalesced-members-dry-run/dry_run.py beside it), and making it one would put a live-GitHub harness inside affected selection.
+# llmlint: ignore-file[boundary_inputs_validated] Every input here is this harness's own raw log, its own state folder or the plan it generated moments earlier; the committed captures are validated where they are read, by analyze.py, and what leaves the raw logs is held by the sanitizer's allowlist and leak scan.
+# llmlint: ignore-file[changed_behavior_has_e2e] Its proof is the live run itself, whose captures are committed and reconciled by test_analyze.py; the GitHub-facing parts can be driven only against GitHub's test board, which measure.sh does, and the sanitizer produces every capture those tests read.
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] What this mirrors (the plugin's documents, the host's configuration, the scratch identities) is pinned to the releases measured, onetaskgraph v0.12.7 and ai-orchestrator 668dc496, each stated in the report and in every row's versions.json; the capture schema it shares with analyze.py is held by test_analyze.py, which builds every capture through sanitize.write.
+# llmlint: ignore-file[modern_domain_modeling] These records are JSON lines passed by allowlist from the proxy's raw log to the sanitized captures; the typed reading of them is analyze.py, and remodelling the retained harness would make it no longer the code that took the captures.
+# llmlint: ignore-file[structural_pattern_matching] This repository's Python target is 3.9 (requires-python in pyproject.toml), where a match statement does not parse.
+"""Reduce one run's raw logs to what is committed: timestamps, durations, operation names,
+counts, costs and limit headers. Nothing else passes. Every field is copied by allowlist,
+never by removing what looks sensitive, so a board's titles, bodies, URLs and node ids
+cannot reach the output; `leaks` then scans the output for anything shaped like one.
+
+`python3 sanitize.py RAW_RUN_DIR OUT_DIR` (the runner calls `write` itself).
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+
+# GitHub's global node ids (`I_kwDO…`, `PVTI_…`, `PVT_…`, `PVTSSF_…`, `IC_…`) and the
+# legacy base64 ones (`MDU6…`).
+NODE_ID = re.compile(
+    r"\b(?:[A-Z]{1,8}_(?=[A-Za-z0-9_-]*[a-z])[A-Za-z0-9_-]{8,}|MD[A-Za-z0-9]{2}[A-Za-z0-9=+/]{8,})"
+)
+ISSUE_URL = re.compile(r"https?://github\.com/[^\s\"']+")
+LIMIT_FIELDS = ("limit", "remaining", "used", "reset")
+# The kinds a sanitized record may carry; anything else is written as `other`. `analyze.py` reads
+# these, so the two cannot name them differently.
+REQUEST_KINDS = ("query", "mutation", "rest", "tunnel")
+HOST_KINDS = ("store", "subprocess", "interpreter", "step")
+SCREEN_NAMES = ("inspect", "check")
+SPAN_ATTRS = ("op", "kind", "attempt", "limiter", "operation")
+STORE_VERBS = {
+    "project",
+    "task",
+    "document",
+    "list",
+    "show",
+    "copy",
+    "deps",
+    "answers",
+    "render",
+    "metadata",
+    "set",
+    "config",
+    "sources",
+}
+
+
+def rest_path(host: str, path: str, kind: str) -> str:
+    if kind == "tunnel":
+        return host
+    bare = path.split("?", 1)[0]
+    if bare.startswith("/graphql"):
+        return "/graphql"
+    if bare.startswith("/user-attachments/assets"):
+        return "/user-attachments/assets"
+    if re.fullmatch(r"/repos/[^/]+/[^/]+", bare):
+        return "/repos/{owner}/{repo}"
+    if bare.startswith("/rate_limit"):
+        return "/rate_limit"
+    return "other"
+
+
+def limits(raw: dict) -> dict:
+    out: dict = {}
+    for key, value in raw.items():
+        short = key.removeprefix("x-ratelimit-")
+        if short in LIMIT_FIELDS or key == "retry-after":
+            try:
+                out[short] = int(value)
+            except ValueError:
+                continue
+        elif short == "resource" and re.fullmatch(r"[a-z_]+", value):
+            out[short] = value
+    return out
+
+
+def operation(record: dict) -> str:
+    op = str(record.get("op", ""))
+    if record.get("kind") == "rest":
+        method = str(record.get("method", ""))
+        return f"{method} {rest_path(record['host'], record['path'], 'rest')}"
+    if record.get("kind") == "tunnel":
+        return (
+            f"CONNECT {record['host']}"
+            if re.fullmatch(r"[a-z0-9.-]+", record["host"])
+            else "CONNECT"
+        )
+    return op if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,80}", op) else "unnamed"
+
+
+def request(record: dict) -> dict:
+    return {
+        "seq": int(record["seq"]),
+        "start": round(float(record["start"]), 3),
+        "end": round(float(record["end"]), 3),
+        "ms": float(record["ms"]),
+        "method": str(record["method"])
+        if record["method"] in ("GET", "POST", "CONNECT")
+        else "other",
+        "host": record["host"]
+        if re.fullmatch(r"[a-z0-9.-]+", record["host"])
+        else "other",
+        "path": rest_path(record["host"], record["path"], record["kind"]),
+        "kind": record["kind"] if record["kind"] in REQUEST_KINDS else "other",
+        "op": operation(record),
+        "req_bytes": int(record["req_bytes"]),
+        "resp_bytes": int(record["resp_bytes"]),
+        "status": int(record["status"]),
+        "cost": record["cost"] if isinstance(record.get("cost"), int) else None,
+        "errors": [
+            e
+            for e in record.get("errors", [])
+            if re.fullmatch(r"[A-Z_]{1,40}|untyped", e)
+        ],
+        "limits": limits(record.get("limits", {})),
+    } | (
+        {"mutations": int(record["mutations"])}
+        if isinstance(record.get("mutations"), int)
+        else {}
+    )
+
+
+def span(record: dict) -> dict:
+    attrs = {
+        k: v
+        for k, v in record.get("attrs", {}).items()
+        if k in SPAN_ATTRS and re.fullmatch(r"[A-Za-z0-9_]{1,80}", str(v))
+    }
+    return {
+        "span": str(record["span"]),
+        "start": round(record["start_us"] / 1e6, 6),
+        "end": round(record["end_us"] / 1e6, 6),
+        "attrs": attrs,
+    }
+
+
+def argv(words: list[str]) -> list[str]:
+    """A command line with every id, path and value replaced by what kind of word it was, except
+    a flag, a store verb and a short lowercase word (a source name, or the generated plan's
+    synthetic id), which are kept as they are."""
+    out = []
+    for word in words:
+        if (
+            word.startswith("--")
+            and re.fullmatch(r"--[a-z-]+", word)
+            or word in STORE_VERBS
+            or re.fullmatch(r"[a-z][a-z-]{0,30}", word)
+        ):
+            out.append(word)
+        elif "/" in word and not ":" in word:
+            out.append("<path>")
+        elif ":" in word:
+            source = word.split(":", 1)[0]
+            out.append(
+                f"{source if re.fullmatch(r'[a-z-]+', source) else '<source>'}:<id>"
+            )
+        else:
+            out.append("<value>")
+    return out
+
+
+def host(record: dict) -> dict:
+    out = {
+        "kind": record["kind"] if record["kind"] in HOST_KINDS else "other",
+        "start": round(record["start"], 3),
+        "end": round(record.get("end", record["start"]), 3),
+    }
+    if "pid" in record:
+        out["pid"] = int(record["pid"])
+    if record["kind"] == "store":
+        out["argv"] = argv(record["argv"])
+        out["returncode"] = record["returncode"]
+    elif record["kind"] == "subprocess":
+        program = str(record.get("program", ""))
+        out["program"] = (
+            program if re.fullmatch(r"[A-Za-z0-9_.+-]{1,40}", program) else "other"
+        )
+        out["returncode"] = record["returncode"]
+    elif record["kind"] == "interpreter":
+        out["name"] = record["name"] if record["name"] in ("start", "exit") else "other"
+    else:
+        out["name"] = (
+            record["name"] if re.fullmatch(r"[a-z_.]+", record["name"]) else "step"
+        )
+    return out
+
+
+def step(record: dict) -> dict:
+    words = record["argv"]
+    program = Path(words[0]).name
+    return {
+        "step": record["step"],
+        "program": program if program in ("onetaskgraph", "just") else "other",
+        "argv": argv(words[1:]),
+        "start": round(record["start"], 3),
+        "end": round(record["end"], 3),
+        "returncode": record["returncode"],
+    }
+
+
+def redact(value: object) -> object:
+    if isinstance(value, dict):
+        return {k: redact(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact(v) for v in value]
+    if isinstance(value, str):
+        return NODE_ID.sub("<node-id>", ISSUE_URL.sub("<url>", value))
+    return value
+
+
+def lines(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def dump(path: Path, records: list[dict]) -> None:
+    path.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in records))
+
+
+def write(run: Path, out: Path) -> Path:
+    out.mkdir(parents=True, exist_ok=True)
+    dump(out / "requests.jsonl", [request(r) for r in lines(run / "proxy.jsonl")])
+    if (run / "spans.jsonl").exists():
+        dump(out / "spans.jsonl", [span(r) for r in lines(run / "spans.jsonl")])
+    if (run / "host.jsonl").exists():
+        dump(out / "host.jsonl", [host(r) for r in lines(run / "host.jsonl")])
+    dump(out / "steps.jsonl", [step(r) for r in lines(run / "steps.jsonl")])
+    if (run / "screen.jsonl").exists():
+        dump(
+            out / "screen.jsonl",
+            [
+                {
+                    "kind": "screen",
+                    "name": r["name"] if r["name"] in SCREEN_NAMES else "other",
+                    "start": round(float(r["start"]), 3),
+                    "end": round(float(r["end"]), 3),
+                    "returncode": int(r["returncode"]),
+                }
+                for r in lines(run / "screen.jsonl")
+            ],
+        )
+    quota = {}
+    for name in ("quota-before.json", "quota-after.json"):
+        if (run / name).exists():
+            raw = json.loads((run / name).read_text())
+            quota[name.removesuffix(".json")] = {
+                "at": raw["at"],
+                # `readings` is how many `rateLimit` queries one reading sent, so the
+                # spike's own consumption is countable from what is committed.
+                "buckets": {
+                    b: {k: int(v[k]) for k in LIMIT_FIELDS}
+                    | (
+                        {"readings": [int(r) for r in v["readings"]]}
+                        if "readings" in v
+                        else {}
+                    )
+                    | (
+                        {"used_readings": [int(r) for r in v["used_readings"]]}
+                        if "used_readings" in v
+                        else {}
+                    )
+                    | (
+                        {
+                            "reset_readings": [
+                                str(r)
+                                for r in v["reset_readings"]
+                                if re.fullmatch(r"[0-9T:Z-]{20}", str(r))
+                            ]
+                        }
+                        if "reset_readings" in v
+                        else {}
+                    )
+                    for b, v in raw["buckets"].items()
+                },
+            }
+    for name in ("burn-before", "burn-after"):
+        if (run / f"{name}.json").exists():
+            quota[name] = [
+                {
+                    "at": round(float(r["at"]), 3),
+                    **{k: int(r[k]) for k in ("used", "remaining", "reset")},
+                }
+                for r in json.loads((run / f"{name}.json").read_text())
+            ]
+    if (run / "quota-events.json").exists():
+        quota["gate"] = [
+            {
+                "event": e["event"],
+                "at": e["at"],
+                **(
+                    {
+                        "seconds": float(e["seconds"]),
+                        "buckets": [str(b) for b in e["buckets"]],
+                    }
+                    if e["event"] == "pause"
+                    else {}
+                ),
+                **(
+                    {
+                        "buckets": {
+                            b: {k: int(v[k]) for k in LIMIT_FIELDS}
+                            | (
+                                {"readings": [int(r) for r in v["readings"]]}
+                                if "readings" in v
+                                else {}
+                            )
+                            for b, v in e["buckets"].items()
+                        },
+                        "verdicts": {
+                            b: bool(v["proceed"]) for b, v in e["verdicts"].items()
+                        },
+                    }
+                    if e["event"] == "reading"
+                    else {}
+                ),
+            }
+            for e in json.loads((run / "quota-events.json").read_text())
+        ]
+    (out / "quota.json").write_text(json.dumps(quota, indent=1, sort_keys=True) + "\n")
+    if (run / "workload.json").exists():
+        sizes = json.loads((run / "workload.json").read_text())
+        workload = {
+            label: [int(v) for v in value]
+            for label, value in sizes.items()
+            if re.fullmatch(r"project|task t[1-8]|document|image", label)
+        }
+        (out / "workload.json").write_text(json.dumps(workload, indent=1) + "\n")
+    for name in ("versions.json", "cache-before.json", "cache-after.json"):
+        if (run / name).exists():
+            raw = json.loads((run / name).read_text())
+            kept = {
+                str(k): v
+                for k, v in raw.items()
+                if re.fullmatch(r"[a-z_]{1,20}", str(k))
+                and (
+                    isinstance(v, int) or re.fullmatch(r"[A-Za-z0-9 ._-]{1,60}", str(v))
+                )
+            }
+            (out / name).write_text(json.dumps(kept, indent=1, sort_keys=True) + "\n")
+    if (run / "conditions.json").exists():
+        raw = json.loads((run / "conditions.json").read_text())
+        kept = {
+            k: {"value": v["value"], "layer": str(v["layer"])}
+            for k, v in raw.items()
+            if re.fullmatch(r"[a-z_.-]{1,80}", k)
+            and isinstance(v, dict)
+            and (
+                isinstance(v.get("value"), bool)
+                or re.fullmatch(r"[a-z-]{1,20}", str(v.get("value")))
+            )
+            and re.fullmatch(r"[a-z]{1,20}", str(v.get("layer")))
+        }
+        (out / "conditions.json").write_text(
+            json.dumps(kept, indent=1, sort_keys=True) + "\n"
+        )
+    for name in ("probes.json", "cleanup.json"):
+        if (run / name).exists():
+            (out / name).write_text(
+                json.dumps(redact(json.loads((run / name).read_text())), indent=1)
+                + "\n"
+            )
+    found = leaks(out)
+    if found:
+        raise SystemExit(f"sanitize: {out} would carry identifying text: {found[:5]}")
+    return out
+
+
+def leaks(
+    directory: Path, forbidden: tuple[str, ...] = ("seeded task", "Spike workload")
+) -> list[str]:
+    """Every line under `directory` holding a node id, a GitHub URL or a workload title."""
+    found = []
+    for path in sorted(directory.rglob("*")):
+        if not path.is_file():
+            continue
+        for number, text in enumerate(path.read_text(errors="replace").splitlines(), 1):
+            if (
+                NODE_ID.search(text)
+                or ISSUE_URL.search(text)
+                or any(f in text for f in forbidden)
+            ):
+                found.append(f"{path.name}:{number}")
+    return found
+
+
+if __name__ == "__main__":
+    write(Path(sys.argv[1]), Path(sys.argv[2]))
