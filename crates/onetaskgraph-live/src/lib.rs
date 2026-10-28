@@ -82,6 +82,7 @@
 #![deny(missing_docs)]
 
 pub mod artifact;
+pub mod linear_artifact;
 pub mod pace;
 
 pub use pace::{Gauge, PAUSE_BELOW, Pause, Reading};

@@ -1148,7 +1148,14 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
         .as_micros();
     let mut origins = Vec::new();
     for kind in ["task", "document"] {
-        let title = format!("onetaskgraph disposable asset {kind} {stamp}");
+        let title = format!(
+            "{}{}",
+            onetaskgraph_live::linear_artifact::TITLE_PREFIX,
+            onetaskgraph_live::artifact::Stamp::new(
+                onetaskgraph_live::artifact::Run::current(),
+                stamp as u64
+            )
+        );
         let (id, _) = journey.create_named(kind, 2, &title, false);
         let output = journey
             .sandbox
@@ -1167,7 +1174,7 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
             .map(|line| format!("{line}\n"))
             .collect();
         std::fs::write(path, text).unwrap();
-        origins.push((kind, id));
+        origins.push((kind, id, title));
     }
     let (endpoint, observed) = live_observer(key.clone());
     journey
@@ -1181,7 +1188,7 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
     // reads the observer's item journal, never the failed journey state; mutex guards are
     // dropped before assertions, and the runtime/client are only reused for fresh deletes.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        for (kind, id) in origins {
+        for (kind, id, title) in origins {
             let run = || {
                 journey
                     .sandbox
@@ -1203,6 +1210,10 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
             assert!(output.status.success(), "{}", stderr(&output));
             let shown: Value = serde_json::from_str(&stdout(&output)).unwrap();
             let item = &shown["items"][0]["item"];
+            assert_eq!(
+                item["title"], title,
+                "the destination retains its recoverable ownership title"
+            );
             let content = item["content"].as_str().unwrap();
             assert!(!content.contains("](./"));
             let uploads = item["metadata"]["onetaskgraph.assets"].as_object().unwrap();

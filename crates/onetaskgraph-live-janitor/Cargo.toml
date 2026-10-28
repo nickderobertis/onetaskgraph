@@ -13,6 +13,7 @@ onetaskgraph-live.workspace = true
 onetaskgraph-github-live.workspace = true
 onetaskgraph-github-projects.workspace = true
 reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 

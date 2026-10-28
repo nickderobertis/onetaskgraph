@@ -52,6 +52,15 @@ import sys
 # the path to its value inside an item — a path reaching a list contributes every element.
 # A path segment of `[]` walks into a list.
 MANIFEST = {
+    "crates/onetaskgraph-live-janitor/tests/fixtures/linear-documents.json": {
+        "items": ["data", "documents", "nodes"],
+        "id": ["id"],
+        "title": ["title"],
+        "facets": {
+            "ownership title": ["title"],
+            "team": ["team", "key"],
+        },
+    },
     "crates/onetaskgraph-linear/tests/fixtures/issues.json": {
         "items": ["data", "issues", "nodes"],
         "id": ["id"],

@@ -151,7 +151,11 @@ fn named<'a>(kind: &'a schema::Type<'a, String>) -> &'a str {
 }
 
 fn validate(document: &str) {
-    let pinned = schema::parse_schema::<String>(PINNED).expect("the pinned schema parses");
+    validate_against(document, PINNED);
+}
+
+fn validate_against(document: &str, pinned: &str) {
+    let pinned = schema::parse_schema::<String>(pinned).expect("the pinned schema parses");
     let schema = Schema::new(&pinned);
     let parsed = query::parse_query::<String>(document).expect("the document parses");
     let [query::Definition::Operation(operation)] = parsed.definitions.as_slice() else {
@@ -228,5 +232,100 @@ fn a_field_github_does_not_have_is_refused() {
             .cloned()
             .unwrap_or_default();
         assert!(message.contains(reason), "{reason}: {message}");
+    }
+}
+
+#[test]
+fn linear_documents_match_the_pinned_upstream_schema() {
+    use onetaskgraph_live_janitor::linear::{DELETE_DOCUMENT, DOCUMENTS};
+    let upstream = std::process::Command::new("python3")
+        .args([
+            "-c",
+            "import gzip,sys; sys.stdout.buffer.write(gzip.open(sys.argv[1], 'rb').read())",
+        ])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/linear-upstream.graphql.gz"
+        ))
+        .output()
+        .expect("read the pinned upstream schema");
+    assert!(upstream.status.success());
+    let pinned = String::from_utf8(upstream.stdout).expect("upstream schema is UTF-8");
+    for document in [DOCUMENTS, DELETE_DOCUMENT] {
+        validate_against(document, &pinned);
+    }
+    let parsed = schema::parse_schema::<String>(&pinned).expect("upstream parses");
+    let schema = Schema::new(&parsed);
+    let query = query::parse_query::<String>(DOCUMENTS).unwrap();
+    let query::Definition::Operation(query::OperationDefinition::Query(operation)) =
+        &query.definitions[0]
+    else {
+        panic!("document listing is a query")
+    };
+    let response: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/linear-documents.json")).unwrap();
+    validate_response(
+        &schema,
+        "Query",
+        &operation.selection_set,
+        &response["data"],
+    );
+}
+
+fn validate_response(
+    schema: &Schema<'_>,
+    parent: &str,
+    selection: &query::SelectionSet<'_, String>,
+    value: &serde_json::Value,
+) {
+    let object = value.as_object().expect("selected object is an object");
+    assert_eq!(
+        object.len(),
+        selection.items.len(),
+        "response carries exactly the selected fields of {parent}"
+    );
+    for item in &selection.items {
+        let query::Selection::Field(selected) = item else {
+            panic!("Linear selections are fields")
+        };
+        let field = schema.fields[parent]
+            .iter()
+            .find(|field| field.name == selected.name)
+            .expect("selected field exists upstream");
+        let value = object
+            .get(selected.alias.as_ref().unwrap_or(&selected.name))
+            .expect("selected field is present");
+        validate_value(schema, &field.field_type, &selected.selection_set, value);
+    }
+}
+
+fn validate_value(
+    schema: &Schema<'_>,
+    kind: &schema::Type<'_, String>,
+    selection: &query::SelectionSet<'_, String>,
+    value: &serde_json::Value,
+) {
+    if let schema::Type::NonNullType(inner) = kind {
+        assert!(!value.is_null(), "non-null field is present");
+        return validate_value(schema, inner, selection, value);
+    }
+    if value.is_null() {
+        return;
+    }
+    match kind {
+        schema::Type::ListType(inner) => {
+            for item in value.as_array().expect("connection field is an array") {
+                validate_value(schema, inner, selection, item);
+            }
+        }
+        schema::Type::NamedType(name) if !selection.items.is_empty() => {
+            validate_response(schema, name, selection, value)
+        }
+        schema::Type::NamedType(name) => match name.as_str() {
+            "String" | "ID" => assert!(value.is_string()),
+            "Boolean" => assert!(value.is_boolean()),
+            other => panic!("unexpected scalar {other}"),
+        },
+        schema::Type::NonNullType(_) => unreachable!(),
     }
 }
