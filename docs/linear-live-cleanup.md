@@ -108,6 +108,12 @@ follow-up records the rule-applicability question. No lint configuration changed
 The parallel verification run hit a packaging race: Maturin could not open its
 `target/maturin/onetaskgraph` intermediate while script and workflow publication
 journeys packaged the same tree. The manager confirmed the race is covered by a
-separate build-lock task. These targets are being rerun serially, with two Rust test
-threads and no committed configuration change. The busy host's load averages were
+separate build-lock task. The script, workflow and janitor test, lint, formatting and type-check targets
+passed serially: all 14 tasks succeeded, including all 95 workflow tests, with two
+Rust test threads and no committed configuration change. The busy host's load averages were
 25.67, 37.44 and 31.81; the first Linear e2e run passed all 146 tests in 803.92 seconds.
+
+Model lint passed on the repaired implementation: 56 rules, 28 passed, zero failed,
+11 skipped, two ignored and 15 not relevant (history `20261028T204633Z-ae728`).
+Static validation also passed. The final changes after that review only record
+these completed verification results.
