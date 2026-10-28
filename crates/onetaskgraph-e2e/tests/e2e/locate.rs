@@ -39,6 +39,9 @@ struct Store {
     record: BoundaryRecord,
     board: GitHubBoardFields,
     ledger: Arc<Mutex<usize>>,
+    /// Where the `hosted` child writes its coverage profiles: outside the store, so the
+    /// write-nothing snapshot stays a walk of every file in it.
+    profiles: tempfile::TempDir,
 }
 
 /// What one command sent: its output, the board's documents with their variables, and the
@@ -145,6 +148,7 @@ impl Store {
                 "visibility": visibility,
             })
         };
+        let profiles = tempfile::tempdir().expect("a directory for the hosted child's profiles");
         let mut site = folder("site", "public");
         site["routes"] = json!([{"classification": "private", "to": "board"}]);
         let document = json!({
@@ -156,12 +160,7 @@ impl Store {
                 "board": {"plugin": "github-projects", "config": board_config,
                           "visibility": "private"},
                 "ledger": {"plugin": "linear", "config": ledger_config},
-                "hosted": {"plugin": "subprocess", "config": {
-                    "command": onetaskgraph_e2e_support::binary(),
-                    "args": ["plugin-serve", "github-projects"],
-                    "secrets": ["GITHUB_PROJECTS_FIXTURE_TOKEN"],
-                    "settings": board_config,
-                }},
+                "hosted": hosted(&board_config, profiles.path()),
             },
             "write_policy": record.write_policy(),
         });
@@ -172,6 +171,7 @@ impl Store {
             record,
             board,
             ledger,
+            profiles,
         }
     }
 
@@ -265,14 +265,6 @@ impl Store {
                 }
                 if path.is_dir() {
                     pending.push(path);
-                // LLVM's coverage runtime, rather than the engine, writes these profiler
-                // artifacts into the working directory of an instrumented run. Match only
-                // its two exact extensions so every other file remains evidence of a write.
-                } else if matches!(
-                    path.extension().and_then(|extension| extension.to_str()),
-                    Some("profraw" | "profdata")
-                ) {
-                    continue;
                 } else {
                     let bytes = std::fs::read(&path).expect("a file");
                     held.insert(display(&path), String::from_utf8_lossy(&bytes).into_owned());
@@ -281,6 +273,42 @@ impl Store {
         }
         held
     }
+}
+
+/// The `hosted` source: the board served over the stdio plugin protocol by this binary.
+///
+/// The engine clears a plugin's environment (protocol §3.1), and with it the
+/// `LLVM_PROFILE_FILE` an instrumented run hands the store, so an instrumented child falls
+/// back to writing `default_*.profraw` into its working directory — the store's own folder,
+/// where the write-nothing snapshot reads it as a write by `locate`. A shell between the
+/// engine and the child names a directory outside the store instead and then becomes the
+/// child, leaving the engine's clearing as it is. Windows has no `/bin/sh`, and nothing is
+/// instrumented there (AGENTS.md: the measurement is skipped on Windows), so it spawns the
+/// binary directly.
+fn hosted(board_config: &Value, profiles: &Path) -> Value {
+    let binary = onetaskgraph_e2e_support::binary();
+    let binary = binary.to_str().expect("the binary's path is UTF-8");
+    let (command, mut args) = if cfg!(unix) {
+        let pattern = profiles.join("hosted-%p-%m.profraw");
+        (
+            "/bin/sh".to_owned(),
+            vec![
+                "-c".to_owned(),
+                r#"export LLVM_PROFILE_FILE="$1"; shift; exec "$0" "$@""#.to_owned(),
+                binary.to_owned(),
+                pattern.to_str().expect("a UTF-8 path").to_owned(),
+            ],
+        )
+    } else {
+        (binary.to_owned(), Vec::new())
+    };
+    args.extend(["plugin-serve".to_owned(), "github-projects".to_owned()]);
+    json!({"plugin": "subprocess", "config": {
+        "command": command,
+        "args": args,
+        "secrets": ["GITHUB_PROJECTS_FIXTURE_TOKEN"],
+        "settings": board_config,
+    }})
 }
 
 fn display(path: &Path) -> String {
@@ -736,5 +764,35 @@ fn target_native_locates_the_counterpart_the_caller_names_and_nothing_else() {
         assert!(located.served.is_empty(), "{kind}: {:#?}", located.served);
         let (code, refused, _) = located.refusal();
         assert_eq!((code, refused.as_str()), (Some(1), kind));
+    }
+}
+
+#[test]
+fn the_write_nothing_snapshot_reads_a_coverage_profile_in_the_store_as_a_write() {
+    let store = Store::new(Vec::new());
+    // The hosted child's profiles go outside the store, which is what lets the snapshot walk
+    // every file in it rather than pass over the ones the coverage runtime might write.
+    assert!(
+        !store.profiles.path().starts_with(store.sandbox.project()),
+        "{} is outside {}",
+        store.profiles.path().display(),
+        store.sandbox.project().display()
+    );
+    for (folder, name) in [
+        ("drafts", "default_1_2.profraw"),
+        ("mirror", "merged.profdata"),
+    ] {
+        let before = store.tree();
+        let planted = store.sandbox.subdirectory(folder).join(name);
+        std::fs::write(&planted, b"profile").expect("a planted profile");
+        let after = store.tree();
+        assert_ne!(after, before, "{name} under {folder} is seen");
+        assert_eq!(
+            after.get(&display(&planted)).map(String::as_str),
+            Some("profile"),
+            "{name} under {folder} is held with its contents"
+        );
+        std::fs::remove_file(&planted).expect("the planted profile goes");
+        assert_eq!(store.tree(), before, "removing {name} restores the tree");
     }
 }
