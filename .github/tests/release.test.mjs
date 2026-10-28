@@ -76,7 +76,7 @@ function uploads() {
   return found;
 }
 
-test("the release is five jobs on the runners their names say, and release-plz is one", () => {
+test("the release is six jobs on the runners their names say, and release-plz is one", () => {
   const all = workflows();
   const release = all["release.yml"];
   assert.deepEqual(Object.keys(release.jobs).sort(), Object.keys(RELEASE_JOBS).sort());
