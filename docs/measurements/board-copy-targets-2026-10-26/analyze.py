@@ -29,7 +29,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NewType
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "harness"))
@@ -38,6 +38,10 @@ import sanitize  # the producer of every capture this reads
 
 CAPTURES = HERE / "captures"
 REPORT = HERE.parent / "board-copy-targets-2026-10-26.md"
+
+
+ScenarioName = NewType("ScenarioName", str)
+CaptureName = NewType("CaptureName", str)
 
 
 class Verdict(str, Enum):
@@ -89,7 +93,7 @@ class Figures:
 
 @dataclass(frozen=True)
 class Scenario:
-    name: str
+    name: ScenarioName
     operation: Operation
     label: str
 
@@ -111,35 +115,43 @@ BEFORE: dict[Operation, Figures] = {
 }
 # The same operations measured on GitHub at onetaskgraph 0.11.0 on 2026-10-24
 # (`board-copy-speed-2026-10-18.md`, combined table).
-EARLIER: dict[str, Figures] = {
-    "bare-first": Figures(seconds=29.8, points=20, writes=36),
-    "bare-changed1": Figures(seconds=8.7, points=7, writes=1),
-    "bare-unchanged": Figures(seconds=6.7, points=6, writes=0),
-    "host-first": Figures(seconds=64.4, points=17, writes=25),
-    "host-changed1": Figures(seconds=52.2, points=7, writes=2),
-    "host-unchanged": Figures(seconds=44.7, points=4, writes=0),
-    "host-approve": Figures(seconds=16.4, points=7, writes=1),
+EARLIER: dict[ScenarioName, Figures] = {
+    ScenarioName("bare-first"): Figures(seconds=29.8, points=20, writes=36),
+    ScenarioName("bare-changed1"): Figures(seconds=8.7, points=7, writes=1),
+    ScenarioName("bare-unchanged"): Figures(seconds=6.7, points=6, writes=0),
+    ScenarioName("host-first"): Figures(seconds=64.4, points=17, writes=25),
+    ScenarioName("host-changed1"): Figures(seconds=52.2, points=7, writes=2),
+    ScenarioName("host-unchanged"): Figures(seconds=44.7, points=4, writes=0),
+    ScenarioName("host-approve"): Figures(seconds=16.4, points=7, writes=1),
 }
 ROWS = (
-    Scenario("bare-first", Operation.FIRST, "bare store: first copy"),
+    Scenario(ScenarioName("bare-first"), Operation.FIRST, "bare store: first copy"),
     Scenario(
-        "bare-changed1",
+        ScenarioName("bare-changed1"),
         Operation.CHANGED1,
         "bare store: re-copy, one task's body changed",
     ),
-    Scenario("bare-unchanged", Operation.UNCHANGED, "bare store: unchanged re-copy"),
-    Scenario("host-first", Operation.FIRST, "host `just copy-plan`: first copy"),
     Scenario(
-        "host-changed1",
+        ScenarioName("bare-unchanged"),
+        Operation.UNCHANGED,
+        "bare store: unchanged re-copy",
+    ),
+    Scenario(
+        ScenarioName("host-first"), Operation.FIRST, "host `just copy-plan`: first copy"
+    ),
+    Scenario(
+        ScenarioName("host-changed1"),
         Operation.CHANGED1,
         "host `just copy-plan`: one task's body changed",
     ),
     Scenario(
-        "host-unchanged",
+        ScenarioName("host-unchanged"),
         Operation.UNCHANGED,
         "host `just copy-plan`: unchanged re-copy",
     ),
-    Scenario("host-approve", Operation.APPROVE, "host `just approve-design`"),
+    Scenario(
+        ScenarioName("host-approve"), Operation.APPROVE, "host `just approve-design`"
+    ),
 )
 # The reference-size arithmetic of the timing spike (`board-copy-speed-2026-10-18.md`): every
 # walk page the test board answered is replaced by the pages the same walk takes on a board of
@@ -643,7 +655,7 @@ def workload_of(path: Path) -> dict[str, Size]:
 class Capture:
     """One row's sanitized capture, parsed."""
 
-    name: str
+    name: CaptureName
     requests: tuple[Request, ...]
     steps: tuple[Step, ...]
     host: tuple[HostEvent, ...]
@@ -658,7 +670,7 @@ class Capture:
 
 def load(path: Path) -> Capture:
     return Capture(
-        name=path.name,
+        name=CaptureName(path.name),
         requests=tuple(requests_of(path / "requests.jsonl")),
         steps=tuple(steps_of(path / "steps.jsonl")),
         host=tuple(host_of(path / "host.jsonl")),
@@ -717,7 +729,7 @@ class Points:
     residual: float | None = None
 
 
-def price(request: Request, prices: dict[str, int], capture: str) -> int:
+def price(request: Request, prices: dict[str, int], capture: CaptureName) -> int:
     """One GraphQL request's primary points: a query its own dry-run price, a mutation request
     `MUTATION_PRICE` (which the dry run cannot price)."""
     if request.kind is RequestKind.MUTATION:
@@ -1168,6 +1180,12 @@ def loopback(captures: Path) -> list[Loopback]:
             raise refuse(
                 path, None, "a loopback recording without its budget or its detail"
             )
+        if record["budget"] != path.stem:
+            raise refuse(
+                path,
+                None,
+                f"a recording of {record['budget']!r} filed as {path.stem!r}",
+            )
         recordings = {}
         compared = record["budget"].startswith(POINTS_BUDGET)
         for name, value in detail.items():
@@ -1191,20 +1209,25 @@ def loopback(captures: Path) -> list[Loopback]:
     return out
 
 
-SIZES = (
-    ("unscreened", "unscreened, on a board of 20,000 items"),
-    ("screened", "screened, on a board of 20,000 items"),
-    (
+@dataclass(frozen=True)
+class Pairing:
+    """One configuration's recording on the board of 2,000 items and its twin on 20,000."""
+
+    small: str
+    large: str
+
+
+SIZES = tuple(
+    Pairing(name, f"{name}, on a board of 20,000 items")
+    for name in (
+        "unscreened",
+        "screened",
         "host configuration, private source",
-        "host configuration, private source, on a board of 20,000 items",
-    ),
-    (
         "host configuration, public source",
-        "host configuration, public source, on a board of 20,000 items",
-    ),
+    )
 )
 POINTS_BUDGET = "github-plan-copy-points-"
-CONFIGURATIONS = {name for pair in SIZES for name in pair}
+CONFIGURATIONS = {name for pair in SIZES for name in (pair.small, pair.large)}
 # What the plugin calls a page of a whole-board walk or of an issue search, in the loopback
 # recordings' operation names.
 WALK_WORDS = ("page of the board", "board's items", "search")
@@ -1233,8 +1256,9 @@ def size_pairs(recordings: list[Loopback]) -> list[SizePair]:
     for record in recordings:
         if not record.budget.startswith(POINTS_BUDGET):
             continue
-        for small, large in SIZES:
-            a, b = record.recordings.get(small), record.recordings.get(large)
+        for pairing in SIZES:
+            small = pairing.small
+            a, b = record.recordings.get(small), record.recordings.get(pairing.large)
             if a is None or b is None:
                 raise SystemExit(
                     f"analyze.py: the loopback recording {record.budget} has no {small!r} on both "

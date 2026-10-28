@@ -382,17 +382,19 @@ def test_the_latest_capture_of_a_scenario_is_its_row_and_a_superseded_one_never_
     measured,
 ):
     root = measured[0]
-    shutil.copytree(
-        root / "bare-unchanged-20261028T050000",
-        root / "superseded" / "bare-unchanged-20261028T070000",
+    earlier = root / "bare-unchanged-20261028T050000"
+    # A superseded capture newer than both is never read; of the two live ones, the later wins.
+    shutil.copytree(earlier, root / "superseded" / "bare-unchanged-20261028T090000")
+    later = take(
+        root,
+        "bare-unchanged-20261028T070000",
+        [graphql(1, "SUB_ISSUES", 1.0, 2.0)],
+        [store_step("project-copy", 0.5, 3.0)],
     )
-    later = retake(
-        measured,
-        "bare-unchanged",
-        {1: 3},
-        requests=[graphql(1, "SUB_ISSUES", 1.0, 2.0)],
-        steps=[store_step("project-copy", 0.5, 3.0)],
-    )
+    pricing = json.loads((root / "pricing.json").read_text())
+    pricing["requests"][f"{later.name}/1"] = 3
+    (root / "pricing.json").write_text(json.dumps(pricing))
+    assert earlier.exists()
     run(measured, "--write")
     row = summary(measured)["bare-unchanged"]
     assert row["capture"] == later.name
@@ -918,7 +920,7 @@ def test_the_committed_loopback_recordings_still_carry_every_pair_the_report_com
     assert {(p.budget, p.recording) for p in pairs} == {
         (f"github-plan-copy-points-{scenario}", recording)
         for scenario in ("first", "changed", "unchanged")
-        for recording, _ in analyze.SIZES
+        for recording in (pairing.small for pairing in analyze.SIZES)
     }
     assert all(p.same and p.walk_pages == (0, 0) for p in pairs)
 
@@ -1024,6 +1026,10 @@ def test_a_quota_capture_the_sanitizer_could_not_have_written_is_refused(
             "a detail that is not JSON",
         ),
         ({"detail": "{}"}, "without its budget or its detail"),
+        (
+            {"budget": "github-plan-copy-points-first", "detail": "{}"},
+            "a recording of 'github-plan-copy-points-first' filed as 'github-plan-copy-points-unchanged'",
+        ),
         (
             {
                 "budget": "github-plan-copy-points-unchanged",
