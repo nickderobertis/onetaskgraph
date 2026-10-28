@@ -441,8 +441,60 @@ fn a_canonical_status_change_mirrors_its_category_alone_to_the_view() {
     assert_site_neutral(&store);
 }
 
+// onevcs reads refresh lock-owner PIDs and identity observation timestamps. Hold every
+// other home byte, including identity decisions and checkout records, across each refusal.
+fn registered_home_tree(home: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
+    tree(home)
+        .into_iter()
+        .map(|(path, mut bytes)| {
+            let relative = std::path::Path::new(&path)
+                .strip_prefix(home)
+                .expect("a path inside the registered home");
+            if relative.parent() == Some(std::path::Path::new("locks"))
+                && relative
+                    .extension()
+                    .is_some_and(|extension| extension == "lock")
+            {
+                let text = std::str::from_utf8(&bytes).expect("a lock PID");
+                text.strip_prefix("pid=")
+                    .expect("the advisory lock owner")
+                    .parse::<u32>()
+                    .expect("a numeric process id");
+                bytes = b"pid=<process>".to_vec();
+            } else if relative == std::path::Path::new("registry.json") {
+                let registry: Value = serde_json::from_slice(&bytes).expect("the registry");
+                let identities = registry["identities"].as_object().expect("the identities");
+                let mut timestamps = BTreeMap::<String, usize>::new();
+                for identity in identities.values() {
+                    if let Some(observed) = identity.get("observed_at") {
+                        assert!(observed.is_string(), "the observation timestamp");
+                        let encoded = serde_json::to_string(observed).expect("the timestamp");
+                        *timestamps.entry(encoded).or_default() += 1;
+                    }
+                }
+                // Replace only value bytes, preserving all other JSON bytes and whitespace.
+                let mut text = String::from_utf8(bytes).expect("a UTF-8 registry");
+                for (timestamp, occurrences) in timestamps {
+                    let field = format!("\"observed_at\": {timestamp}");
+                    assert_eq!(
+                        text.matches(&field).count(),
+                        occurrences,
+                        "identity timestamps only"
+                    );
+                    text = text.replace(&field, "\"observed_at\": \"<observed>\"");
+                }
+                bytes = text.into_bytes();
+            }
+            (path, bytes)
+        })
+        .collect()
+}
+
 #[test]
 fn a_public_task_naming_private_material_is_refused_before_anything_is_written() {
+    let store = projecting_store();
+    private_rollout(&store);
+    // Each refusal proves the store unchanged; only this case's leaky record is replaced.
     for (field, front, body) in [
         (
             "title",
@@ -507,11 +559,16 @@ fn a_public_task_naming_private_material_is_refused_before_anything_is_written()
             "As drawn: ![the retry](./never-attached.png)".to_owned(),
         ),
     ] {
-        let store = projecting_store();
-        private_rollout(&store);
         store.record("plan", "tasks", "leaky", &front, &body);
         let before = store.tree();
+        let home = store.onevcs.as_ref().expect("the registered home").path();
+        let home_before = registered_home_tree(home);
         let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+        assert_eq!(
+            registered_home_tree(home),
+            home_before,
+            "the registered home was written"
+        );
         // An image reference the task holds no asset for is refused by the asset rule every
         // copy keeps, before a view is considered.
         let expected = match field {
@@ -859,6 +916,9 @@ fn a_view_carries_an_anchor_naming_only_itself_and_the_in_page_links_to_it() {
 
 #[test]
 fn an_anchor_carrying_anything_but_its_own_name_is_refused_naming_the_whole_tag() {
+    let store = projecting_store();
+    private_rollout(&store);
+    // Each refusal proves the store unchanged; only this case's leaky record is replaced.
     for (body, reference) in [
         (
             "<a id=\"notes\" href=\"../notes/retry.md\">the notes</a>",
@@ -911,8 +971,6 @@ fn an_anchor_carrying_anything_but_its_own_name_is_refused_naming_the_whole_tag(
             "<button formaction=\"../notes/s\">",
         ),
     ] {
-        let store = projecting_store();
-        private_rollout(&store);
         store.record(
             "plan",
             "tasks",
@@ -921,7 +979,14 @@ fn an_anchor_carrying_anything_but_its_own_name_is_refused_naming_the_whole_tag(
             &format!("See {body} first."),
         );
         let before = store.tree();
+        let home = store.onevcs.as_ref().expect("the registered home").path();
+        let home_before = registered_home_tree(home);
         let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+        assert_eq!(
+            registered_home_tree(home),
+            home_before,
+            "the registered home was written"
+        );
         assert_eq!(kind, "projection-reference", "{body}: {said}");
         assert!(
             said.contains(&format!("carries {reference:?}, a local link")),
