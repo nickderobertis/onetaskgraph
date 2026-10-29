@@ -109,4 +109,28 @@ for arguments in "--bogus" "--instrumented extra"; do
   [ ! -s "$scratch/refused" ] || fail "the warmer built before refusing '$arguments'" "refuse its arguments before building anything"
   grep -q "not '$arguments'" "$scratch/refused.log" || { cat "$scratch/refused.log" >&2; fail "the refusal of '$arguments' does not name it" "name the arguments in the refusal"; }
 done
+
+# The release build it hands to the distribution journey, driven for real behind a stand-in
+# `uv`: --release-build-only has to make exactly the journey's maturin build and stop there,
+# and any other argument has to be refused, exit 2, before anything is built.
+journey="$scratch/journey"
+mkdir -p "$journey/scripts" "$journey/crates/onetaskgraph" "$scratch/journey-bin"
+cp "$root/scripts/test-distribution.sh" "$root/scripts/cli_wheel_lock.py" "$journey/scripts/"
+printf '[package]\nname = "onetaskgraph"\nversion = "1.2.3"\n' >"$journey/crates/onetaskgraph/Cargo.toml"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "uv $*" >>"$WARM_RECORD"' >"$scratch/journey-bin/uv"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$scratch/journey-bin/npm"
+chmod +x "$scratch/journey-bin/uv" "$scratch/journey-bin/npm"
+: >"$scratch/journey.record"
+WARM_RECORD="$scratch/journey.record" PATH="$scratch/journey-bin:$PATH" \
+  bash "$journey/scripts/test-distribution.sh" --release-build-only >"$scratch/journey.log" 2>&1 \
+  || { cat "$scratch/journey.log" >&2; fail "test-distribution.sh --release-build-only failed" "fix what it reports above"; }
+grep -Eq "^uv tool run --from maturin>=1\.9,<2 maturin build --release --locked --target [^ ]+ --out [^ ]+/python-wheel\$" "$scratch/journey.record" \
+  && [ "$(wc -l <"$scratch/journey.record" | tr -d ' ')" = 1 ] \
+  || { cat "$scratch/journey.record" >&2; fail "--release-build-only made something other than the journey's one maturin build (above)" "keep it to build_release_wheel in scripts/test-distribution.sh and an exit"; }
+: >"$scratch/journey.record"
+status=0
+WARM_RECORD="$scratch/journey.record" PATH="$scratch/journey-bin:$PATH" \
+  bash "$journey/scripts/test-distribution.sh" --release-build-only extra >"$scratch/journey.log" 2>&1 || status=$?
+[ "$status" -eq 2 ] && [ ! -s "$scratch/journey.record" ] \
+  || { cat "$scratch/journey.log" >&2; fail "test-distribution.sh exited $status for '--release-build-only extra', not 2 before building" "refuse it as a usage error before any build"; }
 exit 0
