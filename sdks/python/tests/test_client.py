@@ -21,6 +21,7 @@ from onetaskgraph_sdk import (
     Delivered,
     FieldsReport,
     GlobalId,
+    HumanTaskProjection,
     IssuesCompleted,
     MetadataSet,
     OnetaskgraphError,
@@ -421,20 +422,22 @@ def test_a_human_task_is_projected_through_the_real_binary_into_a_loopback_linea
             }
         }
         (tmp_path / "onetaskgraph.yaml").write_text(json.dumps(config), encoding="utf-8")
-        request = {
-            "schema_version": 1,
-            "item_id": "sdk-item",
-            "owner": {"session": "session-1", "run": None, "plan": None},
-            "title": "Decide on the release",
-            "body": "Choose a date.",
-            "priority": "high",
-            "repositories": [],
-            "project": None,
-            "source": "org",
-            "state": "open",
-            "reason": None,
-        }
-        (tmp_path / "request.json").write_text(json.dumps(request), encoding="utf-8")
+        request = HumanTaskProjection.model_validate(
+            {
+                "schema_version": 1,
+                "item_id": "sdk-item",
+                "owner": {"session": "session-1", "run": None, "plan": None},
+                "title": "Decide on the release",
+                "body": "Choose a date.",
+                "priority": "high",
+                "repositories": [],
+                "project": None,
+                "source": "org",
+                "state": "open",
+                "reason": None,
+            }
+        )
+        (tmp_path / "request.json").write_text(request.model_dump_json(), encoding="utf-8")
         client = Client(
             binary,
             cwd=tmp_path,

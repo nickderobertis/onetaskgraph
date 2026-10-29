@@ -941,3 +941,51 @@ fn a_primed_update_changing_the_body_without_moving_an_option_reads_the_body_fir
         "item-primed"
     );
 }
+
+#[test]
+fn without_a_named_host_the_machines_own_name_is_the_authority_and_text_names_the_card() {
+    // The host the `hostname` command names is the one a configuration declares.
+    let output = std::process::Command::new("hostname").output().unwrap();
+    let machine = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+    let store = Store::new(Vec::new());
+    let configured = std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+        .unwrap()
+        .replace(HOST, &machine);
+    store.sandbox.project_document(&configured);
+    let path = store.request_file(&request("item-machine", &[PUBLIC_REPOSITORY]));
+    let answered = store
+        .sandbox
+        .command()
+        .args(["task", "project-human", "--input"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(answered.status.code(), Some(0), "{}", stderr(&answered));
+    // Without --json, one line: the task and the URL a card links to.
+    let created = store.tickets("item-machine");
+    assert_eq!(created.len(), 1);
+    assert_eq!(
+        stdout(&answered).trim(),
+        format!(
+            "human:{} https://github.com/{PUBLIC_REPOSITORY}/issues/{}",
+            created[0],
+            onetaskgraph_e2e_support::fixtures::github_number(&created[0])
+        )
+    );
+
+    // Named otherwise, the host is another one, and is refused.
+    let refused = store
+        .sandbox
+        .command()
+        .args(["task", "project-human", "--input"])
+        .arg(&path)
+        .env("ONETASKGRAPH_HOST", "not-this-machine")
+        .output()
+        .unwrap();
+    assert_ne!(refused.status.code(), Some(0));
+    assert!(
+        stderr(&refused).contains("not-this-machine"),
+        "{}",
+        stderr(&refused)
+    );
+}

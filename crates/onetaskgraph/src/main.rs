@@ -1677,7 +1677,8 @@ async fn project_human(
     Ok(EXIT_OK)
 }
 
-/// The host this process runs on: `ONETASKGRAPH_HOST`, else the machine's own name.
+/// The host this process runs on: `ONETASKGRAPH_HOST`, else what the `hostname` command — the
+/// one spelling every platform this ships for answers alike — prints, trimmed.
 fn current_host() -> Option<String> {
     if let Some(host) = std::env::var(onetaskgraph_core::config::HOST_VARIABLE)
         .ok()
@@ -1685,16 +1686,11 @@ fn current_host() -> Option<String> {
     {
         return Some(host);
     }
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
+    std::process::Command::new("hostname")
+        .output()
         .ok()
-        .or_else(|| std::env::var("HOSTNAME").ok())
-        .or_else(|| std::env::var("COMPUTERNAME").ok())
-        .or_else(|| {
-            std::process::Command::new("hostname")
-                .output()
-                .ok()
-                .and_then(|output| String::from_utf8(output.stdout).ok())
-        })
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
         .map(|host| host.trim().to_owned())
         .filter(|host| !host.is_empty())
 }
