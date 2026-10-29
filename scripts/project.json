@@ -113,14 +113,6 @@
       "cache": false,
       "//": "Outside the `check` fan-out and invoked by name from `just distribution-check`, for the same reason `workspace:deny` is: what these read is the whole publishable surface — every manifest, the release workflows, release-targets.toml, config/registry-interfaces.toml, the crate fixtures — and several of them clone this repository and drive the real release tool over its git history. No input glob describes that, so a cache hit would be a claim about a tree that has since changed and an affected-selection miss would silently stop checking a release. It runs on every gate, exactly as it did before it was a target."
     },
-    "warm-cache-reuse-check": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "bash scripts/check-warm-rust-cache-reuse.sh"
-      },
-      "cache": false,
-      "//": "Outside the `check` fan-out and invoked by name from `just warm-cache-reuse-check`: it builds every dependency cold three ways into a scratch target directory, twenty to thirty minutes on a hosted runner, which no gate should pay on every change to scripts/. Its cheap half runs on every push to main instead, as the Linux leg of .github/workflows/rust-cache-warm.yml ends with it over the target directory that leg has just warmed."
-    },
     "distribution-test": {
       "executor": "nx:run-commands",
       "dependsOn": ["onetaskgraph:build"],
