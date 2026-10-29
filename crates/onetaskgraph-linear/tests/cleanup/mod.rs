@@ -70,7 +70,7 @@ pub const SESSION_NAME: &str = "Linear";
 /// of that half is not spelled here: it is one contract shared with the GitHub Projects
 /// lane, because both have to answer the same question about an artifact with the same
 /// answer.
-pub const ARTIFACT_PREFIX: &str = "onetaskgraph live cleanup ";
+pub use onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX as ARTIFACT_PREFIX;
 
 /// The same for a label, whose name Linear shows in its own filter menus.
 pub const LABEL_PREFIX: &str = "otg-live-";

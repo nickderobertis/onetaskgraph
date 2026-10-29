@@ -82,7 +82,9 @@
 //! `onetaskgraph-live-janitor`: a scratch CI stamp's run must read back `completed`.
 //! That read alone decides; it keeps no waiting period. It is scheduled
 //! cleanup rather than a test lane, so no `test` or `coverage` target runs it.
-//! Linear's machine stamps and lock sweep are unchanged; the janitor never reads Linear.
+//! Linear keeps its machine stamps and local lock sweep. Separately, the scheduled Linear
+//! document janitor expires stamped documents in the nominated test team after 24 hours,
+//! recovering residue from CI machines whose registration directory no longer exists.
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
