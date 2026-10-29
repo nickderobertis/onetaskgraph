@@ -620,13 +620,22 @@ pub(crate) fn first_copy_of_the_realistic_plan() -> FirstCopy {
 
 #[test]
 fn an_unchanged_private_plan_with_repositories_and_a_dependency_sends_no_write() {
+    for cache in [false, true] {
+        for policy in ["preserve-destination", "source"] {
+            private_plan_recopy(cache, policy);
+        }
+    }
+}
+
+/// Exercise both cache boundaries and both ways the copy handles destination status.
+fn private_plan_recopy(cache: bool, policy: &str) {
     let plan = Plan::new(LinearMarkdown::Measured);
     let path = plan.journey.sandbox.project().join("onetaskgraph.yaml");
     let mut config: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     config["sources"]["notes"]["visibility"] = json!("private");
     config["sources"]["dest"]["visibility"] = json!("private");
     config["sources"]["dest"]["cache"] =
-        json!({"enabled": true, "dir": plan.journey.sandbox.subdirectory("cache")});
+        json!({"enabled": cache, "dir": plan.journey.sandbox.subdirectory("cache")});
     plan.journey.sandbox.project_document(&config.to_string());
     for (kind, id) in plan.items() {
         let path = plan.file(kind, &id);
@@ -660,9 +669,15 @@ fn an_unchanged_private_plan_with_repositories_and_a_dependency_sends_no_write()
         "--to",
         "dest",
         "--status-policy",
-        "preserve-destination",
+        policy,
     ];
-    let (first, _) = plan.json(&copy);
+    let (first, sent) = plan.json(&copy);
+    assert!(
+        sent.mutations()
+            .iter()
+            .any(|root| root == "issueRelationCreate"),
+        "the first copy must land the dependency"
+    );
     let document_copy = ["document", "copy", &plan.design, "--to", "dest"];
     let (design, _) = plan.json(&document_copy);
     let landed: Vec<_> = plan
@@ -699,8 +714,12 @@ fn an_unchanged_private_plan_with_repositories_and_a_dependency_sends_no_write()
         );
     }
 
-    // Editing a task outside the dependency leaves that relation and every other item alone.
-    let edited = &landed[3];
+    let dependencies = plan.json(&["task", "deps", &landed[2].2]).0["items"].clone();
+    assert_eq!(dependencies.as_array().unwrap().len(), 1);
+    assert_eq!(dependencies[0]["to"]["id"], landed[1].2);
+
+    // Editing the task that owns the dependency leaves that relation and every other item alone.
+    let edited = &landed[2];
     let path = plan.file("task", &edited.1);
     let text = std::fs::read_to_string(&path).unwrap();
     std::fs::write(path, format!("{text}\nAn edit at the source.\n")).unwrap();
@@ -714,6 +733,13 @@ fn an_unchanged_private_plan_with_repositories_and_a_dependency_sends_no_write()
             .unwrap()
             .contains("An edit at the source.")
     );
+    assert_eq!(
+        plan.json(&["task", "deps", &edited.2]).0["items"],
+        dependencies,
+        "the edited task still depends on the same item"
+    );
+    let (_, repeat) = plan.json(&copy);
+    assert_eq!(repeat.mutations(), Vec::<String>::new());
     for (kind, source, id, before) in &landed {
         if source != &edited.1 {
             assert_eq!(
