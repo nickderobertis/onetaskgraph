@@ -27,6 +27,7 @@ mod copy_unsettled;
 mod fields;
 mod github_status_by_kind;
 mod graph;
+mod human_cost;
 mod human_items;
 mod human_routing;
 mod locate;

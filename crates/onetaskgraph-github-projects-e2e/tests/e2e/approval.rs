@@ -1,18 +1,20 @@
 //! What approving a plan on a board costs: the store calls an approval makes, each through the
-//! real binary against the loopback board of `plan_copy` holding 2,000 other items — `project
-//! show`, `task list --project`, `document list --project`, then `document metadata set
-//! --expect` carrying the version that listing reported for the design document. The listing
-//! carries the document whole, exactly as `document show` would answer it, so approval reads it
-//! once.
+//! real binary against the loopback board of `plan_copy` holding 2,000 other items — the review
+//! task `task project-human` creates under the plan's project, `project show`, `task list
+//! --project`, `document list --project`, then `document metadata set --expect` carrying the
+//! version that listing reported for the design document, and last the review task resolved
+//! through `task project-human`. The listing carries the document whole, exactly as `document
+//! show` would answer it, so approval reads it once.
 //!
 //! Each call's requests are priced by the plugin's own point-cost table, the one
 //! `tests/point_cost.rs` pins and the credentialed lane reconciles against GitHub, and what the
-//! sequence spent is recorded as the `github-approval-calls-points` budget's telemetry, which
-//! `budget_runner::report_approval_calls` hands to onebudgetspec. Nothing here holds the total
-//! to a bound: that is the budget's. What is held here is what each call sends, that the
-//! records come back whole and in order, that the binary waits for nothing on the way, and that
-//! a write expecting a version the board has moved past — whoever moved it, and whether or not
-//! anything here saw it — writes nothing.
+//! sequence spent — split into the existing calls and the review's projection — is recorded as
+//! the `github-approval-calls-points` budget's telemetry, which `human-items/approval-report.mjs`
+//! hands to onebudgetspec. Nothing here holds the total to a bound: that is the budget's. What
+//! is held here is what each call sends, that the records come back whole and in order, that the
+//! existing calls wait for nothing on the way, that the review task is created once and resolved
+//! once, and that a write expecting a version the board has moved past — whoever moved it, and
+//! whether or not anything here saw it — writes nothing and leaves the review open.
 
 use super::asset_board::{Call, Kind};
 use super::plan_copy::{Plan, SMALL, TASKS, counterparts, never_walks, operation, success};
@@ -26,13 +28,25 @@ pub(super) const BUDGET: &str = "github-approval-calls-points";
 /// Named in the recording, so the runner refuses telemetry another journey wrote.
 pub(super) const WORKLOAD: &str = "plan approval store calls";
 
-/// The calls an approval makes, in the order it makes them, by what each is.
-pub(super) const CALLS: [&str; 4] = [
+/// The calls an approval makes, in the order it makes them, by what each is: the review task's
+/// creation, the four existing store calls, and the review task's resolution.
+pub(super) const CALLS: [&str; 6] = [
+    REVIEW_OPEN,
     "project show",
     "task list --project",
     "document list --project",
     "document metadata set --expect",
+    REVIEW_RESOLVED,
 ];
+
+/// The review task's creation through `task project-human`.
+const REVIEW_OPEN: &str = "task project-human (review open)";
+
+/// The review task's resolution through `task project-human`.
+const REVIEW_RESOLVED: &str = "task project-human (review completed)";
+
+/// The host every approval's configuration names as authoritative over its projections.
+const HOST: &str = "approval-host";
 
 const KEY: &str = "plan.approval";
 
@@ -100,11 +114,70 @@ fn shown_version(plan: &Plan, id: &str) -> String {
     version_of(&success(&plan.run(&["document", "show", id, "--json"])))
 }
 
+/// Give the board source the projection authority a review task is written under: this host,
+/// an intent directory in the plan's sandbox, and the plan's project.
+fn authorize_reviews(plan: &Plan, project: &str) {
+    let path = plan.sandbox.project().join("onetaskgraph.yaml");
+    let mut configured: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    configured["sources"]["board"]["task_projection"] = json!({"host": HOST,
+        "directory": plan.sandbox.subdirectory("intents"), "project": project});
+    plan.sandbox.project_document(&configured.to_string());
+}
+
+/// The review task of the plan whose project is `project`, at `state`.
+fn review(plan: &Plan, project: &str, state: &str) -> Value {
+    let repository = plan
+        .github
+        .repository_of(project)
+        .expect("the plan's project issue");
+    let request = json!({"schema_version": 1, "item_id": format!("review-{project}"),
+        "owner": {"session": "manager-session", "run": "run-1", "plan": "plan-1"},
+        "title": "Review the plan's design", "body": "Approve the design or say what changes.",
+        "priority": "high", "repositories": [format!("github.com/{repository}")],
+        "project": format!("board:{project}"), "source": "board", "state": state,
+        "reason": null});
+    let path = plan.sandbox.project().join(format!("review-{state}.json"));
+    std::fs::write(&path, request.to_string()).unwrap();
+    json!(path)
+}
+
+/// Project the review task at `state`, with what the board answered.
+fn project_review(plan: &Plan, project: &str, state: &str, what: &'static str) -> Step {
+    let path = review(plan, project, state);
+    let screened = plan.boundary_calls().len();
+    let (output, calls) = plan.measured_with(
+        &[
+            "task",
+            "project-human",
+            "--input",
+            path.as_str().unwrap(),
+            "--json",
+        ],
+        &[("ONETASKGRAPH_HOST", HOST)],
+    );
+    Step {
+        what,
+        report: success(&output),
+        calls,
+        screening: plan.boundary_calls()[screened..].to_vec(),
+    }
+}
+
 fn approve(plan: &Plan, project: &str, document: &str) -> Vec<Step> {
+    authorize_reviews(plan, project);
+    let mut steps = vec![project_review(plan, project, "open", REVIEW_OPEN)];
+    steps.extend(approve_existing(plan, project, document));
+    steps.push(project_review(plan, project, "completed", REVIEW_RESOLVED));
+    steps
+}
+
+/// The four existing store calls of an approval, as they were before a review task joined them.
+fn approve_existing(plan: &Plan, project: &str, document: &str) -> Vec<Step> {
     let project = format!("board:{project}");
     let document = format!("board:{document}");
     let mut steps = Vec::new();
-    for what in &CALLS[..3] {
+    for what in &CALLS[1..4] {
         let verb = match *what {
             "project show" => vec!["project", "show", &project, "--json"],
             "task list --project" => vec!["task", "list"],
@@ -137,7 +210,7 @@ fn approve(plan: &Plan, project: &str, document: &str) -> Vec<Step> {
         "--json",
     ]);
     steps.push(Step {
-        what: CALLS[3],
+        what: CALLS[4],
         report,
         calls,
         screening: plan.boundary_calls()[screened..].to_vec(),
@@ -204,27 +277,44 @@ fn breakdown(steps: &[Step]) -> Vec<Value> {
         .collect()
 }
 
+/// Whether `step` is the review task's projection rather than one of the existing calls.
+fn projects_the_review(step: &Step) -> bool {
+    step.what == REVIEW_OPEN || step.what == REVIEW_RESOLVED
+}
+
+/// What `steps` spent, in points: all of them, the existing calls', and the review's.
+fn spent(steps: &[Step]) -> Value {
+    let total = |keep: &dyn Fn(&Step) -> bool| -> u64 {
+        steps
+            .iter()
+            .filter(|step| keep(step))
+            .flat_map(|step| &step.calls)
+            .map(points)
+            .sum()
+    };
+    json!({"points": total(&|_| true),
+           "existing": total(&|step| !projects_the_review(step)),
+           "projection": total(&projects_the_review),
+           "calls": breakdown(steps)})
+}
+
 /// Record what the sequence spent as the budget's telemetry: the larger of the run with no
-/// write policy and the run with write screening on, each call's requests and points beside
-/// it, and both runs in the detail.
+/// write policy and the run with write screening on, each split into the existing store calls
+/// and the review task's projection, with both runs' calls in the detail.
 fn record(unscreened: &[Step], screened: &[Step]) {
-    let total =
-        |steps: &[Step]| -> u64 { steps.iter().flat_map(|step| &step.calls).map(points).sum() };
-    let larger = if total(screened) > total(unscreened) {
-        screened
+    let (unscreened, screened) = (spent(unscreened), spent(screened));
+    let larger = if screened["points"].as_u64() > unscreened["points"].as_u64() {
+        &screened
     } else {
-        unscreened
+        &unscreened
     };
     let directory = super::budget_runner::directory();
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(
         onetaskgraph_e2e_support::telemetry::file_in(&directory, BUDGET),
-        serde_json::to_vec(&json!({"budget": BUDGET, "value": total(larger),
-            "detail": json!({"unscreened": {"points": total(unscreened), "calls": breakdown(unscreened)},
-                             "screened": {"points": total(screened), "calls": breakdown(screened)}})
-                .to_string(),
+        serde_json::to_vec_pretty(&json!({"budget": BUDGET, "value": larger["points"],
             "workload": WORKLOAD, "board": SMALL, "tasks": TASKS, "documents": 1,
-            "calls": breakdown(larger)}))
+            "call_order": CALLS, "unscreened": unscreened, "screened": screened}))
         .unwrap(),
     )
     .unwrap();
@@ -233,9 +323,15 @@ fn record(unscreened: &[Step], screened: &[Step]) {
 #[test]
 fn approving_a_plan_lists_each_kind_in_one_point_and_writes_its_approval_behind_one_read() {
     let (plan, project, document) = copied(false);
+    authorize_reviews(&plan, &project);
+    let opened = project_review(&plan, &project, "open", REVIEW_OPEN);
     let waits_before = plan.clock.slept().len();
-    let steps = approve(&plan, &project, &document);
+    let existing = approve_existing(&plan, &project, &document);
     let waits: Vec<_> = plan.clock.slept()[waits_before..].to_vec();
+    let resolved = project_review(&plan, &project, "completed", REVIEW_RESOLVED);
+    let mut steps = vec![opened];
+    steps.extend(existing);
+    steps.push(resolved);
     // Every wait the binary schedules — pacing, a secondary limit, a backoff — is recorded on the
     // clock with its cause, and the board answers nothing to a binary not attached to it, so a
     // count of none is a record of none rather than an absence of one.
@@ -251,10 +347,11 @@ fn approving_a_plan_lists_each_kind_in_one_point_and_writes_its_approval_behind_
     }
     let step = |what: &str| steps.iter().find(|step| step.what == what).unwrap();
 
-    // Each listing is one request, priced at one point, carrying the project's whole page.
+    // Each listing is one request, priced at one point, carrying the project's whole page — the
+    // plan's tasks and the review task filed under the same project.
     // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The node's acceptance criteria require this journey to show each listing is one request priced at one point by the plugin's own table: the point is the functional outcome of MEMBER_PAGE_SIZE, which `tests/point_cost.rs` pins, rather than a budget figure. The sequence's total is recorded below for onebudgetspec, which alone judges it against `github-approval-calls-points`.
     for (what, records) in [
-        ("task list --project", TASKS),
+        ("task list --project", TASKS + 1),
         ("document list --project", 1),
     ] {
         let listing = step(what);
@@ -272,17 +369,21 @@ fn approving_a_plan_lists_each_kind_in_one_point_and_writes_its_approval_behind_
     }
     // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
 
-    // The tasks come back in the order they were filed under the project, each with what a read
-    // of it by its own id reports.
+    // The tasks come back in the order they were filed under the project, the review task last,
+    // each with what a read of it by its own id reports.
     let listed = rows(&step("task list --project").report);
     let titles: Vec<String> = listed.iter().map(|(_, title)| title.clone()).collect();
-    let filed: Vec<String> = (1..=TASKS)
+    let mut filed: Vec<String> = (1..=TASKS)
         .map(|n| format!("Step {n} of the plan"))
         .collect();
+    filed.push("Review the plan's design".to_owned());
     assert_eq!(titles, filed);
+    // The review task is resolved since it was listed, so the plan's own tasks are compared.
     for row in step("task list --project").report["items"]
         .as_array()
         .unwrap()
+        .iter()
+        .filter(|row| row["item"]["metadata"].get("human.item_id").is_none())
     {
         let id = format!("board:{}", row["item"]["id"].as_str().unwrap());
         let shown = success(&plan.run(&["task", "show", &id, "--no-comments", "--json"]));
@@ -316,7 +417,7 @@ fn approving_a_plan_lists_each_kind_in_one_point_and_writes_its_approval_behind_
     // write, and its one check passed before that write.
     let (screened_plan, screened_project, screened_document) = copied_screened();
     let screened = approve(&screened_plan, &screened_project, &screened_document);
-    let write = &screened[3];
+    let write = &screened[4];
     assert_eq!(
         sent(&write.calls),
         GUARDED_WRITE,
@@ -335,15 +436,97 @@ fn approving_a_plan_lists_each_kind_in_one_point_and_writes_its_approval_behind_
         .find(|call| call.creating)
         .expect("the write");
     assert!(checks[0].finished < updated.wall, "checked before it wrote");
-    for step in &screened[..3] {
+    for step in &screened[1..4] {
         assert!(step.screening.is_empty(), "{} screened nothing", step.what);
+    }
+    // The review task's own writes are screened like every other public write.
+    for step in [&screened[0], &screened[5]] {
+        assert!(
+            step.screening
+                .iter()
+                .any(|call| call.command == BoundaryCommand::Check),
+            "{} was screened",
+            step.what
+        );
     }
     assert_eq!(
         slot(&screened_plan, &screened_document)[KEY],
         json!("approved")
     );
 
+    // The review task was created once, under the plan's project, before the approval, and
+    // resolved once after it — on the board both times, as one issue.
+    for (plan, project, steps) in [
+        (&plan, &project, &steps),
+        (&screened_plan, &screened_project, &screened),
+    ] {
+        let opened = &steps[0].report;
+        let resolved = &steps[5].report;
+        assert_eq!(opened, resolved);
+        assert_eq!(opened["project"], json!(project));
+        assert_eq!(opened["source"], "board");
+        let review = opened["task"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("board:")
+            .unwrap();
+        assert_eq!(
+            plan.github.state(review),
+            ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
+        );
+        assert_eq!(plan.github.status(review).as_deref(), Some("Done"));
+        assert_eq!(
+            plan.github
+                .issues()
+                .iter()
+                .find(|issue| issue["id"] == json!(review))
+                .unwrap()["parent"],
+            json!(project)
+        );
+    }
+
     record(&steps, &screened);
+}
+
+#[test]
+fn a_stale_version_refuses_the_approval_and_leaves_its_review_task_open() {
+    let (plan, project, document) = copied(false);
+    authorize_reviews(&plan, &project);
+    let opened = project_review(&plan, &project, "open", REVIEW_OPEN).report;
+    let review = opened["task"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("board:")
+        .unwrap()
+        .to_owned();
+    let id = format!("board:{document}");
+    let stale = shown_version(&plan, &id);
+    plan.github
+        .edit_body(&document, "Edited on the board after the version was read.");
+    let (refused, calls) = set_expecting(&plan, &id, KEY, &stale);
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    assert_eq!(sent(&calls), [GUARDED_READ], "nothing was written");
+    let failure: Value = serde_json::from_str(&stdout(&refused)).expect("a failure document");
+    assert_eq!(failure["failure"]["kind"], "version-moved", "{failure}");
+    assert!(
+        !plan.github.body(&document).as_str().unwrap().contains(KEY),
+        "the refused approval wrote nothing"
+    );
+    // The refused approval resolved nothing: the review task is open on the board.
+    assert_eq!(plan.github.state(&review).0, "OPEN");
+    assert_eq!(plan.github.status(&review).as_deref(), Some("Todo"));
+
+    // With the version the board holds now, the approval lands and the review is resolved.
+    let current = shown_version(&plan, &id);
+    let (landed, _) = set_expecting(&plan, &id, KEY, &current);
+    assert_eq!(landed.status.code(), Some(0), "{}", stderr(&landed));
+    assert_eq!(slot(&plan, &document)[KEY], json!(true));
+    let resolved = project_review(&plan, &project, "completed", REVIEW_RESOLVED).report;
+    assert_eq!(resolved, opened);
+    assert_eq!(
+        plan.github.state(&review),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
+    );
 }
 
 #[test]
@@ -494,20 +677,20 @@ fn a_screened_approval_reclassifies_a_project_a_person_changed_since_and_refuses
     let first = approve(&plan, &project, &document);
     assert_eq!(slot(&plan, &document)[KEY], json!("approved"));
     assert!(
-        first[3]
+        first[4]
             .screening
             .iter()
             .all(|call| call.command != BoundaryCommand::Inspect
                 || call.input["repository"] != "github.com/synthco/secret-gadgets"),
         "{:?}",
-        first[3].screening
+        first[4].screening
     );
     plan.screening
         .as_mut()
         .expect("a screened plan")
         .0
         .private("synthco", "secret-gadgets");
-    let members = rows(&first[1].report);
+    let members = rows(&first[2].report);
     let moved = members[2].0.clone();
     let body = plan.github.body(&moved);
     let (content, held) = body

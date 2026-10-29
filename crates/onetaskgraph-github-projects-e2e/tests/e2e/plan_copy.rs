@@ -583,6 +583,11 @@ impl Plan {
 
     /// One command through the binary, attached to the clock.
     pub fn run(&self, arguments: &[&str]) -> Output {
+        self.run_with(arguments, &[])
+    }
+
+    /// [`Self::run`], with `environment` set beside what every command of this plan is given.
+    pub fn run_with(&self, arguments: &[&str], environment: &[(&str, &str)]) -> Output {
         let mut command = match self.main_thread_stack {
             #[cfg(unix)]
             Some(kib) => {
@@ -600,6 +605,7 @@ impl Plan {
         }
         command
             .args(arguments)
+            .envs(environment.iter().copied())
             .envs(self.clock.client_env(self.client))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -2175,9 +2181,18 @@ impl Plan {
 
     /// [`Self::measured`], for a command that may fail: what it exited with and printed.
     pub(super) fn measured_output(&self, arguments: &[&str]) -> (Output, Vec<Call>) {
+        self.measured_with(arguments, &[])
+    }
+
+    /// [`Self::measured_output`], with `environment` set beside what every command is given.
+    pub(super) fn measured_with(
+        &self,
+        arguments: &[&str],
+        environment: &[(&str, &str)],
+    ) -> (Output, Vec<Call>) {
         let before = self.board.calls().len();
         let lease = self.clock.lease(self.client);
-        let output = self.run(arguments);
+        let output = self.run_with(arguments, environment);
         lease.wait_for_detach();
         drop(lease);
         (output, self.own_calls(before))
