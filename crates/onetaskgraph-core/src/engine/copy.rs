@@ -1873,6 +1873,19 @@ impl Engine {
     /// destination refuses the write — including a field or a metadata key it cannot
     /// carry, which it names rather than dropping.
     pub async fn copy(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
+        let mut result = None;
+        let mut operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
+            Box::pin(async { result = Some(self.copy_in_scope(request).await) });
+        for source in self.ready() {
+            operation = source.source().scope_visibility(operation);
+        }
+        operation.await;
+        result.expect("the scoped operation completed")
+    }
+
+    async fn copy_in_scope(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
+        // Each destination's visibility is read once for the whole copy, and afresh by the next.
+        let _held = self.hold_visibility();
         let _expecting = self.expecting_copy(request)?;
         // Before anything is read: `--create` says there is nothing to look for, and the other
         // two say how to look.
@@ -2884,11 +2897,11 @@ impl Engine {
         // Every item of every project held to the public boundary before any is written, so
         // a refusal leaves nothing anywhere — not even a project its tasks never reached.
         self.preflight_copy(
-            request,
             plans
                 .iter()
                 .flat_map(|(project, tasks, _, _)| std::iter::once(project).chain(tasks))
-                .filter(|item| !item.skipped),
+                .filter(|item| !item.skipped)
+                .collect(),
             running,
         )
         .await?;
@@ -4467,8 +4480,7 @@ impl Engine {
         // included — is written. A task skipped writes nothing, so it has nothing to hold.
         if !running.preflighted {
             self.preflight_copy(
-                request,
-                planned.iter().filter(|item| !item.skipped),
+                planned.iter().filter(|item| !item.skipped).collect(),
                 running,
             )
             .await?;
@@ -5237,20 +5249,19 @@ impl Engine {
 
     /// Hold every item a copy lands to the public boundary before any is written: a private
     /// one refused anywhere not declared private, and every one landing anywhere not declared
-    /// private put to the caller's check. A dry run, which writes nothing, also reads each
-    /// destination declared private once, so it reports the refusal its copy would meet.
+    /// private put to the caller's check. Every destination declared private is read here,
+    /// once for the copy, so a dry run reports the refusal its copy would meet and the copy's
+    /// writes read nothing more.
     ///
     /// While the boundary is active it first learns who may read every item outside the copy
     /// that a carried dependency or delivery names, so a write anywhere not declared private
     /// withholds the id of a private one — and refuses, before anything is written, a
     /// reference whose classification it cannot establish.
-    async fn preflight_copy<'a>(
+    async fn preflight_copy(
         &self,
-        request: &CopyRequest,
-        planned: impl Iterator<Item = &'a Planned>,
+        planned: Vec<&Planned>,
         running: &mut Running,
     ) -> Result<(), EngineError> {
-        let planned: Vec<&Planned> = planned.collect();
         for item in &planned {
             note_private(running, item);
         }
@@ -5263,7 +5274,7 @@ impl Engine {
         // Every item is placed first, and what each lands somewhere not verified private is then
         // put to the check together, before anything is written.
         let mut checked = Vec::new();
-        for item in planned {
+        for item in &planned {
             let destination = self.writable(&item.to)?;
             let target = match &item.target {
                 Target::Update { id, .. } => WriteTarget::Existing(id),
@@ -5287,11 +5298,37 @@ impl Engine {
                 checked.push((destination, outbound.item.clone(), exposure.clone()));
             }
             // Every item, not one per destination: who can read a write depends on where in
-            // the destination it lands — an issue's own repository on a board.
-            if request.dry_run {
-                self.at_write(destination, &outbound.item, &outbound.target)
-                    .await?;
-            }
+            // the destination it lands — an issue's own repository on a board. Read here,
+            // before anything is written, and held for the copy, so its writes read nothing
+            // more and a dry run reports the refusal its copy would meet.
+            let parent = match &item.item {
+                Item::Task(task) => task.project.as_ref(),
+                Item::Document(document) => document.project.as_ref(),
+                Item::Project(_) => None,
+            };
+            let project = parent
+                .and_then(|parent| {
+                    planned.iter().find(|candidate| {
+                        matches!(candidate.item, Item::Project(_))
+                            && candidate.source.source == item.source.source
+                            && candidate.source.native == *parent
+                            && candidate.to == item.to
+                    })
+                })
+                .map(|project| match &project.target {
+                    Target::Update { id, .. } => WriteTarget::Existing(id),
+                    Target::Create => WriteTarget::New {
+                        repositories: repositories_of(&project.item),
+                        project: None,
+                    },
+                });
+            self.verify_private_with_project(
+                destination,
+                &outbound.item,
+                &outbound.target,
+                project.as_ref(),
+            )
+            .await?;
         }
         self.check_all(&checked).await
     }
@@ -7829,10 +7866,10 @@ impl Engine {
         if let Some(record) = &record {
             record.stamp(metadata_of(&mut landing));
         }
-        // Immediately before anything is sent: a destination declared private is read again
-        // for this write, whatever an earlier write read — except the write that completes a
-        // task created together with others, which is the same write its create was checked
-        // for a moment before, finished once the others it names exist.
+        // Before anything is sent: a destination declared private is held to what this copy
+        // read of it, before its first write, for this write's destination — except the write
+        // that completes a task created together with others, which is the same write its
+        // create was checked for a moment before, finished once the others it names exist.
         if stamping != Stamping::Never {
             self.at_write(
                 destination,

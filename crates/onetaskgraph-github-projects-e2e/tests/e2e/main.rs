@@ -35,6 +35,7 @@ mod plan_locations;
 mod plan_pacing;
 mod plan_reads;
 mod plan_writes;
+mod private_home;
 mod project_status;
 mod status_complete;
 mod status_reconcile;

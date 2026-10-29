@@ -27,3 +27,9 @@ jobs:
           GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cargo run --locked -p onetaskgraph-live-janitor
+      - name: Remove abandoned Linear test documents
+        if: always() && !cancelled()
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
+        run: cargo run --locked -p onetaskgraph-live-janitor -- --linear

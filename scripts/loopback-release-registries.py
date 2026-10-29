@@ -529,9 +529,9 @@ class Handler(BaseHTTPRequestHandler):
             with urllib.request.urlopen(request, timeout=60) as response:
                 answer = (200, response.read(), "text/plain")
         except urllib.error.HTTPError as error:
-            answer = (error.code if error.code in (404, 410, 451) else 502, b"", "text/plain")
+            return (error.code if error.code in (404, 410, 451) else 502, b"", "text/plain")
         except (urllib.error.URLError, TimeoutError, OSError):
-            answer = (502, b"", "text/plain")
+            return (502, b"", "text/plain")
         with lock:
             proxied_index[relative] = answer
         return answer

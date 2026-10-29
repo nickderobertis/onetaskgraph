@@ -5,20 +5,86 @@
 //! private for a write only when **both** are private. Each is one read, with this source's
 //! own credential and never another: the Project's `public` field over GraphQL, and the
 //! repository over REST. The two are sent together, so the time they add is one read's
-//! rather than two, and neither is held for a later write: a board or a repository a person
-//! makes public between two writes is read as public at the second.
+//! rather than two.
+//!
+//! **Each destination is read once per copy.** The engine scopes the copy future through
+//! [`TaskSource::scope_visibility`], giving it independent board and repository cells even
+//! when another copy overlaps on the same source. Dropping the future drops those reads;
+//! the next copy reads afresh. Outside a scoped copy every write reads both again, even
+//! while another operation holds visibility. A failed read leaves its cell empty.
 //!
 //! Reading a Project's `public` field needs the `read:project` scope. A credential without
 //! it cannot answer, and the read says so, naming the scope, rather than answering from
 //! anything else — an unread visibility is never guessed.
+//!
+//! [`TaskSource::scope_visibility`]: onetaskgraph_plugin_api::TaskSource::scope_visibility
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use onetaskgraph_plugin_api::{SourceError, Visibility, WriteTarget};
 use secrecy::ExposeSecret;
 use serde_json::{Value, json};
+use tokio::sync::OnceCell;
 
 use crate::{GitHubProjectsSource, RepositoryTarget, accounting, graphql};
 
+/// What one engine operation's hold has read: who can read the board, and each repository.
+///
+/// Each read is a cell taken once however many writes ask for it at the same moment; a read
+/// that fails leaves its cell empty, so the next write asks again.
+#[derive(Default)]
+pub(crate) struct Hold {
+    board: Arc<OnceCell<Visibility>>,
+    repositories: BTreeMap<RepositoryTarget, Arc<OnceCell<Visibility>>>,
+}
+
+tokio::task_local! {
+    static OPERATION_READS: BTreeMap<usize, Arc<std::sync::Mutex<Hold>>>;
+}
+
 impl GitHubProjectsSource {
+    pub(crate) fn scope_visibility_reads<'a>(
+        &'a self,
+        operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            let mut reads = OPERATION_READS.try_with(Clone::clone).unwrap_or_default();
+            reads.insert(
+                std::ptr::from_ref(self) as usize,
+                Arc::new(std::sync::Mutex::new(Hold::default())),
+            );
+            OPERATION_READS.scope(reads, operation).await;
+        })
+    }
+
+    /// Whether the configuration declares this source private.
+    pub(crate) fn is_declared_private(&self) -> bool {
+        self.declared_private.load(Ordering::SeqCst)
+    }
+
+    /// The cell a scoped read of the board, or of `repository`, is kept in — `None` outside
+    /// a copy scope, when every read is sent.
+    fn held_cell(
+        &self,
+        repository: Option<&RepositoryTarget>,
+    ) -> Option<Arc<OnceCell<Visibility>>> {
+        let scoped = OPERATION_READS
+            .try_with(|reads| reads.get(&(std::ptr::from_ref(self) as usize)).cloned())
+            .ok()
+            .flatten()?;
+        let mut hold = scoped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some(match repository {
+            None => Arc::clone(&hold.board),
+            Some(repository) => {
+                Arc::clone(hold.repositories.entry(repository.clone()).or_default())
+            }
+        })
+    }
+
     /// Who can read where `target` lands: private only when the board and the issue's
     /// repository both are.
     pub(crate) async fn write_visibility(
@@ -26,6 +92,30 @@ impl GitHubProjectsSource {
         target: &WriteTarget<'_>,
     ) -> Result<Visibility, SourceError> {
         let repository = self.visibility_repository(target).await?;
+        self.visibility_in_repository(repository).await
+    }
+
+    pub(crate) async fn write_visibility_with_project(
+        &self,
+        target: &WriteTarget<'_>,
+        project: &WriteTarget<'_>,
+    ) -> Result<Visibility, SourceError> {
+        match target {
+            WriteTarget::New { repositories, .. } => {
+                let parent = self.visibility_repository(project).await?;
+                let repository = self
+                    .creation_rule_in_repository(repositories, parent, "a new item")
+                    .await?;
+                self.visibility_in_repository(Some(repository)).await
+            }
+            WriteTarget::Existing(_) => self.write_visibility(target).await,
+        }
+    }
+
+    async fn visibility_in_repository(
+        &self,
+        repository: Option<RepositoryTarget>,
+    ) -> Result<Visibility, SourceError> {
         let (board, repository) = tokio::join!(self.board_visibility(), async {
             match &repository {
                 Some(repository) => self.repository_visibility(repository).await,
@@ -41,38 +131,42 @@ impl GitHubProjectsSource {
     }
 
     /// The repository an issue `target` names lives in, or would be created in: an existing
-    /// issue's own, and for a new one the rule creating it applies — its one named
-    /// repository, else its project's, else the configured one. `None` for a draft.
+    /// issue's own, and for a new one where [`Self::creation_rule`] — the rule the create
+    /// itself applies — places it. `None` for a draft.
     async fn visibility_repository(
         &self,
         target: &WriteTarget<'_>,
     ) -> Result<Option<RepositoryTarget>, SourceError> {
-        let own = |item: Option<crate::Resolved>| {
-            item.and_then(|item| item.own_repository)
-                .map(|origin| origin_target(&origin))
-                .transpose()
-        };
         match target {
-            WriteTarget::Existing(id) => own(self.bound_item(id).await?),
+            WriteTarget::Existing(id) => self
+                .bound_item(id)
+                .await?
+                .and_then(|item| item.own_repository)
+                .map(|origin| origin_target(&origin))
+                .transpose(),
             WriteTarget::New {
                 repositories,
                 project,
-            } => {
-                if let [named] = repositories {
-                    return origin_target(named).map(Some);
-                }
-                if let Some(project) = project
-                    && let Some(repository) = own(self.bound_item(project).await?)?
-                {
-                    return Ok(Some(repository));
-                }
-                self.configured_repository().cloned().map(Some)
-            }
+            } => self
+                .creation_rule(repositories, *project, "a new item")
+                .await
+                .map(Some),
         }
     }
 
-    /// Whether the board's Project is public, read with this source's own credential.
+    /// Whether the board's Project is public, read with this source's own credential — once
+    /// per hold.
     async fn board_visibility(&self) -> Result<Visibility, SourceError> {
+        match self.held_cell(None) {
+            Some(cell) => cell
+                .get_or_try_init(|| self.read_board_visibility())
+                .await
+                .copied(),
+            None => self.read_board_visibility().await,
+        }
+    }
+
+    async fn read_board_visibility(&self) -> Result<Visibility, SourceError> {
         let answer = self
             .graphql(
                 graphql::PROJECT_VISIBILITY,
@@ -106,11 +200,25 @@ impl GitHubProjectsSource {
         }
     }
 
-    /// Whether `repository` is public, read over REST with this source's own credential.
+    /// Whether `repository` is public, read over REST with this source's own credential —
+    /// once per hold.
     ///
     /// GitHub answers `public`, `private` or `internal`; only `public` is public. A repository
     /// the credential cannot see is a failed read, never a guess.
-    async fn repository_visibility(
+    pub(crate) async fn repository_visibility(
+        &self,
+        repository: &RepositoryTarget,
+    ) -> Result<Visibility, SourceError> {
+        match self.held_cell(Some(repository)) {
+            Some(cell) => cell
+                .get_or_try_init(|| self.read_repository_visibility(repository))
+                .await
+                .copied(),
+            None => self.read_repository_visibility(repository).await,
+        }
+    }
+
+    async fn read_repository_visibility(
         &self,
         repository: &RepositoryTarget,
     ) -> Result<Visibility, SourceError> {

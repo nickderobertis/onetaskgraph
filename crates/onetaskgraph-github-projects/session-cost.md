@@ -1019,7 +1019,7 @@ journey — which declares nothing — writes exactly what it wrote before.
 the reconciliation step sends its `rateLimit(dryRun: true)` probe for every read document of
 `graphql::DOCUMENTS`, so the new document is priced against GitHub's own `cost` like every
 other, at 0 worst-case nodes. Nothing the journey writes or reads besides that probe moved.
-What the reads cost a private board's copy is the `visibility-write-requests` budget's, in
+What the reads cost a private board's copy is the `visibility-reads-per-destination` budget's, in
 `crates/onetaskgraph-github-projects-e2e/budgets.yaml`.
 
 ## The type of a board field, held to GitHub

@@ -88,6 +88,21 @@ names() {
 said=""
 run_case "unedited" "" pass
 
+# A generic trait method must be inventoried just like a method without lifetimes.
+# Remove its exception from the real guard, keeping the actual trait and document.
+sed '/^    "scope_visibility": (/ , /^    ),/d' "$ROOT/$GUARD" >"$scratch/$GUARD" || fatal \
+  "could not remove scope_visibility from the scratch guard at $scratch/$GUARD" \
+  "check that $ROOT/$GUARD is readable and the scratch directory is writable, then rerun"
+status=0
+said="$(bash "$scratch/$GUARD" 2>&1 >/dev/null)" || status=$?
+if [ "$status" -eq 0 ]; then
+  fatal "case 'generic method missing from inventory': the guard passed" \
+    "restore recognition of generic TaskSource methods in $GUARD"
+fi
+names "generic method missing from inventory" \
+  '`TaskSource::scope_visibility` has no section named in METHOD_SECTIONS'
+cp "$ROOT/$GUARD" "$scratch/$GUARD" || copy_failed "$GUARD"
+
 run_case "a method missing from the list" \
   's/^- `set_task_rendering`, `set_project_rendering` and `set_document_rendering`, a regenerate in$/- `set_task_rendering` and `set_project_rendering`, a regenerate in/' \
   refuse
