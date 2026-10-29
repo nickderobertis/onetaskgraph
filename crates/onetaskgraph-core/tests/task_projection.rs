@@ -66,6 +66,17 @@ fn projection_refuses_questions_unknown_fields_wrong_versions_and_malformed_orig
             "{key}"
         );
     }
+    for key in ["run", "plan"] {
+        let mut value = request();
+        value["owner"]
+            .as_object_mut()
+            .expect("owner mapping")
+            .remove(key);
+        assert!(
+            serde_json::from_value::<HumanTaskProjection>(value).is_err(),
+            "{key}"
+        );
+    }
     let mut value = request();
     value["owner"]["question"] = json!("Proceed?");
     assert!(serde_json::from_value::<HumanTaskProjection>(value).is_err());
@@ -115,4 +126,96 @@ fn exported_projection_schemas_come_from_the_domain_declaration() {
         .expect("mapping")
         .remove("reason");
     assert!(validator.is_valid(&absent_reason));
+}
+
+#[test]
+fn projection_identities_validate_without_changing_the_published_wire_schema() {
+    for field in ["item_id", "project"] {
+        let mut value = request();
+        value[field] = json!("");
+        assert!(
+            serde_json::from_value::<HumanTaskProjection>(value).is_err(),
+            "{field}"
+        );
+    }
+    for field in ["session", "run", "plan"] {
+        let mut value = request();
+        value["owner"][field] = json!("");
+        assert!(
+            serde_json::from_value::<HumanTaskProjection>(value).is_err(),
+            "{field}"
+        );
+    }
+    for (field, invalid) in [
+        ("task", "not-qualified"),
+        ("project", ""),
+        ("url", "javascript:alert(1)"),
+        ("url", "https://"),
+        ("url", "https://user:secret@example.com/issue/1"),
+    ] {
+        let mut value = json!({"task":"human:ISSUE-1","project":"P-1","source":"human",
+            "url":"https://github.com/operator/product/issues/1"});
+        value[field] = json!(invalid);
+        assert!(
+            serde_json::from_value::<HumanTaskProjected>(value).is_err(),
+            "{field}"
+        );
+    }
+    let task =
+        onetaskgraph_core::task_projection::ProjectedTaskId::new("human:ISSUE-1").expect("task");
+    assert_eq!(task.global_id().to_string(), "human:ISSUE-1");
+    let project =
+        onetaskgraph_core::task_projection::ProjectionProjectId::new("P-1").expect("project");
+    assert_eq!(project.native_id().as_str(), "P-1");
+    let empty_native = onetaskgraph_core::GlobalId::new(
+        onetaskgraph_plugin_api::SourceName::new("human".to_owned()).expect("source"),
+        onetaskgraph_plugin_api::NativeId(String::new()),
+    );
+    assert!(onetaskgraph_core::task_projection::ProjectedTaskId::try_from(empty_native).is_err());
+}
+
+#[test]
+fn projection_identities_refuse_whitespace_and_control_characters() {
+    for invalid in [" item", "item ", "item\nline", "item\u{0}"] {
+        let mut value = request();
+        value["item_id"] = json!(invalid);
+        assert!(
+            serde_json::from_value::<HumanTaskProjection>(value).is_err(),
+            "{invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn response_source_is_derived_and_deserialization_refuses_contradictions() {
+    let value = json!({"task":"human:ISSUE-1","project":"P-1","source":"human",
+        "url":"https://github.com/operator/product/issues/1"});
+    let binding: HumanTaskProjected = serde_json::from_value(value.clone()).expect("binding");
+    assert_eq!(binding.source().as_str(), "human");
+    assert_eq!(binding.task().global_id().source, *binding.source());
+    let mut contradiction = value.clone();
+    contradiction["source"] = json!("other");
+    assert!(serde_json::from_value::<HumanTaskProjected>(contradiction).is_err());
+    for field in ["task", "project", "source", "url"] {
+        let mut missing = value.clone();
+        missing.as_object_mut().expect("mapping").remove(field);
+        assert!(
+            serde_json::from_value::<HumanTaskProjected>(missing).is_err(),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn tracker_urls_never_retain_control_characters_stripped_by_url_parsing() {
+    for url in [
+        "\0https://github.com/operator/product/issues/1",
+        "https://github.com/operator/product/issues/1\0",
+    ] {
+        let value = json!({"task":"human:ISSUE-1","project":"P-1","source":"human","url":url});
+        assert!(
+            serde_json::from_value::<HumanTaskProjected>(value).is_err(),
+            "{url:?}"
+        );
+    }
 }
