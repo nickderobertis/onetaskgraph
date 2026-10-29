@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build what test-linux, test-windows and test-macos build, and run nothing.
+# Build what test-linux and test-windows build, and run nothing.
 #
 #   scripts/warm-rust-cache.sh [--instrumented]
 #

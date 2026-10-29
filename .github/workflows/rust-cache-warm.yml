@@ -1,5 +1,5 @@
-# Build, testing nothing, what test-linux, test-windows and test-macos build, and save it under
-# the key each restores; AGENTS.md says why main must, and why its macOS leg is allowed.
+# Build, testing nothing, what test-linux and test-windows build, and save it under the key each
+# restores; AGENTS.md says why main must. No macOS leg: a push to main schedules no Mac job.
 # .github/tests/rust-cache-warm.test.mjs holds each leg to its job's key and build inputs.
 
 name: rust cache warm
@@ -67,53 +67,3 @@ jobs:
         shell: bash
         run: just warm-cache-reuse-check-warmed
 
-  # Fails open: anything but a clean `true` — a failed or undecided classifier, or this job
-  # failing outright — still warms macOS, as a cold build costs every pull request more.
-  release-merge:
-    name: release merge
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    outputs:
-      version-only: ${{ steps.decide.outputs.version-only }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - uses: extractions/setup-just@v4
-      - run: just github-workflows-bootstrap
-      - name: Decide whether the push changes only release versions and changelogs
-        id: decide
-        shell: bash
-        env:
-          BEFORE: ${{ github.event.before }}
-          AFTER: ${{ github.sha }}
-        run: |
-          answer="$(python3 .github/semantic-release.py "$BEFORE" "$AFTER" | tr -d '\r')" || answer=false
-          [ "$answer" = true ] || answer=false
-          echo "version-only=$answer" >>"$GITHUB_OUTPUT"
-
-  warm-macos:
-    name: warm (macos-latest)
-    needs: [release-merge]
-    if: ${{ !cancelled() && needs.release-merge.outputs.version-only != 'true' }}
-    runs-on: macos-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@v7
-      # rust-cache hashes every installed compiler; exclude the unused floating one.
-      - name: Exclude the unused floating compiler from the build cache
-        shell: bash
-        run: rustup toolchain uninstall stable
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          cache-shared-key: test-macos
-      - name: Build what test-macos builds
-        shell: bash
-        run: bash scripts/warm-rust-cache.sh

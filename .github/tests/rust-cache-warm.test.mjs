@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { parse } from "yaml";
 import { HASHED_ENV_PREFIXES } from "../rust-cache-key.mjs";
-import { jobs, read, root } from "../workflow-graph.mjs";
+import { read, root } from "../workflow-graph.mjs";
 
 // Each leg of rust-cache-warm.yml must save exactly the cache its pull-request job restores:
 // the same shared key, the same toolchain and rust-cache inputs on the same runner, and the
@@ -186,8 +183,12 @@ test("every warmer leg saves what its pull-request job restores", () => {
   assert.deepEqual(problems(all), []);
   assert.deepEqual(
     legs(all.warmer).map((leg) => `${leg.key}:${leg.job["runs-on"]}`),
-    ["test-linux:ubuntu-latest", "test-windows:windows-latest", "test-macos:macos-latest"],
+    ["test-linux:ubuntu-latest", "test-windows:windows-latest"],
   );
+  // A push to main schedules no Mac job: the macOS cache is warmed by its own pull requests.
+  for (const [id, job] of Object.entries(all.warmer.jobs))
+    for (const matrix of job.strategy?.matrix?.include ?? [{}])
+      assert.doesNotMatch(String(resolve(job["runs-on"], matrix)), /mac/i, id);
 });
 
 test("a leg differing from its job in key, toolchain or build is refused", () => {
@@ -198,7 +199,8 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
     return problems(changed);
   };
   const warm = (all) => all.warmer.jobs.warm;
-  const linux = (all) => warm(all).strategy.matrix.include.find((leg) => leg.job === "test-linux");
+  const leg = (all, id) => warm(all).strategy.matrix.include.find((entry) => entry.job === id);
+  const linux = (all) => leg(all, "test-linux");
   const job = (all, id) => all.ci.jobs[id] ?? all.fixture.jobs[id];
   const setup = (steps) => steps.find((step) => step.uses?.startsWith(SETUP));
   const cases = {
@@ -209,15 +211,15 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
       },
     ],
     "the pull-request job's key": [
-      /saves key test-macos, but test-macos restores macos/,
+      /saves key test-windows, but test-windows restores windows/,
       (all) => {
-        setup(job(all, "test-macos").steps).with["cache-shared-key"] = "macos";
+        setup(job(all, "test-windows").steps).with["cache-shared-key"] = "windows";
       },
     ],
     "another toolchain": [
-      /warm-macos \(macos-latest\) gives setup-rust-toolchain/,
+      /warm \(ubuntu-latest\) gives setup-rust-toolchain/,
       (all) => {
-        setup(all.warmer.jobs["warm-macos"].steps).with.toolchain = "nightly";
+        setup(warm(all).steps).with.toolchain = "nightly";
       },
     ],
     "another cache input": [
@@ -241,7 +243,7 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
     "floating stable kept": [
       /must both remove floating stable/,
       (all) => {
-        const steps = all.warmer.jobs["warm-macos"].steps;
+        const steps = warm(all).steps;
         steps.splice(
           steps.findIndex((step) => step.run === UNINSTALL),
           1,
@@ -254,11 +256,10 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
         linux(all).build = "";
       },
     ],
-    "instrumented on macOS": [
-      /builds instrumented, but test-macos does not run coverage/,
+    "instrumented on Windows": [
+      /builds instrumented, but test-windows does not run coverage/,
       (all) => {
-        const step = all.warmer.jobs["warm-macos"].steps.find((s) => WARM.test(s.run ?? ""));
-        step.run = "bash scripts/warm-rust-cache.sh --instrumented";
+        leg(all, "test-windows").build = "--instrumented";
       },
     ],
     "the job no longer runs coverage": [
@@ -272,9 +273,9 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
     "no build": [
       /must run scripts\/warm-rust-cache\.sh exactly once/,
       (all) => {
-        const steps = all.warmer.jobs["warm-macos"].steps;
+        const steps = warm(all).steps;
         steps.splice(
-          steps.findIndex((step) => WARM.test(step.run ?? "")),
+          steps.findIndex((step) => step.run?.startsWith("bash scripts/warm-rust-cache.sh")),
           1,
         );
       },
@@ -286,10 +287,10 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
       },
     ],
     "the job in neither file": [
-      /saves key test-macos, which no job/,
+      /saves key test-windows, which no job/,
       (all) => {
-        delete all.fixture.jobs["test-macos"];
-        delete all.ci.jobs["test-macos"];
+        delete all.fixture.jobs["test-windows"];
+        delete all.ci.jobs["test-windows"];
       },
     ],
   };
@@ -299,45 +300,5 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
       found.some((problem) => expected.test(problem)),
       `${name} must be refused with ${expected}: ${JSON.stringify(found)}`,
     );
-  }
-});
-
-// The macOS leg is skipped only on a decided release merge: a classifier that fails, answers
-// something else, or a release-merge job that fails outright, all still warm it. Each runs the
-// workflow's own decision step over a scratch history whose classifier is a stand-in.
-test("the macOS leg warms whenever the release-merge decision is not a clean true", () => {
-  const warmer = parse(read(".github/workflows/rust-cache-warm.yml"));
-  const scratch = mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "warm-"));
-  const git = (...args) => execFileSync("git", args, { cwd: scratch, encoding: "utf8" }).trim();
-  try {
-    git("init", "-q");
-    git("config", "user.email", "warm@example.invalid");
-    git("config", "user.name", "Warmer contract");
-    mkdirSync(join(scratch, ".github"));
-    const commit = (classifier) => {
-      writeFileSync(join(scratch, ".github/semantic-release.py"), classifier);
-      git("add", ".");
-      git("commit", "-qm", "classifier");
-      return git("rev-parse", "HEAD");
-    };
-    const scheduled = (classifier, workflow = warmer) => {
-      const before = commit("print('first')\n");
-      const after = commit(classifier);
-      const rows = jobs(
-        workflow,
-        { event: "push", branch: "main", revisions: { cwd: scratch, before, after } },
-        { macosRequired: false },
-      );
-      return rows.some((row) => row.job === "warm-macos");
-    };
-    assert.equal(scheduled("print('true')\n"), false, "a decided release merge skips it");
-    assert.equal(scheduled("print('false')\n"), true, "a source change warms it");
-    assert.equal(scheduled("print('maybe')\n"), true, "an unexpected answer warms it");
-    assert.equal(scheduled("raise SystemExit(3)\n"), true, "a failed classifier warms it");
-    const failing = structuredClone(warmer);
-    failing.jobs["release-merge"].steps.find((step) => step.id === "decide").run = "exit 1";
-    assert.equal(scheduled("print('true')\n", failing), true, "a failed decision job warms it");
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
   }
 });
