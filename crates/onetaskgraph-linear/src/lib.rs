@@ -108,6 +108,23 @@
 //!
 //! ## Ruling: what Linear stores is read off each write's own answer
 //!
+//! **Document-content contract:** writes send the caller's Markdown plus this source's
+//! code-span metadata slot. Reads return Linear's stored Markdown with that slot and its
+//! separator removed; they do not promise the caller's original bytes. `stored_content`
+//! reports the write answer in that same form. Code-span payloads survive unchanged;
+//! prose and HTML-comment payloads may be normalized. The captured response in
+//! `tests/fixtures/document-content-40721997875.json` records autolinking, bracket escaping
+//! and a comment terminator escape. What that run read after the Markdown probe's update
+//! matches, byte for byte, the stored form of the HTML-comment probe written before it. The
+//! working hypothesis — not yet confirmed against real Linear — is a by-id read lagging the
+//! write rather than a new rewrite rule, so the live journey waits within its replica bound
+//! for the exact recorded content, refusing a different value when that bound expires; the
+//! required live capability journey comparing both exact probes is what confirms or refutes
+//! it. Hosted run
+//! 40734970799 also missed freshly created projects in the unfiltered listing. That listing
+//! is retried within the existing index bound (21 reads, one second apart), still requiring
+//! both created projects; the journey's test timeout is unchanged.
+//!
 //! Linear stores an issue's `description`, a project's `content` and a document's `content` as
 //! Markdown it normalizes on write — `- ` bullets come back `* `, a table's delimiter row `| -- |`,
 //! a blank line is set before a list after a heading or a paragraph line and between two images

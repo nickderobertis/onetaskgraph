@@ -26,7 +26,9 @@ use std::cmp::Ordering;
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use onetaskgraph_plugin_api::{DocumentQuery, NativeId, PageRequest, Task, TaskQuery, TaskSource};
+use onetaskgraph_plugin_api::{
+    DocumentQuery, NativeId, PageRequest, ProjectQuery, Task, TaskQuery, TaskSource,
+};
 use serde_json::{Value, json};
 
 /// How many times a listing is read, and how far apart, before its disagreement is the answer.
@@ -75,6 +77,53 @@ where
         "{what} came back as {listed:?} rather than {expected:?}, still after {reads} reads \
          over {:?}",
         started.elapsed()
+    ))
+}
+
+/// Walk the whole unfiltered project listing again until every created title is visible.
+/// Other workspace projects are allowed, as in the live assertion this wait protects.
+/// Each walk keeps the journey's existing 100,000-item termination bound.
+pub async fn settled_projects(
+    bound: Bound,
+    source: &dyn TaskSource,
+    expected: &[String],
+) -> Result<Vec<String>, String> {
+    let mut last = Vec::new();
+    for read in 0..bound.reads {
+        if read > 0 {
+            tokio::time::sleep(bound.interval).await;
+        }
+        let mut listed = Vec::new();
+        let mut cursor = None;
+        loop {
+            let step = source
+                .query_projects(
+                    &ProjectQuery::default(),
+                    &PageRequest {
+                        cursor,
+                        limit: onetaskgraph_linear::MAX_PAGE_SIZE,
+                    },
+                )
+                .await
+                .map_err(|error| format!("live project listing failed: {error}"))?;
+            listed.extend(step.items.into_iter().map(|project| project.title));
+            cursor = step.next;
+            if cursor.is_none() {
+                break;
+            }
+            if listed.len() >= 100_000 {
+                return Err("the project walk must terminate".to_owned());
+            }
+        }
+        if expected.iter().all(|title| listed.contains(title)) {
+            return Ok(listed);
+        }
+        last = listed;
+    }
+    Err(format!(
+        "the two projects this run created are not in Linear's own project listing: \
+         expected {expected:?}, last listing {last:?}, after {} reads",
+        bound.reads
     ))
 }
 
@@ -453,4 +502,31 @@ where
         unchanged(before.content == after.content),
         unchanged(before.metadata == after.metadata),
     ))
+}
+
+/// Wait for exactly the stored Markdown promised by a write, without normalizing either
+/// side. A stale replica may catch up; a refusal or a permanently different body fails.
+pub async fn settled_content<F, Fut>(
+    bound: Bound,
+    expected: &str,
+    mut read: F,
+) -> Result<String, String>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<String, String>>,
+{
+    let mut content = read().await?;
+    let mut reads = 1;
+    while content != expected && reads < bound.reads {
+        tokio::time::sleep(bound.interval).await;
+        content = read().await?;
+        reads += 1;
+    }
+    if content == expected {
+        Ok(content)
+    } else {
+        Err(format!(
+            "document content came back as {content:?} rather than {expected:?}, still after {reads} reads"
+        ))
+    }
 }
