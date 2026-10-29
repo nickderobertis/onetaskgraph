@@ -206,6 +206,7 @@ MANIFEST = {
 # reason. Recorded rather than skipped by pattern, so a store fixture cannot be added under
 # a name a pattern happens to exclude.
 NOT_A_STORE = {
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The existing central NOT_A_STORE table requires every non-store response fixture to be named with its reason, matching all other domains here.
     "crates/onetaskgraph-linear/tests/fixtures/document-content-40721997875.json": (
         "Not a store: it records before/after Markdown from hosted run 40721997875, "
         "not a collection a query filters. "
@@ -213,7 +214,6 @@ NOT_A_STORE = {
         "the source's document write and read interfaces over these responses and asserts "
         "exact content, including preserved code spans and rewritten prose."
     ),
-    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The existing central NOT_A_STORE table requires every non-store response fixture to be named with its reason, matching all other domains here.
     "crates/onetaskgraph-live-janitor/tests/fixtures/linear-document-delete.json": (
         "Not a store: a single documentDelete acknowledgement, validated against the pinned "
         "upstream schema and served by the janitor subprocess journey, with no item collection."
