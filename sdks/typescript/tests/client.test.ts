@@ -1217,6 +1217,136 @@ test("a reconcile and a completion drive the real binary over a source whose sta
   }
 });
 
+// A loopback Linear answering the two documents a cold projection sends: the team's resolution
+// and `issueCreate`, answered with the issue it stored. Every request is recorded.
+function linearProjectionDouble(received: { query: string }[]) {
+  return Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(request) {
+      const body = (await request.json()) as {
+        query: string;
+        variables: { input?: Record<string, unknown> };
+      };
+      received.push(body);
+      if (body.query.includes("teams(")) {
+        return Response.json({
+          data: {
+            organization: { id: "ORG-1" },
+            teams: {
+              nodes: [
+                {
+                  id: "TEAM-1",
+                  states: {
+                    nodes: [
+                      { id: "STATE-todo", name: "Todo", type: "unstarted" },
+                      { id: "STATE-done", name: "Done", type: "completed" },
+                      { id: "STATE-canceled", name: "Canceled", type: "canceled" },
+                    ],
+                    pageInfo: { hasNextPage: false },
+                  },
+                },
+              ],
+            },
+            projectStatuses: { nodes: [], pageInfo: { hasNextPage: false } },
+          },
+        });
+      }
+      if (body.query.includes("issueCreate(")) {
+        const stored = body.variables.input ?? {};
+        return Response.json({
+          data: {
+            issueCreate: {
+              success: true,
+              issue: {
+                id: "ISSUE-1",
+                identifier: "FIX-1",
+                title: stored.title,
+                description: stored.description,
+                url: "https://linear.app/fixture/issue/FIX-1",
+                createdAt: null,
+                updatedAt: "2026-09-01T00:00:00Z",
+                archivedAt: null,
+                state: { name: "Todo", type: "unstarted" },
+                priority: stored.priority,
+                labels: { nodes: [] },
+                project: { id: stored.projectId },
+              },
+            },
+          },
+        });
+      }
+      return new Response("unexpected document", { status: 400 });
+    },
+  });
+}
+
+test("a human task is projected through the real binary into a loopback Linear", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-projection-"));
+  const received: { query: string }[] = [];
+  const server = linearProjectionDouble(received);
+  try {
+    writeFileSync(
+      resolve(root, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          org: {
+            plugin: "linear",
+            config: {
+              endpoint: `http://127.0.0.1:${server.port}/graphql`,
+              team: "FIX",
+              status_mapping: { todo: "Todo", done: "Done", cancelled: "Canceled" },
+            },
+            cache: { dir: resolve(root, "cache") },
+            task_projection: {
+              host: "sdk-host",
+              directory: resolve(root, "intents"),
+              project: "P-1",
+            },
+          },
+        },
+      }),
+    );
+    const input = resolve(root, "request.json");
+    writeFileSync(
+      input,
+      JSON.stringify({
+        schema_version: 1,
+        item_id: "sdk-item",
+        owner: { session: "session-1", run: null, plan: null },
+        title: "Decide on the release",
+        body: "Choose a date.",
+        priority: "high",
+        repositories: [],
+        project: null,
+        source: "org",
+        state: "open",
+        reason: null,
+      }),
+    );
+    const client = new OnetaskgraphClient({
+      binaryPath: binary,
+      cwd: root,
+      env: { LINEAR_API_KEY: "fixture-key", ONETASKGRAPH_HOST: "sdk-host" },
+    });
+    const projected = await client.taskProjectHuman(input);
+    expect(projected).toEqual({
+      task: "org:ISSUE-1",
+      url: "https://linear.app/fixture/issue/FIX-1",
+      project: "P-1",
+      source: "org",
+    });
+    expect(received.filter((call) => call.query.includes("issueCreate(")).length).toBe(1);
+    // Bound: the same request again is the same answer, and the tracker is asked nothing.
+    const before = received.length;
+    expect(await client.taskProjectHuman(input)).toEqual(projected);
+    expect(received.length).toBe(before);
+  } finally {
+    server.stop(true);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a human task projection's request reaches the real binary, which refuses what it cannot project", async () => {
   const root = deliveringFolder();
   try {

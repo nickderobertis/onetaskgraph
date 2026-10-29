@@ -319,6 +319,148 @@ def test_status_options_method_decodes_a_real_binary_plan(binary: Path, tmp_path
         thread.join()
 
 
+def linear_projection_handler(received: list[dict[str, object]]) -> type[BaseHTTPRequestHandler]:
+    """Build a loopback Linear answering the two documents a cold projection sends.
+
+    Those are the team's resolution and ``issueCreate``, answered with the issue it stored.
+    """
+
+    class LinearHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802  # stdlib handler API names the method.
+            length = int(self.headers["content-length"])
+            request = json.loads(self.rfile.read(length))
+            received.append(request)
+            query = request["query"]
+            if "teams(" in query:
+                data: dict[str, object] = {
+                    "organization": {"id": "ORG-1"},
+                    "teams": {
+                        "nodes": [
+                            {
+                                "id": "TEAM-1",
+                                "states": {
+                                    "nodes": [
+                                        {"id": "STATE-todo", "name": "Todo", "type": "unstarted"},
+                                        {"id": "STATE-done", "name": "Done", "type": "completed"},
+                                        {
+                                            "id": "STATE-canceled",
+                                            "name": "Canceled",
+                                            "type": "canceled",
+                                        },
+                                    ],
+                                    "pageInfo": {"hasNextPage": False},
+                                },
+                            }
+                        ]
+                    },
+                    "projectStatuses": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                }
+            elif "issueCreate(" in query:
+                stored = request["variables"]["input"]
+                data = {
+                    "issueCreate": {
+                        "success": True,
+                        "issue": {
+                            "id": "ISSUE-1",
+                            "identifier": "FIX-1",
+                            "title": stored["title"],
+                            "description": stored["description"],
+                            "url": "https://linear.app/fixture/issue/FIX-1",
+                            "createdAt": None,
+                            "updatedAt": "2026-09-01T00:00:00Z",
+                            "archivedAt": None,
+                            "state": {"name": "Todo", "type": "unstarted"},
+                            "priority": stored["priority"],
+                            "labels": {"nodes": []},
+                            "project": {"id": stored["projectId"]},
+                        },
+                    }
+                }
+            else:
+                self.send_response(400)
+                self.end_headers()
+                return
+            body = json.dumps({"data": data}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    return LinearHandler
+
+
+def test_a_human_task_is_projected_through_the_real_binary_into_a_loopback_linear(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Project one human task and decode the binding the binary answers with."""
+    received: list[dict[str, object]] = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), linear_projection_handler(received))
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        config = {
+            "sources": {
+                "org": {
+                    "plugin": "linear",
+                    "config": {
+                        "endpoint": f"http://127.0.0.1:{server.server_port}/graphql",
+                        "team": "FIX",
+                        "status_mapping": {"todo": "Todo", "done": "Done", "cancelled": "Canceled"},
+                    },
+                    "cache": {"dir": str(tmp_path / "cache")},
+                    "task_projection": {
+                        "host": "sdk-host",
+                        "directory": str(tmp_path / "intents"),
+                        "project": "P-1",
+                    },
+                }
+            }
+        }
+        (tmp_path / "onetaskgraph.yaml").write_text(json.dumps(config), encoding="utf-8")
+        request = {
+            "schema_version": 1,
+            "item_id": "sdk-item",
+            "owner": {"session": "session-1", "run": None, "plan": None},
+            "title": "Decide on the release",
+            "body": "Choose a date.",
+            "priority": "high",
+            "repositories": [],
+            "project": None,
+            "source": "org",
+            "state": "open",
+            "reason": None,
+        }
+        (tmp_path / "request.json").write_text(json.dumps(request), encoding="utf-8")
+        client = Client(
+            binary,
+            cwd=tmp_path,
+            environment={
+                **os.environ,
+                "LINEAR_API_KEY": "fixture-key",
+                "ONETASKGRAPH_HOST": "sdk-host",
+            },
+        )
+        projected = run(client.task_project_human(str(tmp_path / "request.json")))
+        assert projected.source.root == "org"
+        assert projected.task == "org:ISSUE-1"
+        assert projected.url == "https://linear.app/fixture/issue/FIX-1"
+        assert projected.project == "P-1"
+        creates = [call for call in received if "issueCreate(" in str(call["query"])]
+        assert len(creates) == 1
+        # Bound: the same request again is the same answer, and the tracker is asked nothing.
+        before = len(received)
+        assert run(client.task_project_human(str(tmp_path / "request.json"))) == projected
+        assert len(received) == before
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
 def landed(outcome: CopyOutcome) -> str:
     """The id a copy wrote to, absent only for a dry run that would have created one."""
     reported = outcome.root
