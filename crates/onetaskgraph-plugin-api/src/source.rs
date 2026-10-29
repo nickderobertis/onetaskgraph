@@ -315,6 +315,46 @@ pub trait TaskSource: Send + Sync {
         false
     }
 
+    /// What this source read in this process about where it creates — a container's field
+    /// and option ids, the node ids of the repositories it files in — that a create in a
+    /// later process could take instead of reading it, or `None`.
+    ///
+    /// Immutable placement knowledge only: it holds no item's title, content or membership,
+    /// and nothing that authorizes a versioned write. Defaulted to `None`.
+    fn placement_context(&self) -> Option<serde_json::Value> {
+        None
+    }
+
+    /// Take `context`, which [`placement_context`](Self::placement_context) gave in an
+    /// earlier process, so the next create reads none of it — answering whether it took it.
+    /// A context this source cannot read is not taken. Defaulted to taking nothing.
+    fn prime_placement(&self, context: &serde_json::Value) -> bool {
+        let _ = context;
+        false
+    }
+
+    /// The ids — never the title or the content — a later process needs to write task `id`,
+    /// which this process wrote, without reading it first, or `None`. Defaulted to `None`.
+    fn written_context(&self, id: &NativeId) -> Option<serde_json::Value> {
+        let _ = id;
+        None
+    }
+
+    /// Take `task`, which the caller asserts this source holds exactly as it last wrote it,
+    /// with `context`, which [`written_context`](Self::written_context) gave, as the record
+    /// of `id` — so the next [`update_task`](Self::update_task) of it sends only its
+    /// mutations. Answers whether it took them; a context it cannot read is not taken, and
+    /// the update then reads as it always does. Defaulted to taking nothing.
+    fn prime_written(
+        &self,
+        id: &NativeId,
+        context: &serde_json::Value,
+        task: &crate::Task,
+    ) -> bool {
+        let _ = (id, context, task);
+        false
+    }
+
     /// Drop whatever [`prime_write`](Self::prime_write) took for `id`, and the board context
     /// with it, so the next write of it reads afresh.
     fn unprime(&self, id: &NativeId) {

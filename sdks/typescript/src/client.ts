@@ -14,6 +14,7 @@ import type {
   EffectiveConfig,
   FailureDocument,
   FieldsReport,
+  HumanTaskProjected,
   IssuesCompleted,
   LocateReport,
   MetadataSet,
@@ -297,6 +298,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task render": "Regenerated",
   "task answers": "TemplateAnswers",
   "task assets": "TaskAssetNames",
+  // One human task projected idempotently: its task, canonical URL, project and source.
+  "task project-human": "HumanTaskProjected",
   "document create": "DocumentDetail",
   "document render": "Regenerated",
   "document answers": "TemplateAnswers",
@@ -320,7 +323,8 @@ export const commandAlternateRoots: Readonly<
 // several nor keeps anything in step, so exit 4 is not a code it can produce and not one this
 // client accepts from it. A `metadata set` is the same: one write to one source, and metadata is
 // not status, so it keeps no delivered task in step — and so are `priority set` and `content
-// set`, for the same reason. `sources fields` sets up one board and answers for it whole, or
+// set`, for the same reason. `task project-human` writes one item to one source and keeps
+// nothing in step. `sources fields` sets up one board and answers for it whole, or
 // fails, and `sources route` reads configuration alone. `project graph` prints a graph or
 // nothing, and a graph lacking a private source it could not ask names it in `unanswered` and
 // exits 0, so it never exits 4. `task assets` reads one task from one source and
@@ -343,6 +347,7 @@ const partialResponseCommands = new Set(
       !command.endsWith(" render") &&
       !command.endsWith(" answers") &&
       command !== "task assets" &&
+      command !== "task project-human" &&
       command !== "project create" &&
       command !== "document create",
   ),
@@ -1415,6 +1420,14 @@ export class OnetaskgraphClient {
   // references it by, and answer with the names written.
   taskAssets(id: string, outputDir: string): Promise<TaskAssetNames> {
     return this.run("task assets", [id, "--output-dir", outputDir]);
+  }
+  // Project one human task from the `HumanTaskProjection` request at `input`, a file path or
+  // `-` for standard input: created once by its `item_id`, and settled once at a terminal state.
+  taskProjectHuman(input: string): Promise<HumanTaskProjected> {
+    return this.run("task project-human", [
+      "--input",
+      stringOption("taskProjectHuman", "input", input),
+    ]);
   }
   // Create — or, with `id` naming one the source holds, replace — a project, its description
   // rendered from a template or given as it is; it answers as `projectShow` does.

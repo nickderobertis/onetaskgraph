@@ -200,6 +200,54 @@ fn nullable<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     Option::<T>::deserialize(deserializer)
 }
 
+/// One source's projection authority, as its `task_projection` configures it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionSource {
+    /// The digest naming the source's remote, shared with its local cache.
+    pub identity: SourceIdentityDigest,
+    /// The authoritative host.
+    pub host: String,
+    /// The absolute directory holding its intents.
+    pub directory: std::path::PathBuf,
+    /// The project a planless item is filed under.
+    pub project: Option<ProjectionProjectId>,
+}
+
+/// Every configured source's projection authority, or why it cannot hold one.
+pub(crate) fn configured(
+    config: &crate::config::Config,
+) -> std::collections::BTreeMap<SourceName, Result<ProjectionSource, String>> {
+    config
+        .sources()
+        .iter()
+        .filter_map(|(name, source)| {
+            let declared = source.task_projection()?;
+            let resolved = (|| {
+                let identity = crate::cache::remote_digest(source).ok_or_else(|| {
+                    format!(
+                        "source {name} names no remote tracker, so its projections have no \
+                         stable identity"
+                    )
+                })?;
+                Ok(ProjectionSource {
+                    identity: SourceIdentityDigest::new(identity)?,
+                    host: declared.host.clone(),
+                    directory: declared.directory.clone(),
+                    project: declared
+                        .project
+                        .clone()
+                        .map(ProjectionProjectId::new)
+                        .transpose()
+                        .map_err(|error| {
+                            format!("sources.{name}.task_projection.project: {error}")
+                        })?,
+                })
+            })();
+            Some((name.clone(), resolved))
+        })
+        .collect()
+}
+
 /// The purpose selected by human task projection writers on existing route declarations.
 #[must_use]
 pub fn route_purpose() -> crate::config::RoutePurpose {

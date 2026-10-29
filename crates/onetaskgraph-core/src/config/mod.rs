@@ -43,7 +43,7 @@ pub use discovery::{
     read_optional, readable_documents, secrets_path, user_document_path,
 };
 pub use effective::EffectiveConfig;
-pub use environment_layer::{ENVIRONMENT_PREFIX, variable_for};
+pub use environment_layer::{ENVIRONMENT_PREFIX, HOST_VARIABLE, variable_for};
 pub use error::ConfigError;
 pub use layer::{Layer, Merged, Origin, Setting, SettingPath, merge, unflatten, value_from_text};
 pub(crate) use relative::rebased;
@@ -84,9 +84,17 @@ pub struct SourceConfig {
     visibility: SourceVisibility,
     cache: SourceCacheConfig,
     public_alias: Option<onetaskgraph_plugin_api::Designator>,
+    task_projection: Option<TaskProjectionConfig>,
 }
 
 impl SourceConfig {
+    /// Where, and on which host's authority, human task projections into this source keep
+    /// their durable intents — `None` for a source that receives none.
+    #[must_use]
+    pub fn task_projection(&self) -> Option<&TaskProjectionConfig> {
+        self.task_projection.as_ref()
+    }
+
     /// The designator `public_alias` declares, `alias/<public_alias>`, for a source whose
     /// backend has no opaque identifier of its own: every host's configuration of the same
     /// tracker declares the same alias, so an opaque edge written under one host's name for
@@ -179,6 +187,28 @@ struct SourceShape {
     /// repeats the value.
     #[serde(default)]
     public_alias: Option<Value>,
+    #[serde(default)]
+    task_projection: Option<TaskProjectionConfig>,
+}
+
+/// A source's `task_projection`: the host-local authority over human task projections
+/// written into it (see `docs/task-projection.md`).
+///
+/// One host is authoritative for a source's projections, and its intents live in one absolute
+/// directory there; a process on another host is refused rather than arbitrating. `project` is
+/// the existing project a session's or host's item lands under when its request names no plan
+/// project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskProjectionConfig {
+    /// The authoritative host, compared with `ONETASKGRAPH_HOST` or the machine's hostname.
+    pub host: String,
+    /// The absolute directory holding the durable intents.
+    #[schemars(with = "String")]
+    pub directory: std::path::PathBuf,
+    /// The existing project of this source a planless item is filed under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 /// The designator a source's `public_alias` declares, refused when it is not a string matching
@@ -469,6 +499,7 @@ impl Config {
                     visibility: source.visibility,
                     cache: source.cache,
                     public_alias,
+                    task_projection: source.task_projection,
                 },
             );
         }

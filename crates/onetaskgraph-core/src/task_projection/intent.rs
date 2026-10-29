@@ -126,6 +126,10 @@ enum Phase {
     Bound {
         binding: HumanTaskProjected,
         terminal: Option<Terminal>,
+        /// The ids — never the title or the content — the source gave for the task it wrote,
+        /// which a later terminal write takes instead of reading the task again.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        written: Option<serde_json::Value>,
     },
 }
 
@@ -163,6 +167,9 @@ struct Journal {
     phase: Phase,
 }
 
+/// The file beside a source's intents holding its immutable placement knowledge.
+const PLACEMENT_FILE: &str = "placement.json";
+
 /// The local authoritative intent store, shared by processes on one host.
 ///
 /// The caller obtains its host and directory from host-local configuration. This store
@@ -196,6 +203,67 @@ impl IntentStore {
             host: HostIdentity::new(host).map_err(refused)?,
             current_host: HostIdentity::new(current_host).map_err(refused)?,
         })
+    }
+
+    /// The immutable placement knowledge kept for a source, when a projection kept any.
+    ///
+    /// It holds a container's field and repository ids, never an item's title or content, and
+    /// authorizes nothing: a source that cannot take it reads as it otherwise would.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an unreadable store; a context that is not JSON is read as none.
+    pub fn placement_context(
+        &self,
+        identity: &SourceIdentityDigest,
+    ) -> Result<Option<serde_json::Value>, ProjectionError> {
+        match fs::read(self.directory.join(identity.as_str()).join(PLACEMENT_FILE)) {
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Keep `context` as a source's placement knowledge, replacing what was kept atomically.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a store that cannot be written.
+    pub fn keep_placement_context(
+        &self,
+        identity: &SourceIdentityDigest,
+        context: &serde_json::Value,
+    ) -> Result<(), ProjectionError> {
+        let directory = self.directory.join(identity.as_str());
+        create_directories(&directory)?;
+        let path = directory.join(PLACEMENT_FILE);
+        let temporary = directory.join(format!("{PLACEMENT_FILE}.{}.pending", std::process::id()));
+        let mut file = private_options()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary)?;
+        file.write_all(&serde_json::to_vec(context)?)?;
+        file.sync_all()?;
+        fs::rename(temporary, path)?;
+        sync_directory(&directory)?;
+        Ok(())
+    }
+
+    /// Forget a source's placement knowledge, so the next create reads it afresh.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a store that cannot be written.
+    pub fn forget_placement_context(
+        &self,
+        identity: &SourceIdentityDigest,
+    ) -> Result<(), ProjectionError> {
+        match fs::remove_file(self.directory.join(identity.as_str()).join(PLACEMENT_FILE)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Lock one source identity and external item id, then commit or load its intent.
@@ -254,7 +322,10 @@ impl IntentStore {
                         "persisted intent differs in owner, payload, route or privacy; reconcile it before projecting again",
                     ));
                 }
-                if let Phase::Bound { binding, terminal } = &journal.phase {
+                if let Phase::Bound {
+                    binding, terminal, ..
+                } = &journal.phase
+                {
                     if !binding_valid(binding, placement) {
                         return Err(refused(
                             "invalid persisted tracker binding; reconcile the durable store",
@@ -350,6 +421,51 @@ impl ProjectionClaim {
         }
     }
 
+    /// The ids the source gave for the task it wrote, when the binding kept any.
+    #[must_use]
+    pub fn written_context(&self) -> Option<&serde_json::Value> {
+        match &self.journal.phase {
+            Phase::Bound { written, .. } => written.as_ref(),
+            Phase::Uncertain {} | Phase::Ready {} | Phase::Creating {} => None,
+        }
+    }
+
+    /// Whether a terminal intent was committed — acknowledged or not.
+    #[must_use]
+    pub fn terminal_committed(&self) -> bool {
+        matches!(
+            &self.journal.phase,
+            Phase::Bound {
+                terminal: Some(_),
+                ..
+            }
+        )
+    }
+
+    /// Durably bind a returned identity with the ids the source gave for what it wrote.
+    ///
+    /// # Errors
+    ///
+    /// As [`bind`](Self::bind).
+    pub fn bind_written(
+        &mut self,
+        binding: HumanTaskProjected,
+        written: Option<serde_json::Value>,
+    ) -> Result<(), ProjectionError> {
+        self.bind(binding)?;
+        if let Phase::Bound {
+            written: held @ None,
+            terminal: None,
+            ..
+        } = &mut self.journal.phase
+            && written.is_some()
+        {
+            *held = written;
+            return self.persist();
+        }
+        Ok(())
+    }
+
     /// Persist that a create may reach the tracker before the caller sends it.
     ///
     /// # Errors
@@ -395,6 +511,7 @@ impl ProjectionClaim {
         self.journal.phase = Phase::Bound {
             binding,
             terminal: None,
+            written: None,
         };
         self.persist()
     }

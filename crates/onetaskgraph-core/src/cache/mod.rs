@@ -91,6 +91,14 @@ pub fn location(config: &SourceConfig, home: Option<&Path>) -> Option<CacheLocat
     Some(CacheLocation { dir, remote })
 }
 
+/// The digest naming the remote `config` reads — the one its cache directory is named for —
+/// or `None` for a source with no remote.
+#[must_use]
+pub(crate) fn remote_digest(config: &SourceConfig) -> Option<String> {
+    let identity = config.plugin().plugin().remote_identity(config.config())?;
+    Some(digest(&format!("{}\n{identity}", config.plugin().as_str())))
+}
+
 /// Where the source `config` keeps the designator its backend answered, whether or not its
 /// cache is on: the path of `designator.json` in the directory the cache lives in — `cache.dir`,
 /// or the directory named for the remote under `home` — and the digest of that remote, which a

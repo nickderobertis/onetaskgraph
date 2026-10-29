@@ -654,6 +654,7 @@ pub mod change_token;
 mod expected;
 pub use expected::{CONTEXT_VERSION, WHOLE_MEMBERS, context_shapes};
 mod pacing;
+mod projection;
 mod visibility;
 
 use accounting::Accounting;
@@ -13194,6 +13195,18 @@ impl TaskSource for GitHubProjectsSource {
     }
     fn unprime(&self, id: &NativeId) {
         self.unprime_held(id);
+    }
+    fn placement_context(&self) -> Option<Value> {
+        self.placement_held()
+    }
+    fn prime_placement(&self, context: &Value) -> bool {
+        self.prime_placement_held(context)
+    }
+    fn written_context(&self, id: &NativeId) -> Option<Value> {
+        self.written_held(id)
+    }
+    fn prime_written(&self, id: &NativeId, context: &Value, task: &Task) -> bool {
+        self.prime_written_held(id, context, task)
     }
     fn begin_journal(&self) {
         self.expected.begin();

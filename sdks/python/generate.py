@@ -75,6 +75,8 @@ RESPONSE_ROOTS = {
     "task_render": "Regenerated",
     "task_answers": "TemplateAnswers",
     "task_assets": "TaskAssetNames",
+    # One human task projected idempotently: its task, canonical URL, project and source.
+    "task_project_human": "HumanTaskProjected",
     # A created project as `project show` answers with it.
     "project_create": "QueryResponseOfQualifiedProject",
     "project_render": "Regenerated",
@@ -144,6 +146,9 @@ CONTRACT_ROOTS = {
     "SourceCacheConfig",
     "CacheUse",
     "ExpectedWrite",
+    # The v1 request `task project-human` reads from its input file, which a producer builds
+    # by name from the one declaration the engine exports.
+    "HumanTaskProjection",
 }
 # Commands that answer in more than one shape, by the plugin of the source they are asked
 # about: each command's RESPONSE_ROOTS entry is one shape, and these are the others. `sources
@@ -190,6 +195,8 @@ OPTION_TYPES = {
     "group_by": "str",
     "id": "str",
     "in_": "choices",
+    # The file holding a `HumanTaskProjection` request, or `-` for standard input.
+    "input": "str",
     # The issue references a landing closed, each `owner/name#N`.
     "issue": "list[str] | tuple[str, ...]",
     "kind": "choices",
@@ -243,6 +250,7 @@ OPTION_PLACEHOLDERS = {
     "no_link": None,
     "no_counterpart": None,
     "answers": "FILE",
+    "input": "FILE",
     "asset": "PATH",
     "author": "NAME",
     "body_file": "PATH",
@@ -862,6 +870,8 @@ REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "assets"): ("output_dir",),
     # A locate answers where a copy into one source would land, so it names that source.
     ("task", "locate"): ("to",),
+    # A projection has nothing to project without its request.
+    ("task", "project-human"): ("input",),
 }
 
 # Commands whose required options are keyword-only: named at every call rather than taken by

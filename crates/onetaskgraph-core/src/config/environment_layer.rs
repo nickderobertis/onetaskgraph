@@ -23,7 +23,13 @@ pub const ENVIRONMENT_PREFIX: &str = "ONETASKGRAPH_";
 /// it drives in `ONETASKGRAPH_BIN` and passes its environment on to that binary, where it
 /// would decode to a setting called `bin` and refuse every command. It says which binary
 /// to run — settled before this binary starts — so no command's answer depends on it.
-const RESERVED: &[&str] = &[SECRETS_FILE_VARIABLE, BIN_VARIABLE];
+///
+/// [`HOST_VARIABLE`] names the host this process runs on, which a source's
+/// `task_projection` is compared with; it is a fact about the machine rather than a setting.
+const RESERVED: &[&str] = &[SECRETS_FILE_VARIABLE, BIN_VARIABLE, HOST_VARIABLE];
+
+/// The variable naming the host this process runs on, which is not a setting.
+pub const HOST_VARIABLE: &str = "ONETASKGRAPH_HOST";
 
 /// The variable a caller names this binary's own path in, which is not a setting.
 const BIN_VARIABLE: &str = "ONETASKGRAPH_BIN";

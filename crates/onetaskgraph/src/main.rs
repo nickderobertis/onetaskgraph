@@ -640,6 +640,9 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Assets(args),
         } => task_assets(out, loaded, args).await,
+        Command::Task {
+            command: TaskCommand::ProjectHuman(args),
+        } => project_human(out, loaded, &args.input).await,
         Command::Project {
             command: ProjectCommand::Create(args),
         } => rendered::create_project(out, loaded, args).await,
@@ -1606,6 +1609,94 @@ async fn locate(
     let rendered = rendering(loaded, &report, render::locate, "the location")?;
     emit(out, rendered.trim_end(), "the location")?;
     Ok(EXIT_OK)
+}
+
+/// Project one human task from the request at `input`, refused before any source is
+/// started when the request is not exactly a v1 `HumanTaskProjection`.
+async fn project_human(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    input: &std::path::Path,
+) -> Result<u8, Failure> {
+    let (bytes, from) = if input.as_os_str() == "-" {
+        let mut bytes = Vec::new();
+        io::Read::read_to_end(&mut io::stdin().lock(), &mut bytes).map_err(|error| {
+            Failure::decided(
+                "projection-input",
+                format!(
+                    "could not read the projection request from standard input: {error}\n\
+                     next: pass it with --input FILE instead."
+                ),
+            )
+        })?;
+        (bytes, "standard input".to_owned())
+    } else {
+        let bytes = std::fs::read(input).map_err(|error| {
+            Failure::decided(
+                "projection-input",
+                format!(
+                    "--input {}: could not read it: {error}\n\
+                     next: name a readable file holding the request.",
+                    input.display()
+                ),
+            )
+        })?;
+        (bytes, format!("--input {}", input.display()))
+    };
+    let request: onetaskgraph_core::task_projection::HumanTaskProjection =
+        serde_json::from_slice(&bytes).map_err(|error| {
+            Failure::decided(
+                "projection-input",
+                format!(
+                    "{from} is not a v1 HumanTaskProjection request: {error}\n\
+                     next: send exactly the fields `onetaskgraph schema` publishes for \
+                     HumanTaskProjection; questions are not projected."
+                ),
+            )
+        })?;
+    let host = current_host().ok_or_else(|| {
+        Failure::decided(
+            "projection-host",
+            "this host's name could not be read\n\
+             next: set ONETASKGRAPH_HOST to the host a source's task_projection names."
+                .to_owned(),
+        )
+    })?;
+    let engine = engine(loaded);
+    let projected = engine
+        .project_human(&request, &host)
+        .await
+        .map_err(|error| write_failed(&engine, &error))?;
+    let rendered = rendering(
+        loaded,
+        &projected,
+        |projected| format!("{} {}", projected.task(), projected.url()),
+        "the projection",
+    )?;
+    emit(out, rendered.trim_end(), "the projection")?;
+    Ok(EXIT_OK)
+}
+
+/// The host this process runs on: `ONETASKGRAPH_HOST`, else the machine's own name.
+fn current_host() -> Option<String> {
+    if let Some(host) = std::env::var(onetaskgraph_core::config::HOST_VARIABLE)
+        .ok()
+        .filter(|host| !host.is_empty())
+    {
+        return Some(host);
+    }
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .ok()
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .or_else(|| {
+            std::process::Command::new("hostname")
+                .output()
+                .ok()
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+        })
+        .map(|host| host.trim().to_owned())
+        .filter(|host| !host.is_empty())
 }
 
 /// Name every item a copy left unwritten, and say what the exit code will mean: `4`, the
