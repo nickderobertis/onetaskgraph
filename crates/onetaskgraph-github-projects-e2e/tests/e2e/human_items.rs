@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use onetaskgraph_e2e_support::common::{Sandbox, stderr, stdout};
 use onetaskgraph_e2e_support::fixtures::{GitHubBoardFields, document, github_projects_with_items};
+use onetaskgraph_github_projects::graphql;
 use serde_json::{Value, json};
 
 /// The host every journey's configuration names as the authority over its projections.
@@ -268,4 +269,306 @@ fn an_item_is_created_once_bound_and_settled_once_and_a_conflicting_terminal_is_
     assert_ne!(store.project(&reopened).status.code(), Some(0));
     assert_eq!(store.board.fields.state(&created).0, "CLOSED");
     assert_eq!(store.tickets("item-1"), [created]);
+}
+
+impl Store {
+    /// Write `request` where the binary reads it.
+    fn request_file(&self, request: &Value) -> PathBuf {
+        let path = self.sandbox.project().join(format!(
+            "request-{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, request.to_string()).unwrap();
+        path
+    }
+
+    /// Project `request` and kill the binary as soon as the board has applied the first
+    /// request `matches` holds of — before its answer reaches the binary: a crash at that
+    /// point of the sequence.
+    pub fn project_killed(
+        &self,
+        request: &Value,
+        matches: impl Fn(&str, &Value) -> bool + Send + 'static,
+    ) {
+        let path = self.request_file(request);
+        let mut command = self.sandbox.subprocess(onetaskgraph_e2e_support::binary());
+        command
+            .args(["task", "project-human", "--input"])
+            .arg(&path)
+            .arg("--json")
+            .env("ONETASKGRAPH_HOST", HOST)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let child = std::sync::Arc::new(std::sync::Mutex::new(command.spawn().unwrap()));
+        let killed = std::sync::Arc::clone(&child);
+        self.board.fields.after_request(matches, 0, move |_| {
+            let _ = killed.lock().unwrap().kill();
+        });
+        let status = loop {
+            if let Some(status) = child.lock().unwrap().try_wait().unwrap() {
+                break status;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert!(
+            !status.success(),
+            "the binary finished before the crash point"
+        );
+    }
+}
+
+/// A request matching a document carrying `operation`.
+fn carrying(operation: &'static str) -> impl Fn(&str, &Value) -> bool + Send + 'static {
+    move |query: &str, _: &Value| query.contains(operation)
+}
+
+/// The operation names of the requests the board answered from `from` on.
+fn creates_since(store: &Store, from: usize) -> usize {
+    store
+        .operations_since(from)
+        .iter()
+        .filter(|operation| **operation == "creating an issue")
+        .count()
+}
+
+#[test]
+fn a_dismissal_keeps_its_reason_and_a_lost_terminal_answer_is_retried_without_writing_again() {
+    let store = Store::new(Vec::new());
+    let open = request("item-reason", &[PUBLIC_REPOSITORY]);
+    let created = native(&projected(&store.project(&open)));
+    let mut dismissed = open.clone();
+    dismissed["state"] = json!("dismissed");
+    dismissed["reason"] = json!("Superseded by another example.");
+    // The close lands and its answer never reaches the binary.
+    store.project_killed(&dismissed, carrying("updateIssue(input"));
+    assert_eq!(store.board.fields.state(&created).0, "CLOSED");
+
+    // A fresh process reads the issue once, finds the terminal state there, and writes nothing.
+    let before = store.requests();
+    let answer = projected(&store.project(&dismissed));
+    assert_eq!(native(&answer), created);
+    assert_eq!(store.operations_since(before), ["reading one issue"]);
+    let held = slot(&store.board.fields, &created);
+    assert_eq!(held["human.state"], "dismissed");
+    assert_eq!(held["human.reason"], "Superseded by another example.");
+    assert_eq!(
+        store.board.fields.state(&created),
+        ("CLOSED".to_owned(), Some("NOT_PLANNED".to_owned()))
+    );
+    // Acknowledged now, so the next retry asks the board nothing.
+    let before = store.requests();
+    projected(&store.project(&dismissed));
+    assert_eq!(store.requests(), before);
+
+    // An omitted reason is the same request as a null one.
+    let other = request("item-omitted", &[PUBLIC_REPOSITORY]);
+    let mut omitted = other.clone();
+    omitted.as_object_mut().unwrap().remove("reason");
+    omitted["state"] = json!("completed");
+    let completed = native(&projected(&store.project(&omitted)));
+    let held = slot(&store.board.fields, &completed);
+    assert_eq!(held["human.state"], "completed");
+    assert!(held.get("human.reason").is_none(), "{held}");
+    assert_eq!(
+        store.board.fields.state(&completed),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
+    );
+    let mut nulled = other;
+    nulled["state"] = json!("completed");
+    let before = store.requests();
+    assert_eq!(native(&projected(&store.project(&nulled))), completed);
+    assert_eq!(store.requests(), before);
+}
+
+#[test]
+fn a_create_whose_answer_was_lost_is_bound_by_its_one_verified_origin_match() {
+    let store = Store::new(Vec::new());
+    let open = request("item-lost", &[PUBLIC_REPOSITORY]);
+    // Filed under its project — the last write of the create — and the answer lost.
+    store.project_killed(&open, carrying("addSubIssue"));
+    let tickets = store.tickets("item-lost");
+    assert_eq!(tickets.len(), 1);
+
+    let before = store.requests();
+    let answer = projected(&store.project(&open));
+    assert_eq!(native(&answer), tickets[0]);
+    assert_eq!(
+        answer["url"],
+        format!(
+            "https://github.com/{PUBLIC_REPOSITORY}/issues/{}",
+            onetaskgraph_e2e_support::fixtures::github_number(&tickets[0])
+        )
+    );
+    assert_eq!(creates_since(&store, before), 0);
+    assert_eq!(
+        store.operations_since(before),
+        [super::plan_copy::operation_name(graphql::ORIGIN_LOOKUP)],
+        "recovery is one origin read"
+    );
+    // Bound: the same answer again costs nothing, and resolving it writes the one ticket.
+    let before = store.requests();
+    assert_eq!(projected(&store.project(&open)), answer);
+    assert_eq!(store.requests(), before);
+    let mut completed = open;
+    completed["state"] = json!("completed");
+    assert_eq!(projected(&store.project(&completed)), answer);
+    assert_eq!(store.board.fields.state(&tickets[0]).0, "CLOSED");
+    assert_eq!(store.tickets("item-lost"), tickets);
+}
+
+#[test]
+fn a_pending_create_with_no_verifiable_match_is_refused_and_never_sent_again() {
+    // Crashed before the create reached the board: nothing carries the origin.
+    let store = Store::new(Vec::new());
+    let open = request("item-unsent", &[PUBLIC_REPOSITORY]);
+    store.project_killed(&open, move |query: &str, _: &Value| {
+        query == graphql::CREATION_CONTEXT
+    });
+    assert!(store.tickets("item-unsent").is_empty());
+    let before = store.requests();
+    let refused = store.project(&open);
+    assert_ne!(refused.status.code(), Some(0));
+    assert!(
+        stderr(&refused).contains("no second create was sent"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(creates_since(&store, before), 0);
+    assert!(store.tickets("item-unsent").is_empty());
+
+    // Created, and crashed before it was filed under its project: the one issue carrying the
+    // origin cannot be verified, so it is refused rather than bound or created again.
+    let open = request("item-unfiled", &[PUBLIC_REPOSITORY]);
+    store.project_killed(&open, carrying("createIssue(input"));
+    assert_eq!(store.tickets("item-unfiled").len(), 1);
+    let before = store.requests();
+    let refused = store.project(&open);
+    assert_ne!(refused.status.code(), Some(0));
+    assert!(
+        stderr(&refused).contains("reconcile"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(creates_since(&store, before), 0);
+    assert_eq!(store.tickets("item-unfiled").len(), 1);
+}
+
+#[test]
+fn two_issues_carrying_one_pending_origin_are_refused_without_a_third() {
+    let store = Store::new(Vec::new());
+    let open = request("item-twice", &[PUBLIC_REPOSITORY]);
+    store.project_killed(&open, carrying("addSubIssue"));
+    let first = store.tickets("item-twice");
+    assert_eq!(first.len(), 1);
+    // A person duplicates the issue, body, origin and all.
+    let mut twin = store
+        .board
+        .fields
+        .issues()
+        .into_iter()
+        .find(|issue| issue["id"] == json!(first[0]))
+        .unwrap();
+    twin["id"] = json!("TWIN-1");
+    twin["item"] = json!("ITEM-TWIN-1");
+    store.board.fields.add_items(vec![twin]);
+    let before = store.requests();
+    let refused = store.project(&open);
+    assert_ne!(refused.status.code(), Some(0));
+    assert!(
+        stderr(&refused).contains("zero or multiple origin matches"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(creates_since(&store, before), 0);
+    assert_eq!(store.tickets("item-twice").len(), 2);
+}
+
+#[test]
+fn simultaneous_managers_projecting_one_item_share_one_ticket() {
+    let store = Store::new(Vec::new());
+    let open = request("item-shared", &[PUBLIC_REPOSITORY]);
+    let answers: Vec<Value> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..6)
+            .map(|_| scope.spawn(|| projected(&store.project(&open))))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
+    });
+    assert!(
+        answers.iter().all(|answer| *answer == answers[0]),
+        "{answers:?}"
+    );
+    assert_eq!(store.tickets("item-shared"), [native(&answers[0])]);
+}
+
+#[test]
+fn another_host_a_changed_payload_and_a_malformed_request_are_refused_writing_nothing() {
+    let store = Store::new(Vec::new());
+    let open = request("item-guarded", &[PUBLIC_REPOSITORY]);
+
+    let before = store.requests();
+    let refused = store.project_from(&open, "another-host");
+    assert_ne!(refused.status.code(), Some(0));
+    assert!(
+        stderr(&refused).contains("another-host"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(store.requests(), before);
+    assert!(store.tickets("item-guarded").is_empty());
+
+    let created = native(&projected(&store.project(&open)));
+    let mut changed = open.clone();
+    changed["title"] = json!("A different decision");
+    let before = store.requests();
+    let refused = store.project(&changed);
+    assert_ne!(refused.status.code(), Some(0));
+    assert!(
+        stderr(&refused).contains("differs in owner, payload, route or privacy"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(store.requests(), before);
+    assert_eq!(store.tickets("item-guarded"), [created]);
+
+    let mut malformed = Vec::new();
+    for field in [
+        "item_id", "owner", "title", "priority", "source", "state", "project",
+    ] {
+        let mut missing = open.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        malformed.push((format!("without {field}"), missing));
+    }
+    for (what, field, value) in [
+        ("a question", "state", json!("question")),
+        ("another version", "schema_version", json!(2)),
+        ("an unknown priority", "priority", json!("critical")),
+        ("a blank title", "title", json!("  ")),
+        ("a repository list of numbers", "repositories", json!([1])),
+        ("an unqualified owner", "owner", json!({"session": "s"})),
+    ] {
+        let mut wrong = open.clone();
+        wrong[field] = value;
+        malformed.push((what.to_owned(), wrong));
+    }
+    for extra in ["question", "kind", "classification"] {
+        let mut wrong = open.clone();
+        wrong[extra] = json!("question");
+        malformed.push((format!("with {extra}"), wrong));
+    }
+    for (what, request) in malformed {
+        let refused = store.project(&request);
+        assert_ne!(refused.status.code(), Some(0), "{what} was accepted");
+        let failure: Value = serde_json::from_str(&stdout(&refused)).unwrap();
+        assert_eq!(
+            failure["failure"]["kind"], "projection-input",
+            "{what}: {failure}"
+        );
+    }
+    assert_eq!(store.requests(), before);
 }

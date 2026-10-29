@@ -1752,6 +1752,13 @@ impl GitHubBoardFields {
         board.find(&json!(id))["parent"] = parent.map_or(Value::Null, |parent| json!(parent));
     }
 
+    /// Put `items` on this board beside what it holds, each in this board's own item shape — an
+    /// issue a person made by hand, say, duplicating another.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's private items, which its request loop answers from: only this handle can add one, beside `use_canonical_issue_urls`.
+    pub fn add_items(&self, items: Vec<Value>) {
+        self.board.lock().unwrap().items.extend(items);
+    }
+
     /// Answer every issue's URL as GitHub's canonical `https://github.com/<repo>/issues/<n>`,
     /// for journeys whose card links to it; other journeys keep their placeholder addresses.
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer for every issue's URL, which its request loop composes from its private state: only this handle can switch it, beside `use_repository`.
