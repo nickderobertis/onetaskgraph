@@ -3,7 +3,6 @@ from pathlib import Path
 import shutil
 import os
 import errno
-import time
 import subprocess
 import sys
 import tempfile
@@ -68,7 +67,7 @@ class CliWheelLockTest(unittest.TestCase):
                     release + ['package', '--tag', tag, '--dist', str(directory / 'missing')],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
                 try:
-                    time.sleep(1)
+                    self.assertEqual(failed.stdout.readline().strip(), 'lock requested')
                     self.assertIsNone(failed.poll(), 'package bypassed the shared lock')
                 except BaseException:
                     failed.kill()
@@ -81,6 +80,20 @@ class CliWheelLockTest(unittest.TestCase):
                 release + ['package', '--tag', tag, '--dist', str(dist)],
                 capture_output=True, text=True, encoding='utf-8', timeout=60)
             self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+
+    def test_wrapper_refuses_invalid_commands(self):
+        wrapper = [PYTHON_EXECUTABLE, str(Path(__file__).with_name('cli_wheel_lock.py'))]
+        missing = subprocess.run(wrapper, capture_output=True, text=True, encoding='utf-8')
+        self.assertEqual(missing.returncode, 2, missing.stderr)
+        self.assertIn('a build command is required', missing.stderr)
+        self.assertIn('next:', missing.stderr)
+        with tempfile.TemporaryDirectory(prefix='cli-wheel-missing-command-') as scratch:
+            unavailable = subprocess.run(wrapper + [str(Path(scratch) / 'absent-build-command')],
+                                         capture_output=True, text=True, encoding='utf-8')
+        self.assertEqual(unavailable.returncode, 1, unavailable.stderr)
+        self.assertIn('cli-wheel-lock:', unavailable.stderr)
+        self.assertIn('absent-build-command', unavailable.stderr)
+        self.assertIn('next:', unavailable.stderr)
 
     def test_concurrent_consumers_and_failure_release(self):
         with tempfile.TemporaryDirectory(prefix='cli-wheel-lock-') as scratch:
@@ -133,8 +146,13 @@ def observe_release():
     from release_cd import ROOT, main
 
     phases = set()
+    announced = False
 
     def audit(event, arguments):
+        nonlocal announced
+        if event in ('fcntl.flock', 'msvcrt.locking') and not announced:
+            announced = True
+            print('lock requested', flush=True)
         if event != 'subprocess.Popen':
             return
         raw = arguments[1]
