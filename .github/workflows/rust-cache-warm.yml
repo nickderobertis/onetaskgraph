@@ -1,0 +1,128 @@
+# Build what test-linux, test-windows and test-macos build on every push to main, and save it
+# as the Rust cache those pull-request jobs restore: a pull request restores only caches saved on
+# its own ref or on main, and those jobs run on pull requests alone, so without this every pull
+# request compiled every dependency. Nothing is tested here. Its macOS leg is the one Mac job a
+# push to main schedules, by the user's decision (AGENTS.md): a pull request waits on its
+# slowest job, and test-macos, cold, was that job. It is skipped on a release merge, whose
+# change is workspace-crate versions and changelogs alone: rust-cache stores no workspace
+# crate, so the next pull request's prefix restore of the previous save is as warm. Each leg
+# restores its own previous save, so a push builds only what changed.
+# scripts/warm-rust-cache.sh says what is built and why.
+
+name: rust cache warm
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  warm:
+    name: warm (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            job: test-linux
+            build: --instrumented
+          - os: windows-latest
+            job: test-windows
+            build: ""
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # As test-windows does, for the same reason.
+      - name: Keep Defender's real-time scan off the build
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE, "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup", "$env:LOCALAPPDATA\uv", $env:RUNNER_TEMP, $env:TEMP
+      # The distribution journey's release build runs maturin through uv.
+      - uses: astral-sh/setup-uv@v7
+      # The key the pull-request job restores; rust-cache adds the OS, the toolchain and every
+      # Cargo manifest and lockfile to it.
+      # rust-cache hashes every installed compiler; exclude the unused floating one.
+      - name: Exclude the unused floating compiler from the build cache
+        shell: bash
+        run: rustup toolchain uninstall stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-shared-key: ${{ matrix.job }}
+      - uses: taiki-e/install-action@v2
+        if: matrix.build == '--instrumented'
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+      - name: Build what ${{ matrix.job }} builds
+        shell: bash
+        run: bash scripts/warm-rust-cache.sh ${{ matrix.build }}
+      # test-linux's own builds over what was just built, which must recompile no dependency:
+      # a push to main fails the moment the cache it saves is not one a pull request reuses.
+      - name: Check what test-linux builds reuses this build
+        if: matrix.job == 'test-linux'
+        shell: bash
+        run: bash scripts/check-warm-rust-cache-reuse.sh --warmed
+
+  # Whether this push is a release merge: release-plz's version and changelog edits and nothing
+  # else, as .github/semantic-release.py — the classifier macOS lanes reads a release pull
+  # request with — reads the two trees. Anything it cannot decide answers false — an unreadable
+  # revision, a failed classifier, an answer other than `true` — and a job that fails anyway
+  # still lets warm-macos run, so the macOS leg warms: a cold build costs every pull request
+  # more than one warm leg costs main.
+  release-merge:
+    name: release merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version-only: ${{ steps.decide.outputs.version-only }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: extractions/setup-just@v4
+      - run: just github-workflows-bootstrap
+      - name: Decide whether the push changes only release versions and changelogs
+        id: decide
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          answer="$(python3 .github/semantic-release.py "$BEFORE" "$AFTER" | tr -d '\r')" || answer=false
+          [ "$answer" = true ] || answer=false
+          echo "version-only=$answer" >>"$GITHUB_OUTPUT"
+
+  warm-macos:
+    name: warm (macos-latest)
+    needs: [release-merge]
+    if: ${{ !cancelled() && needs.release-merge.outputs.version-only != 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+      # rust-cache hashes every installed compiler; exclude the unused floating one.
+      - name: Exclude the unused floating compiler from the build cache
+        shell: bash
+        run: rustup toolchain uninstall stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-shared-key: test-macos
+      - name: Build what test-macos builds
+        shell: bash
+        run: bash scripts/warm-rust-cache.sh

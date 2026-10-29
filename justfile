@@ -83,6 +83,11 @@ script-check:
 distribution-check:
     @{{nx}} run scripts:distribution-check
 
+# Prove the Rust cache warmer leaves what a pull request's Linux build reuses: a cold build of
+# every dependency into a scratch target directory, so no gate runs it — see scripts/project.json.
+warm-cache-reuse-check:
+    @{{nx}} run scripts:warm-cache-reuse-check
+
 distribution-test:
     @{{nx}} run scripts:distribution-test
 

@@ -23,5 +23,9 @@ budgets:
     command: [node, macos-budget.mjs, --metric, runs-per-change, --telemetry, .telemetry/macos-policy.json]
     unit: runs
     direction: max
-    threshold: 2
+    # 3: the PR's test-macos, the base push's warm-macos (rust-cache-warm.yml, a macOS warmer
+    # on main the user approved) and the release's macOS assets. The release merge skips the
+    # warmer: it changes only workspace-crate versions, which rust-cache does not store, so the
+    # next pull request's prefix restore is as warm.
+    threshold: 3
     timeout_seconds: 30
