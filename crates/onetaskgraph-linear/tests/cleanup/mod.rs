@@ -244,12 +244,12 @@ async fn find_artifacts(
 /// Retained CI objects are never run residue. Local sets use the same positive
 /// registration evidence as disposable artifacts, after extracting their exact stamp.
 fn cleanup_matches(prefix: &str, name: &str, matches: &dyn Fn(&str, &str) -> bool) -> bool {
-    use onetaskgraph_linear::live_artifact::{Scope, classify_retained};
+    use onetaskgraph_linear::live_artifact::classify_retained;
     if let Some(retained) = classify_retained(name) {
-        return match retained.scope {
-            Scope::Ci { .. } => false,
-            Scope::Local { stamp, .. } => matches(prefix, &format!("{prefix}{stamp}")),
-        };
+        return retained
+            .scope
+            .local_stamp()
+            .is_some_and(|stamp| matches(prefix, &format!("{prefix}{stamp}")));
     }
     if name
         .strip_prefix(ARTIFACT_PREFIX)

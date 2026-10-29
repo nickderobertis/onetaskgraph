@@ -40,19 +40,48 @@ impl Slot {
 
 /// CI identities are stable; local identities belong to one registered invocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Scope<'a> {
-    /// Standing set shared by serialized CI writers.
-    Ci {
-        /// Canonical nominated team key.
-        team: &'a str,
-    },
-    /// Set owned by a registered local invocation.
-    Local {
-        /// Canonical nominated team key.
-        team: &'a str,
-        /// Existing machine/process/timestamp ownership stamp.
-        stamp: &'a str,
-    },
+pub struct Scope<'a> {
+    team: &'a str,
+    stamp: Option<&'a str>,
+}
+impl<'a> Scope<'a> {
+    /// Validate the canonical team key of the standing CI set.
+    pub fn ci(team: &'a str) -> Result<Self, String> {
+        if !team_valid(team) {
+            return Err("invalid retained Linear team identity".into());
+        }
+        Ok(Self { team, stamp: None })
+    }
+
+    /// Validate the team key and a canonical, positively vouched local ownership stamp.
+    pub fn local(team: &'a str, stamp: &'a str) -> Result<Self, String> {
+        let scope = Self::ci(team)?;
+        if !stamp_valid(stamp) {
+            return Err("invalid retained Linear local ownership stamp".into());
+        }
+        Ok(Self {
+            stamp: Some(stamp),
+            ..scope
+        })
+    }
+
+    /// The validated canonical nominated team key.
+    #[must_use]
+    pub fn team(self) -> &'a str {
+        self.team
+    }
+
+    /// The validated invocation stamp, absent for the standing CI set.
+    #[must_use]
+    pub fn local_stamp(self) -> Option<&'a str> {
+        self.stamp
+    }
+
+    /// Whether this is the standing CI set.
+    #[must_use]
+    pub fn is_ci(self) -> bool {
+        self.stamp.is_none()
+    }
 }
 
 /// Exact recognized identity; this alone does not verify remote team membership.
@@ -81,14 +110,11 @@ fn stamp_valid(stamp: &str) -> bool {
         && parts[..2].iter().all(|part| part.parse::<u32>().is_ok())
 }
 
-/// Format a canonical identity, refusing unverifiable team keys and local stamps.
+/// Format an identity whose team and stamp were validated at scope construction.
 pub fn retained_title(scope: Scope<'_>, slot: Slot) -> Result<String, String> {
-    let suffix = match scope {
-        Scope::Ci { team } if team_valid(team) => format!("ci {team} {}", slot.name()),
-        Scope::Local { team, stamp } if team_valid(team) && stamp_valid(stamp) => {
-            format!("local {team} {} {stamp}", slot.name())
-        }
-        _ => return Err("invalid retained Linear ownership identity".into()),
+    let suffix = match scope.local_stamp() {
+        None => format!("ci {} {}", scope.team(), slot.name()),
+        Some(stamp) => format!("local {} {} {stamp}", scope.team(), slot.name()),
     };
     Ok(format!("{LIVE_ARTIFACT_TITLE_PREFIX}retained-v1 {suffix}"))
 }
@@ -102,10 +128,8 @@ pub fn classify_retained(title: &str) -> Option<Retained<'_>> {
         .strip_prefix("retained-v1 ")?;
     let parts: Vec<_> = suffix.split(' ').collect();
     let (scope, slot) = match parts.as_slice() {
-        ["ci", team, slot] if team_valid(team) => (Scope::Ci { team }, Slot::read(slot)?),
-        ["local", team, slot, stamp] if team_valid(team) && stamp_valid(stamp) => {
-            (Scope::Local { team, stamp }, Slot::read(slot)?)
-        }
+        ["ci", team, slot] => (Scope::ci(team).ok()?, Slot::read(slot)?),
+        ["local", team, slot, stamp] => (Scope::local(team, stamp).ok()?, Slot::read(slot)?),
         _ => return None,
     };
     Some(Retained { scope, slot })
