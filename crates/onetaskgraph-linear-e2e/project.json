@@ -73,7 +73,8 @@
     },
     "budgets": {
       "executor": "nx:run-commands",
-      "dependsOn": ["test", "onetaskgraph-linear:test"], "//": "llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier,expensive_tests_stay_behind_their_own_edge] Both lane tests produce the HTTP journals this report consumes, including when only the consumer changes; both are required prerequisites within the Linear budget edge.",
+      "//": "llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier,expensive_tests_stay_behind_their_own_edge] Both lane tests produce the HTTP journals this report consumes, including when only the consumer changes; both are required prerequisites within the Linear budget edge. On its own line, this directive covers exactly the dependsOn line below it, the one biome lets it share no line with.",
+      "dependsOn": ["test", "onetaskgraph-linear:test"],
       "options": {
         "command": "bun run onebudgetspec check crates/onetaskgraph-linear-e2e/budgets.yaml"
       },
