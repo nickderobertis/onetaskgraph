@@ -1080,8 +1080,9 @@ them do; this is the inventory of what is owed, not a status board.
     `--depends-on` or `--delivers` naming one is refused before any write; a stdio-hosted
     source is never verified private.
 90. A GitHub board declared private is held, at every write, to its Project and the issue's
-    repository both reading private, read with its own credential — a change between writes
-    refused at the next, an unreadable read never guessed, a missing `read:project` named; and a
+    repository both reading private, read with its own credential once per destination per copy —
+    a change during one copy refused by the next, an unreadable read never guessed, a missing
+    `read:project` named; and a
     Linear source declared private is verified once per instance inside the cold resolution,
     spending no request a declared-nothing source does not, an unverifiable one refused.
 91. The pinned onevcs boundary schema is what the released `boundary schema --json` prints, and
@@ -1273,10 +1274,19 @@ them do; this is the inventory of what is owed, not a status board.
     in — a task naming one, a parentless task naming several, a task under a project issue in
     another repository — `null` for Linear and a folder of Markdown, `--no-counterpart` reading
     nothing but that project issue. It writes no file, runs no boundary check and reads no live
-    visibility.
+    visibility but the one a GitHub board declared private needs to place a task naming one
+    repository, at most once per destination.
 121. `sources route` answers `reachable`: the source itself, then each route target in written
     order, each once, whatever the repositories and classification asked about, and the source
     alone for one with no routes.
+122. A mixed plan copied onto a GitHub board declared private lands every canonical task there,
+    one naming only a public repository in a private one — its project issue's, else the
+    configured — still naming its public repository, with its view on a public board; each
+    destination's visibility read once per copy before its first mutation, a repository made
+    public during one copy refused by the next, an engine copying twice over one set of sources
+    reading afresh, a re-copy creating nothing, an interrupted copy run again into one issue and
+    one view each; and every visibility refusal still firing, writing nothing, with placement
+    unchanged on a board not declared private and for a repository that reads private.
 
 ## The public boundary
 
@@ -1298,8 +1308,13 @@ store opts in.
   `onetaskgraph.public_projections` map has one definition, `PublicProjections` in
   `engine/copy/projections.rs`, published as a schema root both SDKs generate from.
 - **Destination reality is the plugin's own read** (`TaskSource::visibility`), never the
-  policy's. A GitHub source reads twice per write and holds nothing between writes; the
-  `visibility-write-requests` budget holds a 102-write plan copy to 204. A Linear source is
+  policy's. A GitHub source reads each destination — the board, each repository — once per
+  copy, before its first write, held by the engine's `hold_visibility` for that one operation
+  and dropped at its end, so a long-lived caller reads afresh at each copy; the
+  `visibility-reads-per-destination` budget holds one copy to one read of any destination. On a
+  source declared private (`TaskSource::declare_visibility`) an item's one named repository
+  places its issue only when it reads private — `creation_rule` in the GitHub plugin is the one
+  function the create, the write-time read and `creation_repository` share. A Linear source is
   verified once per instance, by the manager's ruling, because a Linear workspace cannot become
   readable by anybody but its members.
 

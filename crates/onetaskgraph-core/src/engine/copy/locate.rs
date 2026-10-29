@@ -157,6 +157,20 @@ impl Engine {
     /// source not declared private, a `--target-native` item missing or not naming the task
     /// back — with the copy's own error.
     pub async fn locate(&self, request: &LocateRequest) -> Result<LocateReport, EngineError> {
+        let mut result = None;
+        let mut operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
+            Box::pin(async { result = Some(self.locate_in_scope(request).await) });
+        for source in self.ready() {
+            operation = source.source().scope_visibility(operation);
+        }
+        operation.await;
+        result.expect("the scoped operation completed")
+    }
+
+    async fn locate_in_scope(&self, request: &LocateRequest) -> Result<LocateReport, EngineError> {
+        // A source declared private reads a named repository to place a create, once per
+        // destination for the whole locate.
+        let _held = self.hold_visibility();
         if matches!(request.lookup, LocateLookup::TargetNative(_)) && request.items.len() != 1 {
             return Err(EngineError::TargetNativeNeedsOne {
                 count: request.items.len(),

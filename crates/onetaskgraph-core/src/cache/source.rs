@@ -1875,6 +1875,33 @@ impl TaskSource for CachedSource {
     ) -> Result<Option<onetaskgraph_plugin_api::Repository>, SourceError> {
         self.inner.creation_repository(target).await
     }
+
+    async fn visibility_with_project(
+        &self,
+        target: &WriteTarget<'_>,
+        project: &WriteTarget<'_>,
+    ) -> Result<Visibility, SourceError> {
+        self.inner.visibility_with_project(target, project).await
+    }
+
+    fn declare_visibility(&self, declared: Visibility) {
+        self.inner.declare_visibility(declared);
+    }
+
+    fn scope_visibility<'a>(
+        &'a self,
+        operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        self.inner.scope_visibility(operation)
+    }
+
+    fn hold_visibility(&self) {
+        self.inner.hold_visibility();
+    }
+
+    fn release_visibility(&self) {
+        self.inner.release_visibility();
+    }
 }
 
 #[cfg(test)]

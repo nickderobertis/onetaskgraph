@@ -3883,6 +3883,13 @@ const PUBLISHED_BUNDLES: &[(u32, Published)] = &[
             beside: &FORTY_SIXTH_BUNDLE_BESIDE,
         },
     ),
+    (
+        49,
+        Published::Whole {
+            roots: &FORTY_EIGHTH_BUNDLE_SHAPE,
+            beside: &FORTY_NINTH_BUNDLE_BESIDE,
+        },
+    ),
 ];
 
 /// What version 35 publishes beside the engine's roots.
@@ -3946,6 +3953,20 @@ const FORTY_SIXTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
     ("binary/StatusNamesReport", 0x2fffbb3b0308719d),
     ("binary/StatusOptionsReport", 0x31ab0209e340bd4d),
     ("plugin_config/github-projects", 0x0766f20fcf444bfe),
+    ("plugin_config/in-memory", 0x9e4a8f3b82cba0eb),
+    ("plugin_config/linear", 0x10a5b658053e0912),
+    ("plugin_config/local-md", 0x73e221b1e7df9de3),
+    ("plugin_config/subprocess", 0x9be55eaf44b8f5aa),
+];
+
+/// Version 49 states, in the GitHub Projects configuration's `repository` description, that a
+/// source declared private creates an item naming one repository there only when it reads
+/// private.
+const FORTY_NINTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
+    ("binary/FieldsReport", 0x29439ba93e5e343a),
+    ("binary/StatusNamesReport", 0x2fffbb3b0308719d),
+    ("binary/StatusOptionsReport", 0x31ab0209e340bd4d),
+    ("plugin_config/github-projects", 0xa2240a008d55af60),
     ("plugin_config/in-memory", 0x9e4a8f3b82cba0eb),
     ("plugin_config/linear", 0x10a5b658053e0912),
     ("plugin_config/local-md", 0x73e221b1e7df9de3),

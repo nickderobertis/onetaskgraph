@@ -825,26 +825,89 @@ fn selected() -> Option<String> {
 }
 
 /// What `visibility_cost` recorded for `budget`, refused unless it is that journey's recording
-/// at that journey's workload: its figure, and the detail it reports beside it.
+/// of the mixed project copy (101 writes) followed by document copy (1 write), their reads adding up — by destination, and REST and
+/// GraphQL apart — to the totals it states, and the figure the most reads any one destination
+/// received in one copy.
 fn read_visibility(budget: &str) -> Result<(f64, String), String> {
+    visibility_of(&recorded(budget)?)
+}
+
+fn visibility_of(value: &Value) -> Result<(f64, String), String> {
     use super::visibility_cost::{WORKLOAD, WRITES};
-    let value = recorded(budget)?;
     if value["workload"].as_str() != Some(WORKLOAD) || value["writes"].as_u64() != Some(WRITES) {
-        return Err("workload does not match the 102-write plan copy".into());
+        return Err("workload does not match the mixed project copy (101 writes) then document copy (1 write)".into());
     }
     let figure = value["value"]
         .as_u64()
         .ok_or("missing whole-number figure")?;
-    // Every entry of a breakdown is a whole count: one that is not is no breakdown at all,
-    // rather than an entry left out of the sum.
-    let sum = |key: &str| {
-        value[key]
-            .as_object()
-            .and_then(|counts| counts.values().map(Value::as_u64).sum::<Option<u64>>())
-    };
-    if sum("by_write") != Some(figure) || sum("by_read") != Some(figure) {
-        return Err("the breakdown does not add up to the figure".into());
+    let copies = value["copies"]
+        .as_array()
+        .filter(|copies| !copies.is_empty())
+        .ok_or("missing the copies' reads")?;
+    if copies.len() != 2
+        || copies[0]["copy"].as_str() != Some("project copy")
+        || copies[1]["copy"].as_str() != Some("document copy")
+    {
+        return Err("expected project copy then document copy".into());
     }
+    let count = |of: &Value, key: &str| of[key].as_u64().ok_or(format!("missing {key}"));
+    let (mut total, mut rest, mut graphql, mut most) = (0_u64, 0_u64, 0_u64, 0_u64);
+    let mut destinations = std::collections::BTreeSet::new();
+    for (index, copy) in copies.iter().enumerate() {
+        // Every entry is a whole count: one that is not is no breakdown at all, rather than an
+        // entry left out of the sum.
+        let by_destination = copy["by_destination"]
+            .as_object()
+            .ok_or("missing reads by destination")?;
+        let reads = by_destination
+            .values()
+            .try_fold(0_u64, |total, value| total.checked_add(value.as_u64()?))
+            .ok_or("the breakdown does not add up to the reads")?;
+        if reads != count(copy, "reads")?
+            || count(copy, "rest")?.checked_add(count(copy, "graphql")?) != Some(reads)
+        {
+            return Err("the breakdown does not add up to the reads".into());
+        }
+        if by_destination.keys().cloned().collect::<Vec<_>>()
+            != super::visibility_cost::destinations(index == 0)
+        {
+            return Err("the copy does not name the workload's destinations".into());
+        }
+        if by_destination
+            .values()
+            .any(|value| value.as_u64() == Some(0))
+        {
+            return Err("a recorded destination was never read".into());
+        }
+        most = most.max(
+            by_destination
+                .values()
+                .filter_map(Value::as_u64)
+                .max()
+                .unwrap_or(0),
+        );
+        destinations.extend(by_destination.keys().cloned());
+        total = total
+            .checked_add(reads)
+            .ok_or("visibility read total overflow")?;
+        rest = rest
+            .checked_add(count(copy, "rest")?)
+            .ok_or("REST read total overflow")?;
+        graphql = graphql
+            .checked_add(count(copy, "graphql")?)
+            .ok_or("GraphQL read total overflow")?;
+    }
+    if figure != most {
+        return Err("the figure is not the most reads of one destination in one copy".into());
+    }
+    if count(value, "total")? != total
+        || count(value, "rest")? != rest
+        || count(value, "graphql")? != graphql
+        || count(value, "distinct")? != destinations.len() as u64
+    {
+        return Err("the totals do not add up to the copies' reads".into());
+    }
+    count(value, "other_rest")?;
     if !value["simulated_seconds"]
         .as_f64()
         .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
@@ -1024,7 +1087,7 @@ fn the_landing_closure_report_hands_over_the_recorded_figure_and_refuses_what_it
         (output, reported)
     };
     let mut foreign = valid.clone();
-    foreign["budget"] = json!("visibility-write-requests");
+    foreign["budget"] = json!("visibility-reads-per-destination");
     let mut unbalanced = valid.clone();
     unbalanced["scales"]["10x"]["points"] = json!(3);
     for (recorded, message) in [
@@ -1326,9 +1389,19 @@ fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
     let sandbox = Sandbox::new();
     let directory = sandbox.subdirectory("visibility");
     let budget = super::visibility_cost::BUDGET;
-    let valid = json!({"budget":budget,"value":204,"detail":"recorded","workload":super::visibility_cost::WORKLOAD,
-        "writes":102,"by_write":{"project":2,"task":200,"document":2},
-        "by_read":{"project":102,"repository":102},"simulated_seconds":38.76});
+    let counts = |project| {
+        super::visibility_cost::destinations(project)
+            .into_iter()
+            .map(|destination| (destination, json!(1)))
+            .collect::<serde_json::Map<_, _>>()
+    };
+    let valid = json!({"budget":budget,"value":1,"detail":"recorded",
+        "workload":super::visibility_cost::WORKLOAD,"writes":102,"total":14,"distinct":12,
+        "rest":12,"graphql":2,"other_rest":0,"simulated_seconds":5.32,
+        "copies":[{"copy":"project copy","reads":12,"rest":11,"graphql":1,"other_rest":0,
+                   "by_destination":counts(true)},
+                  {"copy":"document copy","reads":2,"rest":1,"graphql":1,"other_rest":0,
+                   "by_destination":counts(false)}]});
     let run = |recorded: Option<Value>| {
         let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
         let _ = std::fs::remove_file(&path);
@@ -1350,15 +1423,24 @@ fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
             .unwrap();
         (output, result.exists())
     };
+    let mut single = valid.clone();
+    single["copies"].as_array_mut().unwrap().truncate(1);
+    single["total"] = json!(12);
+    single["rest"] = json!(11);
+    single["graphql"] = json!(1);
     let mut foreign = valid.clone();
-    foreign["workload"] = json!("plan-copy-1-project-10-tasks-1-document");
+    foreign["workload"] = json!("plan-copy-1-project-100-tasks-1-document");
     let mut fewer = valid.clone();
     fewer["writes"] = json!(12);
     let mut unbalanced = valid.clone();
-    unbalanced["by_read"] = json!({"project":102,"repository":101});
-    // An entry that is no count, beside entries that still add up to the figure on their own.
+    unbalanced["copies"][0]["rest"] = json!(1);
+    // An entry that is no count, beside entries that still add up to the reads on their own.
     let mut uncounted = valid.clone();
-    uncounted["by_write"] = json!({"project":2,"task":200,"document":2,"note":"extra"});
+    uncounted["copies"][0]["by_destination"]["note"] = json!("extra");
+    let mut understated = valid.clone();
+    understated["value"] = json!(0);
+    let mut miscounted = valid.clone();
+    miscounted["distinct"] = json!(13);
     let with = |field: &str, value: Value| {
         let mut changed = valid.clone();
         changed[field] = value;
@@ -1367,17 +1449,92 @@ fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
     // A figure past what one budget can report, its breakdown made to add up so the range is
     // what refuses it.
     let mut huge = valid.clone();
-    huge["value"] = json!(u64::from(u32::MAX) + 1);
-    huge["by_write"] = json!({"task": u64::from(u32::MAX) + 1});
-    huge["by_read"] = json!({"project": u64::from(u32::MAX) + 1});
+    let big = u64::from(u32::MAX) + 1;
+    huge["value"] = json!(big);
+    huge["total"] = json!(big + 13);
+    huge["rest"] = json!(12);
+    huge["graphql"] = json!(big + 1);
+    huge["copies"][0]["reads"] = json!(big + 11);
+    huge["copies"][0]["graphql"] = json!(big);
+    huge["copies"][0]["by_destination"]["project"] = json!(big);
+    let mut unread = valid.clone();
+    unread["value"] = json!(0);
+    unread["total"] = json!(0);
+    unread["rest"] = json!(0);
+    unread["graphql"] = json!(0);
+    for copy in unread["copies"].as_array_mut().unwrap() {
+        copy["reads"] = json!(0);
+        copy["rest"] = json!(0);
+        copy["graphql"] = json!(0);
+        for count in copy["by_destination"].as_object_mut().unwrap().values_mut() {
+            *count = json!(0);
+        }
+    }
+    let mut overflow = valid.clone();
+    overflow["copies"][0]["by_destination"]["project"] = json!(u64::MAX);
+    let mut cross_copy_overflow = valid.clone();
+    cross_copy_overflow["value"] = json!(u64::MAX - 11);
+    cross_copy_overflow["copies"][0]["by_destination"]["project"] = json!(u64::MAX - 11);
+    cross_copy_overflow["copies"][0]["reads"] = json!(u64::MAX);
+    cross_copy_overflow["copies"][0]["graphql"] = json!(u64::MAX - 11);
+    let mut protocol_overflow = valid.clone();
+    protocol_overflow["copies"][0]["rest"] = json!(u64::MAX);
+    protocol_overflow["copies"][0]["graphql"] = json!(1);
+    let copy_with = |field: &str, value: Value| {
+        let mut changed = valid.clone();
+        changed["copies"][0][field] = value;
+        Some(changed)
+    };
+    let mut wrong_destinations = valid.clone();
+    let entries = wrong_destinations["copies"][0]["by_destination"]
+        .as_object_mut()
+        .unwrap();
+    entries.remove("project");
+    entries.insert("another-board".into(), json!(1));
     for (recorded, message) in [
         (None, "no telemetry"),
         (Some(foreign), "workload does not match"),
         (Some(fewer), "workload does not match"),
         (Some(unbalanced), "does not add up"),
         (Some(uncounted), "does not add up"),
+        (Some(overflow), "does not add up"),
+        (Some(cross_copy_overflow), "visibility read total overflow"),
+        (Some(protocol_overflow), "does not add up"),
+        (
+            copy_with("by_destination", json!(null)),
+            "missing reads by destination",
+        ),
+        (copy_with("reads", json!(null)), "missing reads"),
+        (copy_with("rest", json!(null)), "missing rest"),
+        (copy_with("graphql", json!(null)), "missing graphql"),
+        (with("total", json!(null)), "missing total"),
+        (with("rest", json!(null)), "missing rest"),
+        (with("graphql", json!(null)), "missing graphql"),
+        (with("total", json!(0)), "the totals do not add up"),
+        (with("rest", json!(0)), "the totals do not add up"),
+        (with("graphql", json!(0)), "the totals do not add up"),
+        (with("other_rest", json!(null)), "missing other_rest"),
+        (
+            with("other_rest", json!("not a count")),
+            "missing other_rest",
+        ),
+        (with("other_rest", json!(0.5)), "missing other_rest"),
+        (Some(unread), "a recorded destination was never read"),
+        (
+            Some(wrong_destinations),
+            "does not name the workload's destinations",
+        ),
+        (Some(understated), "the figure is not the most reads"),
+        (Some(miscounted), "the totals do not add up"),
+        (with("copies", json!([])), "missing the copies' reads"),
+        (with("copies", json!(null)), "missing the copies' reads"),
+        (Some(single), "expected project copy then document copy"),
+        (
+            with("copies", json!([valid["copies"][1], valid["copies"][0]])),
+            "expected project copy then document copy",
+        ),
         (with("value", json!(null)), "missing whole-number figure"),
-        (with("value", json!(204.5)), "missing whole-number figure"),
+        (with("value", json!(1.5)), "missing whole-number figure"),
         (
             with("simulated_seconds", json!(null)),
             "missing simulated seconds",
@@ -1405,6 +1562,12 @@ fn the_visibility_report_refuses_a_missing_or_foreign_recording_without_a_figure
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(written, "a valid recording is reported");
+    let reported: Value = serde_json::from_slice(
+        &std::fs::read(directory.join("result.json")).expect("the subprocess's result"),
+    )
+    .expect("a JSON result");
+    assert_eq!(reported["value"], 1.0);
+    assert_eq!(reported["detail"], "recorded");
 }
 
 #[test]

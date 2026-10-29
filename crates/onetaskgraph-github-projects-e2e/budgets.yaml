@@ -54,15 +54,16 @@ budgets:
     unit: percent
     direction: max
     threshold: 12.5
-  - id: visibility-write-requests
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The user's ruling 7 makes the read-once rule this task's own budget at threshold 1. Its figure is not part of any other budget's figure: the plan-copy points budgets record copies onto a public board, which reads no visibility, and they price REST at 0.
+  - id: visibility-reads-per-destination
     description: >-
-      An inner measure of headroom on a shared board token that no check may reach: the requests a 102-write plan copy onto a board declared private spends reading the board's and each issue repository's visibility. It protects that token's allowance from a third read per write.
+      The most visibility reads any one destination receives within either command of a mixed plan's first project copy (101 private-board writes) followed by its document copy (1 write), with public task views on a public board. It protects the shared board token from a visibility read per write by requiring each command to share its reads across writes.
     labels: [github]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_visibility_reads", "--exact", "--nocapture"]
-    unit: requests
+    unit: reads
     direction: max
-    threshold: 204
+    threshold: 1
   - id: github-landing-closure-points
     description: >-
       An inner measure of the shared board token that no check may spend: the GitHub GraphQL points one `task status complete` call naming no source spends for one landing closing 10 open issues held on a board of 11,000 items, with a second configured board of 1,100 items holding none of them, driven through the binary against two loopback boards and priced with the plugin's own table; the 1x figure and each source's reads and writes at both scales are its detail. It protects every manager's share of that token from a landing's closure write.

@@ -1673,6 +1673,20 @@ pub struct Engine {
     designators: designators::Designators,
 }
 
+/// One operation's hold on every source's visibility reads, released when dropped — on every
+/// path out of the operation, a refusal's included.
+pub(crate) struct VisibilityHold<'a> {
+    engine: &'a Engine,
+}
+
+impl Drop for VisibilityHold<'_> {
+    fn drop(&mut self) {
+        for source in self.engine.ready() {
+            source.source().release_visibility();
+        }
+    }
+}
+
 /// `source`, sent nothing between a rate limit it answers and the reset that limit names, on
 /// `clock`.
 fn held_off(source: ResolvedSource, clock: &SharedClock) -> ResolvedSource {
@@ -1792,10 +1806,39 @@ impl Engine {
     ///
     /// [`build`](Self::build) takes them from the configuration; a caller holding sources
     /// it built itself states them here, checked by [`Routes::new`].
+    ///
+    /// Each source is told the visibility the routes declare for it
+    /// ([`TaskSource::declare_visibility`](onetaskgraph_plugin_api::TaskSource::declare_visibility)),
+    /// which is where a source that places a new item per item learns it is declared private.
     #[must_use]
     pub fn with_routes(mut self, routes: Routes) -> Self {
         self.routes = routes;
+        for source in self.ready() {
+            source
+                .source()
+                .declare_visibility(match self.routes.visibility(source.name()) {
+                    crate::config::SourceVisibility::Public => {
+                        onetaskgraph_plugin_api::Visibility::Public
+                    }
+                    crate::config::SourceVisibility::Private => {
+                        onetaskgraph_plugin_api::Visibility::Private
+                    }
+                    crate::config::SourceVisibility::Unknown => {
+                        onetaskgraph_plugin_api::Visibility::Unknown
+                    }
+                });
+        }
         self
+    }
+
+    /// Hold every source's visibility reads for one operation, until the guard is dropped: a
+    /// destination is read once for the whole operation rather than once per write
+    /// ([`TaskSource::hold_visibility`](onetaskgraph_plugin_api::TaskSource::hold_visibility)).
+    pub(crate) fn hold_visibility(&self) -> VisibilityHold<'_> {
+        for source in self.ready() {
+            source.source().hold_visibility();
+        }
+        VisibilityHold { engine: self }
     }
 
     /// Where an item with `repositories`, written to `source`, lands.
