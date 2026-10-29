@@ -2,10 +2,11 @@
 # Watch scripts/check-warm-rust-cache-reuse.sh refuse. It runs, unchanged, in a scratch tree
 # beside the real scripts/pr-build-commands.sh and scripts/rust-coverage.sh, one crate's
 # project.json, and a stand-in `cargo` that prints what a real one would: `Compiling` lines for
-# the builds a case names, and always `Finished`. An incomplete warm — a build of the job's
+# the builds a case names, and `Finished` unless a case silences it. An incomplete warm — a build of the job's
 # compiling a dependency again — has to fail naming that dependency and the build; a complete
-# one has to pass; a scan that cannot see a rebuild, because the control's incomplete warm
-# reports none, has to fail before anything else is built.
+# one has to pass, warming first unless given --warmed, which warms nothing; a scan that cannot
+# see a rebuild, because the control's incomplete warm reports none, and a build whose cargo
+# output never reached the scan, have to fail.
 #
 #   scripts/check-warm-rust-cache-reuse-enforced.sh
 #
@@ -35,7 +36,7 @@ mkdir -p "$tree/scripts" "$tree/crates/onetaskgraph-plugin-api" "$scratch/bin"
 for script in check-warm-rust-cache-reuse.sh pr-build-commands.sh rust-coverage.sh; do
   cp "$root/scripts/$script" "$tree/scripts/"
 done
-printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$tree/scripts/warm-rust-cache.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "warm $*" >>"$WARM_RECORD"' >"$tree/scripts/warm-rust-cache.sh"
 printf '%s\n' '#!/usr/bin/env bash' 'echo "    Finished \`release\` profile"' >"$tree/scripts/test-distribution.sh"
 cat >"$tree/crates/onetaskgraph-plugin-api/project.json" <<'JSON'
 {"targets": {"test": {"options": {"command": "cargo test --quiet -p onetaskgraph-plugin-api --all-features --locked"}}}}
@@ -52,19 +53,28 @@ if { [ "$1" = llvm-cov ] && [ "${CARGO_TARGET_DIR##*/}" = empty ] && [ -z "${REU
   || { [ -n "${REUSE_REBUILD:-}" ] && [[ "$*" == *"$REUSE_REBUILD"* ]]; }; then
   echo "   Compiling serde v1.0.0" >&2
 fi
+[ -n "${REUSE_SILENT:-}" ] && [[ "$*" == *"$REUSE_SILENT"* ]] && exit 0
 echo "    Finished \`test\` profile" >&2
 STUB
 chmod +x "$scratch/bin/cargo"
 
-# run <name> [VAR=value...]: run the check in the scratch tree, its output in $scratch/<name>.log.
+# run <name> [VAR=value...]: run the check in the scratch tree with $REUSE_ARGS, its output in
+# $scratch/<name>.log and every warmer invocation in $scratch/<name>.warm.
 run() {
   local name="$1"
   shift
-  env "$@" PATH="$scratch/bin:$PATH" bash "$tree/scripts/check-warm-rust-cache-reuse.sh" \
-    >"$scratch/$name.log" 2>&1
+  : >"$scratch/$name.warm"
+  # shellcheck disable=SC2086 # The arguments are the words they spell.
+  env "$@" WARM_RECORD="$scratch/$name.warm" PATH="$scratch/bin:$PATH" \
+    bash "$tree/scripts/check-warm-rust-cache-reuse.sh" ${REUSE_ARGS:-} >"$scratch/$name.log" 2>&1
 }
 
 run complete || { cat "$scratch/complete.log" >&2; fail "a complete warm was refused" "fix what the check reports above"; }
+[ "$(cat "$scratch/complete.warm")" = "warm --instrumented" ] \
+  || fail "the check did not warm once, in the Linux leg's mode, before its builds" "run scripts/warm-rust-cache.sh --instrumented unless given --warmed"
+
+REUSE_ARGS=--warmed run warmed || { cat "$scratch/warmed.log" >&2; fail "--warmed over a complete warm was refused" "fix what the check reports above"; }
+[ ! -s "$scratch/warmed.warm" ] || fail "--warmed ran the warmer again" "build nothing first under --warmed"
 
 if run incomplete REUSE_REBUILD=llvm-cov; then
   fail "an instrumented build that compiled serde again passed" "keep the refusal at the end of scripts/check-warm-rust-cache-reuse.sh"
@@ -77,4 +87,10 @@ if run blind REUSE_BLIND=1; then
 fi
 grep -q "an incomplete warm passed" "$scratch/blind.log" \
   || { cat "$scratch/blind.log" >&2; fail "the control's refusal does not say the incomplete warm passed" "keep its message"; }
+
+if run silent REUSE_SILENT="--package onetaskgraph-plugin-api --all-features --locked -E"; then
+  fail "a build that printed no cargo 'Finished' line passed" "keep the Finished check in scripts/check-warm-rust-cache-reuse.sh"
+fi
+grep -q "printed no cargo 'Finished' line" "$scratch/silent.log" \
+  || { cat "$scratch/silent.log" >&2; fail "the refusal of a silent build does not say it printed no Finished line" "keep its message"; }
 exit 0
