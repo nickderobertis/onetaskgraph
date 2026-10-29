@@ -52,6 +52,17 @@ import sys
 # the path to its value inside an item — a path reaching a list contributes every element.
 # A path segment of `[]` walks into a list.
 MANIFEST = {
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This existing central MANIFEST inventories every store fixture for the shared discrimination guard; registering this fixture follows all other domains here.
+    "crates/onetaskgraph-live-janitor/tests/fixtures/linear-documents.json": {
+        "items": ["data", "documents", "nodes"],
+        "id": ["id"],
+        "title": ["title"],
+        "facets": {
+            "ownership title": ["title"],
+            "team": ["team", "key"],
+        },
+    },
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     "crates/onetaskgraph-linear/tests/fixtures/issues.json": {
         "items": ["data", "issues", "nodes"],
         "id": ["id"],
@@ -195,6 +206,12 @@ MANIFEST = {
 # reason. Recorded rather than skipped by pattern, so a store fixture cannot be added under
 # a name a pattern happens to exclude.
 NOT_A_STORE = {
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The existing central NOT_A_STORE table requires every non-store response fixture to be named with its reason, matching all other domains here.
+    "crates/onetaskgraph-live-janitor/tests/fixtures/linear-document-delete.json": (
+        "Not a store: a single documentDelete acknowledgement, validated against the pinned "
+        "upstream schema and served by the janitor subprocess journey, with no item collection."
+    ),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     "crates/onetaskgraph-live-janitor/tests/fixtures/rest-operations.json": (
         "Not a store: it holds no items and no query reads it. It pins GitHub's published "
         "description of the six REST operations the live janitor sends — paths, query "

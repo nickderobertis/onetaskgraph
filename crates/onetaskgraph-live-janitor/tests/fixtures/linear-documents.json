@@ -1,0 +1,136 @@
+{
+  "data": {
+    "documents": {
+      "nodes": [
+        {
+          "id": "stale-machine",
+          "title": "onetaskgraph live cleanup 1-2-1",
+          "team": {
+            "key": "TEST"
+          },
+          "project": null
+        },
+        {
+          "id": "fresh",
+          "title": "onetaskgraph live cleanup 1-2-9999999999999999",
+          "team": {
+            "key": "TEST"
+          },
+          "project": null
+        },
+        {
+          "id": "unstamped",
+          "title": "Customer specification",
+          "team": {
+            "key": "TEST"
+          },
+          "project": null
+        },
+        {
+          "id": "legacy-asset",
+          "title": "onetaskgraph disposable asset document 1793211615000000",
+          "team": {
+            "key": "TEST"
+          },
+          "project": null
+        },
+        {
+          "id": "other-team",
+          "title": "onetaskgraph live cleanup 1-2-1",
+          "team": {
+            "key": "ENG"
+          },
+          "project": null
+        },
+        {
+          "id": "stale-ci",
+          "title": "onetaskgraph live cleanup ci-40741930571-1-1",
+          "team": {
+            "key": "TEST"
+          },
+          "project": null
+        },
+        {
+          "id": "stale-project",
+          "title": "onetaskgraph live cleanup 1-2-1",
+          "team": null,
+          "project": {
+            "teams": {
+              "nodes": [
+                {
+                  "key": "TEST"
+                }
+              ],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            }
+          }
+        },
+        {
+          "id": "shared-project",
+          "title": "onetaskgraph live cleanup 1-2-1",
+          "team": null,
+          "project": {
+            "teams": {
+              "nodes": [
+                {
+                  "key": "TEST"
+                },
+                {
+                  "key": "ENG"
+                }
+              ],
+              "pageInfo": {
+                "hasNextPage": false
+              }
+            }
+          }
+        },
+        {
+          "id": "unknown-team",
+          "title": "onetaskgraph live cleanup 1-2-1",
+          "team": null,
+          "project": null
+        },
+        {
+          "id": "malformed-stamp",
+          "title": "onetaskgraph live cleanup 1-2-3-extra",
+          "team": {
+            "key": "TEST"
+          },
+          "project": null
+        },
+        {
+          "id": "unvouched",
+          "title": "onetaskgraph live cleanup 0-2-1",
+          "team": {
+            "key": "TEST"
+          },
+          "project": null
+        },
+        {
+          "id": "incomplete-project",
+          "title": "onetaskgraph live cleanup 1-2-1",
+          "team": null,
+          "project": {
+            "teams": {
+              "nodes": [
+                {
+                  "key": "TEST"
+                }
+              ],
+              "pageInfo": {
+                "hasNextPage": true
+              }
+            }
+          }
+        }
+      ],
+      "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": null
+      }
+    }
+  }
+}

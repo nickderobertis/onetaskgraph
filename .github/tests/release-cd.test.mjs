@@ -225,7 +225,9 @@ print(json.dumps({'names': names, 'digests': [digest(archived), digest(wheeled),
     ),
   );
   assert.deepEqual(inspected.names, ["onetaskgraph"]);
-  const binary = sha256(join(checkout, "target/x86_64-unknown-linux-gnu/release/onetaskgraph"));
+  // The staged wheel owns the canonical bytes; a later maturin build may move the
+  // shared target binary as soon as the release build lets its lock go.
+  const binary = inspected.digests[1];
   assert.deepEqual(inspected.digests, [binary, binary, binary]);
   assert.deepEqual(inspected.tags, ["py3-none-manylinux_2_39_x86_64"]);
   assert.ok(inspected.glibc[0] === 2 && inspected.glibc[1] <= 39, `links GLIBC ${inspected.glibc}`);

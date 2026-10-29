@@ -21,3 +21,19 @@ status and body fields. Descend into the allowance resources and listing arrays;
 null leaf names a field without constraining its value. The journeys then say what moved.
 GraphQL is held separately, by `tests/schema.rs` against the GitHub Projects plugin's
 pinned `schema.graphql`.
+
+## Linear document cleanup
+
+`linear-upstream.graphql.gz` preserves the complete, unmodified official
+[`linear/linear` SDK schema](https://github.com/linear/linear/blob/8397645bc0a496f68896b18ec6453dddd5e51927/packages/sdk/src/schema.graphql),
+read 2026-10-28, compressed with `gzip -n`. Regenerate by fetching that immutable URL
+and piping its bytes through `gzip -n`; do not hand-edit a subset. `tests/schema.rs`
+decompresses it offline, validates both operations, and validates every replayed success
+field and its nullability against that same upstream schema.
+`linear-documents.json` records a response for offline replay, with invented ids,
+team keys and titles covering the removal boundary. It is schema-derived, not captured
+account data: no Linear credential or account inventory was available.
+`linear_journey.py` splits it into two pages and drives the real scheduled executable
+against those responses, records its delete requests and proves protected ids receive none.
+Additional near-cutoff timestamps test the 24-hour expiry. Listing, transport, malformed
+response and deletion refusals are served over that same HTTP boundary.
