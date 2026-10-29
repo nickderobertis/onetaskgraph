@@ -1,7 +1,7 @@
 {
   "run": 40721997875,
   "job": 122936492339,
-  "evidence": "test-linux failure at 2026-10-28T16:29:47.3077958Z. This is the preceding HTML-comment probe, returned after the subsequent Markdown update; not evidence of a new Markdown serialization rule.",
+  "evidence": "test-linux failure at 2026-10-28T16:29:47.3077958Z. The content read after the Markdown probe's update matches, byte for byte, the stored form of the preceding HTML-comment probe. Hypothesis, unconfirmed: a read lagging the update rather than a new Markdown rewrite rule. The match alone does not prove that cause.",
   "before": "P.\n\n<!-- probe {\"site\":\"example.com\",\"list\":[1]} -->\n\n<!-- probe\n{\"k\":\"v\"}\n-->\n\n<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->",
   "after": "P.\n\n<!-- probe {\"site\":\"[example.com](<http://example.com>)\",\"list\":\\[1\\]} -->\n\n<!-- probe\n{\"k\":\"v\"}\n\\-->\n\n<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->",
   "rewrites": [
@@ -20,5 +20,5 @@
   ],
   "preserved": "<!-- probe `{\"site\":\"example.com\",\"list\":[1]}` -->",
   "run_url": "https://github.com/nickderobertis/onetaskgraph/actions/runs/40721997875",
-  "later_comparison": "The change request must compare these recorded responses and both exact document probes against real Linear in its required live capability journey; no fresh live comparison was performed by this dispatch."
+  "later_comparison": "Deferred to pull request #3807's required live capability journey, which is the verdict: compare against real Linear each of the three recorded rewrites (bare example.com autolinked, [1] escaped, a line-opening --> escaped) and both exact document probes (PROBE against PROBE_STORED, MARKDOWN_PROBE against MARKDOWN_PROBE_STORED in tests/live.rs). No live comparison was performed when this fixture was recorded."
 }
