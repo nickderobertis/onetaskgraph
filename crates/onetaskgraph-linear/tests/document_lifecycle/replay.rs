@@ -17,6 +17,11 @@ pub struct State {
     pub documents: BTreeMap<String, Value>,
     pub projects: BTreeMap<String, Value>,
     pub issues: BTreeMap<String, Value>,
+    /// Labels by name: their id, and how many lookups of that name answer no match before
+    /// the label filter holds it — Linear's read-after-write lag; `u32::MAX` never holds it.
+    pub labels: BTreeMap<String, (String, u32)>,
+    /// How many times each label name has been looked up.
+    pub label_lookups: BTreeMap<String, u32>,
     pub requests: Vec<Value>,
     pub uncertain: bool,
     pub pause_next_create: bool,
@@ -233,6 +238,19 @@ fn respond(state: &mut State, request: &Value) -> Value {
     let v = &request["variables"];
     graphql_parser::parse_query::<String>(q).expect("replay requests are GraphQL documents");
     let teams = json!({"nodes":[{"id":"team","key":"ENG","states":{"nodes":[{"id":"open","name":"Todo","type":"unstarted","position":0},{"id":"done","name":"Done","type":"completed","position":1}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}]});
+    if q.contains("issueLabels(") {
+        let name = v["name"].as_str().unwrap().to_lowercase();
+        let lookups = state.label_lookups.entry(name.clone()).or_default();
+        *lookups += 1;
+        let seen = *lookups;
+        let nodes = state
+            .labels
+            .iter()
+            .filter(|(held, (_, lag))| held.to_lowercase() == name && seen > *lag)
+            .map(|(_, (id, _))| json!({"id":id}))
+            .collect();
+        return json!({"data":{"issueLabels":page(nodes)}});
+    }
     if q.contains("teams(") && !q.contains("projects(") && !q.contains("documents(") {
         return json!({"data":{"organization":{"id":"synthetic-organization"},"teams":teams,"projectStatuses":{"nodes":[{"id":"status","name":"Planned","type":"planned","position":0}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}});
     }

@@ -29,9 +29,9 @@ use onetaskgraph_live::{Credential, Exclusivity, Session, missing, required};
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
     Document, DocumentQuery, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataMatch,
-    NativeId, PageRequest, Priority, Project, ProjectFilter, SecretResolver, SourceName,
-    SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TextFields,
-    TextQuery,
+    NativeId, PageRequest, Priority, Project, ProjectFilter, SecretResolver, SourceError,
+    SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskQuery, TaskSource,
+    TextFields, TextQuery,
 };
 use secrecy::SecretString;
 mod document_lifecycle;
@@ -75,9 +75,9 @@ use cleanup::{
 mod settle;
 
 use settle::{
-    LINEAR_DOCUMENT_LISTING, LINEAR_INDEX, LINEAR_REPLICA, settled, settled_content,
-    settled_document_absent, settled_documents, settled_label, settled_projects, settled_tasks,
-    settled_walk, task_titles, token_moved, walked_task_titles,
+    Bound, LINEAR_DOCUMENT_LISTING, LINEAR_INDEX, LINEAR_REPLICA, resolving_labels, settled,
+    settled_content, settled_document_absent, settled_documents, settled_label, settled_projects,
+    settled_tasks, settled_walk, task_titles, token_moved, walked_task_titles,
 };
 
 /// The two workflow states this fixture files its issues under.
@@ -208,6 +208,19 @@ fn page(limit: u32) -> PageRequest {
 fn sorted(mut titles: Vec<String>) -> Vec<String> {
     titles.sort();
     titles
+}
+
+/// `write`, a task naming labels this run created, through [`resolving_labels`]: Linear's
+/// label filter has answered such a label with no match on the plugin's own lookup a moment
+/// after it answered it three times in a row to [`settled_label`], so the write is sent again
+/// within `bound` while that is its refusal, and ends with that same refusal once `bound` is
+/// spent rather than creating the label or dropping it.
+async fn write_labelled_task(
+    bound: Bound,
+    source: &dyn TaskSource,
+    write: &ItemWrite<Task>,
+) -> Result<NativeId, SourceError> {
+    resolving_labels(bound, || source.write_task(write)).await
 }
 
 /// Everything this lane needs to reach the one team it may write to.
@@ -358,8 +371,10 @@ async fn drive_every_declared_capability(
         })
         .await
         .map_err(|error| format!("live project write of {beta:?} failed: {error}"))?;
-    let first_id = source
-        .write_task(&ItemWrite {
+    let first_id = write_labelled_task(
+        LINEAR_INDEX,
+        source,
+        &ItemWrite {
             target: None,
             item: task(
                 &first,
@@ -368,25 +383,32 @@ async fn drive_every_declared_capability(
                 vec![label(&run_label), label(&only_label)],
             ),
             depends_on: vec![],
-        })
-        .await
-        .map_err(|error| format!("live task write of {first:?} failed: {error}"))?;
-    let second_id = source
-        .write_task(&ItemWrite {
+        },
+    )
+    .await
+    .map_err(|error| format!("live task write of {first:?} failed: {error}"))?;
+    let second_id = write_labelled_task(
+        LINEAR_INDEX,
+        source,
+        &ItemWrite {
             target: None,
             item: task(&second, &open, Some(&beta_id), vec![label(&run_label)]),
             depends_on: vec![blocks(&first_id, ItemKind::Task)],
-        })
-        .await
-        .map_err(|error| format!("live task write of {second:?} failed: {error}"))?;
-    let orphan_id = source
-        .write_task(&ItemWrite {
+        },
+    )
+    .await
+    .map_err(|error| format!("live task write of {second:?} failed: {error}"))?;
+    let orphan_id = write_labelled_task(
+        LINEAR_INDEX,
+        source,
+        &ItemWrite {
             target: None,
             item: task(&orphan, &done, None, vec![label(&run_label)]),
             depends_on: vec![],
-        })
-        .await
-        .map_err(|error| format!("live task write of {orphan:?} failed: {error}"))?;
+        },
+    )
+    .await
+    .map_err(|error| format!("live task write of {orphan:?} failed: {error}"))?;
 
     // Linear indexes a created issue before it answers a filtered query over it, so the
     // reads below wait for the fixture rather than racing it — each one, through `settle`,
@@ -812,14 +834,17 @@ async fn every_field_change_moves_a_linear_tasks_token(
         .await
         .map_err(|error| format!("live dependency read failed: {error}"))?
         .items;
-    source
-        .write_task(&ItemWrite {
+    write_labelled_task(
+        LINEAR_INDEX,
+        source,
+        &ItemWrite {
             target: Some(task.clone()),
             item: labelled,
             depends_on: edges,
-        })
-        .await
-        .map_err(|error| format!("live label write failed: {error}"))?;
+        },
+    )
+    .await
+    .map_err(|error| format!("live label write failed: {error}"))?;
     let after = token_moved(source, LINEAR_REPLICA, "a label change", &before, &read).await?;
     note("a label change", &before, &after);
     before = after;
@@ -2929,5 +2954,177 @@ async fn ordinary_document_run_metadata_reset_is_read_back_and_recovers_after_st
         0,
         "recovery updates the same retained documents"
     );
+    assert!(replay.state.lock().unwrap().schema_errors.is_empty());
+}
+
+/// The plugin lane's own write of a task naming labels it created, `write_labelled_task`, over
+/// HTTP to a replay whose label filter holds one label only from its third lookup and never
+/// holds the other: the first is resolved once held and written with its id, and the second
+/// ends, once the bound is spent, in the refusal the plugin gives — with no label created and
+/// no issue written for it.
+#[tokio::test]
+async fn a_task_write_naming_a_label_linear_holds_late_resolves_it_and_one_never_held_is_refused() {
+    const BOUND: Bound = Bound {
+        reads: 4,
+        interval: std::time::Duration::from_millis(20),
+    };
+    let replay = replay();
+    let stamp = now_micros();
+    let late = artifact_label(Run::current(), stamp);
+    let never = artifact_label(Run::current(), stamp + 1);
+    {
+        let mut state = replay.state.lock().unwrap();
+        state.labels.insert(late.clone(), ("label-late".into(), 2));
+        state
+            .labels
+            .insert(never.clone(), ("label-never".into(), u32::MAX));
+    }
+    let source = onetaskgraph_linear::Plugin
+        .build(
+            &SourceName::new("live").unwrap(),
+            &json!({"endpoint":replay.endpoint,"team":"ENG","status_mapping":{"todo":{"task":"Todo"}}}),
+            &ReplaySecrets,
+        )
+        .unwrap();
+    let write = |name: &str, offset: u64| -> ItemWrite<Task> {
+        let mut task: Task = serde_json::from_value(json!({
+            "id":"authored:labelled","title":artifact_title(Run::current(), stamp + offset),
+            "content":"Synthetic labelled task.","status":{"category":"todo","name":"Todo"},
+            "labels":[],"project":null,"repositories":[],"metadata":{}
+        }))
+        .unwrap();
+        task.labels = vec![label(name)];
+        ItemWrite {
+            target: None,
+            item: task,
+            depends_on: vec![],
+        }
+    };
+    let creates = |replay: &document_replay::Replay| -> Vec<Value> {
+        replay
+            .state
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|request| {
+                request["query"]
+                    .as_str()
+                    .is_some_and(|q| q.contains("issueCreate("))
+            })
+            .map(|request| request["variables"]["input"]["labelIds"].clone())
+            .collect()
+    };
+
+    write_labelled_task(BOUND, source.as_ref(), &write(&late, 10))
+        .await
+        .expect("a label the filter holds within the bound is resolved and written");
+    let lookups = |name: &str| replay.state.lock().unwrap().label_lookups[&name.to_lowercase()];
+    assert_eq!(
+        lookups(&late),
+        3,
+        "the write asks again until the label is held, and not once more"
+    );
+    assert_eq!(
+        creates(&replay),
+        vec![json!(["label-late"])],
+        "one issue is written, naming the label once it was resolved"
+    );
+
+    let refusal = write_labelled_task(BOUND, source.as_ref(), &write(&never, 11))
+        .await
+        .expect_err("a label the filter never holds is refused once the bound is spent");
+    assert!(
+        matches!(&refusal, SourceError::Refused { message }
+            if *message == format!("source live cannot resolve label {never:?}: found 0 matches")),
+        "the refusal past the bound is the plugin's own: {refusal:?}"
+    );
+    assert_eq!(
+        lookups(&never),
+        BOUND.reads,
+        "the bound is every lookup made"
+    );
+    assert_eq!(
+        creates(&replay).len(),
+        1,
+        "no issue is written for a label that was never resolved"
+    );
+    let state = replay.state.lock().unwrap();
+    assert!(
+        state.requests.iter().all(|request| {
+            let query = request["query"].as_str().unwrap_or_default();
+            !query.contains("issueLabel") || query == onetaskgraph_linear::graphql::ISSUE_LABEL
+        }),
+        "a label is only ever looked up, never created, renamed or removed"
+    );
+    assert!(state.schema_errors.is_empty(), "{:?}", state.schema_errors);
+}
+
+/// A label a live journey created and has not retired, through a cold ordinary CI pass that
+/// prepares the standing set and a second pass queued after it: neither pass sends any request
+/// that creates, renames or removes a label, and the plugin's lookup still resolves it after
+/// both, so neither can have deleted or hidden it. (Residue clearing is driven over the same
+/// label in `tests/sweep_gate.rs`.)
+#[tokio::test]
+async fn standing_set_preparation_and_a_queued_pass_leave_a_live_journeys_label_resolvable() {
+    let replay = replay();
+    let held = artifact_label(Run::current(), now_micros());
+    replay
+        .state
+        .lock()
+        .unwrap()
+        .labels
+        .insert(held.clone(), ("label-held".into(), 0));
+    let standing_ids = std::sync::Mutex::new(None);
+    replay_ordinary_ci_pass(&replay, now_micros(), &standing_ids).await;
+    let cold = replay.journal.count();
+    assert!(cold > 0, "the first pass prepared the standing set cold");
+    replay_ordinary_ci_pass(&replay, now_micros(), &standing_ids).await;
+    assert_eq!(
+        replay.journal.count(),
+        cold,
+        "the queued pass reused the standing set"
+    );
+    assert!(
+        replay
+            .state
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .all(|request| !request["query"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("issueLabel")),
+        "preparation and the passes over the standing set touched no label"
+    );
+    let source = onetaskgraph_linear::Plugin
+        .build(
+            &SourceName::new("live").unwrap(),
+            &json!({"endpoint":replay.endpoint,"team":"ENG","status_mapping":{"todo":{"task":"Todo"}}}),
+            &ReplaySecrets,
+        )
+        .unwrap();
+    let mut task: Task = serde_json::from_value(json!({
+        "id":"authored:labelled","title":artifact_title(Run::current(), now_micros()),
+        "content":"Synthetic labelled task.","status":{"category":"todo","name":"Todo"},
+        "labels":[],"project":null,"repositories":[],"metadata":{}
+    }))
+    .unwrap();
+    task.labels = vec![label(&held)];
+    write_labelled_task(
+        Bound {
+            reads: 1,
+            interval: std::time::Duration::ZERO,
+        },
+        source.as_ref(),
+        &ItemWrite {
+            target: None,
+            item: task,
+            depends_on: vec![],
+        },
+    )
+    .await
+    .expect("the live journey's label still resolves on the first lookup after both passes");
     assert!(replay.state.lock().unwrap().schema_errors.is_empty());
 }

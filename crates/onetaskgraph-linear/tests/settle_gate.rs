@@ -37,7 +37,7 @@ use serde_json::{Value, json};
 mod settle;
 
 use settle::{
-    Bound, DocumentListingBudget, LABEL_CONNECTION, LABEL_STEADY, LABEL_VARIABLE,
+    Bound, DocumentListingBudget, LABEL_CONNECTION, LABEL_STEADY, LABEL_VARIABLE, resolving_labels,
     settled_document_absent, settled_documents, settled_label, settled_tasks, settled_walk,
     token_moved,
 };
@@ -787,6 +787,24 @@ async fn a_label_two_labels_answer_to_is_refused_at_once_with_their_ids() {
     );
     assert_eq!(answered.load(Ordering::SeqCst), 1);
     assert!(started.elapsed() < BOUND.interval + SLACK);
+}
+
+#[tokio::test]
+async fn a_write_refused_for_a_duplicate_label_is_not_sent_again() {
+    // Only the no-match refusal is index lag; two matches never settle, so the write that
+    // `resolving_labels` wraps is sent once and its refusal returned as it came.
+    let sent = AtomicU32::new(0);
+    let duplicate = || {
+        sent.fetch_add(1, Ordering::SeqCst);
+        async {
+            Err::<(), _>(onetaskgraph_plugin_api::SourceError::Refused {
+                message: r#"source live cannot resolve label "otg-live-label": found 2 matches with ids ["l1", "l2"]"#.into(),
+            })
+        }
+    };
+    let refusal = resolving_labels(BOUND, duplicate).await.unwrap_err();
+    assert!(refusal.to_string().contains("found 2 matches"), "{refusal}");
+    assert_eq!(sent.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
