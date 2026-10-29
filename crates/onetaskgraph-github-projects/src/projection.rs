@@ -138,7 +138,50 @@ struct WrittenIds {
     classification: Classification,
     /// The definitions of the board's fields — ids and options, which the setup-context token
     /// guards for a create — that its writes select by id.
-    board_fields: Value,
+    board_fields: FieldDefinitions,
+}
+
+/// A board's field definitions as a read of its `fields` gives them: a `nodes` list whose every
+/// field names its id and name, and whose every option, where it has options, does too.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(try_from = "Value", into = "Value")]
+struct FieldDefinitions(Value);
+
+impl TryFrom<Value> for FieldDefinitions {
+    type Error = String;
+
+    fn try_from(definitions: Value) -> Result<Self, Self::Error> {
+        let named = |value: &Value| {
+            ["id", "name"].iter().all(|key| {
+                value
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.is_empty())
+            })
+        };
+        let nodes = definitions
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or("field definitions hold a `nodes` list")?;
+        for field in nodes {
+            let options_named = match field.get("options") {
+                None => true,
+                Some(options) => options
+                    .as_array()
+                    .is_some_and(|options| options.iter().all(named)),
+            };
+            if !named(field) || !options_named {
+                return Err(format!("a field definition names no id and name: {field}"));
+            }
+        }
+        Ok(Self(definitions))
+    }
+}
+
+impl From<FieldDefinitions> for Value {
+    fn from(definitions: FieldDefinitions) -> Self {
+        definitions.0
+    }
 }
 
 impl WrittenIds {
@@ -149,10 +192,10 @@ impl WrittenIds {
             compose_body(task.content.as_deref(), &std::collections::BTreeMap::new()).ok()?;
         let fields = self
             .board_fields
+            .0
             .get("nodes")
             .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+            .cloned()?;
         Some(Resolved {
             item_id: self.item.into(),
             id: NativeId(self.issue.into()),
@@ -190,7 +233,7 @@ impl WrittenIds {
             slot: std::collections::BTreeMap::new(),
             board_id: Some(self.board.into()),
             fields,
-            board_fields: Some(self.board_fields),
+            board_fields: Some(self.board_fields.into()),
             blocked_by: None,
         })
     }
@@ -334,7 +377,7 @@ impl GitHubProjectsSource {
             parent: item.parent,
             repositories: item.repositories,
             classification: item.classification,
-            board_fields: item.board_fields?,
+            board_fields: FieldDefinitions::try_from(item.board_fields?).ok()?,
         })
         .ok()
     }

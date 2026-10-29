@@ -1224,10 +1224,25 @@ function linearProjectionDouble(received: { query: string }[]) {
     port: 0,
     hostname: "127.0.0.1",
     async fetch(request) {
-      const body = (await request.json()) as {
-        query: string;
-        variables: { input?: Record<string, unknown> };
-      };
+      const parsed: unknown = await request.json();
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        !("query" in parsed) ||
+        typeof parsed.query !== "string"
+      ) {
+        return new Response("a GraphQL request names its query", { status: 400 });
+      }
+      const variables = "variables" in parsed ? parsed.variables : undefined;
+      const input =
+        typeof variables === "object" &&
+        variables !== null &&
+        "input" in variables &&
+        typeof variables.input === "object" &&
+        variables.input !== null
+          ? Object.fromEntries(Object.entries(variables.input))
+          : undefined;
+      const body = { query: parsed.query };
       received.push(body);
       if (body.query.includes("teams(")) {
         return Response.json({
@@ -1253,7 +1268,10 @@ function linearProjectionDouble(received: { query: string }[]) {
         });
       }
       if (body.query.includes("issueCreate(")) {
-        const stored = body.variables.input ?? {};
+        if (input === undefined) {
+          return new Response("issueCreate names its input", { status: 400 });
+        }
+        const stored = input;
         return Response.json({
           data: {
             issueCreate: {

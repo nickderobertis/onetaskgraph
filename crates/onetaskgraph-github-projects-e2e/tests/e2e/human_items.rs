@@ -857,3 +857,87 @@ fn a_create_answered_without_its_url_reads_it_and_one_with_no_canonical_url_is_r
     assert_eq!(creates_since(&store, before), 0, "no second create");
     assert_eq!(store.tickets("item-insecure").len(), 1);
 }
+
+/// The fixture board's credential, as a plugin built outside the binary is handed it.
+struct FixtureToken;
+
+impl onetaskgraph_plugin_api::SecretResolver for FixtureToken {
+    fn get(&self, _: &str) -> Option<secrecy::SecretString> {
+        Some("test-token".to_owned().into())
+    }
+}
+
+#[test]
+fn a_primed_update_changing_the_body_without_moving_an_option_reads_the_body_first() {
+    use onetaskgraph_plugin_api::{ItemWrite, MetadataKey, SourceName, SourcePlugin as _, Task};
+    // One process writes the issue and keeps its ids; a person then edits the issue; a later
+    // process primes those ids and sends an update that changes the body's metadata and no
+    // status. Nothing moves an option, so the body is read before it is composed.
+    let store = Store::new(Vec::new());
+    let name = SourceName::new("human").unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let task: Task = serde_json::from_value(json!({
+        "id": "item-primed", "title": "Decide on item-primed",
+        "content": "Choose the next public example.", "status": {"category": "todo", "name": "Todo"},
+        "priority": "high", "labels": [], "project": PROJECT, "url": null,
+        "created_at": null, "updated_at": null, "metadata": {"human.item_id": "item-primed"},
+        "repositories": [format!("github.com/{PUBLIC_REPOSITORY}")]}))
+    .unwrap();
+    let writer = onetaskgraph_github_projects::Plugin
+        .build(&name, &store.board.config, &FixtureToken)
+        .unwrap();
+    let id = runtime
+        .block_on(writer.write_task(&ItemWrite {
+            target: None,
+            item: task.clone(),
+            depends_on: Vec::new(),
+        }))
+        .unwrap();
+    let kept = writer
+        .written_context(&id)
+        .expect("ids of the issue written");
+    let body = store.board.fields.body(&id.0);
+    let (_, slotted) = body
+        .as_str()
+        .unwrap()
+        .split_once("<!-- onetaskgraph.metadata")
+        .unwrap();
+    store.board.fields.edit_body(
+        &id.0,
+        &format!("A person rewrote this.\n\n<!-- onetaskgraph.metadata{slotted}"),
+    );
+
+    let later = onetaskgraph_github_projects::Plugin
+        .build(&name, &store.board.config, &FixtureToken)
+        .unwrap();
+    let mut primed = task;
+    primed.id = id.clone();
+    assert!(later.prime_written(&id, &kept, &primed));
+    let before = store.requests();
+    let mut update = onetaskgraph_plugin_api::TaskUpdate::default();
+    update.metadata_set.insert(
+        MetadataKey::new("human.reason".to_owned()).unwrap(),
+        json!("Superseded."),
+    );
+    runtime
+        .block_on(later.update_task(&id, &update))
+        .unwrap()
+        .expect("the issue is held");
+    assert_eq!(
+        store.operations_since(before),
+        ["reading one issue", "updating an issue"]
+    );
+    let body = store.board.fields.body(&id.0);
+    assert!(
+        body.as_str().unwrap().starts_with("A person rewrote this."),
+        "{body}"
+    );
+    assert_eq!(
+        slot(&store.board.fields, &id.0)["human.reason"],
+        "Superseded."
+    );
+    assert_eq!(
+        slot(&store.board.fields, &id.0)["human.item_id"],
+        "item-primed"
+    );
+}
