@@ -1707,93 +1707,146 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         .unwrap_or_else(|error| {
             panic!("the Linear live lane cannot reach its scratch team: {error}")
         });
-    // From the first create on, a failure or panic retires what this invocation created:
-    // `prepare_owned` covers initialization itself, and the journey's guard below the rest.
-    let created = document_lifecycle::Created::default();
-    let standing = document_lifecycle::prepare_owned(
-        &endpoint,
-        &key,
+    // From the first create on, one guard retires what this invocation created: preparation,
+    // the setup after it and the journey all run inside `guard_plugin_invocation`.
+    let created = &document_lifecycle::Created::default();
+    let lane_endpoint = endpoint.clone();
+    let lane_key = key.clone();
+    guard_plugin_invocation(
+        &lane_endpoint,
+        &lane_key,
         &team_key,
-        &team_id,
+        &team_id.clone(),
         scope,
         effective_mode,
-        &[Slot::Filed, Slot::Loose, Slot::FollowUp],
-        &created,
-    )
-    .await
-    .unwrap_or_else(|e| panic!("{e}"));
-    if ci && document_mode == Mode::Initialize {
-        journal.finish().unwrap();
-        return;
-    }
-    journal.journey("capability-and-follow-up");
-    let run = LiveRun {
-        endpoint,
-        key: key.clone(),
-        id: Run::current(),
-        stamp_micros: now_micros(),
-        open_state,
-        done_state,
-        project_status,
-        document_mode,
-        standing,
-    };
-    let id = run.id;
-    // `ensure!` keeps the journey's own checks to `Err`, but anything else that panics in it
-    // must still reach the cleanup below; the panic is resumed once cleanup has run.
-    let panicked = std::sync::Mutex::new(None);
-    let result = run_then_cleanup(
-        || async {
-            match document_lifecycle::unwinding(drive_every_declared_capability(
-                &run,
-                source.as_ref(),
-                &team_id,
-            ))
-            .await
-            {
-                Ok(outcome) => outcome,
-                Err(panic) => {
-                    *panicked.lock().unwrap() = Some(panic);
-                    Err("the Linear live journey panicked".into())
+        created,
+        |standing| async move {
+            if ci && document_mode == Mode::Initialize {
+                journal.finish().unwrap();
+                return;
+            }
+            journal.journey("capability-and-follow-up");
+            let run = LiveRun {
+                endpoint,
+                key: key.clone(),
+                id: Run::current(),
+                stamp_micros: now_micros(),
+                open_state,
+                done_state,
+                project_status,
+                document_mode,
+                standing,
+            };
+            let id = run.id;
+            // `ensure!` keeps the journey's own checks to `Err`, but anything else that panics
+            // in it must still reach the cleanup below; the panic is resumed once cleanup ran.
+            let panicked = std::sync::Mutex::new(None);
+            let result = run_then_cleanup(
+                || async {
+                    match document_lifecycle::unwinding(drive_every_declared_capability(
+                        &run,
+                        source.as_ref(),
+                        &team_id,
+                    ))
+                    .await
+                    {
+                        Ok(outcome) => outcome,
+                        Err(panic) => {
+                            *panicked.lock().unwrap() = Some(panic);
+                            Err("the Linear live journey panicked".into())
+                        }
+                    }
+                },
+                || async {
+                    // The invocation-owned slots by their exact ids first, then this run's
+                    // own: everything it wrote goes whether the journey passed or failed.
+                    // Then what an interrupted EARLIER run left, which is a different
+                    // decision on different evidence — and which is deliberately here, at
+                    // the end, rather than at the start where it used to be. A sweep before
+                    // the journey deleted the in-flight issues of any session running beside
+                    // this one; a sweep after it recovers exactly the same orphans and can
+                    // reach nothing a live run owns.
+                    let slots =
+                        document_lifecycle::retire(&run.endpoint, &key, scope, created).await;
+                    let mine =
+                        remove_artifacts(&key, &|prefix, name| is_this_runs(id, prefix, name))
+                            .await
+                            .and(slots.map(drop));
+                    let orphans = sweep_orphans(&key, &Sweep::of(id, now_micros())).await;
+                    match (mine, orphans) {
+                        (Ok(()), Ok(())) => Ok(()),
+                        (Err(mine), Ok(())) => Err(mine),
+                        (Ok(()), Err(orphans)) => Err(format!(
+                            "residue left by an earlier interrupted run could not be \
+                             cleared: {orphans}"
+                        )),
+                        (Err(mine), Err(orphans)) => Err(format!(
+                            "{mine}; additionally, residue left by an earlier interrupted \
+                             run could not be cleared: {orphans}"
+                        )),
+                    }
+                },
+            )
+            .await;
+            journal.finish().unwrap();
+            if let Some(panic) = panicked.into_inner().unwrap() {
+                if let Err(error) = result {
+                    eprintln!("{error}");
                 }
+                std::panic::resume_unwind(panic);
             }
-        },
-        || async {
-            // The invocation-owned slots by their exact ids first, then this run's own:
-            // everything it wrote goes whether the journey passed or
-            // failed. Then what an interrupted EARLIER run left, which is a different
-            // decision on different evidence — and which is deliberately here, at the end,
-            // rather than at the start where it used to be. A sweep before the journey
-            // deleted the in-flight issues of any session running beside this one; a sweep
-            // after it recovers exactly the same orphans and can reach nothing a live run
-            // owns.
-            let slots = document_lifecycle::retire(&run.endpoint, &key, scope, &created).await;
-            let mine = remove_artifacts(&key, &|prefix, name| is_this_runs(id, prefix, name))
-                .await
-                .and(slots.map(drop));
-            let orphans = sweep_orphans(&key, &Sweep::of(id, now_micros())).await;
-            match (mine, orphans) {
-                (Ok(()), Ok(())) => Ok(()),
-                (Err(mine), Ok(())) => Err(mine),
-                (Ok(()), Err(orphans)) => Err(format!(
-                    "residue left by an earlier interrupted run could not be cleared: {orphans}"
-                )),
-                (Err(mine), Err(orphans)) => Err(format!(
-                    "{mine}; additionally, residue left by an earlier interrupted run could \
-                     not be cleared: {orphans}"
-                )),
-            }
+            result.unwrap_or_else(|error| panic!("Linear live capability journey failed: {error}"));
         },
     )
     .await;
-    journal.finish().unwrap();
-    if let Some(panic) = panicked.into_inner().unwrap() {
-        if let Err(error) = result {
+}
+
+/// The plugin lane's one invocation cleanup guard: it prepares the standing set and runs
+/// `invocation` — the setup after preparation and the journey — over it, so that a panic at
+/// any point from the first slot create on, whether inside preparation, straight after it or
+/// anywhere before the journey's own cleanup ran, retires every slot `created` records before
+/// the panic leaves the lane. A CI set is standing and is never retired here, and once the
+/// journey's cleanup has retired the slots the record is empty, so nothing is deleted twice.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "prepare_owned's lane identities plus the invocation; the offline journey passes \
+              each one separately to drive this guard as the live lane does"
+)]
+async fn guard_plugin_invocation<F, Fut>(
+    endpoint: &str,
+    key: &str,
+    team_key: &str,
+    team_id: &str,
+    scope: Scope<'_>,
+    mode: Mode,
+    created: &document_lifecycle::Created,
+    invocation: F,
+) where
+    F: FnOnce(Standing) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let guarded = document_lifecycle::unwinding(async {
+        let standing = document_lifecycle::prepare_owned(
+            endpoint,
+            key,
+            team_key,
+            team_id,
+            scope,
+            mode,
+            &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+            created,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+        invocation(standing).await;
+    })
+    .await;
+    if let Err(panic) = guarded {
+        if let Err(error) = document_lifecycle::retire(endpoint, key, scope, created).await {
             eprintln!("{error}");
         }
         std::panic::resume_unwind(panic);
     }
-    result.unwrap_or_else(|error| panic!("Linear live capability journey failed: {error}"));
 }
 
 #[path = "document_lifecycle/replay.rs"]
@@ -2203,6 +2256,107 @@ async fn a_panic_after_each_local_slot_create_retires_what_the_invocation_create
         );
         assert_eq!(created.len(), 0);
     }
+    let survived = replay_prepare(&replay, Scope::ci("ENG").unwrap(), Mode::Ordinary)
+        .await
+        .unwrap();
+    assert_eq!(survived.ids, ci.ids, "the standing CI set is untouched");
+    assert!(replay.state.lock().unwrap().schema_errors.is_empty());
+}
+
+/// A panic straight after a successful local preparation — before any of the journey's
+/// setup — is caught by the plugin lane's own invocation guard, which retires the parent
+/// project and all three documents the invocation created; the standing CI set and an
+/// unrelated document and project survive, and the creations stay journalled.
+#[tokio::test]
+async fn a_panic_straight_after_local_preparation_is_retired_by_the_plugin_invocation_guard() {
+    let replay = replay();
+    let ci = replay_prepare(&replay, Scope::ci("ENG").unwrap(), Mode::Initialize)
+        .await
+        .unwrap();
+    let unrelated_document = document_lifecycle::send(
+        &replay.endpoint,
+        "synthetic",
+        "mutation($input:DocumentCreateInput!){documentCreate(input:$input){success document{id}}}",
+        json!({"input":{"title":"Unrelated synthetic document","content":"synthetic","teamId":"team"}}),
+    )
+    .await
+    .unwrap()["documentCreate"]["document"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let unrelated_project = document_lifecycle::send(
+        &replay.endpoint,
+        "synthetic",
+        "mutation($input:ProjectCreateInput!){projectCreate(input:$input){success project{id}}}",
+        json!({"input":{"name":"Unrelated synthetic project","teamIds":["team"]}}),
+    )
+    .await
+    .unwrap()["projectCreate"]["project"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stamp = "1-2-9";
+    let scope = Scope::local("ENG", stamp).unwrap();
+    let before = replay.state.lock().unwrap().requests.len();
+    let creates_before = replay.journal.count();
+    let created = document_lifecycle::Created::default();
+    let prepared = std::sync::Mutex::new(None);
+    let outcome = document_lifecycle::unwinding(guard_plugin_invocation(
+        &replay.endpoint,
+        "synthetic",
+        "ENG",
+        "team",
+        scope,
+        Mode::Initialize,
+        &created,
+        |standing| {
+            *prepared.lock().unwrap() = Some(standing.ids.clone());
+            async {
+                panic!("injected failure straight after local preparation");
+            }
+        },
+    ))
+    .await;
+    let panic = outcome.expect_err("the injected failure still fails the lane");
+    assert_eq!(
+        panic.downcast_ref::<&str>().copied(),
+        Some("injected failure straight after local preparation")
+    );
+    let prepared = prepared
+        .into_inner()
+        .unwrap()
+        .expect("preparation succeeded first");
+    assert_eq!(
+        prepared.len(),
+        4,
+        "the parent and all three local documents were created"
+    );
+    let sent = replay_mutations(&replay, before);
+    assert_eq!(sent.get("projectCreate"), Some(&1));
+    assert_eq!(sent.get("documentCreate"), Some(&3));
+    assert_eq!(sent.get("projectDelete"), Some(&1), "the parent is retired");
+    assert_eq!(
+        sent.get("documentDelete"),
+        Some(&3),
+        "every document is retired"
+    );
+    assert_eq!(
+        replay.journal.count() - creates_before,
+        3,
+        "retired creations stay journalled"
+    );
+    {
+        let state = replay.state.lock().unwrap();
+        for id in prepared.values() {
+            assert!(
+                !state.documents.contains_key(id) && !state.projects.contains_key(id),
+                "{id} survived"
+            );
+        }
+        assert!(state.documents.contains_key(&unrelated_document));
+        assert!(state.projects.contains_key(&unrelated_project));
+    }
+    assert_eq!(created.len(), 0);
     let survived = replay_prepare(&replay, Scope::ci("ENG").unwrap(), Mode::Ordinary)
         .await
         .unwrap();
