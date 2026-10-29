@@ -28,6 +28,7 @@ mod fields;
 mod github_status_by_kind;
 mod graph;
 mod human_items;
+mod human_routing;
 mod locate;
 mod member_copy;
 mod metadata_fields;
