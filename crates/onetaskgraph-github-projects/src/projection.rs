@@ -377,7 +377,13 @@ impl GitHubProjectsSource {
             parent: item.parent,
             repositories: item.repositories,
             classification: item.classification,
-            board_fields: FieldDefinitions::try_from(item.board_fields?).ok()?,
+            // The board's whole field list when the read carried it, else the definitions of the
+            // fields the item holds values of — which a read of it by origin carries, and which
+            // name every field its later writes select.
+            board_fields: FieldDefinitions::try_from(item.board_fields.unwrap_or_else(
+                || json!({"nodes": item.fields, "pageInfo": {"hasNextPage": false}}),
+            ))
+            .ok()?,
         })
         .ok()
     }
