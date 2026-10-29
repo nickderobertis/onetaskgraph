@@ -194,7 +194,6 @@ pub struct Created {
 impl Created {
     /// Fault injection for the offline journeys: panic straight after the `n`th create
     /// is recorded, which is the earliest point a lane can have stranded a slot.
-    #[allow(dead_code)]
     pub fn panicking_after(n: usize) -> Self {
         Self {
             panic_after: Some(n),
@@ -212,11 +211,13 @@ impl Created {
         }
     }
     /// Drops the record once another cleanup has attempted every recorded slot itself.
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "this module is compiled into both lanes' test binaries, and only the asset lane's own cleanup retires slots by its standing record"
+    )]
     pub fn forget(&self) {
         self.ids.lock().unwrap().clear();
     }
-    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.ids.lock().unwrap().len()
     }
@@ -283,7 +284,10 @@ pub async fn unwinding<F: std::future::Future>(future: F) -> std::thread::Result
 
 /// [`prepare`] for a live lane: a failure or panic after any slot create retires every slot
 /// this invocation created before it is reported, so nothing it owns outlives the process.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "prepare's seven lane identities plus the tracker its caller must hold for cleanup; a struct would only restate them"
+)]
 pub async fn prepare_owned(
     endpoint: &str,
     key: &str,
@@ -366,7 +370,6 @@ async fn discover_stranded(
     }
 }
 /// Ordinary discovery is read-only. Initialization alone can fill missing identities.
-#[allow(dead_code)]
 pub async fn prepare(
     endpoint: &str,
     key: &str,
@@ -389,7 +392,10 @@ pub async fn prepare(
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the same lane identities as prepare_owned, which forwards each one unchanged"
+)]
 async fn prepare_tracked(
     endpoint: &str,
     key: &str,

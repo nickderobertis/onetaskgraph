@@ -1504,7 +1504,10 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
 /// create on nothing this invocation owns outlives a panic: one partway through preparing,
 /// or anywhere in `drive` before its own cleanup ran, retires every slot `created` records
 /// before the panic leaves the lane. A CI set is standing and is never retired here.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "prepare_owned's lane identities plus the journal and drive; the offline journey passes each one separately to drive this guard as the live lane does"
+)]
 fn guard_asset_invocation(
     runtime: &tokio::runtime::Runtime,
     lifecycle_endpoint: &str,
@@ -1548,7 +1551,10 @@ fn guard_asset_invocation(
 
 /// Everything the live asset lane does once its standing slot is prepared, ending with the
 /// invocation cleanup; a panic here unwinds to the caller's guard over `created`.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the live lane's locals this body used before it moved under the guard, passed unchanged"
+)]
 fn drive_live_assets(
     runtime: &tokio::runtime::Runtime,
     client: &reqwest::Client,
