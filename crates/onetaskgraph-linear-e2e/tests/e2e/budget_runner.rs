@@ -589,15 +589,18 @@ fn document_reports_require_complete_transport_journals_from_both_lanes() {
                 .durable(directory.to_path_buf())
                 .expect("durable transport journal");
             journal.begin(mode);
+            // The ordinary pass's one create is a cold rebuild of a missing standing slot,
+            // which is filed under that journey and must stay out of the ordinary total.
             if mode != "ordinary" {
-                // Exercise the same acknowledgement recorder and serializer the HTTP replay
-                // uses, rather than a separately maintained consumer-shaped record.
-                journal.observe(
-                    &json!({"query":"mutation { documentCreate(input: {}) { success } }"}),
-                    &json!({"data":{"documentCreate":{"success":true}}}),
-                );
+                journal.journey("probe");
             }
-            assert_eq!(journal.count(), usize::from(mode != "ordinary"));
+            // Exercise the same acknowledgement recorder and serializer the HTTP replay
+            // uses, rather than a separately maintained consumer-shaped record.
+            journal.observe(
+                &json!({"query":"mutation { documentCreate(input: {}) { success } }"}),
+                &json!({"data":{"documentCreate":{"success":true}}}),
+            );
+            assert_eq!(journal.count(), 1);
             let interrupted = run(budget);
             assert!(
                 !interrupted.status.success(),
@@ -631,6 +634,14 @@ fn document_reports_require_complete_transport_journals_from_both_lanes() {
         detail.contains("plugin/failure residue: 1 documents"),
         "{detail}"
     );
+    for lane in ["plugin", "assets"] {
+        assert!(
+            detail.contains(&format!(
+                "{lane}/ordinary cold rebuild: 1 documents, outside the pass total"
+            )),
+            "{detail}"
+        );
+    }
     let ordinary = run("linear-live-documents-created-per-ordinary-pass");
     assert!(
         ordinary.status.success(),
@@ -639,7 +650,10 @@ fn document_reports_require_complete_transport_journals_from_both_lanes() {
     );
     let report: Value =
         serde_json::from_slice(&std::fs::read(&result).expect("ordinary report")).expect("JSON");
-    assert_eq!(report["value"], 0.0, "{report:#}");
+    assert_eq!(
+        report["value"], 0.0,
+        "a cold rebuild is never counted in the ordinary pass: {report:#}"
+    );
     std::fs::remove_file(&result).expect("remove previous report");
     let path = plugin.join("linear-live-documents-fresh.json");
     std::fs::write(&path, "not JSON").expect("writable");

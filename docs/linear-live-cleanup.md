@@ -10,12 +10,16 @@ loose and follow-up probes in the plugin lane, and the asset destination in the
 binary lane. Their identity is stable within the nominated team, without a process
 timestamp. Required parent projects persist too. Each invocation resets mutable
 contents to known run-specific values before asserting updates, reads, filtering,
-metadata, Markdown, image integrity and unchanged recopy. An absent or incomplete
-set refuses with a setup requirement before any `documentCreate`.
+metadata, Markdown, image integrity and unchanged recopy.
 
-Initialize or recover the standing set explicitly by manually dispatching
-`.github/workflows/linear-documents.yml`. Initialization creates only missing slots;
-partial initialization discovers existing objects by exact identity. An uncertain
+An ordinary CI pass that finds the standing set absent or incomplete initializes
+exactly the missing slots itself, under the shared CI concurrency group and the same
+ownership rules, and then runs its reuse assertions over them. Its journal files those
+creates as a cold rebuild: reported as detail, never counted in the ordinary-pass total
+and never read as zero-cost reuse. A warm ordinary pass, every slot present, creates
+none. Manually dispatching `.github/workflows/linear-documents.yml` remains the
+explicit initialization and recovery invocation. Either way only missing slots are
+created; partial initialization discovers existing objects by exact identity. An uncertain
 create acknowledgement requires discovery before any retry. Unknown, duplicate or
 ambiguous ownership fails closed. A retained marker alone never authorizes a write:
 exact recognized ownership and verified nominated-team membership are both required.
@@ -63,8 +67,9 @@ Never infer ownership from a similar title or treat trashing as quota recovery.
 The ordinary budget measures one warm affected CI pass of both lanes: zero successful
 `documentCreate` operations. The daily budget measures one fresh pass of both lanes:
 three plugin documents and one binary asset document. Retries and pass frequency do
-not weight either figure. Cold standing-set initialization and failed-pass residue
-are separate diagnostic detail, not part of either pass total.
+not weight either figure. A cold rebuild of the standing set, whether by an ordinary
+CI pass or the explicit initialization, and failed-pass residue are separate diagnostic
+detail, not part of either pass total.
 
 Offline HTTP replay drives the actual live entry paths and journals successful creates
 at the transport, including objects subsequently deleted or left by failure. The

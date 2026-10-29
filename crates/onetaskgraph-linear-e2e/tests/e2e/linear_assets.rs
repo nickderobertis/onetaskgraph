@@ -1546,6 +1546,9 @@ fn guard_asset_invocation(
                 created,
             ))
             .unwrap_or_else(|error| panic!("{error}"));
+        // Whatever preparation created was the standing set's cold rebuild; from here on a
+        // create is this journey's own.
+        journal.journey("live_disposable_issue_and_document_assets_copy_and_recopy");
         drive(&standing);
     }));
     if let Err(panic) = guarded {
@@ -2467,26 +2470,31 @@ fn document_modes_replay_the_live_binary_asset_entry_over_http() {
     journey.workspace.state.lock().unwrap().document_journal = Some(journal.clone());
     let scope = Scope::ci("ENG").unwrap();
     let slots = &[Slot::Assets];
+    // A default non-CI invocation refuses before any create and names the explicit mode,
+    // which initializes its own set, finds it again on recovery and retires it.
+    let local = Scope::local("ENG", "123-456-500").unwrap();
     let absent = runtime.block_on(document_lifecycle::prepare(
         &endpoint,
         "fixture-key",
         "ENG",
         "team",
-        scope,
+        local,
         Mode::Ordinary,
         slots,
     ));
     assert!(absent.err().unwrap().contains("initialize"));
     assert_eq!(journal.count(), 0, "ordinary absence refuses before create");
+    let created = document_lifecycle::Created::default();
     let standing = runtime
-        .block_on(document_lifecycle::prepare(
+        .block_on(document_lifecycle::prepare_owned(
             &endpoint,
             "fixture-key",
             "ENG",
             "team",
-            scope,
+            local,
             Mode::Initialize,
             slots,
+            &created,
         ))
         .unwrap();
     assert_eq!(
@@ -2500,7 +2508,7 @@ fn document_modes_replay_the_live_binary_asset_entry_over_http() {
             "fixture-key",
             "ENG",
             "team",
-            scope,
+            local,
             Mode::Initialize,
             slots,
         ))
@@ -2511,79 +2519,113 @@ fn document_modes_replay_the_live_binary_asset_entry_over_http() {
         1,
         "recovery discovers the exact initialized slot"
     );
-    journal.finish().unwrap();
-    for (mode, label) in [(Mode::Ordinary, "ordinary"), (Mode::Fresh, "fresh")] {
-        journal.begin(label);
-        journal.journey("live_disposable_issue_and_document_assets_copy_and_recopy");
-        let standing = runtime
-            .block_on(document_lifecycle::prepare(
+    assert_eq!(
+        runtime
+            .block_on(document_lifecycle::retire(
                 &endpoint,
                 "fixture-key",
-                "ENG",
-                "team",
-                scope,
-                mode,
-                slots,
+                local,
+                &created
             ))
-            .unwrap();
-        reset_asset_slot(&runtime, &endpoint, "fixture-key", &standing, label, 21);
-        let origins = asset_origins(&journey, |kind| {
-            if kind == "document" && mode == Mode::Ordinary {
-                standing.titles["assets"].clone()
-            } else {
-                format!(
-                    "{}123-456-{}",
-                    onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX,
-                    if mode == Mode::Ordinary { 1000 } else { 2000 }
-                )
-            }
-        });
-        drive_asset_copy_recopy(
-            &journey,
-            &origins,
+            .unwrap(),
+        1
+    );
+    journal.finish().unwrap();
+    // The CI set is absent: the first ordinary pass rebuilds its one slot through the lane's
+    // own guard, files it as a cold rebuild, and runs every reuse assertion over it; the warm
+    // pass after it creates nothing. Then the daily fresh pass.
+    for (mode, label, warm) in [
+        (Mode::Ordinary, "ordinary", false),
+        (Mode::Ordinary, "ordinary", true),
+        (Mode::Fresh, "fresh", true),
+    ] {
+        if !(mode == Mode::Ordinary && warm) {
+            journal.begin(label);
+        }
+        let before = journal.count();
+        let rebuilt_before = journal.count_in(document_lifecycle::journal::COLD_REBUILD);
+        let run = match (mode, warm) {
+            (Mode::Fresh, _) => 2000,
+            (_, false) => 1000,
+            (_, true) => 1001,
+        };
+        let mut fresh_title = None;
+        guard_asset_invocation(
+            &runtime,
+            &endpoint,
+            "fixture-key",
+            "ENG",
+            "team",
+            scope,
             mode,
-            |name, url| {
-                let response = runtime
-                    .block_on(
-                        reqwest::Client::new()
-                            .get(url)
-                            .header("Authorization", "fixture-key")
-                            .send(),
-                    )
-                    .unwrap();
-                assert!(response.status().is_success());
-                let bytes = runtime.block_on(response.bytes()).unwrap();
-                let state = journey.workspace.state.lock().unwrap();
-                let upload = state
-                    .uploads
-                    .values()
-                    .find(|u| u.name == name && u.bytes == bytes.as_ref())
-                    .expect("authenticated image read is byte-identical to the upload");
-                assert_eq!(upload.bytes.len(), upload.size);
-                assert_eq!(asset_sha256(&upload.bytes), asset_sha256(&bytes));
+            &journal,
+            &document_lifecycle::Created::default(),
+            |standing| {
+                reset_asset_slot(&runtime, &endpoint, "fixture-key", standing, label, 21);
+                let origins = asset_origins(&journey, |kind| {
+                    if kind == "document" && mode == Mode::Ordinary {
+                        standing.titles["assets"].clone()
+                    } else {
+                        format!(
+                            "{}123-456-{run}",
+                            onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX,
+                        )
+                    }
+                });
+                drive_asset_copy_recopy(
+                    &journey,
+                    &origins,
+                    mode,
+                    |name, url| {
+                        let response = runtime
+                            .block_on(
+                                reqwest::Client::new()
+                                    .get(url)
+                                    .header("Authorization", "fixture-key")
+                                    .send(),
+                            )
+                            .unwrap();
+                        assert!(response.status().is_success());
+                        let bytes = runtime.block_on(response.bytes()).unwrap();
+                        let state = journey.workspace.state.lock().unwrap();
+                        let upload = state
+                            .uploads
+                            .values()
+                            .find(|u| u.name == name && u.bytes == bytes.as_ref())
+                            .expect("authenticated image read is byte-identical to the upload");
+                        assert_eq!(upload.bytes.len(), upload.size);
+                        assert_eq!(asset_sha256(&upload.bytes), asset_sha256(&bytes));
+                    },
+                    || journey.workspace.counts().0,
+                );
+                fresh_title = origins
+                    .iter()
+                    .find(|(kind, _, _)| *kind == "document")
+                    .map(|origin| origin.2.clone());
             },
-            || journey.workspace.counts().0,
+        );
+        let rebuilt = journal.count_in(document_lifecycle::journal::COLD_REBUILD) - rebuilt_before;
+        assert_eq!(
+            rebuilt,
+            usize::from(!warm),
+            "{label}: only the cold ordinary pass rebuilds the missing standing slot"
         );
         assert_eq!(
-            journal.count(),
+            journal.count() - before - rebuilt,
             usize::from(mode == Mode::Fresh),
-            "the shared entry path creates the fresh destination once"
+            "{label}: the shared entry path creates the fresh destination once"
         );
         // Removal does not erase a creation from its transport journal.
         if mode == Mode::Fresh {
-            let title = &origins
-                .iter()
-                .find(|(kind, _, _)| *kind == "document")
-                .unwrap()
-                .2;
-            let id = journey.workspace.held.document_titled(title).unwrap();
+            let title = fresh_title.unwrap();
+            let id = journey.workspace.held.document_titled(&title).unwrap();
             assert!(cleanup_asset_items(
                 &runtime,
                 &endpoint,
                 "fixture-key",
                 &[("document", id)]
             ));
-            assert!(journey.workspace.held.document_titled(title).is_none());
+            assert!(journey.workspace.held.document_titled(&title).is_none());
             assert_eq!(journal.count(), 1);
         }
         journal.finish().unwrap();

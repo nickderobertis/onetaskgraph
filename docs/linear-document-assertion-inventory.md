@@ -6,8 +6,9 @@ means `crates/onetaskgraph-linear-e2e/tests/e2e/linear_assets.rs`.
 
 The manager approved moving fresh document creation and document deletion coverage to
 one daily fresh pass. Ordinary selected journeys still execute their update, read,
-filter, metadata, Markdown and asset assertions. Initialization is an explicit setup
-operation, not a substitute for either pass. Deleting a document does not restore
+filter, metadata, Markdown and asset assertions. Initialization — explicit, or the cold
+rebuild an ordinary CI pass makes of a missing standing slot — is setup, not a
+substitute for either pass, and is reported apart from both pass totals. Deleting a document does not restore
 Linear's retained-trash capacity.
 
 | Original sender | Ordinary execution | Fresh daily execution | Initialization |
@@ -65,8 +66,10 @@ capability journeys retain their ordinary execution.
 
 Discovery and explicit initialization live in
 `crates/onetaskgraph-linear/tests/document_lifecycle/mod.rs`. Its `documentCreate`
-sender creates only missing exact owned slots. An absent or incomplete set in ordinary
-mode refuses before that sender; uncertain creation acknowledgements require discovery.
+sender creates only missing exact owned slots. An ordinary CI pass with an absent or
+incomplete standing set reaches that sender for exactly the missing slots, journalled as
+a cold rebuild; a non-CI ordinary invocation refuses before it and names the explicit
+initialize mode. Uncertain creation acknowledgements require discovery.
 The same discovery code supplies both live lanes. Cleanup and orphan sweeping in
 `crates/onetaskgraph-linear/tests/cleanup/mod.rs`, asset panic cleanup, and the Linear
 janitor delete or preserve according to ownership; none sends `documentCreate`.

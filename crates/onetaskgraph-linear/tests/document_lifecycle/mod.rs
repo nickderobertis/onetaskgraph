@@ -371,7 +371,8 @@ async fn discover_stranded(
         }
     }
 }
-/// Ordinary discovery is read-only. Initialization alone can fill missing identities.
+/// Ordinary non-CI discovery is read-only; initialization, and an ordinary CI pass as a
+/// cold rebuild, fill only the missing identities.
 pub async fn prepare(
     endpoint: &str,
     key: &str,
@@ -435,13 +436,17 @@ async fn prepare_tracked(
         }
         standing.titles.insert(slot_key(*slot), title);
     }
+    // An ordinary CI pass rebuilds a missing standing slot itself, under the shared CI
+    // concurrency group, and its journal files that create as a cold rebuild outside the
+    // ordinary total. A non-CI set is the invocation's own and is created only on request.
     if mode == Mode::Ordinary
+        && !scope.is_ci()
         && wanted
             .iter()
             .any(|s| !standing.ids.contains_key(slot_key(*s)))
     {
         return Err(format!(
-            "standing Linear document set absent or incomplete; reuse would create documents; run {MODE_VARIABLE}=initialize under the shared CI concurrency group before ordinary reuse; no documentCreate sent"
+            "invocation-owned Linear document set absent or incomplete; non-CI ordinary reuse would create documents; run {MODE_VARIABLE}=initialize for an explicit creation pass; no documentCreate sent"
         ));
     }
     for slot in wanted {

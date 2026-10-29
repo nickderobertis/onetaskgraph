@@ -1937,6 +1937,31 @@ async fn replay_drive_at(
     drive_document_paths(&run, source.as_ref(), &NativeId(parent), Some(journal)).await
 }
 
+/// One ordinary CI pass through the plugin lane's own invocation guard, recording the
+/// standing set it ran over.
+async fn replay_ordinary_ci_pass(
+    replay: &document_replay::Replay,
+    stamp: u64,
+    standing_ids: &std::sync::Mutex<Option<BTreeMap<&'static str, String>>>,
+) {
+    guard_plugin_invocation(
+        &replay.endpoint,
+        "synthetic",
+        "ENG",
+        "team",
+        Scope::ci("ENG").unwrap(),
+        Mode::Ordinary,
+        &document_lifecycle::Created::default(),
+        |standing| async move {
+            *standing_ids.lock().unwrap() = Some(standing.ids.clone());
+            replay_drive(replay, standing, Mode::Ordinary, stamp)
+                .await
+                .unwrap();
+        },
+    )
+    .await;
+}
+
 async fn replay_cleanup_documents(replay: &document_replay::Replay) -> usize {
     let query = "query($filter:DocumentFilter!){documents(first:100,filter:$filter){nodes{id title} pageInfo{hasNextPage endCursor}}}";
     let read = || {
@@ -1986,43 +2011,78 @@ async fn replay_cleanup_documents(replay: &document_replay::Replay) -> usize {
 async fn document_modes_replay_the_live_plugin_paths_over_http() {
     let replay = replay();
     let scope = Scope::ci("ENG").unwrap();
+    // A default non-CI invocation refuses before any create and names the explicit mode,
+    // which initializes its own set and finds it again on recovery.
+    let local = Scope::local("ENG", "1-2-900").unwrap();
     assert!(
-        replay_prepare(&replay, scope, Mode::Ordinary)
+        replay_prepare(&replay, local, Mode::Ordinary)
             .await
             .err()
             .unwrap()
             .contains("initialize")
     );
     assert_eq!(replay.journal.count(), 0);
-    let standing = replay_prepare(&replay, scope, Mode::Initialize)
-        .await
-        .unwrap();
+    let created = document_lifecycle::Created::default();
+    let standing = document_lifecycle::prepare_owned(
+        &replay.endpoint,
+        "synthetic",
+        "ENG",
+        "team",
+        local,
+        Mode::Initialize,
+        &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+        &created,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         replay.journal.count(),
         3,
         "one owned document per missing plugin slot"
     );
-    replay.journal.finish().unwrap();
-    let again = replay_prepare(&replay, scope, Mode::Initialize)
+    let again = replay_prepare(&replay, local, Mode::Initialize)
         .await
         .unwrap();
     assert_eq!(standing.ids, again.ids);
     assert_eq!(replay.journal.count(), 3);
+    replay_drive(&replay, standing, Mode::Ordinary, now_micros())
+        .await
+        .unwrap();
+    assert_eq!(replay.journal.count(), 3);
+    document_lifecycle::retire(&replay.endpoint, "synthetic", local, &created)
+        .await
+        .unwrap();
+    replay.journal.finish().unwrap();
+    // The CI set is absent: the first ordinary pass rebuilds it through the lane's own guard,
+    // files the creates as a cold rebuild, and then runs its reuse assertions over the set.
     replay.journal.begin("ordinary");
     let stamp = now_micros();
-    replay_drive(&replay, standing, Mode::Ordinary, stamp)
-        .await
-        .unwrap();
-    assert_eq!(replay.journal.count(), 0);
+    let rebuilt = std::sync::Mutex::new(None);
+    replay_ordinary_ci_pass(&replay, stamp, &rebuilt).await;
+    let rebuilt = rebuilt.into_inner().unwrap().unwrap();
+    assert_eq!(rebuilt.len(), 4, "a parent and three document slots");
+    assert_eq!(
+        replay
+            .journal
+            .count_in(document_lifecycle::journal::COLD_REBUILD),
+        3,
+        "exactly the three missing documents, filed as a cold rebuild"
+    );
+    assert_eq!(
+        replay.journal.count(),
+        3,
+        "the reuse assertions create none"
+    );
+    // A second, warm ordinary pass resets the same retained contents and creates nothing.
+    let warm = std::sync::Mutex::new(None);
+    replay_ordinary_ci_pass(&replay, stamp + 1, &warm).await;
+    assert_eq!(warm.into_inner().unwrap().unwrap(), rebuilt);
+    assert_eq!(
+        replay.journal.count(),
+        3,
+        "a warm ordinary pass creates none"
+    );
     replay.journal.finish().unwrap();
-    // A second ordinary pass resets the same retained contents and metadata to its tag.
-    let standing = replay_prepare(&replay, scope, Mode::Ordinary)
-        .await
-        .unwrap();
-    replay_drive(&replay, standing, Mode::Ordinary, stamp + 1)
-        .await
-        .unwrap();
-    assert_eq!(replay.journal.count(), 0);
     replay.journal.begin("fresh");
     let standing = replay_prepare(&replay, scope, Mode::Fresh).await.unwrap();
     replay_drive(&replay, standing, Mode::Fresh, stamp + 2)
@@ -2113,25 +2173,8 @@ async fn document_lifecycle_replay_refuses_unsafe_ownership_and_recovers_partial
         1,
         "uncertain acknowledgement still records the stored create"
     );
-    let before = replay.state.lock().unwrap().requests.len();
-    assert!(
-        replay_prepare(&replay, scope, Mode::Ordinary)
-            .await
-            .err()
-            .unwrap()
-            .contains("incomplete")
-    );
-    assert_eq!(
-        replay.journal.count(),
-        1,
-        "ordinary does not bootstrap partial state"
-    );
-    assert!(
-        replay.state.lock().unwrap().requests[before..]
-            .iter()
-            .all(|r| !r["query"].as_str().unwrap().contains("mutation"))
-    );
-    let recovered = replay_prepare(&replay, scope, Mode::Initialize)
+    // The ordinary CI pass resumes that partial initialization as a cold rebuild.
+    let recovered = replay_prepare(&replay, scope, Mode::Ordinary)
         .await
         .unwrap();
     assert_eq!(
@@ -2140,6 +2183,15 @@ async fn document_lifecycle_replay_refuses_unsafe_ownership_and_recovers_partial
         "discovery reuses the uncertain first create and fills only missing slots"
     );
     assert_eq!(recovered.ids.len(), 4);
+    let again = replay_prepare(&replay, scope, Mode::Ordinary)
+        .await
+        .unwrap();
+    assert_eq!(again.ids, recovered.ids);
+    assert_eq!(
+        replay.journal.count(),
+        3,
+        "a warm pass creates no duplicate"
+    );
     // A cancelled invocation leaves reusable contents, not missing identities.
     replay_drive(&replay, recovered, Mode::Ordinary, now_micros())
         .await
@@ -2520,15 +2572,7 @@ async fn cancelled_document_initialization_discovers_its_stored_create_before_re
         "a committed create remains counted after the caller is cancelled"
     );
     let scope = Scope::ci("ENG").unwrap();
-    assert!(
-        replay_prepare(&replay, scope, Mode::Ordinary)
-            .await
-            .err()
-            .unwrap()
-            .contains("incomplete")
-    );
-    assert_eq!(replay.journal.count(), 1);
-    let restored = replay_prepare(&replay, scope, Mode::Initialize)
+    let restored = replay_prepare(&replay, scope, Mode::Ordinary)
         .await
         .unwrap();
     assert_eq!(

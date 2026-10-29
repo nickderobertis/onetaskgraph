@@ -12,6 +12,7 @@
 //! recorded. [`DIRECTORY`] names another, so a test can drive the runner over telemetry of its
 //! own without touching what the journeys recorded.
 
+use crate::linear_assets::document_lifecycle::journal::COLD_REBUILD;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -288,6 +289,7 @@ fn live_documents_recorded(budget: &str) -> Result<(f64, Option<String>), String
                 .as_array()
                 .ok_or_else(|| format!("{budget}: {lane}/{mode} journal has no operations"))?;
             let mut journeys = std::collections::BTreeMap::<&str, u64>::new();
+            let mut rebuilt = 0_u64;
             for operation in operations {
                 let journey = operation["journey"]
                     .as_str()
@@ -298,15 +300,27 @@ fn live_documents_recorded(budget: &str) -> Result<(f64, Option<String>), String
                         "{budget}: {lane}/{mode} journal contains an unacknowledged create"
                     ));
                 }
-                *journeys.entry(journey).or_default() += 1;
+                if journey == COLD_REBUILD {
+                    rebuilt += 1;
+                } else {
+                    *journeys.entry(journey).or_default() += 1;
+                }
             }
-            let count = u64::try_from(operations.len()).map_err(|error| error.to_string())?;
+            let count =
+                u64::try_from(operations.len()).map_err(|error| error.to_string())? - rebuilt;
             if mode == selected {
                 total = total.checked_add(count).ok_or("document count overflow")?;
             }
             details.push(format!(
                 "{lane}/{mode}: {count} successful documentCreate operations ({journeys:?})"
             ));
+            // A standing slot the pass had to create is a cold rebuild: reported, never
+            // counted in the pass and never read as zero-cost reuse.
+            if rebuilt > 0 {
+                details.push(format!(
+                    "{lane}/{mode} cold rebuild: {rebuilt} documents, outside the pass total"
+                ));
+            }
             if let Some(residue) = journal.get("residue") {
                 let residue = residue.as_u64().ok_or_else(|| {
                     format!("{budget}: {lane}/{mode} residue is not a document count")

@@ -1,6 +1,9 @@
 //! Transport-only creation accounting, shared by both live entry paths.
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
+/// The journey every create made while a lane prepares its standing set is filed under:
+/// in an ordinary journal it is a cold rebuild, reported beside that pass and never in it.
+pub const COLD_REBUILD: &str = "cold-rebuild";
 #[derive(Clone)]
 pub struct Journal {
     lane: &'static str,
@@ -18,7 +21,7 @@ impl Journal {
             residue: Arc::default(),
             mode: Arc::new(Mutex::new(mode)),
             operations: Arc::default(),
-            journey: Arc::new(Mutex::new("bootstrap")),
+            journey: Arc::new(Mutex::new(COLD_REBUILD)),
         }
     }
     pub fn durable(mut self, directory: std::path::PathBuf) -> Result<Self, String> {
@@ -74,10 +77,20 @@ impl Journal {
     pub fn begin(&self, mode: &'static str) {
         *self.mode.lock().unwrap() = mode;
         self.operations.lock().unwrap().clear();
+        *self.journey.lock().unwrap() = COLD_REBUILD;
         *self.residue.lock().unwrap() = None;
     }
     pub fn count(&self) -> usize {
         self.operations.lock().unwrap().len()
+    }
+    /// The successful creates filed under one journey.
+    pub fn count_in(&self, journey: &str) -> usize {
+        self.operations
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|operation| operation["journey"] == journey)
+            .count()
     }
     pub fn finish(&self) -> Result<(), String> {
         if let Some(directory) = &self.directory {
