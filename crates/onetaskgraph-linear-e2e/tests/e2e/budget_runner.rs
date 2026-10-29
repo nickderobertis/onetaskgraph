@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 use crate::common::Sandbox;
 use crate::telemetry;
 
+use crate::linear_assets::document_lifecycle::journal as transport_journal;
+
 #[test]
 fn report() {
     let budget = match std::env::var("ONEBUDGETSPEC_BUDGET_ID") {
@@ -583,21 +585,23 @@ fn document_reports_require_complete_transport_journals_from_both_lanes() {
                 "missing {lane}/{mode} was accepted"
             );
             assert!(!result.exists(), "missing journals emitted a report");
-            let operations = if mode == "ordinary" {
-                vec![]
-            } else {
-                // Reporter fixtures test arithmetic, not the live workload or its ceiling.
-                vec![
-                    json!({"journey": "transport-fixture", "operation": "documentCreate", "success": true}),
-                ]
-            };
-            std::fs::write(
-                directory.join(format!("linear-live-documents-{mode}.json")),
-                json!({"schema_version":1,"lane":lane,"mode":mode,
-                    "completed":true,"operations":operations})
-                .to_string(),
-            )
-            .expect("writable journal");
+            let journal = transport_journal::Journal::new(lane, mode);
+            journal.begin(mode);
+            if mode != "ordinary" {
+                // Exercise the same acknowledgement recorder and serializer the HTTP replay
+                // uses, rather than a separately maintained consumer-shaped record.
+                journal.observe(
+                    &json!({"query":"mutation { documentCreate(input: {}) { success } }"}),
+                    &json!({"data":{"documentCreate":{"success":true}}}),
+                );
+            }
+            assert_eq!(journal.count(), usize::from(mode != "ordinary"));
+            journal.finish_in(directory).expect("writable journal");
+            let path = directory.join(format!("linear-live-documents-{mode}.json"));
+            let mut recorded: Value =
+                serde_json::from_slice(&std::fs::read(&path).expect("journal")).expect("JSON");
+            recorded["residue"] = json!(1);
+            std::fs::write(path, recorded.to_string()).expect("writable diagnostic");
         }
     }
     let success = run(budget);
@@ -615,6 +619,10 @@ fn document_reports_require_complete_transport_journals_from_both_lanes() {
             assert!(detail.contains(&format!("{lane}/{mode}:")), "{detail}");
         }
     }
+    assert!(
+        detail.contains("plugin/failure residue: 1 documents"),
+        "{detail}"
+    );
     let ordinary = run("linear-live-documents-created-per-ordinary-pass");
     assert!(
         ordinary.status.success(),
@@ -626,7 +634,19 @@ fn document_reports_require_complete_transport_journals_from_both_lanes() {
     assert_eq!(report["value"], 0.0, "{report:#}");
     std::fs::remove_file(&result).expect("remove previous report");
     let path = plugin.join("linear-live-documents-fresh.json");
+    std::fs::write(&path, "not JSON").expect("writable");
+    let malformed = run(budget);
+    assert!(!malformed.status.success());
+    assert!(String::from_utf8_lossy(&malformed.stderr).contains("invalid plugin/fresh journal"));
+    assert!(!result.exists(), "malformed journal emitted a report");
     for invalid in [
+        json!({"schema_version":2,"lane":"plugin","mode":"fresh","completed":true,"operations":[]}),
+        json!({"schema_version":1,"lane":"assets","mode":"fresh","completed":true,"operations":[]}),
+        json!({"schema_version":1,"lane":"plugin","mode":"ordinary","completed":true,"operations":[]}),
+        json!({"schema_version":1,"lane":"plugin","mode":"fresh","completed":true,"operations":[{"operation":"documentCreate","success":true}]}),
+        json!({"schema_version":1,"lane":"plugin","mode":"fresh","completed":true,"operations":[{"journey":"","operation":"documentCreate","success":true}]}),
+        json!({"schema_version":1,"lane":"plugin","mode":"fresh","completed":true,"operations":[{"journey":"probe","operation":"documentUpdate","success":true}]}),
+        json!({"schema_version":1,"lane":"plugin","mode":"fresh","completed":true,"operations":[],"residue":"private body"}),
         json!({"schema_version":1,"lane":"plugin","mode":"fresh","completed":false,"operations":[]}),
         json!({"schema_version":1,"lane":"plugin","mode":"fresh","completed":true}),
         json!({"schema_version":1,"lane":"plugin","mode":"fresh","completed":true,"operations":[{"journey":"probe","operation":"documentCreate","success":false}]}),

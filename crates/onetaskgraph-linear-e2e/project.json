@@ -84,7 +84,7 @@
         { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear-e2e/*.json" },
         { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear/*.json" }
       ],
-      "//": "Judges the figures `test` recorded and runs no journey again. Cached: they are requests a deterministic loopback workspace served, in an environment with nothing of the host's, so the key is this project's files (budgets.yaml among them), the measured code (the binary, the engine and the harness in `default`, the Linear plugin and the contract through `^default`), the recorded telemetry, and the onebudgetspec pins in bun.lock and Cargo.lock (sharedGlobals)."
+      "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge,external_service_suite_stays_out_of_the_affected_tier] The task explicitly requires this budget target to depend on both telemetry-producing test targets and restore both journals from Nx caching. The plugin test remains behind the Linear e2e budget edge, not any sibling plugin; this dependency intentionally runs that producer when only its consumer is selected. Judges the figures `test` recorded and runs no journey again. Cached: they are requests a deterministic loopback workspace served, in an environment with nothing of the host's, so the key is this project's files (budgets.yaml among them), the measured code (the binary, the engine and the harness in `default`, the Linear plugin and the contract through `^default`), the recorded telemetry, and the onebudgetspec pins in bun.lock and Cargo.lock (sharedGlobals)."
     },
     "coverage": {
       "executor": "nx:run-commands",
