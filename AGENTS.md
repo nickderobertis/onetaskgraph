@@ -164,7 +164,7 @@ Nothing of a user's work is stored, cached, indexed or mirrored outside the plug
 owns it. The engine compensates transiently and writes nothing down. Extend these three
 mechanisms rather than rediscovering the rule; each says how it fails, not how it works.
 
-**One named exception: the local cache of a remote source, and only where a configuration
+**Named exception: the local cache of a remote source, and only where a configuration
 turns it on.** `sources.<name>.cache.enabled` (off unless set) keeps a GitHub board's or a
 Linear source's tasks, projects, documents and verified image bytes under `${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<digest>` or
 `cache.dir`, keyed on the change token alone and served only at the version a caller pinned
@@ -175,6 +175,17 @@ below hold everything else to the rule: with `cache.enabled` unset nothing is wr
 anywhere, and `no_persistence.rs` still proves it; with it set, the GitHub Projects suite's
 `with_caching_on_the_cache_directory_is_the_only_place_a_file_changes` proves only the cache
 directory changes.
+
+**Named exception: producer-owned projection write authority.**
+`task_projection::IntentStore` keeps the producer's recovery state in the directory its
+caller explicitly selects; [the journal](crates/onetaskgraph-core/src/task_projection/intent.rs)
+defines its contents. Supply the existing cache's source identity digest, not a second
+identity scheme. This journal authorizes a write; it never answers a work query and holds
+no task title or body. OS locks serialize local owners, a create claim must be committed
+before a create is sent, and a failed commit requires reopening the claim. A pending create is
+bound only by one verified origin match; zero, multiple or unindexed matches refuse,
+never authorize another create. Never use stored work content as current terminal-write
+authority. See [the projection intent API](docs/task-projection.md).
 
 **A destination write is not a cache, and the difference is stated rather than assumed.**
 A destination write is at the user's explicit request, names its destination, goes through
