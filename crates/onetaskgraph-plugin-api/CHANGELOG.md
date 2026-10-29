@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.10](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.12.9...onetaskgraph-plugin-api-v0.12.10) - 2026-10-29
+
+### Fixed
+
+- *(deps)* move pulldown-cmark past the wikilink event-growth advisory ([#3802](https://github.com/nickderobertis/onetaskgraph/pull/3802))
+
 ## [0.12.9](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.12.8...onetaskgraph-plugin-api-v0.12.9) - 2026-10-28
 
 ### Added
