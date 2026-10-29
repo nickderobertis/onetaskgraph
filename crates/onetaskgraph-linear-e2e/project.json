@@ -63,6 +63,8 @@
       "inputs": [
         "default",
         "^default",
+        { "env": "ONETASKGRAPH_LINEAR_DOCUMENT_MODE" },
+        { "env": "GITHUB_ACTIONS" },
         { "env": "LINEAR_API_KEY" },
         { "env": "LINEAR_WRITE_TEAM" },
         { "env": "ONETASKGRAPH_LIVE_REQUIRED" }
@@ -71,7 +73,7 @@
     },
     "budgets": {
       "executor": "nx:run-commands",
-      "dependsOn": ["test"],
+      "dependsOn": ["test", "onetaskgraph-linear:test"],
       "options": {
         "command": "bun run onebudgetspec check crates/onetaskgraph-linear-e2e/budgets.yaml"
       },
@@ -79,7 +81,8 @@
       "inputs": [
         "default",
         "^default",
-        { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear-e2e/*.json" }
+        { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear-e2e/*.json" },
+        { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear/*.json" }
       ],
       "//": "Judges the figures `test` recorded and runs no journey again. Cached: they are requests a deterministic loopback workspace served, in an environment with nothing of the host's, so the key is this project's files (budgets.yaml among them), the measured code (the binary, the engine and the harness in `default`, the Linear plugin and the contract through `^default`), the recorded telemetry, and the onebudgetspec pins in bun.lock and Cargo.lock (sharedGlobals)."
     },

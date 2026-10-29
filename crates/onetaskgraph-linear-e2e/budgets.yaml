@@ -197,3 +197,25 @@ budgets:
     unit: requests
     direction: max
     threshold: 20
+  - id: linear-live-documents-created-per-ordinary-pass
+    description: >-
+      Successful documentCreate operations recorded by both live lanes during one ordinary
+      CI pass protect Linear's retained-trash capacity. Deleted documents still count;
+      initialization and failed-pass residue are reported separately as diagnostic detail.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: documents/pass
+    direction: max
+    threshold: 0
+  - id: linear-live-documents-created-per-daily-pass
+    description: >-
+      Successful documentCreate operations recorded by both live lanes during one daily
+      CI pass protect Linear's retained-trash capacity. Deleted documents still count;
+      initialization and failed-pass residue are reported separately as diagnostic detail.
+    labels: [linear]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    unit: documents/pass
+    direction: max
+    threshold: 4

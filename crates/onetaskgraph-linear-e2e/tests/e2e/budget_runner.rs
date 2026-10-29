@@ -559,3 +559,84 @@ fn each_absolute_linear_budget_is_reported_as_the_recorded_hour_holds_it_and_ref
         }
     }
 }
+
+#[test]
+fn document_reports_require_complete_transport_journals_from_both_lanes() {
+    let sandbox = Sandbox::new();
+    let assets = sandbox.subdirectory("assets");
+    let plugin = sandbox.subdirectory("plugin");
+    let result = sandbox.subdirectory("result").join("report.json");
+    let budget = "linear-live-documents-created-per-daily-pass";
+    let run = |id: &str| {
+        run_report(&assets, |command| {
+            command
+                .env("LINEAR_PLUGIN_TELEMETRY_DIR", &plugin)
+                .env("ONEBUDGETSPEC_BUDGET_ID", id)
+                .env("ONEBUDGETSPEC_RESULT", &result);
+        })
+    };
+    for (lane, directory) in [("plugin", &plugin), ("assets", &assets)] {
+        for mode in ["ordinary", "fresh", "initialize", "failure"] {
+            let failed = run(budget);
+            assert!(
+                !failed.status.success(),
+                "missing {lane}/{mode} was accepted"
+            );
+            assert!(!result.exists(), "missing journals emitted a report");
+            let operations = if mode == "ordinary" {
+                vec![]
+            } else {
+                // Reporter fixtures test arithmetic, not the live workload or its ceiling.
+                vec![
+                    json!({"journey": "transport-fixture", "operation": "documentCreate", "success": true}),
+                ]
+            };
+            std::fs::write(
+                directory.join(format!("linear-live-documents-{mode}.json")),
+                json!({"schema_version":1,"lane":lane,"mode":mode,
+                    "completed":true,"operations":operations})
+                .to_string(),
+            )
+            .expect("writable journal");
+        }
+    }
+    let success = run(budget);
+    assert!(
+        success.status.success(),
+        "{}",
+        String::from_utf8_lossy(&success.stderr)
+    );
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(&result).expect("report")).expect("JSON");
+    assert_eq!(report["value"], 2.0, "{report:#}");
+    let detail = report["detail"].as_str().expect("per-lane detail");
+    for lane in ["plugin", "assets"] {
+        for mode in ["ordinary", "fresh", "initialize", "failure"] {
+            assert!(detail.contains(&format!("{lane}/{mode}:")), "{detail}");
+        }
+    }
+    let ordinary = run("linear-live-documents-created-per-ordinary-pass");
+    assert!(
+        ordinary.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ordinary.stderr)
+    );
+    let report: Value =
+        serde_json::from_slice(&std::fs::read(&result).expect("ordinary report")).expect("JSON");
+    assert_eq!(report["value"], 0.0, "{report:#}");
+    std::fs::remove_file(&result).expect("remove previous report");
+    let path = plugin.join("linear-live-documents-fresh.json");
+    for invalid in [
+        json!({"schema_version":1,"lane":"plugin","mode":"fresh","completed":false,"operations":[]}),
+        json!({"schema_version":1,"lane":"plugin","mode":"fresh","completed":true}),
+        json!({"schema_version":1,"lane":"plugin","mode":"fresh","completed":true,"operations":[{"journey":"probe","operation":"documentCreate","success":false}]}),
+    ] {
+        std::fs::write(&path, invalid.to_string()).expect("writable");
+        let refused = run(budget);
+        assert!(
+            !refused.status.success(),
+            "invalid journal was accepted: {invalid}"
+        );
+        assert!(!result.exists(), "invalid journal emitted a report");
+    }
+}
