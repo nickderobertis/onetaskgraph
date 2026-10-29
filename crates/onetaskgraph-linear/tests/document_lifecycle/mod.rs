@@ -81,8 +81,8 @@ pub async fn send(
 }
 // `teams(first:2)`: a full nested page puts these 100-row listings over Linear's complexity
 // cap (`complexity.rs`), and two still lets `in_team` see a second team and fail closed.
-const DOCUMENTS: &str = "query($after:String,$filter:DocumentFilter!){documents(first:100,after:$after,filter:$filter){nodes{id title team{key} project{teams(first:2){nodes{key} pageInfo{hasNextPage}}}} pageInfo{hasNextPage endCursor}}}";
-const PROJECTS: &str = "query($after:String,$filter:ProjectFilter!){projects(first:100,after:$after,filter:$filter){nodes{id name teams(first:2){nodes{key} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor}}}";
+pub(crate) const DOCUMENTS: &str = "query($after:String,$filter:DocumentFilter!){documents(first:100,after:$after,filter:$filter){nodes{id title team{key} project{teams(first:2){nodes{key} pageInfo{hasNextPage}}}} pageInfo{hasNextPage endCursor}}}";
+pub(crate) const PROJECTS: &str = "query($after:String,$filter:ProjectFilter!){projects(first:100,after:$after,filter:$filter){nodes{id name teams(first:2){nodes{key} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor}}}";
 fn in_team(node: &Value, team: &str, project: bool) -> bool {
     if !project {
         match node.get("team") {

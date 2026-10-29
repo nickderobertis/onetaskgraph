@@ -371,8 +371,14 @@ fn serve(
         let mut forwarded = gql.clone();
         let query = gql["query"].as_str().unwrap();
         // Linear refuses a document over its complexity cap with HTTP 400 before reading a
-        // row, so this stand-in does too rather than answering what real Linear would not.
-        if let Some(refused) = document_replay_schema::complexity::refusal(query, &gql["variables"])
+        // row, so this stand-in does too for the lane's own standing-set listings, the documents
+        // that model is reconciled for. It does not score the binary's documents: Linear prices
+        // `issues` by the rows it returns (it accepts that listing at 250, `MAX_PAGE_SIZE`),
+        // which the structural model over-prices — `ISSUES_CACHED` at 100 rows scores 16355 —
+        // and those are priced by `cache_budget::price` from Linear's own scores instead.
+        if [document_lifecycle::DOCUMENTS, document_lifecycle::PROJECTS].contains(&query)
+            && let Some(refused) =
+                document_replay_schema::complexity::refusal(query, &gql["variables"])
         {
             answer(
                 &mut stream,
