@@ -1,15 +1,10 @@
-# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] The authoritative jobs are on #3642's unmerged branch, which no gate here can read; the manager ruled this verbatim snapshot until they land, and rust-cache-warm.test.mjs refuses it the moment ci.yml has any of them, so the change that lands them must delete it.
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] The authoritative jobs are on #3642's unmerged branch, which no gate here can read; the manager ruled this verbatim snapshot until they land. .github/tests/rust-cache-warm.test.mjs compares each warmer leg with this file only while ci.yml lacks its job, and fails when a job is in both, so the change that adds them to ci.yml must delete this file.
 # The Rust-cache-relevant half of the three pull-request test jobs .github/workflows/rust-cache-warm.yml
 # warms, copied verbatim from #3642 (branch nick/3632/onetaskgraph-ci-speedup) at
 # ef1322ea6c3abf9baafe0d780825cdaab9f4746b: each job's runner and job-level env, its
 # floating-compiler removal, its setup-rust-toolchain step, its tool install and the step that
 # runs its build (that step's own env, credentials and nominations, left out: rust-cache keys
 # nothing on it). `phases` is that job's arm of scripts/ci-job.sh at the same commit.
-#
-# Those jobs are not yet in main's ci.yml, and the warmer exists so their runs restore a warm
-# cache. .github/tests/rust-cache.test.mjs compares each warmer leg with its job in ci.yml when
-# ci.yml has it and with this file when it does not, and fails when a job is in both: delete
-# this file in the change that adds them to ci.yml.
 jobs:
   test-linux:
     runs-on: ubuntu-latest

@@ -65,7 +65,8 @@
           "bash scripts/check-selection-code-page.sh",
           "bash scripts/check-scoped-release-plz.sh",
           "python3 scripts/test_cli_wheel_lock.py",
-          "bash scripts/check-warm-rust-cache.sh"
+          "bash scripts/check-warm-rust-cache.sh",
+          "bash scripts/check-warm-rust-cache-reuse-enforced.sh"
         ],
         "parallel": false
       },

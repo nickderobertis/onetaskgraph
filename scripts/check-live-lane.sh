@@ -79,6 +79,10 @@ CLEARERS = {
         "It drives scripts/warm-rust-cache.sh behind a stand-in cargo, and one edit dropping "
         "the stand-in from PATH would run that warmer's builds for real, from scripts:test"
     ),
+    Path("scripts/check-warm-rust-cache-reuse-enforced.sh"): (
+        "It drives scripts/check-warm-rust-cache-reuse.sh behind a stand-in cargo, and one edit "
+        "dropping the stand-in from PATH would make that check's builds for real, from scripts:test"
+    ),
     Path("scripts/check-warm-rust-cache-reuse.sh"): (
         "It builds every crate's tests the way a pull request's Linux job does, on every push to "
         "main after the Rust cache warmer, and one edit dropping `--no-run` would run them there"

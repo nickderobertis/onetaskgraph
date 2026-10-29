@@ -28,13 +28,31 @@ esac
 "$python_bin" - <<'PY' | tr -d '\r'
 import glob, json, re, sys
 
+def refuse(path, why):
+    sys.exit(f"pr-build-commands: {path}: {why}; next: give its `test` target a `cargo test` command, or teach scripts/pr-build-commands.sh the new shape")
+
 out = []
 for path in sorted(glob.glob("crates/*/project.json")):
-    options = json.load(open(path, encoding="utf-8")).get("targets", {}).get("test", {}).get("options", {})
-    for command in options.get("commands") or [options.get("command", "")]:
-        command = command if isinstance(command, str) else command.get("command", "")
+    project = json.load(open(path, encoding="utf-8"))
+    options = project.get("targets", {}).get("test", {}).get("options") if isinstance(project, dict) else None
+    if not isinstance(options, dict):
+        refuse(path, "has no `test` target with options")
+    commands = options["commands"] if "commands" in options else [options.get("command")]
+    if not isinstance(commands, list) or not commands:
+        refuse(path, "its `test` target names no command")
+    built = 0
+    for command in commands:
+        command = command.get("command") if isinstance(command, dict) else command
+        if not isinstance(command, str):
+            refuse(path, f"its `test` target has a command that is not a string: {command!r}")
         if command.startswith("cargo test "):
             out.append(command.replace(" --quiet", "") + " --no-run")
+            built += 1
+        # A guard script of this repository drives the units the cargo commands built.
+        elif not command.startswith("bash scripts/check-"):
+            refuse(path, f"its `test` target runs `{command}`, which is neither `cargo test` nor a guard script")
+    if not built:
+        refuse(path, "its `test` target runs no `cargo test`")
 coverage = open("scripts/rust-coverage.sh", encoding="utf-8").read()
 run = re.search(r'run="\$\((cargo llvm-cov\b.*?) 2>&1\)"', coverage, re.S)
 if not run or '"$CRATE"' not in run.group(1):
