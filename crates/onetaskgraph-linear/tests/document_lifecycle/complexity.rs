@@ -7,6 +7,7 @@
 use graphql_parser::query as q;
 use serde_json::Value;
 
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Linear scores a document only at its own runtime and publishes no scoring artifact or versioned rule to generate from; the model, the cap and the offset are reconciled below against the two scores Linear itself reported (recorded in `onetaskgraph_linear`'s `MAX_PAGE_SIZE` and `graphql::RESOLUTION` documentation), and re-taking them needs the credential the live lane holds, which is the upstream gate: it sends these discovery documents to real Linear.
 /// Linear's per-document complexity cap.
 pub const CAP: f64 = 10_000.0;
 
@@ -68,16 +69,22 @@ fn page(field: &q::Field<'_, String>, variables: &Value) -> Result<Option<f64>, 
         .iter()
         .find(|(name, _)| name == "first" || name == "last");
     if let Some((name, value)) = named {
-        let rows = match value {
-            q::Value::Int(rows) => rows.as_i64(),
-            q::Value::Variable(variable) => variables.get(variable).and_then(Value::as_i64),
-            _ => None,
+        let given = match value {
+            q::Value::Int(rows) => Some(json_rows(rows.as_i64())),
+            // A variable left unset, or set null, is Linear's default page.
+            q::Value::Variable(variable) => match variables.get(variable) {
+                None | Some(Value::Null) => None,
+                Some(rows) => Some(json_rows(rows.as_i64())),
+            },
+            _ => Some(None),
         };
-        return match rows {
-            Some(rows) => Ok(Some(rows as f64)),
-            // A variable left unset is Linear's default page.
-            None if matches!(value, q::Value::Variable(_)) => Ok(Some(50.0)),
-            None => Err(format!("{}({name}) is not an integer", field.name)),
+        return match given {
+            None => Ok(Some(50.0)),
+            Some(Some(rows)) => Ok(Some(rows)),
+            Some(None) => Err(format!(
+                "{}({name}) is not a non-negative integer",
+                field.name
+            )),
         };
     }
     let connection = field.selection_set.items.iter().any(|item| {
@@ -86,7 +93,11 @@ fn page(field: &q::Field<'_, String>, variables: &Value) -> Result<Option<f64>, 
     Ok(connection.then_some(50.0))
 }
 
-// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Linear scores documents only at its own runtime and publishes no scoring artifact; this reconciles the model with the two scores Linear itself reported, recorded in `onetaskgraph_linear`'s `MAX_PAGE_SIZE` and `graphql::RESOLUTION` documentation, and re-taking them needs the credential the live lane holds.
+fn json_rows(rows: Option<i64>) -> Option<f64> {
+    rows.filter(|rows| *rows >= 0).map(|rows| rows as f64)
+}
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+
 #[test]
 fn the_model_reconciles_with_the_scores_linear_reported() {
     use onetaskgraph_linear::graphql;
@@ -119,4 +130,21 @@ fn a_nested_hundred_row_page_inside_a_hundred_row_page_is_refused() {
     assert!(refused.contains("too complex"), "{refused}");
     let bounded = nested.replace("teams(first:100)", "teams(first:2)");
     assert_eq!(refusal(&bounded, &serde_json::json!({"after":null})), None);
+}
+
+#[test]
+fn a_page_size_that_is_not_a_non_negative_integer_is_refused() {
+    let query = "query($first:Int){teams(first:$first){nodes{id}}}";
+    for bad in [
+        serde_json::json!({"first":"100"}),
+        serde_json::json!({"first":-1}),
+        serde_json::json!({"first":true}),
+    ] {
+        assert!(score(query, &bad).is_err(), "{bad}");
+    }
+    assert_eq!(
+        score(query, &serde_json::json!({})).unwrap(),
+        score(query, &serde_json::json!({"first":50})).unwrap()
+    );
+    assert!(score("query{teams(first:-1){nodes{id}}}", &Value::Null).is_err());
 }

@@ -121,8 +121,9 @@ impl Replay {
                 let mut state = serving.lock().unwrap();
                 // Linear scores a document before it reads a row and refuses one over its
                 // cap with HTTP 400, so this replay does too, rather than answering it.
+                // A request with no query string fails to parse and is refused the same way.
                 if let Some(refused) = schema::complexity::refusal(
-                    request["query"].as_str().unwrap(),
+                    request["query"].as_str().unwrap_or_default(),
                     &request["variables"],
                 ) {
                     state.schema_errors.push(refused.clone());
