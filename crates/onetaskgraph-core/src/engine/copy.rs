@@ -62,7 +62,8 @@ use onetaskgraph_plugin_api::{
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
     ItemKind, ItemWrite, Location, MetadataKey, MetadataMatch, MetadataRecord, Metering, NativeId,
     Page, PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SourceError, SourceName,
-    StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef, TextFields, TextQuery, WriteTarget,
+    Status, StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef, TextFields, TextQuery,
+    WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1567,6 +1568,8 @@ struct Planned {
     source: GlobalId,
     /// The item as its source reported it.
     item: Item,
+    /// Its status before destination normalization, for the source's composed version.
+    source_status: Option<Status>,
     /// Its forward edges, as its source reported them.
     edges: Vec<DependencyEdge>,
     /// Where it is going.
@@ -1633,6 +1636,14 @@ enum Item {
 }
 
 impl Item {
+    fn status(&self) -> Option<&Status> {
+        match self {
+            Self::Task(task) => Some(&task.status),
+            Self::Project(project) => Some(&project.status),
+            Self::Document(_) => None,
+        }
+    }
+
     fn id(&self) -> &NativeId {
         match self {
             Self::Task(task) => &task.id,
@@ -6061,6 +6072,7 @@ impl Engine {
         Ok(Planned {
             status_policy: request.status_policy,
             source: id,
+            source_status: item.status().cloned(),
             item,
             edges,
             target,
@@ -9505,7 +9517,13 @@ fn record_of(
 /// `content`.
 fn source_version(item: &Planned, content: Option<&str>) -> record::SourceVersion {
     token_of(&item.item).map_or_else(
-        || record::SourceVersion::Composed(record::composed(&item.item, content)),
+        || {
+            record::SourceVersion::Composed(record::composed(
+                &item.item,
+                content,
+                item.source_status.as_ref(),
+            ))
+        },
         |token| record::SourceVersion::Token(token.to_owned()),
     )
 }
@@ -9699,7 +9717,7 @@ fn recorded_unchanged(
     let version = match token_of(&item.item) {
         Some(token) if covers => record::SourceVersion::Token(token.to_owned()),
         Some(_) => return false,
-        None => record::SourceVersion::Composed(record::composed(&item.item, content_of(outgoing))),
+        None => source_version(item, content_of(outgoing)),
     };
     let with_comments = item.carried.is_some();
     let comments = if with_comments {
