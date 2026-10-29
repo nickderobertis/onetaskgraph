@@ -1,140 +1,72 @@
-# Linear live document residue
+# Linear live document lifecycle
 
-Hosted run [40741930571, test-linux](https://github.com/nickderobertis/onetaskgraph/actions/runs/40741930571/job/123005634093)
-is the reported failure: `linear_assets.rs:1194` in
-`linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy`
-was refused by Linear's maximum of 1000 documents per team. A refused create
-cannot return an id for the journey's cleanup journal. This dispatch could not
-re-fetch the hosted log: `gh run view 40741930571 --log-failed` reported that
-the run was still in progress and its logs were unavailable.
+Linear retains deleted documents in trash. Deletion retires test artifacts; it does
+not restore the team's document quota. The nominated `LINEAR_WRITE_TEAM` is the only
+team these journeys may mutate. Never replace that nomination by discovering an
+arbitrary writable team.
 
-There are two live document producers:
+Ordinary affected CI passes reuse exactly four standing document slots: filed,
+loose and follow-up probes in the plugin lane, and the asset destination in the
+binary lane. Their identity is stable within the nominated team, without a process
+timestamp. Required parent projects persist too. Each invocation resets mutable
+contents to known run-specific values before asserting updates, reads, filtering,
+metadata, Markdown, image integrity and unchanged recopy. An absent or incomplete
+set refuses with a setup requirement before any `documentCreate`.
 
-- `crates/onetaskgraph-linear/tests/live.rs`: `drive_documents` creates a filed and a
-  loose document and explicitly deletes both. `drive_follow_ups` creates a third for
-  metadata/Markdown probes. All three use `artifact_title`, and `run_then_cleanup`
-  calls `remove_artifacts` for this run's stamped titles even when the journey returns
-  an error. Updates and the rejected labelled write do not create additional documents.
-- `crates/onetaskgraph-linear-e2e/tests/e2e/linear_assets.rs`: the live asset journey
-  copies one document, then recopies it onto the existing destination. `live_observer`
-  journals ids returned by `documentCreate`, and the journey catches assertion panics,
-  deletes the journalled items, and rethrows. Previously its title was
-  `onetaskgraph disposable asset document <timestamp>`, which no orphan sweep recognized.
-  Its title now carries the same machine/process/time ownership stamp as the other lane.
+Initialize or recover the standing set explicitly by manually dispatching
+`.github/workflows/linear-documents.yml`. Initialization creates only missing slots;
+partial initialization discovers existing objects by exact identity. An uncertain
+create acknowledgement requires discovery before any retry. Unknown, duplicate or
+ambiguous ownership fails closed. A retained marker alone never authorizes a write:
+exact recognized ownership and verified nominated-team membership are both required.
 
-Normal cleanup therefore exists; interrupted-host recovery was missing. A killed process
-never reaches either cleanup. The Linear lane's local `sweep_orphans` additionally needs
-positive evidence from the writing machine's registration locks; it cannot recover work
-from a discarded hosted runner. The scheduled janitor enumerated GitHub artifacts only
-and explicitly never read Linear. Thus documents from interrupted live journeys could
-remain indefinitely, and the asset journey's old names were not sweepable even locally.
-Code and the reported refusal establish those paths, not the exact composition of the team's
-1000 documents. No credential or captured account listing was available to this dispatch.
+The same workflow runs one scheduled fresh-creation pass each day. It exercises the
+original filed and loose writes, follow-up metadata creation, and first document
+asset copy, with the original deletion/absence assertions and failure cleanup.
+This deliberately moves fresh-creation coverage to the daily schedule; ordinary
+selected journeys still run their non-creation assertions. The assertion-by-assertion
+mapping is in [the coverage inventory](linear-document-assertion-inventory.md).
+Issue, label and state coverage remains in the live journeys.
 
-The scheduled workflow now also invokes `onetaskgraph-live-janitor --linear` with only
-its Linear credential and test-team nomination. It lists documents before writing and
-removes only exact stamped test titles older than 24 hours, directly in that team or
-under a project belonging solely to that team. The expiry deliberately survives the loss
-of the CI machine; it is independent of the local lock sweep. Fresh documents, malformed
-or unvouched stamps, legacy asset titles, unstamped documents, unknown/shared ownership,
-and other teams are protected. Listing errors stop before deletion; deletion refusals
-fail the invocation. Read and write caps and pacing bound each scheduled pass.
+The document mode environment variable is
+`ONETASKGRAPH_LINEAR_DOCUMENT_MODE`: `ordinary`, `fresh`, or `initialize`.
+CI's Linux affected check and the daily/initialization job share the
+`linear-live-documents` concurrency group with `cancel-in-progress: false` and
+`queue: max`. This preserves up to 100 pending writers under
+[GitHub's queue semantics](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+The lock covers the affected gate because its live journeys are embedded in that
+gate. Other platform checks do not share the Linear lock. Machine-local Session
+exclusivity remains an additional guard.
 
-Offline subprocess journeys replay schema-derived recorded response fixtures through
-HTTP, including stale machine/CI/project documents, fresh and unstamped documents, other
-teams, pagination and delete refusals. Fixture provenance is explicit in
-`crates/onetaskgraph-live-janitor/tests/fixtures/README.md`; these are not captured account
-responses. Both GraphQL operations are checked against a pinned official SDK schema.
-No live assertion was removed or loosened and no journey was skipped.
+Local invocations use a separate reusable set containing the existing machine/process
+ownership stamp and cannot resolve CI slots. Initializing those four local slots is
+an explicit local creation pass, outside typical CI sizing. Normal invocation cleanup
+retires local slots. After a killed invocation, the existing local registration/orphan
+sweep may retire them only with positive evidence that their registration is dead;
+still-active registrations remain protected. There is no global coordination for
+local invocations.
 
-Legacy residue is deliberately not swept by guessing at its title. The manager is taking
-one-time cleanup of the existing residue to the user separately. The live asset lane
-remains refused until that cleanup restores document capacity; this code does not claim
-to have emptied the team or verified a credentialed run.
+Standing CI slots and their parents survive normal cleanup, cancellation residue
+cleanup, local orphan sweeping and the hourly janitor regardless of age. Fresh-mode
+artifacts remain disposable with stamped ownership and expiry safeguards. The janitor
+must continue protecting unrelated, fresh, malformed, ambiguous and unvouched records.
+Never infer ownership from a similar title or treat trashing as quota recovery.
 
-## Verification of the finished change
+## Per-pass measurement and privacy
 
-On this branch, the following passed:
+The ordinary budget measures one warm affected CI pass of both lanes: zero successful
+`documentCreate` operations. The daily budget measures one fresh pass of both lanes:
+three plugin documents and one binary asset document. Retries and pass frequency do
+not weight either figure. Cold standing-set initialization and failed-pass residue
+are separate diagnostic detail, not part of either pass total.
 
-- The test, lint and formatting targets for the janitor, shared live support, Linear
-  plugin, Linear e2e, scripts and workflow projects completed all 20 tasks
-  successfully (two lint tasks used Nx cache). This includes
-  146 Linear e2e tests, 95 workflow tests, the janitor HTTP journeys and schema checks,
-  and the script guard journeys. No Linear credential was available; contributor
-  declines are not evidence of a successful live API run.
-- Type checking passed for the workflow, janitor, shared live support, Linear plugin
-  and Linear e2e projects.
-- The store-fixture and live-janitor guards and the whitespace check passed.
-- The seven Linear janitor subprocess journeys also passed directly. Temporarily
-  replacing the stale machine document's ownership title with an ordinary title made
-  the removal assertion fail because that document was preserved; the fixture was
-  restored before the full Nx run completed.
+Offline HTTP replay drives the actual live entry paths and journals successful creates
+at the transport, including objects subsequently deleted or left by failure. The
+plugin and binary test targets record their own lane telemetry. The budget report
+reads those records without replaying journeys; missing or incomplete journals fail,
+rather than substituting zero. Only onebudgetspec compares the registered thresholds.
 
-The previously reported publication assertion at `.github/tests/release-cd.test.mjs:814`
-did not recur. In a separate detached checkout of `main` at
-`057b6c30b35314d1c2a70daef1feec3f5b14ef67`, after installing the pinned `.github`
-dependencies, the release-CD test file passed all 12 tests.
-The full workflow suite on this branch also passed that publication journey. The
-separate checkout was removed afterward; no release tooling was changed.
-
-## Publication repair verification
-
-The shared live-support crate no longer owns the Linear prefix. The Linear plugin
-exports it, matching the existing GitHub plugin's ownership of its design prefix;
-the janitor's Cargo and Nx dependencies agree. No GitHub lane depends on that plugin.
-
-The repair also validates incoming fixture-server requests, represents advancing
-pagination with a required cursor, and checks the actual listing filter and recorded
-delete acknowledgement against the pinned upstream schema. Ten Linear subprocess
-journeys passed, including direct-team precedence, empty project ownership and a zero
-ownership timestamp, missing ownership fields, a failure after the first deletion,
-and real-clock cleanup and listing refusal. Temporarily removing the zero-timestamp guard made the new
-journey fail on the unexpected deletion; restoring it made the full suite pass.
-
-The main-branch release-CD recheck passed all 12 tests at
-`057b6c30b35314d1c2a70daef1feec3f5b14ef67`. Its local HTTP double emitted connection-reset
-tracebacks, but the test runner returned success. The earlier publication assertion
-did not reproduce.
-
-Two narrow lint exceptions retain established repository conventions: the scheduled
-janitor already owns hosted sweeps, so its Cargo and Nx Linear dependency declarations
-carry `new_command_or_client_gets_its_own_project` markers; the shared fixture guard's
-central MANIFEST already inventories domain stores, so the Linear listing entry carries
-`code_lands_in_the_domain_that_owns_it`. The non-store delete-acknowledgement
-registration carries the same marker because that central table also requires every
-fixture to be named. The manager confirmed those placements and a
-follow-up records the rule-applicability question. No lint configuration changed.
-
-The parallel verification run hit a packaging race: Maturin could not open its
-`target/maturin/onetaskgraph` intermediate while script and workflow publication
-journeys packaged the same tree. The manager confirmed the race is covered by a
-separate build-lock task. The script, workflow and janitor test, lint, formatting and type-check targets
-passed serially: all 14 tasks succeeded, including all 95 workflow tests, with two
-Rust test threads and no committed configuration change. The busy host's load averages were
-25.67, 37.44 and 31.81; the first Linear e2e run passed all 146 tests in 803.92 seconds.
-
-Model lint passed on the repaired implementation: 56 rules, 28 passed, zero failed,
-11 skipped, two ignored and 15 not relevant (history `20261028T204633Z-ae728`).
-Static validation also passed. The final changes after that review only record
-these completed verification results.
-
-## Windows formatting repair
-
-Publication run [40767548268, check (windows-latest)](https://github.com/nickderobertis/onetaskgraph/actions/runs/40767548268/job/123102092578)
-failed in `workspace:format-check`: Biome required spaces in the new
-`linear-document-delete.json` response fixture. Commit `d63eeafb` formats that
-fixture without changing its JSON value. No enforcement configuration changed.
-
-After that repair, `workspace:format-check` passed with Nx cache disabled. A serial,
-uncached Nx run of `test`, `lint`, `format-check` and `typecheck` for
-`onetaskgraph-live-janitor`, `onetaskgraph-live`, `onetaskgraph-linear`,
-`onetaskgraph-linear-e2e`, `scripts` and `github-workflows`, plus their two prerequisite
-tasks, passed in 79 minutes 17 seconds with `RUST_TEST_THREADS=2`. This includes all
-146 Linear e2e tests, all 95 workflow tests (including release-CD publication), and
-the janitor subprocess and schema tests. No credentialed Linear run is claimed.
-The store-fixture guard and whitespace check passed too.
-
-Model lint passed with `LLMLINT_ONEHARNESS_BIN` unset: 56 rules, 30 passed, zero
-failed, 11 skipped, two ignored and 13 not relevant (history
-`20261028T213751Z-ce529`). Static validation passed. The only subsequent change is
-this verification record. Hosted Windows verification still belongs to publication.
+Fixtures contain synthetic content and schema-validated recorded response shapes,
+never captured account listings, credentials or private document bodies. Reports
+contain operation counts and lifecycle outcomes, not workspace content. A contributor
+run without credentials is a decline, not evidence of a successful real Linear pass.

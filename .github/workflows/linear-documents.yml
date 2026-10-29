@@ -1,0 +1,32 @@
+# Fresh creation coverage is daily; change-triggered affected checks reuse standing slots.
+name: Linear document creation
+
+on:
+  schedule:
+    - cron: "43 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  documents:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: linear-live-documents
+      cancel-in-progress: false
+      queue: max
+    env:
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+      LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
+      ONETASKGRAPH_LIVE_REQUIRED: "1"
+      ONETASKGRAPH_LINEAR_DOCUMENT_MODE: ${{ github.event_name == 'schedule' && 'fresh' || 'initialize' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Prove plugin document lifecycle
+        run: cargo test --locked -p onetaskgraph-linear --test live -- real_linear_applies_every_declared_capability_and_leaves_no_residue --exact --nocapture
+      - name: Build the binary used by the asset journey
+        run: cargo test --quiet -p onetaskgraph --all-features --locked --no-run
+      - name: Prove binary document assets
+        run: cargo test --locked -p onetaskgraph-linear-e2e --test e2e -- linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy --exact --nocapture

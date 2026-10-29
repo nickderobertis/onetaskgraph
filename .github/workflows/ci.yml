@@ -27,10 +27,6 @@ on:
         type: boolean
         default: false
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 # Least privilege: the token is read-only by default and widened per job only where a job
 # genuinely needs more.
 permissions:
@@ -89,6 +85,12 @@ jobs:
   # matrix; affected selection is what keeps that affordable.
   check:
     name: check (${{ matrix.os }})
+    # The live journeys remain inside the affected gate. Serialize only this job,
+    # and retain every waiting check rather than replacing a pending writer.
+    concurrency:
+      group: ${{ matrix.os == 'ubuntu-latest' && 'linear-live-documents' || format('check-{0}-{1}', matrix.os, github.run_id) }}
+      cancel-in-progress: false
+      queue: max
     needs: [macos-lanes]
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
     runs-on: ${{ matrix.os }}
@@ -184,6 +186,7 @@ jobs:
           GITHUB_LIVE_SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SESSION_DIR: ${{ github.workspace }}/target/debug/telemetry/github-live-session/${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SOURCE_REVISION: ${{ github.sha }}
+          ONETASKGRAPH_LINEAR_DOCUMENT_MODE: ordinary
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # Nominations, not secrets: each lane writes only where it is pointed and refuses
           # to pick a target itself, because "whichever project was updated most recently"
@@ -231,6 +234,7 @@ jobs:
           GITHUB_LIVE_SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SESSION_DIR: ${{ github.workspace }}/target/debug/telemetry/github-live-session/${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SOURCE_REVISION: ${{ github.sha }}
+          ONETASKGRAPH_LINEAR_DOCUMENT_MODE: ordinary
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As on that step: the lane's own refusal is the drift gate, because ONETASKGRAPH_LIVE_REQUIRED is 1 here too, so a name spelled differently on either side fails this run naming the variable rather than skipping green.
           GH_PROJECTS_OWNER: nickderobertis
