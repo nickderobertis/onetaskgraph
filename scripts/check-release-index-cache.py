@@ -14,16 +14,35 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
+class Failure(NamedTuple):
+    route: str
+    upstream_status: int | None
+    expected_status: int
+
+
+FAILURES = (
+    Failure('/pr/ed/503', 503, 502),
+    Failure('/pr/ed/404', 404, 404),
+    Failure('/pr/ed/410', 410, 410),
+    Failure('/pr/ed/451', 451, 451),
+    Failure('/pr/ed/transport', None, 502),
+)
+
+
 class Upstream(BaseHTTPRequestHandler):
     counts = {}
 
     def do_GET(self):
+        case = next((case for case in FAILURES if case.route == self.path), None)
+        if case is None:
+            self.send_error(404)
+            return
         count = self.counts.get(self.path, 0) + 1
         self.counts[self.path] = count
-        if count == 1 and self.path.endswith('/transport'):
+        if count == 1 and case.upstream_status is None:
             self.connection.close()
             return
-        status = int(self.path.rsplit('/', 1)[-1]) if count == 1 else 200
+        status = case.upstream_status if count == 1 else 200
         self.send_response(status)
         self.end_headers()
         if count > 1:
@@ -104,11 +123,10 @@ def main():
                         port = json.loads(port_file.read_text())['main']
                         if type(port) is not int or not 1 <= port <= 65535:
                             raise AssertionError(f'invalid registry port {port!r}; next: repair the launcher port announcement and rerun scripts/check-loopback-registries.sh')
-                        for failure in (503, 404, 410, 451, 'transport'):
-                            path = f'/pr/ed/{failure}'
+                        for case in FAILURES:
+                            path = case.route
                             url = f'http://127.0.0.1:{port}/crates/index{path}'
-                            status = failure if failure in (404, 410, 451) else 502
-                            expect(read(url), Answer(status, b''), 'first request exposes upstream failure')
+                            expect(read(url), Answer(case.expected_status, b''), 'first request exposes upstream failure')
                             expect(Upstream.counts[path], 1, 'first request reaches upstream')
                             expect(read(url), Answer(200, b'recovered index entry\n'), 'second request retries upstream')
                             expect(Upstream.counts[path], 2, 'recovery reaches upstream again')
@@ -124,4 +142,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as error:
+        print(f'check-release-index-cache: {type(error).__name__}: {error}', file=sys.stderr)
+        print('check-release-index-cache: next: inspect loopback socket availability, temporary-directory permissions and the registry launcher diagnostics above; repair the named failure and rerun scripts/check-loopback-registries.sh', file=sys.stderr)
+        sys.exit(1)
