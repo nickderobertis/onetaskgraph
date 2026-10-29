@@ -82,8 +82,7 @@ pub fn location(config: &SourceConfig, home: Option<&Path>) -> Option<CacheLocat
     if !config.cache().enabled {
         return None;
     }
-    let identity = config.plugin().plugin().remote_identity(config.config())?;
-    let remote = digest(&format!("{}\n{identity}", config.plugin().as_str()));
+    let remote = remote_digest(config)?;
     let dir = match &config.cache().dir {
         Some(dir) => dir.clone(),
         None => home?.join("onetaskgraph").join(&remote),
@@ -91,8 +90,9 @@ pub fn location(config: &SourceConfig, home: Option<&Path>) -> Option<CacheLocat
     Some(CacheLocation { dir, remote })
 }
 
-/// The digest naming the remote `config` reads — the one its cache directory is named for —
-/// or `None` for a source with no remote.
+/// The digest naming the remote `config` reads — the one its cache directory is named for, its
+/// designator is held to and a projection keys its intents by — or `None` for a source with no
+/// remote. The one spelling of that identity.
 #[must_use]
 pub(crate) fn remote_digest(config: &SourceConfig) -> Option<String> {
     let identity = config.plugin().plugin().remote_identity(config.config())?;
@@ -111,8 +111,7 @@ pub(crate) fn designator_location(
     config: &SourceConfig,
     home: Option<&Path>,
 ) -> Option<(PathBuf, String)> {
-    let identity = config.plugin().plugin().remote_identity(config.config())?;
-    let remote = digest(&format!("{}\n{identity}", config.plugin().as_str()));
+    let remote = remote_digest(config)?;
     let dir = match &config.cache().dir {
         Some(dir) => dir.clone(),
         None => home?.join("onetaskgraph").join(&remote),

@@ -1206,3 +1206,37 @@ fn a_projection_with_no_project_a_source_with_no_remote_and_a_deleted_ticket_are
     assert_eq!(creates_since(&store, before), 0, "no replacement create");
     assert!(store.tickets("item-deleted").is_empty());
 }
+
+#[test]
+fn with_the_cache_on_kept_contexts_cross_processes_through_the_cached_source() {
+    let store = Store::new(Vec::new());
+    let cache = store.sandbox.subdirectory("cache-human");
+    store.sandbox.project_document(&document(&json!({"human": {
+        "plugin": "github-projects", "config": store.board.config,
+        "cache": {"enabled": true, "dir": cache},
+        "task_projection": {"host": HOST, "directory": store.intents, "project": PROJECT}}})));
+    let setup = super::plan_copy::operation_name(graphql::CREATION_CONTEXT);
+    projected(&store.project(&request("item-cached-first", &[PUBLIC_REPOSITORY])));
+    // A later process, its source behind the store's cache, takes the kept placement…
+    let open = request("item-cached", &[PUBLIC_REPOSITORY]);
+    let before = store.requests();
+    let created = native(&projected(&store.project(&open)));
+    assert!(!store.operations_since(before).contains(&setup));
+    // …and a later one still settles the ticket by the ids it kept, reading nothing first.
+    let mut completed = open;
+    completed["state"] = json!("completed");
+    let before = store.requests();
+    projected(&store.project(&completed));
+    assert!(
+        !store
+            .operations_since(before)
+            .iter()
+            .any(|operation| operation.starts_with("reading")),
+        "{:?}",
+        store.operations_since(before)
+    );
+    assert_eq!(
+        store.board.fields.state(&created),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
+    );
+}
