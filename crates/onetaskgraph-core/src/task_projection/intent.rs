@@ -57,30 +57,25 @@ pub enum IntentPhase {
     Uncertain,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-enum TerminalState {
+/// A terminal projection's outcome: only a dismissal carries a reason, and an absent one stays
+/// absent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Outcome {
     Completed,
-    Dismissed,
+    Dismissed(Option<String>),
 }
 
-impl TryFrom<ProjectionState> for TerminalState {
-    type Error = ProjectionError;
-
-    fn try_from(state: ProjectionState) -> Result<Self, Self::Error> {
-        match state {
-            ProjectionState::Completed => Ok(Self::Completed),
-            ProjectionState::Dismissed => Ok(Self::Dismissed),
-            ProjectionState::Open => Err(refused("an open state is not a terminal intent")),
-        }
-    }
-}
-
-impl From<TerminalState> for ProjectionState {
-    fn from(state: TerminalState) -> Self {
-        match state {
-            TerminalState::Completed => Self::Completed,
-            TerminalState::Dismissed => Self::Dismissed,
+impl Outcome {
+    /// The outcome `state` and `reason` name, refused for an open state and for a reason beside
+    /// a completion.
+    fn of(state: ProjectionState, reason: Option<String>) -> Result<Self, ProjectionError> {
+        match (state, reason) {
+            (ProjectionState::Completed, None) => Ok(Self::Completed),
+            (ProjectionState::Completed, Some(_)) => {
+                Err(refused("a reason is recorded only for a dismissal"))
+            }
+            (ProjectionState::Dismissed, reason) => Ok(Self::Dismissed(reason)),
+            (ProjectionState::Open, _) => Err(refused("an open state is not a terminal intent")),
         }
     }
 }
@@ -109,11 +104,44 @@ impl From<Acknowledgment> for bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "StoredTerminal", into = "StoredTerminal")]
 struct Terminal {
-    state: TerminalState,
+    outcome: Outcome,
+    acknowledged: Acknowledgment,
+}
+
+/// A terminal intent as the journal spells it.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredTerminal {
+    state: ProjectionState,
     reason: Option<String>,
     acknowledged: Acknowledgment,
+}
+
+impl TryFrom<StoredTerminal> for Terminal {
+    type Error = String;
+
+    fn try_from(stored: StoredTerminal) -> Result<Self, Self::Error> {
+        Ok(Self {
+            outcome: Outcome::of(stored.state, stored.reason).map_err(|error| error.to_string())?,
+            acknowledged: stored.acknowledged,
+        })
+    }
+}
+
+impl From<Terminal> for StoredTerminal {
+    fn from(terminal: Terminal) -> Self {
+        let (state, reason) = match terminal.outcome {
+            Outcome::Completed => (ProjectionState::Completed, None),
+            Outcome::Dismissed(reason) => (ProjectionState::Dismissed, reason),
+        };
+        Self {
+            state,
+            reason,
+            acknowledged: terminal.acknowledged,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -342,8 +370,10 @@ impl IntentStore {
                         ));
                     }
                     if let Some(terminal) = terminal
-                        && (ProjectionState::from(terminal.state) != request.state
-                            || terminal.reason != request.reason)
+                        && Outcome::of(request.state, request.reason.clone())
+                            .ok()
+                            .as_ref()
+                            != Some(&terminal.outcome)
                     {
                         return Err(refused(
                             "conflicting terminal projection; the prior terminal intent is immutable",
@@ -601,22 +631,21 @@ impl ProjectionClaim {
         state: ProjectionState,
         reason: Option<String>,
     ) -> Result<(), ProjectionError> {
-        let state = TerminalState::try_from(state)?;
+        let outcome = Outcome::of(state, reason)?;
         let Phase::Bound { terminal, .. } = &mut self.journal.phase else {
             return Err(refused(
                 "terminal projection requires an already bound task",
             ));
         };
         if let Some(terminal) = terminal {
-            return if terminal.state == state && terminal.reason == reason {
+            return if terminal.outcome == outcome {
                 Ok(())
             } else {
                 Err(refused("conflicting terminal projection"))
             };
         }
         *terminal = Some(Terminal {
-            state,
-            reason,
+            outcome,
             acknowledged: Acknowledgment::Pending,
         });
         self.persist()

@@ -671,6 +671,36 @@ fn a_later_cold_process_takes_the_kept_placement_and_a_changed_option_is_read_af
         !kept.contains("item-first") && !kept.contains("Choose the next"),
         "{kept}"
     );
+    // The binding keeps the written issue's ids and nothing of its work or its state.
+    let journals: Vec<String> = std::fs::read_dir(&store.intents)
+        .unwrap()
+        .flat_map(|identity| std::fs::read_dir(identity.unwrap().path()).unwrap())
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .map(|path| std::fs::read_to_string(path).unwrap())
+        .collect();
+    let journal: Value = serde_json::from_str(
+        journals
+            .iter()
+            .find(|text| text.contains("\"item-first\""))
+            .unwrap(),
+    )
+    .unwrap();
+    let written = journal["phase"]["written"].to_string();
+    assert!(
+        journal["phase"]["written"]["item"]["item_id"].is_string(),
+        "{written}"
+    );
+    for work in ["Decide on item-first", "Choose the next", "human."] {
+        assert!(!written.contains(work), "{work} in {written}");
+    }
+    let item = &journal["phase"]["written"]["item"];
+    assert_eq!(item["option"], Value::Null, "{written}");
+    assert_eq!(item["status"]["category"], "unknown", "{written}");
+    assert_eq!(item["slot"], json!({}), "{written}");
     // A second process reads the project issue it is filed under, as every create does, finds
     // the kept placement's token unchanged there, and reads no board fields or repository.
     let second = created_with("item-second");

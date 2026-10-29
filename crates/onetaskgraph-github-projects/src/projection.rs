@@ -7,7 +7,7 @@
 
 use std::sync::{Mutex, MutexGuard};
 
-use onetaskgraph_plugin_api::{NativeId, Task, asset_sha256};
+use onetaskgraph_plugin_api::{NativeId, Status, StatusCategory, Task, asset_sha256};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -251,9 +251,23 @@ impl GitHubProjectsSource {
         {
             return None;
         }
+        // Ids and the board's definitions only: no title, body or metadata, and no state a later
+        // write could take as what the tracker still holds — so every part of a later update is
+        // sent rather than skipped on the word of this record.
         item.title = String::new();
         item.body = None;
         item.raw_body = None;
+        item.slot = std::collections::BTreeMap::new();
+        item.projected = std::collections::BTreeMap::new();
+        item.delivers = Vec::new();
+        item.delivered_by = Vec::new();
+        item.option = None;
+        item.closed = false;
+        item.reason = None;
+        item.status = Status {
+            category: StatusCategory::Unknown,
+            name: String::new(),
+        };
         serde_json::to_value(Written {
             version: ContextVersion,
             owner: self.owner.clone(),
