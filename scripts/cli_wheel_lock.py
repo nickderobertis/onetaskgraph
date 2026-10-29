@@ -2,6 +2,9 @@
 
 The release builder also packages and verifies that output while holding the lock. The
 installer journey takes the same lock for its wheel build, then works in its own tree.
+
+The command wrapper exits 2 for a missing command, 1 for an OS error, and otherwise
+forwards the build command's exit status.
 """
 from __future__ import annotations
 
