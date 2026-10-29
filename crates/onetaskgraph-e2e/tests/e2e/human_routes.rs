@@ -34,8 +34,10 @@ fn an_organizations_human_task_routes_from_a_board_to_its_plan_project_in_linear
     let configure = |route: Value| {
         sandbox.project_document(&document(&json!({
             "human": {"plugin": "github-projects", "config": board_config, "routes": [route],
+                      "cache": {"dir": sandbox.subdirectory("cache-human")},
                       "task_projection": projection("PROJECT-1")},
             "org": {"plugin": "linear", "config": linear_config,
+                    "cache": {"dir": sandbox.subdirectory("cache-org")},
                     "task_projection": projection("P-1")}
         })));
     };

@@ -98,9 +98,11 @@ impl Routed {
         let sources = json!({
             "human-public": {"plugin": "github-projects", "config": self.public_config,
                              "visibility": "public", "routes": routes,
+                             "cache": {"dir": self.sandbox.subdirectory("cache-public")},
                              "task_projection": projection(PROJECT)},
             "human-private": {"plugin": "github-projects", "config": self.private_config,
                               "visibility": "private",
+                              "cache": {"dir": self.sandbox.subdirectory("cache-private")},
                               "task_projection": projection(PRIVATE_PROJECT)}
         });
         let mut configured: Value = serde_json::from_str(&document(&sources)).unwrap();

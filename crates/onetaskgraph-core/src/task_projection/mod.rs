@@ -12,7 +12,9 @@ pub use identity::{
     SessionId, SourceIdentityDigest, TrackerUrl,
 };
 
-pub use intent::{IntentPhase, IntentStore, ProjectionClaim, ProjectionError, ProjectionPlacement};
+pub use intent::{
+    IntentPhase, IntentStore, PlacementCache, ProjectionClaim, ProjectionError, ProjectionPlacement,
+};
 
 use onetaskgraph_plugin_api::{Priority, Repository, SourceName};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
@@ -211,6 +213,9 @@ pub struct ProjectionSource {
     pub directory: std::path::PathBuf,
     /// The project a planless item is filed under.
     pub project: Option<ProjectionProjectId>,
+    /// Where its kept placement lives — beside the source's local cache — or `None` when this
+    /// host names no cache home, so every create reads its placement.
+    pub placement: Option<PlacementCache>,
 }
 
 /// Every configured source's projection authority, or why it cannot hold one.
@@ -222,6 +227,10 @@ pub(crate) fn configured(
         .iter()
         .filter_map(|(name, source)| {
             let declared = source.task_projection()?;
+            let home = config
+                .cache_home()
+                .map(std::path::Path::to_path_buf)
+                .or_else(crate::cache::process_home);
             let resolved = (|| {
                 let identity = crate::cache::remote_digest(source).ok_or_else(|| {
                     format!(
@@ -241,6 +250,11 @@ pub(crate) fn configured(
                         .map_err(|error| {
                             format!("sources.{name}.task_projection.project: {error}")
                         })?,
+                    placement: crate::cache::designator_location(source, home.as_deref()).map(
+                        |(designator, _)| {
+                            PlacementCache::at(designator.with_file_name("placement.json"))
+                        },
+                    ),
                 })
             })();
             Some((name.clone(), resolved))

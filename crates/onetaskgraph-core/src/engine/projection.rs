@@ -22,9 +22,9 @@ use super::delivery::source_failed;
 use super::{Engine, EngineError, ResolvedSource};
 use crate::GlobalId;
 use crate::task_projection::{
-    HumanTaskProjected, HumanTaskProjection, IntentPhase, IntentStore, ProjectedTaskId,
-    ProjectionClaim, ProjectionError, ProjectionPlacement, ProjectionProjectId, ProjectionState,
-    TrackerUrl, route_purpose,
+    HumanTaskProjected, HumanTaskProjection, IntentPhase, IntentStore, PlacementCache,
+    ProjectedTaskId, ProjectionClaim, ProjectionError, ProjectionPlacement, ProjectionProjectId,
+    ProjectionState, TrackerUrl, route_purpose,
 };
 
 /// The metadata keys a projected task carries, read back by recovery.
@@ -174,7 +174,7 @@ impl Engine {
                 }
             }
             IntentPhase::Ready | IntentPhase::Uncertain => {
-                self.create_projection(source, &store, &mut claim, request, &task)
+                self.create_projection(source, &mut claim, request, &task)
                     .await?;
             }
         }
@@ -192,15 +192,21 @@ impl Engine {
     async fn create_projection(
         &self,
         source: &ResolvedSource,
-        store: &IntentStore,
         claim: &mut ProjectionClaim,
         request: &HumanTaskProjection,
         task: &Task,
     ) -> Result<(), EngineError> {
-        let identity = &claim.placement().identity.clone();
-        if let Some(context) = store
-            .placement_context(identity)
+        let kept = self
+            .projections
+            .get(&claim.placement().source)
+            .and_then(|settings| settings.as_ref().ok())
+            .and_then(|settings| settings.placement.clone());
+        if let Some(context) = kept
+            .as_ref()
+            .map(PlacementCache::read)
+            .transpose()
             .map_err(|error| projection_refused(request, &error))?
+            .flatten()
         {
             source.source().prime_placement(&context);
         }
@@ -216,12 +222,14 @@ impl Engine {
             Ok(id) => id,
             Err(error) => {
                 // What it held may be what the tracker refused; the next create reads afresh.
-                let _ = store.forget_placement_context(identity);
+                if let Some(kept) = &kept {
+                    let _ = kept.forget();
+                }
                 return Err(source_failed(source, error));
             }
         };
-        if let Some(context) = source.source().placement_context() {
-            let _ = store.keep_placement_context(identity, &context);
+        if let (Some(kept), Some(context)) = (&kept, source.source().placement_context()) {
+            let _ = kept.keep(&context);
         }
         let url = match source
             .source()

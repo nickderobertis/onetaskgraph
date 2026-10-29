@@ -42,6 +42,7 @@ impl Store {
         let intents: PathBuf = sandbox.subdirectory("intents");
         let mut org = linear(&config, json!({"status_mapping": eng_mapping()}));
         org["task_projection"] = json!({"host": HOST, "directory": intents});
+        org["cache"] = json!({"dir": sandbox.subdirectory("cache-org")});
         sandbox.project_document(&document(&json!({"org": org})));
         Self { sandbox, workspace }
     }

@@ -122,6 +122,12 @@ fn authorize_reviews(plan: &Plan, project: &str) {
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     configured["sources"]["board"]["task_projection"] = json!({"host": HOST,
         "directory": plan.sandbox.subdirectory("intents"), "project": project});
+    // Where the kept placement lives: the board's cache directory, inside this sandbox, whether
+    // or not the cache itself is on.
+    if configured["sources"]["board"]["cache"]["dir"].is_null() {
+        configured["sources"]["board"]["cache"]["dir"] =
+            json!(plan.sandbox.subdirectory("board-cache"));
+    }
     plan.sandbox.project_document(&configured.to_string());
 }
 

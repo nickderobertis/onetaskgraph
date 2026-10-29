@@ -72,6 +72,7 @@ impl Store {
         let mut sources = json!({"human": {
             "plugin": "github-projects",
             "config": self.board.config,
+            "cache": {"dir": self.sandbox.subdirectory("cache-human")},
             "task_projection": {"host": HOST, "directory": self.intents, "project": PROJECT}
         }});
         for (name, source) in extra.as_object().unwrap() {
@@ -661,6 +662,15 @@ fn a_later_cold_process_takes_the_kept_placement_and_a_changed_option_is_read_af
         store.operations_since(before)
     };
     assert!(created_with("item-first").contains(&setup));
+    // Kept in the source's own cache directory, beside nothing of anybody's work: ids under a
+    // token, no title and no body.
+    let kept = std::fs::read_to_string(store.sandbox.project().join("cache-human/placement.json"))
+        .expect("the placement is kept in the source's cache directory");
+    assert!(kept.contains("\"token\""), "{kept}");
+    assert!(
+        !kept.contains("item-first") && !kept.contains("Choose the next"),
+        "{kept}"
+    );
     // A second process reads the project issue it is filed under, as every create does, finds
     // the kept placement's token unchanged there, and reads no board fields or repository.
     let second = created_with("item-second");

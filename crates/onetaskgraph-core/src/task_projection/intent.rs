@@ -167,8 +167,79 @@ struct Journal {
     phase: Phase,
 }
 
-/// The file beside a source's intents holding its immutable placement knowledge.
-const PLACEMENT_FILE: &str = "placement.json";
+/// A source's kept placement: the immutable knowledge of where it creates — field and
+/// repository ids under the plugin's setup-context token — in the store's per-host local cache
+/// for that source, keyed by its source identity as the cache's own directory is.
+///
+/// It holds no item's title, content or membership and authorizes nothing: the plugin takes it
+/// only while its token, computed from a read the create makes anyway, still holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacementCache {
+    path: PathBuf,
+}
+
+impl PlacementCache {
+    /// The kept placement at `path`, the source's cache directory's `placement.json`.
+    #[must_use]
+    pub fn at(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    /// What was kept, when anything readable was: a context that is not JSON reads as none.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a cache that cannot be read.
+    pub fn read(&self) -> Result<Option<serde_json::Value>, ProjectionError> {
+        match fs::read(&self.path) {
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Keep `context` in place of what was kept, atomically.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a cache that cannot be written.
+    pub fn keep(&self, context: &serde_json::Value) -> Result<(), ProjectionError> {
+        let directory = self
+            .path
+            .parent()
+            .ok_or_else(|| refused("a kept placement needs a directory"))?;
+        create_directories(directory)?;
+        let name = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("placement.json");
+        let temporary = directory.join(format!("{name}.{}.pending", std::process::id()));
+        let mut file = private_options()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary)?;
+        file.write_all(&serde_json::to_vec(context)?)?;
+        file.sync_all()?;
+        fs::rename(temporary, &self.path)?;
+        sync_directory(directory)?;
+        Ok(())
+    }
+
+    /// Forget what was kept, so the next create reads its placement afresh.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a cache that cannot be written.
+    pub fn forget(&self) -> Result<(), ProjectionError> {
+        match fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
 
 /// The local authoritative intent store, shared by processes on one host.
 ///
@@ -203,67 +274,6 @@ impl IntentStore {
             host: HostIdentity::new(host).map_err(refused)?,
             current_host: HostIdentity::new(current_host).map_err(refused)?,
         })
-    }
-
-    /// The immutable placement knowledge kept for a source, when a projection kept any.
-    ///
-    /// It holds a container's field and repository ids, never an item's title or content, and
-    /// authorizes nothing: a source that cannot take it reads as it otherwise would.
-    ///
-    /// # Errors
-    ///
-    /// Refuses an unreadable store; a context that is not JSON is read as none.
-    pub fn placement_context(
-        &self,
-        identity: &SourceIdentityDigest,
-    ) -> Result<Option<serde_json::Value>, ProjectionError> {
-        match fs::read(self.directory.join(identity.as_str()).join(PLACEMENT_FILE)) {
-            Ok(bytes) => Ok(serde_json::from_slice(&bytes).ok()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error.into()),
-        }
-    }
-
-    /// Keep `context` as a source's placement knowledge, replacing what was kept atomically.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a store that cannot be written.
-    pub fn keep_placement_context(
-        &self,
-        identity: &SourceIdentityDigest,
-        context: &serde_json::Value,
-    ) -> Result<(), ProjectionError> {
-        let directory = self.directory.join(identity.as_str());
-        create_directories(&directory)?;
-        let path = directory.join(PLACEMENT_FILE);
-        let temporary = directory.join(format!("{PLACEMENT_FILE}.{}.pending", std::process::id()));
-        let mut file = private_options()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&temporary)?;
-        file.write_all(&serde_json::to_vec(context)?)?;
-        file.sync_all()?;
-        fs::rename(temporary, path)?;
-        sync_directory(&directory)?;
-        Ok(())
-    }
-
-    /// Forget a source's placement knowledge, so the next create reads it afresh.
-    ///
-    /// # Errors
-    ///
-    /// Refuses a store that cannot be written.
-    pub fn forget_placement_context(
-        &self,
-        identity: &SourceIdentityDigest,
-    ) -> Result<(), ProjectionError> {
-        match fs::remove_file(self.directory.join(identity.as_str()).join(PLACEMENT_FILE)) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.into()),
-        }
     }
 
     /// Lock one source identity and external item id, then commit or load its intent.

@@ -56,6 +56,7 @@ impl Host {
         let intents: PathBuf = sandbox.subdirectory("intents");
         let sources = json!({"human": {
             "plugin": "github-projects", "config": board.config, "visibility": "public",
+            "cache": {"dir": sandbox.subdirectory("cache-human")},
             "task_projection": {"host": HOST, "directory": intents, "project": PROJECT}}});
         let mut configured: Value = serde_json::from_str(&document(&sources)).unwrap();
         configured["write_policy"] = record.write_policy().clone();
