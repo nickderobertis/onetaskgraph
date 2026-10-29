@@ -76,6 +76,7 @@
       "inputs": [
         "default",
         "{workspaceRoot}/crates/*/tests/fixtures/*.json",
+        "{workspaceRoot}/crates/*/tests/fixtures/not-a-store.toml",
         "{workspaceRoot}/crates/*/project.json",
         "{workspaceRoot}/sdks/*/project.json",
         "{workspaceRoot}/workspace/project.json",

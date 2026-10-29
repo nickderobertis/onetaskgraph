@@ -1,6 +1,9 @@
 //! The entry point `.github/workflows/live-janitor.yml` runs, and — given `--cancelled-run`
 //! first — the one `.github/workflows/ci.yml` runs when a live run is cancelled.
 //!
+//! `--linear` instead expires stamped test documents in `LINEAR_WRITE_TEAM` after 24
+//! hours, using `LINEAR_API_KEY` alone. It recovers residue from discarded CI hosts.
+//!
 //! `--cancelled-run` removes exactly the artifacts stamped with the run and attempt GitHub
 //! Actions names in `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT` (with `GITHUB_ACTIONS=true`),
 //! every kind of them, and nothing of another run. It reads no run's status and so needs no
@@ -114,6 +117,30 @@ fn configure() -> Result<(Config, ClockMode), Failure> {
 }
 
 async fn enter() -> Result<Report, Failure> {
+    if std::env::args().nth(1).as_deref() == Some("--linear") {
+        use onetaskgraph_live_janitor::linear::{LinearConfig, run_linear, run_linear_with_clock};
+        let key = variable("LINEAR_API_KEY")?;
+        let team = variable("LINEAR_WRITE_TEAM")?;
+        let args: Vec<_> = std::env::args().skip(2).collect();
+        let result = if args.is_empty() {
+            run_linear(LinearConfig::production(&key, &team).map_err(Failure::Configuration)?).await
+        } else if (args.len() == 2 || (args.len() == 3 && args[2] == "--virtual-clock"))
+            && args[0] == "--loopback"
+        {
+            let config =
+                LinearConfig::loopback(&args[1], &key, &team).map_err(Failure::Configuration)?;
+            if args.len() == 3 {
+                run_linear_with_clock(config, Arc::new(VirtualClock::default())).await
+            } else {
+                run_linear(config).await
+            }
+        } else {
+            return Err(Failure::Configuration(
+                "expected --linear [--loopback URL [--virtual-clock]]".into(),
+            ));
+        };
+        return result.map_err(Failure::Cleanup);
+    }
     let (config, mode) = configure()?;
     match mode {
         ClockMode::Virtual => run_with_clock(config, Arc::new(VirtualClock::default())).await,

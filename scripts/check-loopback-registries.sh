@@ -242,3 +242,5 @@ if [ "$failures" -ne 0 ]; then
   echo "check-loopback-registries: launching them. Then rerun 'just script-check'." >&2
   exit 1
 fi
+
+python3 "$ROOT/scripts/check-release-index-cache.py"

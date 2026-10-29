@@ -1,0 +1,15 @@
+# The fixtures in this directory that do not stand in for a store, each with the reason.
+#
+# `scripts/check-store-fixtures.sh` reads this file beside the fixtures it classifies: every
+# JSON file under a `tests/fixtures` directory must be a store fixture that check names, or
+# be recorded as not one — here, for a fixture this crate owns, or in that check's own table.
+# Each key is a file of this directory; the check refuses a key naming a file that is not
+# here, one it already classifies, and an entry without a non-empty `reason`.
+
+["document-content-40721997875.json"]
+reason = """\
+Not a store: it records before/after Markdown from hosted run 40721997875, not a \
+collection a query filters. \
+`recorded_document_content_is_returned_as_stored_including_rewrites` drives the source's \
+document write and read interfaces over these responses and asserts exact content, \
+including preserved code spans and rewritten prose."""

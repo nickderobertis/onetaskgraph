@@ -19,8 +19,9 @@
 #
 # The manifest below says, per fixture, where its items are and what the code that reads it
 # filters on. A fixture with no entry is not silently skipped: every JSON file under a
-# `tests/fixtures` directory must be named here or recorded as not standing in for a store,
-# so a new one cannot arrive unchecked.
+# `tests/fixtures` directory must be named here or recorded as not standing in for a store —
+# in NOT_A_STORE below, or in a `not-a-store.toml` beside it in the crate that owns it — so
+# a new one cannot arrive unchecked.
 set -euo pipefail
 
 fatal() {
@@ -44,6 +45,7 @@ python3 - <<'PY' || status=$?
 import json
 import pathlib
 import sys
+import tomllib
 
 # Where each store fixture keeps its items, and what the code that reads it filters on.
 #
@@ -52,6 +54,17 @@ import sys
 # the path to its value inside an item — a path reaching a list contributes every element.
 # A path segment of `[]` walks into a list.
 MANIFEST = {
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This existing central MANIFEST inventories every store fixture for the shared discrimination guard; registering this fixture follows all other domains here.
+    "crates/onetaskgraph-live-janitor/tests/fixtures/linear-documents.json": {
+        "items": ["data", "documents", "nodes"],
+        "id": ["id"],
+        "title": ["title"],
+        "facets": {
+            "ownership title": ["title"],
+            "team": ["team", "key"],
+        },
+    },
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     "crates/onetaskgraph-linear/tests/fixtures/issues.json": {
         "items": ["data", "issues", "nodes"],
         "id": ["id"],
@@ -195,6 +208,12 @@ MANIFEST = {
 # reason. Recorded rather than skipped by pattern, so a store fixture cannot be added under
 # a name a pattern happens to exclude.
 NOT_A_STORE = {
+    # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The existing central NOT_A_STORE table requires every non-store response fixture to be named with its reason, matching all other domains here.
+    "crates/onetaskgraph-live-janitor/tests/fixtures/linear-document-delete.json": (
+        "Not a store: a single documentDelete acknowledgement, validated against the pinned "
+        "upstream schema and served by the janitor subprocess journey, with no item collection."
+    ),
+    # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     "crates/onetaskgraph-live-janitor/tests/fixtures/rest-operations.json": (
         "Not a store: it holds no items and no query reads it. It pins GitHub's published "
         "description of the six REST operations the live janitor sends — paths, query "
@@ -309,6 +328,56 @@ def one(value, path):
     return reached[0] if len(reached) == 1 else None
 
 
+# A crate may record its own non-store fixtures in a `not-a-store.toml` beside them, keyed by
+# file name with a `reason`, so a fixture's classification lands in the domain that owns it.
+# Each entry is held to what a NOT_A_STORE row is, and more: it names a file that is there,
+# one nothing else classifies, and says why.
+LOCAL_NOT_A_STORE = "not-a-store.toml"
+for declaration in sorted(root.glob(f"crates/*/tests/fixtures/{LOCAL_NOT_A_STORE}")):
+    spelled = declaration.as_posix()
+    try:
+        entries = tomllib.loads(declaration.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        problems.append(f"{spelled} could not be read as TOML: {error}.")
+        continue
+    if not entries:
+        problems.append(
+            f"{spelled} records no fixture. Delete it, or record the fixtures of its "
+            "directory that do not stand in for a store."
+        )
+    for name, entry in sorted(entries.items()):
+        path = (declaration.parent / name).as_posix()
+        if "/" in name or "\\" in name or not name.endswith(".json"):
+            problems.append(
+                f"{spelled} records {name!r}, which is not the name of a JSON file in its "
+                "own directory. Key each entry by the fixture's file name alone."
+            )
+            continue
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"reason"}
+            or not isinstance(entry["reason"], str)
+            or not entry["reason"].strip()
+        ):
+            problems.append(
+                f"{spelled} records {name} without exactly one non-empty `reason`. Say why "
+                "it does not stand in for a store, and nothing else."
+            )
+            continue
+        if not (declaration.parent / name).is_file():
+            problems.append(
+                f"{spelled} records {name}, which is not there. Restore it, or drop its "
+                "entry."
+            )
+            continue
+        if path in MANIFEST or path in NOT_A_STORE:
+            problems.append(
+                f"{path} is classified both in {spelled} and in "
+                "scripts/check-store-fixtures.sh. Keep exactly one of the two."
+            )
+            continue
+        NOT_A_STORE[path] = entry["reason"]
+
 # `as_posix()` rather than `str()`: python renders a path with the running platform's
 # separator, so on the Windows runner every discovered fixture read
 # `crates\...\fixtures\issues.json` — matching no MANIFEST key and no NOT_A_STORE key, and
@@ -330,7 +399,8 @@ for path in discovered:
         problems.append(
             f"{path} is a fixture this check has never been told about. Add it to MANIFEST "
             "in scripts/check-store-fixtures.sh with the two properties a store fixture "
-            "owes, or to NOT_A_STORE with why it stands in for something else."
+            "owes, or record why it stands in for something else — in a "
+            f"{LOCAL_NOT_A_STORE} beside it, or in NOT_A_STORE there."
         )
 
 for path, spec in sorted(MANIFEST.items()):

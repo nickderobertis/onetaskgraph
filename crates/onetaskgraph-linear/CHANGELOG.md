@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.10](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.12.9...onetaskgraph-linear-v0.12.10) - 2026-10-29
+
+### Fixed
+
+- *(live)* keep the Linear test team under its document limit ([#3811](https://github.com/nickderobertis/onetaskgraph/pull/3811))
+
 ## [0.12.4](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.12.3...onetaskgraph-linear-v0.12.4) - 2026-10-25
 
 ### Fixed

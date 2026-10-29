@@ -2756,9 +2756,11 @@ pub struct GitHubProjectsConfig {
     /// `owner/name` of the repository this source creates an issue in when the item's own
     /// `repositories` field does not decide it.
     ///
-    /// An item naming exactly one repository is created there; a task or a document naming
-    /// none or several is created in its parent project's repository; and a project, or a
-    /// task or document with no parent, naming none or several is created here. A board
+    /// An item naming exactly one repository is created there — on a source declared
+    /// `visibility: private`, only when that repository reads private, and otherwise as an
+    /// item naming none is; a task or a document naming none or several is created in its
+    /// parent project's repository; and a project, or a task or document with no parent,
+    /// naming none or several is created here. A board
     /// has no repository of its own and `createIssue` requires one, so a write without
     /// this is refused naming the field. Reads never need it.
     pub repository: Option<String>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates the `owner/name` grammar before private construction.
@@ -3682,7 +3684,8 @@ impl StatusTarget {
 /// One repository this source can create an issue in, as `owner/name`.
 ///
 /// Every `createIssue` this source sends names one of these: the item's own single
-/// `repositories` entry, else its parent project issue's repository, else the configured
+/// `repositories` entry — on a source declared private, only when it reads private — else
+/// its parent project issue's repository, else the configured
 /// [`GitHubProjectsConfig::repository`]. [`GitHubProjectsSource::creation_target`] makes
 /// that choice and says what it refuses before `createIssue`.
 // llmlint: ignore-end[comments_earn_their_place, contracts_have_one_source_or_a_drift_gate]
@@ -3827,6 +3830,10 @@ pub struct GitHubProjectsSource {
     /// this source sends or reads ever sees the board without them.
     held_updates: Mutex<Vec<HeldUpdate>>,
     clock: SharedClock,
+    /// Whether the configuration declares this source private, as
+    /// [`TaskSource::declare_visibility`] told it: what decides where a new issue whose one
+    /// named repository reads public is created — see [`Self::creation_rule`].
+    declared_private: std::sync::atomic::AtomicBool,
     numeric_repositories: tokio::sync::Mutex<BTreeMap<RepositoryTarget, std::num::NonZeroU64>>,
     /// The board as this process last read it, for the length of one command — dropped by
     /// [`TaskSource::end_command`].
@@ -5046,6 +5053,7 @@ impl GitHubProjectsSource {
             deferred: Mutex::new(None),
             held_updates: Mutex::new(Vec::new()),
             clock: system_clock(),
+            declared_private: std::sync::atomic::AtomicBool::new(false),
             numeric_repositories: tokio::sync::Mutex::new(BTreeMap::new()),
             board_cache: Mutex::new(None),
             search_cache: Mutex::new(None),
@@ -9080,15 +9088,20 @@ impl GitHubProjectsSource {
 
     /// [`Self::creation_target`]'s rule over what it reads of the item — its `repositories`
     /// and the project issue it is filed under — with `what` naming the item in a refusal: the
-    /// one place the rule is, so the create and [`TaskSource::creation_repository`] cannot
-    /// answer differently.
+    /// one place the rule is, so the create, [`TaskSource::creation_repository`] and the
+    /// write-time read of who can read the issue ([`TaskSource::visibility`]) cannot answer
+    /// differently.
+    ///
+    /// On a source declared private, an item's one named repository is read for its
+    /// visibility first — once per engine hold, see the `visibility` module — and one that
+    /// does not read private decides nothing: the issue is created in the parent's
+    /// repository, else the configured one. A read that cannot be answered refuses.
     async fn creation_rule(
         &self,
         repositories: &[Repository],
         parent: Option<&NativeId>,
         what: &str,
     ) -> Result<RepositoryTarget, SourceError> {
-        let fallback = self.configured_repository()?;
         let parent = match parent {
             Some(parent) => Some(self.bound_item(parent).await?.ok_or_else(|| {
                 SourceError::Refused {
@@ -9140,6 +9153,17 @@ impl GitHubProjectsSource {
                     })
             })
             .transpose()?;
+        self.creation_rule_in_repository(repositories, parents_repository, what)
+            .await
+    }
+
+    async fn creation_rule_in_repository(
+        &self,
+        repositories: &[Repository],
+        parents_repository: Option<RepositoryTarget>,
+        what: &str,
+    ) -> Result<RepositoryTarget, SourceError> {
+        let fallback = self.configured_repository()?;
         match repositories {
             [named] => {
                 let target =
@@ -9153,6 +9177,15 @@ impl GitHubProjectsSource {
                             self.name
                         ),
                     })?;
+                // On a source declared private, an issue whose one named repository does not
+                // read private is created where an item naming none is: the item still names
+                // that repository in its metadata slot, and its issue stays private.
+                if self.is_declared_private()
+                    && self.repository_visibility(&target).await?
+                        != onetaskgraph_plugin_api::Visibility::Private
+                {
+                    return Ok(parents_repository.unwrap_or_else(|| fallback.clone()));
+                }
                 if let Some(parents) = &parents_repository
                     && parents.owner != target.owner
                 {
@@ -13201,6 +13234,26 @@ impl TaskSource for GitHubProjectsSource {
     ) -> Result<onetaskgraph_plugin_api::Visibility, SourceError> {
         self.write_visibility(target).await
     }
+    async fn visibility_with_project(
+        &self,
+        target: &onetaskgraph_plugin_api::WriteTarget<'_>,
+        project: &onetaskgraph_plugin_api::WriteTarget<'_>,
+    ) -> Result<onetaskgraph_plugin_api::Visibility, SourceError> {
+        self.write_visibility_with_project(target, project).await
+    }
+    fn declare_visibility(&self, declared: onetaskgraph_plugin_api::Visibility) {
+        self.declared_private.store(
+            declared == onetaskgraph_plugin_api::Visibility::Private,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+    fn scope_visibility<'a>(
+        &'a self,
+        operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+        self.scope_visibility_reads(operation)
+    }
+
     /// Where a create of `target` would file its issue, by [`Self::creation_rule`] — the rule
     /// the create applies — reading the parent project's issue only when `target` names one.
     async fn creation_repository(

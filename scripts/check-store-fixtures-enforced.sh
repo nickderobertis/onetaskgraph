@@ -191,6 +191,56 @@ expect_refused "an issue store whose every issue is in the same state" \
   "$ISSUES" "distinct status value"
 restore "$ISSUES"
 
+# 4-8. A crate's own `not-a-store.toml` classifies the fixtures beside it, so it is held to
+#      what the check's own table is held to: without it the fixture it records is one the
+#      check was never told about, and an entry that names nothing there, is classified
+#      twice, or gives no reason classifies nothing.
+readonly LOCAL=crates/onetaskgraph-linear/tests/fixtures/not-a-store.toml
+readonly LOCAL_FIXTURE=crates/onetaskgraph-linear/tests/fixtures/document-content-40721997875.json
+write_local() {
+  printf '%s\n' "$1" >"$scratch/repo/$LOCAL" || fatal \
+    "could not write $LOCAL in $scratch/repo" \
+    "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+}
+
+rm -f "$scratch/repo/$LOCAL"
+run_guard
+expect_refused "a crate's non-store fixture with its classification removed" \
+  "$LOCAL_FIXTURE" "never been told about"
+restore "$LOCAL"
+
+write_local '["document-content-40721997875.json"]
+reason = "Not a store."
+["missing.json"]
+reason = "Not a store."'
+run_guard
+expect_refused "a crate classifying a fixture that is not there" \
+  "missing.json" "which is not there"
+restore "$LOCAL"
+
+write_local '["issues.json"]
+reason = "Not a store."
+["document-content-40721997875.json"]
+reason = "Not a store."'
+run_guard
+expect_refused "a crate classifying a fixture the check already names as a store" \
+  "crates/onetaskgraph-linear/tests/fixtures/issues.json" "Keep exactly one"
+restore "$LOCAL"
+
+write_local '["document-content-40721997875.json"]
+reason = "  "'
+run_guard
+expect_refused "a crate classifying a fixture without a reason" \
+  "document-content-40721997875.json" "non-empty \`reason\`"
+restore "$LOCAL"
+
+write_local '["../fixtures/document-content-40721997875.json"]
+reason = "Not a store."'
+run_guard
+expect_refused "a crate classifying a fixture outside its own directory" \
+  "../fixtures/document-content-40721997875.json" "file name alone"
+restore "$LOCAL"
+
 if [ "$failures" -ne 0 ]; then
   echo "check-store-fixtures-enforced: $failures case(s) failed." >&2
   echo "check-store-fixtures-enforced: repair scripts/check-store-fixtures.sh rather than" >&2

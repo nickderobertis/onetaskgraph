@@ -1062,3 +1062,86 @@ async fn a_read_after_a_change_whose_token_never_moves_fails_within_the_bound_na
         );
     }
 }
+
+/// The hosted failure returned the preceding probe, not a new serializer output.
+#[tokio::test]
+async fn document_content_waits_for_the_exact_stored_markdown_and_refuses_other_content() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/document-content-40721997875.json")).unwrap();
+    let expected = fixture["after"].as_str().unwrap();
+    for catches_up in [true, false] {
+        let stored = expected.to_owned();
+        let (source, count) = workspace(move |n, request| {
+            assert!(request.contains("document(id:$id)"));
+            json!({"document":{"id":"d1","title":"Probe",
+                "content": if catches_up && n >= 3 {stored.as_str()} else {"previous probe"},
+                "url":null,"createdAt":null,"updatedAt":null,"project":null}})
+        });
+        let result = settle::settled_content(BOUND, expected, || async {
+            source
+                .get_document(&"d1".into())
+                .await
+                .map_err(|error| error.to_string())?
+                .and_then(|document| document.content)
+                .ok_or_else(|| "missing document content".to_owned())
+        })
+        .await;
+        if catches_up {
+            assert_eq!(result.unwrap(), expected);
+            assert_eq!(count.load(Ordering::SeqCst), 3);
+        } else {
+            let error = result.unwrap_err();
+            assert!(error.contains("previous probe"), "{error}");
+            assert!(error.contains("still after 5 reads"), "{error}");
+            assert_eq!(count.load(Ordering::SeqCst), BOUND.reads);
+        }
+    }
+}
+
+fn projects(names: &[&str], next: Option<&str>) -> Value {
+    json!({"projects": {
+        "nodes": names.iter().map(|name| json!({
+            "id": name, "name": name, "content": null, "url": null,
+            "createdAt": null, "updatedAt": null,
+            "status": {"name": "Started", "type": "started"},
+            "labels": {"nodes": []}
+        })).collect::<Vec<_>>(),
+        "pageInfo": {"hasNextPage": next.is_some(), "endCursor": next}
+    }})
+}
+
+#[tokio::test]
+async fn created_projects_are_waited_for_across_complete_unfiltered_listings() {
+    let (source, reads) = workspace(|n, request| {
+        let request = variables(request);
+        assert_eq!(request["filter"], json!({"and": []}));
+        if request["after"] == "older" {
+            assert!(n >= 3);
+            projects(&["alpha", "beta"], None)
+        } else {
+            projects(&["older"], (n >= 3).then_some("older"))
+        }
+    });
+    let listed = settle::settled_projects(BOUND, source.as_ref(), &["alpha".into(), "beta".into()])
+        .await
+        .unwrap();
+    assert!(listed.contains(&"alpha".into()) && listed.contains(&"beta".into()));
+    assert!(listed.contains(&"older".into()));
+    assert_eq!(reads.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test]
+async fn a_project_listing_that_never_catches_up_fails_with_its_last_answer() {
+    let (source, reads) = workspace(|_, _| projects(&["alpha", "older"], None));
+    let started = Instant::now();
+    let error = settle::settled_projects(BOUND, source.as_ref(), &["alpha".into(), "beta".into()])
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("not in Linear's own project listing"),
+        "{error}"
+    );
+    assert!(error.contains("beta") && error.contains("older"), "{error}");
+    assert_eq!(reads.load(Ordering::SeqCst), BOUND.reads);
+    assert!(started.elapsed() < BOUND.interval * BOUND.reads + SLACK);
+}

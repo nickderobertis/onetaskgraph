@@ -202,6 +202,26 @@ NOT_METHODS = {
         "not carried: the paragraph after §4's method table says a source over this protocol "
         "reports every record as holding no asset"
     ),
+    "visibility_with_project": (
+        "not a message: §4.9 says a hosted source uses visibility unchanged through the "
+        "trait's default, so a predicted project cannot make unknown visibility private"
+    ),
+    "declare_visibility": (
+        "not a message: §4.9 says a hosted source ignores the declaration through the "
+        "trait's default, so configuration never changes its placement"
+    ),
+    "scope_visibility": (
+        "not a message: §4.9 says a hosted source executes the operation unchanged "
+        "through the trait's default, without holding visibility reads"
+    ),
+    "hold_visibility": (
+        "not a message: §4.9 says a hosted source begins no visibility hold through the "
+        "trait's default, since its visibility is always unknown"
+    ),
+    "release_visibility": (
+        "not a message: §4.9 says a hosted source ends no visibility hold through the "
+        "trait's default, since it holds no visibility reads"
+    ),
     "visibility": (
         "not carried: the paragraph after §4's method table says a source over this protocol "
         "answers `unknown`, which is never private"
@@ -579,7 +599,7 @@ if trait is None:
         "restore the trait, or teach this script the shape it has now.",
     )
 
-methods = set(re.findall(r"^\s+(?:async )?fn ([a-z_]+)\(", trait.group(1), re.MULTILINE))
+methods = set(re.findall(r"^\s+(?:async )?fn ([a-z_]+)(?:<[^>]*>)?\(", trait.group(1), re.MULTILINE))
 if not methods:
     refuse(
         "read no methods from the `TaskSource` trait.",

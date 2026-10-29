@@ -1288,12 +1288,17 @@ struct GitHubBoard {
     /// The GraphQL error every read of the Project's `public` field is refused with, in place
     /// of an answer; `None` to answer it.
     project_visibility_error: Option<String>,
+    /// A one-shot rate limit on the Project visibility read, leaving other queries alone.
+    project_visibility_retry_after: Option<u64>,
     /// Whether the token lacks `read:project`, so a read of the Project's `public` field is
     /// refused the way GitHub refuses it: `INSUFFICIENT_SCOPES`, naming the scope.
     project_scope_withheld: bool,
     /// How `GET /repos/{owner}/{name}` answers for each repository by `owner/name` —
     /// [`RepositoryAnswer::Private`] for one no journey named.
     repository_visibility: std::collections::BTreeMap<String, RepositoryAnswer>,
+    /// Repositories this board answers otherwise once it has answered that many requests
+    /// carrying an operation: `(owner/name, answer, operation, answered)`.
+    repository_visibility_after: Vec<(String, RepositoryAnswer, &'static str, usize)>,
     /// Changes a journey has this board make once it has answered a request matching each,
     /// before it reads the next — a person editing an item while a command is reading it.
     hooks: Vec<BoardHook>,
@@ -1336,6 +1341,15 @@ struct BoardHook {
 const GITHUB_BOARD_EPOCH: &str = "2026-09-01T00:00:00Z";
 
 // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] How the loopback board answers its one REST read, which the board's own request loop serves from its private state; it lives beside `GitHubBoard` for the reason that type records, and a GitHub suite could not add an answer from outside it.
+/// The node id a board configured with `configured` gives the repository `slug`.
+fn repository_node_id(configured: &str, slug: &str) -> String {
+    if slug == configured {
+        "REPO-1".to_owned()
+    } else {
+        format!("REPO-{slug}")
+    }
+}
+
 /// How the loopback GitHub answers `GET /repos/{owner}/{name}`, the read a write to a board
 /// declared private sends for the repository an issue lives in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1555,6 +1569,37 @@ impl GitHubBoardFields {
             .and_then(|card| card["status"].as_str().map(str::to_owned))
     }
 
+    /// Every item this server holds — on a board, or created and filed on none — as it holds
+    /// them, in the order it came to.
+    #[must_use]
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Reads the loopback board's private items and pending issues; this can only be a method of this handle. As GitHubBoard records, the agreed e2e layout puts every loopback server in this shared harness so the journey matrix and engine suite drive one model rather than copies in plugin suites.
+    pub fn issues(&self) -> Vec<Value> {
+        let board = self.board.lock().unwrap();
+        board.items.iter().chain(&board.pending).cloned().collect()
+    }
+
+    /// The `owner/name` of the repository the issue `id` lives in, or `None` for a draft or an
+    /// id this board does not hold.
+    #[must_use]
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Reads an issue's repository from the loopback board's private items and pending issues; this can only be a method of this handle. As GitHubBoard records, the agreed e2e layout puts every loopback server in this shared harness so the journey matrix and engine suite drive one model rather than copies in plugin suites.
+    pub fn repository_of(&self, id: &str) -> Option<String> {
+        let board = self.board.lock().unwrap();
+        board
+            .items
+            .iter()
+            .chain(&board.pending)
+            .find(|item| item["id"] == json!(id))
+            .and_then(|item| item["repo"].as_str().map(str::to_owned))
+    }
+
+    /// The node id this board gives the repository `owner/name`: `REPO-1` for the one its source
+    /// is configured with, and one naming it for every other of the same owner.
+    #[must_use]
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Reads the loopback board's private configured repository to reproduce its node id; this can only be a method of this handle. As GitHubBoard records, the agreed e2e layout puts every loopback server in this shared harness so the journey matrix and engine suite drive one model rather than copies in plugin suites.
+    pub fn repository_node_id(&self, slug: &str) -> String {
+        repository_node_id(&self.board.lock().unwrap().repository, slug)
+    }
+
     /// Whether this server holds the issue `id` at all — on a board, or created and filed on
     /// none — as its repository would.
     #[must_use]
@@ -1606,6 +1651,11 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().project_public_after_reads = Some(reads);
     }
 
+    /// Rate-limit only the next Project visibility read, naming its reset in seconds.
+    pub fn rate_limit_project_visibility(&self, retry_after: u64) {
+        self.board.lock().unwrap().project_visibility_retry_after = Some(retry_after);
+    }
+
     /// Withhold `read:project` from the token, so the Project's `public` field is refused.
     pub fn withhold_project_scope(&self) {
         self.board.lock().unwrap().project_scope_withheld = true;
@@ -1618,6 +1668,23 @@ impl GitHubBoardFields {
             .unwrap()
             .repository_visibility
             .insert(slug.to_owned(), answer);
+    }
+
+    /// Answer `GET /repos/{owner}/{name}` for `owner/name` as `answer` once this board has
+    /// answered `answered` requests carrying `operation` — a person changing who can read that
+    /// repository part way through a command's writes.
+    pub fn set_repository_visibility_after(
+        &self,
+        slug: &str,
+        answer: RepositoryAnswer,
+        operation: &'static str,
+        answered: usize,
+    ) {
+        self.board
+            .lock()
+            .unwrap()
+            .repository_visibility_after
+            .push((slug.to_owned(), answer, operation, answered));
     }
 
     /// Answer every read of the Project's `public` field with `project` as `projectV2`, in
@@ -3720,8 +3787,10 @@ fn github_projects_board_at(
         project_visibility_reads: 0,
         project_visibility_answer: None,
         project_visibility_error: None,
+        project_visibility_retry_after: None,
         project_scope_withheld: false,
         repository_visibility: std::collections::BTreeMap::new(),
+        repository_visibility_after: Vec::new(),
         hooks: Vec::new(),
         search_page_rows: None,
         partial_writes: false,
@@ -3802,7 +3871,13 @@ fn github_projects_board_at(
                 }
             }
         }
-        if let Some(wait) = board.lock().unwrap().rate_limit_next.take() {
+        let visibility_wait = if query.contains("visibility:repositoryOwner") {
+            board.lock().unwrap().project_visibility_retry_after.take()
+        } else {
+            None
+        };
+        if let Some(wait) = visibility_wait.or_else(|| board.lock().unwrap().rate_limit_next.take())
+        {
             let body = r#"{"message":"API rate limit exceeded for this fixture"}"#;
             return Some(format!(
                 "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nretry-after: {wait}\r\nContent-Length: {}\r\n\r\n{body}",
@@ -3813,6 +3888,23 @@ fn github_projects_board_at(
             // Refusals named after the board was built join the ones it was built with.
             let mut held = board.lock().unwrap();
             owed_failures.append(&mut held.refusing);
+        }
+        {
+            let mut held = board.lock().unwrap();
+            let mut changed = Vec::new();
+            held.repository_visibility_after
+                .retain_mut(|(slug, answer, operation, answered)| {
+                    if !query.contains(*operation) {
+                        return true;
+                    }
+                    if *answered == 0 {
+                        changed.push((slug.clone(), *answer));
+                        return false;
+                    }
+                    *answered -= 1;
+                    true
+                });
+            held.repository_visibility.extend(changed);
         }
         let late = {
             let mut held = board.lock().unwrap();
@@ -4919,10 +5011,26 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     }
     if query.contains("repository(owner:$owner,name:$name)") {
         assert_eq!(variables["owner"], board.repository_owner());
-        return json!({"repository":{"id":"REPO-1","nameWithOwner":board.repository}});
+        let slug = format!(
+            "{}/{}",
+            variables["owner"].as_str().unwrap_or_default(),
+            variables["name"].as_str().unwrap_or_default()
+        );
+        return json!({"repository":{"id":repository_node_id(&board.repository, &slug),
+                                    "nameWithOwner":slug}});
     }
     if query.contains("createIssue(input:$input)") {
-        assert_eq!(input["repositoryId"], "REPO-1");
+        // The configured repository is `REPO-1`, as it always was; any other repository of the
+        // same owner is the one its node id names.
+        let repo = match input["repositoryId"].as_str() {
+            Some("REPO-1") => board.repository.clone(),
+            Some(other) => other
+                .strip_prefix("REPO-")
+                .filter(|slug| slug.contains('/'))
+                .unwrap_or_else(|| panic!("a create naming no repository of this board: {other}"))
+                .to_owned(),
+            None => panic!("a create naming no repository: {input}"),
+        };
         assert!(input["title"].as_str().is_some_and(|t| !t.is_empty()));
         assert!(input["body"].is_string() || input["body"].is_null());
         board.created += 1;
@@ -4930,7 +5038,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let at = board.tick();
         let mut created = json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue",
             "title":input["title"],"body":input["body"],"state":"OPEN","reason":null,
-            "parent":Value::Null,"repo":board.repository,"status":"Todo",
+            "parent":Value::Null,"repo":repo,"status":"Todo",
             "origin":"","labels":[],"updatedAt":at});
         if board.files_without_status {
             created["status"] = Value::Null;

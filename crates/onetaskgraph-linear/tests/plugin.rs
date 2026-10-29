@@ -7164,3 +7164,74 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
         "a write drops what was held, the origins not yet asked among it"
     );
 }
+
+#[tokio::test]
+async fn recorded_document_content_is_returned_as_stored_including_rewrites() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/document-content-40721997875.json")).unwrap();
+    // The complete observed probe and its protected code-span counterpart exercise both
+    // normalization and verbatim payloads through the same public write/read interface.
+    for (before, after) in [
+        (
+            fixture["before"].as_str().unwrap(),
+            fixture["after"].as_str().unwrap(),
+        ),
+        (
+            fixture["preserved"].as_str().unwrap(),
+            fixture["preserved"].as_str().unwrap(),
+        ),
+    ] {
+        let stored = format!("{after}\n\n<!-- onetaskgraph.metadata `{{\"caller.count\":3}}` -->");
+        let node = serde_json::json!({"id":"d1","title":"Probe","content":stored,
+            "url":null,"createdAt":null,"updatedAt":null,"project":{"id":"p1"}});
+        let (endpoint, requests) = response_server(vec![
+            serde_json::json!({"documentCreate":{"success":true,"document":node}}),
+            serde_json::json!({"document":node}),
+        ]);
+        let source = writable_source(&endpoint);
+        let item = Document {
+            version: None,
+            id: "ignored".into(),
+            title: "Probe".into(),
+            content: Some(before.to_owned()),
+            project: Some("p1".into()),
+            labels: Vec::new(),
+            url: None,
+            location: None,
+            created_at: None,
+            updated_at: None,
+            metadata: [("caller.count".to_owned(), serde_json::json!(3))]
+                .into_iter()
+                .collect(),
+            repositories: Vec::new(),
+            classification: Default::default(),
+        };
+        let id = source
+            .write_document(&ItemWrite {
+                target: None,
+                item,
+                depends_on: vec![],
+            })
+            .await
+            .unwrap();
+        let wire = requests.recv().unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(wire.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        let sent = body["variables"]["input"]["content"].as_str().unwrap();
+        assert!(sent.starts_with(before), "{sent:?}");
+        assert_eq!(
+            source
+                .stored_content(onetaskgraph_plugin_api::MetadataRecord::Document, &id)
+                .as_deref(),
+            Some(after)
+        );
+        let shown = source.get_document(&id).await.unwrap().unwrap();
+        assert_eq!(shown.content.as_deref(), Some(after));
+        assert_eq!(shown.metadata["caller.count"], serde_json::json!(3));
+        // The first read consumes the write acknowledgement; the next reaches Linear.
+        let fetched = source.get_document(&id).await.unwrap().unwrap();
+        assert_eq!(fetched.content.as_deref(), Some(after));
+        assert_eq!(fetched.metadata["caller.count"], serde_json::json!(3));
+        assert!(requests.recv().unwrap().contains("document(id:$id)"));
+    }
+}
