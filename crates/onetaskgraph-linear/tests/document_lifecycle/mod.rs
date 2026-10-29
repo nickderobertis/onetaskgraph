@@ -4,6 +4,7 @@ pub mod observer;
 use onetaskgraph_linear::live_artifact::{Scope, Slot, classify_retained, retained_title};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 pub const MODE_VARIABLE: &str = "ONETASKGRAPH_LINEAR_DOCUMENT_MODE";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,7 +180,193 @@ async fn discover(
     }
     Err("standing discovery did not terminate".into())
 }
+/// Every slot this invocation created, recorded the moment Linear acknowledged its id.
+///
+/// A local set is the invocation's own, so a failure or panic anywhere after its first
+/// create — partway through initialization included — has to retire exactly these ids
+/// rather than leave them for the orphan sweep. [`retire`] drains it, so a second call
+/// after the ordinary cleanup has run deletes nothing twice.
+#[derive(Clone, Default)]
+pub struct Created {
+    ids: Arc<Mutex<Vec<(Slot, String)>>>,
+    panic_after: Option<usize>,
+}
+impl Created {
+    /// Fault injection for the offline journeys: panic straight after the `n`th create
+    /// is recorded, which is the earliest point a lane can have stranded a slot.
+    #[allow(dead_code)]
+    pub fn panicking_after(n: usize) -> Self {
+        Self {
+            panic_after: Some(n),
+            ..Self::default()
+        }
+    }
+    fn record(&self, slot: Slot, id: &str) {
+        let count = {
+            let mut ids = self.ids.lock().unwrap();
+            ids.push((slot, id.to_owned()));
+            ids.len()
+        };
+        if self.panic_after == Some(count) {
+            panic!("injected failure after standing create {count}");
+        }
+    }
+    /// Drops the record once another cleanup has attempted every recorded slot itself.
+    #[allow(dead_code)]
+    pub fn forget(&self) {
+        self.ids.lock().unwrap().clear();
+    }
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize {
+        self.ids.lock().unwrap().len()
+    }
+}
+
+/// Deletes, newest first, every slot `created` holds — documents before the parent project
+/// they are filed under — when the set is invocation-owned. A CI set is standing and is
+/// never retired here. Returns how many were deleted; every refusal is named.
+pub async fn retire(
+    endpoint: &str,
+    key: &str,
+    scope: Scope<'_>,
+    created: &Created,
+) -> Result<usize, String> {
+    if scope.is_ci() {
+        return Ok(0);
+    }
+    let held = std::mem::take(&mut *created.ids.lock().unwrap());
+    let mut refused = Vec::new();
+    let mut retired = 0;
+    for (slot, id) in held.into_iter().rev() {
+        let (query, root) = if slot == Slot::Parent {
+            (
+                onetaskgraph_linear::graphql::PROJECT_DELETE,
+                "projectDelete",
+            )
+        } else {
+            (
+                onetaskgraph_linear::graphql::DOCUMENT_DELETE,
+                "documentDelete",
+            )
+        };
+        match send(endpoint, key, query, json!({"id":id})).await {
+            Ok(data) if data[root]["success"] == true => retired += 1,
+            Ok(_) => refused.push(format!(
+                "Linear did not confirm retiring {} slot {id}",
+                slot_key(slot)
+            )),
+            Err(error) => refused.push(format!("{} slot {id}: {error}", slot_key(slot))),
+        }
+    }
+    if refused.is_empty() {
+        Ok(retired)
+    } else {
+        Err(format!(
+            "invocation-owned standing slots were not all retired: {}",
+            refused.join("; ")
+        ))
+    }
+}
+
+/// Polls `future`, turning a panic inside it into `Err` so the caller can clean up first.
+pub async fn unwinding<F: std::future::Future>(future: F) -> std::thread::Result<F::Output> {
+    let mut future = std::pin::pin!(future);
+    std::future::poll_fn(|cx| {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| future.as_mut().poll(cx))) {
+            Ok(std::task::Poll::Pending) => std::task::Poll::Pending,
+            Ok(std::task::Poll::Ready(output)) => std::task::Poll::Ready(Ok(output)),
+            Err(panic) => std::task::Poll::Ready(Err(panic)),
+        }
+    })
+    .await
+}
+
+/// [`prepare`] for a live lane: a failure or panic after any slot create retires every slot
+/// this invocation created before it is reported, so nothing it owns outlives the process.
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_owned(
+    endpoint: &str,
+    key: &str,
+    team: &str,
+    team_id: &str,
+    scope: Scope<'_>,
+    mode: Mode,
+    slots: &[Slot],
+    created: &Created,
+) -> Result<Standing, String> {
+    let outcome = unwinding(prepare_tracked(
+        endpoint, key, team, team_id, scope, mode, slots, created,
+    ))
+    .await;
+    if !matches!(outcome, Ok(Ok(_))) {
+        discover_stranded(endpoint, key, team, scope, slots, created).await;
+    }
+    match outcome {
+        Ok(Ok(standing)) => Ok(standing),
+        Ok(Err(error)) => Err(match retire(endpoint, key, scope, created).await {
+            Ok(_) => error,
+            Err(retired) => format!("{error}; additionally, {retired}"),
+        }),
+        Err(panic) => {
+            if let Err(retired) = retire(endpoint, key, scope, created).await {
+                eprintln!("{retired}");
+            }
+            std::panic::resume_unwind(panic)
+        }
+    }
+}
+
+/// A local create whose acknowledgement named no id may still have stored the slot, so a
+/// failed initialization finds each slot it did not record by its exact identity — the
+/// discovery recovery requires — and records it for [`retire`]. A CI set is left as it is.
+async fn discover_stranded(
+    endpoint: &str,
+    key: &str,
+    team: &str,
+    scope: Scope<'_>,
+    slots: &[Slot],
+    created: &Created,
+) {
+    if scope.is_ci() {
+        return;
+    }
+    let mut wanted = slots.to_vec();
+    if slots.contains(&Slot::Filed) {
+        wanted.insert(0, Slot::Parent);
+    }
+    for slot in wanted {
+        if created
+            .ids
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(held, _)| *held == slot)
+        {
+            continue;
+        }
+        let Ok(title) = retained_title(scope, slot) else {
+            continue;
+        };
+        match discover(endpoint, key, &title, team, slot == Slot::Parent).await {
+            Ok(Some(id)) => {
+                // The parent goes last in `retire`, which deletes newest first.
+                let mut ids = created.ids.lock().unwrap();
+                if slot == Slot::Parent {
+                    ids.insert(0, (slot, id));
+                } else {
+                    ids.push((slot, id));
+                }
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!(
+                "{} slot could not be discovered for retirement: {error}",
+                slot_key(slot)
+            ),
+        }
+    }
+}
 /// Ordinary discovery is read-only. Initialization alone can fill missing identities.
+#[allow(dead_code)]
 pub async fn prepare(
     endpoint: &str,
     key: &str,
@@ -188,6 +375,30 @@ pub async fn prepare(
     scope: Scope<'_>,
     mode: Mode,
     slots: &[Slot],
+) -> Result<Standing, String> {
+    prepare_tracked(
+        endpoint,
+        key,
+        team,
+        team_id,
+        scope,
+        mode,
+        slots,
+        &Created::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prepare_tracked(
+    endpoint: &str,
+    key: &str,
+    team: &str,
+    team_id: &str,
+    scope: Scope<'_>,
+    mode: Mode,
+    slots: &[Slot],
+    created: &Created,
 ) -> Result<Standing, String> {
     let nominated = scope.team();
     if !nominated.eq_ignore_ascii_case(team)
@@ -265,6 +476,7 @@ pub async fn prepare(
         }
         let id=data[root][field]["id"].as_str().filter(|s| !s.is_empty()).ok_or("uncertain standing create acknowledgement; discover exact identity before recovery; no automatic retry")?;
         standing.ids.insert(name, id.to_owned());
+        created.record(slot, id);
     }
     standing.parent = standing.ids.get("parent").cloned();
     Ok(standing)

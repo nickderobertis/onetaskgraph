@@ -1707,7 +1707,10 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         .unwrap_or_else(|error| {
             panic!("the Linear live lane cannot reach its scratch team: {error}")
         });
-    let standing = document_lifecycle::prepare(
+    // From the first create on, a failure or panic retires what this invocation created:
+    // `prepare_owned` covers initialization itself, and the journey's guard below the rest.
+    let created = document_lifecycle::Created::default();
+    let standing = document_lifecycle::prepare_owned(
         &endpoint,
         &key,
         &team_key,
@@ -1715,6 +1718,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         scope,
         effective_mode,
         &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+        &created,
     )
     .await
     .unwrap_or_else(|e| panic!("{e}"));
@@ -1735,17 +1739,38 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         standing,
     };
     let id = run.id;
+    // `ensure!` keeps the journey's own checks to `Err`, but anything else that panics in it
+    // must still reach the cleanup below; the panic is resumed once cleanup has run.
+    let panicked = std::sync::Mutex::new(None);
     let result = run_then_cleanup(
-        || drive_every_declared_capability(&run, source.as_ref(), &team_id),
         || async {
-            // This run's own, first: everything it wrote goes whether the journey passed or
+            match document_lifecycle::unwinding(drive_every_declared_capability(
+                &run,
+                source.as_ref(),
+                &team_id,
+            ))
+            .await
+            {
+                Ok(outcome) => outcome,
+                Err(panic) => {
+                    *panicked.lock().unwrap() = Some(panic);
+                    Err("the Linear live journey panicked".into())
+                }
+            }
+        },
+        || async {
+            // The invocation-owned slots by their exact ids first, then this run's own:
+            // everything it wrote goes whether the journey passed or
             // failed. Then what an interrupted EARLIER run left, which is a different
             // decision on different evidence — and which is deliberately here, at the end,
             // rather than at the start where it used to be. A sweep before the journey
             // deleted the in-flight issues of any session running beside this one; a sweep
             // after it recovers exactly the same orphans and can reach nothing a live run
             // owns.
-            let mine = remove_artifacts(&key, &|prefix, name| is_this_runs(id, prefix, name)).await;
+            let slots = document_lifecycle::retire(&run.endpoint, &key, scope, &created).await;
+            let mine = remove_artifacts(&key, &|prefix, name| is_this_runs(id, prefix, name))
+                .await
+                .and(slots.map(drop));
             let orphans = sweep_orphans(&key, &Sweep::of(id, now_micros())).await;
             match (mine, orphans) {
                 (Ok(()), Ok(())) => Ok(()),
@@ -1762,6 +1787,12 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     )
     .await;
     journal.finish().unwrap();
+    if let Some(panic) = panicked.into_inner().unwrap() {
+        if let Err(error) = result {
+            eprintln!("{error}");
+        }
+        std::panic::resume_unwind(panic);
+    }
     result.unwrap_or_else(|error| panic!("Linear live capability journey failed: {error}"));
 }
 
@@ -2072,6 +2103,175 @@ async fn document_lifecycle_replay_refuses_unsafe_ownership_and_recovers_partial
             "{defect} sent a write"
         );
     }
+    assert!(replay.state.lock().unwrap().schema_errors.is_empty());
+}
+
+/// The transport's own record of a replay: each create and delete mutation it answered.
+fn replay_mutations(
+    replay: &document_replay::Replay,
+    from: usize,
+) -> BTreeMap<&'static str, usize> {
+    let state = replay.state.lock().unwrap();
+    let mut counted = BTreeMap::new();
+    for request in &state.requests[from..] {
+        let query = request["query"].as_str().unwrap();
+        for root in [
+            "projectCreate",
+            "documentCreate",
+            "projectDelete",
+            "documentDelete",
+        ] {
+            if query.contains(&format!("{root}(")) {
+                *counted.entry(root).or_default() += 1;
+            }
+        }
+    }
+    counted
+}
+
+/// A panic straight after each individual slot create of a local initialization — the
+/// parent project, then each of the three documents — still retires every slot the
+/// invocation created before the panic leaves the lane, and nothing else.
+#[tokio::test]
+async fn a_panic_after_each_local_slot_create_retires_what_the_invocation_created() {
+    let replay = replay();
+    let ci = replay_prepare(&replay, Scope::ci("ENG").unwrap(), Mode::Initialize)
+        .await
+        .unwrap();
+    for after in 1..=4 {
+        let stamp = format!("1-2-{after}");
+        let scope = Scope::local("ENG", &stamp).unwrap();
+        let before = replay.state.lock().unwrap().requests.len();
+        let creates_before = replay.journal.count();
+        let created = document_lifecycle::Created::panicking_after(after);
+        let outcome = document_lifecycle::unwinding(document_lifecycle::prepare_owned(
+            &replay.endpoint,
+            "synthetic",
+            "ENG",
+            "team",
+            scope,
+            Mode::Initialize,
+            &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+            &created,
+        ))
+        .await;
+        let panic = outcome.err().expect("the injected failure panics the lane");
+        assert_eq!(
+            panic.downcast_ref::<String>().map(String::as_str),
+            Some(format!("injected failure after standing create {after}").as_str())
+        );
+        let sent = replay_mutations(&replay, before);
+        let projects = 1;
+        let documents = after - projects;
+        assert_eq!(
+            sent.get("projectCreate").copied().unwrap_or(0),
+            projects,
+            "after {after}"
+        );
+        assert_eq!(
+            sent.get("documentCreate").copied().unwrap_or(0),
+            documents,
+            "after {after}"
+        );
+        assert_eq!(
+            sent.get("projectDelete").copied().unwrap_or(0),
+            projects,
+            "after {after}: the parent created is the parent retired"
+        );
+        assert_eq!(
+            sent.get("documentDelete").copied().unwrap_or(0),
+            documents,
+            "after {after}: every document created is retired"
+        );
+        assert_eq!(
+            replay.journal.count() - creates_before,
+            documents,
+            "after {after}: retired documents stay counted as created"
+        );
+        let state = replay.state.lock().unwrap();
+        assert!(
+            state
+                .documents
+                .values()
+                .chain(state.projects.values())
+                .all(|row| !row["title"]
+                    .as_str()
+                    .or(row["name"].as_str())
+                    .unwrap_or("")
+                    .contains(&stamp)),
+            "after {after}: nothing of the invocation's set survives"
+        );
+        assert_eq!(created.len(), 0);
+    }
+    let survived = replay_prepare(&replay, Scope::ci("ENG").unwrap(), Mode::Ordinary)
+        .await
+        .unwrap();
+    assert_eq!(survived.ids, ci.ids, "the standing CI set is untouched");
+    assert!(replay.state.lock().unwrap().schema_errors.is_empty());
+}
+
+/// An uncertain local create — stored, but acknowledged without its id — is found by its
+/// exact identity and retired with the slot created before it; a CI set keeps its slots for
+/// the discovery recovery requires.
+#[tokio::test]
+async fn an_uncertain_local_slot_create_is_discovered_and_retired_before_the_lane_fails() {
+    let replay = replay();
+    replay.state.lock().unwrap().uncertain = true;
+    let created = document_lifecycle::Created::default();
+    let error = document_lifecycle::prepare_owned(
+        &replay.endpoint,
+        "synthetic",
+        "ENG",
+        "team",
+        Scope::local("ENG", "1-2-3").unwrap(),
+        Mode::Initialize,
+        &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+        &created,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(error.contains("discover"), "{error}");
+    let sent = replay_mutations(&replay, 0);
+    assert_eq!(sent.get("projectCreate"), Some(&1));
+    assert_eq!(sent.get("documentCreate"), Some(&1));
+    assert_eq!(sent.get("projectDelete"), Some(&1));
+    assert_eq!(sent.get("documentDelete"), Some(&1));
+    assert_eq!(
+        replay.journal.count(),
+        1,
+        "the retired create stays counted"
+    );
+    {
+        let state = replay.state.lock().unwrap();
+        assert!(state.documents.is_empty() && state.projects.is_empty());
+    }
+    replay.state.lock().unwrap().uncertain = true;
+    let before = replay.state.lock().unwrap().requests.len();
+    document_lifecycle::prepare_owned(
+        &replay.endpoint,
+        "synthetic",
+        "ENG",
+        "team",
+        Scope::ci("ENG").unwrap(),
+        Mode::Initialize,
+        &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+        &document_lifecycle::Created::default(),
+    )
+    .await
+    .err()
+    .unwrap();
+    let sent = replay_mutations(&replay, before);
+    assert_eq!(
+        sent.get("projectDelete"),
+        None,
+        "standing CI slots are never retired"
+    );
+    assert_eq!(
+        sent.get("documentDelete"),
+        None,
+        "standing CI slots are never retired"
+    );
     assert!(replay.state.lock().unwrap().schema_errors.is_empty());
 }
 

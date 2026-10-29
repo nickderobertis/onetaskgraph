@@ -1466,27 +1466,110 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
         &key,
         journal.clone(),
     );
-    let standing = runtime
-        .block_on(document_lifecycle::prepare(
-            &lifecycle_endpoint,
-            &key,
-            &team_key,
-            team_id,
-            scope,
-            effective_mode,
-            &[Slot::Assets],
-        ))
-        .unwrap();
-    if ci && mode == Mode::Initialize {
-        journal.finish().unwrap();
-        return;
-    }
-    reset_asset_slot(
+    let created = document_lifecycle::Created::default();
+    guard_asset_invocation(
         &runtime,
+        &lifecycle_endpoint,
+        &key,
+        &team_key,
+        team_id,
+        scope,
+        effective_mode,
+        &journal,
+        &created,
+        |standing| {
+            if ci && mode == Mode::Initialize {
+                journal.finish().unwrap();
+                return;
+            }
+            drive_live_assets(
+                &runtime,
+                &client,
+                &key,
+                &team,
+                &state_name,
+                standing,
+                scope,
+                mode,
+                &owner_stamp,
+                &journal,
+                &lifecycle_endpoint,
+                &created,
+            );
+        },
+    );
+}
+
+/// Prepares the lane's standing slot and runs `drive` over it, so that from the first
+/// create on nothing this invocation owns outlives a panic: one partway through preparing,
+/// or anywhere in `drive` before its own cleanup ran, retires every slot `created` records
+/// before the panic leaves the lane. A CI set is standing and is never retired here.
+#[allow(clippy::too_many_arguments)]
+fn guard_asset_invocation(
+    runtime: &tokio::runtime::Runtime,
+    lifecycle_endpoint: &str,
+    key: &str,
+    team_key: &str,
+    team_id: &str,
+    scope: Scope<'_>,
+    mode: Mode,
+    journal: &document_lifecycle::journal::Journal,
+    created: &document_lifecycle::Created,
+    drive: impl FnOnce(&document_lifecycle::Standing),
+) {
+    let guarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let standing = runtime
+            .block_on(document_lifecycle::prepare_owned(
+                lifecycle_endpoint,
+                key,
+                team_key,
+                team_id,
+                scope,
+                mode,
+                &[Slot::Assets],
+                created,
+            ))
+            .unwrap_or_else(|error| panic!("{error}"));
+        drive(&standing);
+    }));
+    if let Err(panic) = guarded {
+        if let Err(error) = runtime.block_on(document_lifecycle::retire(
+            lifecycle_endpoint,
+            key,
+            scope,
+            created,
+        )) {
+            eprintln!("{error}");
+        }
+        let _ = journal.finish();
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// Everything the live asset lane does once its standing slot is prepared, ending with the
+/// invocation cleanup; a panic here unwinds to the caller's guard over `created`.
+#[allow(clippy::too_many_arguments)]
+fn drive_live_assets(
+    runtime: &tokio::runtime::Runtime,
+    client: &reqwest::Client,
+    key: &str,
+    team: &str,
+    state_name: &str,
+    standing: &document_lifecycle::Standing,
+    scope: Scope<'_>,
+    mode: Mode,
+    owner_stamp: &str,
+    journal: &document_lifecycle::journal::Journal,
+    lifecycle_endpoint: &str,
+    created: &document_lifecycle::Created,
+) {
+    let key = key.to_owned();
+    reset_asset_slot(
+        runtime,
         "https://api.linear.app/graphql",
         &key,
-        &standing,
-        &owner_stamp,
+        standing,
+        owner_stamp,
         21,
     );
     let journey = Journey::new();
@@ -1554,14 +1637,11 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
         eprintln!("{observation}");
     }
     let items = observed.lock().unwrap().items.clone();
-    let cleanup_failed = !retire_asset_invocation(
-        &runtime,
-        &lifecycle_endpoint,
-        &key,
-        &items,
-        &standing,
-        scope,
-    );
+    let cleanup_failed =
+        !retire_asset_invocation(runtime, lifecycle_endpoint, &key, &items, standing, scope);
+    // That cleanup attempted every slot `created` recorded, so the caller's guard must not
+    // send their deletes a second time.
+    created.forget();
     journal.finish().unwrap();
     assert!(!cleanup_failed, "live disposable cleanup failed");
     if let Err(panic) = result {
@@ -2690,6 +2770,103 @@ fn asset_invocation_cleanup_retires_local_slots_and_continues_after_a_refused_de
             .document_titled(&local.titles["assets"])
             .is_none(),
         "successful normal local cleanup also retires its set"
+    );
+}
+
+/// A panic straight after the asset lane's one local slot create, and one later in the
+/// drive before its own cleanup, each retire the invocation's slot before the panic leaves
+/// the lane: one documentCreate and one documentDelete of that document at the transport,
+/// the create still counted, and the standing CI slot and an unrelated document kept.
+#[test]
+fn a_panic_after_the_local_asset_slot_create_retires_it_before_the_lane_fails() {
+    let journey = Journey::with_clients(0);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let endpoint = format!("{}/0/graphql", journey.workspace.endpoint);
+    let journal = document_lifecycle::journal::Journal::new("assets", "initialize");
+    journey.workspace.state.lock().unwrap().document_journal = Some(journal.clone());
+    let ci = runtime
+        .block_on(document_lifecycle::prepare(
+            &endpoint,
+            "fixture-key",
+            "ENG",
+            "team",
+            Scope::ci("ENG").unwrap(),
+            Mode::Initialize,
+            &[Slot::Assets],
+        ))
+        .unwrap();
+    let unrelated = runtime.block_on(document_lifecycle::send(&endpoint,"fixture-key",onetaskgraph_linear::graphql::DOCUMENT_CREATE,json!({"input":{"title":"Unrelated synthetic document","content":"synthetic","teamId":"team"}}))).unwrap()["documentCreate"]["document"]["id"].as_str().unwrap().to_owned();
+    for (stamp, created, drive_panics) in [
+        (
+            "1-2-3",
+            document_lifecycle::Created::panicking_after(1),
+            false,
+        ),
+        ("1-2-4", document_lifecycle::Created::default(), true),
+    ] {
+        let scope = Scope::local("ENG", stamp).unwrap();
+        let title =
+            onetaskgraph_linear::live_artifact::retained_title(scope, Slot::Assets).unwrap();
+        let creates = journal.count();
+        let deletes = journey
+            .workspace
+            .state
+            .lock()
+            .unwrap()
+            .document_delete_attempts
+            .len();
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            guard_asset_invocation(
+                &runtime,
+                &endpoint,
+                "fixture-key",
+                "ENG",
+                "team",
+                scope,
+                Mode::Initialize,
+                &journal,
+                &created,
+                |standing| {
+                    assert!(standing.ids.contains_key("assets"));
+                    assert!(!drive_panics, "injected failure in the drive");
+                },
+            )
+        }));
+        assert!(failed.is_err(), "{stamp}: the lane still fails");
+        assert_eq!(
+            journal.count() - creates,
+            1,
+            "{stamp}: the create stays counted"
+        );
+        let attempted = journey
+            .workspace
+            .state
+            .lock()
+            .unwrap()
+            .document_delete_attempts[deletes..]
+            .to_vec();
+        assert_eq!(
+            attempted.len(),
+            1,
+            "{stamp}: exactly the created slot is retired"
+        );
+        assert!(
+            journey.workspace.held.document_titled(&title).is_none(),
+            "{stamp}: nothing of the invocation's set survives"
+        );
+        assert_eq!(created.len(), 0);
+    }
+    assert_eq!(
+        journey.workspace.held.document_titled(&ci.titles["assets"]),
+        Some(ci.ids["assets"].clone()),
+        "the standing CI slot survives"
+    );
+    assert_eq!(
+        journey
+            .workspace
+            .held
+            .document_titled("Unrelated synthetic document"),
+        Some(unrelated)
     );
 }
 

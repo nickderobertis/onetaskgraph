@@ -44,7 +44,10 @@ writing when its set is absent. Opt in with `ONETASKGRAPH_LINEAR_DOCUMENT_MODE=i
 that invocation initializes its isolated slots, runs the ordinary reuse assertions, and
 retires the set in the same process. It prints and journals this as an explicit local
 creation pass, outside typical CI sizing. Normal invocation cleanup
-retires local slots. After a killed invocation, the existing local registration/orphan
+retires local slots. A failure or panic at any point after the first slot create,
+partway through initialization included, retires every slot the invocation created —
+by the id Linear acknowledged, or for a create acknowledged without one by its exact
+identity — before the lane fails; those creations stay counted in its journal. After a killed invocation, the existing local registration/orphan
 sweep may retire them only with positive evidence that their registration is dead;
 still-active registrations remain protected. There is no global coordination for
 local invocations.
