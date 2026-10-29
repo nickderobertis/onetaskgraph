@@ -69,6 +69,10 @@ run() {
     bash "$tree/scripts/check-warm-rust-cache-reuse.sh" ${REUSE_ARGS:-} >"$scratch/$name.log" 2>&1
 }
 
+status=0
+REUSE_ARGS=--bogus run usage || status=$?
+[ "$status" -eq 2 ] || { cat "$scratch/usage.log" >&2; fail "an unknown argument exited $status, not 2, its usage error" "exit 2 on any argument but --warmed alone"; }
+
 run complete || { cat "$scratch/complete.log" >&2; fail "a complete warm was refused" "fix what the check reports above"; }
 [ "$(cat "$scratch/complete.warm")" = "warm --instrumented" ] \
   || fail "the check did not warm once, in the Linux leg's mode, before its builds" "run scripts/warm-rust-cache.sh --instrumented unless given --warmed"

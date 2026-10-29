@@ -8,6 +8,9 @@
 #
 #   scripts/check-warm-rust-cache-reuse.sh [--warmed]
 #
+# Exits 0 when nothing was rebuilt (or off Linux), 1 when a build was or a step failed, 2 on
+# any other argument.
+#
 # With --warmed it builds nothing first and checks the target directory cargo already uses,
 # which the warmer has just filled: .github/workflows/rust-cache-warm.yml runs it so as the
 # Linux leg's last step, where the job's builds find everything built and cost little, so a
@@ -36,7 +39,11 @@ warmed=false
 case "$#:${1:-}" in
   0:) ;;
   1:--warmed) warmed=true ;;
-  *) fail "takes no argument or --warmed alone, not '$*'" "run it with none, or with --warmed after scripts/warm-rust-cache.sh --instrumented" ;;
+  *)
+    echo "check-warm-rust-cache-reuse: takes no argument or --warmed alone, not '$*'" >&2
+    echo "check-warm-rust-cache-reuse: next: run it with none, or with --warmed after scripts/warm-rust-cache.sh --instrumented" >&2
+    exit 2
+    ;;
 esac
 
 if [ "$(uname -s)" != Linux ]; then

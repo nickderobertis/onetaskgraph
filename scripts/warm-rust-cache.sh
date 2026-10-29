@@ -3,6 +3,8 @@
 #
 #   scripts/warm-rust-cache.sh [--instrumented]
 #
+# Exits 0 once everything is built, 1 when a build fails, 2 on any other argument.
+#
 # .github/workflows/rust-cache-warm.yml runs this on every push to main. The cache keeps
 # dependency units only, so what matters is that these are the very units the jobs compile —
 # scripts/check-warm-rust-cache.sh holds them to the shapes scripts/pr-build-commands.sh reads:
@@ -24,7 +26,11 @@ instrumented=false
 case "$#:${1:-}" in
   0:) ;;
   1:--instrumented) instrumented=true ;;
-  *) fatal "takes no argument or --instrumented alone, not '$*'" "run it with none, or with --instrumented on Linux" ;;
+  *)
+    echo "warm-rust-cache: takes no argument or --instrumented alone, not '$*'" >&2
+    echo "warm-rust-cache: next: run it with none, or with --instrumented on Linux" >&2
+    exit 2
+    ;;
 esac
 
 # Nothing here opens a live session, and nothing may: it builds the live crates' tests.

@@ -103,9 +103,9 @@ fi
 for arguments in "--bogus" "--instrumented extra"; do
   : >"$scratch/refused"
   # shellcheck disable=SC2086 # Each case is the words it spells.
-  if leg refused $arguments; then
-    fail "the warmer ran with '$arguments'" "refuse every argument but --instrumented alone in scripts/warm-rust-cache.sh"
-  fi
+  status=0
+  leg refused $arguments || status=$?
+  [ "$status" -eq 2 ] || fail "the warmer exited $status with '$arguments', not 2, its usage error" "refuse every argument but --instrumented alone in scripts/warm-rust-cache.sh, exiting 2"
   [ ! -s "$scratch/refused" ] || fail "the warmer built before refusing '$arguments'" "refuse its arguments before building anything"
   grep -q "not '$arguments'" "$scratch/refused.log" || { cat "$scratch/refused.log" >&2; fail "the refusal of '$arguments' does not name it" "name the arguments in the refusal"; }
 done

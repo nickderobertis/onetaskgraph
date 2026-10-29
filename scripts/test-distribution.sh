@@ -87,6 +87,7 @@ name="onetaskgraph-${tag}-${target}.${ext}"
 build_release_wheel() {
   (cd "$root" && "$python_bin" scripts/cli_wheel_lock.py uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$1")
 }
+# Exit 2 is a usage error: any argument but --release-build-only alone.
 case "$#:${1:-}" in
   0:) ;;
   1:--release-build-only) build_release_wheel "$tmp/python-wheel"; exit 0 ;;
