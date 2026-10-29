@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from typing import NamedTuple
 import threading
 import time
 import urllib.error
@@ -19,7 +20,11 @@ class Upstream(BaseHTTPRequestHandler):
     def do_GET(self):
         count = self.counts.get(self.path, 0) + 1
         self.counts[self.path] = count
-        self.send_response(503 if count == 1 else 200)
+        if count == 1 and self.path.endswith('/transport'):
+            self.connection.close()
+            return
+        status = int(self.path.rsplit('/', 1)[-1]) if count == 1 else 200
+        self.send_response(status)
         self.end_headers()
         if count > 1:
             self.wfile.write(b'recovered index entry\n')
@@ -36,21 +41,43 @@ import sys
 import urllib.request
 original = urllib.request.Request
 upstream = sys.argv.pop(1)
+from urllib.parse import urlsplit
+from pathlib import Path
+origin = urlsplit(upstream)
+if origin.scheme != 'http' or origin.hostname != '127.0.0.1' or not origin.port:
+    raise ValueError('expected loopback upstream origin')
 def request(url, *args, **kwargs):
     return original(url.replace('https://index.crates.io/', upstream + '/'), *args, **kwargs)
 urllib.request.Request = request
 launcher = sys.argv.pop(1)
+if not Path(launcher).is_file():
+    raise ValueError('expected existing registry launcher')
 runpy.run_path(launcher, run_name='__main__')
 """
 
 
-def read(url):
+class Answer(NamedTuple):
+    status: int
+    body: bytes
+
+
+# llmlint: ignore-block[async_typed_clients_at_boundaries] This synchronous HTTP test uses
+# only the standard library, like the registry fixture it drives; no application client
+# exists for this release-only subprocess boundary.
+def read(url) -> Answer:
     try:
         with urllib.request.urlopen(url, timeout=5) as response:
-            return response.status, response.read()
+            return Answer(response.status, response.read())
     except urllib.error.HTTPError as error:
         with error:
-            return error.code, error.read()
+            return Answer(error.code, error.read())
+
+# llmlint: ignore-end[async_typed_clients_at_boundaries]
+
+
+def expect(actual, expected, detail):
+    if actual != expected:
+        raise AssertionError(f'{detail}: expected {expected!r}, got {actual!r}; next: repair the release registry proxy cache and rerun scripts/check-loopback-registries.sh')
 
 
 def main():
@@ -69,19 +96,24 @@ def main():
                         deadline = time.monotonic() + 30
                         while not port_file.exists():
                             if process.poll() is not None:
-                                raise AssertionError(process.communicate())
+                                raise AssertionError(f'release registry exited: {process.communicate()!r}; next: repair the launcher startup error and rerun scripts/check-loopback-registries.sh')
                             if time.monotonic() >= deadline:
-                                raise AssertionError('release registry did not report its ports')
+                                process.terminate()
+                                raise AssertionError(f'release registry did not report its ports: {process.communicate()!r}; next: inspect the launcher startup and rerun scripts/check-loopback-registries.sh')
                             time.sleep(0.05)
                         port = json.loads(port_file.read_text())['main']
-                        path = '/pr/ed/predicates'
-                        url = f'http://127.0.0.1:{port}/crates/index{path}'
-                        assert read(url) == (502, b''), 'first request must expose upstream failure'
-                        assert Upstream.counts == {path: 1}
-                        assert read(url) == (200, b'recovered index entry\n'), 'second request must retry upstream'
-                        assert Upstream.counts == {path: 2}
-                        assert read(url) == (200, b'recovered index entry\n'), 'third request must reuse successful answer'
-                        assert Upstream.counts == {path: 2}, 'cache hit must not reach upstream'
+                        if type(port) is not int or not 1 <= port <= 65535:
+                            raise AssertionError(f'invalid registry port {port!r}; next: repair the launcher port announcement and rerun scripts/check-loopback-registries.sh')
+                        for failure in (503, 404, 410, 451, 'transport'):
+                            path = f'/pr/ed/{failure}'
+                            url = f'http://127.0.0.1:{port}/crates/index{path}'
+                            status = failure if failure in (404, 410, 451) else 502
+                            expect(read(url), Answer(status, b''), 'first request exposes upstream failure')
+                            expect(Upstream.counts[path], 1, 'first request reaches upstream')
+                            expect(read(url), Answer(200, b'recovered index entry\n'), 'second request retries upstream')
+                            expect(Upstream.counts[path], 2, 'recovery reaches upstream again')
+                            expect(read(url), Answer(200, b'recovered index entry\n'), 'third request reuses success')
+                            expect(Upstream.counts[path], 2, 'cache hit avoids upstream')
                     finally:
                         process.terminate()
                         process.communicate(timeout=5)
