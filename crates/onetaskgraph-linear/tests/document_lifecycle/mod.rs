@@ -79,11 +79,8 @@ pub async fn send(
         .cloned()
         .ok_or("Linear lifecycle response omitted data".into())
 }
-// `teams` is asked at `first:2`, never at a full page: Linear multiplies a nested
-// connection's selection by every row of the page around it, and `teams(first:100)` inside
-// these 100-row pages scored about 22,000 points against Linear's cap of 10,000, so real
-// Linear refused both with HTTP 400 (`complexity.rs` now refuses the same offline). Two
-// still lets `in_team` see a second team and fail closed on it, as it fails on a next page.
+// `teams(first:2)`: a full nested page puts these 100-row listings over Linear's complexity
+// cap (`complexity.rs`), and two still lets `in_team` see a second team and fail closed.
 const DOCUMENTS: &str = "query($after:String,$filter:DocumentFilter!){documents(first:100,after:$after,filter:$filter){nodes{id title team{key} project{teams(first:2){nodes{key} pageInfo{hasNextPage}}}} pageInfo{hasNextPage endCursor}}}";
 const PROJECTS: &str = "query($after:String,$filter:ProjectFilter!){projects(first:100,after:$after,filter:$filter){nodes{id name teams(first:2){nodes{key} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor}}}";
 fn in_team(node: &Value, team: &str, project: bool) -> bool {

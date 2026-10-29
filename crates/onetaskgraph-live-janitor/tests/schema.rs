@@ -240,9 +240,8 @@ fn a_field_github_does_not_have_is_refused() {
 #[path = "../../onetaskgraph-linear/tests/document_lifecycle/complexity.rs"]
 mod complexity;
 
-/// Linear refuses a document over its complexity cap with HTTP 400 before it reads a row,
-/// which no schema shows: the listing once nested `teams(first:100)` in its 100-row page and
-/// every hourly Linear sweep failed `Linear HTTP request refused` while this file passed.
+/// Schema validation cannot see Linear's complexity cap, which refuses a document over it
+/// with HTTP 400.
 #[test]
 fn linear_documents_stay_under_linears_complexity_cap() {
     use onetaskgraph_live_janitor::linear::{DELETE_DOCUMENT, DOCUMENTS};

@@ -1,20 +1,17 @@
-//! Linear's documented complexity model, applied to a query document before it is answered.
+//! Linear's complexity score of a query document, which it refuses over [`CAP`] with HTTP 400
+//! before reading a row and which no schema shows, so a replay must refuse it too.
 //!
-//! Linear scores every document it is sent and refuses one over [`CAP`] outright, HTTP 400,
-//! `The query is too complex.` — before it reads a row. Nothing in a schema says so, so a
-//! replay that only checks field names and wire types answers a document real Linear
-//! refuses: the standing-set discovery once nested `teams(first:100)` inside a `first:100`
-//! page, about 22,000 points by this model, and both live lanes failed on it at once while
-//! every offline journey passed. The model is the one `onetaskgraph_linear::graphql::RESOLUTION`
-//! records: a property 0.1, an object 1, and a connection's children multiplied by its `first`
-//! (or `last`), or 50 without one. Linear prices some connections by the rows it returns
-//! rather than the rows asked for, so this is an upper bound — the direction a refusal here
-//! has to err in.
+//! The model is the one `onetaskgraph_linear::graphql::RESOLUTION` documents — a property 0.1,
+//! an object 1, a connection's children times its `first` (or `last`, else 50) — and Linear's
+//! own scores run [`LINEAR_ABOVE_MODEL`] above it, which the first test reconciles.
 use graphql_parser::query as q;
 use serde_json::Value;
 
 /// Linear's per-document complexity cap.
 pub const CAP: f64 = 10_000.0;
+
+/// How far Linear's reported score ran above [`score`] on both documents it has scored here.
+pub const LINEAR_ABOVE_MODEL: f64 = 225.0;
 
 /// What Linear's model scores `query` at under `variables`, or why it cannot be scored.
 pub fn score(query: &str, variables: &Value) -> Result<f64, String> {
@@ -38,9 +35,10 @@ pub fn score(query: &str, variables: &Value) -> Result<f64, String> {
 /// The refusal Linear answers a document over [`CAP`] with, or `None` when it is under it.
 pub fn refusal(query: &str, variables: &Value) -> Option<String> {
     match score(query, variables) {
-        Ok(points) if points <= CAP => None,
+        Ok(points) if points + LINEAR_ABOVE_MODEL <= CAP => None,
         Ok(points) => Some(format!(
-            "The query is too complex. (model scores {points:.1} against {CAP})"
+            "The query is too complex. (scored {:.1} against {CAP})",
+            points + LINEAR_ABOVE_MODEL
         )),
         Err(error) => Some(format!("complexity could not be scored: {error}")),
     }
@@ -88,18 +86,30 @@ fn page(field: &q::Field<'_, String>, variables: &Value) -> Result<Option<f64>, 
     Ok(connection.then_some(50.0))
 }
 
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Linear scores documents only at its own runtime and publishes no scoring artifact; this reconciles the model with the two scores Linear itself reported, recorded in `onetaskgraph_linear`'s `MAX_PAGE_SIZE` and `graphql::RESOLUTION` documentation, and re-taking them needs the credential the live lane holds.
 #[test]
-fn the_model_reproduces_the_scores_linear_documented_for_the_plugin() {
-    // `graphql::RESOLUTION`'s own documentation prices it 1827.2 plus 1.1 for `organization{id}`.
-    let points = score(
-        onetaskgraph_linear::graphql::RESOLUTION,
-        &serde_json::json!({"key":"T"}),
-    )
-    .unwrap();
-    assert!((points - 1828.3).abs() < 0.01, "{points}");
-    // The document Linear refused `Query too complex`, with `teams` at its default page.
-    let refused = "query($key:String!){ organization{id} teams(filter:{key:{eqIgnoreCase:$key}}){nodes{id states(first:250){nodes{id name type} pageInfo{hasNextPage}}}} projectStatuses(first:250){nodes{id name type position} pageInfo{hasNextPage}} }";
-    assert!(refusal(refused, &serde_json::json!({"key":"T"})).is_some());
+fn the_model_reconciles_with_the_scores_linear_reported() {
+    use onetaskgraph_linear::graphql;
+    let key = serde_json::json!({"key":"T"});
+    // `RESOLUTION`'s documentation prices it 1827.2, plus 1.1 for `organization{id}`.
+    let resolution = score(graphql::RESOLUTION, &key).unwrap();
+    assert!((resolution - 1828.3).abs() < 0.01, "{resolution}");
+    // Linear scored `RESOLUTION` 30905 and refused it while it had `teams` at its default page
+    // and no `organization{id}`, and `PROJECTS` at `first: 250` 17475.
+    let refused = graphql::RESOLUTION
+        .replace("teams(first:2,", "teams(")
+        .replace(" organization{id}", "");
+    let projects = score(graphql::PROJECTS, &serde_json::json!({"first":250})).unwrap();
+    for (points, reported) in [
+        (score(&refused, &key).unwrap(), 30905.0),
+        (projects, 17475.0),
+    ] {
+        assert!(
+            (points + LINEAR_ABOVE_MODEL - reported).abs() < 0.01,
+            "{points}"
+        );
+    }
+    assert!(refusal(&refused, &key).is_some());
 }
 
 #[test]
