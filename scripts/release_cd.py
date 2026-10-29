@@ -26,6 +26,8 @@ names it and what to do next); 2 an invalid invocation.
 
 from __future__ import annotations
 
+from cli_wheel_lock import cli_wheel_lock
+
 import argparse
 import email.parser
 import hashlib
@@ -322,22 +324,23 @@ def maturin_requirement() -> str:
 
 
 def build_target(row: PlatformTarget, tag: ReleaseTag, dist: Path) -> None:
-    wheels = dist / "wheels" / row.target
-    shutil.rmtree(wheels, ignore_errors=True)
-    wheels.mkdir(parents=True)
-    run(
-        [tool("uv"), "tool", "run", "--from", maturin_requirement(), "maturin", "build", "--release", "--locked", "--target", row.target, "--out", str(wheels)],
-        f"maturin could not build the {row.target} wheel",
-        "fix the build error above; the wheel's binary is the one every other artifact carries",
-        env={**os.environ, "RUSTFLAGS": "-D warnings"},
-    )
-    package_target(row, tag, dist)
-    run(
-        [PYTHON_EXECUTABLE, "scripts/verify-release-products.py", "--target", row.target, "--npm", row.npm_platform, "--tag", tag, "--ext", row.extension, "--dist", str(dist), "--install"],
-        f"the {row.target} artifacts did not install and run",
-        "nothing was published; fix the artifact the verification named above and rerun the build",
-        capture=True,
-    )
+    with cli_wheel_lock():
+        wheels = dist / "wheels" / row.target
+        shutil.rmtree(wheels, ignore_errors=True)
+        wheels.mkdir(parents=True)
+        run(
+            [tool("uv"), "tool", "run", "--from", maturin_requirement(), "maturin", "build", "--release", "--locked", "--target", row.target, "--out", str(wheels)],
+            f"maturin could not build the {row.target} wheel",
+            "fix the build error above; the wheel's binary is the one every other artifact carries",
+            env={**os.environ, "RUSTFLAGS": "-D warnings"},
+        )
+        package_target(row, tag, dist)
+        run(
+            [PYTHON_EXECUTABLE, "scripts/verify-release-products.py", "--target", row.target, "--npm", row.npm_platform, "--tag", tag, "--ext", row.extension, "--dist", str(dist), "--install"],
+            f"the {row.target} artifacts did not install and run",
+            "nothing was published; fix the artifact the verification named above and rerun the build",
+            capture=True,
+        )
 
 
 def package_target(row: PlatformTarget, tag: ReleaseTag, dist: Path) -> None:
@@ -1005,8 +1008,9 @@ def main(argv: Iterable[str] | None = None) -> int:
             case "package":
                 if args.platform == "independent":
                     parser.error("`package` packages a platform's wheels: --platform linux, linux-arm64, macos or windows")
-                for row in platform_targets(args.platform):
-                    package_target(row, tag, dist)
+                with cli_wheel_lock():
+                    for row in platform_targets(args.platform):
+                        package_target(row, tag, dist)
             case "publish":
                 registries = INDEPENDENT_REGISTRIES if args.platform == "independent" else PLATFORM_REGISTRIES
                 if args.to not in registries:
