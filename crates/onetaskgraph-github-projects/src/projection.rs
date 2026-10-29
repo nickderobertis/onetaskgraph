@@ -7,13 +7,15 @@
 
 use std::sync::{Mutex, MutexGuard};
 
-use onetaskgraph_plugin_api::{NativeId, Status, StatusCategory, Task, asset_sha256};
+use onetaskgraph_plugin_api::{
+    Classification, NativeId, Repository, Status, StatusCategory, Task, asset_sha256,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
-    BoardFields, BoardKind, ContentKind, GitHubProjectsSource, ItemKind, RepositoryTarget,
-    Resolved, compose_body,
+    BoardFields, BoardKind, ContentKind, GitHubProjectsSource, HeldPriority, ItemKind,
+    RepositoryTarget, Resolved, compose_body,
 };
 
 /// The version of both contexts, so one an earlier or later build wrote is declined rather
@@ -103,21 +105,95 @@ struct Placement {
     version: ContextVersion,
     /// The setup-context token the placement was kept under.
     token: SetupToken,
-    /// The repository the issue is created in, `owner/name`.
-    repository: String,
+    /// The repository the issue is created in.
+    repository: RepositoryTarget,
     /// That repository's node id.
     repository_id: NodeId,
 }
 
-/// One issue this source wrote, with its title and both spellings of its body left out, and the
-/// board — its owner and number — it was written on.
+/// The ids of one task issue this source wrote, and the board — its owner and number — it was
+/// written on: everything a later write needs to address it, and nothing of its work or of its
+/// state. Its title, body, metadata, status, option and closure are not representable here, so
+/// a later update sends every part of itself rather than skipping one on a kept record's word.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Written {
+struct WrittenIds {
     version: ContextVersion,
     owner: String,
     number: u32,
-    item: Resolved,
+    /// The issue's node id.
+    issue: NodeId,
+    /// Its board item's node id.
+    item: NodeId,
+    /// The board's node id.
+    board: NodeId,
+    /// The issue's own number in its repository.
+    issue_number: Option<u64>,
+    url: Option<String>,
+    /// The repository the issue lives in.
+    own_repository: Option<Repository>,
+    /// The project issue it is filed under.
+    parent: Option<NativeId>,
+    repositories: Vec<Repository>,
+    classification: Classification,
+    /// The definitions of the board's fields — ids and options, which the setup-context token
+    /// guards for a create — that its writes select by id.
+    board_fields: Value,
+}
+
+impl WrittenIds {
+    /// The record a write of the issue takes: these ids, `task`'s title, content and priority as
+    /// the caller states them, and no state — every status, option and closure unknown.
+    fn resolved(self, task: &Task) -> Option<Resolved> {
+        let raw_body =
+            compose_body(task.content.as_deref(), &std::collections::BTreeMap::new()).ok()?;
+        let fields = self
+            .board_fields
+            .get("nodes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        Some(Resolved {
+            item_id: self.item.into(),
+            id: NativeId(self.issue.into()),
+            content_kind: ContentKind::Issue,
+            kind: BoardKind::Work(ItemKind::Task),
+            title: task.title.clone(),
+            body: task.content.clone(),
+            raw_body,
+            status: Status {
+                category: StatusCategory::Unknown,
+                name: String::new(),
+            },
+            option: None,
+            priority: HeldPriority::Read(task.priority),
+            closed: false,
+            reason: None,
+            delivers: Vec::new(),
+            delivered_by: Vec::new(),
+            labels: Vec::new(),
+            parent: self.parent,
+            origin: None,
+            projected: std::collections::BTreeMap::new(),
+            number: self.issue_number,
+            url: self.url,
+            created_at: None,
+            updated_at: None,
+            item_updated_at: None,
+            comment_count: None,
+            relationship_events: None,
+            served_at: None,
+            facets: None,
+            own_repository: self.own_repository,
+            repositories: self.repositories,
+            classification: self.classification,
+            slot: std::collections::BTreeMap::new(),
+            board_id: Some(self.board.into()),
+            fields,
+            board_fields: Some(self.board_fields),
+            blocked_by: None,
+        })
+    }
 }
 
 /// What this source holds for projections, for the length of one process.
@@ -190,7 +266,7 @@ impl GitHubProjectsSource {
         serde_json::to_value(Placement {
             version: ContextVersion,
             token,
-            repository: repository.slug(),
+            repository: repository.clone(),
             repository_id: NodeId::try_from(repository_id).ok()?,
         })
         .ok()
@@ -202,9 +278,6 @@ impl GitHubProjectsSource {
         let Ok(placement) = serde_json::from_value::<Placement>(context.clone()) else {
             return false;
         };
-        if RepositoryTarget::parse(&placement.repository).is_err() {
-            return false;
-        }
         *held(&self.projection.kept) = Some(placement);
         true
     }
@@ -230,7 +303,7 @@ impl GitHubProjectsSource {
             return false;
         };
         let current = setup_token(&board, repository, parent, self.is_declared_private());
-        if kept.repository != repository.slug() || current.as_ref() != Some(&kept.token) {
+        if kept.repository != *repository || current.as_ref() != Some(&kept.token) {
             return false;
         }
         let (Ok(mut fields), Ok(mut repositories)) = (self.fields_cache(), self.repository_cache())
@@ -242,21 +315,26 @@ impl GitHubProjectsSource {
         true
     }
 
-    /// The record this process wrote of issue `id`, without its title or body.
+    /// The ids of issue `id`, which this process wrote, and of the board it sits on.
     pub(super) fn written_held(&self, id: &NativeId) -> Option<Value> {
-        let mut item = self.resolved_cache().ok()?.get(id).cloned()?;
-        if item.kind != BoardKind::Work(ItemKind::Task)
-            || item.content_kind != ContentKind::Issue
-            || item.item_id.is_empty()
-        {
+        let item = self.resolved_cache().ok()?.get(id).cloned()?;
+        if item.kind != BoardKind::Work(ItemKind::Task) || item.content_kind != ContentKind::Issue {
             return None;
         }
-        ids_only(&mut item);
-        serde_json::to_value(Written {
+        serde_json::to_value(WrittenIds {
             version: ContextVersion,
             owner: self.owner.clone(),
             number: self.project_number,
-            item,
+            issue: NodeId::try_from(item.id.0).ok()?,
+            item: NodeId::try_from(item.item_id).ok()?,
+            board: NodeId::try_from(item.board_id?).ok()?,
+            issue_number: item.number,
+            url: item.url,
+            own_repository: item.own_repository,
+            parent: item.parent,
+            repositories: item.repositories,
+            classification: item.classification,
+            board_fields: item.board_fields?,
         })
         .ok()
     }
@@ -267,31 +345,20 @@ impl GitHubProjectsSource {
     /// update that changes the body reads the body first (`targeted_update`), and one that does
     /// not sends no body at all.
     pub(super) fn prime_written_held(&self, id: &NativeId, context: &Value, task: &Task) -> bool {
-        let Ok(written) = serde_json::from_value::<Written>(context.clone()) else {
+        let Ok(written) = serde_json::from_value::<WrittenIds>(context.clone()) else {
             return false;
         };
-        let mut item = written.item;
-        // Only a task issue of this board, addressed by both its ids, directs a write.
+        // Only a task issue of this board, addressed by its id, directs a write.
         if written.owner != self.owner
             || written.number != self.project_number
-            || item.id != *id
+            || written.issue.0 != id.0
             || task.id != *id
-            || item.kind != BoardKind::Work(ItemKind::Task)
-            || item.content_kind != ContentKind::Issue
-            || item.item_id.is_empty()
-            || item.named_board().is_none()
         {
             return false;
         }
-        // Whatever the context says of the issue's state is discarded on the way in too: only
-        // its ids direct a write.
-        ids_only(&mut item);
-        let Ok(raw_body) = compose_body(task.content.as_deref(), &item.slot) else {
+        let Some(item) = written.resolved(task) else {
             return false;
         };
-        item.title.clone_from(&task.title);
-        item.body.clone_from(&task.content);
-        item.raw_body = raw_body;
         let Ok(mut cache) = self.resolved_cache() else {
             return false;
         };
@@ -343,24 +410,4 @@ impl GitHubProjectsSource {
             })?
             .to_owned())
     }
-}
-
-/// `item` reduced to its ids and its board's definitions: no title, body or metadata, and no
-/// state a later write could take as what the tracker still holds — so every part of a later
-/// update is sent rather than skipped on the word of a kept record.
-fn ids_only(item: &mut Resolved) {
-    item.title = String::new();
-    item.body = None;
-    item.raw_body = None;
-    item.slot = std::collections::BTreeMap::new();
-    item.projected = std::collections::BTreeMap::new();
-    item.delivers = Vec::new();
-    item.delivered_by = Vec::new();
-    item.option = None;
-    item.closed = false;
-    item.reason = None;
-    item.status = Status {
-        category: StatusCategory::Unknown,
-        name: String::new(),
-    };
 }

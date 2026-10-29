@@ -3690,7 +3690,8 @@ impl StatusTarget {
 /// [`GitHubProjectsConfig::repository`]. [`GitHubProjectsSource::creation_target`] makes
 /// that choice and says what it refuses before `createIssue`.
 // llmlint: ignore-end[comments_earn_their_place, contracts_have_one_source_or_a_drift_gate]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 struct RepositoryTarget {
     owner: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only after `owner/name` validation in `new`.
     name: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only after `owner/name` validation in `new`.
@@ -3744,6 +3745,22 @@ impl RepositoryTarget {
 
     fn slug(&self) -> String {
         format!("{}/{}", self.owner, self.name)
+    }
+}
+
+/// Read back from a kept context as the `owner/name` it was written as, refused unless
+/// [`RepositoryTarget::parse`] takes it.
+impl TryFrom<String> for RepositoryTarget {
+    type Error = String;
+
+    fn try_from(slug: String) -> Result<Self, Self::Error> {
+        Self::parse(&slug).map_err(|error| error.to_string())
+    }
+}
+
+impl From<RepositoryTarget> for String {
+    fn from(target: RepositoryTarget) -> Self {
+        target.slug()
     }
 }
 

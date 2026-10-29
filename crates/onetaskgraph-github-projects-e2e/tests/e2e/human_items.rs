@@ -690,17 +690,18 @@ fn a_later_cold_process_takes_the_kept_placement_and_a_changed_option_is_read_af
     )
     .unwrap();
     let written = journal["phase"]["written"].to_string();
-    assert!(
-        journal["phase"]["written"]["item"]["item_id"].is_string(),
-        "{written}"
-    );
+    let kept_ids = journal["phase"]["written"].as_object().unwrap();
+    for id in ["issue", "item", "board"] {
+        assert!(kept_ids[id].is_string(), "{written}");
+    }
     for work in ["Decide on item-first", "Choose the next", "human."] {
         assert!(!written.contains(work), "{work} in {written}");
     }
-    let item = &journal["phase"]["written"]["item"];
-    assert_eq!(item["option"], Value::Null, "{written}");
-    assert_eq!(item["status"]["category"], "unknown", "{written}");
-    assert_eq!(item["slot"], json!({}), "{written}");
+    for state in [
+        "title", "body", "slot", "status", "option", "closed", "reason",
+    ] {
+        assert!(!kept_ids.contains_key(state), "{state} in {written}");
+    }
     // A second process reads the project issue it is filed under, as every create does, finds
     // the kept placement's token unchanged there, and reads no board fields or repository.
     let second = created_with("item-second");
