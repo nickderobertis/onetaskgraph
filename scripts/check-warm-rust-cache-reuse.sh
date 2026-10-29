@@ -13,11 +13,9 @@
 # Linux leg's last step, where the job's builds find everything built and cost little, so a
 # push to main fails the moment the cache it saves stops being one a pull request reuses.
 #
-# The job's builds, read from where they are declared: each crate's `test` target's cargo
-# commands with --no-run, its instrumented build as scripts/rust-coverage.sh runs it with
-# --no-run, and the distribution journey's release build, by the same function the journey
-# itself calls. A first, cheap pass of one of them against an empty directory has to report a
-# compiled dependency, or a scan that never matches would read as a pass.
+# The job's builds are what scripts/pr-build-commands.sh reads from where each is declared.
+# A first, cheap build into an empty directory has to report a compiled dependency, or a scan
+# that never matches would read as a pass.
 #
 # Without it, a cold build of every dependency three ways, so it is no phase of `check`: run it
 # by name (`just warm-cache-reuse-check`) when the warmer, the build commands or the toolchain
@@ -57,28 +55,6 @@ members="$(cargo metadata --no-deps --format-version 1 --locked \
   | "$python_bin" -c 'import json, sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))' \
   | tr -d '\r')" || fail "could not list the workspace's crates" "run 'cargo metadata --no-deps' and fix what it reports"
 
-# consumer_builds: one command per line, every build the Linux pull-request job makes.
-consumer_builds() {
-  local project
-  for project in crates/*/project.json; do
-    "$python_bin" - "$project" <<'PY'
-import json, sys
-target = json.load(open(sys.argv[1], encoding="utf-8")).get("targets", {}).get("test", {})
-options = target.get("options", {})
-commands = options.get("commands") or [options.get("command", "")]
-for command in commands:
-    command = command if isinstance(command, str) else command.get("command", "")
-    if command.startswith("cargo test "):
-        print(command.replace(" --quiet", "") + " --no-run")
-PY
-  done | tr -d '\r'
-  local crate
-  for crate in $members; do
-    echo "cargo llvm-cov --no-report nextest --package $crate --all-features --locked --no-run"
-  done
-  echo "bash scripts/test-distribution.sh --release-build-only"
-}
-
 # rebuilt <log>: the non-workspace crates a build log says cargo compiled, one per line.
 rebuilt() {
   sed -n 's/^ *Compiling \([^ ]*\) v.*/\1/p' "$1" | tr -d '\r' | sort -u \
@@ -102,7 +78,7 @@ if ! "$warmed"; then
   }
 fi
 
-consumer_builds >"$scratch/builds"
+bash scripts/pr-build-commands.sh >"$scratch/builds"
 [ -s "$scratch/builds" ] || fail "found no pull-request build to make" "keep the crates' test targets' cargo commands in crates/*/project.json"
 : >"$scratch/rebuilt"
 while IFS= read -r build; do

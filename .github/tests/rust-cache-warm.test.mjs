@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { test } from "node:test";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parse } from "yaml";
-import { read, root } from "../workflow-graph.mjs";
+import { jobs, read, root } from "../workflow-graph.mjs";
 
 // Each leg of rust-cache-warm.yml must save exactly the cache its pull-request job restores:
 // the same shared key, the same toolchain and rust-cache inputs on the same runner, and the
 // same build — or the save is a cache nobody reads and every pull request builds cold.
+// A real save and restore needs GitHub's cache service, so the key is proven in two halves
+// that need none: this parity of every input rust-cache keys on, beside rust-cache.test.mjs
+// running the real action's key computation, and scripts/check-warm-rust-cache-reuse.sh,
+// which builds the job's units over what the warmer built and fails on any recompiled.
 
 const FIXTURE = ".github/tests/fixtures/ci-speedup-test-jobs.yml";
 // rust-cache's own default env-var prefixes: what it hashes into the key besides the
@@ -26,7 +33,6 @@ function sources() {
   };
 }
 
-// `${{ matrix.<name> }}` replaced with that combination's value, everywhere in a job.
 function resolve(value, matrix) {
   if (typeof value === "string")
     return value.replace(/\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}/g, (_, name) =>
@@ -61,8 +67,6 @@ function hashedEnv(...levels) {
   );
 }
 
-// The setup-rust-toolchain step, what it is given beyond the key, and whether the floating
-// compiler is removed straight before it.
 function toolchain(job) {
   const steps = job.steps ?? [];
   const index = steps.findIndex((step) => step.uses?.startsWith(SETUP));
@@ -297,5 +301,45 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
       found.some((problem) => expected.test(problem)),
       `${name} must be refused with ${expected}: ${JSON.stringify(found)}`,
     );
+  }
+});
+
+// The macOS leg is skipped only on a decided release merge: a classifier that fails, answers
+// something else, or a release-merge job that fails outright, all still warm it. Each runs the
+// workflow's own decision step over a scratch history whose classifier is a stand-in.
+test("the macOS leg warms whenever the release-merge decision is not a clean true", () => {
+  const warmer = parse(read(".github/workflows/rust-cache-warm.yml"));
+  const scratch = mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "warm-"));
+  const git = (...args) => execFileSync("git", args, { cwd: scratch, encoding: "utf8" }).trim();
+  try {
+    git("init", "-q");
+    git("config", "user.email", "warm@example.invalid");
+    git("config", "user.name", "Warmer contract");
+    mkdirSync(join(scratch, ".github"));
+    const commit = (classifier) => {
+      writeFileSync(join(scratch, ".github/semantic-release.py"), classifier);
+      git("add", ".");
+      git("commit", "-qm", "classifier");
+      return git("rev-parse", "HEAD");
+    };
+    const scheduled = (classifier, workflow = warmer) => {
+      const before = commit("print('first')\n");
+      const after = commit(classifier);
+      const rows = jobs(
+        workflow,
+        { event: "push", branch: "main", revisions: { cwd: scratch, before, after } },
+        { macosRequired: false },
+      );
+      return rows.some((row) => row.job === "warm-macos");
+    };
+    assert.equal(scheduled("print('true')\n"), false, "a decided release merge skips it");
+    assert.equal(scheduled("print('false')\n"), true, "a source change warms it");
+    assert.equal(scheduled("print('maybe')\n"), true, "an unexpected answer warms it");
+    assert.equal(scheduled("raise SystemExit(3)\n"), true, "a failed classifier warms it");
+    const failing = structuredClone(warmer);
+    failing.jobs["release-merge"].steps.find((step) => step.id === "decide").run = "exit 1";
+    assert.equal(scheduled("print('true')\n", failing), true, "a failed decision job warms it");
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
 });

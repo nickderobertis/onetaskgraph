@@ -3,8 +3,10 @@
 # answers `cargo metadata` with two crates and records every other invocation, and a stand-in
 # distribution journey that records its arguments. Each leg must build every crate's test units
 # with every feature and with its defaults, the Linux leg each crate's instrumented units too,
-# and both the distribution journey's release build alone; any other invocation is refused. A
-# build the warmer stops making leaves every later pull request cold, and nothing else says so.
+# and both the distribution journey's release build alone; any other invocation is refused.
+# Each build scripts/pr-build-commands.sh reads test-linux making has to be one of those
+# shapes. A build the warmer stops making leaves every later pull request cold, and nothing
+# else says so.
 #
 #   scripts/check-warm-rust-cache.sh
 #
@@ -65,6 +67,38 @@ for name in plain instrumented; do
     fail "the $name leg built something other than what the pull-request jobs restore (expected '<', ran '>')" "keep scripts/warm-rust-cache.sh building every crate's test units, instrumented on Linux, and the release build alone"
   fi
 done
+
+# And every build test-linux makes, read from where each is declared, has to be one the
+# instrumented leg makes for every crate, up to the crate, the test target and the filter.
+bash "$root/scripts/pr-build-commands.sh" >"$scratch/pr-builds" 2>"$scratch/pr-builds.log" \
+  || { cat "$scratch/pr-builds.log" >&2; fail "scripts/pr-build-commands.sh failed" "fix what it reports above"; }
+python3 - "$scratch/instrumented" "$scratch/pr-builds" >"$scratch/unwarmed" <<'PY' || fail "could not compare the warmer's builds with test-linux's" "run scripts/pr-build-commands.sh and fix what it reports"
+import sys
+
+def shape(line):
+    words = line.split()
+    if words[:1] != ["cargo"]:
+        return None
+    kept, skip = [], False
+    for word in words[1:]:
+        if skip:
+            skip = False
+        elif word in ("-p", "--package", "--test", "-E"):
+            skip = True
+        elif word not in ("--quiet", "--no-run", "--no-tests=pass"):
+            kept.append(word)
+    return (kept[0], tuple(sorted(kept[1:])))
+
+warmed = {shape(line) for line in open(sys.argv[1], encoding="utf-8").read().splitlines()}
+for line in open(sys.argv[2], encoding="utf-8").read().splitlines():
+    built = shape(line)
+    if built is not None and built not in warmed:
+        print(line)
+PY
+if [ -s "$scratch/unwarmed" ]; then
+  tr -d '\r' <"$scratch/unwarmed" >&2
+  fail "test-linux makes the builds above, which scripts/warm-rust-cache.sh makes in no shape" "build each of them in scripts/warm-rust-cache.sh with the same flags"
+fi
 
 for arguments in "--bogus" "--instrumented extra"; do
   : >"$scratch/refused"

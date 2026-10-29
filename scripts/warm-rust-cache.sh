@@ -3,12 +3,9 @@
 #
 #   scripts/warm-rust-cache.sh [--instrumented]
 #
-# .github/workflows/rust-cache-warm.yml runs this on every push to main and saves the Rust
-# cache under the key each of those pull-request jobs restores, because a pull request may
-# restore only a cache saved on its own ref or on main, and they run on pull requests alone:
-# without it every pull request compiled every dependency, and the distribution journey's
-# release build — eight to fifteen minutes — on every run. The cache keeps dependency units
-# only, so what matters is that these are the very units the jobs compile:
+# .github/workflows/rust-cache-warm.yml runs this on every push to main. The cache keeps
+# dependency units only, so what matters is that these are the very units the jobs compile —
+# scripts/check-warm-rust-cache.sh holds them to the shapes scripts/pr-build-commands.sh reads:
 #
 #   every workspace crate's test units, with every feature and with its defaults, as the
 #   crates' `test` targets build them;
