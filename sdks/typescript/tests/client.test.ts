@@ -1368,7 +1368,11 @@ test("a human task is projected through the real binary into a loopback Linear",
 test("a human task projection's request reaches the real binary, which refuses what it cannot project", async () => {
   const root = deliveringFolder();
   try {
-    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+    const client = new OnetaskgraphClient({
+      binaryPath: binary,
+      cwd: root,
+      env: { ONETASKGRAPH_HOST: "sdk-host" },
+    });
     const request = {
       schema_version: 1,
       item_id: "item-1",
@@ -1384,10 +1388,13 @@ test("a human task projection's request reaches the real binary, which refuses w
     };
     const valid = resolve(root, "request.json");
     writeFileSync(valid, JSON.stringify(request));
-    // The binary read the request whole and refused the source, which declares no projection.
+    // The binary read the request whole and refused this host, which no source's
+    // task_projection names, before starting any source.
     const unconfigured = client.taskProjectHuman(valid);
     await expect(unconfigured).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
-    await expect(unconfigured).rejects.toThrow("declares no task_projection");
+    await expect(unconfigured).rejects.toThrow(
+      'host "sdk-host" is not the host any source\'s task_projection names',
+    );
     const question = resolve(root, "question.json");
     writeFileSync(question, JSON.stringify({ ...request, state: "question" }));
     const malformed = client.taskProjectHuman(question);
