@@ -205,7 +205,7 @@ pub struct TaskProjectionConfig {
     pub host: crate::task_projection::HostIdentity,
     /// The absolute directory holding the durable intents.
     #[schemars(with = "String")]
-    pub directory: std::path::PathBuf,
+    pub directory: AbsoluteDirectory,
     /// The existing project of this source a planless item is filed under.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<crate::task_projection::ProjectionProjectId>,
@@ -256,6 +256,37 @@ pub struct SourceCacheConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
     pub dir: Option<std::path::PathBuf>,
+}
+
+/// An absolute directory, refused at load when a configuration gives a relative one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "std::path::PathBuf", into = "std::path::PathBuf")]
+pub struct AbsoluteDirectory(std::path::PathBuf);
+
+impl AbsoluteDirectory {
+    /// The directory.
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl TryFrom<std::path::PathBuf> for AbsoluteDirectory {
+    type Error = String;
+
+    fn try_from(path: std::path::PathBuf) -> Result<Self, Self::Error> {
+        if path.is_absolute() {
+            Ok(Self(path))
+        } else {
+            Err(format!("{} is not an absolute directory", path.display()))
+        }
+    }
+}
+
+impl From<AbsoluteDirectory> for std::path::PathBuf {
+    fn from(directory: AbsoluteDirectory) -> Self {
+        directory.0
+    }
 }
 
 /// Who a configuration declares can read one source: `visibility` beside `plugin` and

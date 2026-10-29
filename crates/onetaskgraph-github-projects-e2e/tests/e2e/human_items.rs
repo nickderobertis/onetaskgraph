@@ -734,3 +734,53 @@ fn a_request_on_standard_input_is_projected_and_a_half_landed_terminal_is_finish
     );
     assert_eq!(store.board.fields.status(&created).as_deref(), Some("Done"));
 }
+
+#[test]
+fn kept_contexts_that_cannot_be_read_are_declined_and_read_afresh() {
+    let store = Store::new(Vec::new());
+    let setup = super::plan_copy::operation_name(graphql::CREATION_CONTEXT);
+    projected(&store.project(&request("item-kept", &[PUBLIC_REPOSITORY])));
+
+    // A kept placement that is not one — an empty repository id — is declined: the next create
+    // reads its context and keeps a sound one.
+    let kept = store.sandbox.project().join("cache-human/placement.json");
+    let mut placement: Value =
+        serde_json::from_str(&std::fs::read_to_string(&kept).unwrap()).unwrap();
+    placement["repository_id"] = json!("");
+    std::fs::write(&kept, placement.to_string()).unwrap();
+    let before = store.requests();
+    let open = request("item-after-corruption", &[PUBLIC_REPOSITORY]);
+    let created = native(&projected(&store.project(&open)));
+    assert!(store.operations_since(before).contains(&setup));
+
+    // A written context naming another board is declined: the terminal write reads the issue
+    // first, then settles it.
+    let journal = std::fs::read_dir(&store.intents)
+        .unwrap()
+        .flat_map(|identity| std::fs::read_dir(identity.unwrap().path()).unwrap())
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+                && std::fs::read_to_string(path)
+                    .unwrap()
+                    .contains("\"item-after-corruption\"")
+        })
+        .expect("the item's journal");
+    let mut held: Value =
+        serde_json::from_str(&std::fs::read_to_string(&journal).unwrap()).unwrap();
+    held["phase"]["written"]["number"] = json!(999);
+    std::fs::write(&journal, held.to_string()).unwrap();
+    let mut completed = open;
+    completed["state"] = json!("completed");
+    let before = store.requests();
+    projected(&store.project(&completed));
+    assert_eq!(
+        store.operations_since(before).first().copied(),
+        Some("reading one issue")
+    );
+    assert_eq!(
+        store.board.fields.state(&created),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
+    );
+}

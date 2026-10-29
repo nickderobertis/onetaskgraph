@@ -108,6 +108,7 @@ pub struct HumanTaskProjection {
     /// The desired lifecycle.
     pub state: ProjectionState,
     /// An optional dismissal reason. Omission and null both preserve absence.
+    // llmlint: ignore[invalid_states_unrepresentable] The v1 wire declares `state` and `reason` as independent fields, and the exported schema both SDKs generate from is frozen; `Engine::project_human` refuses a reason beside any state but `dismissed` before anything is written, and a journey proves it.
     #[serde(default)]
     pub reason: Option<String>,
 }
@@ -241,7 +242,7 @@ pub(crate) fn configured(
                 Ok(ProjectionSource {
                     identity: SourceIdentityDigest::new(identity)?,
                     host: declared.host.clone(),
-                    directory: declared.directory.clone(),
+                    directory: declared.directory.as_path().to_path_buf(),
                     project: declared.project.clone(),
                     placement: crate::cache::designator_location(source, home.as_deref()).map(
                         |(designator, _)| {

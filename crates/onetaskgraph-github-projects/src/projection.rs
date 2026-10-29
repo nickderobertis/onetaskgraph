@@ -46,24 +46,77 @@ impl From<ContextVersion> for u64 {
     }
 }
 
+/// A non-empty GitHub node id, as a kept context names one.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+struct NodeId(String);
+
+impl TryFrom<String> for NodeId {
+    type Error = String;
+
+    fn try_from(id: String) -> Result<Self, Self::Error> {
+        if id.is_empty() || id.chars().any(char::is_whitespace) {
+            Err("a node id is non-empty and holds no whitespace".to_owned())
+        } else {
+            Ok(Self(id))
+        }
+    }
+}
+
+impl From<NodeId> for String {
+    fn from(id: NodeId) -> Self {
+        id.0
+    }
+}
+
+/// A setup-context token: the lowercase SHA-256 [`setup_token`] spells.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+struct SetupToken(String);
+
+impl TryFrom<String> for SetupToken {
+    type Error = String;
+
+    fn try_from(token: String) -> Result<Self, Self::Error> {
+        if token.len() == 64
+            && token
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            Ok(Self(token))
+        } else {
+            Err("a setup-context token is a lowercase SHA-256".to_owned())
+        }
+    }
+}
+
+impl From<SetupToken> for String {
+    fn from(token: SetupToken) -> Self {
+        token.0
+    }
+}
+
 /// The placement a create in this board reads before it writes, and the token it holds under.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Placement {
     version: ContextVersion,
     /// The setup-context token the placement was kept under.
-    token: String,
+    token: SetupToken,
     /// The repository the issue is created in, `owner/name`.
     repository: String,
     /// That repository's node id.
-    repository_id: String,
+    repository_id: NodeId,
 }
 
-/// One issue this source wrote, with its title and both spellings of its body left out.
+/// One issue this source wrote, with its title and both spellings of its body left out, and the
+/// board — its owner and number — it was written on.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Written {
     version: ContextVersion,
+    owner: String,
+    number: u32,
     item: Resolved,
 }
 
@@ -94,7 +147,7 @@ fn setup_token(
     repository: &RepositoryTarget,
     parent: Option<&NativeId>,
     private: bool,
-) -> Option<String> {
+) -> Option<SetupToken> {
     let mut fields: Vec<Value> = board
         .fields
         .get("nodes")?
@@ -119,7 +172,7 @@ fn setup_token(
     let parts = json!({"version": PROJECTION_CONTEXT_VERSION, "board": board.id.as_str(),
         "fields": fields, "repository": repository.slug(), "parent": parent.map(|id| &id.0),
         "private": private});
-    Some(asset_sha256(parts.to_string().as_bytes()))
+    SetupToken::try_from(asset_sha256(parts.to_string().as_bytes())).ok()
 }
 
 impl GitHubProjectsSource {
@@ -138,7 +191,7 @@ impl GitHubProjectsSource {
             version: ContextVersion,
             token,
             repository: repository.slug(),
-            repository_id,
+            repository_id: NodeId::try_from(repository_id).ok()?,
         })
         .ok()
     }
@@ -149,6 +202,9 @@ impl GitHubProjectsSource {
         let Ok(placement) = serde_json::from_value::<Placement>(context.clone()) else {
             return false;
         };
+        if RepositoryTarget::parse(&placement.repository).is_err() {
+            return false;
+        }
         *held(&self.projection.kept) = Some(placement);
         true
     }
@@ -174,7 +230,7 @@ impl GitHubProjectsSource {
             return false;
         };
         let current = setup_token(&board, repository, parent, self.is_declared_private());
-        if kept.repository != repository.slug() || current.as_deref() != Some(kept.token.as_str()) {
+        if kept.repository != repository.slug() || current.as_ref() != Some(&kept.token) {
             return false;
         }
         let (Ok(mut fields), Ok(mut repositories)) = (self.fields_cache(), self.repository_cache())
@@ -182,7 +238,7 @@ impl GitHubProjectsSource {
             return false;
         };
         *fields = Some(board);
-        repositories.insert(repository.clone(), kept.repository_id);
+        repositories.insert(repository.clone(), kept.repository_id.into());
         true
     }
 
@@ -200,6 +256,8 @@ impl GitHubProjectsSource {
         item.raw_body = None;
         serde_json::to_value(Written {
             version: ContextVersion,
+            owner: self.owner.clone(),
+            number: self.project_number,
             item,
         })
         .ok()
@@ -216,7 +274,9 @@ impl GitHubProjectsSource {
         };
         let mut item = written.item;
         // Only a task issue of this board, addressed by both its ids, directs a write.
-        if item.id != *id
+        if written.owner != self.owner
+            || written.number != self.project_number
+            || item.id != *id
             || task.id != *id
             || item.kind != BoardKind::Work(ItemKind::Task)
             || item.content_kind != ContentKind::Issue
