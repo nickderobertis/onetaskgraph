@@ -33,10 +33,12 @@ def refuse(path, why):
 
 out = []
 for path in sorted(glob.glob("crates/*/project.json")):
-    project = json.load(open(path, encoding="utf-8"))
-    options = project.get("targets", {}).get("test", {}).get("options") if isinstance(project, dict) else None
-    if not isinstance(options, dict):
-        refuse(path, "has no `test` target with options")
+    node = json.load(open(path, encoding="utf-8"))
+    for key in ("targets", "test", "options"):
+        node = node.get(key) if isinstance(node, dict) else None
+    if not isinstance(node, dict):
+        refuse(path, "has no `targets.test.options` object")
+    options = node
     commands = options["commands"] if "commands" in options else [options.get("command")]
     if not isinstance(commands, list) or not commands:
         refuse(path, "its `test` target names no command")
