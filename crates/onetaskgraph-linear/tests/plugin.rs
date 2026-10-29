@@ -2257,6 +2257,95 @@ async fn a_project_status_is_matched_locally_because_linear_narrows_that_connect
     }
 }
 
+/// Reconcile through the public plugin API and real HTTP, including a paged relation read.
+#[tokio::test]
+async fn task_rewrites_keep_matching_relations_and_only_write_the_difference() {
+    let task: Task = serde_json::from_value(serde_json::json!({
+        "id":"I", "title":"Edited body", "content":"Changed", "status":{"category":"todo","name":"Todo"},
+        "labels":[], "project":null, "repositories":[], "metadata":{}
+    })).unwrap();
+    let edge = |far: &str, kind| DependencyEdge {
+        from: DependencyEndpoint::from_native("I".into(), ItemKind::Task),
+        to: DependencyEndpoint::new(far.to_owned(), ItemKind::Task).unwrap(),
+        kind,
+    };
+    let relation = |id: &str, far: &str, kind: &str| {
+        serde_json::json!({
+            "id": id, "type": kind, "relatedIssue": {"id": far}
+        })
+    };
+    let page = |nodes, more| {
+        serde_json::json!({
+            "nodes": nodes, "pageInfo": {"hasNextPage":more,"endCursor":if more {Some("next")} else {None}}
+        })
+    };
+    let (endpoint, wire) = response_server(vec![
+        writable_resolution(),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I","description":"Changed","relations":page(vec![relation("KEEP", "FAR", "blocks")], true)}}}),
+        serde_json::json!({"issue":{"relations":page(vec![relation("KEEP-RELATED", "OTHER", "related"), relation("REMOVE", "OLD", "blocks")], false)}}),
+        serde_json::json!({"issueRelationDelete":{"success":true}}),
+        serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"NEW"}}}),
+    ]);
+    writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: Some("I".into()),
+            item: task.clone(),
+            depends_on: vec![
+                edge("work:FAR", DependencyKind::Blocks),
+                edge("OTHER", DependencyKind::Related),
+                edge("NEW-FAR", DependencyKind::Blocks),
+            ],
+        })
+        .await
+        .unwrap();
+    let requests: Vec<_> = wire.iter().collect();
+    let mutations: Vec<serde_json::Value> = requests
+        .iter()
+        .filter_map(|request| {
+            request
+                .split_once("\r\n\r\n")
+                .map(|(_, body)| serde_json::from_str(body).unwrap())
+        })
+        .filter(|request: &serde_json::Value| {
+            request["query"].as_str().unwrap().contains("issueRelation")
+        })
+        .collect();
+    assert_eq!(mutations.len(), 2);
+    assert_eq!(
+        mutations[0]["variables"],
+        serde_json::json!({"id":"REMOVE"})
+    );
+    assert_eq!(
+        mutations[1]["variables"],
+        serde_json::json!({"input":{"issueId":"I","relatedIssueId":"NEW-FAR","type":"blocks"}})
+    );
+
+    // Unreadable relation facts must refuse, never turn into deletion of an existing link.
+    for malformed in [
+        serde_json::json!({"id":"KEEP","type":"blocks"}),
+        serde_json::json!({"id":"KEEP","type":7,"relatedIssue":{"id":"FAR"}}),
+        serde_json::json!({"id":"KEEP","type":"blocks","relatedIssue":{"id":""}}),
+    ] {
+        let (endpoint, wire) = response_server(vec![
+            writable_resolution(),
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I","description":"Changed","relations":page(vec![malformed], false)}}}),
+        ]);
+        let error = writable_source(&endpoint)
+            .write_task(&ItemWrite {
+                target: Some("I".into()),
+                item: task.clone(),
+                depends_on: vec![edge("FAR", DependencyKind::Blocks)],
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, SourceError::Malformed { .. }), "{error}");
+        assert!(
+            wire.iter()
+                .all(|request| !request.contains("issueRelationDelete"))
+        );
+    }
+}
+
 #[tokio::test]
 async fn replacing_more_than_one_full_relation_page_deletes_every_existing_edge() {
     let task: Task = serde_json::from_value(serde_json::json!({"id":"from:T","title":"task","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"repositories":[],"metadata":{}})).unwrap();
@@ -7143,4 +7232,75 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
         ],
         "a write drops what was held, the origins not yet asked among it"
     );
+}
+
+#[tokio::test]
+async fn recorded_document_content_is_returned_as_stored_including_rewrites() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/document-content-40721997875.json")).unwrap();
+    // The complete observed probe and its protected code-span counterpart exercise both
+    // normalization and verbatim payloads through the same public write/read interface.
+    for (before, after) in [
+        (
+            fixture["before"].as_str().unwrap(),
+            fixture["after"].as_str().unwrap(),
+        ),
+        (
+            fixture["preserved"].as_str().unwrap(),
+            fixture["preserved"].as_str().unwrap(),
+        ),
+    ] {
+        let stored = format!("{after}\n\n<!-- onetaskgraph.metadata `{{\"caller.count\":3}}` -->");
+        let node = serde_json::json!({"id":"d1","title":"Probe","content":stored,
+            "url":null,"createdAt":null,"updatedAt":null,"project":{"id":"p1"}});
+        let (endpoint, requests) = response_server(vec![
+            serde_json::json!({"documentCreate":{"success":true,"document":node}}),
+            serde_json::json!({"document":node}),
+        ]);
+        let source = writable_source(&endpoint);
+        let item = Document {
+            version: None,
+            id: "ignored".into(),
+            title: "Probe".into(),
+            content: Some(before.to_owned()),
+            project: Some("p1".into()),
+            labels: Vec::new(),
+            url: None,
+            location: None,
+            created_at: None,
+            updated_at: None,
+            metadata: [("caller.count".to_owned(), serde_json::json!(3))]
+                .into_iter()
+                .collect(),
+            repositories: Vec::new(),
+            classification: Default::default(),
+        };
+        let id = source
+            .write_document(&ItemWrite {
+                target: None,
+                item,
+                depends_on: vec![],
+            })
+            .await
+            .unwrap();
+        let wire = requests.recv().unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(wire.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        let sent = body["variables"]["input"]["content"].as_str().unwrap();
+        assert!(sent.starts_with(before), "{sent:?}");
+        assert_eq!(
+            source
+                .stored_content(onetaskgraph_plugin_api::MetadataRecord::Document, &id)
+                .as_deref(),
+            Some(after)
+        );
+        let shown = source.get_document(&id).await.unwrap().unwrap();
+        assert_eq!(shown.content.as_deref(), Some(after));
+        assert_eq!(shown.metadata["caller.count"], serde_json::json!(3));
+        // The first read consumes the write acknowledgement; the next reaches Linear.
+        let fetched = source.get_document(&id).await.unwrap().unwrap();
+        assert_eq!(fetched.content.as_deref(), Some(after));
+        assert_eq!(fetched.metadata["caller.count"], serde_json::json!(3));
+        assert!(requests.recv().unwrap().contains("document(id:$id)"));
+    }
 }

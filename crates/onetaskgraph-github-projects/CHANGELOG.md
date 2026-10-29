@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.11](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.12.10...onetaskgraph-github-projects-v0.12.11) - 2026-10-29
+
+### Fixed
+
+- *(github-projects)* file a private home's public task in a private repository ([#3804](https://github.com/nickderobertis/onetaskgraph/pull/3804))
+
 ## [0.12.9](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.12.8...onetaskgraph-github-projects-v0.12.9) - 2026-10-28
 
 ### Added

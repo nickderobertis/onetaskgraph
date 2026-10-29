@@ -348,6 +348,13 @@ for fixture_file in "$ROOT"/crates/*/tests/fixtures/*.json; do
   fixture mkdir -p "$scratch/store/$(dirname "$relative")"
   fixture cp "$fixture_file" "$scratch/store/$relative"
 done
+# And each crate's own record of the fixtures beside it that are not stores, which the guard
+# reads as part of its inventory: without it those fixtures would read as never classified.
+for declaration in "$ROOT"/crates/*/tests/fixtures/not-a-store.toml; do
+  [ -f "$declaration" ] || continue
+  relative="${declaration#"$ROOT"/}"
+  fixture cp "$declaration" "$scratch/store/$relative"
+done
 
 run_store_native() {
   OUTPUT="$(bash "$scratch/store/scripts/$STORE_GUARD" 2>&1)" && STATUS=0 || STATUS=$?

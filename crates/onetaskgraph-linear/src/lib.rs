@@ -108,6 +108,23 @@
 //!
 //! ## Ruling: what Linear stores is read off each write's own answer
 //!
+//! **Document-content contract:** writes send the caller's Markdown plus this source's
+//! code-span metadata slot. Reads return Linear's stored Markdown with that slot and its
+//! separator removed; they do not promise the caller's original bytes. `stored_content`
+//! reports the write answer in that same form. Code-span payloads survive unchanged;
+//! prose and HTML-comment payloads may be normalized. The captured response in
+//! `tests/fixtures/document-content-40721997875.json` records autolinking, bracket escaping
+//! and a comment terminator escape. What that run read after the Markdown probe's update
+//! matches, byte for byte, the stored form of the HTML-comment probe written before it. The
+//! working hypothesis — not yet confirmed against real Linear — is a by-id read lagging the
+//! write rather than a new rewrite rule, so the live journey waits within its replica bound
+//! for the exact recorded content, refusing a different value when that bound expires; the
+//! required live capability journey comparing both exact probes is what confirms or refutes
+//! it. Hosted run
+//! 40734970799 also missed freshly created projects in the unfiltered listing. That listing
+//! is retried within the existing index bound (21 reads, one second apart), still requiring
+//! both created projects; the journey's test timeout is unchanged.
+//!
 //! Linear stores an issue's `description`, a project's `content` and a document's `content` as
 //! Markdown it normalizes on write — `- ` bullets come back `* `, a table's delimiter row `| -- |`,
 //! a blank line is set before a list after a heading or a paragraph line and between two images
@@ -334,8 +351,10 @@
 //! the scope's ruling below. A targeted update naming anything else
 //! keeps its one read of the issue: the metadata slot is merged into the description Linear
 //! holds, and writing it without that read would overwrite whatever a person wrote there since.
-//! A whole rewrite of an issue or a project reads the relations it replaces in its own answer
+//! A whole rewrite of an issue or a project reads its existing relations in its own answer
 //! ([`graphql::ISSUE_REWRITE`], [`graphql::PROJECT_REWRITE`]) rather than in a read of its own.
+//! Matching issue relations are retained, so a body edit or stored-content follow-up does not
+//! delete and recreate an unchanged dependency.
 //!
 //! ## Ruling: `sources fields --apply` creates every name the mapping needs
 //!
@@ -679,9 +698,9 @@ pub mod graphql {
     /// so every other issue write keeps asking for exactly what it reads.
     pub const ISSUE_PRIORITY_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id priority}} }";
     /// Rewrite an issue whole, and read back in the same request the first page of the
-    /// relations it holds — the ones a whole write replaces.
+    /// relations it holds — the ones a whole write reconciles.
     ///
-    /// A whole write of an existing item replaces every relation it holds with the ones it was
+    /// A whole write of an existing item reconciles its relations with the ones it was
     /// given, so it has to know which it holds; selected here, that is the update's own answer
     /// rather than a read of its own, and a re-write with no relations to replace is the one
     /// request. The relations are read after the update, which moves none of them.
@@ -1596,6 +1615,14 @@ enum WriteKind {
     Task,
     Project,
 }
+/// Linear's native relation type for a task edge.
+fn issue_relation_type(kind: DependencyKind) -> &'static str {
+    match kind {
+        DependencyKind::Blocks => "blocks",
+        DependencyKind::Related => "related",
+    }
+}
+
 /// What a whole write already knows of the relations its item holds.
 enum HeldRelations<'a> {
     /// None: the item was just created.
@@ -2807,8 +2834,8 @@ impl LinearSource {
             .iter()
             .find(|edge| edge.to.kind == ItemKind::Project && edge.kind == DependencyKind::Related)
     }
-    /// Replace every relation `near` holds of `kind` with exactly `edges`: the ones it holds
-    /// are deleted, then each edge is created.
+    /// Set the relations `near` holds of `kind` to exactly `edges`. Matching issue relations
+    /// are retained; obsolete relations are deleted and missing ones created.
     ///
     /// `held` is what is already known of the ones it holds: none, for an item the write this
     /// follows created; the first page of them, for one a rewrite's own answer reported; and
@@ -2820,6 +2847,15 @@ impl LinearSource {
         kind: WriteKind,
         held: HeldRelations<'_>,
     ) -> Result<(), SourceError> {
+        let wanted: std::collections::BTreeSet<_> = edges
+            .iter()
+            .filter(|_| matches!(kind, WriteKind::Task))
+            .filter_map(|edge| {
+                self.relation_target(edge, kind)
+                    .map(|far| (far.to_owned(), issue_relation_type(edge.kind).to_owned()))
+            })
+            .collect();
+        let mut kept = std::collections::BTreeSet::new();
         let mut cursor: Option<Cursor> = None;
         let mut answered = match held {
             HeldRelations::None => None,
@@ -2865,6 +2901,15 @@ impl LinearSource {
                 })?
             {
                 let id = backend_id(relation, "id")?;
+                if !wanted.is_empty() {
+                    let far = backend_id(&relation["relatedIssue"], "id")?;
+                    let relation_type = str_at(relation, "type")?;
+                    let key = (far.to_owned(), relation_type.to_owned());
+                    if wanted.contains(&key) {
+                        kept.insert(key);
+                        continue;
+                    }
+                }
                 let (query, mutation) = if matches!(kind, WriteKind::Project) {
                     (
                         graphql::PROJECT_RELATION_DELETE,
@@ -2917,21 +2962,14 @@ impl LinearSource {
         const NEAR_ANCHOR: &str = "start";
         const FAR_ANCHOR: &str = "end";
         for edge in edges {
-            if edge.to.kind
-                != match kind {
-                    WriteKind::Task => ItemKind::Task,
-                    WriteKind::Project => ItemKind::Project,
-                }
-                // An opaque far end names another tracker, which no relation here can hold.
-                || edge.to.designator().is_some()
+            let Some(far) = self.relation_target(edge, kind) else {
+                continue;
+            };
+            if matches!(kind, WriteKind::Task)
+                && kept.contains(&(far.to_owned(), issue_relation_type(edge.kind).to_owned()))
             {
                 continue;
             }
-            let far = match edge.to.id().split_once(':') {
-                Some((source, native)) if source == self.name.as_str() => native,
-                Some(_) => continue,
-                None => edge.to.id(),
-            };
             // A project relation is not spelled the way an issue relation is, and this is
             // the whole of what a project's `type` may say.
             //
@@ -2956,8 +2994,7 @@ impl LinearSource {
             // different relation with a different set, which does include `related`.
             let relation_type = match (kind, edge.kind) {
                 (WriteKind::Project, DependencyKind::Blocks) => "dependency",
-                (WriteKind::Task, DependencyKind::Blocks) => "blocks",
-                (WriteKind::Task, DependencyKind::Related) => "related",
+                (WriteKind::Task, dependency) => issue_relation_type(dependency),
                 // Unreachable past `write_project`'s guard, and an error rather than a
                 // skip so it stays that way: an edge dropped here would be a copy
                 // reporting success for a dependency the destination does not hold.
@@ -2995,6 +3032,22 @@ impl LinearSource {
             backend_id(relation, "id")?;
         }
         Ok(())
+    }
+
+    /// A native endpoint a Linear relation can hold, with this source's qualifier removed.
+    fn relation_target<'a>(&self, edge: &'a DependencyEdge, kind: WriteKind) -> Option<&'a str> {
+        let expected = match kind {
+            WriteKind::Task => ItemKind::Task,
+            WriteKind::Project => ItemKind::Project,
+        };
+        if edge.to.kind != expected || edge.to.designator().is_some() {
+            return None;
+        }
+        match edge.to.id().split_once(':') {
+            Some((source, native)) if source == self.name.as_str() => Some(native),
+            Some(_) => None,
+            None => Some(edge.to.id()),
+        }
     }
 
     async fn prepare_edges(
