@@ -87,6 +87,7 @@ jobs:
     name: check (${{ matrix.os }})
     # The live journeys remain inside the affected gate. Serialize only this job,
     # and retain every waiting check rather than replacing a pending writer.
+    # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] This block moves no suite into the gate: the live journeys were already ordinary affected tests, run only when their own plugin changed, which AGENTS.md records as reversing the separate live tier. It only serializes the one credentialed leg so two writers cannot interleave updates to the standing Linear set.
     concurrency:
       group: ${{ matrix.os == 'ubuntu-latest' && 'linear-live-documents' || format('check-{0}-{1}', matrix.os, github.run_id) }}
       cancel-in-progress: false
