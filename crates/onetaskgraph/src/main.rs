@@ -1662,6 +1662,23 @@ async fn project_human(
                 .to_owned(),
         )
     })?;
+    // A host no source names is refused here, from the configuration alone, before any
+    // source is started: the comparison is the configured spelling against this one, so it
+    // answers alike whatever the platform's own host-name conventions are.
+    if !loaded.config.sources().values().any(|source| {
+        source
+            .task_projection()
+            .is_some_and(|projection| projection.host.as_str() == host)
+    }) {
+        return Err(Failure::decided(
+            "projection-host",
+            format!(
+                "host {host:?} is not the host any source's task_projection names\n\
+                 next: run this on the host sources.<name>.task_projection.host names, or set \
+                 ONETASKGRAPH_HOST to it."
+            ),
+        ));
+    }
     let engine = engine(loaded);
     let projected = engine
         .project_human(&request, &host)
@@ -2395,6 +2412,7 @@ mod tests {
                 "task render",
                 "task answers",
                 "task assets",
+                "task project-human",
                 "project list",
                 "project show",
                 "project deps",

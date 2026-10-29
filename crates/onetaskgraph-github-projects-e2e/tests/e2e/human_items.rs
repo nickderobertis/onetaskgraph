@@ -1289,7 +1289,26 @@ fn an_unreadable_request_and_an_unknown_host_are_refused_before_any_source() {
         );
     }
 
-    // No host named, and no `hostname` command to ask.
+    // A host no source's task_projection names, refused from the configuration alone.
+    let path = store.request_file(&request("item-unknown-host", &[PUBLIC_REPOSITORY]));
+    let unknown = store
+        .sandbox
+        .command()
+        .args(["task", "project-human", "--input"])
+        .arg(&path)
+        .arg("--json")
+        .env("ONETASKGRAPH_HOST", "no-source-names-this-host")
+        .output()
+        .unwrap();
+    assert_eq!(failure(&unknown)["failure"]["kind"], "projection-host");
+    assert!(
+        stderr(&unknown).contains("no-source-names-this-host"),
+        "{}",
+        stderr(&unknown)
+    );
+
+    // No host named, and — where the platform finds none without a PATH — no `hostname`
+    // command to ask; either way no source names the host this process ends up with.
     let path = store.request_file(&request("item-hostless", &[PUBLIC_REPOSITORY]));
     let hostless = store
         .sandbox
