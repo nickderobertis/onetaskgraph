@@ -96,8 +96,21 @@ if permissions.strip().splitlines() != ['actions: read', '  contents: read']:
 for key, secret in [('GH_PROJECTS_TOKEN', 'GH_PROJECTS_TOKEN'), ('GITHUB_TOKEN', 'GITHUB_TOKEN')]:
     if values(source, key) != ['${{ secrets.' + secret + ' }}']:
         refuse(f'{key} must use secrets.{secret}')
-if values(source, 'run') != ['cargo run --locked -p onetaskgraph-live-janitor']:
-    refuse('run must invoke the real janitor entry point')
+if values(source, 'run') != ['cargo run --locked -p onetaskgraph-live-janitor',
+                             'cargo run --locked -p onetaskgraph-live-janitor -- --linear']:
+    refuse('run must invoke the GitHub and Linear janitor entry points')
+linear_steps = [step for step in re.split(r'(?m)^      - (?=name:|uses:)', source)
+                if values(step, 'run') == ['cargo run --locked -p onetaskgraph-live-janitor -- --linear']]
+if len(linear_steps) != 1:
+    refuse('exactly one step must sweep Linear documents')
+else:
+    linear_env = section(linear_steps[0], '\n        env:\n', '\n        run:', 'Linear cleanup env')
+    if set(re.findall(r'^          ([A-Z_]+):', linear_env, re.M)) != {'LINEAR_API_KEY', 'LINEAR_WRITE_TEAM'}:
+        refuse('Linear cleanup must receive only its own credential and test-team nomination')
+    if values(linear_env, 'LINEAR_API_KEY') != ['${{ secrets.LINEAR_API_KEY }}']:
+        refuse('Linear cleanup must use secrets.LINEAR_API_KEY')
+    if values(linear_env, 'LINEAR_WRITE_TEAM') != ['${{ vars.LINEAR_WRITE_TEAM }}']:
+        refuse('Linear cleanup must nominate vars.LINEAR_WRITE_TEAM')
 # No required check opens a janitor session. Offline tests invoke a loopback binary instead.
 for path in [*Path('crates').glob('*/project.json'), *Path('sdks').glob('*/project.json'), Path('workspace/project.json'), Path('scripts/project.json')]:
     try:

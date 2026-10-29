@@ -14,12 +14,16 @@
 //! [`Ownership::CancelledRun`] is the same cleanup asked by a run about itself: the step
 //! `ci.yml` runs when a live run is cancelled removes exactly that run attempt's stamps,
 //! while its run still reads in progress, and reads no ownership at all.
-//! Linear keeps its machine stamps and lock sweep everywhere; this janitor never reads it.
+//! Linear document recovery is a separate `--linear` invocation; see [`linear`]. It
+//! expires stamped test documents after 24 hours, since a discarded CI machine cannot
+//! answer the local lock sweep. It uses no GitHub credential.
 //!
 //! Every REST route, query parameter and response field this crate uses is held to GitHub's
 //! published description: `tests/fixtures/rest-operations.json` is that description reduced
 //! to these operations, pinned with its source commit, and the offline journeys refuse any
 //! request the janitor sends, or body the stand-in serves, that the pin does not admit.
+
+pub mod linear;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;

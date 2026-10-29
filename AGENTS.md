@@ -495,7 +495,8 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   registration lock proves when that process is over. Machine-stamped residue stays the
   lock sweep's on the machine that wrote it; a foreign machine's residue is never swept.
   `STALE_AFTER` is an extra margin, never the authorisation. Linear keeps writing machine
-  stamps everywhere, with its lock sweep unchanged; the janitor never reads Linear.
+  stamps everywhere, with its lock sweep unchanged. The scheduled Linear document sweep
+  below also recovers documents from discarded CI machines.
   GitHub Projects writes `ci-<run id>-<attempt>-<micros>` under `GITHUB_ACTIONS=true`,
   naming the run that wrote it, and refuses missing or invalid run id or attempt before
   writing. Outside Actions its machine stamp is unchanged. Each process's own cleanup
@@ -516,6 +517,18 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   There is no waiting period: that read alone decides, so a finished run's artifacts go
   on the next pass whatever their age, rather than filling the board the live lane
   refuses when it is too full for a day.
+  **Linear documents also have scheduled recovery.** The separate `--linear` invocation
+  receives only `LINEAR_API_KEY` and `LINEAR_WRITE_TEAM`. It removes documents whose exact
+  `onetaskgraph live cleanup <Stamp or CiStamp>` title is older than 24 hours and whose
+  direct team, or sole project team, matches that nomination. Fresh, unstamped, malformed,
+  unvouched, shared-project and other-team documents stay. It lists every page before
+  writing, refuses incomplete enumeration, and caps reads at 50 and deletes at 150, one
+  second apart. This deliberately replaces the earlier rule that the janitor never reads
+  Linear: a discarded CI machine can never release a registration where another machine
+  can inspect it, and interrupted journeys otherwise accumulate documents indefinitely.
+  Every live document, including the asset journey's, carries that stamp and still has its
+  journey's own cleanup. The 24-hour expiry is a document-specific recovery policy; the
+  existing local lock sweep and GitHub run-status ownership rules do not change.
   **A cancelled run cleans up after itself, and a pre-flight never refuses a finished run's
   residue.** `ci.yml`'s step on cancellation runs the janitor with `--cancelled-run`, which
   removes exactly that run attempt's stamps and reads no run (`scripts/check-live-janitor.sh`
