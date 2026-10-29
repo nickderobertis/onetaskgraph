@@ -245,6 +245,10 @@ async fn request<V: Serialize, T: DeserializeOwned>(
 }
 
 fn old_test_title(title: &str, now: u64) -> bool {
+    // Retained sets retire only through their invocation registration, never by age.
+    if onetaskgraph_linear::live_artifact::classify_retained(title).is_some() {
+        return false;
+    }
     let Some(suffix) = title.strip_prefix(DOCUMENT_PREFIX) else {
         return false;
     };

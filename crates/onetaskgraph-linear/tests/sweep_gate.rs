@@ -540,6 +540,114 @@ async fn this_runs_own_cleanup_removes_everything_it_wrote_and_nothing_else() {
     );
 }
 
+fn retained_entities(
+    scope: onetaskgraph_linear::live_artifact::Scope<'_>,
+    tag: &str,
+) -> Vec<Entity> {
+    use onetaskgraph_linear::live_artifact::{Slot, retained_title};
+    [
+        Slot::Filed,
+        Slot::Loose,
+        Slot::FollowUp,
+        Slot::Assets,
+        Slot::Parent,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, slot)| Entity {
+        kind: if slot == Slot::Parent {
+            "project"
+        } else {
+            "document"
+        },
+        id: format!("{tag}-{index}"),
+        name: retained_title(scope, slot).unwrap(),
+    })
+    .collect()
+}
+
+#[tokio::test]
+async fn retained_ci_survives_even_broad_cleanup_and_local_sets_retire_by_registration() {
+    use onetaskgraph_linear::live_artifact::Scope;
+    let mut beside = LiveRunBeside::start();
+    let ci = retained_entities(Scope::Ci { team: "TEST" }, "ci");
+    let local_stamp = onetaskgraph_live::artifact::Stamp::new(beside.run, aged(10)).to_string();
+    let local = retained_entities(
+        Scope::Local {
+            team: "TEST",
+            stamp: &local_stamp,
+        },
+        "local",
+    );
+    let unknown = Entity {
+        kind: "document",
+        id: "unknown".into(),
+        name: "onetaskgraph live cleanup retained-v2 ci TEST filed".into(),
+    };
+    let drive = Drive::plant(
+        [ci.clone(), local.clone(), vec![unknown.clone()]].concat(),
+        vec![],
+        vec![],
+    );
+    cleanup::sweep_orphans(KEY, &sweep_at(NOW)).await.unwrap();
+    assert_eq!(
+        drive.left(),
+        sorted(
+            [ci.clone(), local.clone(), vec![unknown.clone()]]
+                .concat()
+                .into_iter()
+                .map(|entity| entity.name)
+                .collect()
+        )
+    );
+    beside.end();
+    cleanup::sweep_orphans(KEY, &sweep_at(NOW)).await.unwrap();
+    assert_eq!(
+        drive.left(),
+        sorted(
+            [ci.clone(), vec![unknown.clone()]]
+                .concat()
+                .into_iter()
+                .map(|entity| entity.name)
+                .collect()
+        )
+    );
+    // A cancellation cleanup naming all stamped objects still cannot retire CI slots.
+    cleanup::remove_artifacts(KEY, &|_, _| true).await.unwrap();
+    assert_eq!(
+        drive.left(),
+        sorted(
+            [ci, vec![unknown]]
+                .concat()
+                .into_iter()
+                .map(|entity| entity.name)
+                .collect()
+        )
+    );
+}
+
+#[tokio::test]
+async fn retained_local_set_retires_at_its_own_invocation_cleanup() {
+    use onetaskgraph_linear::live_artifact::Scope;
+    let stamp = onetaskgraph_live::artifact::Stamp::new(RUNS.mine, NOW).to_string();
+    let mine = retained_entities(
+        Scope::Local {
+            team: "TEST",
+            stamp: &stamp,
+        },
+        "mine",
+    );
+    let ci = retained_entities(Scope::Ci { team: "TEST" }, "ci");
+    let drive = Drive::plant([mine, ci.clone()].concat(), vec![], vec![]);
+    cleanup::remove_artifacts(KEY, &|prefix, name| is_this_runs(RUNS.mine, prefix, name))
+        .await
+        .unwrap();
+    assert_eq!(
+        drive.left(),
+        sorted(ci.into_iter().map(|entity| entity.name).collect())
+    );
+}
+
 #[tokio::test]
 async fn residue_a_delete_never_takes_fails_the_cleanup_rather_than_passing_quietly() {
     // The other side of the tolerance, and the side that has to stay sharp. A delete refused
