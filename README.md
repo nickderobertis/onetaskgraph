@@ -2051,18 +2051,23 @@ or one not naming the task back, is refused as `task copy --target-task` refuses
 several ids or beside `--no-counterpart` it is refused before anything is read.
 
 What a locate never does is what a copy does only to write: it never runs the boundary's
-`check_command`, never reads a destination's live visibility, and reads no asset and no forward
-edge. A project or a document id is refused, naming it.
+`check_command`, never reads a destination's live visibility but the one read `creates_in` needs
+on a GitHub board declared private (below), and reads no asset and no forward edge. A project or a document id is refused, naming it.
 
 `creates_in` is the destination's own answer, through `TaskSource::creation_repository`, a
 defaulted method of the plugin contract answering `None` — no repository — for every source that
 does not say otherwise. A GitHub Projects source answers it from the same rule its create
-applies: a task naming one repository is filed there; one naming none or several is filed in its
-parent project issue's repository, else in the source's configured `repository`; and a target the
-create would refuse — a repository of another owner than its parent issue's, a parent the board
-does not hold, no configured repository — is refused the same way. It reads the parent project's
-issue only when the task is in a project. Linear, a folder of Markdown and an in-memory source
-answer `null`.
+applies: a task naming one repository is filed there — on a source declared private only when
+that repository reads private; one naming none or several is filed in its parent project issue's
+repository, else in the source's configured `repository`; and a target the create would refuse —
+a repository of another owner than its parent issue's, a parent the board does not hold, no
+configured repository — is refused the same way. It reads the parent project's issue only when
+the task is in a project. Linear, a folder of Markdown and an in-memory source answer `null`.
+
+So a locate reads one live visibility in exactly one case: a task naming exactly one repository,
+located for a GitHub Projects source declared private, has that repository's visibility read, at
+most once per destination for the whole locate, because that read is what decides where the
+create files its issue. Every other locate reads none.
 
 The SDKs spell it `task_locate(ids, to=..., no_counterpart=..., target_native=...)` and
 `taskLocate(ids, { to, noCounterpart, targetNative })`; a refusal's failure document, with its
@@ -2092,10 +2097,14 @@ to a source declared `private` **whose backend agrees at that write**:
 - a folder of Markdown and an in-memory source are on this machine, so declaring one private
   declares a host-local destination;
 - a GitHub board is private only while its Project and the repository the issue lives in are
-  both private. Both are read, with the source's own `token_env` credential, immediately before
-  every write — two reads per write, sent together, never remembered for the next. Reading a
-  Project's visibility needs the `read:project` scope, and a credential without it is refused
-  naming the scope;
+  both private. Each is read with the source's own `token_env` credential, and a copy reads
+  each destination — the board, and each repository it reads — **once for the whole copy**,
+  all before its first write, and holds those reads for every write it makes; the next copy
+  reads afresh, so a destination whose visibility changes during one copy is seen by the next
+  copy, never by the one already running. A linking process holding its sources for hours reads
+  afresh at each copy, and so does an interrupted copy run again. Any other write reads its
+  destination before it is sent. Reading a Project's visibility needs the `read:project`
+  scope, and a credential without it is refused naming the scope;
 - a Linear workspace is readable by its members alone, which no setting changes, so a Linear
   source is verified once per source instance: the workspace its credential reaches is read
   inside the team and status read its first write sends anyway, and later writes send nothing
@@ -2103,6 +2112,24 @@ to a source declared `private` **whose backend agrees at that write**:
 - a source hosted over the stdio plugin protocol cannot answer, and is never private.
 
 A visibility that cannot be read is never guessed: the write is refused.
+
+**Where a GitHub board declared private creates an issue.** A GitHub Projects source files a
+new issue — for a task, a project or a document — in the item's one named repository, else in
+the repository of the project issue it is filed under, else in the source's configured
+`repository`. On a source declared `visibility: private` the first arm is read first: an item
+naming exactly one repository has that repository's visibility read, with the source's own
+credential and once per copy, and is created there only when it reads private. One reading
+anything else decides nothing, and the issue is created where an item naming zero or several
+repositories is — its project issue's repository, else the configured one; a read that cannot
+be answered refuses the write, naming the repository, and takes no fallback. The item still
+names its repository: every read of it answers `repositories: [<that repository>]` while its
+issue lives in the private one, and a later copy or update keeps the issue where it was
+created — nothing moves or transfers an issue. What a write demands is unchanged: the board and
+the repository the issue is actually created in must both read private, so a private source
+whose fallback repository reads public still refuses such an item, and an existing issue
+already in a public repository is refused where it is. Every source not declared private, and
+every item naming a repository that reads private or naming zero or several, is placed exactly
+as before.
 
 **What it may say: `write_policy`.** A write to a destination not verified private is put to
 the caller's check, and a repository's visibility is the caller's answer too. The store derives
@@ -2246,9 +2273,20 @@ status each answer the view as `projection`, and a ticket the delivery rule move
 through the view's own screened status write; nothing but the category crosses, and a view's other
 fields change only with the next copy.
 
+**A GitHub board as the private home.** A home on a GitHub Projects source declared private
+holds every canonical task of the plan, a task naming only a public repository included: its
+issue is created in a private repository — the plan project's issue's, else the source's
+configured `repository` — under [the placement rule above](#the-public-boundary), and it still
+names its public repository, so its view carries that repository and is filed there on the
+public side. A canonical issue in a private home therefore never lives in the public repository
+its work changes, and a closing line in that repository (`Fixes …`) never closes it: the task
+reaches `done` through its own status write — `task status set`, or the delivery rule moving it —
+which its view mirrors. Each destination is read once per copy, as everywhere: a repository made
+public during one copy is seen, and the copy refused before it writes, by the next.
+
 **Every check runs before the first write.** A copy holds every item of every project to the
-boundary before it writes any, and each write reads its destination's reality immediately
-before it is sent; a write refused part-way is undone, as a copy always is. A private task or
+boundary before it writes any, reading each destination's reality once for the whole copy
+before its first write; a write refused part-way is undone, as a copy always is. A private task or
 document is refused by a project held public rather than filed under it. A copy out of a source
 declared private into one that is not records no `onetaskgraph.origin` naming it, and a copy
 into a private source records no `onetaskgraph.copies` link naming that source on a source that

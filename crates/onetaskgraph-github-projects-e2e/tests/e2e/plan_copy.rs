@@ -13,7 +13,9 @@
 //! onebudgetspec: the larger of three recordings at both board sizes, with no write policy,
 //! screened, and in the host's own configuration ([`HOST_CACHE`] names what of it is mirrored),
 //! whose copy out of a folder declared private is reported beside the same copy out of one
-//! declaring nothing.
+//! declaring nothing and beside a fourth configuration no budget's figure counts: the host's,
+//! copying onto a board declared private as the plan's home ([`Plan::private_home`]), half its
+//! tasks naming only a public repository and each of those viewed on a public board.
 
 use super::asset_board::{Board, Call, Kind, creations};
 use onetaskgraph_e2e_support::{
@@ -21,7 +23,7 @@ use onetaskgraph_e2e_support::{
     clock::SimulatedClock,
     common::{Sandbox, assert_spawnable_on_windows, stderr, stdout},
     fixtures::{
-        GitHubBoardFields, MEASURED_PLACEMENT_MILLIS, MembersPageField, document,
+        GitHubBoardFields, MEASURED_PLACEMENT_MILLIS, MembersPageField, RepositoryAnswer, document,
         github_projects_with_items,
     },
     images,
@@ -194,6 +196,28 @@ pub(super) struct Plan {
     /// The stack, in KiB, the binary's main thread is started with, when a journey holds it to
     /// less than the host's own: on a Unix host the binary is started under `ulimit -s` of it.
     pub main_thread_stack: Option<u32>,
+    /// For a private home ([`Plan::private_home`]): the loopback public board the views of its
+    /// public tasks go to.
+    pub site: Option<GitHubBoardFields>,
+}
+
+/// The repository a private home's board creates an issue in when nothing else decides: served
+/// private by the loopback board, and registered with no visibility, so the policy answers it
+/// unknown, which is private.
+pub(super) const HOME_REPOSITORY: &str = "synthco/plans-private";
+
+/// The repository a private home's even-numbered tasks name: private, as [`HOME_REPOSITORY`] is.
+pub(super) const PRIVATE_WORK: &str = "synthco/private-widgets";
+
+/// The repository task `n` of a private home names: [`SCREENED_REPOSITORY`], public, for the odd
+/// ones, and [`PRIVATE_WORK`] for the even ones — four of each.
+fn home_repository(n: usize) -> String {
+    if n % 2 == 1 {
+        let (owner, name) = SCREENED_REPOSITORY;
+        format!("{owner}/{name}")
+    } else {
+        PRIVATE_WORK.to_owned()
+    }
 }
 
 // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The source of these values is ai-orchestrator's own onetaskgraph.yaml, in another repository this one may not read in a check. Its drift gate is the host's board-copy-approval journeys, run against these store figures by that repository's adopt-copy-targets work, which is the later comparison the task registering these recordings names; each mirrored value is stated below so that comparison has an exact set to hold.
@@ -272,6 +296,7 @@ impl Plan {
             0,
             None,
             None,
+            false,
         )
     }
 
@@ -288,6 +313,26 @@ impl Plan {
             0,
             None,
             Some(private),
+            false,
+        )
+    }
+
+    /// The generated plan copied as this host copies one — see [`HOST_CACHE`] — onto a board
+    /// declared private as its home: its odd tasks naming only the public [`SCREENED_REPOSITORY`]
+    /// and its even ones the private [`PRIVATE_WORK`], the board creating every other issue in
+    /// the private [`HOME_REPOSITORY`] and routing the public repository's work to a loopback
+    /// public board, `site`, where each public task's view goes.
+    pub fn private_home(items: usize) -> Self {
+        Self::hosted(
+            items,
+            Vec::new(),
+            Some(serde_json::from_str(HOST_CACHE).unwrap()),
+            true,
+            &SimulatedClock::start(1),
+            0,
+            None,
+            Some(true),
+            true,
         )
     }
 
@@ -296,7 +341,17 @@ impl Plan {
     /// GitHub secondary-limit windows they share, with write screening on when `screened` is.
     pub fn managers(managers: usize, items: usize, screened: bool) -> Vec<Self> {
         let clock = SimulatedClock::start(managers);
-        let first = Self::hosted(items, Vec::new(), None, screened, &clock, 0, None, None);
+        let first = Self::hosted(
+            items,
+            Vec::new(),
+            None,
+            screened,
+            &clock,
+            0,
+            None,
+            None,
+            false,
+        );
         let mut plans = Vec::with_capacity(managers);
         for client in 1..managers {
             plans.push(Self::hosted(
@@ -308,6 +363,7 @@ impl Plan {
                 client,
                 Some(&first.board),
                 None,
+                false,
             ));
         }
         plans.insert(0, first);
@@ -316,8 +372,9 @@ impl Plan {
 
     // Each argument is one independent axis of the plan a journey lays — its board, its cache,
     // its screening, its clock, its manager, the host it shares and, for the host's own
-    // configuration, whether its folder is declared private — and every caller names all of
-    // them, so a builder would only restate this signature.
+    // configuration, whether its folder is declared private and whether the board is a private
+    // home — and every caller names all of them, so a builder would only restate this
+    // signature.
     #[allow(clippy::too_many_arguments)]
     fn hosted(
         items: usize,
@@ -328,6 +385,7 @@ impl Plan {
         client: usize,
         host: Option<&Board>,
         declared: Option<bool>,
+        home: bool,
     ) -> Self {
         let private = declared == Some(true);
         let clock = clock.clone();
@@ -369,11 +427,26 @@ impl Plan {
         if private {
             notes["visibility"] = json!("private");
         }
-        let mut configured: Value = serde_json::from_str(&document(&json!({
-            "notes": notes,
-            "board": board_source
-        })))
-        .unwrap();
+        let mut sources = json!({"notes": notes});
+        let site = home.then(|| {
+            let (owner, name) = SCREENED_REPOSITORY;
+            let public = format!("{owner}/{name}");
+            board_source["visibility"] = json!("private");
+            board_source["config"]["repository"] = json!(HOME_REPOSITORY);
+            github.use_repository(HOME_REPOSITORY);
+            github.set_repository_visibility(&public, RepositoryAnswer::Public);
+            board.serve_public_repository(&public);
+            board_source["routes"] =
+                json!([{"repositories": [format!("github.com/{public}")], "to": "site"}]);
+            let (mut config, site) = github_projects_with_items(&sandbox, Vec::new());
+            config["repository"] = json!(public);
+            site.use_repository(&public);
+            sources["site"] =
+                json!({"plugin": "github-projects", "config": config, "visibility": "public"});
+            site
+        });
+        sources["board"] = board_source;
+        let mut configured: Value = serde_json::from_str(&document(&sources)).unwrap();
         if let Some((_, record)) = &screening {
             configured["write_policy"] = record.write_policy().clone();
         }
@@ -389,6 +462,7 @@ impl Plan {
             client,
             private,
             main_thread_stack: None,
+            site,
         };
         plan.author();
         plan
@@ -491,10 +565,16 @@ impl Plan {
         } else {
             format!("depends_on: [{}]\n", depends.join(", "))
         };
+        let repositories = if self.site.is_some() {
+            format!("repositories: [github.com/{}]\n", home_repository(n))
+        } else {
+            String::new()
+        };
         std::fs::write(
             path,
             format!(
-                "---\ntitle: Step {n} of the plan\nstatus: todo\n{}{depends}{kept}---\n{content}",
+                "---\ntitle: Step {n} of the plan\nstatus: todo\n{}{repositories}{depends}{kept}\
+                 ---\n{content}",
                 if filed { "project: P\n" } else { "" }
             ),
         )
@@ -844,6 +924,10 @@ pub(super) struct Runs<'a> {
     pub host_large: &'a Scenario,
     pub host_public: &'a Scenario,
     pub host_public_large: &'a Scenario,
+    /// The host's configuration copying onto a board declared private as its home
+    /// ([`Plan::private_home`]), on the board of [`SMALL`]: reported beside the others, and not
+    /// one of the three the budgets hold.
+    pub home: &'a Scenario,
 }
 
 /// Record what scenario `name` cost as the copy budgets' telemetry, for
@@ -853,8 +937,9 @@ pub(super) struct Runs<'a> {
 /// no write policy, with write screening on, and in the host's configuration with its folder
 /// declared private — on the board of [`SMALL`] and of [`LARGE`]; and, apart, the real seconds
 /// the processes of the run with no write policy ran. Every detail carries every run, their
-/// screening calls, and the host's configuration with its folder declaring nothing beside the
-/// private one, so the two read side by side.
+/// screening calls, and the host's configuration with its folder declaring nothing — and, on the
+/// board of [`SMALL`], copying onto a private home — beside the private one, so they read side
+/// by side.
 fn record(name: &str, runs: &Runs<'_>) {
     let costs = [
         ("unscreened", cost(runs.small)),
@@ -878,6 +963,7 @@ fn record(name: &str, runs: &Runs<'_>) {
             "host configuration, public source, on a board of 20,000 items",
             cost(runs.host_public_large),
         ),
+        (HOST_HOME, cost(runs.home)),
     ];
     let at_once: Vec<(String, Cost)> = runs
         .managers
@@ -966,6 +1052,10 @@ const HOST_PRIVATE: &str = "host configuration, private source";
 /// The comparison the private case is reported beside, and which no budget's figure counts.
 const HOST_PUBLIC: &str = "host configuration, public source";
 
+/// The host's configuration copying onto a private home, reported beside the private case at
+/// the board of [`SMALL`] items, and counted by no budget's figure.
+const HOST_HOME: &str = "host configuration, private home";
+
 /// `detail` with the host configuration's private and public recordings' points, writes and
 /// simulated seconds side by side at each board size, out of the recordings `costs` and
 /// `compared` that carry them.
@@ -986,6 +1076,9 @@ fn with_side_by_side(
                    "public source": figures(&compared[public].1)}),
         );
     }
+    sides
+        .get_mut(&format!("on a board of {SMALL} items"))
+        .expect("the smaller board's comparison")["private home"] = figures(&compared[2].1);
     detail["host configuration, private beside public"] = Value::Object(sides);
     detail
 }
@@ -1094,10 +1187,10 @@ pub(super) fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(us
     let github = &plan.github;
     let project = &at["P"];
     let item = |id: &str| github.item(id).unwrap_or_else(|| panic!("no item {id}"));
-    // A copy out of a folder declared private records no origin naming it on the board: its
-    // origin field is left empty.
+    // A copy out of a folder declared private records no origin naming it on a board that is
+    // not declared private too: its origin field is left empty. A private home records it.
     let origin = |id: &str| {
-        if plan.private {
+        if plan.private && plan.site.is_none() {
             json!("")
         } else {
             json!(format!("notes:{id}"))
@@ -1186,6 +1279,84 @@ pub(super) fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(us
         expected.trim_end(),
         "the document's rewritten body"
     );
+}
+
+/// For a private home, hold its two boards to holding exactly the plan and its views: every
+/// issue of the plan in a private repository of the home board — a public task's in
+/// [`HOME_REPOSITORY`], beside the project's and the document's — and, on the public board, one
+/// `Public work` project and one view of each public task under it, in the public repository,
+/// titled as its task and carrying its content, and nothing else the copy made. `changed` is
+/// what [`holds_the_plan`] takes. A plan that is no private home holds no views to check.
+pub(super) fn holds_the_views(plan: &Plan, at: &Counterparts, changed: Option<(usize, &str)>) {
+    let Some(site) = &plan.site else {
+        return;
+    };
+    for n in 1..=TASKS {
+        let held = plan.github.item(&at[&format!("T-{n}")]).unwrap();
+        let expected = if n % 2 == 1 {
+            HOME_REPOSITORY.to_owned()
+        } else {
+            home_repository(n)
+        };
+        assert_eq!(held["repo"], json!(expected), "T-{n}'s issue is private");
+    }
+    for record in ["P", "D"] {
+        let held = plan.github.item(&at[record]).unwrap();
+        assert_eq!(held["repo"], json!(HOME_REPOSITORY), "{record}'s issue");
+    }
+    let (owner, name) = SCREENED_REPOSITORY;
+    let public = format!("{owner}/{name}");
+    let made: Vec<Value> = site
+        .issues()
+        .into_iter()
+        .filter(|issue| {
+            issue["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("ISSUE-"))
+        })
+        .collect();
+    let projects: Vec<&Value> = made
+        .iter()
+        .filter(|issue| issue["title"] == "Public work")
+        .collect();
+    assert_eq!(projects.len(), 1, "one `Public work` project: {made:#?}");
+    let views: Vec<&Value> = made
+        .iter()
+        .filter(|issue| issue["title"] != "Public work")
+        .collect();
+    let mut titles: Vec<String> = views
+        .iter()
+        .map(|view| view["title"].as_str().unwrap().to_owned())
+        .collect();
+    titles.sort();
+    let wanted: Vec<String> = (1..=TASKS)
+        .filter(|n| n % 2 == 1)
+        .map(|n| format!("Step {n} of the plan"))
+        .collect();
+    assert_eq!(
+        titles, wanted,
+        "one view of each public task and nothing else"
+    );
+    for view in views {
+        assert_eq!(view["repo"], json!(public), "a view is public work");
+        assert_eq!(
+            view["parent"], projects[0]["id"],
+            "filed under `Public work`"
+        );
+        let n: usize = view["title"]
+            .as_str()
+            .unwrap()
+            .trim_start_matches("Step ")
+            .trim_end_matches(" of the plan")
+            .parse()
+            .unwrap();
+        let expected = match changed {
+            Some((task, content)) if task == n => content,
+            _ => plan.generated.tasks[n - 1].as_str(),
+        };
+        let (content, _) = split_slot(view["body"].as_str().unwrap());
+        assert_eq!(content.trim_end(), expected.trim_end(), "the view of T-{n}");
+    }
 }
 
 /// The board ids of the plan's counterparts, from a scenario's two reports.
@@ -1412,6 +1583,7 @@ fn scenarios_of(plan: &Plan, screened: bool) -> Measured {
     never_walks("the first copy", &first.calls);
     let at = counterparts(&first.project, &first.document);
     holds_the_plan(plan, &at, None);
+    holds_the_views(plan, &at, None);
     screening("the first copy", &first);
 
     let edited = format!(
@@ -1427,12 +1599,14 @@ fn scenarios_of(plan: &Plan, screened: bool) -> Measured {
         "the re-copy found every item"
     );
     holds_the_plan(plan, &at, Some((4, &edited)));
+    holds_the_views(plan, &at, Some((4, &edited)));
     screening("the re-copy after one task changed", &changed);
 
     let unchanged = plan.copy_timed();
     never_walks("the unchanged re-copy", &unchanged.calls);
     assert_eq!(counterparts(&unchanged.project, &unchanged.document), at);
     holds_the_plan(plan, &at, Some((4, &edited)));
+    holds_the_views(plan, &at, Some((4, &edited)));
     screening("the unchanged re-copy", &unchanged);
 
     (
@@ -1529,6 +1703,9 @@ fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
     let (host_large, host_large_runs) = host_scenarios(LARGE, true);
     let (host_public, host_public_runs) = host_scenarios(SMALL, false);
     let (host_public_large, host_public_large_runs) = host_scenarios(LARGE, false);
+    // The host's configuration onto a private home: its views on a public board, the board
+    // holding exactly the plan and its views after each scenario.
+    let (_, home_runs) = scenarios_of(&Plan::private_home(SMALL), false);
     for (index, scenario) in [
         "first copy",
         "re-copy after one task changed",
@@ -1667,6 +1844,7 @@ fn a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated() {
                 host_large: &host_large_runs[index],
                 host_public: &host_public_runs[index],
                 host_public_large: &host_public_large_runs[index],
+                home: &home_runs[index],
             },
         );
     }

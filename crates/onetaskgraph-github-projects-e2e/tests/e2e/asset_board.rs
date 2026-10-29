@@ -266,6 +266,9 @@ pub(super) struct Call {
 struct State {
     calls: Vec<Call>,
     transferred: BTreeMap<String, String>,
+    /// The repositories, `owner/name`, whose `GET /repos/{owner}/{repo}` answers `public`: every
+    /// other answers `private`, as the fixture board does for one no journey named.
+    public_repositories: Vec<String>,
     assets: BTreeMap<String, Vec<u8>>,
     refusal: Option<Refusal>,
     disconnect: Option<Stage>,
@@ -480,11 +483,28 @@ impl Board {
                             .to_ascii_lowercase()
                             .contains("authorization: bearer test-token")
                     );
-                    answer = Some(if path == "/repos/fixture/transferred" {
-                        br#"{"id":654321}"#.to_vec()
+                    let id = if path == "/repos/fixture/transferred" {
+                        654_321
                     } else {
-                        br#"{"id":123456}"#.to_vec()
-                    });
+                        123_456
+                    };
+                    // Who can read it, beside its id: what a write to a board declared private
+                    // reads the same request for.
+                    let slug = path.trim_start_matches("/repos/");
+                    let visibility = if state
+                        .public_repositories
+                        .iter()
+                        .any(|public| public == slug)
+                    {
+                        "public"
+                    } else {
+                        "private"
+                    };
+                    answer = Some(
+                        json!({"id": id, "visibility": visibility})
+                            .to_string()
+                            .into_bytes(),
+                    );
                 }
                 if !disconnect {
                     state.calls.push(Call {
@@ -622,6 +642,14 @@ impl Board {
     /// [`Kind::measured_millis`], instead of 200 ms, or 800 ms for an upload.
     pub fn measure_latency(&self) {
         self.state.lock().unwrap().measured = true;
+    }
+    /// Answer `GET /repos/{owner}/{repo}` for `owner/name` as public.
+    pub fn serve_public_repository(&self, slug: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .public_repositories
+            .push(slug.to_owned());
     }
 }
 fn transfer_repositories(value: &mut Value, transfers: &BTreeMap<String, String>) {
