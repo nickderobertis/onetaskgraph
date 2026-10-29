@@ -48,7 +48,7 @@ pub use error::ConfigError;
 pub use layer::{Layer, Merged, Origin, Setting, SettingPath, merge, unflatten, value_from_text};
 pub(crate) use relative::rebased;
 pub use relative::resolve_document_relative_paths;
-pub use routes::{Placement, RepositoryPattern, Route, Routes, SourceRoute};
+pub use routes::{Placement, RepositoryPattern, Route, RoutePurpose, Routes, SourceRoute};
 
 /// The variable that moves the credentials file somewhere else.
 pub const SECRETS_FILE_VARIABLE: &str = "ONETASKGRAPH_SECRETS_FILE";

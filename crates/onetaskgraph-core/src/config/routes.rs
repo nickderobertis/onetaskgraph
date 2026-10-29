@@ -86,8 +86,54 @@ impl RepositoryPattern {
 /// One entry of a source's `routes`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Route {
+    purpose: Option<RoutePurpose>,
     matcher: Matcher,
     to: SourceName,
+}
+
+/// An operation's routing identity. Producers name their own purpose; legacy writers
+/// leave it absent. A purpose is a nonempty lowercase identifier separated by hyphens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "String", into = "String")]
+pub struct RoutePurpose(String);
+
+impl RoutePurpose {
+    /// Validate a producer's routing identity.
+    ///
+    /// # Errors
+    ///
+    /// Refuses empty identifiers and segments containing anything but lowercase ASCII letters.
+    pub fn new(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        if value
+            .split('-')
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_lowercase()))
+        {
+            Ok(Self(value))
+        } else {
+            Err("a route purpose is lowercase words separated by hyphens".to_owned())
+        }
+    }
+
+    /// The producer's identifier as written.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for RoutePurpose {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<RoutePurpose> for String {
+    fn from(value: RoutePurpose) -> Self {
+        value.0
+    }
 }
 
 /// What one entry matches on: its repositories, its classification, or both together, so
@@ -104,6 +150,12 @@ enum Matcher {
 }
 
 impl Route {
+    /// The operation this entry serves, or the legacy unscoped operation.
+    #[must_use]
+    pub fn purpose(&self) -> Option<&RoutePurpose> {
+        self.purpose.as_ref()
+    }
+
     /// The patterns, in the order written — empty for a classification entry.
     #[must_use]
     pub fn repositories(&self) -> &[RepositoryPattern] {
@@ -222,6 +274,20 @@ impl Routes {
         classification: Classification,
         repositories: &[Repository],
     ) -> Placement {
+        self.place_for(source, classification, repositories, None)
+    }
+
+    /// Place an item using only entries of the requested purpose. Visibility restrictions
+    /// and matcher precedence are identical to legacy routing; a scoped entry never
+    /// changes an unrelated writer's destination.
+    #[must_use]
+    pub fn place_for(
+        &self,
+        source: &SourceName,
+        classification: Classification,
+        repositories: &[Repository],
+        purpose: Option<&RoutePurpose>,
+    ) -> Placement {
         let entries: Vec<(usize, &Route)> = self
             .0
             .get(source)
@@ -230,9 +296,10 @@ impl Routes {
                     .iter()
                     .enumerate()
                     .filter(|(_, route)| {
-                        classification.is_public()
-                            || self.is_private(&route.to)
-                            || self.2.contains(&route.to)
+                        route.purpose.as_ref() == purpose
+                            && (classification.is_public()
+                                || self.is_private(&route.to)
+                                || self.2.contains(&route.to))
                     })
                     .collect()
             })
@@ -337,6 +404,7 @@ impl Routes {
             for (index, (patterns, to)) in entries.into_iter().enumerate() {
                 let key = entry_key(&source, index);
                 parsed.push(Route {
+                    purpose: None,
                     matcher: Matcher::Repositories(patterns_of(&key, patterns)?),
                     to,
                 });
@@ -366,6 +434,7 @@ impl Routes {
         let mut classified: Vec<Route> = entries
             .into_iter()
             .map(|(classification, to)| Route {
+                purpose: None,
                 matcher: Matcher::Classification(classification),
                 to,
             })
@@ -398,6 +467,7 @@ impl Routes {
         for (index, (classification, patterns, to)) in entries.into_iter().enumerate() {
             let key = entry_key(&source, index);
             combined.push(Route {
+                purpose: None,
                 matcher: Matcher::Combined(classification, patterns_of(&key, patterns)?),
                 to,
             });
@@ -488,18 +558,29 @@ fn parse_entry(key: &str, entry: &Value) -> Result<Route, ConfigError> {
              `{classification: private, to: <source>}` or both matchers together.",
         ));
     };
-    if let Some(unknown) = fields
-        .keys()
-        .find(|field| !["repositories", "classification", "to"].contains(&field.as_str()))
-    {
+    if let Some(unknown) = fields.keys().find(|field| {
+        !["repositories", "classification", "to", "purpose"].contains(&field.as_str())
+    }) {
         return Err(ConfigError::setting(
             format!("{key}.{unknown}"),
             "unknown field; a route holds `to` and `repositories`, `classification` or both, \
-             and nothing else",
+             with optional `purpose: human-task`",
             "remove it.",
         ));
     }
     let to = destination_of(key, fields)?;
+    let purpose = fields
+        .get("purpose")
+        .map(|value| {
+            serde_json::from_value::<RoutePurpose>(value.clone()).map_err(|error| {
+                ConfigError::setting(
+                    format!("{key}.purpose"),
+                    error.to_string(),
+                    "write `human-task` or omit purpose for legacy routing.",
+                )
+            })
+        })
+        .transpose()?;
     let classification = fields
         .get("classification")
         .map(|classification| {
@@ -517,6 +598,7 @@ fn parse_entry(key: &str, entry: &Value) -> Result<Route, ConfigError> {
         .transpose()?;
     if let (Some(classification), false) = (classification, fields.contains_key("repositories")) {
         return Ok(Route {
+            purpose,
             matcher: Matcher::Classification(classification),
             to,
         });
@@ -552,6 +634,7 @@ fn parse_entry(key: &str, entry: &Value) -> Result<Route, ConfigError> {
     };
     let patterns = patterns_of(key, patterns)?;
     Ok(Route {
+        purpose,
         matcher: match classification {
             Some(classification) => Matcher::Combined(classification, patterns),
             None => Matcher::Repositories(patterns),
@@ -742,6 +825,7 @@ mod tests {
     #[test]
     fn an_entry_matches_only_when_every_repository_does() {
         let route = Route {
+            purpose: None,
             matcher: Matcher::Repositories(vec![
                 RepositoryPattern::new("github.com/example-org/*").unwrap(),
             ]),
