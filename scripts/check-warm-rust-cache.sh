@@ -112,7 +112,10 @@ done
 
 # The release build it hands to the distribution journey, driven for real behind a stand-in
 # `uv`: --release-build-only has to make exactly the journey's maturin build and stop there,
-# and any other argument has to be refused, exit 2, before anything is built.
+# and any other argument has to be refused, exit 2, before anything is built. On Windows the
+# journey's `uv` is spawned by python, whose CreateProcess finds only `uv.exe` and so runs the
+# real one past the stand-in; there the refusal is still driven and the build's shape is left
+# to the Linux and macOS lanes.
 journey="$scratch/journey"
 mkdir -p "$journey/scripts" "$journey/crates/onetaskgraph" "$scratch/journey-bin"
 cp "$root/scripts/test-distribution.sh" "$root/scripts/cli_wheel_lock.py" "$journey/scripts/"
@@ -120,13 +123,20 @@ printf '[package]\nname = "onetaskgraph"\nversion = "1.2.3"\n' >"$journey/crates
 printf '%s\n' '#!/usr/bin/env bash' 'echo "uv $*" >>"$WARM_RECORD"' >"$scratch/journey-bin/uv"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$scratch/journey-bin/npm"
 chmod +x "$scratch/journey-bin/uv" "$scratch/journey-bin/npm"
-: >"$scratch/journey.record"
-WARM_RECORD="$scratch/journey.record" PATH="$scratch/journey-bin:$PATH" \
-  bash "$journey/scripts/test-distribution.sh" --release-build-only >"$scratch/journey.log" 2>&1 \
-  || { cat "$scratch/journey.log" >&2; fail "test-distribution.sh --release-build-only failed" "fix what it reports above"; }
-grep -Eq "^uv tool run --from maturin>=1\.9,<2 maturin build --release --locked --target [^ ]+ --out [^ ]+/python-wheel\$" "$scratch/journey.record" \
-  && [ "$(wc -l <"$scratch/journey.record" | tr -d ' ')" = 1 ] \
-  || { cat "$scratch/journey.record" >&2; fail "--release-build-only made something other than the journey's one maturin build (above)" "keep it to build_release_wheel in scripts/test-distribution.sh and an exit"; }
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-warm-rust-cache: the release build's shape is skipped on Windows (python spawns the real uv.exe past a stand-in); the Linux and macOS lanes gate it" >&2
+    ;;
+  *)
+    : >"$scratch/journey.record"
+    WARM_RECORD="$scratch/journey.record" PATH="$scratch/journey-bin:$PATH" \
+      bash "$journey/scripts/test-distribution.sh" --release-build-only >"$scratch/journey.log" 2>&1 \
+      || { cat "$scratch/journey.log" >&2; fail "test-distribution.sh --release-build-only failed" "fix what it reports above"; }
+    grep -Eq "^uv tool run --from maturin>=1\.9,<2 maturin build --release --locked --target [^ ]+ --out [^ ]+/python-wheel\$" "$scratch/journey.record" \
+      && [ "$(wc -l <"$scratch/journey.record" | tr -d ' ')" = 1 ] \
+      || { cat "$scratch/journey.record" >&2; fail "--release-build-only made something other than the journey's one maturin build (above)" "keep it to build_release_wheel in scripts/test-distribution.sh and an exit"; }
+    ;;
+esac
 : >"$scratch/journey.record"
 status=0
 WARM_RECORD="$scratch/journey.record" PATH="$scratch/journey-bin:$PATH" \
