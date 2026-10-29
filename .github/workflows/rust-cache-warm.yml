@@ -60,10 +60,12 @@ jobs:
         run: bash scripts/warm-rust-cache.sh ${{ matrix.build }}
       # test-linux's own builds over what was just built, which must recompile no dependency:
       # a push to main fails the moment the cache it saves is not one a pull request reuses.
+      - uses: extractions/setup-just@v4
+        if: matrix.job == 'test-linux'
       - name: Check what test-linux builds reuses this build
         if: matrix.job == 'test-linux'
         shell: bash
-        run: bash scripts/check-warm-rust-cache-reuse.sh --warmed
+        run: just warm-cache-reuse-check-warmed
 
   # Fails open: anything but a clean `true` — a failed or undecided classifier, or this job
   # failing outright — still warms macOS, as a cold build costs every pull request more.

@@ -88,6 +88,11 @@ distribution-check:
 warm-cache-reuse-check:
     @{{nx}} run scripts:warm-cache-reuse-check
 
+# Its cheap half, over the target directory scripts/warm-rust-cache.sh --instrumented has just
+# filled: the warmer's Linux leg runs it, with no Node toolchain for Nx to run on.
+warm-cache-reuse-check-warmed:
+    @bash scripts/check-warm-rust-cache-reuse.sh --warmed
+
 distribution-test:
     @{{nx}} run scripts:distribution-test
 
