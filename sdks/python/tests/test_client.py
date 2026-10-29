@@ -418,31 +418,36 @@ def linear_projection_handler(received: list[GraphqlRequest]) -> type[BaseHTTPRe
             length = int(self.headers["content-length"])
             request = GraphqlRequest.parse(self.rfile.read(length))
             received.append(request)
-            if "teams(" in request.query:
-                states = [asdict(state) for state in LINEAR_STATES]
-                data: dict[str, object] = {
-                    "organization": {"id": "ORG-1"},
-                    "teams": {
-                        "nodes": [
-                            {
-                                "id": "TEAM-1",
-                                "states": {"nodes": states, "pageInfo": {"hasNextPage": False}},
-                            }
-                        ]
-                    },
-                    "projectStatuses": {"nodes": [], "pageInfo": {"hasNextPage": False}},
-                }
-            elif "issueCreate(" in request.query:
-                data = {
-                    "issueCreate": {
-                        "success": True,
-                        "issue": LinearIssueInput.of(request).answered(),
+            data: dict[str, object]
+            match request.query:
+                case query if "teams(" in query:
+                    states = [asdict(state) for state in LINEAR_STATES]
+                    data = {
+                        "organization": {"id": "ORG-1"},
+                        "teams": {
+                            "nodes": [
+                                {
+                                    "id": "TEAM-1",
+                                    "states": {
+                                        "nodes": states,
+                                        "pageInfo": {"hasNextPage": False},
+                                    },
+                                }
+                            ]
+                        },
+                        "projectStatuses": {"nodes": [], "pageInfo": {"hasNextPage": False}},
                     }
-                }
-            else:
-                self.send_response(400)
-                self.end_headers()
-                return
+                case query if "issueCreate(" in query:
+                    data = {
+                        "issueCreate": {
+                            "success": True,
+                            "issue": LinearIssueInput.of(request).answered(),
+                        }
+                    }
+                case _:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
             body = json.dumps({"data": data}).encode()
             self.send_response(200)
             self.send_header("content-type", "application/json")
