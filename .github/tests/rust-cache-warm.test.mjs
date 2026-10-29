@@ -30,9 +30,11 @@ function sources() {
 
 function resolve(value, matrix) {
   if (typeof value === "string")
-    return value.replace(/\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}/g, (_, name) =>
-      String(matrix[name] ?? ""),
-    );
+    return value.replace(/\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}/g, (_, name) => {
+      if (!Object.hasOwn(matrix, name))
+        throw Error(`rust-cache-warm.yml names matrix.${name}, which its leg does not define`);
+      return String(matrix[name]);
+    });
   if (Array.isArray(value)) return value.map((entry) => resolve(entry, matrix));
   if (value && typeof value === "object")
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, resolve(v, matrix)]));
@@ -294,6 +296,11 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
       },
     ],
   };
+  // A leg naming a matrix field it does not define is refused, not resolved to nothing.
+  assert.throws(
+    () => mutate((all) => delete linux(all).build),
+    /names matrix\.build, which its leg does not define/,
+  );
   for (const [name, [expected, edit]] of Object.entries(cases)) {
     const found = mutate(edit);
     assert.ok(

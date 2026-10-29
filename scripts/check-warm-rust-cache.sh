@@ -133,4 +133,22 @@ WARM_RECORD="$scratch/journey.record" PATH="$scratch/journey-bin:$PATH" \
   bash "$journey/scripts/test-distribution.sh" --release-build-only extra >"$scratch/journey.log" 2>&1 || status=$?
 [ "$status" -eq 2 ] && [ ! -s "$scratch/journey.record" ] \
   || { cat "$scratch/journey.log" >&2; fail "test-distribution.sh exited $status for '--release-build-only extra', not 2 before building" "refuse it as a usage error before any build"; }
+
+# And scripts/pr-build-commands.sh refuses a file it cannot read naming that file and a next
+# action, never with a traceback: a crate's project.json that does not parse, and a missing
+# scripts/rust-coverage.sh.
+reader="$scratch/reader"
+mkdir -p "$reader/scripts" "$reader/crates/broken"
+cp "$root/scripts/pr-build-commands.sh" "$reader/scripts/"
+printf '{"targets": {"test": \n' >"$reader/crates/broken/project.json"
+refused_by_reader() {
+  local status=0
+  bash "$reader/scripts/pr-build-commands.sh" >/dev/null 2>"$scratch/reader.log" || status=$?
+  [ "$status" -eq 1 ] && grep -q "$1" "$scratch/reader.log" && grep -q "next:" "$scratch/reader.log" \
+    && ! grep -q Traceback "$scratch/reader.log" \
+    || { cat "$scratch/reader.log" >&2; fail "pr-build-commands.sh exited $status for $2, without naming $1 and a next action" "refuse it through sys.exit with the file and a next action"; }
+}
+refused_by_reader "crates/broken/project.json: could not be read as JSON" "a project.json that does not parse"
+printf '{"targets": {"test": {"options": {"command": "cargo test -p broken"}}}}\n' >"$reader/crates/broken/project.json"
+refused_by_reader "scripts/rust-coverage.sh could not be read" "a missing scripts/rust-coverage.sh"
 exit 0

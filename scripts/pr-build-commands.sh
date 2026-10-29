@@ -33,7 +33,11 @@ def refuse(path, why):
 
 out = []
 for path in sorted(glob.glob("crates/*/project.json")):
-    node = json.load(open(path, encoding="utf-8"))
+    try:
+        with open(path, encoding="utf-8") as handle:
+            node = json.load(handle)
+    except (OSError, ValueError) as error:
+        sys.exit(f"pr-build-commands: {path}: could not be read as JSON ({error}); next: fix that file so it parses")
     for key in ("targets", "test", "options"):
         node = node.get(key) if isinstance(node, dict) else None
     if not isinstance(node, dict):
@@ -55,7 +59,11 @@ for path in sorted(glob.glob("crates/*/project.json")):
             refuse(path, f"its `test` target runs `{command}`, which is neither `cargo test` nor a guard script")
     if not built:
         refuse(path, "its `test` target runs no `cargo test`")
-coverage = open("scripts/rust-coverage.sh", encoding="utf-8").read()
+try:
+    with open("scripts/rust-coverage.sh", encoding="utf-8") as handle:
+        coverage = handle.read()
+except (OSError, ValueError) as error:
+    sys.exit(f"pr-build-commands: scripts/rust-coverage.sh could not be read ({error}); next: restore it, which holds the instrumented run")
 run = re.search(r'run="\$\((cargo llvm-cov\b.*?) 2>&1\)"', coverage, re.S)
 if not run or '"$CRATE"' not in run.group(1):
     sys.exit("pr-build-commands: scripts/rust-coverage.sh has no `run=\"$(cargo llvm-cov ... \"$CRATE\" ... 2>&1)\"`; next: point this at its instrumented run")
