@@ -332,13 +332,11 @@ impl Engine {
                     .acknowledge_terminal()
                     .map_err(|error| projection_refused(request, &error));
             }
-        } else if request.reason.is_none()
-            && let Some(context) = claim.written_context()
-        {
-            // The terminal state is the issue's own — its status and its closure — so with no
-            // reason to record the update changes no body, and the ids this producer kept are
-            // all it needs. A reason is recorded against the body as it is read now, never
-            // against a copy of the body this producer wrote.
+        } else if let Some(context) = claim.written_context() {
+            // The terminal state is the issue's own — its status and its closure — so the ids this
+            // producer kept are all the write needs. A reason is recorded against the body as it
+            // stands now, which the source reads before composing it — never against a copy of the
+            // body this producer wrote.
             let mut held = task.clone();
             held.id.clone_from(&id);
             source.source().prime_written(&id, context, &held);

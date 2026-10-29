@@ -628,12 +628,17 @@ fn an_edit_a_person_makes_before_the_terminal_projection_survives_it() {
                     "{item}"
                 );
             }
-            // The reason is written against the body as it reads now.
+            // The reason is written against the body as it reads now: the `Status` write answers
+            // with the issue whole, and the body is composed against that answer — still two
+            // requests, neither of them a read of its own.
             Some(reason) => {
                 assert_eq!(slot(&store.board.fields, &created)["human.reason"], reason);
                 assert_eq!(
-                    store.operations_since(before).first().copied(),
-                    Some("reading one issue"),
+                    store.operations_since(before),
+                    [
+                        super::plan_copy::operation_name(graphql::UPDATE_FIELD_WHOLE),
+                        "updating an issue"
+                    ],
                     "{item}"
                 );
             }

@@ -59,6 +59,9 @@ pub(super) struct Held {
     kept: Mutex<Option<Placement>>,
     /// The repository and project issue the last create of this process was placed by.
     placed: Mutex<Option<(RepositoryTarget, Option<NativeId>)>>,
+    /// Issues primed from a producer's written context whose body nothing in this process has
+    /// read: an update changing one reads the body first.
+    unread: Mutex<std::collections::BTreeSet<NativeId>>,
 }
 
 /// A lock an earlier panic poisoned is read as it stands: what these hold is an optimisation,
@@ -192,9 +195,9 @@ impl GitHubProjectsSource {
 
     /// Take `context` with `task`'s title and content as the record of issue `id`.
     ///
-    /// What it holds of the body is the caller's word, not a read: its caller primes it only for
-    /// an update that changes neither the content nor the metadata, which therefore sends no
-    /// body at all, so no body is ever written from it.
+    /// What it holds of the body is the caller's word, not a read, so it is marked unread: an
+    /// update that changes the body reads the body first (`targeted_update`), and one that does
+    /// not sends no body at all.
     pub(super) fn prime_written_held(&self, id: &NativeId, context: &Value, task: &Task) -> bool {
         let Ok(written) = serde_json::from_value::<Written>(context.clone()) else {
             return false;
@@ -213,6 +216,51 @@ impl GitHubProjectsSource {
             return false;
         };
         cache.insert(id.clone(), item);
+        held(&self.projection.unread).insert(id.clone());
         true
+    }
+
+    /// Whether issue `id`'s record was primed from a written context and its body not read
+    /// since — answered once, so the read that follows makes it read.
+    pub(super) fn take_unread(&self, id: &NativeId) -> bool {
+        held(&self.projection.unread).remove(id)
+    }
+
+    /// Select `option` in the board field `field` of the item `item` by the mutation that answers
+    /// with the issue whole, and answer with the issue's body as GitHub holds it now: a write of
+    /// the body composed against that answer is composed against the body as it stands.
+    pub(super) async fn select_reading_body(
+        &self,
+        board: &str,
+        item: &str,
+        field: &str,
+        option: &str,
+    ) -> Result<String, onetaskgraph_plugin_api::SourceError> {
+        let data = self
+            .graphql_sent(
+                super::graphql::UPDATE_FIELD_WHOLE,
+                super::expected::whole_variables(json!({"input":{
+                    "projectId":board,"itemId":item,"fieldId":field,
+                    "value":{"singleSelectOptionId":option}
+                },"readPriority":false,"priorityName":super::PRIORITY_FIELD})),
+            )
+            .await?;
+        let returned = data
+            .pointer("/updateProjectV2ItemFieldValue/projectV2Item")
+            .ok_or_else(|| onetaskgraph_plugin_api::SourceError::Malformed {
+                message: "GitHub field update returned no project item".into(),
+            })?;
+        if returned.get("id").and_then(Value::as_str) != Some(item) {
+            return Err(onetaskgraph_plugin_api::SourceError::Malformed {
+                message: "GitHub field update returned the wrong project item".into(),
+            });
+        }
+        Ok(returned
+            .pointer("/content/body")
+            .and_then(Value::as_str)
+            .ok_or_else(|| onetaskgraph_plugin_api::SourceError::Malformed {
+                message: "GitHub field update returned no issue body".into(),
+            })?
+            .to_owned())
     }
 }

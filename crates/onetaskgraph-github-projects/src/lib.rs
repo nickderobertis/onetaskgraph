@@ -8460,6 +8460,45 @@ impl GitHubProjectsSource {
             None => None,
         };
 
+        // A record primed from what a producer wrote holds no body anybody read, so an update
+        // changing the body reads it first: by the `Status` write's own answer when the update
+        // moves the option — the mutation answering with the issue whole — and otherwise by
+        // reading the issue. The body is then composed against what GitHub holds now.
+        let mut option_selected = false;
+        if self.take_unread(id)
+            && (update.content.is_some()
+                || !update.metadata_set.is_empty()
+                || !update.metadata_remove.is_empty()
+                || update.delivers.is_some()
+                || edges.is_some())
+        {
+            let live = match status_move.as_ref().filter(|moving| moving.moves.option()) {
+                Some(moving) => {
+                    option_selected = true;
+                    Some(
+                        self.select_reading_body(
+                            moving.board.as_str(),
+                            &item.item_id,
+                            &moving.field,
+                            &moving.option,
+                        )
+                        .await?,
+                    )
+                }
+                None => {
+                    self.forget(id)?;
+                    let Some(read) = self.item_by_id(id).await? else {
+                        return Ok(None);
+                    };
+                    read.raw_body
+                }
+            };
+            let (visible, read_slot) = metadata_body(live.clone())?;
+            item.raw_body = live;
+            item.body = visible;
+            item.slot = read_slot;
+        }
+
         let mut slot = item.slot.clone();
         for (key, value) in &update.metadata_set {
             slot.insert(key.as_str().to_owned(), value.clone());
@@ -8525,7 +8564,10 @@ impl GitHubProjectsSource {
         // closes, as a whole write does — then the `blockedBy` difference, then the body.
         let mut board_writes: Vec<(&BoardId, (String, Value))> = Vec::new();
         let mut clears: Vec<(&BoardId, &str)> = Vec::new();
-        if let Some(moving) = status_move.as_ref().filter(|moving| moving.moves.option()) {
+        if let Some(moving) = status_move
+            .as_ref()
+            .filter(|moving| moving.moves.option() && !option_selected)
+        {
             board_writes.push((
                 &moving.board,
                 (

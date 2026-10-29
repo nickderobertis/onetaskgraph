@@ -346,11 +346,11 @@ pub trait TaskSource: Send + Sync {
 
     /// Take `context`, which [`written_context`](Self::written_context) gave, with `task`'s
     /// fields, as the record of `id` — so the next [`update_task`](Self::update_task) of it
-    /// sends only its mutations. Taken only for an update that changes neither the content nor
-    /// the metadata, which therefore writes no body from what the caller holds: a body change is
-    /// made only against the body as read. Answers whether it took them; a context it cannot
-    /// read is not taken, and the update then reads as it always does. Defaulted to taking
-    /// nothing.
+    /// sends only its mutations. What the caller holds of the body is never written: an update
+    /// that changes the body reads it first — in the answer to one of its own mutations where it
+    /// can — and composes it against what the backend holds now. Answers whether it took them;
+    /// a context it cannot read is not taken, and the update then reads as it always does.
+    /// Defaulted to taking nothing.
     fn prime_written(
         &self,
         id: &NativeId,
