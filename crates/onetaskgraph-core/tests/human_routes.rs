@@ -184,3 +184,40 @@ fn distinct_producer_purposes_cannot_select_each_others_routes() {
         );
     }
 }
+
+#[test]
+fn scoped_routes_never_expand_legacy_write_preflights() {
+    let mut document = configured(json!("human-task"));
+    let plans = SourceName::new("plans".to_owned()).expect("source");
+    let config = Config::from_document(document.clone()).expect("routes");
+    let routes = config.routes();
+    assert_eq!(
+        routes
+            .reachable(&plans)
+            .iter()
+            .map(SourceName::as_str)
+            .collect::<Vec<_>>(),
+        ["plans", "legacy"],
+        "legacy preflight must not contact scoped destinations"
+    );
+    document["sources"]["plans"]["routes"]
+        .as_array_mut()
+        .expect("routes")
+        .pop();
+    let scoped_only = Config::from_document(document)
+        .expect("only scoped routes")
+        .routes();
+    assert!(!scoped_only.routes(&plans));
+    assert!(!scoped_only.any());
+    assert_eq!(scoped_only.reachable(&plans), vec![plans]);
+}
+
+#[test]
+fn scoped_entries_still_cannot_create_route_chains() {
+    let mut document = configured(json!("human-task"));
+    document["sources"]["human-public"]["routes"] = json!([
+        {"classification":"public","purpose":"review","to":"legacy"}
+    ]);
+    let error = Config::from_document(document).expect_err("a scoped target still routes");
+    assert!(error.to_string().contains("routes of its own"), "{error}");
+}

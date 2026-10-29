@@ -357,16 +357,19 @@ impl Routes {
         self
     }
 
-    /// Whether `source` declares any route.
+    /// Whether `source` declares any legacy, unscoped route.
     #[must_use]
     pub fn routes(&self, source: &SourceName) -> bool {
-        self.0.get(source).is_some_and(|routes| !routes.is_empty())
+        self.of(source).iter().any(|route| route.purpose.is_none())
     }
 
-    /// Whether any source declares any route.
+    /// Whether any source declares a legacy, unscoped route.
     #[must_use]
     pub fn any(&self) -> bool {
-        self.0.values().any(|routes| !routes.is_empty())
+        self.0
+            .values()
+            .flatten()
+            .any(|route| route.purpose.is_none())
     }
 
     /// Every source an item written to `source` could land in: the source itself first,
@@ -374,7 +377,11 @@ impl Routes {
     #[must_use]
     pub fn reachable(&self, source: &SourceName) -> Vec<SourceName> {
         let mut reachable = vec![source.clone()];
-        for route in self.0.get(source).into_iter().flatten() {
+        for route in self
+            .of(source)
+            .iter()
+            .filter(|route| route.purpose.is_none())
+        {
             if !reachable.contains(&route.to) {
                 reachable.push(route.to.clone());
             }
@@ -732,7 +739,7 @@ pub(super) fn check(routes: &Routes, configured: &[SourceName]) -> Result<(), Co
                     "name another source, or remove the entry.",
                 ));
             }
-            if routes.routes(&route.to) {
+            if !routes.of(&route.to).is_empty() {
                 return Err(ConfigError::setting(
                     key,
                     format!(
