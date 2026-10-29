@@ -3966,6 +3966,21 @@ pub struct GitHubProjectsSource {
     projection: projection::Held,
 }
 
+/// The board item a single field update's answer names, refused unless it is `item_id`.
+fn field_update_item<'a>(data: &'a Value, item_id: &str) -> Result<&'a Value, SourceError> {
+    let returned = data
+        .pointer("/updateProjectV2ItemFieldValue/projectV2Item")
+        .ok_or_else(|| SourceError::Malformed {
+            message: "GitHub field update returned no project item".into(),
+        })?;
+    if required_str(returned, "id")? != item_id {
+        return Err(SourceError::Malformed {
+            message: "GitHub field update returned the wrong project item".into(),
+        });
+    }
+    Ok(returned)
+}
+
 /// GitHub's closed single-select color vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -8482,12 +8497,14 @@ impl GitHubProjectsSource {
         // moves the option — the mutation answering with the issue whole — and otherwise by
         // reading the issue. The body is then composed against what GitHub holds now.
         let mut option_selected = false;
-        if self.take_unread(id)
-            && (update.content.is_some()
-                || !update.metadata_set.is_empty()
-                || !update.metadata_remove.is_empty()
-                || update.delivers.is_some()
-                || edges.is_some())
+        // The mark stays until a read lands, so an update that writes no body, or one whose
+        // read fails, leaves the next update of it to read the body too.
+        if (update.content.is_some()
+            || !update.metadata_set.is_empty()
+            || !update.metadata_remove.is_empty()
+            || update.delivers.is_some()
+            || edges.is_some())
+            && self.is_unread(id)
         {
             let live = match status_move.as_ref().filter(|moving| moving.moves.option()) {
                 Some(moving) => {
@@ -8511,6 +8528,7 @@ impl GitHubProjectsSource {
                 }
             };
             let (visible, read_slot) = metadata_body(live.clone())?;
+            self.mark_read(id);
             item.raw_body = live;
             item.body = visible;
             item.slot = read_slot;
@@ -8759,17 +8777,7 @@ impl GitHubProjectsSource {
                 },"readPriority":false,"priorityName":PRIORITY_FIELD}),
             )
             .await?;
-        let returned = data
-            .pointer("/updateProjectV2ItemFieldValue/projectV2Item")
-            .ok_or_else(|| SourceError::Malformed {
-                message: "GitHub field update returned no project item".into(),
-            })?;
-        if required_str(returned, "id")? != item_id {
-            return Err(SourceError::Malformed {
-                message: "GitHub field update returned the wrong project item".into(),
-            });
-        }
-        Ok(())
+        field_update_item(&data, item_id).map(|_| ())
     }
 
     /// GitHub accepts one value per field mutation; aliases combine those mutations in

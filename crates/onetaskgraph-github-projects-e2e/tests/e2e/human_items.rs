@@ -989,3 +989,126 @@ fn without_a_named_host_the_machines_own_name_is_the_authority_and_text_names_th
         stderr(&refused)
     );
 }
+
+#[test]
+fn a_primed_record_stays_unread_through_a_bodiless_update_and_a_failed_read() {
+    use onetaskgraph_plugin_api::{
+        ItemWrite, MetadataKey, SourceName, SourcePlugin as _, Status, StatusCategory, Task,
+        TaskUpdate,
+    };
+    let store = Store::new(Vec::new());
+    let name = SourceName::new("human").unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let task: Task = serde_json::from_value(json!({
+        "id": "item-sequence", "title": "Decide on item-sequence",
+        "content": "Choose the next public example.", "status": {"category": "todo", "name": "Todo"},
+        "priority": "high", "labels": [], "project": PROJECT, "url": null,
+        "created_at": null, "updated_at": null, "metadata": {"human.item_id": "item-sequence"},
+        "repositories": [format!("github.com/{PUBLIC_REPOSITORY}")]}))
+    .unwrap();
+    let writer = onetaskgraph_github_projects::Plugin
+        .build(&name, &store.board.config, &FixtureToken)
+        .unwrap();
+    let id = runtime
+        .block_on(writer.write_task(&ItemWrite {
+            target: None,
+            item: task.clone(),
+            depends_on: Vec::new(),
+        }))
+        .unwrap();
+    let kept = writer.written_context(&id).unwrap();
+    let body = store.board.fields.body(&id.0);
+    let (_, slotted) = body
+        .as_str()
+        .unwrap()
+        .split_once("<!-- onetaskgraph.metadata")
+        .unwrap();
+    let edited = format!("A person rewrote this.\n\n<!-- onetaskgraph.metadata{slotted}");
+    store.board.fields.edit_body(&id.0, &edited);
+
+    let later = onetaskgraph_github_projects::Plugin
+        .build(&name, &store.board.config, &FixtureToken)
+        .unwrap();
+    let mut primed = task;
+    primed.id = id.clone();
+    assert!(later.prime_written(&id, &kept, &primed));
+    // A status update writes no body, and leaves the body as the person left it.
+    let closing = TaskUpdate {
+        status: Some(Status {
+            category: StatusCategory::Cancelled,
+            name: "cancelled".to_owned(),
+        }),
+        ..TaskUpdate::default()
+    };
+    runtime
+        .block_on(later.update_task(&id, &closing))
+        .unwrap()
+        .unwrap();
+    assert_eq!(store.board.fields.body(&id.0), json!(edited));
+
+    // The next update changes the body: its read of the issue is refused, so it writes nothing;
+    // retried, the same update reads the body first and keeps the person's edit.
+    let mut reason = TaskUpdate::default();
+    reason.metadata_set.insert(
+        MetadataKey::new("human.reason".to_owned()).unwrap(),
+        json!("Superseded."),
+    );
+    let reads = |from: usize| {
+        store
+            .operations_since(from)
+            .iter()
+            .filter(|operation| operation.starts_with("reading"))
+            .count()
+    };
+    let before = store.requests();
+    store.board.fields.refuse_once("query($id:ID!");
+    assert!(runtime.block_on(later.update_task(&id, &reason)).is_err());
+    assert_eq!(store.board.fields.body(&id.0), json!(edited));
+    runtime
+        .block_on(later.update_task(&id, &reason))
+        .unwrap()
+        .unwrap();
+    assert!(reads(before) >= 1, "{:?}", store.operations_since(before));
+    let body = store.board.fields.body(&id.0);
+    assert!(
+        body.as_str().unwrap().starts_with("A person rewrote this."),
+        "{body}"
+    );
+    assert_eq!(
+        slot(&store.board.fields, &id.0)["human.reason"],
+        "Superseded."
+    );
+}
+
+#[test]
+fn a_status_write_answered_without_the_body_is_refused_and_the_retry_writes_the_reason() {
+    let store = Store::new(Vec::new());
+    let open = request("item-bodiless", &[PUBLIC_REPOSITORY]);
+    let created = native(&projected(&store.project(&open)));
+    let body = store.board.fields.body(&created);
+    let mut dismissed = open;
+    dismissed["state"] = json!("dismissed");
+    dismissed["reason"] = json!("Superseded by another example.");
+    // The `Status` write that should answer with the body answers without it: no body is
+    // composed from anything else, and nothing of the body is written.
+    store.board.fields.omit_from_writes(&["body"]);
+    let refused = store.project(&dismissed);
+    assert_ne!(refused.status.code(), Some(0));
+    assert!(
+        stderr(&refused).contains("no issue body"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(store.board.fields.body(&created), body);
+    // Answered whole again, the retry reads the issue and records the reason against it.
+    store.board.fields.omit_from_writes(&[]);
+    projected(&store.project(&dismissed));
+    assert_eq!(
+        slot(&store.board.fields, &created)["human.reason"],
+        "Superseded by another example."
+    );
+    assert_eq!(
+        store.board.fields.state(&created),
+        ("CLOSED".to_owned(), Some("NOT_PLANNED".to_owned()))
+    );
+}

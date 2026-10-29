@@ -10,6 +10,7 @@ import sys
 import threading
 import tomllib
 from collections.abc import Coroutine, Mapping
+from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -320,7 +321,82 @@ def test_status_options_method_decodes_a_real_binary_plan(binary: Path, tmp_path
         thread.join()
 
 
-def linear_projection_handler(received: list[dict[str, object]]) -> type[BaseHTTPRequestHandler]:
+@dataclass(frozen=True)
+class GraphqlRequest:
+    """One GraphQL request a loopback tracker received: its document and its variables."""
+
+    query: str
+    variables: dict[str, object]
+
+    @classmethod
+    def parse(cls, raw: bytes) -> GraphqlRequest:
+        """Decode a request body, refusing one that names no document."""
+        decoded = json.loads(raw)
+        if not isinstance(decoded, dict) or not isinstance(decoded.get("query"), str):
+            raise ValueError("a GraphQL request names its query")
+        variables = decoded.get("variables") or {}
+        if not isinstance(variables, dict):
+            raise ValueError("a GraphQL request's variables are an object")
+        return cls(query=decoded["query"], variables=variables)
+
+
+@dataclass(frozen=True)
+class LinearIssueInput:
+    """The ``issueCreate`` input a projection sends: what the loopback stores."""
+
+    title: str
+    description: str
+    priority: int
+    project_id: str
+
+    @classmethod
+    def of(cls, request: GraphqlRequest) -> LinearIssueInput:
+        """Read the input of an ``issueCreate`` request, refusing one missing a member."""
+        stored = request.variables.get("input")
+        if not isinstance(stored, dict):
+            raise ValueError("issueCreate names its input")
+        return cls(
+            title=str(stored["title"]),
+            description=str(stored["description"]),
+            priority=int(stored["priority"]),
+            project_id=str(stored["projectId"]),
+        )
+
+    def answered(self) -> dict[str, object]:
+        """The issue Linear answers ``issueCreate`` with, stored as given."""
+        return {
+            "id": "ISSUE-1",
+            "identifier": "FIX-1",
+            "title": self.title,
+            "description": self.description,
+            "url": "https://linear.app/fixture/issue/FIX-1",
+            "createdAt": None,
+            "updatedAt": "2026-09-01T00:00:00Z",
+            "archivedAt": None,
+            "state": {"name": "Todo", "type": "unstarted"},
+            "priority": self.priority,
+            "labels": {"nodes": []},
+            "project": {"id": self.project_id},
+        }
+
+
+@dataclass(frozen=True)
+class LinearState:
+    """One workflow state of the loopback team."""
+
+    id: str
+    name: str
+    type: str
+
+
+LINEAR_STATES = (
+    LinearState("STATE-todo", "Todo", "unstarted"),
+    LinearState("STATE-done", "Done", "completed"),
+    LinearState("STATE-canceled", "Canceled", "canceled"),
+)
+
+
+def linear_projection_handler(received: list[GraphqlRequest]) -> type[BaseHTTPRequestHandler]:
     """Build a loopback Linear answering the two documents a cold projection sends.
 
     Those are the team's resolution and ``issueCreate``, answered with the issue it stored.
@@ -329,52 +405,27 @@ def linear_projection_handler(received: list[dict[str, object]]) -> type[BaseHTT
     class LinearHandler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802  # stdlib handler API names the method.
             length = int(self.headers["content-length"])
-            request = json.loads(self.rfile.read(length))
+            request = GraphqlRequest.parse(self.rfile.read(length))
             received.append(request)
-            query = request["query"]
-            if "teams(" in query:
+            if "teams(" in request.query:
+                states = [asdict(state) for state in LINEAR_STATES]
                 data: dict[str, object] = {
                     "organization": {"id": "ORG-1"},
                     "teams": {
                         "nodes": [
                             {
                                 "id": "TEAM-1",
-                                "states": {
-                                    "nodes": [
-                                        {"id": "STATE-todo", "name": "Todo", "type": "unstarted"},
-                                        {"id": "STATE-done", "name": "Done", "type": "completed"},
-                                        {
-                                            "id": "STATE-canceled",
-                                            "name": "Canceled",
-                                            "type": "canceled",
-                                        },
-                                    ],
-                                    "pageInfo": {"hasNextPage": False},
-                                },
+                                "states": {"nodes": states, "pageInfo": {"hasNextPage": False}},
                             }
                         ]
                     },
                     "projectStatuses": {"nodes": [], "pageInfo": {"hasNextPage": False}},
                 }
-            elif "issueCreate(" in query:
-                stored = request["variables"]["input"]
+            elif "issueCreate(" in request.query:
                 data = {
                     "issueCreate": {
                         "success": True,
-                        "issue": {
-                            "id": "ISSUE-1",
-                            "identifier": "FIX-1",
-                            "title": stored["title"],
-                            "description": stored["description"],
-                            "url": "https://linear.app/fixture/issue/FIX-1",
-                            "createdAt": None,
-                            "updatedAt": "2026-09-01T00:00:00Z",
-                            "archivedAt": None,
-                            "state": {"name": "Todo", "type": "unstarted"},
-                            "priority": stored["priority"],
-                            "labels": {"nodes": []},
-                            "project": {"id": stored["projectId"]},
-                        },
+                        "issue": LinearIssueInput.of(request).answered(),
                     }
                 }
             else:
@@ -398,7 +449,7 @@ def test_a_human_task_is_projected_through_the_real_binary_into_a_loopback_linea
     binary: Path, tmp_path: Path
 ) -> None:
     """Project one human task and decode the binding the binary answers with."""
-    received: list[dict[str, object]] = []
+    received: list[GraphqlRequest] = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), linear_projection_handler(received))
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
@@ -452,7 +503,7 @@ def test_a_human_task_is_projected_through_the_real_binary_into_a_loopback_linea
         assert projected.task == "org:ISSUE-1"
         assert projected.url == "https://linear.app/fixture/issue/FIX-1"
         assert projected.project == "P-1"
-        creates = [call for call in received if "issueCreate(" in str(call["query"])]
+        creates = [call for call in received if "issueCreate(" in call.query]
         assert len(creates) == 1
         # Bound: the same request again is the same answer, and the tracker is asked nothing.
         before = len(received)

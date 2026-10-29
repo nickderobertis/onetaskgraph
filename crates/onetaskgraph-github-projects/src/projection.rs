@@ -411,9 +411,14 @@ impl GitHubProjectsSource {
     }
 
     /// Whether issue `id`'s record was primed from a written context and its body not read
-    /// since — answered once, so the read that follows makes it read.
-    pub(super) fn take_unread(&self, id: &NativeId) -> bool {
-        held(&self.projection.unread).remove(id)
+    /// since.
+    pub(super) fn is_unread(&self, id: &NativeId) -> bool {
+        held(&self.projection.unread).contains(id)
+    }
+
+    /// Record that issue `id`'s body has now been read.
+    pub(super) fn mark_read(&self, id: &NativeId) {
+        held(&self.projection.unread).remove(id);
     }
 
     /// Select `option` in the board field `field` of the item `item` by the mutation that answers
@@ -435,16 +440,7 @@ impl GitHubProjectsSource {
                 },"readPriority":false,"priorityName":super::PRIORITY_FIELD})),
             )
             .await?;
-        let returned = data
-            .pointer("/updateProjectV2ItemFieldValue/projectV2Item")
-            .ok_or_else(|| onetaskgraph_plugin_api::SourceError::Malformed {
-                message: "GitHub field update returned no project item".into(),
-            })?;
-        if returned.get("id").and_then(Value::as_str) != Some(item) {
-            return Err(onetaskgraph_plugin_api::SourceError::Malformed {
-                message: "GitHub field update returned the wrong project item".into(),
-            });
-        }
+        let returned = super::field_update_item(&data, item)?;
         Ok(returned
             .pointer("/content/body")
             .and_then(Value::as_str)

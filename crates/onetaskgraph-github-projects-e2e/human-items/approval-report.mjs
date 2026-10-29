@@ -17,12 +17,14 @@ const CALLS = [
   "task project-human (review completed)",
 ];
 
-// One mode's figures, refused unless its calls are the approval's, in order, adding up.
+// One mode's figures, refused unless its calls are the approval's, in order, each counting its
+// requests and points, adding up.
 function mode(telemetry, name) {
   const spent = telemetry[name];
   if (!spent || !Array.isArray(spent.calls)) throw Error(`the recording has no ${name} sequence`);
   if (JSON.stringify(spent.calls.map((call) => call.call)) !== JSON.stringify(CALLS))
     throw Error(`the ${name} sequence does not name the approval's calls in order`);
+  sum(spent.calls, "requests");
   const projection = spent.calls.filter((call) => call.call.startsWith("task project-human"));
   if (
     sum(spent.calls, "points") !== spent.points ||

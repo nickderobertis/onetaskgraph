@@ -118,12 +118,15 @@ fn the_approval_reporter_hands_over_the_larger_sequence_of_the_journeys_calls() 
     reordered.swap(1, 2);
     let mut unpriced = recorded.clone();
     unpriced["screened"]["projection"] = json!(0);
+    let mut uncounted = recorded.clone();
+    uncounted["unscreened"]["calls"][2]["requests"] = json!(-1);
     for refused in [
         super::approval::recording(
             super::approval::spent_of(reordered),
             recorded["screened"].clone(),
         ),
         unpriced,
+        uncounted,
         {
             let mut other = recorded.clone();
             other["workload"] = json!("a plan copy");
