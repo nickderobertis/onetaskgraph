@@ -32,7 +32,7 @@ const ITEM_ID_KEY: &str = "human.item_id";
 const OWNER_KEY: &str = "human.owner";
 const DIGEST_KEY: &str = "human.payload_digest";
 const HOST_KEY: &str = "human.host";
-const STATE_KEY: &str = "human.state";
+/// A dismissal's reason, recorded only when the request gives one.
 const REASON_KEY: &str = "human.reason";
 
 /// The most origin matches one recovery reads; a page holding more is ambiguous.
@@ -162,6 +162,16 @@ impl Engine {
                 claim
                     .reconcile(request, &matches)
                     .map_err(|error| projection_refused(request, &error))?;
+                // The match this process just read is what a later terminal write takes instead
+                // of reading it again, exactly as a create's own answer is.
+                if let Some(binding) = claim.binding().cloned() {
+                    let written = source
+                        .source()
+                        .written_context(&binding.task().global_id().native);
+                    claim
+                        .bind_written(binding, written)
+                        .map_err(|error| projection_refused(request, &error))?;
+                }
             }
             IntentPhase::Ready | IntentPhase::Uncertain => {
                 self.create_projection(source, &store, &mut claim, request, &task)
@@ -322,7 +332,13 @@ impl Engine {
                     .acknowledge_terminal()
                     .map_err(|error| projection_refused(request, &error));
             }
-        } else if let Some(context) = claim.written_context() {
+        } else if request.reason.is_none()
+            && let Some(context) = claim.written_context()
+        {
+            // The terminal state is the issue's own — its status and its closure — so with no
+            // reason to record the update changes no body, and the ids this producer kept are
+            // all it needs. A reason is recorded against the body as it is read now, never
+            // against a copy of the body this producer wrote.
             let mut held = task.clone();
             held.id.clone_from(&id);
             source.source().prime_written(&id, context, &held);
@@ -384,7 +400,6 @@ fn projected_task(
         OWNER_KEY.to_owned(),
         serde_json::to_value(&request.owner).unwrap_or(Value::Null),
     );
-    metadata.insert(STATE_KEY.to_owned(), Value::from("open"));
     if let Some(claim) = claim {
         metadata.insert(GlobalId::ORIGIN_KEY.to_owned(), Value::from(claim.origin()));
         metadata.insert(DIGEST_KEY.to_owned(), Value::from(claim.payload_digest()));
@@ -423,23 +438,17 @@ fn terminal_category(state: ProjectionState) -> StatusCategory {
     }
 }
 
-fn state_word(state: ProjectionState) -> &'static str {
-    match state {
-        ProjectionState::Open => "open",
-        ProjectionState::Completed => "completed",
-        ProjectionState::Dismissed => "dismissed",
-    }
-}
-
-/// The one update a terminal projection writes: its status, its state and — only when the
-/// request gave one — its reason. An absent reason stays absent.
+/// The one update a terminal projection writes: its status — which closes the issue as its
+/// category says — and, only when the request gave one, its reason. An absent reason stays
+/// absent.
 fn terminal_update(request: &HumanTaskProjection) -> TaskUpdate {
     let category = terminal_category(request.state);
     let mut metadata_set = BTreeMap::new();
-    let key = |key: &str| MetadataKey::new(key.to_owned()).expect("a literal human key");
-    metadata_set.insert(key(STATE_KEY), Value::from(state_word(request.state)));
     if let Some(reason) = &request.reason {
-        metadata_set.insert(key(REASON_KEY), Value::from(reason.as_str()));
+        metadata_set.insert(
+            MetadataKey::new(REASON_KEY.to_owned()).expect("a literal human key"),
+            Value::from(reason.as_str()),
+        );
     }
     TaskUpdate {
         status: Some(Status {
@@ -457,7 +466,6 @@ fn terminal_update(request: &HumanTaskProjection) -> TaskUpdate {
 /// Whether `held` already shows the terminal state and reason the request names.
 fn settled(held: &Task, request: &HumanTaskProjection) -> bool {
     held.status.category == terminal_category(request.state)
-        && held.metadata.get(STATE_KEY).and_then(Value::as_str) == Some(state_word(request.state))
         && held.metadata.get(REASON_KEY).and_then(Value::as_str) == request.reason.as_deref()
 }
 

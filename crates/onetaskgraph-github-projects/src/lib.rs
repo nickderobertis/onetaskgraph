@@ -3944,6 +3944,9 @@ pub struct GitHubProjectsSource {
     /// What [`expected`] holds for a write the store's cache expects: the journal while one is
     /// open, the issues primed from the cache, and the comments known on each.
     expected: expected::Held,
+    /// What [`projection`] holds for a producer's projection: a kept placement awaiting its
+    /// setup-context token, and where the last create was placed.
+    projection: projection::Held,
 }
 
 /// GitHub's closed single-select color vocabulary.
@@ -5071,6 +5074,7 @@ impl GitHubProjectsSource {
             repository_cache: Mutex::new(BTreeMap::new()),
             ledger,
             expected: expected::Held::default(),
+            projection: projection::Held::default(),
         })
     }
 
@@ -6308,6 +6312,11 @@ impl GitHubProjectsSource {
     ) -> Result<(), SourceError> {
         let fields_known = self.board_cache()?.is_some() || self.fields_cache()?.is_some();
         if fields_known || self.repository_cache()?.contains_key(repository) {
+            return Ok(());
+        }
+        // A placement an earlier process kept is taken only while the project issue this create
+        // has just read shows its setup-context token unchanged; see `projection`.
+        if self.placed_by_kept(repository, incoming.parent) {
             return Ok(());
         }
         let data = self

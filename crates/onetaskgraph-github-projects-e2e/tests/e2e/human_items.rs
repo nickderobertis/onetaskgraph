@@ -203,7 +203,10 @@ fn an_item_is_created_once_bound_and_settled_once_and_a_conflicting_terminal_is_
     assert_eq!(store.tickets("item-1"), std::slice::from_ref(&created));
     let held = slot(&store.board.fields, &created);
     assert_eq!(held["human.item_id"], "item-1");
-    assert_eq!(held["human.state"], "open");
+    assert!(
+        held.get("human.state").is_none(),
+        "the state is the issue's own: {held}"
+    );
     assert!(
         held["onetaskgraph.origin"]
             .as_str()
@@ -239,8 +242,11 @@ fn an_item_is_created_once_bound_and_settled_once_and_a_conflicting_terminal_is_
         ("CLOSED".to_owned(), Some("NOT_PLANNED".to_owned()))
     );
     let held = slot(&store.board.fields, &created);
-    assert_eq!(held["human.state"], "dismissed");
     assert!(held.get("human.reason").is_none(), "{held}");
+    assert_eq!(
+        store.board.fields.status(&created).as_deref(),
+        Some("Cancelled")
+    );
     assert!(
         !settled_with
             .iter()
@@ -352,7 +358,6 @@ fn a_dismissal_keeps_its_reason_and_a_lost_terminal_answer_is_retried_without_wr
     assert_eq!(native(&answer), created);
     assert_eq!(store.operations_since(before), ["reading one issue"]);
     let held = slot(&store.board.fields, &created);
-    assert_eq!(held["human.state"], "dismissed");
     assert_eq!(held["human.reason"], "Superseded by another example.");
     assert_eq!(
         store.board.fields.state(&created),
@@ -370,8 +375,11 @@ fn a_dismissal_keeps_its_reason_and_a_lost_terminal_answer_is_retried_without_wr
     omitted["state"] = json!("completed");
     let completed = native(&projected(&store.project(&omitted)));
     let held = slot(&store.board.fields, &completed);
-    assert_eq!(held["human.state"], "completed");
     assert!(held.get("human.reason").is_none(), "{held}");
+    assert_eq!(
+        store.board.fields.status(&completed).as_deref(),
+        Some("Done")
+    );
     assert_eq!(
         store.board.fields.state(&completed),
         ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
@@ -571,4 +579,92 @@ fn another_host_a_changed_payload_and_a_malformed_request_are_refused_writing_no
         );
     }
     assert_eq!(store.requests(), before);
+}
+
+#[test]
+fn an_edit_a_person_makes_before_the_terminal_projection_survives_it() {
+    let store = Store::new(Vec::new());
+    for (item, reason) in [
+        ("item-edited", None),
+        ("item-edited-reason", Some("Superseded by another example.")),
+    ] {
+        let open = request(item, &[PUBLIC_REPOSITORY]);
+        let created = native(&projected(&store.project(&open)));
+        let body = store.board.fields.body(&created);
+        let (_, slotted) = body
+            .as_str()
+            .unwrap()
+            .split_once("<!-- onetaskgraph.metadata")
+            .unwrap();
+        let edited = format!(
+            "A person rewrote this between the create and the decision.\n\n<!-- onetaskgraph.metadata{slotted}"
+        );
+        store.board.fields.edit_body(&created, &edited);
+
+        let mut dismissed = open;
+        dismissed["state"] = json!("dismissed");
+        dismissed["reason"] = json!(reason);
+        let before = store.requests();
+        projected(&store.project(&dismissed));
+        let body = store.board.fields.body(&created);
+        let body = body.as_str().unwrap();
+        assert!(
+            body.starts_with("A person rewrote this between the create and the decision."),
+            "{item}: {body}"
+        );
+        assert_eq!(
+            store.board.fields.state(&created),
+            ("CLOSED".to_owned(), Some("NOT_PLANNED".to_owned()))
+        );
+        match reason {
+            // Nothing of the body is written: the state is the issue's own.
+            None => {
+                assert_eq!(body, edited, "{item}");
+                assert!(
+                    !store
+                        .operations_since(before)
+                        .iter()
+                        .any(|operation| operation.starts_with("reading")),
+                    "{item}"
+                );
+            }
+            // The reason is written against the body as it reads now.
+            Some(reason) => {
+                assert_eq!(slot(&store.board.fields, &created)["human.reason"], reason);
+                assert_eq!(
+                    store.operations_since(before).first().copied(),
+                    Some("reading one issue"),
+                    "{item}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_later_cold_process_takes_the_kept_placement_and_a_changed_option_is_read_afresh() {
+    let store = Store::new(Vec::new());
+    let setup = super::plan_copy::operation_name(graphql::CREATION_CONTEXT);
+    let created_with = |item: &str| {
+        let before = store.requests();
+        let answer = projected(&store.project(&request(item, &[PUBLIC_REPOSITORY])));
+        assert_eq!(
+            store.board.fields.status(&native(&answer)).as_deref(),
+            Some("Todo"),
+            "{item}"
+        );
+        store.operations_since(before)
+    };
+    assert!(created_with("item-first").contains(&setup));
+    // A second process reads the project issue it is filed under, as every create does, finds
+    // the kept placement's token unchanged there, and reads no board fields or repository.
+    let second = created_with("item-second");
+    assert!(!second.contains(&setup), "{second:?}");
+    assert_eq!(second.first().copied(), Some("reading one issue"));
+
+    // An option given a new id moves the token: the next process reads its context afresh,
+    // writes the option's new id, and keeps that context for the one after it.
+    store.board.fields.remint_status_option("Todo");
+    assert!(created_with("item-third").contains(&setup));
+    assert!(!created_with("item-fourth").contains(&setup));
 }

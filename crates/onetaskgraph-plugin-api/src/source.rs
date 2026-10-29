@@ -315,19 +315,23 @@ pub trait TaskSource: Send + Sync {
         false
     }
 
-    /// What this source read in this process about where it creates — a container's field
-    /// and option ids, the node ids of the repositories it files in — that a create in a
-    /// later process could take instead of reading it, or `None`.
+    /// What this source read in this process about where it creates — the node ids of the
+    /// repository it filed in — under a setup-context token, or `None`.
     ///
-    /// Immutable placement knowledge only: it holds no item's title, content or membership,
-    /// and nothing that authorizes a versioned write. Defaulted to `None`.
+    /// The token is the source's own digest of every input the context depends on: the
+    /// container's field definitions and options, the repository it creates in, the project it
+    /// files under and the visibility it was declared. Immutable placement knowledge only: it
+    /// holds no item's title, content or membership, and nothing that authorizes a versioned
+    /// write. Defaulted to `None`.
     fn placement_context(&self) -> Option<serde_json::Value> {
         None
     }
 
-    /// Take `context`, which [`placement_context`](Self::placement_context) gave in an
-    /// earlier process, so the next create reads none of it — answering whether it took it.
-    /// A context this source cannot read is not taken. Defaulted to taking nothing.
+    /// Hold `context`, which [`placement_context`](Self::placement_context) gave in an earlier
+    /// process, for the next create to take only if its token still holds — computed from a
+    /// read that create makes anyway, so taking it adds no request and a changed input is read
+    /// afresh rather than reused. Answers whether it held it; a context this source cannot read
+    /// is not held. Defaulted to holding nothing.
     fn prime_placement(&self, context: &serde_json::Value) -> bool {
         let _ = context;
         false
@@ -340,11 +344,13 @@ pub trait TaskSource: Send + Sync {
         None
     }
 
-    /// Take `task`, which the caller asserts this source holds exactly as it last wrote it,
-    /// with `context`, which [`written_context`](Self::written_context) gave, as the record
-    /// of `id` — so the next [`update_task`](Self::update_task) of it sends only its
-    /// mutations. Answers whether it took them; a context it cannot read is not taken, and
-    /// the update then reads as it always does. Defaulted to taking nothing.
+    /// Take `context`, which [`written_context`](Self::written_context) gave, with `task`'s
+    /// fields, as the record of `id` — so the next [`update_task`](Self::update_task) of it
+    /// sends only its mutations. Taken only for an update that changes neither the content nor
+    /// the metadata, which therefore writes no body from what the caller holds: a body change is
+    /// made only against the body as read. Answers whether it took them; a context it cannot
+    /// read is not taken, and the update then reads as it always does. Defaulted to taking
+    /// nothing.
     fn prime_written(
         &self,
         id: &NativeId,

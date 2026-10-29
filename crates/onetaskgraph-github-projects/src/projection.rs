@@ -1,18 +1,26 @@
 //! What a producer's projection carries from one process to the next on this board: the
-//! board's field and option ids and the repositories' node ids a create reads, and the ids of
+//! placement a create reads before it writes, held behind a setup-context token, and the ids of
 //! an item this process wrote — never its title or its content.
 //!
 //! Every human task projection is its own process, so without these each create reads the
 //! board's fields and its repository again and each terminal write reads the issue it wrote.
-//! The producer's durable intent keeps them between processes (`docs/task-projection.md`);
-//! what a write still has to read — the project issue a task is filed under, which every
-//! sub-issue it gains moves — is read as it always is.
+//! The producer's durable intent keeps them between processes (`docs/task-projection.md`).
+//!
+//! **A kept placement is reused only while its setup-context token still holds.** The token is
+//! the digest of everything the placement depends on — the board, every field definition and
+//! option the board defines, the repository the issue is created in, the project issue it is
+//! filed under, and whether this source is declared private — and it is computed afresh from
+//! the read of that project issue every create already makes, which carries the board's whole
+//! field list. A kept placement whose token differs, or one this process cannot compute, is not
+//! taken: the create reads its context as it always did and keeps the new one. So the steady
+//! state reads nothing the create did not already read, and a changed option, field, repository,
+//! project or visibility is read afresh rather than reused.
 
-use std::collections::BTreeMap;
+use std::sync::{Mutex, MutexGuard};
 
-use onetaskgraph_plugin_api::{NativeId, Task};
+use onetaskgraph_plugin_api::{NativeId, Task, asset_sha256};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::{
     BoardFields, BoardKind, ContentKind, GitHubProjectsSource, ItemKind, RepositoryTarget,
@@ -21,16 +29,19 @@ use super::{
 
 /// The version of both contexts, so one an earlier or later build wrote is declined rather
 /// than misread.
-const PROJECTION_CONTEXT_VERSION: u64 = 1;
+const PROJECTION_CONTEXT_VERSION: u64 = 2;
 
-/// The ids a create in this board reads before it writes.
-#[derive(Serialize, Deserialize)]
+/// The placement a create in this board reads before it writes, and the token it holds under.
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Placement {
     version: u64,
-    fields: BoardFields,
-    /// Each repository's node id, by `owner/name`.
-    repositories: BTreeMap<String, String>,
+    /// The setup-context token the placement was kept under.
+    token: String,
+    /// The repository the issue is created in, `owner/name`.
+    repository: String,
+    /// That repository's node id.
+    repository_id: String,
 }
 
 /// One issue this source wrote, with its title and both spellings of its body left out.
@@ -41,25 +52,81 @@ struct Written {
     item: Resolved,
 }
 
+/// What this source holds for projections, for the length of one process.
+#[derive(Default)]
+pub(super) struct Held {
+    /// A placement an earlier process kept, not yet held to this process's token.
+    kept: Mutex<Option<Placement>>,
+    /// The repository and project issue the last create of this process was placed by.
+    placed: Mutex<Option<(RepositoryTarget, Option<NativeId>)>>,
+}
+
+/// A lock an earlier panic poisoned is read as it stands: what these hold is an optimisation,
+/// and a create that cannot use it reads instead.
+fn held<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
+    lock.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The setup-context token of `board`'s fields, for an issue created in `repository` under
+/// `parent` by a source `private` or not: the digest of each field's id, name, kind and options,
+/// in id order, beside the rest.
+fn setup_token(
+    board: &BoardFields,
+    repository: &RepositoryTarget,
+    parent: Option<&NativeId>,
+    private: bool,
+) -> Option<String> {
+    let mut fields: Vec<Value> = board
+        .fields
+        .get("nodes")?
+        .as_array()?
+        .iter()
+        .map(|field| {
+            let options = field
+                .get("options")
+                .and_then(Value::as_array)
+                .map(|options| {
+                    options
+                        .iter()
+                        .map(|option| json!([option.get("id"), option.get("name")]))
+                        .collect::<Vec<_>>()
+                });
+            json!({"id": field.get("id"), "name": field.get("name"),
+                   "kind": field.get("__typename"), "type": field.get("dataType"),
+                   "options": options})
+        })
+        .collect();
+    fields.sort_by_key(|field| field["id"].to_string());
+    let parts = json!({"version": PROJECTION_CONTEXT_VERSION, "board": board.id.as_str(),
+        "fields": fields, "repository": repository.slug(), "parent": parent.map(|id| &id.0),
+        "private": private});
+    Some(asset_sha256(parts.to_string().as_bytes()))
+}
+
 impl GitHubProjectsSource {
-    /// The board's fields and every repository id this process read, when it read the fields.
+    /// The placement this process's last create read, under the token it holds now.
     pub(super) fn placement_held(&self) -> Option<Value> {
+        let (repository, parent) = held(&self.projection.placed).clone()?;
         let fields = self.fields_cache().ok()?.clone()?;
-        let repositories = self
-            .repository_cache()
-            .ok()?
-            .iter()
-            .map(|(target, id)| (target.slug(), id.clone()))
-            .collect();
+        let repository_id = self.repository_cache().ok()?.get(&repository)?.clone();
+        let token = setup_token(
+            &fields,
+            &repository,
+            parent.as_ref(),
+            self.is_declared_private(),
+        )?;
         serde_json::to_value(Placement {
             version: PROJECTION_CONTEXT_VERSION,
-            fields,
-            repositories,
+            token,
+            repository: repository.slug(),
+            repository_id,
         })
         .ok()
     }
 
-    /// Take a placement an earlier process held, where this process has read none of it.
+    /// Hold a placement an earlier process kept, to be taken only once this process's own read
+    /// of the project issue shows its token unchanged.
     pub(super) fn prime_placement_held(&self, context: &Value) -> bool {
         let Ok(placement) = serde_json::from_value::<Placement>(context.clone()) else {
             return false;
@@ -67,23 +134,40 @@ impl GitHubProjectsSource {
         if placement.version != PROJECTION_CONTEXT_VERSION {
             return false;
         }
-        let Ok(repositories) = placement
-            .repositories
-            .iter()
-            .map(|(slug, id)| RepositoryTarget::parse(slug).map(|target| (target, id.clone())))
-            .collect::<Result<Vec<_>, _>>()
+        *held(&self.projection.kept) = Some(placement);
+        true
+    }
+
+    /// Record where a create is placed, and take the kept placement when the project issue this
+    /// create already read shows its token unchanged — answering whether it did, so the create
+    /// reads its context only when it did not.
+    pub(super) fn placed_by_kept(
+        &self,
+        repository: &RepositoryTarget,
+        parent: Option<&NativeId>,
+    ) -> bool {
+        *held(&self.projection.placed) = Some((repository.clone(), parent.cloned()));
+        let Some(kept) = held(&self.projection.kept).clone() else {
+            return false;
+        };
+        let Some(board) = parent.and_then(|parent| {
+            self.resolved_cache()
+                .ok()?
+                .get(parent)
+                .and_then(Resolved::carried_board)
+        }) else {
+            return false;
+        };
+        let current = setup_token(&board, repository, parent, self.is_declared_private());
+        if kept.repository != repository.slug() || current.as_deref() != Some(kept.token.as_str()) {
+            return false;
+        }
+        let (Ok(mut fields), Ok(mut repositories)) = (self.fields_cache(), self.repository_cache())
         else {
             return false;
         };
-        let (Ok(mut fields), Ok(mut held)) = (self.fields_cache(), self.repository_cache()) else {
-            return false;
-        };
-        if fields.is_none() {
-            *fields = Some(placement.fields);
-        }
-        for (target, id) in repositories {
-            held.entry(target).or_insert(id);
-        }
+        *fields = Some(board);
+        repositories.insert(repository.clone(), kept.repository_id);
         true
     }
 
@@ -106,8 +190,11 @@ impl GitHubProjectsSource {
         .ok()
     }
 
-    /// Take `context` with `task`'s title and content as the record of issue `id`, its body
-    /// composed exactly as the write that created it composed it.
+    /// Take `context` with `task`'s title and content as the record of issue `id`.
+    ///
+    /// What it holds of the body is the caller's word, not a read: its caller primes it only for
+    /// an update that changes neither the content nor the metadata, which therefore sends no
+    /// body at all, so no body is ever written from it.
     pub(super) fn prime_written_held(&self, id: &NativeId, context: &Value, task: &Task) -> bool {
         let Ok(written) = serde_json::from_value::<Written>(context.clone()) else {
             return false;
