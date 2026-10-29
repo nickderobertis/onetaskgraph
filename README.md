@@ -754,6 +754,15 @@ nothing and refused in the words a plugin with no such write refuses with
 document above — through the same public boundary a task's status write passes.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
+### Projecting a human task
+
+`task project-human --input FILE --json` writes one human action item — a decision or an
+approval waiting on a person — into the tracker its source's `purpose: human-task` routes
+select, at most once per `item_id`, and answers its task, canonical issue URL, project and
+source. A retry after a lost answer binds the same issue, a terminal state is written once,
+and a conflicting one is refused. The request, the `task_projection` setting a destination
+declares and the durable intent behind it are in [docs/task-projection.md](docs/task-projection.md).
+
 ### When an issue closes: reconciling and completing its card
 
 A GitHub board holds a card beside an issue that closes on its own — a person closes it, a
