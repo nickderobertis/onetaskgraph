@@ -180,7 +180,7 @@ class Workspace:
             self.deleted.append(identifier)
             return json.loads((Path(__file__).parent / 'fixtures/linear-document-delete.json').read_text())
         assert 'team{key}' in request['query']
-        assert 'project{teams(first:100)' in request['query']
+        assert 'project{teams(first:2)' in request['query']
         # read_request validated the listing shape; Python cannot narrow a TypedDict union by query text.
         variables = cast(ListingVariables, request['variables'])
         assert variables['filter']['title']['startsWith'] == 'onetaskgraph live cleanup '

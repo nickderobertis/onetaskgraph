@@ -119,6 +119,23 @@ impl Replay {
             for mut stream in listener.incoming().flatten() {
                 let request = read(&mut stream);
                 let mut state = serving.lock().unwrap();
+                // Linear scores a document before it reads a row and refuses one over its
+                // cap with HTTP 400, so this replay does too, rather than answering it.
+                if let Some(refused) = schema::complexity::refusal(
+                    request["query"].as_str().unwrap(),
+                    &request["variables"],
+                ) {
+                    state.schema_errors.push(refused.clone());
+                    state.requests.push(request);
+                    drop(state);
+                    let body = json!({"errors":[{"message":refused}]}).to_string();
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    continue;
+                }
                 let mut body = respond(&mut state, &request);
                 if body.get("errors").is_none()
                     && body

@@ -3,6 +3,8 @@
 use graphql_parser::{query as q, schema as s};
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::LazyLock};
+#[path = "complexity.rs"]
+pub mod complexity;
 static SCHEMA: LazyLock<s::Document<'static, String>> =
     LazyLock::new(|| s::parse_schema(include_str!("../fixtures/schema.graphql")).unwrap());
 

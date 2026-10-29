@@ -370,6 +370,19 @@ fn serve(
         use onetaskgraph_linear::graphql;
         let mut forwarded = gql.clone();
         let query = gql["query"].as_str().unwrap();
+        // Linear refuses a document over its complexity cap with HTTP 400 before reading a
+        // row, so this stand-in does too rather than answering what real Linear would not.
+        if let Some(refused) = document_replay_schema::complexity::refusal(query, &gql["variables"])
+        {
+            answer(
+                &mut stream,
+                400,
+                json!({"errors":[{"message":refused}]})
+                    .to_string()
+                    .as_bytes(),
+            );
+            return;
+        }
         if query.contains("documentUpdate(")
             && gql["variables"]["input"]["content"]
                 .as_str()
