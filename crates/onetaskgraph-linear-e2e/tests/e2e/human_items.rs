@@ -252,3 +252,41 @@ fn an_edit_a_person_makes_in_linear_survives_the_terminal_projection() {
     );
     assert_eq!(shown["metadata"]["human.reason"], "No longer needed.");
 }
+
+#[test]
+fn one_origin_match_with_another_page_behind_it_is_refused_rather_than_bound() {
+    let store = Store::new();
+    let open = request("org-paged");
+    store.crashed(&open, "issueCreate");
+    assert_eq!(store.tickets("org-paged"), 1);
+    // The origin lookup answers its one match and says another page follows: that page is no
+    // whole answer, so the match is not bound and no second create is sent.
+    store.workspace.bend_answers(
+        |query: &str, variables: &Value| {
+            query.contains("issues(")
+                && variables
+                    .pointer("/filter/and/1/description/contains")
+                    .and_then(Value::as_str)
+                    .is_some_and(|phrase| phrase.contains("human-task:"))
+        },
+        1,
+        |_, data: &mut Value| {
+            data["issues"]["pageInfo"] = json!({"hasNextPage": true, "endCursor": "more"});
+        },
+    );
+    let before = store.workspace.served().len();
+    let refused = store.project(&open);
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    assert!(
+        stderr(&refused).contains("zero or multiple origin matches"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(store.creates_since(before), 0, "no second create");
+    assert_eq!(store.tickets("org-paged"), 1);
+
+    // Answered whole, the same match binds.
+    let answer = projected(&store.project(&open));
+    assert_eq!(answer["project"], PLAN_PROJECT);
+    assert_eq!(store.tickets("org-paged"), 1);
+}

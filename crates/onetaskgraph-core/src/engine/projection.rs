@@ -237,6 +237,7 @@ impl Engine {
         if let (Some(kept), Some(context)) = (&kept, source.source().placement_context()) {
             let _ = kept.keep(&context);
         }
+        let written = source.source().written_context(&id);
         let url = match source
             .source()
             .written_location(MetadataRecord::Task, &id)
@@ -245,13 +246,22 @@ impl Engine {
                 onetaskgraph_plugin_api::Location::Path(_) => None,
             }) {
             Some(url) => url,
-            None => source
-                .source()
-                .get_task(&id)
-                .await
-                .map_err(|error| source_failed(source, error))?
-                .and_then(|task| task.url)
-                .unwrap_or_default(),
+            None => {
+                // The create's answer named no address, so the tracker is asked: what this process
+                // remembers of its own write knows no more than that answer did.
+                source
+                    .source()
+                    .end_command()
+                    .await
+                    .map_err(|error| source_failed(source, error))?;
+                source
+                    .source()
+                    .get_task(&id)
+                    .await
+                    .map_err(|error| source_failed(source, error))?
+                    .and_then(|task| task.url)
+                    .unwrap_or_default()
+            }
         };
         let placement = claim.placement().clone();
         let binding = HumanTaskProjected::new(
@@ -269,7 +279,7 @@ impl Engine {
             placement.project,
         );
         claim
-            .bind_written(binding, source.source().written_context(&id))
+            .bind_written(binding, written)
             .map_err(|error| projection_refused(request, &error))
     }
 

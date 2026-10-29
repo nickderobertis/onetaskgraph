@@ -815,3 +815,45 @@ fn kept_contexts_that_cannot_be_read_are_declined_and_read_afresh() {
         ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
     );
 }
+
+#[test]
+fn a_create_answered_without_its_url_reads_it_and_one_with_no_canonical_url_is_refused() {
+    // The create's answer names no URL: the issue is read once for it, and the card's URL is
+    // still the issue's canonical address.
+    let store = Store::new(Vec::new());
+    store.board.fields.omit_created_issue_urls();
+    let before = store.requests();
+    let answer = projected(&store.project(&request("item-unaddressed", &[PUBLIC_REPOSITORY])));
+    let created = native(&answer);
+    assert_eq!(
+        answer["url"],
+        format!(
+            "https://github.com/{PUBLIC_REPOSITORY}/issues/{}",
+            onetaskgraph_e2e_support::fixtures::github_number(&created)
+        )
+    );
+    assert_eq!(
+        store.operations_since(before).last().copied(),
+        Some("reading one issue"),
+        "the URL was read after the create"
+    );
+
+    // No address the tracker gives is canonical HTTPS: the projection is refused rather than
+    // answered with a link a card cannot use, and a retry sends no second create.
+    let store = Store::new(Vec::new());
+    store.board.fields.serve_insecure_issue_urls();
+    let open = request("item-insecure", &[PUBLIC_REPOSITORY]);
+    let refused = store.project(&open);
+    assert_ne!(refused.status.code(), Some(0));
+    assert!(
+        stderr(&refused).contains("canonical"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(store.tickets("item-insecure").len(), 1);
+    let before = store.requests();
+    let retried = store.project(&open);
+    assert_ne!(retried.status.code(), Some(0));
+    assert_eq!(creates_since(&store, before), 0, "no second create");
+    assert_eq!(store.tickets("item-insecure").len(), 1);
+}
