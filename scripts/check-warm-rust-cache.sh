@@ -112,36 +112,43 @@ done
 
 # The release build it hands to the distribution journey, driven for real behind a stand-in
 # `uv`: --release-build-only has to make exactly the journey's maturin build and stop there,
-# and any other argument has to be refused, exit 2, before anything is built. On Windows the
-# journey's `uv` is spawned by python, whose CreateProcess finds only `uv.exe` and so runs the
-# real one past the stand-in; there the refusal is still driven and the build's shape is left
-# to the Linux and macOS lanes.
+# and any other argument has to be refused, exit 2, before anything is built. The journey's
+# `uv` is spawned by python, and on Windows CreateProcess resolves only `uv.exe`, so the
+# stand-in is a real executable compiled here by the pinned toolchain — the same harness on
+# every platform. It records its arguments beside itself, a path no environment translation
+# between bash and a native process can rewrite.
 journey="$scratch/journey"
-mkdir -p "$journey/scripts" "$journey/crates/onetaskgraph" "$scratch/journey-bin"
+journey_bin="$scratch/journey-bin"
+mkdir -p "$journey/scripts" "$journey/crates/onetaskgraph" "$journey_bin"
 cp "$root/scripts/test-distribution.sh" "$root/scripts/cli_wheel_lock.py" "$journey/scripts/"
 printf '[package]\nname = "onetaskgraph"\nversion = "1.2.3"\n' >"$journey/crates/onetaskgraph/Cargo.toml"
-printf '%s\n' '#!/usr/bin/env bash' 'echo "uv $*" >>"$WARM_RECORD"' >"$scratch/journey-bin/uv"
-printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$scratch/journey-bin/npm"
-chmod +x "$scratch/journey-bin/uv" "$scratch/journey-bin/npm"
-case "${OS:-}${OSTYPE:-}" in
-  *Windows_NT* | *msys* | *cygwin* | *win32*)
-    echo "check-warm-rust-cache: the release build's shape is skipped on Windows (python spawns the real uv.exe past a stand-in); the Linux and macOS lanes gate it" >&2
-    ;;
-  *)
-    : >"$scratch/journey.record"
-    WARM_RECORD="$scratch/journey.record" PATH="$scratch/journey-bin:$PATH" \
-      bash "$journey/scripts/test-distribution.sh" --release-build-only >"$scratch/journey.log" 2>&1 \
-      || { cat "$scratch/journey.log" >&2; fail "test-distribution.sh --release-build-only failed" "fix what it reports above"; }
-    grep -Eq "^uv tool run --from maturin>=1\.9,<2 maturin build --release --locked --target [^ ]+ --out [^ ]+/python-wheel\$" "$scratch/journey.record" \
-      && [ "$(wc -l <"$scratch/journey.record" | tr -d ' ')" = 1 ] \
-      || { cat "$scratch/journey.record" >&2; fail "--release-build-only made something other than the journey's one maturin build (above)" "keep it to build_release_wheel in scripts/test-distribution.sh and an exit"; }
-    ;;
-esac
-: >"$scratch/journey.record"
+cat >"$scratch/uv.rs" <<'RUST'
+use std::io::Write;
+fn main() {
+    let record = std::env::current_exe().unwrap().with_file_name("uv.record");
+    let words: Vec<String> = std::env::args().skip(1).collect();
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(record).unwrap();
+    writeln!(file, "uv {}", words.join(" ")).unwrap();
+}
+RUST
+exe=""
+case "${OS:-}${OSTYPE:-}" in *Windows_NT* | *msys* | *cygwin* | *win32*) exe=.exe ;; esac
+# From the root, so rustup reads rust-toolchain.toml rather than wanting a default toolchain.
+(cd "$root" && rustc --edition 2021 -o "$journey_bin/uv$exe" "$scratch/uv.rs") >"$scratch/uv-build.log" 2>&1 \
+  || { cat "$scratch/uv-build.log" >&2; fail "could not compile the stand-in uv" "fix what rustc reports above"; }
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$journey_bin/npm"
+chmod +x "$journey_bin/npm"
+: >"$journey_bin/uv.record"
+PATH="$journey_bin:$PATH" bash "$journey/scripts/test-distribution.sh" --release-build-only >"$scratch/journey.log" 2>&1 \
+  || { cat "$scratch/journey.log" >&2; fail "test-distribution.sh --release-build-only failed" "fix what it reports above"; }
+tr -d '\r' <"$journey_bin/uv.record" >"$scratch/journey.record"
+grep -Eq "^uv tool run --from maturin>=1\.9,<2 maturin build --release --locked --target [^ ]+ --out [^ ]+[/\\]python-wheel\$" "$scratch/journey.record" \
+  && [ "$(wc -l <"$scratch/journey.record" | tr -d ' ')" = 1 ] \
+  || { cat "$scratch/journey.record" >&2; fail "--release-build-only made something other than the journey's one maturin build (above)" "keep it to build_release_wheel in scripts/test-distribution.sh and an exit"; }
+: >"$journey_bin/uv.record"
 status=0
-WARM_RECORD="$scratch/journey.record" PATH="$scratch/journey-bin:$PATH" \
-  bash "$journey/scripts/test-distribution.sh" --release-build-only extra >"$scratch/journey.log" 2>&1 || status=$?
-[ "$status" -eq 2 ] && [ ! -s "$scratch/journey.record" ] \
+PATH="$journey_bin:$PATH" bash "$journey/scripts/test-distribution.sh" --release-build-only extra >"$scratch/journey.log" 2>&1 || status=$?
+[ "$status" -eq 2 ] && [ ! -s "$journey_bin/uv.record" ] \
   || { cat "$scratch/journey.log" >&2; fail "test-distribution.sh exited $status for '--release-build-only extra', not 2 before building" "refuse it as a usage error before any build"; }
 
 # And scripts/pr-build-commands.sh refuses a file it cannot read naming that file and a next
