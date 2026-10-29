@@ -46,5 +46,6 @@ if not crates:
 for crate in crates:
     out.append(instrumented.replace('"$CRATE"', crate) + " -E none() --no-tests=pass")
 out.append("bash scripts/test-distribution.sh --release-build-only")
+# llmlint: ignore[tool_output_is_signal] Standard output is this script's machine-read interface: the two checks that call it read one build command per line.
 print("\n".join(out))
 PY

@@ -1,3 +1,4 @@
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] The authoritative jobs are on #3642's unmerged branch, which no gate here can read; the manager ruled this verbatim snapshot until they land, and rust-cache-warm.test.mjs refuses it the moment ci.yml has any of them, so the change that lands them must delete it.
 # The Rust-cache-relevant half of the three pull-request test jobs .github/workflows/rust-cache-warm.yml
 # warms, copied verbatim from #3642 (branch nick/3632/onetaskgraph-ci-speedup) at
 # ef1322ea6c3abf9baafe0d780825cdaab9f4746b: each job's runner and job-level env, its

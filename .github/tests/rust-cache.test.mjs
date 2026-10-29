@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { parse } from "yaml";
+import { HASHED_ENV_PREFIXES } from "../rust-cache-key.mjs";
 import { read } from "../workflow-graph.mjs";
 import { test } from "node:test";
 import { workflows } from "../workflow-graph.mjs";
@@ -161,6 +162,12 @@ test("the real cache action ignores floating stable but tracks the pin and lockf
     ]);
     command("git", ["-C", action, "checkout", "-q", "FETCH_HEAD"]);
     const manifest = actionManifest(readFileSync(join(action, "action.yml"), "utf8"));
+    // The env-var prefixes rust-cache-warm.test.mjs compares a warmer leg and its job on.
+    const prefixes = readFileSync(join(action, "src/config.ts"), "utf8").match(
+      /const envPrefixes = \[([^\]]*)\];/,
+    );
+    assert.ok(prefixes, "rust-cache must declare its env-var prefixes in src/config.ts");
+    assert.deepEqual(JSON.parse(`[${prefixes[1]}]`), HASHED_ENV_PREFIXES);
     assert.equal(manifest.runs.using, "node24");
     assert.equal(typeof manifest.runs.main, "string");
     assert.match(manifest.runs.main, /^dist\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.js$/);

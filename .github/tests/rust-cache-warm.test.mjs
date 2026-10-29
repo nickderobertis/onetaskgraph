@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse } from "yaml";
+import { HASHED_ENV_PREFIXES } from "../rust-cache-key.mjs";
 import { jobs, read, root } from "../workflow-graph.mjs";
 
 // Each leg of rust-cache-warm.yml must save exactly the cache its pull-request job restores:
@@ -16,9 +17,6 @@ import { jobs, read, root } from "../workflow-graph.mjs";
 // which builds the job's units over what the warmer built and fails on any recompiled.
 
 const FIXTURE = ".github/tests/fixtures/ci-speedup-test-jobs.yml";
-// rust-cache's own default env-var prefixes: what it hashes into the key besides the
-// toolchain and the manifests (src/config.ts of the pinned Swatinem/rust-cache).
-const HASHED_ENV = ["CARGO", "CC", "CFLAGS", "CXX", "CMAKE", "RUST"];
 const SETUP = "actions-rust-lang/setup-rust-toolchain@";
 const UNINSTALL = "rustup toolchain uninstall stable";
 const WARM = /^bash scripts\/warm-rust-cache\.sh(?: (--instrumented))?$/;
@@ -62,7 +60,7 @@ function hashedEnv(...levels) {
   const merged = Object.assign({}, ...levels.map((env) => env ?? {}));
   return Object.fromEntries(
     Object.entries(merged)
-      .filter(([name]) => HASHED_ENV.some((prefix) => name.startsWith(prefix)))
+      .filter(([name]) => HASHED_ENV_PREFIXES.some((prefix) => name.startsWith(prefix)))
       .sort(([a], [b]) => a.localeCompare(b)),
   );
 }

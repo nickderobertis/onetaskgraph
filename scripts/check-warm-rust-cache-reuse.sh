@@ -14,8 +14,8 @@
 # push to main fails the moment the cache it saves stops being one a pull request reuses.
 #
 # The job's builds are what scripts/pr-build-commands.sh reads from where each is declared.
-# A first, cheap build into an empty directory has to report a compiled dependency, or a scan
-# that never matches would read as a pass.
+# A first, cheap control warms one crate incompletely and has to be refused, or a scan that
+# never matches would read as a pass.
 #
 # Without it, a cold build of every dependency three ways, so it is no phase of `check`: run it
 # by name (`just warm-cache-reuse-check`) when the warmer, the build commands or the toolchain
@@ -52,22 +52,54 @@ trap 'rm -rf "$scratch"' EXIT
 python_bin="$(command -v python3)" || fail "python3 is not on PATH" "install python3 and re-run"
 
 members="$(cargo metadata --no-deps --format-version 1 --locked \
-  | "$python_bin" -c 'import json, sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))' \
+  | "$python_bin" -c 'import json, sys
+document = json.load(sys.stdin)
+packages = document.get("packages") if isinstance(document, dict) else None
+if not isinstance(packages, list) or not packages or not all(
+    isinstance(package, dict) and isinstance(package.get("name"), str) and package["name"].strip()
+    for package in packages
+):
+    raise SystemExit("cargo metadata did not answer with a packages array of named packages")
+print("\n".join(package["name"] for package in packages))
+' \
   | tr -d '\r')" || fail "could not list the workspace's crates" "run 'cargo metadata --no-deps' and fix what it reports"
 
 # rebuilt <log>: the non-workspace crates a build log says cargo compiled, one per line.
 rebuilt() {
+  local status=0
   sed -n 's/^ *Compiling \([^ ]*\) v.*/\1/p' "$1" | tr -d '\r' | sort -u \
-    | { grep -vxF -f <(printf '%s\n' $members) || true; }
+    | grep -vxF -f <(printf '%s\n' $members) || status=$?
+  # 1 is grep's "nothing left", which is the answer; anything above it is grep failing.
+  [ "$status" -le 1 ] || fail "grep failed (exit $status) filtering $1" "re-run; if it repeats, check the scratch directory is readable"
 }
 
-# The control: the same scan over a build into an empty directory must see dependencies built.
-CARGO_TARGET_DIR="$scratch/empty" cargo test --no-run --locked --all-features -p onetaskgraph-plugin-api \
-  >"$scratch/control.log" 2>&1 || { cat "$scratch/control.log" >&2; fail "the control build failed" "fix what cargo reports above"; }
-[ -n "$(rebuilt "$scratch/control.log")" ] || {
-  cat "$scratch/control.log" >&2
-  fail "a build into an empty directory reported no dependency compiled, so this scan cannot see one" "make rebuilt() match cargo's 'Compiling' lines again"
+# replay <builds> <rebuilt>: make each build, one command per line, over $CARGO_TARGET_DIR,
+# listing in <rebuilt> every dependency one of them compiled and which.
+replay() {
+  local build log="$scratch/build.log"
+  : >"$2"
+  while IFS= read -r build; do
+    # shellcheck disable=SC2086 # Each line is the words of one command.
+    $build </dev/null >"$log" 2>&1 || { cat "$log" >&2; fail "'$build' failed" "fix what it reports above"; }
+    # Cargo's own closing line, so this build's output reached the scan: a command whose cargo
+    # output went elsewhere would otherwise report nothing compiled and pass.
+    grep -Eq '^ *Finished ' "$log" || { cat "$log" >&2; fail "'$build' printed no cargo 'Finished' line, so this scan cannot see what it compiled" "let that command's cargo output reach its standard error"; }
+    rebuilt "$log" | sed "s|\$| (by '$build')|" >>"$2"
+  done <"$1"
 }
+
+bash scripts/pr-build-commands.sh >"$scratch/builds"
+[ -s "$scratch/builds" ] || fail "found no pull-request build to make" "keep the crates' test targets' cargo commands in crates/*/project.json"
+
+# The control: an incomplete warm — one crate's plain test units, none instrumented — then
+# that crate's instrumented build from the job's own list, which has to be refused naming the
+# dependencies it compiled, or a refusal this check owes would read as a pass.
+grep -E -- '^cargo llvm-cov .*--package onetaskgraph-plugin-api ' "$scratch/builds" >"$scratch/control.builds" \
+  || fail "the job's builds hold no instrumented build of onetaskgraph-plugin-api for the control" "point the control at a crate scripts/pr-build-commands.sh lists"
+CARGO_TARGET_DIR="$scratch/empty" cargo test --no-run --locked --all-features -p onetaskgraph-plugin-api \
+  >"$scratch/control.log" 2>&1 || { cat "$scratch/control.log" >&2; fail "the control's partial warm failed" "fix what cargo reports above"; }
+CARGO_TARGET_DIR="$scratch/empty" replay "$scratch/control.builds" "$scratch/control.rebuilt"
+[ -s "$scratch/control.rebuilt" ] || fail "an incomplete warm passed: the instrumented build after an uninstrumented one reported no dependency compiled" "make rebuilt() match cargo's 'Compiling' lines again"
 rm -rf "$scratch/empty"
 
 if ! "$warmed"; then
@@ -78,16 +110,7 @@ if ! "$warmed"; then
   }
 fi
 
-bash scripts/pr-build-commands.sh >"$scratch/builds"
-[ -s "$scratch/builds" ] || fail "found no pull-request build to make" "keep the crates' test targets' cargo commands in crates/*/project.json"
-: >"$scratch/rebuilt"
-while IFS= read -r build; do
-  log="$scratch/build.log"
-  # shellcheck disable=SC2086 # Each line is the words of one command.
-  $build </dev/null >"$log" 2>&1 || { cat "$log" >&2; fail "'$build' failed" "fix what it reports above"; }
-  rebuilt "$log" | sed "s|\$| (by '$build')|" >>"$scratch/rebuilt"
-done <"$scratch/builds"
-
+replay "$scratch/builds" "$scratch/rebuilt"
 if [ -s "$scratch/rebuilt" ]; then
   cat "$scratch/rebuilt" >&2
   fail "the pull-request builds compiled dependencies the warmer had built (listed above)" "make scripts/warm-rust-cache.sh build each of those commands' units exactly as the job does"

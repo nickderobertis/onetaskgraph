@@ -36,7 +36,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
 cd "$ROOT"
 
 crates="$(cargo metadata --no-deps --format-version 1 --locked \
-  | python3 -c 'import json, sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))' \
+  | python3 -c 'import json, sys
+document = json.load(sys.stdin)
+packages = document.get("packages") if isinstance(document, dict) else None
+if not isinstance(packages, list) or not packages or not all(
+    isinstance(package, dict) and isinstance(package.get("name"), str) and package["name"].strip()
+    for package in packages
+):
+    raise SystemExit("cargo metadata did not answer with a packages array of named packages")
+print("\n".join(package["name"] for package in packages))
+' \
   | tr -d '\r')" || fatal "could not list the workspace's crates" "run 'cargo metadata --no-deps' and fix what it reports"
 [ -n "$crates" ] || fatal "the workspace lists no crate" "run 'cargo metadata --no-deps' and fix what it reports"
 
