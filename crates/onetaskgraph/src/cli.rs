@@ -452,6 +452,7 @@ pub enum TaskCommand {
     /// `task_projection` directory is committed before the create is sent, so a retry after a
     /// lost answer binds the same issue or refuses, and never creates a second. A terminal
     /// state is written once and a conflicting one refused.
+    // llmlint: ignore[new_command_or_client_gets_its_own_project] The approved design places the human projection verb in the existing CLI over the existing task-write engine, with no alternate tracker client, and the manager ruled (c-adcfc828) that it stays here rather than in a crate of its own; its journeys stay in the per-plugin e2e projects so selection stays targeted. A drafted follow-up weighs moving it.
     ProjectHuman(TaskProjectHumanArgs),
 }
 
