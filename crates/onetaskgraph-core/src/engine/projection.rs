@@ -62,6 +62,12 @@ impl Engine {
             next: next.to_owned(),
         };
         self.built(&request.source)?;
+        if request.reason.is_some() && request.state != ProjectionState::Dismissed {
+            return Err(refused(
+                "a reason is recorded only for a dismissal".to_owned(),
+                "send the reason with state dismissed, or send it as null.",
+            ));
+        }
         // Who may read it is its repositories' answer while the boundary is active; it is
         // routed by that and by its repositories through the human-task entries alone.
         let classification = self
@@ -123,7 +129,7 @@ impl Engine {
         let source = self.creatable(&destination, MetadataRecord::Task)?;
         let store = IntentStore::new(
             settings.directory.clone(),
-            settings.host.clone(),
+            settings.host.as_str().to_owned(),
             current_host.to_owned(),
         )
         .map_err(|error| projection_refused(request, &error))?;
@@ -327,20 +333,9 @@ impl Engine {
         let id = binding.task().global_id().native;
         let update = terminal_update(request);
         self.admit_update(source, item, &id, &update).await?;
-        if resumed {
-            // A terminal write whose answer was lost may have landed: read once, and write
-            // only what the tracker does not already hold.
-            let held = source
-                .source()
-                .get_task(&id)
-                .await
-                .map_err(|error| source_failed(source, error))?;
-            if held.as_ref().is_some_and(|held| settled(held, request)) {
-                return claim
-                    .acknowledge_terminal()
-                    .map_err(|error| projection_refused(request, &error));
-            }
-        } else if let Some(context) = claim.written_context() {
+        // A terminal write whose answer was lost may have landed whole, in part or not at all:
+        // the update then reads the task as it stands and writes only what still differs.
+        if !resumed && let Some(context) = claim.written_context() {
             // The terminal state is the issue's own — its status and its closure — so the ids this
             // producer kept are all the write needs. A reason is recorded against the body as it
             // stands now, which the source reads before composing it — never against a copy of the
@@ -467,12 +462,6 @@ fn terminal_update(request: &HumanTaskProjection) -> TaskUpdate {
         metadata_set,
         ..TaskUpdate::default()
     }
-}
-
-/// Whether `held` already shows the terminal state and reason the request names.
-fn settled(held: &Task, request: &HumanTaskProjection) -> bool {
-    held.status.category == terminal_category(request.state)
-        && held.metadata.get(REASON_KEY).and_then(Value::as_str) == request.reason.as_deref()
 }
 
 fn projection_refused(request: &HumanTaskProjection, error: &ProjectionError) -> EngineError {

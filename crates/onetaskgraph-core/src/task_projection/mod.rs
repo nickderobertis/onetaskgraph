@@ -8,8 +8,8 @@ mod identity;
 mod intent;
 
 pub use identity::{
-    ExternalItemId, PlanId, ProjectedTaskId, ProjectionProjectId, ProjectionTitle, RunId,
-    SessionId, SourceIdentityDigest, TrackerUrl,
+    ExternalItemId, HostIdentity, PlanId, ProjectedTaskId, ProjectionProjectId, ProjectionTitle,
+    RunId, SessionId, SourceIdentityDigest, TrackerUrl,
 };
 
 pub use intent::{
@@ -208,7 +208,7 @@ pub struct ProjectionSource {
     /// The digest naming the source's remote, shared with its local cache.
     pub identity: SourceIdentityDigest,
     /// The authoritative host.
-    pub host: String,
+    pub host: HostIdentity,
     /// The absolute directory holding its intents.
     pub directory: std::path::PathBuf,
     /// The project a planless item is filed under.
@@ -242,14 +242,7 @@ pub(crate) fn configured(
                     identity: SourceIdentityDigest::new(identity)?,
                     host: declared.host.clone(),
                     directory: declared.directory.clone(),
-                    project: declared
-                        .project
-                        .clone()
-                        .map(ProjectionProjectId::new)
-                        .transpose()
-                        .map_err(|error| {
-                            format!("sources.{name}.task_projection.project: {error}")
-                        })?,
+                    project: declared.project.clone(),
                     placement: crate::cache::designator_location(source, home.as_deref()).map(
                         |(designator, _)| {
                             PlacementCache::at(designator.with_file_name("placement.json"))

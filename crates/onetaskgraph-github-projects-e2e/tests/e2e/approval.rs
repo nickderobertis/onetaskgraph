@@ -283,47 +283,47 @@ fn breakdown(steps: &[Step]) -> Vec<Value> {
         .collect()
 }
 
-/// Whether `step` is the review task's projection rather than one of the existing calls.
-fn projects_the_review(step: &Step) -> bool {
-    step.what == REVIEW_OPEN || step.what == REVIEW_RESOLVED
-}
-
 /// What `steps` spent, in points: all of them, the existing calls', and the review's.
 fn spent(steps: &[Step]) -> Value {
-    let total = |keep: &dyn Fn(&Step) -> bool| -> u64 {
-        steps
+    spent_of(breakdown(steps))
+}
+
+/// What one sequence's `calls` — each `{call, requests, points, ...}` — spent, in points: all
+/// of them, the existing calls', and the review's.
+pub(super) fn spent_of(calls: Vec<Value>) -> Value {
+    let total = |keep: &dyn Fn(&str) -> bool| -> u64 {
+        calls
             .iter()
-            .filter(|step| keep(step))
-            .flat_map(|step| &step.calls)
-            .map(points)
+            .filter(|call| keep(call["call"].as_str().unwrap()))
+            .map(|call| call["points"].as_u64().unwrap())
             .sum()
     };
-    json!({"points": total(&|_| true),
-           "existing": total(&|step| !projects_the_review(step)),
-           "projection": total(&projects_the_review),
-           "calls": breakdown(steps)})
+    let review = |call: &str| call == REVIEW_OPEN || call == REVIEW_RESOLVED;
+    json!({"points": total(&|_| true), "existing": total(&|call| !review(call)),
+           "projection": total(&review), "calls": calls})
 }
 
 /// Record what the sequence spent as the budget's telemetry: the larger of the run with no
 /// write policy and the run with write screening on, each split into the existing store calls
 /// and the review task's projection, with both runs' calls in the detail.
 fn record(unscreened: &[Step], screened: &[Step]) {
-    let (unscreened, screened) = (spent(unscreened), spent(screened));
-    let larger = if screened["points"].as_u64() > unscreened["points"].as_u64() {
-        &screened
-    } else {
-        &unscreened
-    };
     let directory = super::budget_runner::directory();
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(
         onetaskgraph_e2e_support::telemetry::file_in(&directory, BUDGET),
-        serde_json::to_vec_pretty(&json!({"budget": BUDGET, "value": larger["points"],
-            "workload": WORKLOAD, "board": SMALL, "tasks": TASKS, "documents": 1,
-            "call_order": CALLS, "unscreened": unscreened, "screened": screened}))
-        .unwrap(),
+        serde_json::to_vec_pretty(&recording(spent(unscreened), spent(screened))).unwrap(),
     )
     .unwrap();
+}
+
+/// The budget's telemetry over the two sequences' figures, the larger as its value.
+pub(super) fn recording(unscreened: Value, screened: Value) -> Value {
+    let larger = unscreened["points"]
+        .as_u64()
+        .max(screened["points"].as_u64());
+    json!({"budget": BUDGET, "value": larger,
+        "workload": WORKLOAD, "board": SMALL, "tasks": TASKS, "documents": 1,
+        "call_order": CALLS, "unscreened": unscreened, "screened": screened})
 }
 
 #[test]

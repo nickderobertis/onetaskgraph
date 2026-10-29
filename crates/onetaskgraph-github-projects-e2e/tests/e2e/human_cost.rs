@@ -300,8 +300,20 @@ fn a_hundred_tasks_from_ten_managers_are_projected_recovered_and_resolved_once_e
         settled(&host.board, n, &warm);
     }
 
-    let phases = summed(&rows, "phase");
-    let operations = summed(&rows, "operation");
+    let directory = super::budget_runner::directory();
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        onetaskgraph_e2e_support::telemetry::file_in(&directory, BUDGET),
+        serde_json::to_vec_pretty(&recording(&rows)).unwrap(),
+    )
+    .unwrap();
+}
+
+/// The budget's telemetry over `rows`, each one phase's priced requests: what the reporter
+/// reads, summed by phase and by operation.
+pub(super) fn recording(rows: &[Value]) -> Value {
+    let phases = summed(rows, "phase");
+    let operations = summed(rows, "operation");
     let total = |field: &str| -> u64 {
         phases
             .iter()
@@ -311,19 +323,12 @@ fn a_hundred_tasks_from_ten_managers_are_projected_recovered_and_resolved_once_e
     let totals = json!({"requests": total("requests"), "points": total("points"),
         "mutation_fields": total("mutation_fields"),
         "secondary_points": total("secondary_points")});
-    let directory = super::budget_runner::directory();
-    std::fs::create_dir_all(&directory).unwrap();
-    std::fs::write(
-        onetaskgraph_e2e_support::telemetry::file_in(&directory, BUDGET),
-        serde_json::to_vec_pretty(&json!({
-            "budget": BUDGET, "workload": WORKLOAD, "tasks": TASKS, "managers": MANAGERS,
-            "board_items": BOARD_ITEMS, "screened": true,
-            "terminals": {"completed": 34, "dismissed_without_reason": 33,
-                          "dismissed_with_reason": 33},
-            "recoveries": {"create": MANAGERS, "cold_terminal": MANAGERS, "warm_noop": MANAGERS},
-            "secondary_model": {"per_mutation_field": SECONDARY_PER_FIELD, "per_read": 1},
-            "totals": totals, "phases": phases, "operations": operations}))
-        .unwrap(),
-    )
-    .unwrap();
+    json!({
+        "budget": BUDGET, "workload": WORKLOAD, "tasks": TASKS, "managers": MANAGERS,
+        "board_items": BOARD_ITEMS, "screened": true,
+        "terminals": {"completed": 34, "dismissed_without_reason": 33,
+                      "dismissed_with_reason": 33},
+        "recoveries": {"create": MANAGERS, "cold_terminal": MANAGERS, "warm_noop": MANAGERS},
+        "secondary_model": {"per_mutation_field": SECONDARY_PER_FIELD, "per_read": 1},
+        "totals": totals, "phases": phases, "operations": operations})
 }

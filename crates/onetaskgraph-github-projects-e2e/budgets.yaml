@@ -202,7 +202,7 @@ budgets:
     threshold: 40
   - id: github-approval-calls-points
     description: >-
-      An inner measure of the shared board token that no check may spend: the GitHub GraphQL points one complete design approval of a plan on a 2,000-item loopback board spends — the four existing store calls (project show, task list, document list, the version-guarded approval write) and the review task it creates and resolves through task project-human — priced with the plugin's own point-cost table, the larger of the sequence with no write policy and the sequence screened through the released onevcs boundary commands. Its detail splits the existing calls from the review projection. It protects every manager's share of that token from what an approval spends.
+      Modelled GitHub GraphQL points of one complete plan design approval, its review task's creation and resolution included, on a 2,000-item board, screened or not. It protects every manager's share of the board token.
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] This task fixes the `node crates/onetaskgraph-github-projects-e2e/human-items/approval-report.mjs` surface, spelled from this file's directory, which onebudgetspec runs every command in: it reads only the telemetry the `approval` journey saved in the crate's test run, refuses any other recording, and reports one figure through the onebudgetspec SDK, which alone judges it.
@@ -214,7 +214,7 @@ budgets:
   # llmlint: ignore[budgets_track_product_owner_outcomes] Manager-approved for this design: the per-item budget covers every human task lifecycle on its own, independently of the complete approval flow (`github-approval-calls-points`) that also includes one, because the 100-item, 10-manager workload is what spends the shared token and an approval total cannot show one item's lifecycle regressing.
   - id: human-task-projection-points
     description: >-
-      An inner measure of the shared board token that no check may spend: the modelled GitHub GraphQL points per item of projecting human tasks — creation, recovery and terminal resolution — for 100 new tasks from 10 simultaneous managers on one screened 2,000-item loopback board, each resolved once (34 completed, 33 dismissed without a reason, 33 with one), with ten lost create answers recovered, ten lost terminal answers retried cold and ten warm retries, priced per GraphQL document with the plugin's own table. Its detail reports each operation's and phase's requests, points, aliased mutation fields and secondary points. It protects every manager's share of that token from what a queue of human work spends.
+      Modelled GitHub GraphQL points per human task projected through its whole lifecycle by simultaneous managers onto a shared screened board. It protects every manager's share of the board token.
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] This task fixes the `node crates/onetaskgraph-github-projects-e2e/human-items/report.mjs` surface, spelled from this file's directory, which onebudgetspec runs every command in: it reads only the telemetry `tests/e2e/human_cost.rs` saved in the crate's test run, refuses any other recording, and reports one figure through the onebudgetspec SDK, which alone judges it.

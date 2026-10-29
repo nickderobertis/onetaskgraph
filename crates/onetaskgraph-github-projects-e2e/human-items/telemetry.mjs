@@ -38,7 +38,6 @@ export function sum(rows, field) {
   }, 0);
 }
 
-// Run `reporter`, printing what it handed over or why it refused.
 export function run(budget, reporter) {
   try {
     const { value, detail } = reporter();

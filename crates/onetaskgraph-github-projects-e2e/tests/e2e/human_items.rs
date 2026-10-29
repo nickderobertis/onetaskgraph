@@ -683,3 +683,54 @@ fn a_later_cold_process_takes_the_kept_placement_and_a_changed_option_is_read_af
     assert!(created_with("item-third").contains(&setup));
     assert!(!created_with("item-fourth").contains(&setup));
 }
+
+#[test]
+fn a_request_on_standard_input_is_projected_and_a_half_landed_terminal_is_finished() {
+    use std::io::Write as _;
+    let store = Store::new(Vec::new());
+    let open = request("item-stdin", &[PUBLIC_REPOSITORY]);
+    let mut child = store
+        .sandbox
+        .subprocess(onetaskgraph_e2e_support::binary())
+        .args(["task", "project-human", "--input", "-", "--json"])
+        .env("ONETASKGRAPH_HOST", HOST)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(open.to_string().as_bytes())
+        .unwrap();
+    let created = native(&projected(&child.wait_with_output().unwrap()));
+    assert_eq!(store.tickets("item-stdin"), std::slice::from_ref(&created));
+
+    // A reason is recorded only for a dismissal.
+    let mut completed = open.clone();
+    completed["state"] = json!("completed");
+    completed["reason"] = json!("Done early.");
+    let before = store.requests();
+    assert_ne!(store.project(&completed).status.code(), Some(0));
+    assert_eq!(store.requests(), before);
+
+    // The card moves and the close is refused: the retry reads the issue and sends only the
+    // close the tracker does not hold yet.
+    completed["reason"] = Value::Null;
+    store.board.fields.refuse_once("updateIssue(input");
+    assert_ne!(store.project(&completed).status.code(), Some(0));
+    assert_eq!(store.board.fields.state(&created).0, "OPEN");
+    let before = store.requests();
+    projected(&store.project(&completed));
+    assert_eq!(
+        store.operations_since(before),
+        ["reading one issue", "updating an issue"]
+    );
+    assert_eq!(
+        store.board.fields.state(&created),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
+    );
+    assert_eq!(store.board.fields.status(&created).as_deref(), Some("Done"));
+}

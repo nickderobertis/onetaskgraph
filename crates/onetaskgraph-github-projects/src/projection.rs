@@ -1,20 +1,9 @@
 //! What a producer's projection carries from one process to the next on this board: the
-//! placement a create reads before it writes, held behind a setup-context token, and the ids of
-//! an item this process wrote — never its title or its content.
-//!
-//! Every human task projection is its own process, so without these each create reads the
-//! board's fields and its repository again and each terminal write reads the issue it wrote.
-//! The producer's durable intent keeps them between processes (`docs/task-projection.md`).
-//!
-//! **A kept placement is reused only while its setup-context token still holds.** The token is
-//! the digest of everything the placement depends on — the board, every field definition and
-//! option the board defines, the repository the issue is created in, the project issue it is
-//! filed under, and whether this source is declared private — and it is computed afresh from
-//! the read of that project issue every create already makes, which carries the board's whole
-//! field list. A kept placement whose token differs, or one this process cannot compute, is not
-//! taken: the create reads its context as it always did and keeps the new one. So the steady
-//! state reads nothing the create did not already read, and a changed option, field, repository,
-//! project or visibility is read afresh rather than reused.
+//! placement a create reads, held behind a setup-context token, and the ids of an item this
+//! process wrote — never its title or its content. `docs/task-projection.md` states the
+//! contract; here, the token is computed from the project-issue read every create already
+//! makes, which carries the board's whole field list, so taking a kept placement adds no
+//! request.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -31,11 +20,37 @@ use super::{
 /// than misread.
 const PROJECTION_CONTEXT_VERSION: u64 = 2;
 
+/// [`PROJECTION_CONTEXT_VERSION`], the one version a context may carry: any other refuses to
+/// deserialize, so a context of another build is never taken.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
+struct ContextVersion;
+
+impl TryFrom<u64> for ContextVersion {
+    type Error = String;
+
+    fn try_from(version: u64) -> Result<Self, Self::Error> {
+        if version == PROJECTION_CONTEXT_VERSION {
+            Ok(Self)
+        } else {
+            Err(format!(
+                "projection context version {version} is another build's"
+            ))
+        }
+    }
+}
+
+impl From<ContextVersion> for u64 {
+    fn from(_: ContextVersion) -> Self {
+        PROJECTION_CONTEXT_VERSION
+    }
+}
+
 /// The placement a create in this board reads before it writes, and the token it holds under.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Placement {
-    version: u64,
+    version: ContextVersion,
     /// The setup-context token the placement was kept under.
     token: String,
     /// The repository the issue is created in, `owner/name`.
@@ -48,7 +63,7 @@ struct Placement {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Written {
-    version: u64,
+    version: ContextVersion,
     item: Resolved,
 }
 
@@ -120,7 +135,7 @@ impl GitHubProjectsSource {
             self.is_declared_private(),
         )?;
         serde_json::to_value(Placement {
-            version: PROJECTION_CONTEXT_VERSION,
+            version: ContextVersion,
             token,
             repository: repository.slug(),
             repository_id,
@@ -134,9 +149,6 @@ impl GitHubProjectsSource {
         let Ok(placement) = serde_json::from_value::<Placement>(context.clone()) else {
             return false;
         };
-        if placement.version != PROJECTION_CONTEXT_VERSION {
-            return false;
-        }
         *held(&self.projection.kept) = Some(placement);
         true
     }
@@ -187,7 +199,7 @@ impl GitHubProjectsSource {
         item.body = None;
         item.raw_body = None;
         serde_json::to_value(Written {
-            version: PROJECTION_CONTEXT_VERSION,
+            version: ContextVersion,
             item,
         })
         .ok()
@@ -203,7 +215,14 @@ impl GitHubProjectsSource {
             return false;
         };
         let mut item = written.item;
-        if written.version != PROJECTION_CONTEXT_VERSION || item.id != *id || task.id != *id {
+        // Only a task issue of this board, addressed by both its ids, directs a write.
+        if item.id != *id
+            || task.id != *id
+            || item.kind != BoardKind::Work(ItemKind::Task)
+            || item.content_kind != ContentKind::Issue
+            || item.item_id.is_empty()
+            || item.named_board().is_none()
+        {
             return false;
         }
         let Ok(raw_body) = compose_body(task.content.as_deref(), &item.slot) else {

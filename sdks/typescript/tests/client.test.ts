@@ -1217,6 +1217,40 @@ test("a reconcile and a completion drive the real binary over a source whose sta
   }
 });
 
+test("a human task projection's request reaches the real binary, which refuses what it cannot project", async () => {
+  const root = deliveringFolder();
+  try {
+    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+    const request = {
+      schema_version: 1,
+      item_id: "item-1",
+      owner: { session: "session-1", run: null, plan: null },
+      title: "Decide on the release",
+      body: "Choose a date.",
+      priority: "high",
+      repositories: [],
+      project: null,
+      source: "work",
+      state: "open",
+      reason: null,
+    };
+    const valid = resolve(root, "request.json");
+    writeFileSync(valid, JSON.stringify(request));
+    // The binary read the request whole and refused the source, which declares no projection.
+    const unconfigured = client.taskProjectHuman(valid);
+    await expect(unconfigured).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(unconfigured).rejects.toThrow("declares no task_projection");
+    const question = resolve(root, "question.json");
+    writeFileSync(question, JSON.stringify({ ...request, state: "question" }));
+    const malformed = client.taskProjectHuman(question);
+    await expect(malformed).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(malformed).rejects.toThrow("is not a v1 HumanTaskProjection request");
+    expect(() => client.taskProjectHuman(JSON.parse("7"))).toThrow("taskProjectHuman");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function priorityFolder(): string {
   const priorityRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-priority-"));
   mkdirSync(resolve(priorityRoot, "work/tasks"), { recursive: true });

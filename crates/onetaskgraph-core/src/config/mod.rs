@@ -202,13 +202,13 @@ struct SourceShape {
 #[serde(deny_unknown_fields)]
 pub struct TaskProjectionConfig {
     /// The authoritative host, compared with `ONETASKGRAPH_HOST` or the machine's hostname.
-    pub host: String,
+    pub host: crate::task_projection::HostIdentity,
     /// The absolute directory holding the durable intents.
     #[schemars(with = "String")]
     pub directory: std::path::PathBuf,
     /// The existing project of this source a planless item is filed under.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub project: Option<String>,
+    pub project: Option<crate::task_projection::ProjectionProjectId>,
 }
 
 /// The designator a source's `public_alias` declares, refused when it is not a string matching

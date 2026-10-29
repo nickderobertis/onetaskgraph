@@ -19,9 +19,19 @@ const reported = run(BUDGET, () => {
       throw Error(`the recording's ${field} do not add up to its total`);
   }
   for (const phase of ["create", "terminal", "create_recovery", "cold_terminal_retry"]) {
-    if (!phases.some((row) => row.phase === phase))
+    if (!phases.some((row) => row.phase === phase && row.requests > 0))
       throw Error(`the recording has no ${phase} phase`);
   }
+  const { terminals, recoveries } = telemetry;
+  if (
+    terminals?.completed !== 34 ||
+    terminals?.dismissed_without_reason !== 33 ||
+    terminals?.dismissed_with_reason !== 33 ||
+    recoveries?.create !== 10 ||
+    recoveries?.cold_terminal !== 10 ||
+    recoveries?.warm_noop !== 10
+  )
+    throw Error("the recording is not of the registered terminals and recoveries");
   return {
     value: totals.points / tasks,
     detail: JSON.stringify({
