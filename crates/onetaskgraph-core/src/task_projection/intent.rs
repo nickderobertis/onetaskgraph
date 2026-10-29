@@ -735,13 +735,15 @@ fn refused(message: impl Into<String>) -> ProjectionError {
 }
 
 fn private_options() -> OpenOptions {
-    let mut options = OpenOptions::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
+        let mut options = OpenOptions::new();
         options.mode(0o600);
+        options
     }
-    options
+    #[cfg(not(unix))]
+    OpenOptions::new()
 }
 
 fn create_directories(path: &Path) -> std::io::Result<()> {
@@ -751,12 +753,15 @@ fn create_directories(path: &Path) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         create_directories(parent)?;
     }
-    let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let builder = {
         use std::os::unix::fs::DirBuilderExt as _;
+        let mut builder = fs::DirBuilder::new();
         builder.mode(0o700);
-    }
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = fs::DirBuilder::new();
     match builder.create(path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {}
