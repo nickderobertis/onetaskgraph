@@ -251,23 +251,7 @@ impl GitHubProjectsSource {
         {
             return None;
         }
-        // Ids and the board's definitions only: no title, body or metadata, and no state a later
-        // write could take as what the tracker still holds — so every part of a later update is
-        // sent rather than skipped on the word of this record.
-        item.title = String::new();
-        item.body = None;
-        item.raw_body = None;
-        item.slot = std::collections::BTreeMap::new();
-        item.projected = std::collections::BTreeMap::new();
-        item.delivers = Vec::new();
-        item.delivered_by = Vec::new();
-        item.option = None;
-        item.closed = false;
-        item.reason = None;
-        item.status = Status {
-            category: StatusCategory::Unknown,
-            name: String::new(),
-        };
+        ids_only(&mut item);
         serde_json::to_value(Written {
             version: ContextVersion,
             owner: self.owner.clone(),
@@ -299,6 +283,9 @@ impl GitHubProjectsSource {
         {
             return false;
         }
+        // Whatever the context says of the issue's state is discarded on the way in too: only
+        // its ids direct a write.
+        ids_only(&mut item);
         let Ok(raw_body) = compose_body(task.content.as_deref(), &item.slot) else {
             return false;
         };
@@ -356,4 +343,24 @@ impl GitHubProjectsSource {
             })?
             .to_owned())
     }
+}
+
+/// `item` reduced to its ids and its board's definitions: no title, body or metadata, and no
+/// state a later write could take as what the tracker still holds — so every part of a later
+/// update is sent rather than skipped on the word of a kept record.
+fn ids_only(item: &mut Resolved) {
+    item.title = String::new();
+    item.body = None;
+    item.raw_body = None;
+    item.slot = std::collections::BTreeMap::new();
+    item.projected = std::collections::BTreeMap::new();
+    item.delivers = Vec::new();
+    item.delivered_by = Vec::new();
+    item.option = None;
+    item.closed = false;
+    item.reason = None;
+    item.status = Status {
+        category: StatusCategory::Unknown,
+        name: String::new(),
+    };
 }
