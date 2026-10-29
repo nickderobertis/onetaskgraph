@@ -997,6 +997,14 @@ Nor is the repository a create would file its issue in: for a hosted source the 
 drives against a board hosted this way. A plugin written against this document implements
 nothing more.
 
+Nor is what `task project-human` keeps between processes so a later one writes without reading
+first (`docs/task-projection.md`): for a hosted source the engine
+answers each by the trait's default — `TaskSource::placement_context` and
+`TaskSource::written_context` keep nothing, and `TaskSource::prime_placement` and
+`TaskSource::prime_written` take nothing — so every create and every terminal write of a
+projection crosses as the plugin's own `write_task` and `update_task`, each reading what it needs
+as it always does. A plugin written against this document implements nothing more.
+
 ### 4.9a Image assets on `write_task` and `write_document`
 
 A task's or a document's content references an image **asset** as a Markdown image whose
