@@ -1240,3 +1240,71 @@ fn with_the_cache_on_kept_contexts_cross_processes_through_the_cached_source() {
         ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
     );
 }
+
+#[test]
+fn an_unreadable_request_and_an_unknown_host_are_refused_before_any_source() {
+    let store = Store::new(Vec::new());
+    let failure = |output: &std::process::Output| -> Value {
+        assert_ne!(output.status.code(), Some(0));
+        serde_json::from_str(&stdout(output)).unwrap()
+    };
+
+    // A request file that is not there.
+    let missing = store
+        .sandbox
+        .command()
+        .args([
+            "task",
+            "project-human",
+            "--input",
+            "no-such-request.json",
+            "--json",
+        ])
+        .env("ONETASKGRAPH_HOST", HOST)
+        .output()
+        .unwrap();
+    assert_eq!(failure(&missing)["failure"]["kind"], "projection-input");
+    assert!(
+        stderr(&missing).contains("no-such-request.json"),
+        "{}",
+        stderr(&missing)
+    );
+
+    // Standard input that cannot be read: a directory in its place.
+    #[cfg(unix)]
+    {
+        let unreadable = store
+            .sandbox
+            .subprocess(onetaskgraph_e2e_support::binary())
+            .args(["task", "project-human", "--input", "-", "--json"])
+            .env("ONETASKGRAPH_HOST", HOST)
+            .stdin(std::fs::File::open(store.sandbox.project()).unwrap())
+            .output()
+            .unwrap();
+        assert_eq!(failure(&unreadable)["failure"]["kind"], "projection-input");
+        assert!(
+            stderr(&unreadable).contains("standard input"),
+            "{}",
+            stderr(&unreadable)
+        );
+    }
+
+    // No host named, and no `hostname` command to ask.
+    let path = store.request_file(&request("item-hostless", &[PUBLIC_REPOSITORY]));
+    let hostless = store
+        .sandbox
+        .command()
+        .args(["task", "project-human", "--input"])
+        .arg(&path)
+        .arg("--json")
+        .env("PATH", store.sandbox.subdirectory("empty-path"))
+        .output()
+        .unwrap();
+    assert_eq!(failure(&hostless)["failure"]["kind"], "projection-host");
+    assert!(
+        stderr(&hostless).contains("ONETASKGRAPH_HOST"),
+        "{}",
+        stderr(&hostless)
+    );
+    assert_eq!(store.requests(), 0, "nothing was sent");
+}
