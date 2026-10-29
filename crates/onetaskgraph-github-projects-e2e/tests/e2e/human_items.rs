@@ -1136,3 +1136,73 @@ fn a_relative_intent_directory_is_refused_when_the_configuration_is_read() {
     );
     assert_eq!(store.requests(), 0, "nothing was sent");
 }
+
+#[test]
+fn a_projection_with_no_project_a_source_with_no_remote_and_a_deleted_ticket_are_refused() {
+    let store = Store::new(Vec::new());
+    let folder = store.sandbox.subdirectory("notes");
+    // A destination configuring no project takes no planless item.
+    store.sandbox.project_document(&document(&json!({"human": {
+        "plugin": "github-projects", "config": store.board.config,
+        "cache": {"dir": store.sandbox.subdirectory("cache-human")},
+        "task_projection": {"host": HOST, "directory": store.intents}}})));
+    let refused = store.project(&request("item-unfiled", &[PUBLIC_REPOSITORY]));
+    assert_ne!(refused.status.code(), Some(0));
+    assert!(
+        stderr(&refused).contains("configures none"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(store.requests(), 0);
+
+    // A source with no remote tracker has no stable identity to key its intents by.
+    store.configure(
+        json!({"notes": {"plugin": "local-md", "config": {"root": folder},
+        "task_projection": {"host": HOST, "directory": store.intents, "project": "P-1"}}}),
+    );
+    let mut local = request("item-local", &[]);
+    local["source"] = json!("notes");
+    let refused = store.project(&local);
+    assert_ne!(refused.status.code(), Some(0));
+    assert!(
+        stderr(&refused).contains("names no remote tracker"),
+        "{}",
+        stderr(&refused)
+    );
+
+    // A bound ticket deleted on the tracker is never replaced: the terminal projection is
+    // refused, and no second create is sent.
+    let open = request("item-deleted", &[PUBLIC_REPOSITORY]);
+    let created = native(&projected(&store.project(&open)));
+    store.board.fields.delete_issue(&created);
+    // GitHub answers a write naming the deleted issue's board item as a node that no longer
+    // resolves.
+    store
+        .board
+        .fields
+        .refuse_as_stale_once("updateProjectV2ItemFieldValue");
+    let mut completed = open;
+    completed["state"] = json!("completed");
+    let before = store.requests();
+    let refused = store.project(&completed);
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    assert_eq!(creates_since(&store, before), 0, "no replacement create");
+    assert!(store.tickets("item-deleted").is_empty());
+    assert!(
+        stderr(&refused).contains("Could not resolve"),
+        "{}",
+        stderr(&refused)
+    );
+    // Retried, the terminal intent reads the ticket, finds none, and refuses — still creating
+    // nothing in its place.
+    let before = store.requests();
+    let refused = store.project(&completed);
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    assert!(
+        stderr(&refused).contains("no longer in the tracker"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(creates_since(&store, before), 0, "no replacement create");
+    assert!(store.tickets("item-deleted").is_empty());
+}
