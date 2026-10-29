@@ -13,6 +13,7 @@ from collections.abc import Coroutine, Mapping
 from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Literal, NewType
 
 import pytest
 from pydantic import ValidationError
@@ -321,6 +322,16 @@ def test_status_options_method_decodes_a_real_binary_plan(binary: Path, tmp_path
         thread.join()
 
 
+LinearProjectId = NewType("LinearProjectId", str)
+"""A Linear project's id, as ``issueCreate`` names the project an issue is filed in."""
+
+LinearStateId = NewType("LinearStateId", str)
+"""A Linear workflow state's id."""
+
+LinearStateType = Literal["unstarted", "completed", "canceled"]
+"""The workflow-state categories the loopback team holds."""
+
+
 @dataclass(frozen=True)
 class GraphqlRequest:
     """One GraphQL request a loopback tracker received: its document and its variables."""
@@ -347,7 +358,7 @@ class LinearIssueInput:
     title: str
     description: str
     priority: int
-    project_id: str
+    project_id: LinearProjectId
 
     @classmethod
     def of(cls, request: GraphqlRequest) -> LinearIssueInput:
@@ -359,7 +370,7 @@ class LinearIssueInput:
             title=str(stored["title"]),
             description=str(stored["description"]),
             priority=int(stored["priority"]),
-            project_id=str(stored["projectId"]),
+            project_id=LinearProjectId(str(stored["projectId"])),
         )
 
     def answered(self) -> dict[str, object]:
@@ -384,15 +395,15 @@ class LinearIssueInput:
 class LinearState:
     """One workflow state of the loopback team."""
 
-    id: str
+    id: LinearStateId
     name: str
-    type: str
+    type: LinearStateType
 
 
 LINEAR_STATES = (
-    LinearState("STATE-todo", "Todo", "unstarted"),
-    LinearState("STATE-done", "Done", "completed"),
-    LinearState("STATE-canceled", "Canceled", "canceled"),
+    LinearState(LinearStateId("STATE-todo"), "Todo", "unstarted"),
+    LinearState(LinearStateId("STATE-done"), "Done", "completed"),
+    LinearState(LinearStateId("STATE-canceled"), "Canceled", "canceled"),
 )
 
 

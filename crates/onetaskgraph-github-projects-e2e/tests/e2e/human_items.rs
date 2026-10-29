@@ -1112,3 +1112,27 @@ fn a_status_write_answered_without_the_body_is_refused_and_the_retry_writes_the_
         ("CLOSED".to_owned(), Some("NOT_PLANNED".to_owned()))
     );
 }
+
+#[test]
+fn a_relative_intent_directory_is_refused_when_the_configuration_is_read() {
+    let store = Store::new(Vec::new());
+    let configured = std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+        .unwrap()
+        .replace(
+            &serde_json::to_string(&store.intents).unwrap(),
+            "\"relative/intents\"",
+        );
+    assert!(configured.contains("relative/intents"), "{configured}");
+    store.sandbox.project_document(&configured);
+    let refused = store.project(&request("item-relative", &[PUBLIC_REPOSITORY]));
+    assert_ne!(refused.status.code(), Some(0));
+    let failure: Value = serde_json::from_str(&stdout(&refused)).unwrap();
+    assert_eq!(failure["failure"]["kind"], "config-setting", "{failure}");
+    assert!(
+        stderr(&refused).contains("task_projection.directory")
+            && stderr(&refused).contains("not an absolute directory"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(store.requests(), 0, "nothing was sent");
+}
