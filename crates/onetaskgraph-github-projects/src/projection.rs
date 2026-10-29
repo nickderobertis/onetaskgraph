@@ -71,6 +71,30 @@ impl From<NodeId> for String {
     }
 }
 
+/// An issue's address as GitHub answered it: an absolute HTTP or HTTPS URL naming a host.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+struct IssueUrl(String);
+
+impl TryFrom<String> for IssueUrl {
+    type Error = String;
+
+    fn try_from(url: String) -> Result<Self, Self::Error> {
+        let parsed = reqwest::Url::parse(&url).map_err(|error| error.to_string())?;
+        if matches!(parsed.scheme(), "http" | "https") && parsed.has_host() {
+            Ok(Self(url))
+        } else {
+            Err(format!("{url} is no issue address"))
+        }
+    }
+}
+
+impl From<IssueUrl> for String {
+    fn from(url: IssueUrl) -> Self {
+        url.0
+    }
+}
+
 /// A setup-context token: the lowercase SHA-256 [`setup_token`] spells.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -129,7 +153,7 @@ struct WrittenIds {
     board: NodeId,
     /// The issue's own number in its repository.
     issue_number: Option<u64>,
-    url: Option<String>,
+    url: Option<IssueUrl>,
     /// The repository the issue lives in.
     own_repository: Option<Repository>,
     /// The project issue it is filed under.
@@ -219,7 +243,7 @@ impl WrittenIds {
             origin: None,
             projected: std::collections::BTreeMap::new(),
             number: self.issue_number,
-            url: self.url,
+            url: self.url.map(String::from),
             created_at: None,
             updated_at: None,
             item_updated_at: None,
@@ -372,7 +396,7 @@ impl GitHubProjectsSource {
             item: NodeId::try_from(item.item_id).ok()?,
             board: NodeId::try_from(item.board_id?).ok()?,
             issue_number: item.number,
-            url: item.url,
+            url: item.url.map(IssueUrl::try_from).transpose().ok()?,
             own_repository: item.own_repository,
             parent: item.parent,
             repositories: item.repositories,
