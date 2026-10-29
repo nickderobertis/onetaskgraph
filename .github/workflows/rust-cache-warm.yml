@@ -34,7 +34,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # As test-windows does, for the same reason.
+      # Defender scanning each file the build writes slows it; the cache key reads none of this.
       - name: Keep Defender's real-time scan off the build
         if: runner.os == 'Windows'
         shell: pwsh
