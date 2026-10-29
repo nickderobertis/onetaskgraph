@@ -72,6 +72,15 @@
         }
       ]
     },
+    "live-documents": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "parallelism": false,
+      "options": {
+        "command": "cargo test --locked -p onetaskgraph-linear --test live -- real_linear_applies_every_declared_capability_and_leaves_no_residue --exact --nocapture"
+      },
+      "//": "Explicit daily creation and initialization only: this target is outside the affected check fan-out and must reach the service on every invocation."
+    },
     "coverage": {
       "executor": "nx:run-commands",
       "dependsOn": ["workspace:coverage-clear"],

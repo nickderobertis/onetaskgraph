@@ -39,8 +39,11 @@ gate. Other platform checks do not share the Linear lock. Machine-local Session
 exclusivity remains an additional guard.
 
 Local invocations use a separate reusable set containing the existing machine/process
-ownership stamp and cannot resolve CI slots. Initializing those four local slots is
-an explicit local creation pass, outside typical CI sizing. Normal invocation cleanup
+ownership stamp and cannot resolve CI slots. Default local `ordinary` refuses before
+writing when its set is absent. Opt in with `ONETASKGRAPH_LINEAR_DOCUMENT_MODE=initialize`:
+that invocation initializes its isolated slots, runs the ordinary reuse assertions, and
+retires the set in the same process. It prints and journals this as an explicit local
+creation pass, outside typical CI sizing. Normal invocation cleanup
 retires local slots. After a killed invocation, the existing local registration/orphan
 sweep may retire them only with positive evidence that their registration is dead;
 still-active registrations remain protected. There is no global coordination for

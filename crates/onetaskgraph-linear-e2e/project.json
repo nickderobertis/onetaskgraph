@@ -73,7 +73,7 @@
     },
     "budgets": {
       "executor": "nx:run-commands",
-      "dependsOn": ["test", "onetaskgraph-linear:test"],
+      "dependsOn": ["test", "onetaskgraph-linear:test"], "//": "llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier,expensive_tests_stay_behind_their_own_edge] Both lane tests produce the HTTP journals this report consumes, including when only the consumer changes; both are required prerequisites within the Linear budget edge.",
       "options": {
         "command": "bun run onebudgetspec check crates/onetaskgraph-linear-e2e/budgets.yaml"
       },
@@ -83,8 +83,17 @@
         "^default",
         { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear-e2e/*.json" },
         { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear/*.json" }
-      ],
-      "//": "llmlint: ignore[expensive_tests_stay_behind_their_own_edge,external_service_suite_stays_out_of_the_affected_tier] The task explicitly requires this budget target to depend on both telemetry-producing test targets and restore both journals from Nx caching. The plugin test remains behind the Linear e2e budget edge, not any sibling plugin; this dependency intentionally runs that producer when only its consumer is selected. Judges the figures `test` recorded and runs no journey again. Cached: they are requests a deterministic loopback workspace served, in an environment with nothing of the host's, so the key is this project's files (budgets.yaml among them), the measured code (the binary, the engine and the harness in `default`, the Linear plugin and the contract through `^default`), the recorded telemetry, and the onebudgetspec pins in bun.lock and Cargo.lock (sharedGlobals)."
+      ]
+    },
+    "live-documents": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "parallelism": false,
+      "options": {
+        "command": "cargo test --locked -p onetaskgraph-linear-e2e --test e2e -- linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy --exact --nocapture"
+      },
+      "//": "Explicit daily creation and initialization only: this target is outside the affected check fan-out and must reach the service on every invocation.",
+      "dependsOn": ["onetaskgraph:build"]
     },
     "coverage": {
       "executor": "nx:run-commands",

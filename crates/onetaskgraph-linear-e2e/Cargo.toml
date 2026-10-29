@@ -15,6 +15,8 @@ authors.workspace = true
 
 # Every dependency is a dev-dependency: the package has no library or binary of its own.
 [dev-dependencies]
+# Validate the actual document replay replies with the shared pinned-schema guard.
+graphql-parser.workspace = true
 # The warm budget measurements drive the engine the binary links, as a long-lived caller holds
 # one source instance across writes.
 onetaskgraph-core = { workspace = true, features = ["linear"] }

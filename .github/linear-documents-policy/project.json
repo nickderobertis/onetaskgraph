@@ -1,0 +1,69 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "linear-documents-policy",
+  "projectType": "library",
+  "tags": ["lang:javascript", "layer:workspace"],
+  "namedInputs": {
+    "default": [
+      "{projectRoot}/**/*",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/crates/onetaskgraph-linear/project.json",
+      "{workspaceRoot}/crates/onetaskgraph-linear-e2e/project.json",
+      "{workspaceRoot}/.github/workflows/*.yml",
+      "{workspaceRoot}/.github/workflows/*.yaml",
+      "{workspaceRoot}/.github/workflow-graph.mjs",
+      "{workspaceRoot}/.github/actions-expressions.mjs",
+      "{workspaceRoot}/.github/telemetry.ts",
+      "{workspaceRoot}/.github/package.json",
+      "{workspaceRoot}/.github/bun.lock",
+      "{workspaceRoot}/.github/tsconfig.json"
+    ]
+  },
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:noop",
+      "dependsOn": ["github-workflows:bootstrap"]
+    },
+    "check": {
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "typecheck", "test", "coverage"]
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format --write .github/linear-documents-policy"
+      },
+      "cache": false
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format .github/linear-documents-policy"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome lint --error-on-warnings .github/linear-documents-policy"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run tsc -p .github/tsconfig.json"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/linear-documents-policy/policy.test.mjs"
+      },
+      "cache": false
+    },
+    "coverage": {
+      "executor": "nx:noop",
+      "//": "Private declarative workflow policy is verified by executable assertions and real Nx selection; it adds no separate runtime coverage metric."
+    }
+  }
+}

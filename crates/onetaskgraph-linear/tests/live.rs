@@ -15,8 +15,10 @@
 //! `ONETASKGRAPH_LIVE_REQUIRED=1` and each of those skips becomes a failure naming the
 //! variable, so the required lane cannot pass green for want of a credential.
 //!
-//! Everything it creates it deletes, whether its assertions passed or failed. It also
-//! recovers what a run killed between its writes and its cleanup left behind — but only
+//! Ordinary CI reuses three explicitly initialized, team-owned documents and their parent.
+//! Daily fresh mode removes its disposable documents after exercising creation and deletion.
+//! Invocation-owned local sets retire on cleanup. Both modes also recover what a run killed
+//! between its writes and its cleanup left behind — but only
 //! artifacts the kernel says no live run owns, and only once its own journey is over. See
 //! [`sweep_orphans`].
 
@@ -32,6 +34,9 @@ use onetaskgraph_plugin_api::{
     TextFields, TextQuery,
 };
 use secrecy::SecretString;
+mod document_lifecycle;
+use document_lifecycle::{Mode, Standing};
+use onetaskgraph_linear::live_artifact::{Scope, Slot};
 use serde_json::{Value, json};
 
 struct Environment;
@@ -207,6 +212,7 @@ fn sorted(mut titles: Vec<String>) -> Vec<String> {
 
 /// Everything this lane needs to reach the one team it may write to.
 struct LiveRun {
+    endpoint: String,
     key: String,
     /// Which run this is: the machine that can vouch for it and the process on it. Every
     /// artifact below carries it, which is what its own cleanup finds them by and what a
@@ -216,6 +222,14 @@ struct LiveRun {
     open_state: String,
     done_state: String,
     project_status: String,
+    document_mode: Mode,
+    standing: Standing,
+}
+
+impl LiveRun {
+    async fn linear(&self, query: &str, variables: Value, _what: &str) -> Result<Value, String> {
+        document_lifecycle::send(&self.endpoint, &self.key, query, variables).await
+    }
 }
 
 /// Drives every field of the source's declared `Capabilities` against Linear's real API.
@@ -239,7 +253,7 @@ async fn drive_every_declared_capability(
     // for a while after that may answer it on one read and not the next.
     for name in [&run_label, &only_label] {
         settled_label(LINEAR_INDEX, name, |query, variables| {
-            linear(&run.key, query, variables, "live label lookup")
+            run.linear(query, variables, "live label lookup")
         })
         .await?;
     }
@@ -604,8 +618,7 @@ async fn drive_every_declared_capability(
     // And that the ceiling itself is a page Linear really serves, rather than a number
     // this source guessed at. What Linear does with one row *more* is its own business and
     // is documented nowhere, so nothing here asserts on it.
-    linear(
-        &run.key,
+    run.linear(
         ISSUE_PAGE_PROBE,
         json!({"first":ceiling}),
         "page size probe at the declared maximum",
@@ -633,13 +646,58 @@ async fn drive_every_declared_capability(
         closed_back.status.category
     );
 
-    drive_documents(run, source, &alpha_id, &title(5), &title(6)).await?;
-    drive_follow_ups(run, source, &title(7), &title(8), &title(9), &title(10)).await?;
+    drive_document_paths(run, source, &alpha_id, None).await?;
     // Renamed to another of this run's own titles, so the artifact cleanup still knows it.
     every_field_change_moves_a_linear_tasks_token(
         source,
         (&second_id, &first_id, &orphan_id),
         (&title(11), &label(&only_label)),
+    )
+    .await
+}
+
+/// The common document-mode entry used by the real capability lane and HTTP replay.
+async fn drive_document_paths(
+    run: &LiveRun,
+    source: &dyn TaskSource,
+    alpha_id: &NativeId,
+    journal: Option<&document_lifecycle::journal::Journal>,
+) -> Result<(), String> {
+    let title = |offset: u64| artifact_title(run.id, run.stamp_micros + offset);
+    let document_parent = run.standing.parent.as_ref().map(|id| NativeId(id.clone()));
+    let document_parent = document_parent.as_ref().unwrap_or(alpha_id);
+    let filed_title = run
+        .standing
+        .titles
+        .get("filed")
+        .cloned()
+        .unwrap_or_else(|| title(5));
+    let loose_title = run
+        .standing
+        .titles
+        .get("loose")
+        .cloned()
+        .unwrap_or_else(|| title(6));
+    if let Some(journal) = journal {
+        journal.journey("drive_documents");
+    }
+    drive_documents(run, source, document_parent, &filed_title, &loose_title).await?;
+    let follow_up_title = run
+        .standing
+        .titles
+        .get("follow-up")
+        .cloned()
+        .unwrap_or_else(|| title(9));
+    if let Some(journal) = journal {
+        journal.journey("drive_follow_ups");
+    }
+    drive_follow_ups(
+        run,
+        source,
+        &title(7),
+        &title(8),
+        &follow_up_title,
+        &title(10),
     )
     .await
 }
@@ -852,8 +910,7 @@ async fn every_field_change_moves_a_linear_tasks_token(
 
 /// One issue's raw `description`, as Linear hands it back.
 async fn raw_description(run: &LiveRun, id: &NativeId) -> Result<String, String> {
-    linear(
-        &run.key,
+    run.linear(
         "query($id:String!){ issue(id:$id){ description } }",
         json!({"id":id.0}),
         "live raw issue read",
@@ -867,8 +924,7 @@ async fn raw_description(run: &LiveRun, id: &NativeId) -> Result<String, String>
 
 /// One document's raw `content`, as Linear hands it back.
 async fn raw_content(run: &LiveRun, id: &NativeId) -> Result<String, String> {
-    linear(
-        &run.key,
+    run.linear(
         "query($id:String!){ document(id:$id){ content } }",
         json!({"id":id.0}),
         "live raw document read",
@@ -1030,9 +1086,7 @@ async fn drive_follow_ups(
         })
         .await
         .map_err(|error| format!("live write of {probe_title:?} failed: {error}"))?;
-    linear(
-        &run.key,
-        "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success} }",
+    run.linear("mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success} }",
         json!({"id":probe_id.0,"input":{"description":PROBE}}),
         "live description probe",
     )
@@ -1061,7 +1115,7 @@ async fn drive_follow_ups(
     );
     let document_id = source
         .write_document(&ItemWrite {
-            target: None,
+            target: run.standing.ids.get("follow-up").cloned().map(NativeId),
             item: Document {
                 version: None,
                 id: NativeId("live-source-item".into()),
@@ -1091,9 +1145,7 @@ async fn drive_follow_ups(
             && document.content.as_deref() == Some("A probed document."),
         "a document's slot did not keep its metadata: {document:?}"
     );
-    linear(
-        &run.key,
-        "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success} }",
+    run.linear("mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success} }",
         json!({"id":document_id.0,"input":{"content":PROBE}}),
         "live content probe",
     )
@@ -1105,9 +1157,7 @@ async fn drive_follow_ups(
     );
 
     // What Linear does to Markdown on write, rule by rule, in both long-form fields.
-    linear(
-        &run.key,
-        "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success} }",
+    run.linear("mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success} }",
         json!({"id":probe_id.0,"input":{"description":MARKDOWN_PROBE}}),
         "live Markdown description probe",
     )
@@ -1126,9 +1176,7 @@ async fn drive_follow_ups(
         read.as_deref() == Some(MARKDOWN_PROBE_STORED),
         "a read of the Markdown probe's issue handed back {read:?}, not its stored form"
     );
-    linear(
-        &run.key,
-        "mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success} }",
+    run.linear("mutation($id:String!,$input:DocumentUpdateInput!){ documentUpdate(id:$id,input:$input){success} }",
         json!({"id":document_id.0,"input":{"content":MARKDOWN_PROBE}}),
         "live Markdown content probe",
     )
@@ -1260,13 +1308,13 @@ async fn drive_follow_ups(
     // Linear's own comparators, as the module documentation records them: `contains` reads
     // the slot and is case-sensitive, `containsIgnoreCase` is not.
     let narrowed = |filter: Value| async move {
-        let data = linear(
-            &run.key,
-            "query($filter:IssueFilter){ issues(first:10,filter:$filter){ nodes{ title } } }",
-            json!({ "filter": filter }),
-            "live comparator probe",
-        )
-        .await?;
+        let data = run
+            .linear(
+                "query($filter:IssueFilter){ issues(first:10,filter:$filter){ nodes{ title } } }",
+                json!({ "filter": filter }),
+                "live comparator probe",
+            )
+            .await?;
         let mut titles = data
             .pointer("/issues/nodes")
             .and_then(Value::as_array)
@@ -1349,14 +1397,23 @@ async fn drive_documents(
         location: None,
         created_at: None,
         updated_at: None,
-        metadata: [("caller.count".to_owned(), json!(3))]
-            .into_iter()
-            .collect(),
+        metadata: [
+            ("caller.count".to_owned(), json!(3)),
+            ("caller.run".to_owned(), json!(run.stamp_micros)),
+        ]
+        .into_iter()
+        .collect(),
         repositories: vec![],
         classification: Default::default(),
     };
     let write = |item: Document| ItemWrite {
-        target: None,
+        target: if item.title == filed {
+            run.standing.ids.get("filed")
+        } else {
+            run.standing.ids.get("loose")
+        }
+        .cloned()
+        .map(NativeId),
         item,
         depends_on: vec![],
     };
@@ -1390,6 +1447,11 @@ async fn drive_documents(
         read.metadata.get("caller.count") == Some(&json!(3)),
         "a caller's key did not round-trip with its JSON type: {:?}",
         read.metadata
+    );
+    ensure!(
+        read.metadata.get("caller.run") == Some(&json!(run.stamp_micros)),
+        "the retained document did not reset caller.run to this invocation: {:?}",
+        read.metadata.get("caller.run")
     );
     ensure!(
         read.labels.is_empty(),
@@ -1485,7 +1547,10 @@ async fn drive_documents(
 
     // And removed again, which is what lets a copy that could not finish take one back.
     // The sweep would clear them anyway; driving the verb is what proves it works.
-    for (id, title) in [(&filed_id, filed), (&loose_id, loose)] {
+    for (id, title) in [(&filed_id, filed), (&loose_id, loose)]
+        .into_iter()
+        .filter(|_| run.document_mode == Mode::Fresh)
+    {
         source
             .delete_document(id)
             .await
@@ -1548,6 +1613,39 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     let session = Session::open(SESSION_NAME, key, Exclusivity::OneAtATime)
         .unwrap_or_else(|declined| declined.refuse());
     let key = session.credential().expose().to_owned();
+    let document_mode = Mode::read().unwrap_or_else(|e| panic!("{e}"));
+    let owner = Run::current();
+    let stamp = onetaskgraph_live::artifact::Stamp::new(owner, now_micros()).to_string();
+    let team_key = team.to_ascii_uppercase();
+    let ci = env::var("GITHUB_ACTIONS").as_deref() == Ok("true");
+    let scope = if ci {
+        Scope::ci(&team_key).unwrap()
+    } else {
+        Scope::local(&team_key, &stamp).unwrap()
+    };
+    let effective_mode = document_mode;
+    if !ci && document_mode == Mode::Initialize {
+        eprintln!(
+            "non-CI creation pass: initialize invocation-owned plugin document slots, exercise reuse assertions, and retire the set"
+        );
+    }
+    let journal = document_lifecycle::journal::Journal::new("plugin", effective_mode.name())
+        .durable(
+            std::env::current_exe()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("telemetry/onetaskgraph-linear/live")
+                .join(&stamp),
+        )
+        .unwrap();
+    let endpoint = document_lifecycle::observer::start(
+        "https://api.linear.app/graphql",
+        &key,
+        journal.clone(),
+    );
     // The names the fixture files its issues and projects under are what this source's
     // `status_mapping` gives `todo` and `done`: Linear has no built-in names, so a source
     // without a mapping refuses every status write and reads every item as `unknown`.
@@ -1560,7 +1658,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     let source = onetaskgraph_linear::Plugin
         .build(
             &SourceName::new("live").unwrap(),
-            &json!({"team":team,"status_mapping":{
+            &json!({"endpoint":endpoint,"team":team,"status_mapping":{
                 "todo":{"task":open_state,"project":project_status},
                 "done":{"task":done_state},
             }}),
@@ -1609,16 +1707,35 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         .unwrap_or_else(|error| {
             panic!("the Linear live lane cannot reach its scratch team: {error}")
         });
+    let standing = document_lifecycle::prepare(
+        &endpoint,
+        &key,
+        &team_key,
+        &team_id,
+        scope,
+        effective_mode,
+        &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+    )
+    .await
+    .unwrap_or_else(|e| panic!("{e}"));
+    if ci && document_mode == Mode::Initialize {
+        journal.finish().unwrap();
+        return;
+    }
+    journal.journey("capability-and-follow-up");
     let run = LiveRun {
+        endpoint,
         key: key.clone(),
         id: Run::current(),
         stamp_micros: now_micros(),
         open_state,
         done_state,
         project_status,
+        document_mode,
+        standing,
     };
     let id = run.id;
-    run_then_cleanup(
+    let result = run_then_cleanup(
         || drive_every_declared_capability(&run, source.as_ref(), &team_id),
         || async {
             // This run's own, first: everything it wrote goes whether the journey passed or
@@ -1643,6 +1760,760 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             }
         },
     )
+    .await;
+    journal.finish().unwrap();
+    result.unwrap_or_else(|error| panic!("Linear live capability journey failed: {error}"));
+}
+
+#[path = "document_lifecycle/replay.rs"]
+mod document_replay;
+
+fn replay() -> document_replay::Replay {
+    document_replay::Replay::start(
+        document_lifecycle::journal::Journal::new("plugin", "initialize"),
+        [
+            (PROBE.to_owned(), PROBE_STORED.to_owned()),
+            (MARKDOWN_PROBE.to_owned(), MARKDOWN_PROBE_STORED.to_owned()),
+        ]
+        .into_iter()
+        .collect(),
+    )
+}
+async fn replay_prepare(
+    replay: &document_replay::Replay,
+    scope: Scope<'_>,
+    mode: Mode,
+) -> Result<document_lifecycle::Standing, String> {
+    document_lifecycle::prepare(
+        &replay.endpoint,
+        "synthetic",
+        "ENG",
+        "team",
+        scope,
+        mode,
+        &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+    )
     .await
-    .unwrap_or_else(|error| panic!("Linear live capability journey failed: {error}"));
+}
+async fn replay_drive(
+    replay: &document_replay::Replay,
+    standing: document_lifecycle::Standing,
+    mode: Mode,
+    stamp: u64,
+) -> Result<(), String> {
+    replay_drive_at(&replay.endpoint, &replay.journal, standing, mode, stamp).await
+}
+async fn replay_drive_at(
+    endpoint: &str,
+    journal: &document_lifecycle::journal::Journal,
+    standing: document_lifecycle::Standing,
+    mode: Mode,
+    stamp: u64,
+) -> Result<(), String> {
+    let source = onetaskgraph_linear::Plugin.build(&SourceName::new("live").unwrap(),
+        &json!({"endpoint":endpoint,"team":"ENG","status_mapping":{"todo":{"task":"Todo","project":"Planned"},"done":{"task":"Done"}}}),&ReplaySecrets).unwrap();
+    let parent = if let Some(parent) = &standing.parent {
+        parent.clone()
+    } else {
+        let data = document_lifecycle::send(endpoint, "synthetic",
+            "mutation($input:ProjectCreateInput!){projectCreate(input:$input){success project{id}}}",
+            json!({"input":{"name":artifact_title(Run::current(), stamp),"teamIds":["team"]}})).await?;
+        data["projectCreate"]["project"]["id"]
+            .as_str()
+            .ok_or("fresh parent create omitted id")?
+            .to_owned()
+    };
+    let run = LiveRun {
+        endpoint: endpoint.to_owned(),
+        key: "synthetic".into(),
+        id: Run::current(),
+        stamp_micros: stamp,
+        open_state: "Todo".into(),
+        done_state: "Done".into(),
+        project_status: "Planned".into(),
+        document_mode: mode,
+        standing,
+    };
+    drive_document_paths(&run, source.as_ref(), &NativeId(parent), Some(journal)).await
+}
+
+async fn replay_cleanup_documents(replay: &document_replay::Replay) -> usize {
+    let query = "query($filter:DocumentFilter!){documents(first:100,filter:$filter){nodes{id title} pageInfo{hasNextPage endCursor}}}";
+    let read = || {
+        document_lifecycle::send(
+            &replay.endpoint,
+            "synthetic",
+            query,
+            json!({"filter":{"title":{"containsIgnoreCase":onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX}}}),
+        )
+    };
+    let listing = read().await.unwrap();
+    let owned = |row: &Value| {
+        row["title"].as_str().is_some_and(|title| {
+            is_this_runs(
+                Run::current(),
+                onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX,
+                title,
+            )
+        })
+    };
+    for document in listing["documents"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| owned(row))
+    {
+        document_lifecycle::send(
+            &replay.endpoint,
+            "synthetic",
+            onetaskgraph_linear::graphql::DOCUMENT_DELETE,
+            json!({"id":document["id"]}),
+        )
+        .await
+        .unwrap();
+    }
+    let after = read().await.unwrap();
+    after["documents"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| owned(row))
+        .count()
+}
+
+/// Both modes run the same capability and follow-up functions as the credentialed lane.
+#[tokio::test]
+async fn document_modes_replay_the_live_plugin_paths_over_http() {
+    let replay = replay();
+    let scope = Scope::ci("ENG").unwrap();
+    assert!(
+        replay_prepare(&replay, scope, Mode::Ordinary)
+            .await
+            .err()
+            .unwrap()
+            .contains("initialize")
+    );
+    assert_eq!(replay.journal.count(), 0);
+    let standing = replay_prepare(&replay, scope, Mode::Initialize)
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.journal.count(),
+        3,
+        "one owned document per missing plugin slot"
+    );
+    replay.journal.finish().unwrap();
+    let again = replay_prepare(&replay, scope, Mode::Initialize)
+        .await
+        .unwrap();
+    assert_eq!(standing.ids, again.ids);
+    assert_eq!(replay.journal.count(), 3);
+    replay.journal.begin("ordinary");
+    let stamp = now_micros();
+    replay_drive(&replay, standing, Mode::Ordinary, stamp)
+        .await
+        .unwrap();
+    assert_eq!(replay.journal.count(), 0);
+    replay.journal.finish().unwrap();
+    // A second ordinary pass resets the same retained contents and metadata to its tag.
+    let standing = replay_prepare(&replay, scope, Mode::Ordinary)
+        .await
+        .unwrap();
+    replay_drive(&replay, standing, Mode::Ordinary, stamp + 1)
+        .await
+        .unwrap();
+    assert_eq!(replay.journal.count(), 0);
+    replay.journal.begin("fresh");
+    let standing = replay_prepare(&replay, scope, Mode::Fresh).await.unwrap();
+    replay_drive(&replay, standing, Mode::Fresh, stamp + 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.journal.count(),
+        3,
+        "two document writes and the follow-up document write"
+    );
+    replay.journal.finish().unwrap();
+    // The original filed/loose deletion assertions ran in drive_documents; retire the
+    // follow-up using the same documentDelete HTTP boundary as invocation cleanup.
+    let fresh_ids: Vec<_> = replay
+        .state
+        .lock()
+        .unwrap()
+        .documents
+        .iter()
+        .filter(|(_, row)| {
+            row["title"].as_str().is_some_and(|t| {
+                is_this_runs(
+                    Run::current(),
+                    onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX,
+                    t,
+                )
+            })
+        })
+        .map(|(id, _)| id.clone())
+        .collect();
+    assert_eq!(fresh_ids.len(), 1);
+    for id in fresh_ids {
+        document_lifecycle::send(
+            &replay.endpoint,
+            "synthetic",
+            onetaskgraph_linear::graphql::DOCUMENT_DELETE,
+            json!({"id":id}),
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        replay.journal.count(),
+        3,
+        "deletion never removes successful creations from the journal"
+    );
+    replay.journal.begin("failure");
+    replay.state.lock().unwrap().corrupt_document_create_ack = true;
+    let standing = replay_prepare(&replay, scope, Mode::Fresh).await.unwrap();
+    let error = replay_drive(&replay, standing, Mode::Fresh, stamp + 3)
+        .await
+        .unwrap_err();
+    assert!(error.contains("visible body"), "{error}");
+    assert_eq!(
+        replay.journal.count(),
+        2,
+        "both writes before the assertion failure remain counted"
+    );
+    let residue = replay_cleanup_documents(&replay).await;
+    assert_eq!(
+        residue, 0,
+        "failed fresh documents retire while standing CI slots survive"
+    );
+    replay.journal.residue(residue);
+    replay.journal.finish().unwrap();
+    replay.state.lock().unwrap().corrupt_document_create_ack = false;
+    let standing = replay_prepare(&replay, scope, Mode::Ordinary)
+        .await
+        .unwrap();
+    replay_drive(&replay, standing, Mode::Ordinary, stamp + 4)
+        .await
+        .unwrap();
+    assert!(replay.state.lock().unwrap().schema_errors.is_empty());
+}
+
+#[tokio::test]
+async fn document_lifecycle_replay_refuses_unsafe_ownership_and_recovers_partial_initialization() {
+    let replay = replay();
+    let scope = Scope::ci("ENG").unwrap();
+    replay.state.lock().unwrap().uncertain = true;
+    let error = replay_prepare(&replay, scope, Mode::Initialize)
+        .await
+        .err()
+        .unwrap();
+    assert!(error.contains("discover"), "{error}");
+    assert_eq!(
+        replay.journal.count(),
+        1,
+        "uncertain acknowledgement still records the stored create"
+    );
+    let before = replay.state.lock().unwrap().requests.len();
+    assert!(
+        replay_prepare(&replay, scope, Mode::Ordinary)
+            .await
+            .err()
+            .unwrap()
+            .contains("incomplete")
+    );
+    assert_eq!(
+        replay.journal.count(),
+        1,
+        "ordinary does not bootstrap partial state"
+    );
+    assert!(
+        replay.state.lock().unwrap().requests[before..]
+            .iter()
+            .all(|r| !r["query"].as_str().unwrap().contains("mutation"))
+    );
+    let recovered = replay_prepare(&replay, scope, Mode::Initialize)
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.journal.count(),
+        3,
+        "discovery reuses the uncertain first create and fills only missing slots"
+    );
+    assert_eq!(recovered.ids.len(), 4);
+    // A cancelled invocation leaves reusable contents, not missing identities.
+    replay_drive(&replay, recovered, Mode::Ordinary, now_micros())
+        .await
+        .unwrap();
+    for defect in ["wrong-team", "unverifiable-team", "ambiguous", "unknown"] {
+        let before = {
+            let mut state = replay.state.lock().unwrap();
+            state.wrong_team = defect == "wrong-team";
+            state.unverifiable_team = defect == "unverifiable-team";
+            state.ambiguous = defect == "ambiguous";
+            if defect == "unknown" {
+                state.documents.values_mut().next().unwrap()["title"] =
+                    json!("onetaskgraph live cleanup retained-v2 ci ENG filed");
+            }
+            state.requests.len()
+        };
+        let error = replay_prepare(&replay, scope, Mode::Ordinary)
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            error.contains("ownership") || error.contains("membership"),
+            "{defect}: {error}"
+        );
+        let state = replay.state.lock().unwrap();
+        assert!(
+            state.requests[before..]
+                .iter()
+                .all(|r| !r["query"].as_str().unwrap().contains("mutation")),
+            "{defect} sent a write"
+        );
+    }
+    assert!(replay.state.lock().unwrap().schema_errors.is_empty());
+}
+
+#[tokio::test]
+async fn local_document_sets_cannot_resolve_ci_or_another_invocation() {
+    let replay = replay();
+    let ci = replay_prepare(&replay, Scope::ci("ENG").unwrap(), Mode::Initialize)
+        .await
+        .unwrap();
+    let first = Scope::local("ENG", "1-2-3").unwrap();
+    let second = Scope::local("ENG", "1-4-5").unwrap();
+    for scope in [first, second] {
+        assert!(
+            replay_prepare(&replay, scope, Mode::Ordinary)
+                .await
+                .err()
+                .unwrap()
+                .contains("initialize")
+        );
+    }
+    let local = replay_prepare(&replay, first, Mode::Initialize)
+        .await
+        .unwrap();
+    let other = replay_prepare(&replay, second, Mode::Initialize)
+        .await
+        .unwrap();
+    for key in ["filed", "loose", "follow-up", "parent"] {
+        assert_ne!(ci.ids[key], local.ids[key]);
+        assert_ne!(local.ids[key], other.ids[key]);
+    }
+    assert_eq!(
+        replay.journal.count(),
+        9,
+        "each independently owned set has three real document creates"
+    );
+    assert!(replay.state.lock().unwrap().schema_errors.is_empty());
+}
+#[tokio::test]
+async fn cancelled_document_initialization_discovers_its_stored_create_before_recovery() {
+    use std::{sync::atomic::Ordering, time::Duration};
+    let replay = replay();
+    replay.state.lock().unwrap().pause_next_create = true;
+    let endpoint = replay.endpoint.clone();
+    let initializing = tokio::spawn(async move {
+        document_lifecycle::prepare(
+            &endpoint,
+            "synthetic",
+            "ENG",
+            "team",
+            Scope::ci("ENG").unwrap(),
+            Mode::Initialize,
+            &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !replay.paused.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("create reached HTTP transport before cancellation");
+    initializing.abort();
+    assert!(matches!(initializing.await, Err(error) if error.is_cancelled()));
+    replay.release.store(true, Ordering::Release);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while replay.journal.count() != 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("forwarding observer records the upstream acknowledgement after cancellation");
+    assert_eq!(
+        replay.journal.count(),
+        1,
+        "a committed create remains counted after the caller is cancelled"
+    );
+    let scope = Scope::ci("ENG").unwrap();
+    assert!(
+        replay_prepare(&replay, scope, Mode::Ordinary)
+            .await
+            .err()
+            .unwrap()
+            .contains("incomplete")
+    );
+    assert_eq!(replay.journal.count(), 1);
+    let restored = replay_prepare(&replay, scope, Mode::Initialize)
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.journal.count(),
+        3,
+        "recovery discovers the cancelled create and creates only missing identities"
+    );
+    replay_drive(&replay, restored, Mode::Ordinary, now_micros())
+        .await
+        .unwrap();
+    assert!(replay.state.lock().unwrap().schema_errors.is_empty());
+}
+
+/// A child role invoked only by the subprocess seat journey below.
+#[tokio::test]
+async fn document_writer_child() {
+    use std::time::Duration;
+    let Ok(role) = env::var("ONETASKGRAPH_LINEAR_WRITER_CHILD") else {
+        return;
+    };
+    let root = std::path::PathBuf::from(env::var_os("ONETASKGRAPH_LINEAR_WRITER_ROOT").unwrap());
+    let session = Session::open(
+        SESSION_NAME,
+        Credential::new("synthetic").unwrap(),
+        Exclusivity::OneAtATime,
+    );
+    if role == "decline" {
+        assert!(
+            session.is_err(),
+            "a concurrent writer unexpectedly acquired the Linear seat"
+        );
+        println!("declined before HTTP");
+        return;
+    }
+    let _session = session
+        .unwrap_or_else(|error| panic!("isolated writer could not acquire its seat: {error}"));
+    std::fs::write(root.join("held"), b"held").unwrap();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !root.join("release").exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("parent releases the writer it started");
+    let endpoint = env::var("ONETASKGRAPH_LINEAR_WRITER_ENDPOINT").unwrap();
+    let standing = document_lifecycle::prepare(
+        &endpoint,
+        "synthetic",
+        "ENG",
+        "team",
+        Scope::ci("ENG").unwrap(),
+        Mode::Ordinary,
+        &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+    )
+    .await
+    .unwrap();
+    let journal = document_lifecycle::journal::Journal::new("plugin", "ordinary");
+    replay_drive_at(&endpoint, &journal, standing, Mode::Ordinary, now_micros())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn document_ci_writers_share_the_real_machine_seat_before_http_updates() {
+    use std::{
+        process::{Child, Command, Stdio},
+        time::Duration,
+    };
+    struct HeldChild(Option<Child>);
+    impl Drop for HeldChild {
+        fn drop(&mut self) {
+            if let Some(child) = self.0.as_mut() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+    let replay = replay();
+    let standing = replay_prepare(&replay, Scope::ci("ENG").unwrap(), Mode::Initialize)
+        .await
+        .unwrap();
+    replay.journal.begin("ordinary");
+    let root = env::var_os("ONEPIPELINE_NODE_SCRATCH_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(env::temp_dir)
+        .join(format!(
+            "linear-writers-{}-{}",
+            std::process::id(),
+            now_micros()
+        ));
+    std::fs::create_dir_all(root.join("seats")).unwrap();
+    let command = |role: &str| {
+        let mut command = Command::new(env::current_exe().unwrap());
+        command
+            .args(["--exact", "document_writer_child", "--nocapture"])
+            .env("ONETASKGRAPH_LINEAR_WRITER_CHILD", role)
+            .env("ONETASKGRAPH_LINEAR_WRITER_ROOT", &root)
+            .env("ONETASKGRAPH_LINEAR_WRITER_ENDPOINT", &replay.endpoint)
+            .env(
+                onetaskgraph_live::SEAT_DIRECTORY_VARIABLE,
+                root.join("seats"),
+            )
+            .env(
+                onetaskgraph_live::artifact::REGISTRY_DIRECTORY_VARIABLE,
+                root.join("registry"),
+            )
+            .env_remove("LINEAR_API_KEY")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    };
+    let mut first = HeldChild(Some(command("hold").spawn().unwrap()));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !root.join("held").exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("first child holds its isolated Linear seat");
+    let before = replay.state.lock().unwrap().requests.len();
+    let declined = command("decline").output().unwrap();
+    assert!(
+        declined.status.success(),
+        "{}",
+        String::from_utf8_lossy(&declined.stderr)
+    );
+    assert!(String::from_utf8_lossy(&declined.stdout).contains("declined before HTTP"));
+    assert_eq!(
+        replay.state.lock().unwrap().requests.len(),
+        before,
+        "declined writer sends no HTTP operation"
+    );
+    std::fs::write(root.join("release"), b"release").unwrap();
+    let completed = first.0.take().unwrap().wait_with_output().unwrap();
+    assert!(
+        completed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&completed.stdout)
+    );
+    assert_eq!(replay.journal.count(), 0);
+    let requests = replay.state.lock().unwrap().requests[before..].to_vec();
+    assert!(
+        requests
+            .iter()
+            .filter(|request| request["query"]
+                .as_str()
+                .unwrap()
+                .contains("documentUpdate("))
+            .count()
+            >= 3,
+        "admitted child runs the actual shared ordinary document paths"
+    );
+    let after = replay_prepare(&replay, Scope::ci("ENG").unwrap(), Mode::Ordinary)
+        .await
+        .unwrap();
+    assert_eq!(standing.ids, after.ids);
+    assert!(replay.state.lock().unwrap().schema_errors.is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+struct ReplaySecrets;
+impl SecretResolver for ReplaySecrets {
+    fn get(&self, _: &str) -> Option<SecretString> {
+        Some(SecretString::from("synthetic"))
+    }
+}
+
+#[tokio::test]
+async fn document_discovery_follows_advancing_http_pages_without_writes() {
+    let replay = replay();
+    let scope = Scope::ci("ENG").unwrap();
+    let initialized = replay_prepare(&replay, scope, Mode::Initialize)
+        .await
+        .unwrap();
+    let before = {
+        let mut state = replay.state.lock().unwrap();
+        state.discovery_pagination = Some("advance");
+        state.requests.len()
+    };
+    let discovered = replay_prepare(&replay, scope, Mode::Ordinary)
+        .await
+        .unwrap();
+    assert_eq!(discovered.ids, initialized.ids);
+    let state = replay.state.lock().unwrap();
+    let requests = &state.requests[before..];
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request["query"].as_str().unwrap().contains("mutation"))
+    );
+    let cursors: Vec<_> = requests
+        .iter()
+        .filter(|request| request["query"].as_str().unwrap().contains("documents("))
+        .map(|request| request["variables"]["after"].clone())
+        .collect();
+    assert_eq!(
+        cursors,
+        (0..3)
+            .flat_map(|_| [Value::Null, json!("1"), json!("2")])
+            .collect::<Vec<_>>(),
+        "each exact slot discovery reads all three actual stored document pages"
+    );
+    assert!(state.schema_errors.is_empty(), "{:?}", state.schema_errors);
+}
+
+#[tokio::test]
+async fn document_discovery_refuses_broken_or_unbounded_http_pagination_before_writes() {
+    let replay = replay();
+    let scope = Scope::ci("ENG").unwrap();
+    replay_prepare(&replay, scope, Mode::Initialize)
+        .await
+        .unwrap();
+    for (fault, expected, pages) in [
+        ("missing-cursor", "omitted cursor", 1),
+        ("repeated-cursor", "did not advance", 2),
+        ("missing-pagination", "omitted pagination", 1),
+        ("exhausted", "did not terminate", 50),
+    ] {
+        let before = {
+            let mut state = replay.state.lock().unwrap();
+            state.discovery_pagination = Some(fault);
+            state.requests.len()
+        };
+        let error = replay_prepare(&replay, scope, Mode::Ordinary)
+            .await
+            .err()
+            .unwrap();
+        assert!(error.contains(expected), "{fault}: {error}");
+        let state = replay.state.lock().unwrap();
+        let requests = &state.requests[before..];
+        assert!(
+            requests
+                .iter()
+                .all(|request| !request["query"].as_str().unwrap().contains("mutation")),
+            "{fault} sent a write"
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request["query"].as_str().unwrap().contains("documents("))
+                .count(),
+            pages,
+            "{fault}"
+        );
+        assert!(
+            state.schema_errors.is_empty(),
+            "{fault}: {:?}",
+            state.schema_errors
+        );
+    }
+    assert_eq!(
+        replay.journal.count(),
+        3,
+        "failed ordinary discovery never creates a replacement"
+    );
+}
+
+#[tokio::test]
+async fn document_discovery_requires_well_formed_direct_team_before_project_fallback() {
+    let replay = replay();
+    let prepare = |mode| {
+        document_lifecycle::prepare(
+            &replay.endpoint,
+            "synthetic",
+            "ENG",
+            "team",
+            Scope::ci("ENG").unwrap(),
+            mode,
+            &[Slot::Filed],
+        )
+    };
+    let initialized = prepare(Mode::Initialize).await.unwrap();
+    for malformed in [
+        json!("ENG"),
+        json!({}),
+        json!({"key":7}),
+        json!({"key":"OTHER"}),
+    ] {
+        let before = {
+            let mut state = replay.state.lock().unwrap();
+            state.direct_team_override = Some(malformed.clone());
+            state.requests.len()
+        };
+        let error = prepare(Mode::Ordinary).await.err().unwrap();
+        assert!(error.contains("membership"), "{malformed}: {error}");
+        let state = replay.state.lock().unwrap();
+        assert!(
+            state.requests[before..]
+                .iter()
+                .all(|request| !request["query"].as_str().unwrap().contains("mutation")),
+            "{malformed} sent a write"
+        );
+    }
+    let before = {
+        let mut state = replay.state.lock().unwrap();
+        state.direct_team_override = None;
+        state.omit_direct_team = true;
+        state.requests.len()
+    };
+    assert!(
+        prepare(Mode::Ordinary)
+            .await
+            .err()
+            .unwrap()
+            .contains("membership")
+    );
+    assert!(
+        replay.state.lock().unwrap().requests[before..]
+            .iter()
+            .all(|request| !request["query"].as_str().unwrap().contains("mutation"))
+    );
+    {
+        let mut state = replay.state.lock().unwrap();
+        state.omit_direct_team = false;
+        state.direct_team_override = Some(Value::Null);
+    }
+    let recovered = prepare(Mode::Ordinary).await.unwrap();
+    assert_eq!(
+        recovered.ids, initialized.ids,
+        "explicit null uses the verified complete project membership"
+    );
+    assert_eq!(replay.journal.count(), 1);
+}
+
+#[tokio::test]
+async fn ordinary_document_run_metadata_reset_is_read_back_and_recovers_after_stale_write() {
+    let replay = replay();
+    let scope = Scope::ci("ENG").unwrap();
+    let first = replay_prepare(&replay, scope, Mode::Initialize)
+        .await
+        .unwrap();
+    replay.journal.begin("ordinary");
+    let stamp = now_micros();
+    replay_drive(&replay, first, Mode::Ordinary, stamp)
+        .await
+        .unwrap();
+    replay.state.lock().unwrap().freeze_document_run_metadata = true;
+    let second = replay_prepare(&replay, scope, Mode::Ordinary)
+        .await
+        .unwrap();
+    let error = replay_drive(&replay, second, Mode::Ordinary, stamp + 1)
+        .await
+        .unwrap_err();
+    assert!(error.contains("reset caller.run"), "{error}");
+    replay.state.lock().unwrap().freeze_document_run_metadata = false;
+    let recovered = replay_prepare(&replay, scope, Mode::Ordinary)
+        .await
+        .unwrap();
+    replay_drive(&replay, recovered, Mode::Ordinary, stamp + 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        replay.journal.count(),
+        0,
+        "recovery updates the same retained documents"
+    );
+    assert!(replay.state.lock().unwrap().schema_errors.is_empty());
 }

@@ -570,15 +570,9 @@ fn retained_entities(
 async fn retained_ci_survives_even_broad_cleanup_and_local_sets_retire_by_registration() {
     use onetaskgraph_linear::live_artifact::Scope;
     let mut beside = LiveRunBeside::start();
-    let ci = retained_entities(Scope::Ci { team: "TEST" }, "ci");
+    let ci = retained_entities(Scope::ci("TEST").unwrap(), "ci");
     let local_stamp = onetaskgraph_live::artifact::Stamp::new(beside.run, aged(10)).to_string();
-    let local = retained_entities(
-        Scope::Local {
-            team: "TEST",
-            stamp: &local_stamp,
-        },
-        "local",
-    );
+    let local = retained_entities(Scope::local("TEST", &local_stamp).unwrap(), "local");
     let unknown = Entity {
         kind: "document",
         id: "unknown".into(),
@@ -630,14 +624,8 @@ async fn retained_ci_survives_even_broad_cleanup_and_local_sets_retire_by_regist
 async fn retained_local_set_retires_at_its_own_invocation_cleanup() {
     use onetaskgraph_linear::live_artifact::Scope;
     let stamp = onetaskgraph_live::artifact::Stamp::new(RUNS.mine, NOW).to_string();
-    let mine = retained_entities(
-        Scope::Local {
-            team: "TEST",
-            stamp: &stamp,
-        },
-        "mine",
-    );
-    let ci = retained_entities(Scope::Ci { team: "TEST" }, "ci");
+    let mine = retained_entities(Scope::local("TEST", &stamp).unwrap(), "mine");
+    let ci = retained_entities(Scope::ci("TEST").unwrap(), "ci");
     let drive = Drive::plant([mine, ci.clone()].concat(), vec![], vec![]);
     cleanup::remove_artifacts(KEY, &|prefix, name| is_this_runs(RUNS.mine, prefix, name))
         .await

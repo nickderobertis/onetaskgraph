@@ -585,7 +585,9 @@ fn document_reports_require_complete_transport_journals_from_both_lanes() {
                 "missing {lane}/{mode} was accepted"
             );
             assert!(!result.exists(), "missing journals emitted a report");
-            let journal = transport_journal::Journal::new(lane, mode);
+            let journal = transport_journal::Journal::new(lane, mode)
+                .durable(directory.to_path_buf())
+                .expect("durable transport journal");
             journal.begin(mode);
             if mode != "ordinary" {
                 // Exercise the same acknowledgement recorder and serializer the HTTP replay
@@ -596,6 +598,12 @@ fn document_reports_require_complete_transport_journals_from_both_lanes() {
                 );
             }
             assert_eq!(journal.count(), usize::from(mode != "ordinary"));
+            let interrupted = run(budget);
+            assert!(
+                !interrupted.status.success(),
+                "unfinished durable {lane}/{mode} was accepted"
+            );
+            assert!(!result.exists(), "unfinished journal emitted a report");
             journal.finish_in(directory).expect("writable journal");
             let path = directory.join(format!("linear-live-documents-{mode}.json"));
             let mut recorded: Value =
@@ -659,4 +667,32 @@ fn document_reports_require_complete_transport_journals_from_both_lanes() {
         );
         assert!(!result.exists(), "invalid journal emitted a report");
     }
+}
+
+#[test]
+fn durable_transport_journal_counts_aliased_and_spaced_creates_before_completion() {
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("durable-journal");
+    let journal = transport_journal::Journal::new("assets", "fresh")
+        .durable(directory.clone())
+        .unwrap();
+    journal.journey("transport-acknowledgements");
+    journal.observe(&json!({"query":"mutation { first: documentCreate (input:{title:\"one\"}) {success} second: documentCreate(input:{title:\"two\"}) {success} }"}),&json!({"data":{"first":{"success":true,"document":null},"second":{"success":true}}}));
+    journal.observe(
+        &json!({"query":"mutation { documentCreate (input:{title:\"refused\"}) {success} }"}),
+        &json!({"data":{"documentCreate":{"success":false}}}),
+    );
+    assert_eq!(
+        journal.count(),
+        2,
+        "each actual successful operation counts, even without a returned id"
+    );
+    let path = directory.join("linear-live-documents-fresh.json");
+    let incomplete: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(incomplete["completed"], false);
+    assert_eq!(incomplete["operations"].as_array().unwrap().len(), 2);
+    journal.finish_in(&directory).unwrap();
+    let complete: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(complete["completed"], true);
+    assert_eq!(complete["operations"], incomplete["operations"]);
 }

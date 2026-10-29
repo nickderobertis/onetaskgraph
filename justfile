@@ -260,3 +260,7 @@ github-workflows-bootstrap:
 # Focused workflow graph, required-context and budget proofs.
 github-workflows-check:
     @{{nx}} run-many -t check --projects github-workflows
+
+# Explicit scheduled creation or standing-set recovery; mode comes from the caller.
+linear-document-creation:
+    @{{nx}} run-many -t live-documents --projects onetaskgraph-linear,onetaskgraph-linear-e2e --parallel=1
