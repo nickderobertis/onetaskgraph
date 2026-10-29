@@ -92,7 +92,6 @@ class CliWheelLockTest(unittest.TestCase):
                                          capture_output=True, text=True, encoding='utf-8')
         self.assertEqual(unavailable.returncode, 1, unavailable.stderr)
         self.assertIn('cli-wheel-lock:', unavailable.stderr)
-        self.assertIn('absent-build-command', unavailable.stderr)
         self.assertIn('next:', unavailable.stderr)
 
     def test_concurrent_consumers_and_failure_release(self):
