@@ -406,6 +406,45 @@ elif ! grep -qF -- "$FOREIGN_FIXTURE" <<<"$OUTPUT"; then
 fi
 fixture cp "$ROOT/scripts/$STORE_GUARD" "$scratch/store/scripts/$STORE_GUARD"
 
+# The reader scripts/check-warm-rust-cache.sh asserts on, which names a crate's project.json it
+# could not parse. Its glob once named it `crates\broken\project.json` on the Windows runner,
+# and the check, matching the forward-slash spelling, failed `check (windows-latest)`.
+readonly READER="pr-build-commands.sh"
+readonly BROKEN="crates/broken/project.json"
+readonly FOREIGN_BROKEN='crates\broken\project.json'
+fixture mkdir -p "$scratch/reader/scripts" "$scratch/reader/crates/broken"
+fixture cp "$ROOT/scripts/$READER" "$scratch/reader/scripts/$READER"
+printf '{"targets": {"test": \n' >"$scratch/reader/$BROKEN" || fatal \
+  "could not write the unparseable fixture at $scratch/reader/$BROKEN" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+
+run_reader_foreign() {
+  OUTPUT="$(PATH="$scratch/bin:$PATH" bash "$scratch/reader/scripts/$READER" 2>&1)" \
+    && STATUS=0 || STATUS=$?
+}
+
+# 9. The reader on a host that spells paths with a backslash names the file as every lane does.
+run_reader_foreign
+if [ "$STATUS" -eq 0 ] || ! grep -qF -- "$BROKEN: could not be read as JSON" <<<"$OUTPUT" \
+  || grep -qF -- "$FOREIGN_BROKEN" <<<"$OUTPUT"; then
+  echo "check-guard-path-spelling: scripts/$READER did not refuse an unparseable $BROKEN on a" >&2
+  echo "check-guard-path-spelling: backslash-separator host naming it with forward slashes. It said:" >&2
+  report_output
+  failures=$((failures + 1))
+fi
+
+# 10. The control: without the normalisation, the backslash spelling the Windows runner printed
+#     has to come back, or case 9 proves nothing.
+substitute "$scratch/reader/scripts/$READER" "path = found.as_posix()" "path = str(found)"
+run_reader_foreign
+if ! grep -qF -- "$FOREIGN_BROKEN" <<<"$OUTPUT"; then
+  echo "check-guard-path-spelling: with the path normalisation removed, scripts/$READER did not" >&2
+  echo "check-guard-path-spelling: name '$FOREIGN_BROKEN' on a backslash-separator host, so the" >&2
+  echo "check-guard-path-spelling: simulation is not reproducing that host. It said:" >&2
+  report_output
+  failures=$((failures + 1))
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "check-guard-path-spelling: $failures case(s) failed." >&2
   echo "check-guard-path-spelling: repair the reporting in the guard the case names rather than" >&2

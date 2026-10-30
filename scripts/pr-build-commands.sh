@@ -26,15 +26,17 @@ case $python_bin in
 esac
 
 "$python_bin" - <<'PY' | tr -d '\r'
-import glob, json, re, sys
+import json, pathlib, re, sys
 
 def refuse(path, why):
     sys.exit(f"pr-build-commands: {path}: {why}; next: give its `test` target a `cargo test` command, or teach scripts/pr-build-commands.sh the new shape")
 
 out = []
-for path in sorted(glob.glob("crates/*/project.json")):
+# Named with forward slashes on every platform, as every other guard here names a path.
+for found in sorted(pathlib.Path("crates").glob("*/project.json"), key=lambda found: found.as_posix()):
+    path = found.as_posix()
     try:
-        with open(path, encoding="utf-8") as handle:
+        with open(found, encoding="utf-8") as handle:
             node = json.load(handle)
     except (OSError, ValueError) as error:
         sys.exit(f"pr-build-commands: {path}: could not be read as JSON ({error}); next: fix that file so it parses")
