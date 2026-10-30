@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import tomllib
 import zipfile
 from release_products import PLATFORM_TARGETS, PlatformTarget, RustTarget, VerificationReport, validate_tag, validate_target
@@ -22,6 +23,14 @@ from release_cd import plan
 from product_versions import SEMANTIC_VERSION_RE, SemanticVersion
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
+# In Actions each refusal and each packaging run says what it took, because the hosted
+# runners are where this journey is slow and its own output says nothing while it works.
+TIMED = os.environ.get('GITHUB_ACTIONS') == 'true'
+
+
+def timed(label: str, started: float) -> None:
+    if TIMED:
+        print(f'release products timing: {time.monotonic() - started:6.1f}s {label}', file=sys.stderr)
 # Tampered fixtures are judged by their payload, never by compression level.
 FIXTURE_COMPRESSION = 1
 
@@ -124,7 +133,9 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         wheel_path.write_bytes(original_wheel)
         subprocess.run([PYTHON_EXECUTABLE, 'scripts/release-wheel-binary.py', '--wheels', str(wheels), '--binary', str(canonical)], cwd=tree, check=True, stdout=subprocess.DEVNULL)
         package = ['just', f'release-{selected.platform}', 'package', '--tag', f'v{version}', '--dist', shlex.quote(str(tree / 'dist'))]
+        started = time.monotonic()
         subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
+        timed('packaging', started)
         # Every refusal below corrupts the products this one packaging produced and is judged
         # against them; they are kept here once and put back at the end, rather than packaged
         # again, for the final verification.
@@ -132,7 +143,9 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         shutil.copytree(tree / 'dist', pristine / 'dist')
         shutil.copy2(canonical, pristine / binary)
         command = [PYTHON_EXECUTABLE, 'scripts/verify-release-products.py', '--target', target, '--npm', selected.npm_platform, '--tag', f'v{version}', '--ext', selected.extension, '--dist', str(tree / 'dist')]
+        started = time.monotonic()
         installed = subprocess.run(command + ['--install'], cwd=tree, capture_output=True, text=True)
+        timed('first install', started)
         if installed.returncode:
             print(installed.stderr, file=sys.stderr)
             raise subprocess.CalledProcessError(installed.returncode, command, installed.stdout, installed.stderr)
@@ -142,7 +155,9 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             raise ValueError('installer did not emit the documented single JSON verification result')
 
         def refuses(reason: str) -> None:
+            started = time.monotonic()
             result = subprocess.run(command + ['--install'], cwd=tree, capture_output=True, text=True)
+            timed(f'refusal: {reason}', started)
             if result.returncode == 0 or reason not in result.stderr:
                 raise ValueError(f'tampered staged product did not fail for {reason}: status={result.returncode}, stderr={result.stderr}; repair the production verifier before publishing')
 
@@ -346,7 +361,9 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             with zipfile.ZipFile(wheel_path, 'w', compresslevel=FIXTURE_COMPRESSION) as wheel:
                 for info, data in contents.values():
                     wheel.writestr(info, data)
+            started = time.monotonic()
             subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
+            timed('packaging', started)
             refuses(reason)
             canonical.write_bytes(original_binary)
             wheel_path.write_bytes(original_wheel)

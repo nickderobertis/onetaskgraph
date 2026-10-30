@@ -75,7 +75,29 @@ start_server() {
     exit 1
   }
 }
+# The trace above, summed per line: what each line spent until the next one began.
+report_timings() {
+  [ -s "$tmp/journey.trace" ] || return 0
+  "$python_bin" - "$tmp/journey.trace" >&2 <<'PY' || true
+import re, sys
+spent, text, previous = {}, {}, None
+with open(sys.argv[1], encoding="utf-8", errors="replace") as trace:
+    for line in trace:
+        match = re.match(r"^\++(\d+\.\d+) (\S+:\d+): (.*)", line)
+        if not match:
+            continue
+        moment, site = float(match.group(1)), match.group(2)
+        if previous is not None:
+            spent[previous[0]] = spent.get(previous[0], 0.0) + moment - previous[1]
+        previous = (site, moment)
+        text.setdefault(site, match.group(3)[:110])
+for site, seconds in sorted(spent.items(), key=lambda item: -item[1])[:20]:
+    print(f"distribution timing: {seconds:7.1f}s {site}: {text[site]}")
+PY
+}
 cleanup() {
+  { set +x; } 2>/dev/null
+  report_timings
   stop_server "${http_server_pid:-}"
   stop_server "${registry_server_pid:-}"
   stop_server "${npm_registry_server_pid:-}"
@@ -115,6 +137,15 @@ case "$#:${1:-}" in
   1:--interpreter-only) (cd "$tmp" && "$python_bin" -c 'pass'); exit 0 ;;
   *) echo "distribution test takes no argument, --release-build-only or --interpreter-only alone, not '$*'; next: run scripts/test-distribution.sh with none" >&2; exit 2 ;;
 esac
+# In Actions, every line of the whole journey is timed into a trace and its slowest are named
+# on exit, because the hosted runners are where it is slow and nothing else there says where.
+# bash 5's EPOCHREALTIME costs no process per line; an older bash (macOS's 3.2) is not traced.
+if [ "${GITHUB_ACTIONS:-}" = true ] && [ "${BASH_VERSINFO[0]}" -ge 5 ]; then
+  exec 7>"$tmp/journey.trace"
+  BASH_XTRACEFD=7
+  PS4='+${EPOCHREALTIME} ${BASH_SOURCE##*/}:${LINENO}: '
+  set -x
+fi
 # The binary is what onetaskgraph:build produced and this target depends on; nothing here
 # builds it, because a cargo invocation of that package from anywhere else replaces the
 # file while the Rust integration tests are spawning it (scripts/check-workspace-config.sh).
