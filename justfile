@@ -84,6 +84,19 @@ script-check:
 distribution-check:
     @{{nx}} run scripts:distribution-check
 
+# Prove the Rust cache warmer leaves what a pull request's Linux build reuses: a cold build of
+# every dependency three ways into a scratch target directory, twenty to thirty minutes on a
+# hosted runner, so no gate runs it. It is a plain script rather than an Nx target because a
+# recipe that runs a target by name is a stage every gate has to run
+# (scripts/check-live-lane-selection.sh holds that), and this one deliberately is not.
+warm-cache-reuse-check:
+    @bash scripts/check-warm-rust-cache-reuse.sh
+
+# Its cheap half, over the target directory scripts/warm-rust-cache.sh --instrumented has just
+# filled: the warmer's Linux leg runs it, with no Node toolchain for Nx to run on.
+warm-cache-reuse-check-warmed:
+    @bash scripts/check-warm-rust-cache-reuse.sh --warmed
+
 distribution-test:
     @{{nx}} run scripts:distribution-test
 
@@ -286,3 +299,7 @@ github-workflows-bootstrap:
 # Focused workflow graph, required-context and budget proofs.
 github-workflows-check:
     @{{nx}} run-many -t check --projects github-workflows
+
+# Explicit scheduled creation or standing-set recovery; mode comes from the caller.
+linear-document-creation:
+    @{{nx}} run-many -t live-documents --projects onetaskgraph-linear,onetaskgraph-linear-e2e --parallel=1

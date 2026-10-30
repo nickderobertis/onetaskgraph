@@ -39,7 +39,7 @@ export const cdJourneyReadSet = [
   "package.json",
 ];
 
-export const policyJourneyReadSet = ["bun.lock"];
+export const policyJourneyReadSet = ["bun.lock", "rust-toolchain.toml", "scripts/ci-job.sh"];
 
 export const policyJourneyFiles = [
   ".github/tests/boundaries.test.mjs",
@@ -48,6 +48,8 @@ export const policyJourneyFiles = [
   ".github/tests/policy.test.mjs",
   ".github/tests/release-shortcut.test.mjs",
   ".github/tests/reusable.test.mjs",
+  ".github/tests/rust-cache-warm.test.mjs",
+  ".github/tests/rust-cache.test.mjs",
 ];
 
 export const cdJourneyFiles = [

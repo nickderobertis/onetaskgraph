@@ -1,5 +1,7 @@
 //! Where the Linear request budgets' telemetry lives: one JSON file per budget,
 //! `{"value": <requests>, "detail": "<how they were counted>"}`, named after the budget's id.
+//! Document creation budgets instead aggregate the two lanes' versioned transport journals;
+//! they require completed recordings of ordinary, fresh, initialization and failure journeys.
 //!
 //! The `measure_*` journeys write it with [`record`] while the `e2e` target runs, and
 //! `budget_runner::report` reads it back with [`recorded`] for `onebudgetspec check`. The
@@ -11,6 +13,7 @@
 //! recorded. [`DIRECTORY`] names another, so a test can drive the runner over telemetry of its
 //! own without touching what the journeys recorded.
 
+use crate::linear_assets::document_lifecycle::journal::COLD_REBUILD;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -78,6 +81,13 @@ pub fn recorded(budget: &str) -> Result<(f64, Option<String>), String> {
             "{budget:?} is not a budget id ({}); name one of budgets.yaml's",
             onebudgetspec_core::model::ID_PATTERN
         ));
+    }
+    if matches!(
+        budget,
+        "linear-live-documents-created-per-ordinary-pass"
+            | "linear-live-documents-created-per-daily-pass"
+    ) {
+        return live_documents_recorded(budget);
     }
     let path = file_in(&directory(), budget);
     let text = std::fs::read_to_string(&path).map_err(|error| {
@@ -234,4 +244,85 @@ pub fn recorded(budget: &str) -> Result<(f64, Option<String>), String> {
         }
     };
     Ok((value, detail))
+}
+
+/// Read both transport journals, without executing either producer. Every mode must have
+/// finished recording: a missing failed-pass journal is not evidence that it created nothing.
+fn live_documents_recorded(budget: &str) -> Result<(f64, Option<String>), String> {
+    let selected = if budget.ends_with("ordinary-pass") {
+        "ordinary"
+    } else {
+        "fresh"
+    };
+    let assets = directory();
+    let plugin = std::env::var_os("LINEAR_PLUGIN_TELEMETRY_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| assets.with_file_name("onetaskgraph-linear"));
+    let mut total = 0_u64;
+    let mut details = Vec::new();
+    for (lane, directory) in [("plugin", plugin), ("assets", assets)] {
+        for mode in ["ordinary", "fresh", "initialize", "failure"] {
+            let path = directory.join(format!("linear-live-documents-{mode}.json"));
+            let text = std::fs::read_to_string(&path).map_err(|error| {
+                format!(
+                    "{budget}: missing {lane}/{mode} journal at {}: {error}",
+                    path.display()
+                )
+            })?;
+            let journal: Value = serde_json::from_str(&text)
+                .map_err(|error| format!("{budget}: invalid {lane}/{mode} journal: {error}"))?;
+            if journal["schema_version"] != 1
+                || journal["lane"] != lane
+                || journal["mode"] != mode
+                || journal["completed"] != true
+            {
+                return Err(format!(
+                    "{budget}: incomplete or mismatched {lane}/{mode} journal"
+                ));
+            }
+            let operations = journal["operations"]
+                .as_array()
+                .ok_or_else(|| format!("{budget}: {lane}/{mode} journal has no operations"))?;
+            let mut journeys = std::collections::BTreeMap::<&str, u64>::new();
+            let mut rebuilt = 0_u64;
+            for operation in operations {
+                let journey = operation["journey"]
+                    .as_str()
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| format!("{budget}: {lane}/{mode} operation has no journey"))?;
+                if operation["operation"] != "documentCreate" || operation["success"] != true {
+                    return Err(format!(
+                        "{budget}: {lane}/{mode} journal contains an unacknowledged create"
+                    ));
+                }
+                if journey == COLD_REBUILD {
+                    rebuilt += 1;
+                } else {
+                    *journeys.entry(journey).or_default() += 1;
+                }
+            }
+            let count =
+                u64::try_from(operations.len()).map_err(|error| error.to_string())? - rebuilt;
+            if mode == selected {
+                total = total.checked_add(count).ok_or("document count overflow")?;
+            }
+            details.push(format!(
+                "{lane}/{mode}: {count} successful documentCreate operations ({journeys:?})"
+            ));
+            // A standing slot the pass had to create is a cold rebuild: reported, never
+            // counted in the pass and never read as zero-cost reuse.
+            if rebuilt > 0 {
+                details.push(format!(
+                    "{lane}/{mode} cold rebuild: {rebuilt} documents, outside the pass total"
+                ));
+            }
+            if let Some(residue) = journal.get("residue") {
+                let residue = residue.as_u64().ok_or_else(|| {
+                    format!("{budget}: {lane}/{mode} residue is not a document count")
+                })?;
+                details.push(format!("{lane}/{mode} residue: {residue} documents"));
+            }
+        }
+    }
+    Ok((total as f64, Some(details.join("; "))))
 }

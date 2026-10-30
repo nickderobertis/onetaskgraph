@@ -26,7 +26,9 @@
 
 use std::collections::BTreeMap;
 
-use onetaskgraph_plugin_api::{DependencyEdge, Document, MetadataKey, Project, SourceName, Task};
+use onetaskgraph_plugin_api::{
+    DependencyEdge, Document, MetadataKey, Project, Repository, SourceName, Status, Task,
+};
 use serde_json::Value;
 
 use crate::template::{Sha256Digest, answers_digest};
@@ -112,6 +114,15 @@ pub(super) fn without_record(metadata: &BTreeMap<String, Value>) -> BTreeMap<Str
     kept
 }
 
+/// Caller metadata as a copy writes it: repository names are already digested from the
+/// item's `repositories` field. Hosted sources also expose that field's transport slot in
+/// metadata, while a folder keeps it in front matter; that duplication is not an edit.
+fn digest_metadata(metadata: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
+    let mut kept = without_record(metadata);
+    kept.remove(Repository::METADATA_KEY);
+    kept
+}
+
 /// Whether `metadata` records that the copy it describes carried the task's comments.
 pub(super) fn carried_comments(metadata: &BTreeMap<String, Value>) -> bool {
     metadata.get(MetadataKey::COPIED_WITH_COMMENTS_KEY) == Some(&Value::Bool(true))
@@ -168,7 +179,7 @@ pub(super) fn digest(
         (
             "metadata".to_owned(),
             Value::Object(
-                without_record(&task.metadata)
+                digest_metadata(&task.metadata)
                     .into_iter()
                     .filter(|(key, _)| key != super::super::dependents::DEPENDED_ON_BY_KEY)
                     .collect(),
@@ -275,7 +286,7 @@ fn project_digest(project: &Project, edges: &[DependencyEdge]) -> Sha256Digest {
         ),
         (
             "metadata".to_owned(),
-            Value::Object(without_record(&project.metadata).into_iter().collect()),
+            Value::Object(digest_metadata(&project.metadata).into_iter().collect()),
         ),
         (
             "repositories".to_owned(),
@@ -307,7 +318,7 @@ fn document_digest(document: &Document) -> Sha256Digest {
         ),
         (
             "metadata".to_owned(),
-            Value::Object(without_record(&document.metadata).into_iter().collect()),
+            Value::Object(digest_metadata(&document.metadata).into_iter().collect()),
         ),
         (
             "repositories".to_owned(),
@@ -327,7 +338,11 @@ fn document_digest(document: &Document) -> Sha256Digest {
 /// classification and metadata as the source holds them, without the three keys and without
 /// the copy's own links there, `onetaskgraph.copies` and `onetaskgraph.copy_locations`, which a
 /// copy writes onto its source once it has landed.
-pub(super) fn composed(item: &Item, content: Option<&str>) -> Sha256Digest {
+pub(super) fn composed(
+    item: &Item,
+    content: Option<&str>,
+    source_status: Option<&Status>,
+) -> Sha256Digest {
     let (title, metadata, mut fields) = match item {
         Item::Task(task) => (
             &task.title,
@@ -335,7 +350,7 @@ pub(super) fn composed(item: &Item, content: Option<&str>) -> Sha256Digest {
             BTreeMap::from([
                 (
                     "status".to_owned(),
-                    as_json(serde_json::to_value(&task.status)),
+                    as_json(serde_json::to_value(source_status.unwrap_or(&task.status))),
                 ),
                 (
                     "priority".to_owned(),
@@ -361,7 +376,9 @@ pub(super) fn composed(item: &Item, content: Option<&str>) -> Sha256Digest {
             BTreeMap::from([
                 (
                     "status".to_owned(),
-                    as_json(serde_json::to_value(&project.status)),
+                    as_json(serde_json::to_value(
+                        source_status.unwrap_or(&project.status),
+                    )),
                 ),
                 (
                     "labels".to_owned(),

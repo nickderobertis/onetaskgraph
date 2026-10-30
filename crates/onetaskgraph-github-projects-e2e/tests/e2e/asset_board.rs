@@ -133,7 +133,7 @@ impl Kind {
 /// mutation — read by brace depth, so a nested selection is never counted, and leaving out each
 /// field an `@include(if:$name)` whose variable is false, or a `@skip(if:$name)` whose variable
 /// is true, keeps from being sent.
-fn top_level_fields(document: &str, variables: &Value) -> usize {
+pub(super) fn top_level_fields(document: &str, variables: &Value) -> usize {
     let sent = |name: &str| variables.get(name).and_then(Value::as_bool);
     let mut excluded = 0;
     for (directive, keeps) in [("@include(if:$", true), ("@skip(if:$", false)] {

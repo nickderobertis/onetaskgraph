@@ -3,12 +3,15 @@
 #
 #   scripts/warm-rust-cache.sh [--instrumented]
 #
+# Exits 0 once everything is built, 1 when a build fails, 2 on any other argument.
+#
 # .github/workflows/rust-cache-warm.yml runs this on every push to main and saves the Rust
 # cache under the key each of those pull-request jobs restores, because a pull request may
 # restore only a cache saved on its own ref or on main, and they run on pull requests alone:
 # without it every pull request compiled every dependency, and the distribution journey's
 # release build — eight to fifteen minutes — on every run. The cache keeps dependency units
-# only, so what matters is that these are the very units the jobs compile:
+# only, so what matters is that these are the very units the jobs compile —
+# scripts/check-warm-rust-cache.sh holds them to the shapes scripts/pr-build-commands.sh reads:
 #
 #   every workspace crate's test units, with every feature and with its defaults, as the
 #   crates' `test` targets build them;
@@ -27,7 +30,11 @@ instrumented=false
 case "$#:${1:-}" in
   0:) ;;
   1:--instrumented) instrumented=true ;;
-  *) fatal "takes no argument or --instrumented alone, not '$*'" "run it with none, or with --instrumented on Linux" ;;
+  *)
+    echo "warm-rust-cache: takes no argument or --instrumented alone, not '$*'" >&2
+    echo "warm-rust-cache: next: run it with none, or with --instrumented on Linux" >&2
+    exit 2
+    ;;
 esac
 
 # Nothing here opens a live session, and nothing may: it builds the live crates' tests.
@@ -39,17 +46,31 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
 cd "$ROOT"
 
 crates="$(cargo metadata --no-deps --format-version 1 --locked \
-  | python3 -c 'import json, sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))' \
+  | python3 -c 'import json, sys
+document = json.load(sys.stdin)
+packages = document.get("packages") if isinstance(document, dict) else None
+if not isinstance(packages, list) or not packages or not all(
+    isinstance(package, dict) and isinstance(package.get("name"), str) and package["name"].strip()
+    for package in packages
+):
+    raise SystemExit("cargo metadata did not answer with a packages array of named packages")
+print("\n".join(package["name"] for package in packages))
+' \
   | tr -d '\r')" || fatal "could not list the workspace's crates" "run 'cargo metadata --no-deps' and fix what it reports"
 [ -n "$crates" ] || fatal "the workspace lists no crate" "run 'cargo metadata --no-deps' and fix what it reports"
 
+next="fix what it reports above, then rerun; the pull-request job it warms would fail the same way"
 for crate in $crates; do
-  cargo test --quiet --no-run --locked --all-features -p "$crate"
-  cargo test --quiet --no-run --locked -p "$crate"
+  cargo test --quiet --no-run --locked --all-features -p "$crate" \
+    || fatal "building $crate's test units with every feature failed" "$next"
+  cargo test --quiet --no-run --locked -p "$crate" \
+    || fatal "building $crate's test units with its default features failed" "$next"
   if "$instrumented"; then
     cargo llvm-cov --no-report nextest --package "$crate" --all-features --locked \
-      -E 'none()' --no-tests=pass
+      -E 'none()' --no-tests=pass \
+      || fatal "building $crate's instrumented test units failed" "$next"
   fi
 done
 
-bash scripts/test-distribution.sh --release-build-only
+bash scripts/test-distribution.sh --release-build-only \
+  || fatal "the distribution journey's release build failed" "$next"

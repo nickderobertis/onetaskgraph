@@ -1,7 +1,7 @@
 [package]
 name = "onetaskgraph-core"
 description = "The onetaskgraph engine: the plugin registry, global-id qualification, and the plan every response carries."
-version = "0.12.11"
+version = "0.12.12"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -21,6 +21,7 @@ linear = ["dep:onetaskgraph-linear"]
 # The engine may depend on every plugin; no plugin may depend back. Registering a new
 # plugin here is what lets a configuration name it.
 [dependencies]
+url.workspace = true
 # The trait a subprocess-hosted source implements is async, so the engine needs the same
 # attribute macro a plugin does. It brings no runtime with it: this crate is still written
 # against `std::future` alone and runs on whatever runtime its caller starts.

@@ -334,3 +334,15 @@ the same published SDK schema (`packages/sdk/src/schema.graphql` in `linear/line
 documents the query as "The user's organization." The resolution read selects that one id, so
 a source declared private is verified against the workspace its credential reaches inside the
 request a cold write already sends. That date is documentation-derived.
+
+The retained-document replay also reads `Document.team`, `Project.teams(first:,after:)`,
+`Team.key` and `TeamConnection.pageInfo`. These additions to the subset come from the
+existing pinned full upstream schema at
+`crates/onetaskgraph-live-janitor/tests/fixtures/linear-upstream.graphql.gz`, whose
+provenance is recorded beside it. The replay's
+`retained_ownership_fields_match_the_recorded_full_linear_schema` reconciles their output
+and argument types against that same artifact. Replay responses start from the recorded
+`documents.json`, `projects.json`, `issues.json` and `comments.json` shapes and use synthetic
+identifiers and content; every requested response field is checked against the subset
+before HTTP delivery. Deliberately uncertain create acknowledgements are the explicit
+malformed-response case, rather than accepted fixture shapes.

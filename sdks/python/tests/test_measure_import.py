@@ -65,7 +65,12 @@ def test_the_figure_and_every_share_reach_the_file_onebudgetspec_names(tmp_path:
         "load average",
     ):
         assert share in detail, f"the detail does not name {share!r}: {detail}"
-    assert f"import, validate and exit median {reported['value']:.3f} s" in detail
+    quoted = re.search(r"import, validate and exit median (\d+\.\d{3}) s", detail)
+    assert quoted, f"the detail does not quote the figure's median: {detail}"
+    # The detail rounds the median to three places and the value to four, so formatting the
+    # value again rounds twice: a median of 0.10851 is quoted 0.109 and reported 0.1085, which
+    # reformats as 0.108. The two agree to within the detail's own half a thousandth.
+    assert abs(float(quoted.group(1)) - reported["value"]) <= 0.0005 + 1e-9, detail
     # What onebudgetspec records is what a person running the script reads.
     assert ran.stderr.strip() == detail
 

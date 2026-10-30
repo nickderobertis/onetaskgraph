@@ -286,6 +286,7 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::UnrecordedMember { .. } => ("unrecorded-member".to_owned(), None, None),
         EngineError::Misrouted { .. } => ("misrouted".to_owned(), None, None),
         EngineError::SplitPrivateHome { .. } => ("split-private-home".to_owned(), None, None),
+        EngineError::ProjectionRefused { .. } => ("projection-refused".to_owned(), None, None),
         EngineError::NotPrivateDestination { destination, .. } => (
             "not-private-destination".to_owned(),
             configured(destination),

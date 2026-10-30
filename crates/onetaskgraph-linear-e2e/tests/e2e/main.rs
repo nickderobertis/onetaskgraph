@@ -20,6 +20,7 @@ mod cache_documents;
 mod cache_parts;
 mod copy_skip;
 mod health;
+mod human_items;
 mod linear;
 mod linear_assets;
 mod linear_boundary;

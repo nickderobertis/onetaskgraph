@@ -2257,6 +2257,95 @@ async fn a_project_status_is_matched_locally_because_linear_narrows_that_connect
     }
 }
 
+/// Reconcile through the public plugin API and real HTTP, including a paged relation read.
+#[tokio::test]
+async fn task_rewrites_keep_matching_relations_and_only_write_the_difference() {
+    let task: Task = serde_json::from_value(serde_json::json!({
+        "id":"I", "title":"Edited body", "content":"Changed", "status":{"category":"todo","name":"Todo"},
+        "labels":[], "project":null, "repositories":[], "metadata":{}
+    })).unwrap();
+    let edge = |far: &str, kind| DependencyEdge {
+        from: DependencyEndpoint::from_native("I".into(), ItemKind::Task),
+        to: DependencyEndpoint::new(far.to_owned(), ItemKind::Task).unwrap(),
+        kind,
+    };
+    let relation = |id: &str, far: &str, kind: &str| {
+        serde_json::json!({
+            "id": id, "type": kind, "relatedIssue": {"id": far}
+        })
+    };
+    let page = |nodes, more| {
+        serde_json::json!({
+            "nodes": nodes, "pageInfo": {"hasNextPage":more,"endCursor":if more {Some("next")} else {None}}
+        })
+    };
+    let (endpoint, wire) = response_server(vec![
+        writable_resolution(),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I","description":"Changed","relations":page(vec![relation("KEEP", "FAR", "blocks")], true)}}}),
+        serde_json::json!({"issue":{"relations":page(vec![relation("KEEP-RELATED", "OTHER", "related"), relation("REMOVE", "OLD", "blocks")], false)}}),
+        serde_json::json!({"issueRelationDelete":{"success":true}}),
+        serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"NEW"}}}),
+    ]);
+    writable_source(&endpoint)
+        .write_task(&ItemWrite {
+            target: Some("I".into()),
+            item: task.clone(),
+            depends_on: vec![
+                edge("work:FAR", DependencyKind::Blocks),
+                edge("OTHER", DependencyKind::Related),
+                edge("NEW-FAR", DependencyKind::Blocks),
+            ],
+        })
+        .await
+        .unwrap();
+    let requests: Vec<_> = wire.iter().collect();
+    let mutations: Vec<serde_json::Value> = requests
+        .iter()
+        .filter_map(|request| {
+            request
+                .split_once("\r\n\r\n")
+                .map(|(_, body)| serde_json::from_str(body).unwrap())
+        })
+        .filter(|request: &serde_json::Value| {
+            request["query"].as_str().unwrap().contains("issueRelation")
+        })
+        .collect();
+    assert_eq!(mutations.len(), 2);
+    assert_eq!(
+        mutations[0]["variables"],
+        serde_json::json!({"id":"REMOVE"})
+    );
+    assert_eq!(
+        mutations[1]["variables"],
+        serde_json::json!({"input":{"issueId":"I","relatedIssueId":"NEW-FAR","type":"blocks"}})
+    );
+
+    // Unreadable relation facts must refuse, never turn into deletion of an existing link.
+    for malformed in [
+        serde_json::json!({"id":"KEEP","type":"blocks"}),
+        serde_json::json!({"id":"KEEP","type":7,"relatedIssue":{"id":"FAR"}}),
+        serde_json::json!({"id":"KEEP","type":"blocks","relatedIssue":{"id":""}}),
+    ] {
+        let (endpoint, wire) = response_server(vec![
+            writable_resolution(),
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I","description":"Changed","relations":page(vec![malformed], false)}}}),
+        ]);
+        let error = writable_source(&endpoint)
+            .write_task(&ItemWrite {
+                target: Some("I".into()),
+                item: task.clone(),
+                depends_on: vec![edge("FAR", DependencyKind::Blocks)],
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, SourceError::Malformed { .. }), "{error}");
+        assert!(
+            wire.iter()
+                .all(|request| !request.contains("issueRelationDelete"))
+        );
+    }
+}
+
 #[tokio::test]
 async fn replacing_more_than_one_full_relation_page_deletes_every_existing_edge() {
     let task: Task = serde_json::from_value(serde_json::json!({"id":"from:T","title":"task","content":null,"status":{"category":"todo","name":"Todo"},"labels":[],"project":null,"repositories":[],"metadata":{}})).unwrap();

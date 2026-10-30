@@ -65,6 +65,8 @@
       "inputs": [
         "default",
         "^default",
+        { "env": "ONETASKGRAPH_LINEAR_DOCUMENT_MODE" },
+        { "env": "GITHUB_ACTIONS" },
         { "env": "LINEAR_API_KEY" },
         { "env": "LINEAR_WRITE_TEAM" },
         { "env": "ONETASKGRAPH_LIVE_REQUIRED" },
@@ -75,7 +77,8 @@
     },
     "budgets": {
       "executor": "nx:run-commands",
-      "dependsOn": ["test"],
+      "//": "llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier,expensive_tests_stay_behind_their_own_edge] Both lane tests produce the HTTP journals this report consumes, including when only the consumer changes; both are required prerequisites within the Linear budget edge. On its own line, this directive covers exactly the dependsOn line below it, the one biome lets it share no line with.",
+      "dependsOn": ["test", "onetaskgraph-linear:test"],
       "options": {
         "command": "bun run onebudgetspec check crates/onetaskgraph-linear-e2e/budgets.yaml"
       },
@@ -83,9 +86,19 @@
       "inputs": [
         "default",
         "^default",
-        { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear-e2e/*.json" }
-      ],
-      "//": "Judges the figures `test` recorded and runs no journey again. Cached: they are requests a deterministic loopback workspace served, in an environment with nothing of the host's, so the key is this project's files (budgets.yaml among them), the measured code (the binary, the engine and the harness in `default`, the Linear plugin and the contract through `^default`), the recorded telemetry, and the onebudgetspec pins in bun.lock and Cargo.lock (sharedGlobals)."
+        { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear-e2e/*.json" },
+        { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear/*.json" }
+      ]
+    },
+    "live-documents": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "parallelism": false,
+      "options": {
+        "command": "cargo test --locked -p onetaskgraph-linear-e2e --test e2e -- linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy --exact --nocapture"
+      },
+      "//": "Explicit daily creation and initialization only: this target is outside the affected check fan-out and must reach the service on every invocation.",
+      "dependsOn": ["onetaskgraph:build"]
     },
     "coverage": {
       "executor": "nx:run-commands",

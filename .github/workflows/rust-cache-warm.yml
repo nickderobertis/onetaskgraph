@@ -8,6 +8,7 @@
 # crate, so the next pull request's prefix restore of the previous save is as warm. Each leg
 # restores its own previous save, so a push builds only what changed.
 # scripts/warm-rust-cache.sh says what is built and why.
+# .github/tests/rust-cache-warm.test.mjs holds each leg to its job's key and build inputs.
 
 name: rust cache warm
 
@@ -41,7 +42,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      # As test-windows does, for the same reason.
+      # Defender scanning each file the build writes slows it; the cache key reads none of this.
       - name: Keep Defender's real-time scan off the build
         if: runner.os == 'Windows'
         shell: pwsh
@@ -65,6 +66,14 @@ jobs:
       - name: Build what ${{ matrix.job }} builds
         shell: bash
         run: bash scripts/warm-rust-cache.sh ${{ matrix.build }}
+      # test-linux's own builds over what was just built, which must recompile no dependency:
+      # a push to main fails the moment the cache it saves is not one a pull request reuses.
+      - uses: extractions/setup-just@v4
+        if: matrix.job == 'test-linux'
+      - name: Check what test-linux builds reuses this build
+        if: matrix.job == 'test-linux'
+        shell: bash
+        run: just warm-cache-reuse-check-warmed
 
   # Whether this push is a release merge: release-plz's version and changelog edits and nothing
   # else, as .github/semantic-release.py — the classifier macOS lanes reads a release pull

@@ -15,7 +15,7 @@ use crate::{Clock, GRAPHQL_READ_LIMIT, RealClock, Report, WRITE_INTERVAL, WRITE_
 
 pub use onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX as DOCUMENT_PREFIX;
 pub const DOCUMENT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
-pub const DOCUMENTS: &str = "query($after:String,$filter:DocumentFilter!){documents(first:100,after:$after,filter:$filter){nodes{id title team{key} project{teams(first:100){nodes{key} pageInfo{hasNextPage}}}} pageInfo{hasNextPage endCursor}}}";
+pub const DOCUMENTS: &str = "query($after:String,$filter:DocumentFilter!){documents(first:100,after:$after,filter:$filter){nodes{id title team{key} project{teams(first:2){nodes{key} pageInfo{hasNextPage}}}} pageInfo{hasNextPage endCursor}}}";
 pub const DELETE_DOCUMENT: &str = "mutation($id:String!){documentDelete(id:$id){success}}";
 
 fn valid_text(value: String) -> Result<String, String> {
@@ -245,6 +245,10 @@ async fn request<V: Serialize, T: DeserializeOwned>(
 }
 
 fn old_test_title(title: &str, now: u64) -> bool {
+    // Retained sets retire only through their invocation registration, never by age.
+    if onetaskgraph_linear::live_artifact::classify_retained(title).is_some() {
+        return false;
+    }
     let Some(suffix) = title.strip_prefix(DOCUMENT_PREFIX) else {
         return false;
     };

@@ -37,7 +37,7 @@ use serde_json::{Value, json};
 mod settle;
 
 use settle::{
-    Bound, DocumentListingBudget, LABEL_CONNECTION, LABEL_STEADY, LABEL_VARIABLE,
+    Bound, DocumentListingBudget, LABEL_CONNECTION, LABEL_STEADY, LABEL_VARIABLE, resolving_labels,
     settled_document_absent, settled_documents, settled_label, settled_tasks, settled_walk,
     token_moved,
 };
@@ -239,6 +239,11 @@ fn variables(request: &str) -> serde_json::Map<String, Value> {
 /// Whether `request` asks for the page after the cursor `c1`.
 fn after_c1(request: &str) -> bool {
     variables(request).get("after") == Some(&json!("c1"))
+}
+
+/// Whether `request` is a page of a walk in pages of one rather than the whole page beside it.
+fn is_walk(request: &str) -> bool {
+    variables(request).get("first") == Some(&json!(1))
 }
 
 fn under(project: &str) -> TaskQuery {
@@ -559,15 +564,18 @@ async fn unfiltered_and_orphan_document_listings_read_past_other_documents() {
 
 #[tokio::test]
 async fn a_walk_in_pages_of_one_the_index_catches_up_with_late_passes_without_walking_again() {
-    // The first walk finds the index empty; every walk after it reaches both issues, one a page.
+    // The whole page reports both issues from the start; the first walk finds the index empty,
+    // as a live run's walk did right after an earlier walk had reached all three of its
+    // issues, and every walk after it reaches both, one a page, in the page's order.
     let walks = Arc::new(AtomicU32::new(0));
     let seen = Arc::clone(&walks);
     let (source, answered) = workspace(move |_, request| {
-        assert_eq!(
-            variables(request).get("first"),
-            Some(&json!(1)),
-            "a walk asks for pages of one: {request}"
-        );
+        if !is_walk(request) {
+            return issues(vec![
+                issue("i1", "first", "p1"),
+                issue("i2", "second", "p1"),
+            ]);
+        }
         if after_c1(request) {
             return issues(vec![issue("i2", "second", "p1")]);
         }
@@ -594,8 +602,9 @@ async fn a_walk_in_pages_of_one_the_index_catches_up_with_late_passes_without_wa
     );
     assert_eq!(
         answered.load(Ordering::SeqCst),
-        3,
-        "the empty walk's one page, then both pages of the walk that agrees"
+        5,
+        "a whole page and the empty walk's one page, then a whole page and both pages of the \
+         walk that agrees"
     );
 }
 
@@ -603,7 +612,12 @@ async fn a_walk_in_pages_of_one_the_index_catches_up_with_late_passes_without_wa
 async fn a_walk_that_never_reaches_the_expected_set_fails_within_the_bound_naming_what_it_reached()
 {
     let (source, answered) = workspace(|_, request| {
-        if after_c1(request) {
+        if !is_walk(request) {
+            issues(vec![
+                issue("i1", "first", "p1"),
+                issue("i3", "stranger", "p2"),
+            ])
+        } else if after_c1(request) {
             issues(vec![issue("i3", "stranger", "p2")])
         } else {
             issues_then(vec![issue("i1", "first", "p1")], "c1")
@@ -623,16 +637,50 @@ async fn a_walk_that_never_reaches_the_expected_set_fails_within_the_bound_namin
     let waited = started.elapsed();
     assert!(
         refusal.starts_with(
-            r#"a walk in pages of one came back as ["first", "stranger"] rather than ["first", "second"], still after 5 reads"#
+            r#"a walk in pages of one reached ["first", "stranger"] where one whole page reports ["first", "stranger"] rather than ["first", "second"], still after 5 reads"#
         ),
-        "the failure names what the walk reached: {refusal}"
+        "the failure names what the walk and the page reached: {refusal}"
     );
-    assert_eq!(answered.load(Ordering::SeqCst), 2 * BOUND.reads);
+    assert_eq!(answered.load(Ordering::SeqCst), 3 * BOUND.reads);
     assert!(
         waited >= BOUND.interval * (BOUND.reads - 1)
             && waited < BOUND.interval * BOUND.reads + SLACK,
         "a wrong walk fails once the bound is spent, and waited {waited:?}"
     );
+}
+
+#[tokio::test]
+async fn a_walk_reaching_the_expected_set_out_of_the_whole_pages_order_fails_naming_both() {
+    // The set agrees, so only the order can refuse it.
+    let (source, answered) = workspace(|_, request| {
+        if !is_walk(request) {
+            issues(vec![
+                issue("i2", "second", "p1"),
+                issue("i1", "first", "p1"),
+            ])
+        } else if after_c1(request) {
+            issues(vec![issue("i2", "second", "p1")])
+        } else {
+            issues_then(vec![issue("i1", "first", "p1")], "c1")
+        }
+    });
+    let refusal = settled_walk(
+        BOUND,
+        source.as_ref(),
+        &under("p1"),
+        10,
+        "a walk in pages of one",
+        &["first".to_owned(), "second".to_owned()],
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        refusal.starts_with(
+            r#"a walk in pages of one reached ["first", "second"] where one whole page reports ["second", "first"] rather than ["first", "second"], still after 5 reads"#
+        ),
+        "the failure names the walk's order and the page's: {refusal}"
+    );
+    assert_eq!(answered.load(Ordering::SeqCst), 3 * BOUND.reads);
 }
 
 #[test]
@@ -790,6 +838,24 @@ async fn a_label_two_labels_answer_to_is_refused_at_once_with_their_ids() {
 }
 
 #[tokio::test]
+async fn a_write_refused_for_a_duplicate_label_is_not_sent_again() {
+    // Only the no-match refusal is index lag; two matches never settle, so the write that
+    // `resolving_labels` wraps is sent once and its refusal returned as it came.
+    let sent = AtomicU32::new(0);
+    let duplicate = || {
+        sent.fetch_add(1, Ordering::SeqCst);
+        async {
+            Err::<(), _>(onetaskgraph_plugin_api::SourceError::Refused {
+                message: r#"source live cannot resolve label "otg-live-label": found 2 matches with ids ["l1", "l2"]"#.into(),
+            })
+        }
+    };
+    let refusal = resolving_labels(BOUND, duplicate).await.unwrap_err();
+    assert!(refusal.to_string().contains("found 2 matches"), "{refusal}");
+    assert_eq!(sent.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn a_label_lookup_that_cannot_be_read_fails_at_once_rather_than_waiting() {
     let (url, answered) = serve(|_, _| json!({"issueLabels": null}));
     let started = Instant::now();
@@ -872,8 +938,9 @@ async fn a_walk_given_more_than_one_row_on_a_page_of_one_fails_at_once() {
     );
     assert_eq!(
         answered.load(Ordering::SeqCst),
-        1,
-        "a page past its limit is not an index catching up, so it is not read again"
+        2,
+        "the whole page, then a walk page past its limit, which is not an index catching up, \
+         so it is not read again"
     );
     assert!(started.elapsed() < BOUND.interval + SLACK);
 }
@@ -895,7 +962,11 @@ async fn a_walk_that_does_not_end_fails_at_its_page_bound_naming_what_it_reached
         refusal,
         r#"a walk in pages of one had not ended after 3 pages, having reached ["first", "first", "first"]"#
     );
-    assert_eq!(answered.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        answered.load(Ordering::SeqCst),
+        1 + 3,
+        "the whole page, then three walk pages"
+    );
 }
 
 #[tokio::test]

@@ -32,10 +32,6 @@ on:
         type: boolean
         default: false
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 # Least privilege: the token is read-only by default and widened per job only where a job
 # genuinely needs more.
 permissions:
@@ -94,6 +90,15 @@ jobs:
   # matrix; affected selection is what keeps that affordable.
   check:
     name: check (${{ matrix.os }})
+    # The live journeys remain inside the affected gate. Serialize only this job's
+    # credentialed leg — the Linux one on a push; on a pull request `test-linux` carries the
+    # credentials and joins the group instead — and retain every waiting check rather than
+    # replacing a pending writer.
+    # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] This block moves no suite into the gate: the live journeys were already ordinary affected tests, run only when their own plugin changed, which AGENTS.md records as reversing the separate live tier. It only serializes the one credentialed leg so two writers cannot interleave updates to the standing Linear set.
+    concurrency:
+      group: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' && 'linear-live-documents' || format('check-{0}-{1}', matrix.os, github.run_id) }}
+      cancel-in-progress: false
+      queue: max
     needs: [macos-lanes]
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
     runs-on: ${{ matrix.os }}
@@ -218,6 +223,7 @@ jobs:
           GITHUB_LIVE_SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SESSION_DIR: ${{ github.workspace }}/target/debug/telemetry/github-live-session/${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SOURCE_REVISION: ${{ github.sha }}
+          ONETASKGRAPH_LINEAR_DOCUMENT_MODE: ordinary
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As on that step: the lane's own refusal is the drift gate, because ONETASKGRAPH_LIVE_REQUIRED is 1 here too, so a name spelled differently on either side fails this run naming the variable rather than skipping green.
           GH_PROJECTS_OWNER: nickderobertis
@@ -679,6 +685,13 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # This run's one live session, serialized with every other writer to the standing Linear
+    # set (linear-documents.yml, and `check`'s Linux leg on a push), every waiting writer kept.
+    # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] This block moves no suite into the job: the live journeys are ordinary affected tests here as on `check`, run only when their own plugin changed. It only serializes the credentialed job so two writers cannot interleave updates to the standing Linear set.
+    concurrency:
+      group: linear-live-documents
+      cancel-in-progress: false
+      queue: max
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"
@@ -795,6 +808,7 @@ jobs:
           GITHUB_LIVE_SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SESSION_DIR: ${{ github.workspace }}/target/debug/telemetry/github-live-session/${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SOURCE_REVISION: ${{ github.sha }}
+          ONETASKGRAPH_LINEAR_DOCUMENT_MODE: ordinary
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The lane's own refusal is the drift gate: ONETASKGRAPH_LIVE_REQUIRED below is 1 on this lane, so a name spelled differently on either side fails this job naming the variable rather than skipping green.
           GH_PROJECTS_OWNER: nickderobertis
@@ -963,6 +977,10 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+      # rust-cache hashes every installed compiler; exclude the unused floating one.
+      - name: Exclude the unused floating compiler from the build cache
+        shell: bash
+        run: rustup toolchain uninstall stable
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@v2
         with:

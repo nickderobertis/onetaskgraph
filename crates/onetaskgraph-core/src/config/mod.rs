@@ -43,12 +43,12 @@ pub use discovery::{
     read_optional, readable_documents, secrets_path, user_document_path,
 };
 pub use effective::EffectiveConfig;
-pub use environment_layer::{ENVIRONMENT_PREFIX, variable_for};
+pub use environment_layer::{ENVIRONMENT_PREFIX, HOST_VARIABLE, variable_for};
 pub use error::ConfigError;
 pub use layer::{Layer, Merged, Origin, Setting, SettingPath, merge, unflatten, value_from_text};
 pub(crate) use relative::rebased;
 pub use relative::resolve_document_relative_paths;
-pub use routes::{Placement, RepositoryPattern, Route, Routes, SourceRoute};
+pub use routes::{Placement, RepositoryPattern, Route, RoutePurpose, Routes, SourceRoute};
 
 /// The variable that moves the credentials file somewhere else.
 pub const SECRETS_FILE_VARIABLE: &str = "ONETASKGRAPH_SECRETS_FILE";
@@ -84,9 +84,17 @@ pub struct SourceConfig {
     visibility: SourceVisibility,
     cache: SourceCacheConfig,
     public_alias: Option<onetaskgraph_plugin_api::Designator>,
+    task_projection: Option<TaskProjectionConfig>,
 }
 
 impl SourceConfig {
+    /// Where, and on which host's authority, human task projections into this source keep
+    /// their durable intents — `None` for a source that receives none.
+    #[must_use]
+    pub fn task_projection(&self) -> Option<&TaskProjectionConfig> {
+        self.task_projection.as_ref()
+    }
+
     /// The designator `public_alias` declares, `alias/<public_alias>`, for a source whose
     /// backend has no opaque identifier of its own: every host's configuration of the same
     /// tracker declares the same alias, so an opaque edge written under one host's name for
@@ -179,6 +187,28 @@ struct SourceShape {
     /// repeats the value.
     #[serde(default)]
     public_alias: Option<Value>,
+    #[serde(default)]
+    task_projection: Option<TaskProjectionConfig>,
+}
+
+/// A source's `task_projection`: the host-local authority over human task projections
+/// written into it (see `docs/task-projection.md`).
+///
+/// One host is authoritative for a source's projections, and its intents live in one absolute
+/// directory there; a process on another host is refused rather than arbitrating. `project` is
+/// the existing project a session's or host's item lands under when its request names no plan
+/// project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskProjectionConfig {
+    /// The authoritative host, compared with `ONETASKGRAPH_HOST` or the machine's hostname.
+    pub host: crate::task_projection::HostIdentity,
+    /// The absolute directory holding the durable intents.
+    #[schemars(with = "String")]
+    pub directory: AbsoluteDirectory,
+    /// The existing project of this source a planless item is filed under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<crate::task_projection::ProjectionProjectId>,
 }
 
 /// The designator a source's `public_alias` declares, refused when it is not a string matching
@@ -226,6 +256,37 @@ pub struct SourceCacheConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<String>")]
     pub dir: Option<std::path::PathBuf>,
+}
+
+/// An absolute directory, refused at load when a configuration gives a relative one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "std::path::PathBuf", into = "std::path::PathBuf")]
+pub struct AbsoluteDirectory(std::path::PathBuf);
+
+impl AbsoluteDirectory {
+    /// The directory.
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl TryFrom<std::path::PathBuf> for AbsoluteDirectory {
+    type Error = String;
+
+    fn try_from(path: std::path::PathBuf) -> Result<Self, Self::Error> {
+        if path.is_absolute() {
+            Ok(Self(path))
+        } else {
+            Err(format!("{} is not an absolute directory", path.display()))
+        }
+    }
+}
+
+impl From<AbsoluteDirectory> for std::path::PathBuf {
+    fn from(directory: AbsoluteDirectory) -> Self {
+        directory.0
+    }
 }
 
 /// Who a configuration declares can read one source: `visibility` beside `plugin` and
@@ -469,6 +530,7 @@ impl Config {
                     visibility: source.visibility,
                     cache: source.cache,
                     public_alias,
+                    task_projection: source.task_projection,
                 },
             );
         }

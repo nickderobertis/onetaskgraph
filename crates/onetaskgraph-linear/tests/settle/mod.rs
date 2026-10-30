@@ -17,7 +17,9 @@
 //! resolve uniquely a label it had created a moment before — so a label the journey creates is
 //! waited for too, through that very lookup. One answer is not enough: a later run's wait saw
 //! the label once, and the plugin's own lookup a moment after it was answered with none, so
-//! the wait holds out for [`LABEL_STEADY`] answers in a row.
+//! the wait holds out for [`LABEL_STEADY`] answers in a row. Even that run of answers was once
+//! followed by the plugin's lookup finding none, so the journey's labelled writes go through
+//! [`resolving_labels`] too, which sends a write refused for that reason again within a bound.
 //!
 //! A single read lags too: [`token_moved`] reads a task again while its change token has not
 //! yet moved past the read before a change, within [`LINEAR_REPLICA`].
@@ -27,7 +29,7 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use onetaskgraph_plugin_api::{
-    DocumentQuery, NativeId, PageRequest, ProjectQuery, Task, TaskQuery, TaskSource,
+    DocumentQuery, NativeId, PageRequest, ProjectQuery, SourceError, Task, TaskQuery, TaskSource,
 };
 use serde_json::{Value, json};
 
@@ -274,7 +276,14 @@ pub async fn settled_tasks(
     .await
 }
 
-/// [`settled`] over the set a walk in pages of one reaches.
+/// A walk in pages of one that reaches, in order, exactly what one whole page of fifty reports,
+/// once that page holds `expected` — read as a pair, again while either disagrees.
+///
+/// A walk compared once against a page read once is two listings racing the index: a run
+/// had a walk settle on all three of its issues and the very next walk come back with none,
+/// while a whole page between them reported all three. Each attempt therefore reads the
+/// page and then walks, and passes only when the page holds `expected` and the walk reached
+/// the page's rows in the page's order. An `Err` names the last pair once `bound` is spent.
 pub async fn settled_walk(
     bound: Bound,
     source: &dyn TaskSource,
@@ -283,12 +292,41 @@ pub async fn settled_walk(
     what: &str,
     expected: &[String],
 ) -> Result<(), String> {
-    settled(bound, what, expected, || async move {
-        let mut walked = walked_task_titles(source, query, most, what).await?;
-        walked.sort();
-        Ok(walked)
-    })
-    .await
+    let mut expected = expected.to_vec();
+    expected.sort();
+    let started = Instant::now();
+    let mut reads = 0;
+    loop {
+        let whole = source
+            .query_tasks(
+                query,
+                &PageRequest {
+                    cursor: None,
+                    limit: 50,
+                },
+            )
+            .await
+            .map_err(|error| format!("{what} could not read its whole page: {error}"))?
+            .items
+            .into_iter()
+            .map(|task| task.title)
+            .collect::<Vec<_>>();
+        let walked = walked_task_titles(source, query, most, what).await?;
+        reads += 1;
+        let mut held = whole.clone();
+        held.sort();
+        if held == expected && walked == whole {
+            return Ok(());
+        }
+        if reads >= bound.reads {
+            return Err(format!(
+                "{what} reached {walked:?} where one whole page reports {whole:?} rather than \
+                 {expected:?}, still after {reads} reads over {:?}",
+                started.elapsed()
+            ));
+        }
+        tokio::time::sleep(bound.interval).await;
+    }
 }
 
 /// The root field `graphql::ISSUE_LABEL` answers under, whose `nodes` are the labels it found.
@@ -372,6 +410,42 @@ where
             });
         }
         tokio::time::sleep(bound.interval).await;
+    }
+}
+
+/// Whether `error` is the plugin's refusal of a write naming a label its lookup found no match
+/// for — the one answer index lag gives, and the only one [`resolving_labels`] asks again on.
+pub fn label_unresolved(error: &SourceError) -> bool {
+    matches!(
+        error,
+        SourceError::Refused { message }
+            if message.contains(" cannot resolve label ") && message.ends_with(": found 0 matches")
+    )
+}
+
+/// `write`, sent again while the plugin refuses it as finding no match for a label it names,
+/// at most `bound.reads` times in all — and that same refusal once the bound is spent.
+///
+/// [`settled_label`] waits for [`LABEL_STEADY`] answers in a row before a write names a label,
+/// and a run's first task write was still refused a moment later with no match for a label the
+/// lookup had just answered three times: the filter's lag outlasts any run of answers, so the
+/// write itself waits it out. Asking again is safe because the plugin resolves every label
+/// before its first mutation, so a refused write sent nothing; a refusal of anything else,
+/// two matches included, is returned at once, and no label is ever created here.
+pub async fn resolving_labels<F, Fut, T>(bound: Bound, mut write: F) -> Result<T, SourceError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, SourceError>>,
+{
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        match write().await {
+            Err(error) if label_unresolved(&error) && attempts < bound.reads => {
+                tokio::time::sleep(bound.interval).await;
+            }
+            answered => return answered,
+        }
     }
 }
 

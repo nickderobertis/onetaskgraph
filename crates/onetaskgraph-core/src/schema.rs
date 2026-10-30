@@ -54,7 +54,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 49;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 50;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -62,6 +62,8 @@ pub fn schema_bundle() -> Value {
     let mut roots: BTreeMap<&'static str, Schema> = BTreeMap::new();
 
     roots.insert("Task", schema_for!(Task));
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The repository deliberately centralizes every schema root beside its append-only version golden. This single line registers the projection domain's own list; its declarations and schema derivation remain in that domain.
+    roots.extend(crate::task_projection::schemas());
     roots.insert("Project", schema_for!(Project));
     roots.insert("Document", schema_for!(Document));
     // A root of its own although both `Task` and `Project` reach it inside their own
