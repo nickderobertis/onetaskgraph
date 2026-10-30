@@ -20,7 +20,18 @@
       "{workspaceRoot}/scripts/ci-job.sh",
       "{workspaceRoot}/scripts/project.json",
       "{workspaceRoot}/justfile",
-      "{workspaceRoot}/scripts/check-*.sh"
+      "{workspaceRoot}/scripts/check-distribution-contract.sh",
+      "{workspaceRoot}/scripts/check-distribution-contract-enforced.sh",
+      "{workspaceRoot}/scripts/check-release-packaging.sh",
+      "{workspaceRoot}/scripts/check-release-targets.sh",
+      "{workspaceRoot}/scripts/check-release-probe.sh",
+      "{workspaceRoot}/scripts/check-crate-sibling-resolution.sh",
+      "{workspaceRoot}/scripts/check-crate-sibling-resolution-same-second.sh",
+      "{workspaceRoot}/scripts/check-store-fixtures.sh",
+      "{workspaceRoot}/scripts/check-store-fixtures-enforced.sh",
+      "{workspaceRoot}/scripts/check-release-pr-sync.sh",
+      "{workspaceRoot}/scripts/check-release-tooling-selection.sh",
+      "{workspaceRoot}/scripts/check-real-release-preparation.sh"
     ]
   },
   "targets": {

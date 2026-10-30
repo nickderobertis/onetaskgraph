@@ -78,7 +78,7 @@ start_server() {
 # The trace above, summed per line: what each line spent until the next one began.
 report_timings() {
   [ -s "$tmp/journey.trace" ] || return 0
-  "$python_bin" - "$tmp/journey.trace" >&2 <<'PY' || true
+  "$python_bin" - "$tmp/journey.trace" "$tmp/products.timings" >&2 <<'PY' || true
 import re, sys
 spent, text, previous = {}, {}, None
 with open(sys.argv[1], encoding="utf-8", errors="replace") as trace:
@@ -91,8 +91,17 @@ with open(sys.argv[1], encoding="utf-8", errors="replace") as trace:
             spent[previous[0]] = spent.get(previous[0], 0.0) + moment - previous[1]
         previous = (site, moment)
         text.setdefault(site, match.group(3)[:110])
-for site, seconds in sorted(spent.items(), key=lambda item: -item[1])[:20]:
-    print(f"distribution timing: {seconds:7.1f}s {site}: {text[site]}")
+lines = [f"{seconds:.0f}s {site} {text[site][:60]}" for site, seconds in sorted(spent.items(), key=lambda item: -item[1])[:8]]
+cases = {}
+try:
+    with open(sys.argv[2], encoding="utf-8") as recorded:
+        for row in recorded:
+            seconds, label = row.rstrip("\n").split("\t", 1)
+            cases[label] = cases.get(label, 0.0) + float(seconds)
+except OSError:
+    pass
+slowest = [f"{seconds:.0f}s {label[:50]}" for label, seconds in sorted(cases.items(), key=lambda item: -item[1])[:8]]
+print("distribution timing: slowest lines: " + "; ".join(lines) + " | slowest packaging cases: " + "; ".join(slowest))
 PY
 }
 cleanup() {
@@ -139,10 +148,12 @@ case "$#:${1:-}" in
 esac
 # Asked for with ONETASKGRAPH_DISTRIBUTION_TIMINGS=1 (scripts/ci-job.sh asks on the hosted
 # Windows runner, where this journey is slow and nothing else says where), every line of the
-# whole journey is timed into a trace and its slowest are named on exit. bash 5's
+# whole journey is timed into a trace, and one line on exit names its slowest lines and its
+# slowest packaging cases (scripts/test-release-products.py records those). bash 5's
 # EPOCHREALTIME costs no process per line; an older bash (macOS's 3.2) is not traced.
 if [ "${ONETASKGRAPH_DISTRIBUTION_TIMINGS:-}" = 1 ] && [ "${BASH_VERSINFO[0]}" -ge 5 ]; then
   exec 7>"$tmp/journey.trace"
+  export ONETASKGRAPH_PRODUCTS_TIMINGS_FILE="$tmp/products.timings"
   BASH_XTRACEFD=7
   PS4='+${EPOCHREALTIME} ${BASH_SOURCE##*/}:${LINENO}: '
   set -x

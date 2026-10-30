@@ -47,7 +47,19 @@ export const policyJourneyReadSet = [
   "scripts/ci-job.sh",
   "scripts/project.json",
   "justfile",
-  "scripts/check-*.sh",
+  // Exactly the scripts:distribution-check guards; policy/tests/inventory.test.mjs holds the list to it.
+  "scripts/check-distribution-contract.sh",
+  "scripts/check-distribution-contract-enforced.sh",
+  "scripts/check-release-packaging.sh",
+  "scripts/check-release-targets.sh",
+  "scripts/check-release-probe.sh",
+  "scripts/check-crate-sibling-resolution.sh",
+  "scripts/check-crate-sibling-resolution-same-second.sh",
+  "scripts/check-store-fixtures.sh",
+  "scripts/check-store-fixtures-enforced.sh",
+  "scripts/check-release-pr-sync.sh",
+  "scripts/check-release-tooling-selection.sh",
+  "scripts/check-real-release-preparation.sh",
 ];
 
 export const policyJourneyFiles = [

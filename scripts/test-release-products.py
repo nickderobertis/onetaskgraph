@@ -23,14 +23,16 @@ from release_cd import plan
 from product_versions import SEMANTIC_VERSION_RE, SemanticVersion
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
-# Asked for with ONETASKGRAPH_DISTRIBUTION_TIMINGS=1, as the distribution journey's own
-# timing is: each refusal and each packaging run says what it took.
-TIMED = os.environ.get('ONETASKGRAPH_DISTRIBUTION_TIMINGS') == '1'
+# Where the distribution journey asks for its timing (ONETASKGRAPH_DISTRIBUTION_TIMINGS=1), it
+# names a file here, and each refusal and packaging run records what it took there for the
+# journey's one summary line; nothing is printed.
+TIMINGS = os.environ.get('ONETASKGRAPH_PRODUCTS_TIMINGS_FILE')
 
 
 def timed(label: str, started: float) -> None:
-    if TIMED:
-        print(f'release products timing: {time.monotonic() - started:6.1f}s {label}', file=sys.stderr)
+    if TIMINGS:
+        with open(TIMINGS, 'a', encoding='utf-8') as record:
+            record.write(f'{time.monotonic() - started:.1f}\t{label}\n')
 # Tampered fixtures are judged by their payload, never by compression level.
 FIXTURE_COMPRESSION = 1
 

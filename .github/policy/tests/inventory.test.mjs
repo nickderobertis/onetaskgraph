@@ -170,6 +170,17 @@ function guardSources() {
   return sources;
 }
 
+test("the policy journeys are keyed on exactly the distribution-check guards they read", () => {
+  const scripts = JSON.parse(read("scripts/project.json"));
+  const guards = scripts.targets["distribution-check"].options.commands
+    .map((command) => command.match(/^bash (scripts\/check-[a-z0-9-]+\.sh)$/)?.[1])
+    .filter(Boolean);
+  assert.deepEqual(
+    policyJourneyReadSet.filter((path) => path.startsWith("scripts/check-")).sort(),
+    guards.sort(),
+  );
+});
+
 test("every release guard that skips Windows runs in full in test-linux", () => {
   const sources = guardSources();
   for (const guard of MOVED_OFF_WINDOWS) assert.ok(windowsSkips(sources).includes(guard), guard);
