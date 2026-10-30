@@ -78,15 +78,21 @@ case "$JOB" in
     ;;
   test-macos)
     # Every suite once, uninstrumented: coverage is Linux's. `budgets` reads what `test`
-    # recorded, and depends on it.
-    phases="1 affected test,budgets -
+    # recorded, and depends on it. The two Linear crates have a phase of their own, as on
+    # Linux: `onetaskgraph-linear:test` is `parallelism: false` for its seat, so in one Nx run
+    # with everything else it waited for every other task to end. No credential reaches this
+    # job, so no seat is taken here; that phase holds one of the runner's three slots.
+    phases="1 affected test,budgets onetaskgraph-linear,onetaskgraph-linear-e2e --parallel=2
+1 affected test,budgets *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 run scripts:distribution-check -
 1 run scripts:distribution-test -"
     ;;
   test-windows)
-    # As test-macos, with a slot per core of the 4-core runner: its suites spend most of their
-    # time waiting on the loopback servers and processes they drive, not computing.
-    phases="1 affected test,budgets - --parallel=4
+    # As test-macos, with a slot per core of the 4-core runner, one of them the Linear crates':
+    # its suites spend most of their time waiting on the loopback servers and processes they
+    # drive, not computing.
+    phases="1 affected test,budgets onetaskgraph-linear,onetaskgraph-linear-e2e --parallel=3
+1 affected test,budgets *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 run scripts:distribution-check -
 1 run scripts:distribution-test -"
     ;;
