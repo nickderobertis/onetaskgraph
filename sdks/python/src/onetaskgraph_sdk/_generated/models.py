@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from .failure_document import FailureDocument as FailureDocument
     from .fields_report import FieldsReport as FieldsReport
     from .global_id import GlobalId as GlobalId
+    from .human_task_projected import HumanTaskProjected as HumanTaskProjected
+    from .human_task_projection import HumanTaskProjection as HumanTaskProjection
     from .issues_completed import IssuesCompleted as IssuesCompleted
     from .item_type import ItemType as ItemType
     from .linear_config import LinearConfig as LinearConfig
@@ -100,6 +102,8 @@ __all__ = [
     "FailureDocument",
     "FieldsReport",
     "GlobalId",
+    "HumanTaskProjected",
+    "HumanTaskProjection",
     "IssuesCompleted",
     "ItemType",
     "LinearConfig",
@@ -170,6 +174,8 @@ _MODULES: dict[str, tuple[str, str]] = {
     "FailureDocument": ("failure_document", "FailureDocument"),
     "FieldsReport": ("fields_report", "FieldsReport"),
     "GlobalId": ("global_id", "GlobalId"),
+    "HumanTaskProjected": ("human_task_projected", "HumanTaskProjected"),
+    "HumanTaskProjection": ("human_task_projection", "HumanTaskProjection"),
     "IssuesCompleted": ("issues_completed", "IssuesCompleted"),
     "ItemType": ("item_type", "ItemType"),
     "LinearConfig": ("linear_config", "LinearConfig"),

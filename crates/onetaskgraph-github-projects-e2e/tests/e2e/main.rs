@@ -27,6 +27,11 @@ mod copy_unsettled;
 mod fields;
 mod github_status_by_kind;
 mod graph;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The human-task-projection-points workload must run in this crate's `test` target, whose saved telemetry its reporter reads and whose `budgets` target judges it, as every budget of this crate does (`plan_copy`, `store_cost`); it is about six seconds of loopback-only work, and its default inputs are the crate's own, shared by every journey here.
+mod human_cost;
+mod human_items;
+mod human_reporters;
+mod human_routing;
 mod locate;
 mod member_copy;
 mod metadata_fields;

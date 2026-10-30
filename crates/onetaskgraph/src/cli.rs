@@ -443,6 +443,25 @@ pub enum TaskCommand {
     /// Read through the task's source, so it works the same on every store that keeps assets;
     /// a task holding none writes nothing. Under --json it prints the names it wrote, as a list.
     Assets(TaskAssetsArgs),
+    /// Project one human action item into its tracker, idempotently, by its `item_id`.
+    ///
+    /// The input is the v1 `HumanTaskProjection` document `onetaskgraph schema` publishes,
+    /// and the answer the `HumanTaskProjected` one: the task, its canonical issue URL, its
+    /// project and its source. The item is routed by the source's `purpose: human-task`
+    /// routes and created at most once — a durable intent under the destination's
+    /// `task_projection` directory is committed before the create is sent, so a retry after a
+    /// lost answer binds the same issue or refuses, and never creates a second. A terminal
+    /// state is written once and a conflicting one refused.
+    // llmlint: ignore[new_command_or_client_gets_its_own_project] The approved design places the human projection verb in the existing CLI over the existing task-write engine, with no alternate tracker client, and the manager ruled (c-adcfc828) that it stays here rather than in a crate of its own; its journeys stay in the per-plugin e2e projects so selection stays targeted. A drafted follow-up weighs moving it.
+    ProjectHuman(TaskProjectHumanArgs),
+}
+
+/// `onetaskgraph task project-human`.
+#[derive(Debug, Args)]
+pub struct TaskProjectHumanArgs {
+    /// The file holding the `HumanTaskProjection` request, or `-` for standard input.
+    #[arg(long, value_name = "FILE")]
+    pub input: std::path::PathBuf,
 }
 
 /// `onetaskgraph task assets`.

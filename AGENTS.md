@@ -164,7 +164,7 @@ Nothing of a user's work is stored, cached, indexed or mirrored outside the plug
 owns it. The engine compensates transiently and writes nothing down. Extend these three
 mechanisms rather than rediscovering the rule; each says how it fails, not how it works.
 
-**One named exception: the local cache of a remote source, and only where a configuration
+**Named exception: the local cache of a remote source, and only where a configuration
 turns it on.** `sources.<name>.cache.enabled` (off unless set) keeps a GitHub board's or a
 Linear source's tasks, projects, documents and verified image bytes under `${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<digest>` or
 `cache.dir`, keyed on the change token alone and served only at the version a caller pinned
@@ -175,6 +175,19 @@ below hold everything else to the rule: with `cache.enabled` unset nothing is wr
 anywhere, and `no_persistence.rs` still proves it; with it set, the GitHub Projects suite's
 `with_caching_on_the_cache_directory_is_the_only_place_a_file_changes` proves only the cache
 directory changes.
+
+**Named exception: producer-owned projection write authority.**
+`task_projection::IntentStore` keeps the producer's recovery state in the directory its
+caller explicitly selects; [the journal](crates/onetaskgraph-core/src/task_projection/intent.rs)
+defines its contents. Supply the existing cache's source identity digest, not a second
+identity scheme. This journal authorizes a write; it never answers a work query and holds
+no task title or body. OS locks serialize local owners, a create claim must be committed
+before a create is sent, and a failed commit requires reopening the claim. A pending create is
+bound only by one verified origin match; zero, multiple or unindexed matches refuse,
+never authorize another create. Never use stored work content as current terminal-write
+authority. The placement a projection keeps between processes — ids under a plugin-owned
+setup-context token, never work content — sits beside `designator.json` in the source's cache
+directory on the same terms. See [the projection intent API](docs/task-projection.md).
 
 **A destination write is not a cache, and the difference is stated rather than assumed.**
 A destination write is at the user's explicit request, names its destination, goes through
@@ -1287,6 +1300,23 @@ them do; this is the inventory of what is owed, not a status board.
     reading afresh, a re-copy creating nothing, an interrupted copy run again into one issue and
     one view each; and every visibility refusal still firing, writing nothing, with placement
     unchanged on a board not declared private and for a repository that reads private.
+
+123. `task project-human` creates one ticket per `item_id` on a GitHub board and in a Linear
+     plan project, answers its canonical issue URL, answers a bound retry sending nothing,
+     settles a terminal state once — completed, dismissed without and with a reason — and
+     refuses a conflicting one, another host, a changed payload and every malformed or question
+     request, writing nothing.
+124. Killed after the tracker applied a chosen write, a projection recovers a lost create answer
+     by its one verified origin match and a lost terminal answer by one read, and refuses a
+     pending create with no, an unverifiable or two matches without creating again;
+     simultaneous managers share one ticket.
+125. Human-task routes send public work to the public board, private and mixed work only to the
+     private one and an organization's to its Linear plan project, refuse private work with no
+     private route and a project of another source, and are never taken without their purpose.
+126. A later cold process takes the kept placement behind its setup-context token and reads it
+     afresh once an option changes; a person's body edit survives every terminal projection;
+     and an approval creates and resolves its review task through `task project-human`, a stale
+     version refusing the approval and leaving the review open.
 
 ## The public boundary
 

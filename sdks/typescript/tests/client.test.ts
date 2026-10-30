@@ -1217,6 +1217,195 @@ test("a reconcile and a completion drive the real binary over a source whose sta
   }
 });
 
+// A loopback Linear answering the two documents a cold projection sends: the team's resolution
+// and `issueCreate`, answered with the issue it stored. Every request is recorded.
+function linearProjectionDouble(received: { query: string }[]) {
+  return Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(request) {
+      const parsed: unknown = await request.json();
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        !("query" in parsed) ||
+        typeof parsed.query !== "string"
+      ) {
+        return new Response("a GraphQL request names its query", { status: 400 });
+      }
+      const variables = "variables" in parsed ? parsed.variables : undefined;
+      const input =
+        typeof variables === "object" &&
+        variables !== null &&
+        "input" in variables &&
+        typeof variables.input === "object" &&
+        variables.input !== null
+          ? Object.fromEntries(Object.entries(variables.input))
+          : undefined;
+      const body = { query: parsed.query };
+      received.push(body);
+      if (body.query.includes("teams(")) {
+        return Response.json({
+          data: {
+            organization: { id: "ORG-1" },
+            teams: {
+              nodes: [
+                {
+                  id: "TEAM-1",
+                  states: {
+                    nodes: [
+                      { id: "STATE-todo", name: "Todo", type: "unstarted" },
+                      { id: "STATE-done", name: "Done", type: "completed" },
+                      { id: "STATE-canceled", name: "Canceled", type: "canceled" },
+                    ],
+                    pageInfo: { hasNextPage: false },
+                  },
+                },
+              ],
+            },
+            projectStatuses: { nodes: [], pageInfo: { hasNextPage: false } },
+          },
+        });
+      }
+      if (body.query.includes("issueCreate(")) {
+        if (input === undefined) {
+          return new Response("issueCreate names its input", { status: 400 });
+        }
+        const stored = input;
+        return Response.json({
+          data: {
+            issueCreate: {
+              success: true,
+              issue: {
+                id: "ISSUE-1",
+                identifier: "FIX-1",
+                title: stored.title,
+                description: stored.description,
+                url: "https://linear.app/fixture/issue/FIX-1",
+                createdAt: null,
+                updatedAt: "2026-09-01T00:00:00Z",
+                archivedAt: null,
+                state: { name: "Todo", type: "unstarted" },
+                priority: stored.priority,
+                labels: { nodes: [] },
+                project: { id: stored.projectId },
+              },
+            },
+          },
+        });
+      }
+      return new Response("unexpected document", { status: 400 });
+    },
+  });
+}
+
+test("a human task is projected through the real binary into a loopback Linear", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-projection-"));
+  const received: { query: string }[] = [];
+  const server = linearProjectionDouble(received);
+  try {
+    writeFileSync(
+      resolve(root, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          org: {
+            plugin: "linear",
+            config: {
+              endpoint: `http://127.0.0.1:${server.port}/graphql`,
+              team: "FIX",
+              status_mapping: { todo: "Todo", done: "Done", cancelled: "Canceled" },
+            },
+            cache: { dir: resolve(root, "cache") },
+            task_projection: {
+              host: "sdk-host",
+              directory: resolve(root, "intents"),
+              project: "P-1",
+            },
+          },
+        },
+      }),
+    );
+    const input = resolve(root, "request.json");
+    writeFileSync(
+      input,
+      JSON.stringify({
+        schema_version: 1,
+        item_id: "sdk-item",
+        owner: { session: "session-1", run: null, plan: null },
+        title: "Decide on the release",
+        body: "Choose a date.",
+        priority: "high",
+        repositories: [],
+        project: null,
+        source: "org",
+        state: "open",
+        reason: null,
+      }),
+    );
+    const client = new OnetaskgraphClient({
+      binaryPath: binary,
+      cwd: root,
+      env: { LINEAR_API_KEY: "fixture-key", ONETASKGRAPH_HOST: "sdk-host" },
+    });
+    const projected = await client.taskProjectHuman(input);
+    expect(projected).toEqual({
+      task: "org:ISSUE-1",
+      url: "https://linear.app/fixture/issue/FIX-1",
+      project: "P-1",
+      source: "org",
+    });
+    expect(received.filter((call) => call.query.includes("issueCreate(")).length).toBe(1);
+    // Bound: the same request again is the same answer, and the tracker is asked nothing.
+    const before = received.length;
+    expect(await client.taskProjectHuman(input)).toEqual(projected);
+    expect(received.length).toBe(before);
+  } finally {
+    server.stop(true);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a human task projection's request reaches the real binary, which refuses what it cannot project", async () => {
+  const root = deliveringFolder();
+  try {
+    const client = new OnetaskgraphClient({
+      binaryPath: binary,
+      cwd: root,
+      env: { ONETASKGRAPH_HOST: "sdk-host" },
+    });
+    const request = {
+      schema_version: 1,
+      item_id: "item-1",
+      owner: { session: "session-1", run: null, plan: null },
+      title: "Decide on the release",
+      body: "Choose a date.",
+      priority: "high",
+      repositories: [],
+      project: null,
+      source: "work",
+      state: "open",
+      reason: null,
+    };
+    const valid = resolve(root, "request.json");
+    writeFileSync(valid, JSON.stringify(request));
+    // The binary read the request whole and refused this host, which no source's
+    // task_projection names, before starting any source.
+    const unconfigured = client.taskProjectHuman(valid);
+    await expect(unconfigured).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(unconfigured).rejects.toThrow(
+      'host "sdk-host" is not the host any source\'s task_projection names',
+    );
+    const question = resolve(root, "question.json");
+    writeFileSync(question, JSON.stringify({ ...request, state: "question" }));
+    const malformed = client.taskProjectHuman(question);
+    await expect(malformed).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(malformed).rejects.toThrow("is not a v1 HumanTaskProjection request");
+    expect(() => client.taskProjectHuman(JSON.parse("7"))).toThrow("taskProjectHuman");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function priorityFolder(): string {
   const priorityRoot = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-priority-"));
   mkdirSync(resolve(priorityRoot, "work/tasks"), { recursive: true });

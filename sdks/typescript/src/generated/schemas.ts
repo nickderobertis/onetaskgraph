@@ -6846,6 +6846,214 @@ export const runtimeSchemas = {
     "title": "HeldTask",
     "type": "object"
   },
+  "HumanTaskProjected": {
+    "$defs": {
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "description": "A durable projection's bound tracker identity, suitable for a directly clickable card.",
+    "properties": {
+      "project": {
+        "description": "The resolved destination project.",
+        "type": "string"
+      },
+      "source": {
+        "$ref": "#/$defs/SourceName",
+        "description": "The resolved configured source."
+      },
+      "task": {
+        "description": "The qualified task identity.",
+        "type": "string"
+      },
+      "url": {
+        "description": "The canonical tracker issue URL.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "task",
+      "url",
+      "project",
+      "source"
+    ],
+    "title": "HumanTaskProjected",
+    "type": "object"
+  },
+  "HumanTaskProjection": {
+    "$defs": {
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
+      "ProjectionOwner": {
+        "additionalProperties": false,
+        "description": "The producer that owns the intent; nullable run and plan are explicit on the wire.",
+        "properties": {
+          "plan": {
+            "description": "The owning plan, when applicable.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "run": {
+            "description": "The owning run, when applicable.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session": {
+            "description": "The owning session.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session",
+          "run",
+          "plan"
+        ],
+        "type": "object"
+      },
+      "ProjectionState": {
+        "description": "The requested tracker lifecycle. Questions have no representation here.",
+        "oneOf": [
+          {
+            "const": "open",
+            "description": "The operator has work to do.",
+            "type": "string"
+          },
+          {
+            "const": "completed",
+            "description": "The operator completed the work.",
+            "type": "string"
+          },
+          {
+            "const": "dismissed",
+            "description": "The operator dismissed the work, optionally recording a reason.",
+            "type": "string"
+          }
+        ]
+      },
+      "ProjectionVersion": {
+        "const": 1,
+        "type": "integer"
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "pattern": "^[a-z0-9][a-z0-9-]*$",
+        "type": "string"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "description": "Version 1 of the general human task projection request.",
+    "properties": {
+      "body": {
+        "description": "The visible task content.",
+        "type": "string"
+      },
+      "item_id": {
+        "description": "The external idempotency identity, stable across producer retries.",
+        "type": "string"
+      },
+      "owner": {
+        "$ref": "#/$defs/ProjectionOwner",
+        "description": "The producer that owns the intent."
+      },
+      "priority": {
+        "$ref": "#/$defs/Priority",
+        "description": "Its priority, using the existing plugin API serialization."
+      },
+      "project": {
+        "description": "The plan's resolved destination project, or null for a configured human project.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "reason": {
+        "default": null,
+        "description": "An optional dismissal reason. Omission and null both preserve absence.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "repositories": {
+        "description": "Normalized repository origins whose work this item concerns.",
+        "items": {
+          "$ref": "#/$defs/Repository"
+        },
+        "type": "array"
+      },
+      "schema_version": {
+        "$ref": "#/$defs/ProjectionVersion",
+        "description": "The wire contract version, always 1."
+      },
+      "source": {
+        "$ref": "#/$defs/SourceName",
+        "description": "The configured source through which placement is resolved."
+      },
+      "state": {
+        "$ref": "#/$defs/ProjectionState",
+        "description": "The desired lifecycle."
+      },
+      "title": {
+        "description": "The visible task title.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "schema_version",
+      "item_id",
+      "owner",
+      "title",
+      "body",
+      "priority",
+      "repositories",
+      "project",
+      "source",
+      "state"
+    ],
+    "title": "HumanTaskProjection",
+    "type": "object"
+  },
   "IssueCompleted": {
     "$defs": {
       "CompleteAction": {

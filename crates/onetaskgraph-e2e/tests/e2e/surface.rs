@@ -42,6 +42,7 @@ const SURFACE: &[(&[&str], &[&str])] = &[
     (&["help", "cache", "clear"], &["[SOURCE]", "--json"]),
     (&["help", "task", "show"], &["--pin", "--no-comments"]),
     (&["help", "task", "show-many"], &["--pin", "--no-comments"]),
+    (&["help", "task", "project-human"], &["--input"]),
     (&["help", "task", "comment", "list"], &["--pin"]),
     (&["help", "task", "deps"], &["--pin", "--direction"]),
     (&["help", "project", "deps"], &["--pin", "--direction"]),
@@ -301,7 +302,9 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 49);
+    assert_eq!(bundle["version"], 50);
+    assert!(bundle["roots"]["HumanTaskProjection"].is_object());
+    assert!(bundle["roots"]["HumanTaskProjected"].is_object());
     assert!(bundle["roots"]["LocateReport"].is_object());
     assert_eq!(
         bundle["roots"]["SourceRoute"]["properties"]["reachable"]["type"], "array",
@@ -431,6 +434,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task render",
             "task answers",
             "task assets",
+            "task project-human",
             "project list",
             "project show",
             "project deps",

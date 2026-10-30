@@ -202,14 +202,27 @@ budgets:
     threshold: 40
   - id: github-approval-calls-points
     description: >-
-      An inner measure of the shared board token that no check may spend: the GitHub GraphQL points the four store calls approving a plan's design document on a 2,000-item loopback board spend, priced with the plugin's own point-cost table, the larger of the sequence with no write policy and the sequence screened through the released onevcs boundary commands. It protects every manager's share of that token from what an approval spends.
+      Modelled GitHub GraphQL points of one complete plan design approval, its review task's creation and resolution included, on a 2,000-item board, screened or not. It protects every manager's share of the board token.
     labels: [github]
     measure: reported
-    # llmlint: ignore[budget_commands_measure_directly] This command reports the telemetry the `approval` journey measured in the crate's test run, refusing any other recording; onebudgetspec judges the figure.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_approval_calls", "--exact", "--nocapture"]
+    # llmlint: ignore[budget_commands_measure_directly] This task fixes the `node crates/onetaskgraph-github-projects-e2e/human-items/approval-report.mjs` surface, spelled from this file's directory, which onebudgetspec runs every command in: it reads only the telemetry the `approval` journey saved in the crate's test run, refuses any other recording, and reports one figure through the onebudgetspec SDK, which alone judges it.
+    command: ["node", "human-items/approval-report.mjs"]
     unit: points
     direction: max
-    threshold: 5
+    threshold: 13
+    timeout_seconds: 30
+  # llmlint: ignore[budgets_track_product_owner_outcomes] Manager-approved for this design: the per-item budget covers every human task lifecycle on its own, independently of the complete approval flow (`github-approval-calls-points`) that also includes one, because the 100-item, 10-manager workload is what spends the shared token and an approval total cannot show one item's lifecycle regressing.
+  - id: human-task-projection-points
+    description: >-
+      Modelled GitHub GraphQL points per human task projected through its whole lifecycle by simultaneous managers onto a shared screened board. It protects every manager's share of the board token.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] This task fixes the `node crates/onetaskgraph-github-projects-e2e/human-items/report.mjs` surface, spelled from this file's directory, which onebudgetspec runs every command in: it reads only the telemetry `tests/e2e/human_cost.rs` saved in the crate's test run, refuses any other recording, and reports one figure through the onebudgetspec SDK, which alone judges it.
+    command: ["node", "human-items/report.mjs"]
+    unit: points
+    direction: max
+    threshold: 7.3
+    timeout_seconds: 30
   # llmlint: ignore[budgets_track_product_owner_outcomes] The user ruled that every store operation the engine uses carries its own per-backend request bound, paired with the engine's backend-agnostic store-operation budgets (its hold loop with the dependency reads, each dispatch with the status writes); a session or hourly total cannot show one operation's requests regressing, which is what this bound is for.
   - id: github-requests-per-dependency-read
     description: >-

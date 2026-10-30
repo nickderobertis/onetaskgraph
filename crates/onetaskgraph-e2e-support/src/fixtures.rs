@@ -1116,6 +1116,12 @@ struct BoardPlacement {
 /// The board this fixture keeps, and everything a request may change on it.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 struct GitHubBoard {
+    canonical_issue_urls: bool,
+    /// Whether `createIssue` answers without the issue's URL, so a writer learns it only by
+    /// reading the issue.
+    created_url_omitted: bool,
+    /// Whether every issue's URL is answered over plain HTTP, which is no canonical card link.
+    insecure_issue_urls: bool,
     items: Vec<Value>,
     /// Every comment on every issue this board holds, oldest first.
     ///
@@ -1749,6 +1755,32 @@ impl GitHubBoardFields {
             );
         }
         board.find(&json!(id))["parent"] = parent.map_or(Value::Null, |parent| json!(parent));
+    }
+
+    /// Put `items` on this board beside what it holds, each in this board's own item shape — an
+    /// issue a person made by hand, say, duplicating another.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's private items, which its request loop answers from: only this handle can add one, beside `use_canonical_issue_urls`.
+    pub fn add_items(&self, items: Vec<Value>) {
+        self.board.lock().unwrap().items.extend(items);
+    }
+
+    /// Answer every issue's URL as GitHub's canonical `https://github.com/<repo>/issues/<n>`,
+    /// for journeys whose card links to it; other journeys keep their placeholder addresses.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer for every issue's URL, which its request loop composes from its private state: only this handle can switch it, beside `use_repository`.
+    pub fn use_canonical_issue_urls(&self) {
+        self.board.lock().unwrap().canonical_issue_urls = true;
+    }
+
+    /// Answer `createIssue` without the issue's URL, so a writer has to read the issue for it.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer to `createIssue`, composed by its request loop from its private state: only this handle can switch it, beside `use_canonical_issue_urls`.
+    pub fn omit_created_issue_urls(&self) {
+        self.board.lock().unwrap().created_url_omitted = true;
+    }
+
+    /// Answer every issue's URL over plain HTTP, which no card may link to as canonical.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer for every issue's URL, which its request loop composes from its private state: only this handle can switch it, beside `use_canonical_issue_urls`.
+    pub fn serve_insecure_issue_urls(&self) {
+        self.board.lock().unwrap().insecure_issue_urls = true;
     }
 
     /// Move the issue `id` to the repository `repository`, as a person transferring it on
@@ -2692,6 +2724,20 @@ fn board_client(endpoint: &str) -> Arc<Mutex<loopback::Upstream>> {
 }
 
 impl GitHubBoard {
+    fn issue_url(&self, id: &str, repository: &str) -> String {
+        if self.insecure_issue_urls {
+            return format!("http://example.invalid/{id}");
+        }
+        if self.canonical_issue_urls {
+            format!(
+                "https://github.com/{repository}/issues/{}",
+                github_number(id)
+            )
+        } else {
+            format!("https://example.invalid/{id}")
+        }
+    }
+
     fn options(&self) -> Value {
         Value::Array(self.status_options.clone())
     }
@@ -3017,7 +3063,7 @@ impl GitHubBoard {
         }
         json!({"__typename":"Issue","id":item["id"],"title":item["title"],"body":item["body"],
                "number":github_number(item["id"].as_str().unwrap()),
-               "url":format!("https://example.invalid/{}", item["id"].as_str().unwrap()),
+               "url":self.issue_url(item["id"].as_str().unwrap(), item["repo"].as_str().unwrap()),
                "createdAt":item["createdAt"],"updatedAt":item["updatedAt"],
                "commentCount":{"totalCount":self.comment_count(&item["id"])},
                "relationshipEvents":{"totalCount":self.timeline_count(item)},
@@ -3603,6 +3649,9 @@ fn github_projects_board_at(
         }
     }
     let board = Arc::new(Mutex::new(GitHubBoard {
+        canonical_issue_urls: false,
+        created_url_omitted: false,
+        insecure_issue_urls: false,
         items,
         comments: Vec::new(),
         comment_ticks: 0,
@@ -4979,8 +5028,13 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         // GitHub answers the creating mutation with the issue's own web address and its
         // number, which is the only place a run learns where an item it just created is,
         // and what that item's short handle is, before this board's read catches up.
+        let url = if board.created_url_omitted {
+            Value::Null
+        } else {
+            json!(board.issue_url(&id, &board.repository))
+        };
         return json!({"createIssue":{"issue":{"id":id,"number":github_number(&id),
-            "url":format!("https://example.invalid/{id}")}}});
+            "url":url}}});
     }
     if query.contains("addProjectV2ItemById(input:$input)") {
         assert_eq!(input["projectId"], "PVT-board");
