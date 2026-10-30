@@ -47,7 +47,7 @@ export const policyJourneyReadSet = [
   "scripts/ci-job.sh",
   "scripts/project.json",
   "justfile",
-  // Exactly the scripts:distribution-check guards; policy/tests/inventory.test.mjs holds the list to it.
+  // Exactly the scripts:distribution-check and distribution-test guards; policy/tests/inventory.test.mjs holds the list to it.
   "scripts/check-distribution-contract.sh",
   "scripts/check-distribution-contract-enforced.sh",
   "scripts/check-release-packaging.sh",
@@ -60,6 +60,8 @@ export const policyJourneyReadSet = [
   "scripts/check-release-pr-sync.sh",
   "scripts/check-release-tooling-selection.sh",
   "scripts/check-real-release-preparation.sh",
+  "scripts/check-npm-publish.sh",
+  "scripts/check-fixture-discrimination.sh",
 ];
 
 export const policyJourneyFiles = [

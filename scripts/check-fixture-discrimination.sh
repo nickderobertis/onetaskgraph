@@ -20,6 +20,16 @@ set -euo pipefail
 # The demand goes with the credentials, or the skip that clearing produces would fail this
 # step for a session it is deliberately not running. AGENTS.md records the rest.
 unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
+# What this asserts is a property of the suite, not of the platform: the same substitution
+# reaches the same assertion everywhere, and the crate's own suite still runs on every runner.
+# test-linux runs it, through scripts:distribution-test; the others spend their time on what
+# depends on them (.github/policy/tests/inventory.test.mjs holds that).
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32* | *darwin*)
+    echo "check-fixture-discrimination: skipped off Linux (it checks the GitHub Projects suite's fixtures, the same on every platform); the Linux lane runs it" >&2
+    exit 0
+    ;;
+esac
 
 fatal() {
   echo "check-fixture-discrimination: $1" >&2

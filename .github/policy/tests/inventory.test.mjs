@@ -106,10 +106,13 @@ test("a crate edit selects the CD journeys without the policy journeys", () => {
   }
 });
 
-// A release guard may skip Windows only where what it drives runs on Linux alone in production;
-// then it must still run in full, unconditionally, in test-linux. Derived from
-// scripts:distribution-check rather than listed, so a guard that starts skipping is held too.
+// A release guard may skip Windows only where what it drives runs on Linux alone in production,
+// or skip off Linux where it checks something no platform changes; either way it must still
+// run in full, unconditionally, in test-linux. Derived from scripts:distribution-check and
+// scripts:distribution-test rather than listed, so a guard that starts skipping is held too.
+const GUARD_TARGETS = ["distribution-check", "distribution-test"];
 const WINDOWS = ["*Windows_NT*", "*msys*", "*cygwin*", "*win32*"];
+const OFF_LINUX = [...WINDOWS, "*darwin*"];
 const MOVED_OFF_WINDOWS = [
   "scripts/check-release-pr-sync.sh",
   "scripts/check-release-tooling-selection.sh",
@@ -117,26 +120,34 @@ const MOVED_OFF_WINDOWS = [
   "scripts/check-crate-sibling-resolution-same-second.sh",
 ];
 
+function guardsOf(scripts) {
+  return GUARD_TARGETS.flatMap((target) => {
+    const options = scripts.targets[target].options;
+    return (options.commands ?? [options.command])
+      .map((command) => command.match(/^bash (scripts\/check-[a-z0-9-]+\.sh)$/)?.[1])
+      .filter(Boolean);
+  });
+}
+
 function windowsSkips(sources) {
-  const scripts = JSON.parse(sources["scripts/project.json"]);
-  const options = scripts.targets["distribution-check"].options;
-  return (options.commands ?? [options.command])
-    .map((command) => command.match(/^bash (scripts\/check-[a-z0-9-]+\.sh)$/)?.[1])
-    .filter((guard) => guard && /skipped on Windows/.test(sources[guard]));
+  return guardsOf(JSON.parse(sources["scripts/project.json"])).filter((guard) =>
+    /skipped (?:on Windows|off Linux)/.test(sources[guard]),
+  );
 }
 
 function skipProblems(sources) {
   const problems = [];
   for (const guard of windowsSkips(sources)) {
     const skip = sources[guard].match(
-      /case "\$\{OS:-\}\$\{OSTYPE:-\}" in\n\s*([^\n]+)\)\n[^\n]*skipped on Windows[^\n]*\n\s*exit 0/,
+      /case "\$\{OS:-\}\$\{OSTYPE:-\}" in\n\s*([^\n]+)\)\n[^\n]*skipped (on Windows|off Linux)[^\n]*\n\s*exit 0/,
     );
     if (!skip) {
-      problems.push(`${guard} skips Windows in a shape this inventory cannot read`);
+      problems.push(`${guard} skips a platform in a shape this inventory cannot read`);
       continue;
     }
+    const allowed = skip[2] === "off Linux" ? OFF_LINUX : WINDOWS;
     for (const pattern of skip[1].split("|").map((alternative) => alternative.trim()))
-      if (!WINDOWS.includes(pattern)) problems.push(`${guard} also skips ${pattern}`);
+      if (!allowed.includes(pattern)) problems.push(`${guard} also skips ${pattern}`);
   }
   const ci = parse(sources[".github/workflows/ci.yml"]);
   const job = ci.jobs["test-linux"];
@@ -149,8 +160,9 @@ function skipProblems(sources) {
   const arm = sources["scripts/ci-job.sh"].match(
     /\n {2}test-linux\)\n[\s\S]*?phases="([\s\S]*?)"\n/,
   );
-  if (!arm?.[1].split("\n").includes("1 run scripts:distribution-check -"))
-    problems.push("test-linux's phases do not run scripts:distribution-check unconditionally");
+  for (const target of GUARD_TARGETS)
+    if (!arm?.[1].split("\n").includes(`1 run scripts:${target} -`))
+      problems.push(`test-linux's phases do not run scripts:${target} unconditionally`);
   return problems;
 }
 
@@ -162,19 +174,13 @@ function guardSources() {
     "scripts/ci-job.sh",
   ];
   const sources = Object.fromEntries(paths.map((path) => [path, read(path)]));
-  const scripts = JSON.parse(sources["scripts/project.json"]);
-  for (const command of scripts.targets["distribution-check"].options.commands) {
-    const guard = command.match(/^bash (scripts\/check-[a-z0-9-]+\.sh)$/)?.[1];
-    if (guard) sources[guard] = read(guard);
-  }
+  for (const guard of guardsOf(JSON.parse(sources["scripts/project.json"])))
+    sources[guard] = read(guard);
   return sources;
 }
 
-test("the policy journeys are keyed on exactly the distribution-check guards they read", () => {
-  const scripts = JSON.parse(read("scripts/project.json"));
-  const guards = scripts.targets["distribution-check"].options.commands
-    .map((command) => command.match(/^bash (scripts\/check-[a-z0-9-]+\.sh)$/)?.[1])
-    .filter(Boolean);
+test("the policy journeys are keyed on exactly the distribution guards they read", () => {
+  const guards = guardsOf(JSON.parse(read("scripts/project.json")));
   assert.deepEqual(
     policyJourneyReadSet.filter((path) => path.startsWith("scripts/check-")).sort(),
     guards.sort(),
@@ -183,7 +189,8 @@ test("the policy journeys are keyed on exactly the distribution-check guards the
 
 test("every release guard that skips Windows runs in full in test-linux", () => {
   const sources = guardSources();
-  for (const guard of MOVED_OFF_WINDOWS) assert.ok(windowsSkips(sources).includes(guard), guard);
+  for (const guard of [...MOVED_OFF_WINDOWS, "scripts/check-fixture-discrimination.sh"])
+    assert.ok(windowsSkips(sources).includes(guard), guard);
   assert.deepEqual(skipProblems(sources), []);
 });
 
@@ -201,6 +208,16 @@ test("a skip widened past Windows, or test-linux leaving distribution-check, is 
     const guard = MOVED_OFF_WINDOWS[0];
     sources[guard] = sources[guard].replace("*win32*)", "*win32* | *linux*)");
   }, /check-release-pr-sync\.sh also skips \*linux\*/);
+  refused((sources) => {
+    const guard = "scripts/check-fixture-discrimination.sh";
+    sources[guard] = sources[guard].replace("*darwin*)", "*darwin* | *linux*)");
+  }, /check-fixture-discrimination\.sh also skips \*linux\*/);
+  refused((sources) => {
+    sources["scripts/ci-job.sh"] = sources["scripts/ci-job.sh"].replace(
+      /(\n {2}test-linux\)[\s\S]*?)1 run scripts:distribution-test -\n/,
+      (_, before) => before,
+    );
+  }, /do not run scripts:distribution-test unconditionally/);
   refused((sources) => {
     sources["scripts/ci-job.sh"] = sources["scripts/ci-job.sh"].replace(
       /(\n {2}test-linux\)[\s\S]*?)1 run scripts:distribution-check -\n/,
