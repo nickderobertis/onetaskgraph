@@ -197,6 +197,9 @@ test("the Linux recipe builds once, packages every artifact from that binary, in
   });
   expectStatus(refused, 1, "a failed CLI-wheel build");
   assert.match(refused.output, /maturin.*exit 37/);
+  // A failed build names what else held maturin's staging then, so a second build over the
+  // same target directory outside the CLI-wheel lock says so rather than a missing file.
+  assert.match(refused.output, /release-cd: target\/maturin holds: /);
   const commandOffset = invocations().length;
   const [result, distribution] = await Promise.all([
     runAsync("just", ["release-linux", "run", "--tag", tag, "--dry-run", "--dist", dist], {

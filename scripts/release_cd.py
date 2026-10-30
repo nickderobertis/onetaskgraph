@@ -323,17 +323,40 @@ def maturin_requirement() -> str:
     return selected[0]
 
 
+def describe_maturin_staging() -> None:
+    """Say, after a failed maturin build, what else held target/maturin's staging then.
+
+    maturin renames each artifact into target/maturin/ while it builds and back afterwards, so
+    a second build over the same target directory outside the CLI-wheel lock takes the first
+    one's staged file away. Every build this repository makes takes that lock; when one still
+    fails that way, this names the staged files and every maturin and cargo process alive.
+    """
+    staging = ROOT / "target" / "maturin"
+    entries = sorted(path.name for path in staging.iterdir()) if staging.is_dir() else []
+    print(f"release-cd: target/maturin holds: {', '.join(entries) or 'nothing'}", file=sys.stderr)
+    if os.name == "nt":
+        return
+    listed = subprocess.run(["ps", "-eo", "pid,ppid,etime,args"], capture_output=True, text=True, check=False)
+    for line in listed.stdout.splitlines():
+        if ("maturin" in line or "cargo" in line) and "ps -eo" not in line:
+            print(f"release-cd: alive beside it: {line.strip()}", file=sys.stderr)
+
+
 def build_target(row: PlatformTarget, tag: ReleaseTag, dist: Path) -> None:
     with cli_wheel_lock():
         wheels = dist / "wheels" / row.target
         shutil.rmtree(wheels, ignore_errors=True)
         wheels.mkdir(parents=True)
-        run(
-            [tool("uv"), "tool", "run", "--from", maturin_requirement(), "maturin", "build", "--release", "--locked", "--target", row.target, "--out", str(wheels)],
-            f"maturin could not build the {row.target} wheel",
-            "fix the build error above; the wheel's binary is the one every other artifact carries",
-            env={**os.environ, "RUSTFLAGS": "-D warnings"},
-        )
+        try:
+            run(
+                [tool("uv"), "tool", "run", "--from", maturin_requirement(), "maturin", "build", "--release", "--locked", "--target", row.target, "--out", str(wheels)],
+                f"maturin could not build the {row.target} wheel",
+                "fix the build error above; the wheel's binary is the one every other artifact carries",
+                env={**os.environ, "RUSTFLAGS": "-D warnings"},
+            )
+        except ReleaseStepFailed:
+            describe_maturin_staging()
+            raise
         package_target(row, tag, dist)
         run(
             [PYTHON_EXECUTABLE, "scripts/verify-release-products.py", "--target", row.target, "--npm", row.npm_platform, "--tag", tag, "--ext", row.extension, "--dist", str(dist), "--install"],
