@@ -180,7 +180,7 @@ class Workspace:
             self.deleted.append(identifier)
             return json.loads((Path(__file__).parent / 'fixtures/linear-document-delete.json').read_text())
         assert 'team{key}' in request['query']
-        assert 'project{teams(first:100)' in request['query']
+        assert 'project{teams(first:2)' in request['query']
         # read_request validated the listing shape; Python cannot narrow a TypedDict union by query text.
         variables = cast(ListingVariables, request['variables'])
         assert variables['filter']['title']['startsWith'] == 'onetaskgraph live cleanup '
@@ -322,6 +322,21 @@ class LinearJourneys(unittest.TestCase):
         self.assertEqual(len(workspace.requests), 5)
         self.assertIn('0 REST reads, 2 GraphQL queries, 3 content writes', result.stdout)
         self.assertIn('[0, 1000000, 2000000]', result.stdout)
+
+    def test_retained_sets_never_expire_by_age(self) -> None:
+        workspace = Workspace()
+        sample = workspace.pages[0].data.documents.nodes[0]
+        prefix = 'onetaskgraph live cleanup retained-v1 '
+        titles = [prefix + 'ci TEST ' + slot for slot in ['filed', 'loose', 'follow-up', 'assets']]
+        titles += [prefix + 'local TEST filed 1-2-3',
+                   prefix + 'ci TEST unknown', prefix + 'ci OTHER filed']
+        workspace.pages[0].data.documents.nodes = [
+            replace(sample, id=DocumentId(str(index)), title=title)
+            for index, title in enumerate(titles)]
+        workspace.pages[1].data.documents.nodes = []
+        result = self.run_janitor(workspace)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(workspace.deleted, [])
 
     def test_direct_team_precedes_project_and_unvouched_documents_survive(self) -> None:
         workspace = Workspace()

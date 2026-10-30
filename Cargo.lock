@@ -1389,6 +1389,7 @@ dependencies = [
 name = "onetaskgraph-linear-e2e"
 version = "0.12.12"
 dependencies = [
+ "graphql-parser",
  "onebudgetspec-core",
  "onetaskgraph-core",
  "onetaskgraph-e2e-support",

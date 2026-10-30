@@ -510,6 +510,9 @@ pub mod change_token;
 /// Ownership prefix for Linear live-test artifacts and scheduled orphan recovery.
 pub const LIVE_ARTIFACT_TITLE_PREFIX: &str = "onetaskgraph live cleanup ";
 
+/// Exact ownership grammar shared by live lanes and their cleanup.
+pub mod live_artifact;
+
 mod origins;
 
 /// The plugin kind a `linear` source's `plugin:` field names.

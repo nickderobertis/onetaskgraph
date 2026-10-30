@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use onetaskgraph_e2e_support::loopback::{self, After};
 use onetaskgraph_e2e_support::{clock::SimulatedClock, images};
 use onetaskgraph_plugin_api::asset_sha256;
 use serde_json::{Value, json};
@@ -18,6 +19,12 @@ const REQUEST_WINDOW: Duration = Duration::from_secs(3_600);
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 use crate::fixtures::{LinearMarkdown, LinearWorkspace, document, linear_workspace};
+#[path = "../../../onetaskgraph-linear/tests/document_lifecycle/mod.rs"]
+pub(crate) mod document_lifecycle;
+#[path = "../../../onetaskgraph-linear/tests/document_lifecycle/replay_schema.rs"]
+mod document_replay_schema;
+use document_lifecycle::Mode;
+use onetaskgraph_linear::live_artifact::{Scope, Slot};
 
 #[derive(Default)]
 struct Upload {
@@ -30,6 +37,13 @@ struct Upload {
 #[derive(Default)]
 struct State {
     uploads: BTreeMap<usize, Upload>,
+    document_journal: Option<document_lifecycle::journal::Journal>,
+    refused_document_deletes: std::collections::BTreeSet<String>,
+    document_delete_attempts: Vec<String>,
+    ignore_asset_reset: bool,
+    /// A document id, the content a lagging replica still holds for it, and how many more
+    /// `document(id:)` reads that replica answers.
+    stale_document: Option<(String, String, usize)>,
     requests: usize,
     tokens: f64,
     last_refill: Duration,
@@ -75,13 +89,27 @@ impl Workspace {
         let serving = state.clone();
         let timing = clock.clone();
         let address = endpoint.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let state = serving.clone();
-                let clock = timing.clone();
-                let backend = backend.clone();
-                let address = address.clone();
-                std::thread::spawn(move || serve(stream, &backend, &address, &state, &clock));
+        // Each connection the binary keeps alive is answered on a thread of its own, forwarding
+        // over one kept connection of its own to the backend, so no request costs a connection
+        // at either end — a connection per request is what AGENTS.md says exhausts the Windows
+        // runner's loopback ports under the rest of this suite.
+        let upstream_address = backend.parse().unwrap();
+        loopback::serve_each(listener, move || {
+            let state = serving.clone();
+            let clock = timing.clone();
+            let backend = backend.clone();
+            let address = address.clone();
+            let mut upstream = loopback::Upstream::new(upstream_address);
+            move |request: &loopback::Request, stream: &mut TcpStream| {
+                serve(
+                    request,
+                    stream,
+                    &mut upstream,
+                    &backend,
+                    &address,
+                    &state,
+                    &clock,
+                )
             }
         });
         config["endpoint"] = json!(format!("{endpoint}/0/graphql"));
@@ -142,6 +170,10 @@ fn answer(stream: &mut TcpStream, status: u16, body: &[u8]) {
 }
 
 fn answer_hinted(stream: &mut TcpStream, status: u16, body: &[u8], hint: Option<&str>) {
+    respond(stream, status, body, hint, "close");
+}
+
+fn respond(stream: &mut TcpStream, status: u16, body: &[u8], hint: Option<&str>, connection: &str) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -165,21 +197,48 @@ fn answer_hinted(stream: &mut TcpStream, status: u16, body: &[u8], hint: Option<
     };
     write!(
         stream,
-        "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\n{headers}Connection: close\r\n\r\n",
+        "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\n{headers}Connection: {connection}\r\n\r\n",
         body.len()
     )
     .unwrap();
     stream.write_all(body).unwrap();
 }
 
+/// [`answer`] on a connection the client keeps alive, which therefore stays open.
+fn reply(stream: &mut TcpStream, status: u16, body: &[u8]) {
+    reply_hinted(stream, status, body, Some("normal"));
+}
+
+/// [`answer_hinted`] on a connection the client keeps alive.
+fn reply_hinted(stream: &mut TcpStream, status: u16, body: &[u8], hint: Option<&str>) {
+    respond(stream, status, body, hint, "keep-alive");
+}
+
+fn complete_replay_document(row: &mut Value) {
+    if !row.is_object() {
+        return;
+    }
+    let recorded: Value = serde_json::from_str(include_str!(
+        "../../../onetaskgraph-linear/tests/fixtures/documents.json"
+    ))
+    .unwrap();
+    for field in ["createdAt", "updatedAt"] {
+        if row[field].is_null() {
+            row[field] = recorded["data"]["documents"]["nodes"][0][field].clone();
+        }
+    }
+}
+
 fn serve(
-    mut stream: TcpStream,
+    request: &loopback::Request,
+    stream: &mut TcpStream,
+    upstream: &mut loopback::Upstream,
     backend: &str,
     address: &str,
     state: &Mutex<State>,
     clock: &SimulatedClock,
-) {
-    let bytes = read_request(&mut stream);
+) -> After {
+    let bytes = request.bytes();
     let split = bytes
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -284,7 +343,7 @@ fn serve(
                 | (Some("redirect-read"), "verifying read")
         ) {
             stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://example.invalid/credential-target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
-            return;
+            return After::Close;
         }
         if matches!(
             (fault, stage),
@@ -292,7 +351,7 @@ fn serve(
                 | (Some("disconnect-PUT"), "PUT")
                 | (Some("disconnect-read"), "verifying read")
         ) {
-            return;
+            return After::Close;
         }
         if stage == "mutation" {
             let bad = match fault {
@@ -307,8 +366,8 @@ fn serve(
                 _ => None,
             };
             if let Some(body) = bad {
-                answer(&mut stream, 200, body.as_bytes());
-                return;
+                reply(stream, 200, body.as_bytes());
+                return After::KeepOpen;
             }
         }
     }
@@ -329,8 +388,8 @@ fn serve(
         } else {
             body.to_string()
         };
-        answer_hinted(
-            &mut stream,
+        reply_hinted(
+            stream,
             if stage == "mutation" && status == 429 && fault != Some("mutation-http429") {
                 400
             } else {
@@ -339,17 +398,125 @@ fn serve(
             body.as_bytes(),
             hint,
         );
-        return;
+        return After::KeepOpen;
     }
     if !asset_request {
-        let mut upstream = TcpStream::connect(backend).unwrap();
-        let original = String::from_utf8_lossy(&bytes[..split]).replacen(path, "/graphql", 1);
-        upstream.write_all(original.as_bytes()).unwrap();
-        upstream.write_all(&bytes[split..]).unwrap();
-        let mut response = Vec::new();
-        upstream.read_to_end(&mut response).unwrap();
-        stream.write_all(&response).unwrap();
-        return;
+        use onetaskgraph_linear::graphql;
+        let mut forwarded = gql.clone();
+        let query = gql["query"].as_str().unwrap();
+        // Linear refuses a document over its complexity cap with HTTP 400 before reading a
+        // row, so this stand-in does too for the lane's own standing-set listings, the documents
+        // that model is reconciled for. It does not score the binary's documents: Linear prices
+        // `issues` by the rows it returns (it accepts that listing at 250, `MAX_PAGE_SIZE`),
+        // which the structural model over-prices — `ISSUES_CACHED` at 100 rows scores 16355 —
+        // and those are priced by `cache_budget::price` from Linear's own scores instead.
+        if [document_lifecycle::DOCUMENTS, document_lifecycle::PROJECTS].contains(&query)
+            && let Some(refused) =
+                document_replay_schema::complexity::refusal(query, &gql["variables"])
+        {
+            reply(
+                stream,
+                400,
+                json!({"errors":[{"message":refused}]})
+                    .to_string()
+                    .as_bytes(),
+            );
+            return After::KeepOpen;
+        }
+        if query.contains("documentUpdate(")
+            && gql["variables"]["input"]["content"]
+                .as_str()
+                .is_some_and(|content| content.starts_with("Reset for invocation "))
+            && state.lock().unwrap().ignore_asset_reset
+        {
+            reply(
+                stream,
+                200,
+                json!({"data":{"documentUpdate":{"success":true}}})
+                    .to_string()
+                    .as_bytes(),
+            );
+            return After::KeepOpen;
+        }
+        if query.contains("documentDelete(") {
+            let id = gql["variables"]["id"].as_str().unwrap();
+            let refused = {
+                let mut state = state.lock().unwrap();
+                state.document_delete_attempts.push(id.to_owned());
+                state.refused_document_deletes.contains(id)
+            };
+            if refused {
+                reply(
+                    stream,
+                    200,
+                    json!({"data":{"documentDelete":{"success":false}}})
+                        .to_string()
+                        .as_bytes(),
+                );
+                return After::KeepOpen;
+            }
+        }
+        let discovery = query.contains("documents(") && query.contains("team{key}");
+        if discovery {
+            forwarded["query"] = json!(graphql::DOCUMENTS);
+            forwarded["variables"]["first"] = json!(100);
+        } else if query.contains("documentCreate(") {
+            forwarded["query"] = json!(graphql::DOCUMENT_CREATE);
+        } else if query.contains("documentUpdate(") {
+            forwarded["query"] = json!(graphql::DOCUMENT_UPDATE);
+        } else if query.contains("documentDelete(") {
+            forwarded["query"] = json!(graphql::DOCUMENT_DELETE);
+        }
+        let body = forwarded.to_string();
+        let response = upstream.forward(format!("POST /graphql HTTP/1.1\r\nHost: {backend}\r\nAuthorization: fixture-key\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",body.len()).as_bytes());
+        let split = response.windows(4).position(|b| b == b"\r\n\r\n").unwrap() + 4;
+        let mut response: Value = serde_json::from_slice(&response[split..]).unwrap();
+        if discovery
+            && let Some(nodes) = response
+                .pointer_mut("/data/documents/nodes")
+                .and_then(Value::as_array_mut)
+        {
+            for node in nodes {
+                node["team"] = json!({"key":"ENG"});
+                if node["project"].is_object() {
+                    node["project"]["teams"] =
+                        json!({"nodes":[{"key":"ENG"}],"pageInfo":{"hasNextPage":false}});
+                }
+            }
+        }
+        if let Some(row) = response.pointer_mut("/data/document")
+            && let Some((id, content, reads)) = &mut state.lock().unwrap().stale_document
+            && row["id"].as_str() == Some(id.as_str())
+            && *reads > 0
+        {
+            *reads -= 1;
+            row["content"] = json!(content);
+        }
+        if let Some(journal) = &state.lock().unwrap().document_journal {
+            // Record acknowledgement before validating its shape, including uncertain IDs.
+            journal.observe(&gql, &response);
+            for pointer in [
+                "/data/document",
+                "/data/documentCreate/document",
+                "/data/documentUpdate/document",
+            ] {
+                if let Some(row) = response.pointer_mut(pointer) {
+                    complete_replay_document(row);
+                }
+            }
+            if let Some(nodes) = response
+                .pointer_mut("/data/documents/nodes")
+                .and_then(Value::as_array_mut)
+            {
+                for row in nodes {
+                    complete_replay_document(row);
+                }
+            }
+            document_replay_schema::validate(query, &response)
+                .expect("recorded Linear response shape");
+        }
+        reply(stream, 200, response.to_string().as_bytes());
+        return After::KeepOpen;
     }
     let response = {
         let mut state = state.lock().unwrap();
@@ -387,6 +554,13 @@ fn serve(
         }
     };
     let mut response = response;
+    if state.lock().unwrap().document_journal.is_some() && stage == "mutation" {
+        document_replay_schema::validate(
+            gql["query"].as_str().unwrap(),
+            &serde_json::from_slice(&response).unwrap(),
+        )
+        .expect("recorded fileUpload response shape");
+    }
     if stage == "mutation" {
         let mut body: Value = serde_json::from_slice(&response).unwrap();
         let file = &mut body["data"]["fileUpload"]["uploadFile"];
@@ -415,7 +589,8 @@ fn serve(
         }
         response = body.to_string().into_bytes();
     }
-    answer(&mut stream, 200, &response);
+    reply(stream, 200, &response);
+    After::KeepOpen
 }
 
 pub(crate) struct Journey {
@@ -986,7 +1161,11 @@ struct LiveUploads {
 
 /// A forwarding observer changes only the signed PUT URL, keeping Linear's asset URL intact, so
 /// the journey's own authenticated GET of each asset reaches Linear directly.
-fn live_observer(key: String) -> (String, Arc<Mutex<LiveUploads>>) {
+fn live_observer(
+    key: String,
+    journal: document_lifecycle::journal::Journal,
+    upstream: String,
+) -> (String, Arc<Mutex<LiveUploads>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let state = Arc::new(Mutex::new(LiveUploads::default()));
@@ -1045,7 +1224,7 @@ fn live_observer(key: String) -> (String, Arc<Mutex<LiveUploads>>) {
                 let response = runtime
                     .block_on(
                         client
-                            .post("https://api.linear.app/graphql")
+                            .post(&upstream)
                             .header("Authorization", &key)
                             .json(&request)
                             .send(),
@@ -1053,6 +1232,7 @@ fn live_observer(key: String) -> (String, Arc<Mutex<LiveUploads>>) {
                     .unwrap();
                 let status = response.status().as_u16();
                 let mut body: Value = runtime.block_on(response.json()).unwrap();
+                journal.observe(&request, &body);
                 let mut state = recording.lock().unwrap();
                 if request["query"].as_str().unwrap().contains("fileUpload(") {
                     let id = state.signed.len();
@@ -1083,6 +1263,226 @@ fn live_observer(key: String) -> (String, Arc<Mutex<LiveUploads>>) {
         }
     });
     (format!("{endpoint}/graphql"), state)
+}
+
+/// The line [`asset_origins`] ends each origin's content with, naming the invocation that made it.
+const INVOCATION_LINE: &str = "Invocation ";
+
+/// Reads after a copy that may still answer the destination as it stood before, and their spacing.
+const SHOW_READS: u32 = 21;
+
+/// Each origin of one invocation, its content ending in an [`INVOCATION_LINE`] no other
+/// invocation shares.
+///
+/// The standing asset slot keeps one title across runs, and the images are seeded from the title,
+/// so without that line every ordinary pass would copy byte-for-byte what the previous one wrote.
+/// Linear answers a single read from a replica that can still hold that previous content after
+/// the reset is confirmed, and a copy reading it finds nothing to change and writes nothing —
+/// which is how one ordinary pass showed the reset marker with no `onetaskgraph.assets`.
+fn asset_origins(
+    journey: &Journey,
+    title: impl Fn(&str) -> String,
+) -> Vec<(&'static str, String, String)> {
+    static INVOCATIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let invocation = format!(
+        "{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        INVOCATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
+    let mut origins = Vec::new();
+    for kind in ["task", "document"] {
+        let title = title(kind);
+        let (id, _) = journey.create_named(kind, 2, &title, false);
+        let output = journey
+            .sandbox
+            .command()
+            .args(["--json", kind, "show", &id])
+            .output()
+            .unwrap();
+        let shown: Value = serde_json::from_str(&stdout(&output)).unwrap();
+        let path = shown["items"][0]["item"]["location"]["path"]
+            .as_str()
+            .unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+        let mut text: String = text
+            .lines()
+            .filter(|line| !line.starts_with("project:"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        text.push_str(&format!("\n{INVOCATION_LINE}{invocation}\n"));
+        std::fs::write(path, text).unwrap();
+        origins.push((kind, id, title));
+    }
+    origins
+}
+
+fn cleanup_asset_items(
+    runtime: &tokio::runtime::Runtime,
+    endpoint: &str,
+    key: &str,
+    items: &[(&str, String)],
+) -> bool {
+    items
+        .iter()
+        .map(|(kind, id)| {
+            let (query, root) = if *kind == "issue" {
+                (onetaskgraph_linear::graphql::ISSUE_DELETE, "issueDelete")
+            } else {
+                (
+                    onetaskgraph_linear::graphql::DOCUMENT_DELETE,
+                    "documentDelete",
+                )
+            };
+            // Attempt every removal even when another failed, preserving the observer journal.
+            runtime
+                .block_on(document_lifecycle::send(
+                    endpoint,
+                    key,
+                    query,
+                    json!({"id":id}),
+                ))
+                .is_ok_and(|response| response[root]["success"] == true)
+        })
+        .fold(true, |all, removed| all & removed)
+}
+
+fn retire_asset_invocation(
+    runtime: &tokio::runtime::Runtime,
+    endpoint: &str,
+    key: &str,
+    created: &[(&str, String)],
+    standing: &document_lifecycle::Standing,
+    scope: Scope<'_>,
+) -> bool {
+    let mut items = created.to_vec();
+    if !scope.is_ci() {
+        items.extend(standing.ids.values().cloned().map(|id| ("document", id)));
+    }
+    cleanup_asset_items(runtime, endpoint, key, &items)
+}
+
+fn reset_asset_slot(
+    runtime: &tokio::runtime::Runtime,
+    endpoint: &str,
+    key: &str,
+    standing: &document_lifecycle::Standing,
+    stamp: &str,
+    reads: u32,
+) {
+    if let Some(id) = standing.ids.get("assets") {
+        let marker = format!("Reset for invocation {stamp}");
+        let response=runtime.block_on(document_lifecycle::send(endpoint,key,
+            "mutation($id:String!,$input:DocumentUpdateInput!){documentUpdate(id:$id,input:$input){success}}",
+            json!({"id":id,"input":{"content":marker}}))).unwrap();
+        assert_eq!(
+            response["documentUpdate"]["success"], true,
+            "Linear must acknowledge the run-specific reset"
+        );
+        for attempt in 0..reads {
+            let held = runtime
+                .block_on(document_lifecycle::send(
+                    endpoint,
+                    key,
+                    onetaskgraph_linear::graphql::DOCUMENT,
+                    json!({"id":id}),
+                ))
+                .unwrap();
+            if held["document"]["content"].as_str() == Some(marker.as_str()) {
+                return;
+            }
+            if attempt + 1 < reads {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+        panic!("Linear did not retain the run-specific asset reset before copying");
+    }
+}
+
+/// The live and replay lanes share the exact copy/read/unchanged-recopy assertions.
+fn drive_asset_copy_recopy(
+    journey: &Journey,
+    origins: &[(&str, String, String)],
+    mode: Mode,
+    asset_read: impl Fn(&str, &str),
+    upload_count: impl Fn() -> usize,
+) {
+    for (kind, id, title) in origins {
+        let kind = *kind;
+        let run = || {
+            let mut command = journey.sandbox.command();
+            command.args(["--json", kind, "copy", id.as_str(), "--to", "dest"]);
+            if kind == "document" && mode != Mode::Fresh {
+                command.args(["--match-by", "title"]);
+            }
+            command.output().unwrap()
+        };
+        let show = |id: &str| {
+            let output = journey
+                .sandbox
+                .command()
+                .args(["--json", kind, "show", id])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", stderr(&output));
+            serde_json::from_str::<Value>(&stdout(&output)).unwrap()
+        };
+        let origin = show(id);
+        let invocation = origin["items"][0]["item"]["content"]
+            .as_str()
+            .unwrap()
+            .lines()
+            .find(|line| line.starts_with(INVOCATION_LINE))
+            .expect("every origin names its invocation")
+            .to_owned();
+        let output = run();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let report: Value = serde_json::from_str(&stdout(&output)).unwrap();
+        let dest = report["items"][0]["destination"].as_str().unwrap();
+        // A single Linear read can still answer from before the copy; read until it reaches it.
+        let mut shown = show(dest);
+        for _ in 1..SHOW_READS {
+            if shown["items"][0]["item"]["content"]
+                .as_str()
+                .is_some_and(|content| content.contains(&invocation))
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+            shown = show(dest);
+        }
+        let item = &shown["items"][0]["item"];
+        assert!(
+            item["content"]
+                .as_str()
+                .is_some_and(|content| content.contains(&invocation)),
+            "{kind} copy {} never reached {dest} after {SHOW_READS} reads: {}",
+            report["items"][0]["action"],
+            item["content"]
+        );
+        assert_eq!(
+            item["title"],
+            title.as_str(),
+            "the destination retains its recoverable ownership title"
+        );
+        let content = item["content"].as_str().unwrap();
+        assert!(!content.contains("](./"));
+        let uploads = item["metadata"]["onetaskgraph.assets"].as_object().unwrap();
+        assert_eq!(uploads.len(), 2);
+        for (name, upload) in uploads {
+            let url = upload["url"].as_str().unwrap();
+            assert!(content.contains(url));
+            asset_read(name, url);
+        }
+        let before = upload_count();
+        let output = run();
+        assert!(output.status.success(), "{}", stderr(&output));
+        let after = upload_count();
+        assert_eq!(after, before, "unchanged copy sends no fileUpload");
+    }
 }
 
 #[test]
@@ -1141,42 +1541,184 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
         .as_str()
         .unwrap()
         .to_owned();
+    let mode = Mode::read().unwrap();
+    let ci = std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true");
+    let owner_stamp = onetaskgraph_live::artifact::Stamp::new(
+        onetaskgraph_live::artifact::Run::current(),
+        onetaskgraph_live::artifact::now_micros(),
+    )
+    .to_string();
+    let team_key = team.to_ascii_uppercase();
+    let scope = if ci {
+        Scope::ci(&team_key).unwrap()
+    } else {
+        Scope::local(&team_key, &owner_stamp).unwrap()
+    };
+    let team_id = response["data"]["teams"]["nodes"][0]["id"]
+        .as_str()
+        .unwrap();
+    let effective_mode = mode;
+    if !ci && mode == Mode::Initialize {
+        eprintln!(
+            "non-CI creation pass: initialize the invocation-owned asset destination, exercise reuse assertions, and retire it"
+        );
+    }
+    let journal = document_lifecycle::journal::Journal::new("assets", effective_mode.name())
+        .durable(
+            std::env::current_exe()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("telemetry/onetaskgraph-linear-e2e/live")
+                .join(&owner_stamp),
+        )
+        .unwrap();
+    let lifecycle_endpoint = document_lifecycle::observer::start(
+        "https://api.linear.app/graphql",
+        &key,
+        journal.clone(),
+    );
+    let created = document_lifecycle::Created::default();
+    guard_asset_invocation(
+        &runtime,
+        &lifecycle_endpoint,
+        &key,
+        &team_key,
+        team_id,
+        scope,
+        effective_mode,
+        &journal,
+        &created,
+        |standing| {
+            if ci && mode == Mode::Initialize {
+                journal.finish().unwrap();
+                return;
+            }
+            drive_live_assets(
+                &runtime,
+                &client,
+                &key,
+                &team,
+                &state_name,
+                standing,
+                scope,
+                mode,
+                &owner_stamp,
+                &journal,
+                &lifecycle_endpoint,
+                &created,
+            );
+        },
+    );
+}
+
+/// Prepares the lane's standing slot and runs `drive` over it, so that from the first
+/// create on nothing this invocation owns outlives a panic: one partway through preparing,
+/// or anywhere in `drive` before its own cleanup ran, retires every slot `created` records
+/// before the panic leaves the lane. A CI set is standing and is never retired here.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "prepare_owned's lane identities plus the journal and drive; the offline journey passes each one separately to drive this guard as the live lane does"
+)]
+fn guard_asset_invocation(
+    runtime: &tokio::runtime::Runtime,
+    lifecycle_endpoint: &str,
+    key: &str,
+    team_key: &str,
+    team_id: &str,
+    scope: Scope<'_>,
+    mode: Mode,
+    journal: &document_lifecycle::journal::Journal,
+    created: &document_lifecycle::Created,
+    drive: impl FnOnce(&document_lifecycle::Standing),
+) {
+    let guarded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let standing = runtime
+            .block_on(document_lifecycle::prepare_owned(
+                lifecycle_endpoint,
+                key,
+                team_key,
+                team_id,
+                scope,
+                mode,
+                &[Slot::Assets],
+                created,
+            ))
+            .unwrap_or_else(|error| panic!("{error}"));
+        // Whatever preparation created was the standing set's cold rebuild; from here on a
+        // create is this journey's own.
+        journal.journey("live_disposable_issue_and_document_assets_copy_and_recopy");
+        drive(&standing);
+    }));
+    if let Err(panic) = guarded {
+        if let Err(error) = runtime.block_on(document_lifecycle::retire(
+            lifecycle_endpoint,
+            key,
+            scope,
+            created,
+        )) {
+            eprintln!("{error}");
+        }
+        let _ = journal.finish();
+        std::panic::resume_unwind(panic);
+    }
+}
+
+/// Everything the live asset lane does once its standing slot is prepared, ending with the
+/// invocation cleanup; a panic here unwinds to the caller's guard over `created`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the live lane's locals this body used before it moved under the guard, passed unchanged"
+)]
+fn drive_live_assets(
+    runtime: &tokio::runtime::Runtime,
+    client: &reqwest::Client,
+    key: &str,
+    team: &str,
+    state_name: &str,
+    standing: &document_lifecycle::Standing,
+    scope: Scope<'_>,
+    mode: Mode,
+    owner_stamp: &str,
+    journal: &document_lifecycle::journal::Journal,
+    lifecycle_endpoint: &str,
+    created: &document_lifecycle::Created,
+) {
+    let key = key.to_owned();
+    reset_asset_slot(
+        runtime,
+        "https://api.linear.app/graphql",
+        &key,
+        standing,
+        owner_stamp,
+        21,
+    );
     let journey = Journey::new();
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_micros();
-    let mut origins = Vec::new();
-    for kind in ["task", "document"] {
-        let title = format!(
-            "{}{}",
-            onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX,
-            onetaskgraph_live::artifact::Stamp::new(
-                onetaskgraph_live::artifact::Run::current(),
-                stamp as u64
+    let origins = asset_origins(&journey, |kind| {
+        if kind == "document" && mode != Mode::Fresh {
+            standing.titles["assets"].clone()
+        } else {
+            format!(
+                "{}{}",
+                onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX,
+                onetaskgraph_live::artifact::Stamp::new(
+                    onetaskgraph_live::artifact::Run::current(),
+                    stamp as u64
+                )
             )
-        );
-        let (id, _) = journey.create_named(kind, 2, &title, false);
-        let output = journey
-            .sandbox
-            .command()
-            .args(["--json", kind, "show", &id])
-            .output()
-            .unwrap();
-        let shown: Value = serde_json::from_str(&stdout(&output)).unwrap();
-        let path = shown["items"][0]["item"]["location"]["path"]
-            .as_str()
-            .unwrap();
-        let text = std::fs::read_to_string(path).unwrap();
-        let text: String = text
-            .lines()
-            .filter(|line| !line.starts_with("project:"))
-            .map(|line| format!("{line}\n"))
-            .collect();
-        std::fs::write(path, text).unwrap();
-        origins.push((kind, id, title));
-    }
-    let (endpoint, observed) = live_observer(key.clone());
+        }
+    });
+    let (endpoint, observed) = live_observer(
+        key.clone(),
+        journal.clone(),
+        "https://api.linear.app/graphql".into(),
+    );
     journey
         .sandbox
         .secrets_file(&format!("LINEAR_API_KEY={key}\n"));
@@ -1188,39 +1730,11 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
     // reads the observer's item journal, never the failed journey state; mutex guards are
     // dropped before assertions, and the runtime/client are only reused for fresh deletes.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        for (kind, id, title) in origins {
-            let run = || {
-                journey
-                    .sandbox
-                    .command()
-                    .args(["--json", kind, "copy", &id, "--to", "dest"])
-                    .output()
-                    .unwrap()
-            };
-            let output = run();
-            assert!(output.status.success(), "{}", stderr(&output));
-            let report: Value = serde_json::from_str(&stdout(&output)).unwrap();
-            let dest = report["items"][0]["destination"].as_str().unwrap();
-            let output = journey
-                .sandbox
-                .command()
-                .args(["--json", kind, "show", dest])
-                .output()
-                .unwrap();
-            assert!(output.status.success(), "{}", stderr(&output));
-            let shown: Value = serde_json::from_str(&stdout(&output)).unwrap();
-            let item = &shown["items"][0]["item"];
-            assert_eq!(
-                item["title"], title,
-                "the destination retains its recoverable ownership title"
-            );
-            let content = item["content"].as_str().unwrap();
-            assert!(!content.contains("](./"));
-            let uploads = item["metadata"]["onetaskgraph.assets"].as_object().unwrap();
-            assert_eq!(uploads.len(), 2);
-            for (name, upload) in uploads {
-                let url = upload["url"].as_str().unwrap();
-                assert!(content.contains(url));
+        drive_asset_copy_recopy(
+            &journey,
+            &origins,
+            mode,
+            |name, url| {
                 let parsed = reqwest::Url::parse(url).unwrap();
                 assert_eq!(parsed.scheme(), "https");
                 assert_eq!(parsed.host_str(), Some("uploads.linear.app"));
@@ -1238,34 +1752,20 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
                     response.status()
                 );
                 assert!(response.status().is_success());
-            }
-            let before = observed.lock().unwrap().signed.len();
-            let output = run();
-            assert!(output.status.success(), "{}", stderr(&output));
-            let after = observed.lock().unwrap().signed.len();
-            assert_eq!(after, before, "unchanged copy sends no fileUpload");
-        }
+            },
+            || observed.lock().unwrap().signed.len(),
+        );
     }));
     for observation in &observed.lock().unwrap().observations {
         eprintln!("{observation}");
     }
     let items = observed.lock().unwrap().items.clone();
-    let mut cleanup_failed = false;
-    for (kind, id) in items {
-        let mutation = if kind == "issue" {
-            "issueDelete"
-        } else {
-            "documentDelete"
-        };
-        let response: Value = runtime.block_on(async {
-            client.post("https://api.linear.app/graphql").header("Authorization", &key)
-                .json(&json!({"query":format!("mutation($id:String!){{{mutation}(id:$id){{success}}}}"),"variables":{"id":id}}))
-                .send().await.unwrap().json().await.unwrap()
-        });
-        let removed = response["data"][mutation]["success"] == true;
-        eprintln!("live disposable {kind} {id}: removed={removed}, response={response}");
-        cleanup_failed |= !removed;
-    }
+    let cleanup_failed =
+        !retire_asset_invocation(runtime, lifecycle_endpoint, &key, &items, standing, scope);
+    // That cleanup attempted every slot `created` recorded, so the caller's guard must not
+    // send their deletes a second time.
+    created.forget();
+    journal.finish().unwrap();
     assert!(!cleanup_failed, "live disposable cleanup failed");
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
@@ -2059,4 +2559,688 @@ fn an_asset_carrying_rendering_records_what_linear_stores_and_an_unstable_backen
             .held
             .rewrite_markdown_on_write(LinearMarkdown::Measured);
     }
+}
+
+#[test]
+fn document_modes_replay_the_live_binary_asset_entry_over_http() {
+    use document_lifecycle::journal::Journal;
+    let journey = Journey::with_clients(0);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let endpoint = format!("{}/0/graphql", journey.workspace.endpoint);
+    let journal = Journal::new("assets", "initialize");
+    journey.workspace.state.lock().unwrap().document_journal = Some(journal.clone());
+    let scope = Scope::ci("ENG").unwrap();
+    let slots = &[Slot::Assets];
+    // A default non-CI invocation refuses before any create and names the explicit mode,
+    // which initializes its own set, finds it again on recovery and retires it.
+    let local = Scope::local("ENG", "123-456-500").unwrap();
+    let absent = runtime.block_on(document_lifecycle::prepare(
+        &endpoint,
+        "fixture-key",
+        "ENG",
+        "team",
+        local,
+        Mode::Ordinary,
+        slots,
+    ));
+    assert!(absent.err().unwrap().contains("initialize"));
+    assert_eq!(journal.count(), 0, "ordinary absence refuses before create");
+    let created = document_lifecycle::Created::default();
+    let standing = runtime
+        .block_on(document_lifecycle::prepare_owned(
+            &endpoint,
+            "fixture-key",
+            "ENG",
+            "team",
+            local,
+            Mode::Initialize,
+            slots,
+            &created,
+        ))
+        .unwrap();
+    assert_eq!(
+        journal.count(),
+        1,
+        "one asset slot initialized at the HTTP boundary"
+    );
+    let again = runtime
+        .block_on(document_lifecycle::prepare(
+            &endpoint,
+            "fixture-key",
+            "ENG",
+            "team",
+            local,
+            Mode::Initialize,
+            slots,
+        ))
+        .unwrap();
+    assert_eq!(standing.ids, again.ids);
+    assert_eq!(
+        journal.count(),
+        1,
+        "recovery discovers the exact initialized slot"
+    );
+    assert_eq!(
+        runtime
+            .block_on(document_lifecycle::retire(
+                &endpoint,
+                "fixture-key",
+                local,
+                &created
+            ))
+            .unwrap(),
+        1
+    );
+    journal.finish().unwrap();
+    // The CI set is absent: the first ordinary pass rebuilds its one slot through the lane's
+    // own guard, files it as a cold rebuild, and runs every reuse assertion over it; the warm
+    // pass after it creates nothing. Then the daily fresh pass.
+    for (mode, label, warm) in [
+        (Mode::Ordinary, "ordinary", false),
+        (Mode::Ordinary, "ordinary", true),
+        (Mode::Fresh, "fresh", true),
+    ] {
+        if !(mode == Mode::Ordinary && warm) {
+            journal.begin(label);
+        }
+        let before = journal.count();
+        let rebuilt_before = journal.count_in(document_lifecycle::journal::COLD_REBUILD);
+        let run = match (mode, warm) {
+            (Mode::Fresh, _) => 2000,
+            (_, false) => 1000,
+            (_, true) => 1001,
+        };
+        let mut fresh_title = None;
+        guard_asset_invocation(
+            &runtime,
+            &endpoint,
+            "fixture-key",
+            "ENG",
+            "team",
+            scope,
+            mode,
+            &journal,
+            &document_lifecycle::Created::default(),
+            |standing| {
+                reset_asset_slot(&runtime, &endpoint, "fixture-key", standing, label, 21);
+                let origins = asset_origins(&journey, |kind| {
+                    if kind == "document" && mode == Mode::Ordinary {
+                        standing.titles["assets"].clone()
+                    } else {
+                        format!(
+                            "{}123-456-{run}",
+                            onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX,
+                        )
+                    }
+                });
+                drive_asset_copy_recopy(
+                    &journey,
+                    &origins,
+                    mode,
+                    |name, url| {
+                        let response = runtime
+                            .block_on(
+                                reqwest::Client::new()
+                                    .get(url)
+                                    .header("Authorization", "fixture-key")
+                                    .send(),
+                            )
+                            .unwrap();
+                        assert!(response.status().is_success());
+                        let bytes = runtime.block_on(response.bytes()).unwrap();
+                        let state = journey.workspace.state.lock().unwrap();
+                        let upload = state
+                            .uploads
+                            .values()
+                            .find(|u| u.name == name && u.bytes == bytes.as_ref())
+                            .expect("authenticated image read is byte-identical to the upload");
+                        assert_eq!(upload.bytes.len(), upload.size);
+                        assert_eq!(asset_sha256(&upload.bytes), asset_sha256(&bytes));
+                    },
+                    || journey.workspace.counts().0,
+                );
+                fresh_title = origins
+                    .iter()
+                    .find(|(kind, _, _)| *kind == "document")
+                    .map(|origin| origin.2.clone());
+            },
+        );
+        let rebuilt = journal.count_in(document_lifecycle::journal::COLD_REBUILD) - rebuilt_before;
+        assert_eq!(
+            rebuilt,
+            usize::from(!warm),
+            "{label}: only the cold ordinary pass rebuilds the missing standing slot"
+        );
+        assert_eq!(
+            journal.count() - before - rebuilt,
+            usize::from(mode == Mode::Fresh),
+            "{label}: the shared entry path creates the fresh destination once"
+        );
+        // Removal does not erase a creation from its transport journal.
+        if mode == Mode::Fresh {
+            let title = fresh_title.unwrap();
+            let id = journey.workspace.held.document_titled(&title).unwrap();
+            assert!(cleanup_asset_items(
+                &runtime,
+                &endpoint,
+                "fixture-key",
+                &[("document", id)]
+            ));
+            assert!(journey.workspace.held.document_titled(&title).is_none());
+            assert_eq!(journal.count(), 1);
+        }
+        journal.finish().unwrap();
+    }
+    journal.begin("failure");
+    journal.journey("failed_asset_copy_cleanup");
+    let title = format!(
+        "{}123-456-3000",
+        onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX
+    );
+    let origins = asset_origins(&journey, |kind| format!("{title}-{kind}"));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drive_asset_copy_recopy(
+            &journey,
+            &origins,
+            Mode::Fresh,
+            |_, _| panic!("injected assertion failure after creation"),
+            || journey.workspace.counts().0,
+        )
+    }));
+    assert!(failure.is_err());
+    // The first origin is an issue; exercise the document failure path separately.
+    let document = origins
+        .iter()
+        .find(|(kind, _, _)| *kind == "document")
+        .unwrap()
+        .clone();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drive_asset_copy_recopy(
+            &journey,
+            std::slice::from_ref(&document),
+            Mode::Fresh,
+            |_, _| panic!("injected document assertion failure"),
+            || journey.workspace.counts().0,
+        )
+    }));
+    assert!(failure.is_err());
+    let id = journey.workspace.held.document_titled(&document.2).unwrap();
+    assert_eq!(
+        journal.count(),
+        1,
+        "failed-run creations remain in the journal"
+    );
+    assert!(cleanup_asset_items(
+        &runtime,
+        &endpoint,
+        "fixture-key",
+        &[("document", id)]
+    ));
+    assert!(
+        journey
+            .workspace
+            .held
+            .document_titled(&document.2)
+            .is_none()
+    );
+    assert_eq!(journal.count(), 1);
+    journal.residue(usize::from(
+        journey
+            .workspace
+            .held
+            .document_titled(&document.2)
+            .is_some(),
+    ));
+    journal.finish().unwrap();
+}
+
+#[test]
+fn asset_invocation_cleanup_retires_local_slots_and_continues_after_a_refused_delete() {
+    let journey = Journey::with_clients(0);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let endpoint = format!("{}/0/graphql", journey.workspace.endpoint);
+    let ci_scope = Scope::ci("ENG").unwrap();
+    let local_scope = Scope::local("ENG", "1-2-3").unwrap();
+    let prepare = |scope| {
+        runtime
+            .block_on(document_lifecycle::prepare(
+                &endpoint,
+                "fixture-key",
+                "ENG",
+                "team",
+                scope,
+                Mode::Initialize,
+                &[Slot::Assets],
+            ))
+            .unwrap()
+    };
+    let ci = prepare(ci_scope);
+    let local = prepare(local_scope);
+    let create = |title: &str| {
+        runtime.block_on(document_lifecycle::send(&endpoint,"fixture-key",onetaskgraph_linear::graphql::DOCUMENT_CREATE,json!({"input":{"title":title,"content":"synthetic disposable cleanup probe","teamId":"team"}}))).unwrap()["documentCreate"]["document"]["id"].as_str().unwrap().to_owned()
+    };
+    let first_title = format!("{}1-2-4", onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX);
+    let second_title = format!("{}1-2-5", onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX);
+    let first = create(&first_title);
+    let second = create(&second_title);
+    let unrelated = create("Unrelated synthetic document");
+    journey
+        .workspace
+        .state
+        .lock()
+        .unwrap()
+        .refused_document_deletes
+        .insert(first.clone());
+    let created = vec![("document", first.clone()), ("document", second.clone())];
+    assert!(
+        !retire_asset_invocation(
+            &runtime,
+            &endpoint,
+            "fixture-key",
+            &created,
+            &local,
+            local_scope
+        ),
+        "a refused removal reports failure"
+    );
+    let attempted = journey
+        .workspace
+        .state
+        .lock()
+        .unwrap()
+        .document_delete_attempts
+        .clone();
+    for id in [&first, &second, &local.ids["assets"]] {
+        assert!(
+            attempted.contains(id),
+            "cleanup attempted every invocation-owned item"
+        );
+    }
+    assert!(
+        journey
+            .workspace
+            .held
+            .document_titled(&first_title)
+            .is_some()
+    );
+    assert!(
+        journey
+            .workspace
+            .held
+            .document_titled(&second_title)
+            .is_none()
+    );
+    assert!(
+        journey
+            .workspace
+            .held
+            .document_titled(&local.titles["assets"])
+            .is_none(),
+        "local retained destination retires within invocation cleanup"
+    );
+    assert_eq!(
+        journey
+            .workspace
+            .held
+            .document_titled("Unrelated synthetic document"),
+        Some(unrelated)
+    );
+    assert!(retire_asset_invocation(
+        &runtime,
+        &endpoint,
+        "fixture-key",
+        &[],
+        &ci,
+        ci_scope
+    ));
+    assert_eq!(
+        journey.workspace.held.document_titled(&ci.titles["assets"]),
+        Some(ci.ids["assets"].clone()),
+        "CI standing slot survives the same cleanup entry"
+    );
+    journey
+        .workspace
+        .state
+        .lock()
+        .unwrap()
+        .refused_document_deletes
+        .clear();
+    assert!(
+        cleanup_asset_items(&runtime, &endpoint, "fixture-key", &[("document", first)]),
+        "retry retires only the refused invocation item"
+    );
+    assert!(
+        journey
+            .workspace
+            .held
+            .document_titled(&first_title)
+            .is_none()
+    );
+    let local = prepare(local_scope);
+    assert!(retire_asset_invocation(
+        &runtime,
+        &endpoint,
+        "fixture-key",
+        &[],
+        &local,
+        local_scope
+    ));
+    assert!(
+        journey
+            .workspace
+            .held
+            .document_titled(&local.titles["assets"])
+            .is_none(),
+        "successful normal local cleanup also retires its set"
+    );
+}
+
+/// A panic straight after the asset lane's one local slot create, and one later in the
+/// drive before its own cleanup, each retire the invocation's slot before the panic leaves
+/// the lane: one documentCreate and one documentDelete of that document at the transport,
+/// the create still counted, and the standing CI slot and an unrelated document kept.
+#[test]
+fn a_panic_after_the_local_asset_slot_create_retires_it_before_the_lane_fails() {
+    let journey = Journey::with_clients(0);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let endpoint = format!("{}/0/graphql", journey.workspace.endpoint);
+    let journal = document_lifecycle::journal::Journal::new("assets", "initialize");
+    journey.workspace.state.lock().unwrap().document_journal = Some(journal.clone());
+    let ci = runtime
+        .block_on(document_lifecycle::prepare(
+            &endpoint,
+            "fixture-key",
+            "ENG",
+            "team",
+            Scope::ci("ENG").unwrap(),
+            Mode::Initialize,
+            &[Slot::Assets],
+        ))
+        .unwrap();
+    let unrelated = runtime.block_on(document_lifecycle::send(&endpoint,"fixture-key",onetaskgraph_linear::graphql::DOCUMENT_CREATE,json!({"input":{"title":"Unrelated synthetic document","content":"synthetic","teamId":"team"}}))).unwrap()["documentCreate"]["document"]["id"].as_str().unwrap().to_owned();
+    for (stamp, created, drive_panics) in [
+        (
+            "1-2-3",
+            document_lifecycle::Created::panicking_after(1),
+            false,
+        ),
+        ("1-2-4", document_lifecycle::Created::default(), true),
+    ] {
+        let scope = Scope::local("ENG", stamp).unwrap();
+        let title =
+            onetaskgraph_linear::live_artifact::retained_title(scope, Slot::Assets).unwrap();
+        let creates = journal.count();
+        let deletes = journey
+            .workspace
+            .state
+            .lock()
+            .unwrap()
+            .document_delete_attempts
+            .len();
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            guard_asset_invocation(
+                &runtime,
+                &endpoint,
+                "fixture-key",
+                "ENG",
+                "team",
+                scope,
+                Mode::Initialize,
+                &journal,
+                &created,
+                |standing| {
+                    assert!(standing.ids.contains_key("assets"));
+                    assert!(!drive_panics, "injected failure in the drive");
+                },
+            )
+        }));
+        assert!(failed.is_err(), "{stamp}: the lane still fails");
+        assert_eq!(
+            journal.count() - creates,
+            1,
+            "{stamp}: the create stays counted"
+        );
+        let attempted = journey
+            .workspace
+            .state
+            .lock()
+            .unwrap()
+            .document_delete_attempts[deletes..]
+            .to_vec();
+        assert_eq!(
+            attempted.len(),
+            1,
+            "{stamp}: exactly the created slot is retired"
+        );
+        assert!(
+            journey.workspace.held.document_titled(&title).is_none(),
+            "{stamp}: nothing of the invocation's set survives"
+        );
+        assert_eq!(created.len(), 0);
+    }
+    assert_eq!(
+        journey.workspace.held.document_titled(&ci.titles["assets"]),
+        Some(ci.ids["assets"].clone()),
+        "the standing CI slot survives"
+    );
+    assert_eq!(
+        journey
+            .workspace
+            .held
+            .document_titled("Unrelated synthetic document"),
+        Some(unrelated)
+    );
+}
+
+#[test]
+fn asset_reset_must_store_its_current_marker_before_copying_and_recovers() {
+    let journey = Journey::with_clients(0);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let endpoint = format!("{}/0/graphql", journey.workspace.endpoint);
+    let journal = document_lifecycle::journal::Journal::new("assets", "initialize");
+    journey.workspace.state.lock().unwrap().document_journal = Some(journal.clone());
+    let standing = runtime
+        .block_on(document_lifecycle::prepare(
+            &endpoint,
+            "fixture-key",
+            "ENG",
+            "team",
+            Scope::ci("ENG").unwrap(),
+            Mode::Initialize,
+            &[Slot::Assets],
+        ))
+        .unwrap();
+    journal.begin("ordinary");
+    journey.workspace.state.lock().unwrap().ignore_asset_reset = true;
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        reset_asset_slot(
+            &runtime,
+            &endpoint,
+            "fixture-key",
+            &standing,
+            "current-run",
+            1,
+        )
+    }));
+    assert!(
+        refused.is_err(),
+        "an acknowledged reset that stores nothing must refuse"
+    );
+    assert_eq!(
+        journal.count(),
+        0,
+        "failed reset never bootstraps a replacement"
+    );
+    journey.workspace.state.lock().unwrap().ignore_asset_reset = false;
+    reset_asset_slot(
+        &runtime,
+        &endpoint,
+        "fixture-key",
+        &standing,
+        "recovered-run",
+        21,
+    );
+    assert_eq!(
+        journey
+            .workspace
+            .held
+            .long_form("documents", &standing.ids["assets"])
+            .as_deref(),
+        Some("Reset for invocation recovered-run")
+    );
+    assert_eq!(journal.count(), 0);
+}
+
+/// Two ordinary passes over one standing slot, the second with Linear's single read of the slot
+/// answering, once, from a replica still holding what the first pass wrote — after the reset
+/// was read back. The previous pass's content is what this pass would write were the content not
+/// run-specific, so the copy would find nothing to change and leave the reset marker in place,
+/// which is the `onetaskgraph.assets` read one live ordinary pass panicked on.
+#[test]
+fn an_ordinary_asset_pass_writes_over_a_replica_still_holding_the_previous_pass() {
+    let journey = Journey::with_clients(0);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let endpoint = format!("{}/0/graphql", journey.workspace.endpoint);
+    let journal = document_lifecycle::journal::Journal::new("assets", "initialize");
+    journey.workspace.state.lock().unwrap().document_journal = Some(journal.clone());
+    let standing = runtime
+        .block_on(document_lifecycle::prepare(
+            &endpoint,
+            "fixture-key",
+            "ENG",
+            "team",
+            Scope::ci("ENG").unwrap(),
+            Mode::Initialize,
+            &[Slot::Assets],
+        ))
+        .unwrap();
+    let slot = standing.ids["assets"].clone();
+    let read = |_: &str, url: &str| {
+        let response = runtime
+            .block_on(
+                reqwest::Client::new()
+                    .get(url)
+                    .header("Authorization", "fixture-key")
+                    .send(),
+            )
+            .unwrap();
+        assert!(response.status().is_success());
+    };
+    for pass in ["previous-pass", "lagging-pass"] {
+        let previous = journey.workspace.held.long_form("documents", &slot);
+        reset_asset_slot(&runtime, &endpoint, "fixture-key", &standing, pass, 21);
+        if pass == "lagging-pass" {
+            let previous = previous.unwrap();
+            assert!(previous.contains("onetaskgraph.assets"), "{previous}");
+            // Armed once the reset has been read back, as the live pass saw it.
+            journey.workspace.state.lock().unwrap().stale_document =
+                Some((slot.clone(), previous, 1));
+        }
+        let origins = asset_origins(&journey, |kind| {
+            if kind == "document" {
+                standing.titles["assets"].clone()
+            } else {
+                format!(
+                    "{}123-456-{pass}",
+                    onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX
+                )
+            }
+        });
+        let document = origins
+            .iter()
+            .find(|(kind, _, _)| *kind == "document")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            document.1, "notes:onetaskgraph-live-cleanup-retained-v1-ci-eng-assets",
+            "{pass}: the origin has the id every live pass's origin has"
+        );
+        drive_asset_copy_recopy(
+            &journey,
+            std::slice::from_ref(&document),
+            Mode::Ordinary,
+            read,
+            || journey.workspace.counts().0,
+        );
+        // Each live pass copies from a sandbox of its own, so its origin has the same id as the
+        // previous pass's; retiring this one's file lets the next pass's origin take that id too.
+        let output = journey
+            .sandbox
+            .command()
+            .args(["--json", "document", "show", &document.1])
+            .output()
+            .unwrap();
+        let shown: Value = serde_json::from_str(&stdout(&output)).unwrap();
+        std::fs::remove_file(
+            shown["items"][0]["item"]["location"]["path"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        journey
+            .workspace
+            .state
+            .lock()
+            .unwrap()
+            .stale_document
+            .as_ref()
+            .map(|held| held.2),
+        Some(0),
+        "the lagging replica answered the copy's read"
+    );
+    assert_eq!(journal.count(), 1, "the passes reuse the one slot");
+}
+
+#[test]
+fn live_asset_forwarding_transport_counts_created_then_deleted_documents() {
+    let journey = Journey::with_clients(0);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let upstream = format!("{}/0/graphql", journey.workspace.endpoint);
+    // The synthetic upstream checks the wire shape independently of the real observer.
+    journey.workspace.state.lock().unwrap().document_journal =
+        Some(document_lifecycle::journal::Journal::new("assets", "fresh"));
+    let journal = document_lifecycle::journal::Journal::new("assets", "fresh");
+    journal.journey("live-asset-forwarding-transport");
+    let (endpoint, observed) = live_observer("fixture-key".into(), journal.clone(), upstream);
+    let created=runtime.block_on(document_lifecycle::send(&endpoint,"fixture-key",onetaskgraph_linear::graphql::DOCUMENT_CREATE,json!({"input":{"title":"Synthetic forwarded document","content":"Synthetic body","teamId":"team"}}))).unwrap();
+    let id = created["documentCreate"]["document"]["id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        journal.count(),
+        1,
+        "the live forwarding path observes the actual create acknowledgement"
+    );
+    assert_eq!(
+        observed.lock().unwrap().items,
+        vec![("document", id.to_owned())]
+    );
+    assert!(cleanup_asset_items(
+        &runtime,
+        &endpoint,
+        "fixture-key",
+        &[("document", id.to_owned())]
+    ));
+    assert!(
+        journey
+            .workspace
+            .held
+            .document_titled("Synthetic forwarded document")
+            .is_none()
+    );
+    assert_eq!(
+        journal.count(),
+        1,
+        "deletion never erases a forwarded create"
+    );
+    let directory = journey.sandbox.subdirectory("forwarded-journal");
+    journal.finish_in(&directory).unwrap();
+    let recorded: Value = serde_json::from_slice(
+        &std::fs::read(directory.join("linear-live-documents-fresh.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(recorded["operations"].as_array().unwrap().len(), 1);
+    assert_eq!(recorded["completed"], true);
 }

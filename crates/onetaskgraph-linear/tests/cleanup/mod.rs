@@ -234,11 +234,30 @@ async fn find_artifacts(
         found.extend(
             listed
                 .into_iter()
-                .filter(|(_, name)| matches(residue.prefix, name))
+                .filter(|(_, name)| cleanup_matches(residue.prefix, name, matches))
                 .map(|(id, name)| (residue, id, name)),
         );
     }
     Ok(found)
+}
+
+/// Retained CI objects are never run residue. Local sets use the same positive
+/// registration evidence as disposable artifacts, after extracting their exact stamp.
+fn cleanup_matches(prefix: &str, name: &str, matches: &dyn Fn(&str, &str) -> bool) -> bool {
+    use onetaskgraph_linear::live_artifact::classify_retained;
+    if let Some(retained) = classify_retained(name) {
+        return retained
+            .scope
+            .local_stamp()
+            .is_some_and(|stamp| matches(prefix, &format!("{prefix}{stamp}")));
+    }
+    if name
+        .strip_prefix(ARTIFACT_PREFIX)
+        .is_some_and(|suffix| suffix.starts_with("retained-"))
+    {
+        return false;
+    }
+    matches(prefix, name)
 }
 
 /// Deletes every issue, project, document and label whose name `matches`.

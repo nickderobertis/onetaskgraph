@@ -235,6 +235,26 @@ fn a_field_github_does_not_have_is_refused() {
     }
 }
 
+// The one statement of Linear's complexity model, shared with the Linear lanes' replays; the
+// janitor depends on that crate, so a change there selects these tests too.
+#[path = "../../onetaskgraph-linear/tests/document_lifecycle/complexity.rs"]
+mod complexity;
+
+/// Schema validation cannot see Linear's complexity cap, which refuses a document over it
+/// with HTTP 400.
+#[test]
+fn linear_documents_stay_under_linears_complexity_cap() {
+    use onetaskgraph_live_janitor::linear::{DELETE_DOCUMENT, DOCUMENTS};
+    let variables = serde_json::json!({"after":null,"filter":{},"id":"d"});
+    for document in [DOCUMENTS, DELETE_DOCUMENT] {
+        assert_eq!(
+            complexity::refusal(document, &variables),
+            None,
+            "{document}"
+        );
+    }
+}
+
 #[test]
 fn linear_documents_match_the_pinned_upstream_schema() {
     use onetaskgraph_live_janitor::linear::{DELETE_DOCUMENT, DOCUMENTS};

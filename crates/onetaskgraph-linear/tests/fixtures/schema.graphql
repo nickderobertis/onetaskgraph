@@ -181,6 +181,7 @@ type Issue {
   comments(before: String, last: Int, first: Int): CommentConnection!
 }
 type Project {
+  teams(first: Int, after: String): TeamConnection!
   id: ID!
   name: String!
   description: String
@@ -199,6 +200,7 @@ type Project {
 # Organization, which is why this source reports a document's labels as none rather than
 # standing a slot up beside a first-class type.
 type Document {
+  team: Team
   id: ID!
   title: String!
   content: String
@@ -286,10 +288,12 @@ type ProjectRelation {
   relatedProject: Project
 }
 type Team {
+  key: String!
   id: ID!
   states(first: Int): WorkflowStateConnection!
 }
 type TeamConnection {
+  pageInfo: PageInfo!
   nodes: [Team!]!
 }
 type WorkflowStateConnection {
