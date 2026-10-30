@@ -140,7 +140,8 @@ printf '#!/usr/bin/env bash\n. "%s" "%s" "$@"\nexec "%s" "$@"\n' \
   "$root/scripts/python-call-site.sh" "$probe" "$real_python3" >"$probe/bin/python3"
 chmod +x "$probe/bin/python3"
 mkdir -p "$tmp/sites/scripts"
-printf '%s\n' 'import sys' 'print("ran", sys.flags.utf8_mode)' >"$tmp/sites/scripts/site.py"
+# It prints what the options delivered, which no interpreter default decides.
+printf '%s\n' 'import sys' 'print("ran", sys.warnoptions, sorted(sys._xoptions))' >"$tmp/sites/scripts/site.py"
 caller="$tmp/sites/scripts/caller.sh"
 printf '%s\n' '#!/usr/bin/env bash' '"$@"' >"$caller"
 ran() {
@@ -150,8 +151,8 @@ ran() {
   printf '%s' "$out"
 }
 [ "$(ran -m json.tool <<<'{}')" = "{}" ] || fail "-m json.tool did not run through the recorder" "keep stdin and the arguments intact"
-[ "$(ran -W ignore scripts/site.py)" = "ran 0" ] || fail "-W ignore scripts/site.py did not run through the recorder" "keep the arguments intact"
-[ "$(ran -X utf8 scripts/site.py)" = "ran 1" ] || fail "-X utf8 scripts/site.py did not run through the recorder" "keep the arguments intact"
+[ "$(ran -W ignore scripts/site.py)" = "ran ['ignore'] []" ] || fail "-W ignore scripts/site.py did not run through the recorder" "keep the arguments intact"
+[ "$(ran -X utf8 scripts/site.py)" = "ran [] ['utf8']" ] || fail "-X utf8 scripts/site.py did not run through the recorder" "keep the arguments intact"
 # The lone options run as this script's own child, by a process id it holds, so a recorder
 # that loops is stopped here after a minute rather than by a `timeout` macOS does not ship.
 for lone in -W -X; do
