@@ -9,6 +9,14 @@
 # credential absent and read exactly like a pass. AGENTS.md records why that step is where a
 # second session per lane would otherwise come from.
 set -euo pipefail
+# The step this drives runs on Linux alone (scripts/check-fixture-discrimination.sh skips off
+# it), so off Linux there is no process to watch; the Linux lane drives it.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32* | *darwin*)
+    echo "check-fixture-discrimination-credential-free: skipped off Linux (the step it drives runs on Linux alone); the Linux lane runs it" >&2
+    exit 0
+    ;;
+esac
 
 fatal() {
   echo "check-fixture-discrimination-credential-free: $1" >&2

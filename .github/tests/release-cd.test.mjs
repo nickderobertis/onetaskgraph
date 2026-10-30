@@ -110,10 +110,11 @@ function recipe(job, args, env = {}) {
   });
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
-// A run still going after `bound` is stopped and fails with what it wrote and every process
-// alive then, so a release build that hangs on the hosted runner says what it waited on
-// instead of holding the job to its timeout.
-function runAsync(command, args, env, bound = 15 * 60 * 1000) {
+// A run still going after `bound` is stopped and fails with what it wrote and the build
+// processes alive then, so a release build that hangs on the hosted runner says what it
+// waited on before the job's own timeout. The bound sits above the release compile this run
+// can pay on a contended runner (over nine minutes, hosted), and below that timeout.
+function runAsync(command, args, env, bound = 22 * 60 * 1000) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: checkout,
