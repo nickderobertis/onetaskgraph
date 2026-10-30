@@ -137,10 +137,11 @@ case "$#:${1:-}" in
   1:--interpreter-only) (cd "$tmp" && "$python_bin" -c 'pass'); exit 0 ;;
   *) echo "distribution test takes no argument, --release-build-only or --interpreter-only alone, not '$*'; next: run scripts/test-distribution.sh with none" >&2; exit 2 ;;
 esac
-# In Actions, every line of the whole journey is timed into a trace and its slowest are named
-# on exit, because the hosted runners are where it is slow and nothing else there says where.
-# bash 5's EPOCHREALTIME costs no process per line; an older bash (macOS's 3.2) is not traced.
-if [ "${GITHUB_ACTIONS:-}" = true ] && [ "${BASH_VERSINFO[0]}" -ge 5 ]; then
+# Asked for with ONETASKGRAPH_DISTRIBUTION_TIMINGS=1 (scripts/ci-job.sh asks on the hosted
+# Windows runner, where this journey is slow and nothing else says where), every line of the
+# whole journey is timed into a trace and its slowest are named on exit. bash 5's
+# EPOCHREALTIME costs no process per line; an older bash (macOS's 3.2) is not traced.
+if [ "${ONETASKGRAPH_DISTRIBUTION_TIMINGS:-}" = 1 ] && [ "${BASH_VERSINFO[0]}" -ge 5 ]; then
   exec 7>"$tmp/journey.trace"
   BASH_XTRACEFD=7
   PS4='+${EPOCHREALTIME} ${BASH_SOURCE##*/}:${LINENO}: '

@@ -11,6 +11,7 @@ import {
   inputProblems,
   policyJourneyFiles,
   policyJourneyReadSet,
+  rustCacheJourneyFiles,
 } from "../../test-inputs.mjs";
 import { parse } from "yaml";
 import { graphReadSet, read } from "../../workflow-graph.mjs";
@@ -44,6 +45,7 @@ test("the two projects run every journey exactly once through its owning target"
   const policy = load("../project.json");
   for (const [project, target, files] of [
     [policy, "policy-tests", policyJourneyFiles],
+    [policy, "rust-cache-action", rustCacheJourneyFiles],
     [workflows, "cd-journeys", cdJourneyFiles],
   ]) {
     assert.equal(project.targets.test.executor, "nx:noop");
@@ -54,13 +56,17 @@ test("the two projects run every journey exactly once through its owning target"
   // Every policy journey sits under this project's root, which github-workflows' own inputs
   // leave out, so editing one alone does not select the CD journeys.
   assert.ok(workflows.namedInputs.default.includes("!{projectRoot}/policy/**/*"));
-  for (const file of policyJourneyFiles) assert.ok(file.startsWith(".github/policy/"), file);
+  for (const file of [...policyJourneyFiles, ...rustCacheJourneyFiles])
+    assert.ok(file.startsWith(".github/policy/"), file);
   const actual = ["tests", "policy/tests"].flatMap((directory) =>
     readdirSync(new URL(`../../${directory}/`, import.meta.url))
       .filter((file) => file.endsWith(".test.mjs"))
       .map((file) => `.github/${directory}/${file}`),
   );
-  assert.deepEqual([...policyJourneyFiles, ...cdJourneyFiles].sort(), actual.sort());
+  assert.deepEqual(
+    [...policyJourneyFiles, ...rustCacheJourneyFiles, ...cdJourneyFiles].sort(),
+    actual.sort(),
+  );
 });
 
 // Selection by real Nx, which is what the split is for: a crate edit selects the CD journeys
@@ -196,4 +202,88 @@ test("a skip widened past Windows, or test-linux leaving distribution-check, is 
       "$1windows-latest",
     );
   }, /test-linux does not run on ubuntu-latest/);
+});
+
+// Which projects a job's phases run a target for, as Nx reads each phase's exclusions: a name,
+// a `tag:`, `*`, and `!name` putting one back, in order.
+function selects(job, target, project, tags, ciJob) {
+  const arm = ciJob.match(new RegExp(`\\n {2}${job}\\)\\n[\\s\\S]*?phases="([\\s\\S]*?)"\\n`));
+  if (!arm) return false;
+  return arm[1].split("\n").some((line) => {
+    const [, kind, targets, excluded = "-"] = line.trim().split(/\s+/);
+    if (kind !== "affected" || !targets.split(",").includes(target)) return false;
+    let out = false;
+    for (const pattern of excluded === "-" ? [] : excluded.split(",")) {
+      if (pattern === "*") out = true;
+      else if (pattern === `!${project}`) out = false;
+      else if (
+        pattern === project ||
+        (pattern.startsWith("tag:") && tags.includes(pattern.slice(4)))
+      )
+        out = true;
+    }
+    return !out;
+  });
+}
+
+function placementProblems(ciJob) {
+  const problems = [];
+  const tagsOf = (file) => load(file).tags ?? [];
+  const suites = [
+    ["github-workflows", "test", tagsOf("../../project.json")],
+    ["github-workflow-policy", "test", tagsOf("../project.json")],
+  ];
+  for (const [project, target, tags] of suites) {
+    if (!selects("test-linux", target, project, tags, ciJob))
+      problems.push(`test-linux does not run ${project}:${target}`);
+    for (const job of ["test-windows", "test-macos"])
+      if (selects(job, target, project, tags, ciJob))
+        problems.push(`${job} runs ${project}:${target}, whose suites model Linux jobs`);
+  }
+  const policyTags = tagsOf("../project.json");
+  for (const job of ["test-linux", "test-windows", "test-macos"])
+    if (
+      !selects(job, "rust-cache-action", "github-workflow-policy", policyTags, ciJob) &&
+      !(job === "test-linux" && selects(job, "test", "github-workflow-policy", policyTags, ciJob))
+    )
+      problems.push(`${job} does not run the real rust-cache action's journey`);
+  return problems;
+}
+
+test("the workflow suites run in test-linux, and the rust-cache journey on every runner", () => {
+  assert.deepEqual(placementProblems(read("scripts/ci-job.sh")), []);
+  assert.deepEqual(load("../project.json").targets.test.dependsOn.sort(), [
+    "policy-tests",
+    "rust-cache-action",
+  ]);
+});
+
+test("a workflow suite leaving test-linux, or the rust-cache journey leaving a runner, is refused", () => {
+  const ciJob = read("scripts/ci-job.sh");
+  const refused = (edited, expected) =>
+    assert.ok(
+      placementProblems(edited).some((problem) => expected.test(problem)),
+      `${expected}: ${JSON.stringify(placementProblems(edited))}`,
+    );
+  refused(
+    ciJob.replace(
+      "1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e\n",
+      "1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows\n",
+    ),
+    /test-linux does not run github-workflows:test/,
+  );
+  refused(
+    ciJob.replace(
+      /(\n {2}test-windows\)[\s\S]*?)1 affected rust-cache-action -\n/,
+      (_, before) => before,
+    ),
+    /test-windows does not run the real rust-cache action's journey/,
+  );
+  refused(
+    ciJob.replace(
+      /(\n {2}test-macos\)[\s\S]*?),github-workflows,github-workflow-policy --parallel=2/,
+      (_, before) => `${before} --parallel=2`,
+    ),
+    /test-macos runs github-workflows:test/,
+  );
 });

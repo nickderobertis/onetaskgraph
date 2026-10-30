@@ -23,9 +23,9 @@ from release_cd import plan
 from product_versions import SEMANTIC_VERSION_RE, SemanticVersion
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
-# In Actions each refusal and each packaging run says what it took, because the hosted
-# runners are where this journey is slow and its own output says nothing while it works.
-TIMED = os.environ.get('GITHUB_ACTIONS') == 'true'
+# Asked for with ONETASKGRAPH_DISTRIBUTION_TIMINGS=1, as the distribution journey's own
+# timing is: each refusal and each packaging run says what it took.
+TIMED = os.environ.get('ONETASKGRAPH_DISTRIBUTION_TIMINGS') == '1'
 
 
 def timed(label: str, started: float) -> None:

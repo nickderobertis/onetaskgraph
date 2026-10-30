@@ -59,8 +59,10 @@ export const policyJourneyFiles = [
   ".github/policy/tests/release-shortcut.test.mjs",
   ".github/policy/tests/reusable.test.mjs",
   ".github/policy/tests/rust-cache-warm.test.mjs",
-  ".github/policy/tests/rust-cache.test.mjs",
 ];
+
+// The one policy journey run on every platform, because the real action it runs does.
+export const rustCacheJourneyFiles = [".github/policy/tests/rust-cache.test.mjs"];
 
 export const cdJourneyFiles = [
   ".github/tests/github-interfaces.test.mjs",

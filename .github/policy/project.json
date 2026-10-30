@@ -48,14 +48,14 @@
       "executor": "nx:run-commands",
       "dependsOn": ["bootstrap"],
       "options": {
-        "command": "node --test .github/policy/tests/boundaries.test.mjs .github/policy/tests/inventory.test.mjs .github/policy/tests/policy-carriers.test.mjs .github/policy/tests/policy-routing.test.mjs .github/policy/tests/policy.test.mjs .github/policy/tests/release-shortcut.test.mjs .github/policy/tests/reusable.test.mjs .github/policy/tests/rust-cache-warm.test.mjs .github/policy/tests/rust-cache.test.mjs"
+        "command": "node --test .github/policy/tests/boundaries.test.mjs .github/policy/tests/inventory.test.mjs .github/policy/tests/policy-carriers.test.mjs .github/policy/tests/policy-routing.test.mjs .github/policy/tests/policy.test.mjs .github/policy/tests/release-shortcut.test.mjs .github/policy/tests/reusable.test.mjs .github/policy/tests/rust-cache-warm.test.mjs"
       },
       "cache": false,
       "outputs": ["{workspaceRoot}/.github/.telemetry/macos-policy.json"]
     },
     "test": {
       "executor": "nx:noop",
-      "dependsOn": ["policy-tests"],
+      "dependsOn": ["policy-tests", "rust-cache-action"],
       "cache": false
     },
     "budgets": {
@@ -69,6 +69,15 @@
     "coverage": {
       "executor": "nx:noop",
       "//": "Private declarative workflow policy is verified by executable assertions and real Nx selection; it adds no separate runtime coverage metric."
+    },
+    "rust-cache-action": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/policy/tests/rust-cache.test.mjs"
+      },
+      "cache": false,
+      "//": "The one policy journey that runs the real rust-cache action, which also runs on the Windows and macOS runners; test-windows and test-macos run this target alone, and test-linux runs it with the rest of `test`."
     }
   }
 }
