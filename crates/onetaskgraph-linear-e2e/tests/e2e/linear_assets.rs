@@ -40,6 +40,9 @@ struct State {
     refused_document_deletes: std::collections::BTreeSet<String>,
     document_delete_attempts: Vec<String>,
     ignore_asset_reset: bool,
+    /// A document id, the content a lagging replica still holds for it, and how many more
+    /// `document(id:)` reads that replica answers.
+    stale_document: Option<(String, String, usize)>,
     requests: usize,
     tokens: f64,
     last_refill: Duration,
@@ -452,6 +455,14 @@ fn serve(
                         json!({"nodes":[{"key":"ENG"}],"pageInfo":{"hasNextPage":false}});
                 }
             }
+        }
+        if let Some(row) = response.pointer_mut("/data/document")
+            && let Some((id, content, reads)) = &mut state.lock().unwrap().stale_document
+            && row["id"].as_str() == Some(id.as_str())
+            && *reads > 0
+        {
+            *reads -= 1;
+            row["content"] = json!(content);
         }
         if let Some(journal) = &state.lock().unwrap().document_journal {
             // Record acknowledgement before validating its shape, including uncertain IDs.
@@ -1225,10 +1236,34 @@ fn live_observer(
     (format!("{endpoint}/graphql"), state)
 }
 
+/// The line [`asset_origins`] ends each origin's content with, naming the invocation that made it.
+const INVOCATION_LINE: &str = "Invocation ";
+
+/// Reads after a copy that may still answer the destination as it stood before, and their spacing.
+const SHOW_READS: u32 = 21;
+
+/// Each origin of one invocation, its content ending in an [`INVOCATION_LINE`] no other
+/// invocation shares.
+///
+/// The standing asset slot keeps one title across runs, and the images are seeded from the title,
+/// so without that line every ordinary pass would copy byte-for-byte what the previous one wrote.
+/// Linear answers a single read from a replica that can still hold that previous content after
+/// the reset is confirmed, and a copy reading it finds nothing to change and writes nothing —
+/// which is how one ordinary pass showed the reset marker with no `onetaskgraph.assets`.
 fn asset_origins(
     journey: &Journey,
     title: impl Fn(&str) -> String,
 ) -> Vec<(&'static str, String, String)> {
+    static INVOCATIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let invocation = format!(
+        "{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        INVOCATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    );
     let mut origins = Vec::new();
     for kind in ["task", "document"] {
         let title = title(kind);
@@ -1244,11 +1279,12 @@ fn asset_origins(
             .as_str()
             .unwrap();
         let text = std::fs::read_to_string(path).unwrap();
-        let text: String = text
+        let mut text: String = text
             .lines()
             .filter(|line| !line.starts_with("project:"))
             .map(|line| format!("{line}\n"))
             .collect();
+        text.push_str(&format!("\n{INVOCATION_LINE}{invocation}\n"));
         std::fs::write(path, text).unwrap();
         origins.push((kind, id, title));
     }
@@ -1355,19 +1391,49 @@ fn drive_asset_copy_recopy(
             }
             command.output().unwrap()
         };
+        let show = |id: &str| {
+            let output = journey
+                .sandbox
+                .command()
+                .args(["--json", kind, "show", id])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", stderr(&output));
+            serde_json::from_str::<Value>(&stdout(&output)).unwrap()
+        };
+        let origin = show(id);
+        let invocation = origin["items"][0]["item"]["content"]
+            .as_str()
+            .unwrap()
+            .lines()
+            .find(|line| line.starts_with(INVOCATION_LINE))
+            .expect("every origin names its invocation")
+            .to_owned();
         let output = run();
         assert!(output.status.success(), "{}", stderr(&output));
         let report: Value = serde_json::from_str(&stdout(&output)).unwrap();
         let dest = report["items"][0]["destination"].as_str().unwrap();
-        let output = journey
-            .sandbox
-            .command()
-            .args(["--json", kind, "show", dest])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{}", stderr(&output));
-        let shown: Value = serde_json::from_str(&stdout(&output)).unwrap();
+        // A single Linear read can still answer from before the copy; read until it reaches it.
+        let mut shown = show(dest);
+        for _ in 1..SHOW_READS {
+            if shown["items"][0]["item"]["content"]
+                .as_str()
+                .is_some_and(|content| content.contains(&invocation))
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+            shown = show(dest);
+        }
         let item = &shown["items"][0]["item"];
+        assert!(
+            item["content"]
+                .as_str()
+                .is_some_and(|content| content.contains(&invocation)),
+            "{kind} copy {} never reached {dest} after {SHOW_READS} reads: {}",
+            report["items"][0]["action"],
+            item["content"]
+        );
         assert_eq!(
             item["title"],
             title.as_str(),
@@ -2994,6 +3060,108 @@ fn asset_reset_must_store_its_current_marker_before_copying_and_recovers() {
         Some("Reset for invocation recovered-run")
     );
     assert_eq!(journal.count(), 0);
+}
+
+/// Two ordinary passes over one standing slot, the second with Linear's single read of the slot
+/// answering, once, from a replica still holding what the first pass wrote — after the reset
+/// was read back. The previous pass's content is what this pass would write were the content not
+/// run-specific, so the copy would find nothing to change and leave the reset marker in place,
+/// which is the `onetaskgraph.assets` read one live ordinary pass panicked on.
+#[test]
+fn an_ordinary_asset_pass_writes_over_a_replica_still_holding_the_previous_pass() {
+    let journey = Journey::with_clients(0);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let endpoint = format!("{}/0/graphql", journey.workspace.endpoint);
+    let journal = document_lifecycle::journal::Journal::new("assets", "initialize");
+    journey.workspace.state.lock().unwrap().document_journal = Some(journal.clone());
+    let standing = runtime
+        .block_on(document_lifecycle::prepare(
+            &endpoint,
+            "fixture-key",
+            "ENG",
+            "team",
+            Scope::ci("ENG").unwrap(),
+            Mode::Initialize,
+            &[Slot::Assets],
+        ))
+        .unwrap();
+    let slot = standing.ids["assets"].clone();
+    let read = |_: &str, url: &str| {
+        let response = runtime
+            .block_on(
+                reqwest::Client::new()
+                    .get(url)
+                    .header("Authorization", "fixture-key")
+                    .send(),
+            )
+            .unwrap();
+        assert!(response.status().is_success());
+    };
+    for pass in ["previous-pass", "lagging-pass"] {
+        let previous = journey.workspace.held.long_form("documents", &slot);
+        reset_asset_slot(&runtime, &endpoint, "fixture-key", &standing, pass, 21);
+        if pass == "lagging-pass" {
+            let previous = previous.unwrap();
+            assert!(previous.contains("onetaskgraph.assets"), "{previous}");
+            // Armed once the reset has been read back, as the live pass saw it.
+            journey.workspace.state.lock().unwrap().stale_document =
+                Some((slot.clone(), previous, 1));
+        }
+        let origins = asset_origins(&journey, |kind| {
+            if kind == "document" {
+                standing.titles["assets"].clone()
+            } else {
+                format!(
+                    "{}123-456-{pass}",
+                    onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX
+                )
+            }
+        });
+        let document = origins
+            .iter()
+            .find(|(kind, _, _)| *kind == "document")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            document.1, "notes:onetaskgraph-live-cleanup-retained-v1-ci-eng-assets",
+            "{pass}: the origin has the id every live pass's origin has"
+        );
+        drive_asset_copy_recopy(
+            &journey,
+            std::slice::from_ref(&document),
+            Mode::Ordinary,
+            read,
+            || journey.workspace.counts().0,
+        );
+        // Each live pass copies from a sandbox of its own, so its origin has the same id as the
+        // previous pass's; retiring this one's file lets the next pass's origin take that id too.
+        let output = journey
+            .sandbox
+            .command()
+            .args(["--json", "document", "show", &document.1])
+            .output()
+            .unwrap();
+        let shown: Value = serde_json::from_str(&stdout(&output)).unwrap();
+        std::fs::remove_file(
+            shown["items"][0]["item"]["location"]["path"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        journey
+            .workspace
+            .state
+            .lock()
+            .unwrap()
+            .stale_document
+            .as_ref()
+            .map(|held| held.2),
+        Some(0),
+        "the lagging replica answered the copy's read"
+    );
+    assert_eq!(journal.count(), 1, "the passes reuse the one slot");
 }
 
 #[test]
