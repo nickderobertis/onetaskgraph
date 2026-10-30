@@ -20,10 +20,8 @@ const WARM = /^bash scripts\/warm-rust-cache\.sh(?: (--instrumented))?$/;
 
 const isMapping = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 
-// The shape every helper below reads, refused naming the file and the place it breaks rather
-// than surfacing later as a TypeError: a mapping whose `jobs`, `env` and each job's `env`,
-// `strategy.matrix.include` and `steps` — each step's `with`, `uses` and `run` — are what a
-// workflow spells them as.
+// Holds a parsed workflow to the shape the helpers below read, naming the file and where it
+// breaks rather than surfacing later as a TypeError.
 function shaped(file, document) {
   const refuse = (where, what) => {
     throw Error(`${file}: ${where} is not ${what}`);
@@ -332,7 +330,6 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
       },
     ],
   };
-  // A leg naming a matrix field it does not define is refused, not resolved to nothing.
   assert.throws(
     () => mutate((all) => delete linux(all).build),
     /names matrix\.build, which its leg does not define/,

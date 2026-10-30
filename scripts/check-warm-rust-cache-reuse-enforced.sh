@@ -28,13 +28,15 @@ if [ "$(uname -s)" != Linux ]; then
 fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-scratch="$(mktemp -d "${ONEPIPELINE_NODE_SCRATCH_DIR:-${TMPDIR:-/tmp}}/warm-rust-cache-reuse-enforced.XXXXXX")"
+scratch="$(mktemp -d "${ONEPIPELINE_NODE_SCRATCH_DIR:-${TMPDIR:-/tmp}}/warm-rust-cache-reuse-enforced.XXXXXX")" \
+  || fail "could not create a scratch directory" "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 trap 'rm -rf "$scratch"' EXIT
 
 tree="$scratch/tree"
-mkdir -p "$tree/scripts" "$tree/crates/onetaskgraph-plugin-api" "$scratch/bin"
+mkdir -p "$tree/scripts" "$tree/crates/onetaskgraph-plugin-api" "$scratch/bin" \
+  || fail "could not create the scratch tree in $scratch" "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 for script in check-warm-rust-cache-reuse.sh pr-build-commands.sh rust-coverage.sh; do
-  cp "$root/scripts/$script" "$tree/scripts/"
+  cp "$root/scripts/$script" "$tree/scripts/" || fail "could not copy scripts/$script into $scratch" "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 done
 printf '%s\n' '#!/usr/bin/env bash' 'echo "warm $*" >>"$WARM_RECORD"' >"$tree/scripts/warm-rust-cache.sh"
 printf '%s\n' '#!/usr/bin/env bash' 'echo "    Finished \`release\` profile"' >"$tree/scripts/test-distribution.sh"

@@ -406,9 +406,8 @@ elif ! grep -qF -- "$FOREIGN_FIXTURE" <<<"$OUTPUT"; then
 fi
 fixture cp "$ROOT/scripts/$STORE_GUARD" "$scratch/store/scripts/$STORE_GUARD"
 
-# The reader scripts/check-warm-rust-cache.sh asserts on, which names a crate's project.json it
-# could not parse. Its glob once named it `crates\broken\project.json` on the Windows runner,
-# and the check, matching the forward-slash spelling, failed `check (windows-latest)`.
+# The reader scripts/check-warm-rust-cache.sh asserts on names a crate's project.json it could
+# not parse, and has to name it with forward slashes on every platform for that check to match.
 readonly READER="pr-build-commands.sh"
 readonly BROKEN="crates/broken/project.json"
 readonly FOREIGN_BROKEN='crates\broken\project.json'

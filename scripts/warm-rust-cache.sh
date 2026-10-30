@@ -55,13 +55,18 @@ print("\n".join(package["name"] for package in packages))
   | tr -d '\r')" || fatal "could not list the workspace's crates" "run 'cargo metadata --no-deps' and fix what it reports"
 [ -n "$crates" ] || fatal "the workspace lists no crate" "run 'cargo metadata --no-deps' and fix what it reports"
 
+next="fix what it reports above, then rerun; the pull-request job it warms would fail the same way"
 for crate in $crates; do
-  cargo test --quiet --no-run --locked --all-features -p "$crate"
-  cargo test --quiet --no-run --locked -p "$crate"
+  cargo test --quiet --no-run --locked --all-features -p "$crate" \
+    || fatal "building $crate's test units with every feature failed" "$next"
+  cargo test --quiet --no-run --locked -p "$crate" \
+    || fatal "building $crate's test units with its default features failed" "$next"
   if "$instrumented"; then
     cargo llvm-cov --no-report nextest --package "$crate" --all-features --locked \
-      -E 'none()' --no-tests=pass
+      -E 'none()' --no-tests=pass \
+      || fatal "building $crate's instrumented test units failed" "$next"
   fi
 done
 
-bash scripts/test-distribution.sh --release-build-only
+bash scripts/test-distribution.sh --release-build-only \
+  || fatal "the distribution journey's release build failed" "$next"

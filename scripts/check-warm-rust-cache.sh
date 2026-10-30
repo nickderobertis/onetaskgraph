@@ -16,18 +16,20 @@ set -euo pipefail
 # Nothing here may open a live session; scripts/check-live-lane.sh holds it to that.
 unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-scratch="$(mktemp -d "${ONEPIPELINE_NODE_SCRATCH_DIR:-${TMPDIR:-/tmp}}/warm-rust-cache.XXXXXX")"
-trap 'rm -rf "$scratch"' EXIT
 fail() {
   echo "check-warm-rust-cache: $1" >&2
   echo "check-warm-rust-cache: next: $2" >&2
   exit 1
 }
 
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+scratch="$(mktemp -d "${ONEPIPELINE_NODE_SCRATCH_DIR:-${TMPDIR:-/tmp}}/warm-rust-cache.XXXXXX")" \
+  || fail "could not create a scratch directory" "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+trap 'rm -rf "$scratch"' EXIT
+
 tree="$scratch/tree"
-mkdir -p "$tree/scripts" "$scratch/bin"
-cp "$root/scripts/warm-rust-cache.sh" "$tree/scripts/"
+{ mkdir -p "$tree/scripts" "$scratch/bin" && cp "$root/scripts/warm-rust-cache.sh" "$tree/scripts/"; } \
+  || fail "could not plant the warmer in $scratch" "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 cat >"$tree/scripts/test-distribution.sh" <<'STUB'
 echo "distribution $*" >>"$WARM_RECORD"
 STUB
@@ -37,6 +39,7 @@ if [ "$1" = metadata ]; then
   echo '{"packages":[{"name":"alpha"},{"name":"beta"}]}'
 else
   echo "cargo $*" >>"$WARM_RECORD"
+  [ -z "${WARM_FAIL:-}" ] || [[ "$*" != *"$WARM_FAIL"* ]] || exit 101
 fi
 STUB
 chmod +x "$scratch/bin/cargo"
@@ -110,6 +113,14 @@ for arguments in "--bogus" "--instrumented extra"; do
   grep -q "not '$arguments'" "$scratch/refused.log" || { cat "$scratch/refused.log" >&2; fail "the refusal of '$arguments' does not name it" "name the arguments in the refusal"; }
 done
 
+# A build that fails stops the warmer, exit 1, naming that build and a next action.
+: >"$scratch/broken"
+status=0
+WARM_FAIL="-p beta" leg broken --instrumented || status=$?
+[ "$status" -eq 1 ] && grep -q "building beta's test units with every feature failed" "$scratch/broken.log" \
+  && grep -q "next:" "$scratch/broken.log" && [ "$(tail -1 "$scratch/broken")" = "cargo test --quiet --no-run --locked --all-features -p beta" ] \
+  || { cat "$scratch/broken.log" >&2; fail "the warmer exited $status on a failed build of beta, without stopping there naming it and a next action" "end each build in scripts/warm-rust-cache.sh with || fatal naming it"; }
+
 # The release build it hands to the distribution journey, driven for real behind a stand-in
 # `uv`: --release-build-only has to make exactly the journey's maturin build and stop there,
 # and any other argument has to be refused, exit 2, before anything is built. The journey's
@@ -119,8 +130,9 @@ done
 # between bash and a native process can rewrite.
 journey="$scratch/journey"
 journey_bin="$scratch/journey-bin"
-mkdir -p "$journey/scripts" "$journey/crates/onetaskgraph" "$journey_bin"
-cp "$root/scripts/test-distribution.sh" "$root/scripts/cli_wheel_lock.py" "$journey/scripts/"
+{ mkdir -p "$journey/scripts" "$journey/crates/onetaskgraph" "$journey_bin" \
+  && cp "$root/scripts/test-distribution.sh" "$root/scripts/cli_wheel_lock.py" "$journey/scripts/"; } \
+  || fail "could not plant the distribution journey in $scratch" "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 printf '[package]\nname = "onetaskgraph"\nversion = "1.2.3"\n' >"$journey/crates/onetaskgraph/Cargo.toml"
 cat >"$scratch/uv.rs" <<'RUST'
 use std::io::Write;
@@ -155,8 +167,8 @@ PATH="$journey_bin:$PATH" bash "$journey/scripts/test-distribution.sh" --release
 # action, never with a traceback: a crate's project.json that does not parse, and a missing
 # scripts/rust-coverage.sh.
 reader="$scratch/reader"
-mkdir -p "$reader/scripts" "$reader/crates/broken"
-cp "$root/scripts/pr-build-commands.sh" "$reader/scripts/"
+{ mkdir -p "$reader/scripts" "$reader/crates/broken" && cp "$root/scripts/pr-build-commands.sh" "$reader/scripts/"; } \
+  || fail "could not plant scripts/pr-build-commands.sh in $scratch" "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 printf '{"targets": {"test": \n' >"$reader/crates/broken/project.json"
 refused_by_reader() {
   local status=0
