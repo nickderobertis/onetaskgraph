@@ -343,6 +343,19 @@ expect_status "test-linux after a change to $CHANGED" 0
 expect "test-linux after a change to $CHANGED" ran "$CHANGED:coverage"
 expect "test-linux after a change to $CHANGED" ran "$CHANGED:test" absent
 expect "test-linux after a change to $CHANGED" ran "$DEPENDENT:test-uncovered"
+# What coverage cannot run is run beside it for every project whose suite coverage runs, an SDK
+# as much as a crate: each one declaring `test-uncovered`, read from its own project.json.
+for uncovered in $(cd "$REPO" && python3 -c '
+import json, pathlib
+for found in sorted(pathlib.Path(".").glob("*/*/project.json")) + sorted(pathlib.Path(".").glob("*/project.json")):
+    project = json.loads(found.read_text(encoding="utf-8"))
+    if any(tag.startswith("test-in-coverage:") for tag in project.get("tags", [])) and "test-uncovered" in project.get("targets", {}):
+        print(project["name"])
+' | tr -d '\r'); do
+  case " $CHANGED $DEPENDENT sdk-python " in
+    *" $uncovered "*) expect "test-linux after a change to $CHANGED" ran "$uncovered:test-uncovered" ;;
+  esac
+done
 expect "test-linux after a change to $CHANGED" ran "onetaskgraph-linear-e2e:test"
 expect "test-linux after a change to $CHANGED" ran "onetaskgraph-linear-e2e:budgets"
 expect "test-linux after a change to $CHANGED" ran "workspace:test"

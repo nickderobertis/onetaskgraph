@@ -71,7 +71,7 @@ case "$JOB" in
     phases="1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e
 1 affected test *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 affected test-uncovered,coverage tag:layer:sdk
-1 affected coverage *,!tag:layer:sdk
+1 affected test-uncovered,coverage *,!tag:layer:sdk
 1 run scripts:distribution-check -
 1 run scripts:distribution-test -
 2 affected budgets - --excludeTaskDependencies,--skipNxCache"
