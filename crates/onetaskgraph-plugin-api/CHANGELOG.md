@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.13](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.12.12...onetaskgraph-plugin-api-v0.12.13) - 2026-10-30
+
+### Added
+
+- project human tasks through existing tracker routing ([#3824](https://github.com/nickderobertis/onetaskgraph/pull/3824))
+
 ## [0.12.11](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.12.10...onetaskgraph-plugin-api-v0.12.11) - 2026-10-29
 
 ### Fixed
