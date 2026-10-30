@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use onetaskgraph_e2e_support::loopback::{self, After};
 use onetaskgraph_e2e_support::{clock::SimulatedClock, images};
 use onetaskgraph_plugin_api::asset_sha256;
 use serde_json::{Value, json};
@@ -88,13 +89,27 @@ impl Workspace {
         let serving = state.clone();
         let timing = clock.clone();
         let address = endpoint.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let state = serving.clone();
-                let clock = timing.clone();
-                let backend = backend.clone();
-                let address = address.clone();
-                std::thread::spawn(move || serve(stream, &backend, &address, &state, &clock));
+        // Each connection the binary keeps alive is answered on a thread of its own, forwarding
+        // over one kept connection of its own to the backend, so no request costs a connection
+        // at either end — a connection per request is what AGENTS.md says exhausts the Windows
+        // runner's loopback ports under the rest of this suite.
+        let upstream_address = backend.parse().unwrap();
+        loopback::serve_each(listener, move || {
+            let state = serving.clone();
+            let clock = timing.clone();
+            let backend = backend.clone();
+            let address = address.clone();
+            let mut upstream = loopback::Upstream::new(upstream_address);
+            move |request: &loopback::Request, stream: &mut TcpStream| {
+                serve(
+                    request,
+                    stream,
+                    &mut upstream,
+                    &backend,
+                    &address,
+                    &state,
+                    &clock,
+                )
             }
         });
         config["endpoint"] = json!(format!("{endpoint}/0/graphql"));
@@ -155,6 +170,10 @@ fn answer(stream: &mut TcpStream, status: u16, body: &[u8]) {
 }
 
 fn answer_hinted(stream: &mut TcpStream, status: u16, body: &[u8], hint: Option<&str>) {
+    respond(stream, status, body, hint, "close");
+}
+
+fn respond(stream: &mut TcpStream, status: u16, body: &[u8], hint: Option<&str>, connection: &str) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -178,11 +197,21 @@ fn answer_hinted(stream: &mut TcpStream, status: u16, body: &[u8], hint: Option<
     };
     write!(
         stream,
-        "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\n{headers}Connection: close\r\n\r\n",
+        "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\n{headers}Connection: {connection}\r\n\r\n",
         body.len()
     )
     .unwrap();
     stream.write_all(body).unwrap();
+}
+
+/// [`answer`] on a connection the client keeps alive, which therefore stays open.
+fn reply(stream: &mut TcpStream, status: u16, body: &[u8]) {
+    reply_hinted(stream, status, body, Some("normal"));
+}
+
+/// [`answer_hinted`] on a connection the client keeps alive.
+fn reply_hinted(stream: &mut TcpStream, status: u16, body: &[u8], hint: Option<&str>) {
+    respond(stream, status, body, hint, "keep-alive");
 }
 
 fn complete_replay_document(row: &mut Value) {
@@ -201,13 +230,15 @@ fn complete_replay_document(row: &mut Value) {
 }
 
 fn serve(
-    mut stream: TcpStream,
+    request: &loopback::Request,
+    stream: &mut TcpStream,
+    upstream: &mut loopback::Upstream,
     backend: &str,
     address: &str,
     state: &Mutex<State>,
     clock: &SimulatedClock,
-) {
-    let bytes = read_request(&mut stream);
+) -> After {
+    let bytes = request.bytes();
     let split = bytes
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
@@ -312,7 +343,7 @@ fn serve(
                 | (Some("redirect-read"), "verifying read")
         ) {
             stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: https://example.invalid/credential-target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
-            return;
+            return After::Close;
         }
         if matches!(
             (fault, stage),
@@ -320,7 +351,7 @@ fn serve(
                 | (Some("disconnect-PUT"), "PUT")
                 | (Some("disconnect-read"), "verifying read")
         ) {
-            return;
+            return After::Close;
         }
         if stage == "mutation" {
             let bad = match fault {
@@ -335,8 +366,8 @@ fn serve(
                 _ => None,
             };
             if let Some(body) = bad {
-                answer(&mut stream, 200, body.as_bytes());
-                return;
+                reply(stream, 200, body.as_bytes());
+                return After::KeepOpen;
             }
         }
     }
@@ -357,8 +388,8 @@ fn serve(
         } else {
             body.to_string()
         };
-        answer_hinted(
-            &mut stream,
+        reply_hinted(
+            stream,
             if stage == "mutation" && status == 429 && fault != Some("mutation-http429") {
                 400
             } else {
@@ -367,7 +398,7 @@ fn serve(
             body.as_bytes(),
             hint,
         );
-        return;
+        return After::KeepOpen;
     }
     if !asset_request {
         use onetaskgraph_linear::graphql;
@@ -383,14 +414,14 @@ fn serve(
             && let Some(refused) =
                 document_replay_schema::complexity::refusal(query, &gql["variables"])
         {
-            answer(
-                &mut stream,
+            reply(
+                stream,
                 400,
                 json!({"errors":[{"message":refused}]})
                     .to_string()
                     .as_bytes(),
             );
-            return;
+            return After::KeepOpen;
         }
         if query.contains("documentUpdate(")
             && gql["variables"]["input"]["content"]
@@ -398,14 +429,14 @@ fn serve(
                 .is_some_and(|content| content.starts_with("Reset for invocation "))
             && state.lock().unwrap().ignore_asset_reset
         {
-            answer(
-                &mut stream,
+            reply(
+                stream,
                 200,
                 json!({"data":{"documentUpdate":{"success":true}}})
                     .to_string()
                     .as_bytes(),
             );
-            return;
+            return After::KeepOpen;
         }
         if query.contains("documentDelete(") {
             let id = gql["variables"]["id"].as_str().unwrap();
@@ -415,14 +446,14 @@ fn serve(
                 state.refused_document_deletes.contains(id)
             };
             if refused {
-                answer(
-                    &mut stream,
+                reply(
+                    stream,
                     200,
                     json!({"data":{"documentDelete":{"success":false}}})
                         .to_string()
                         .as_bytes(),
                 );
-                return;
+                return After::KeepOpen;
             }
         }
         let discovery = query.contains("documents(") && query.contains("team{key}");
@@ -437,10 +468,7 @@ fn serve(
             forwarded["query"] = json!(graphql::DOCUMENT_DELETE);
         }
         let body = forwarded.to_string();
-        let mut upstream = TcpStream::connect(backend).unwrap();
-        write!(upstream,"POST /graphql HTTP/1.1\r\nHost: {backend}\r\nAuthorization: fixture-key\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
-        let mut response = Vec::new();
-        upstream.read_to_end(&mut response).unwrap();
+        let response = upstream.forward(format!("POST /graphql HTTP/1.1\r\nHost: {backend}\r\nAuthorization: fixture-key\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",body.len()).as_bytes());
         let split = response.windows(4).position(|b| b == b"\r\n\r\n").unwrap() + 4;
         let mut response: Value = serde_json::from_slice(&response[split..]).unwrap();
         if discovery
@@ -487,8 +515,8 @@ fn serve(
             document_replay_schema::validate(query, &response)
                 .expect("recorded Linear response shape");
         }
-        answer(&mut stream, 200, response.to_string().as_bytes());
-        return;
+        reply(stream, 200, response.to_string().as_bytes());
+        return After::KeepOpen;
     }
     let response = {
         let mut state = state.lock().unwrap();
@@ -561,7 +589,8 @@ fn serve(
         }
         response = body.to_string().into_bytes();
     }
-    answer(&mut stream, 200, &response);
+    reply(stream, 200, &response);
+    After::KeepOpen
 }
 
 pub(crate) struct Journey {
