@@ -105,8 +105,13 @@
       "outputs": ["{workspaceRoot}/target/debug/telemetry/github-live-session"]
     },
     "coverage": {
-      "executor": "nx:noop",
-      "//": "Its suite runs every case uninstrumented, in `test`, and contributes no line coverage: the user's decision of 2026-10-30. scripts/check-coverage-enforced.sh holds the tag, this target and workspace:coverage's dependency list to one another."
+      "executor": "nx:run-commands",
+      "dependsOn": ["workspace:coverage-clear"],
+      "options": {
+        "command": "bash scripts/rust-coverage.sh --build-only onetaskgraph-github-projects"
+      },
+      "cache": false,
+      "//": "Its suite runs every case uninstrumented, in `test`, and contributes no line coverage: the user's decision of 2026-10-30. This only builds its test binaries instrumented and runs none, because onetaskgraph-github-projects-e2e's measured entry-point pairs run them from target/llvm-cov-target. scripts/check-coverage-enforced.sh holds the tag, this target and workspace:coverage's dependency list to one another."
     }
   }
 }

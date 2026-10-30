@@ -191,12 +191,16 @@
           "projects": [
             "onetaskgraph",
             "onetaskgraph-core",
+            "onetaskgraph-e2e",
             "onetaskgraph-e2e-support",
+            "onetaskgraph-github-projects-e2e",
             "onetaskgraph-in-memory",
+            "onetaskgraph-linear-e2e",
             "onetaskgraph-live",
             "onetaskgraph-local-md",
             "onetaskgraph-plugin-api",
             "onetaskgraph-status-options",
+            "onetaskgraph-status-options-e2e",
             "onetaskgraph-live-janitor",
             "onetaskgraph-github-live"
           ],

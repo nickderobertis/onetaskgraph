@@ -260,6 +260,13 @@ ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear-e2e e2e 
 [ "$LIVE_STATUS" -eq 0 ] && [ "$RECORDED" = "test --quiet -p onetaskgraph-linear-e2e --all-features --locked --test e2e -- --exact linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy --list
 test --quiet -p onetaskgraph-linear-e2e --all-features --locked --test e2e -- --exact linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy" ] \
   || fail "where coverage stands in, live-crate-test.sh ran '$RECORDED' (exit $LIVE_STATUS), not the credentialed journey alone"
+ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear live \
+  real_linear_reads_nothing_that_is_not_there
+[ "$LIVE_STATUS" -eq 0 ] && [ "$RECORDED" = "test --quiet -p onetaskgraph-linear --all-features --locked" ] \
+  || fail "live-crate-test.sh narrowed onetaskgraph-linear, tagged coverage:uninstrumented, to its journey: ran '$RECORDED' (exit $LIVE_STATUS), not the whole suite"
+ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-no-such-crate live journey
+[ "$LIVE_STATUS" -eq 2 ] && [ -z "$RECORDED" ] && grep -qF "has no crates/onetaskgraph-no-such-crate/project.json" <<<"$LIVE_OUTPUT" \
+  || fail "live-crate-test.sh ran a crate with no project.json under the variable: exit $LIVE_STATUS, ran '$RECORDED'"
 CARGO_LISTS_NOTHING=1 ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear-e2e e2e \
   linear_assets::not_a_journey
 [ "$LIVE_STATUS" -eq 2 ] && [ "$(wc -l <<<"$RECORDED")" -eq 1 ] && grep -qF "holds no test named" <<<"$LIVE_OUTPUT" \
@@ -457,10 +464,9 @@ for job in test-linux test-macos; do
     || fail "$job ran the distribution journey as '$(cat "$scratch/distribution-path" 2>/dev/null)', not '$expected'"
 done
 
-# 3b. Where a suite's own run records the budgets' telemetry, `budgets` is judged after it, and
-#     that suite runs once: the Linear e2e suite, which runs uninstrumented in `test`
-#     (coverage:uninstrumented), leaves a mark its budgets refuse to run without, and counts
-#     its runs.
+# 3b. Where coverage records the budgets' telemetry, `budgets` is judged after it, and without
+#     running `test` a second time: the Linear e2e suite's coverage leaves a mark its budgets
+#     refuse to run without, and its test counts its runs.
 git -C "$REPO" checkout --quiet -- .
 git -C "$REPO" reset --quiet --hard "$BASE"
 record_targets
@@ -472,16 +478,17 @@ import json, sys
 path, order = sys.argv[1], sys.argv[2]
 project = json.load(open(path, encoding="utf-8"))
 targets = project["targets"]
-targets["test"]["options"] = {"command": f"sleep 2 && echo ran >>{order}/tests && touch {order}/recorded"}
-targets["budgets"]["options"] = {"command": f"test -f {order}/recorded"}
+targets["coverage"]["options"] = {"command": f"sleep 2 && touch {order}/covered"}
+targets["test"]["options"] = {"command": f"echo ran >>{order}/tests"}
+targets["budgets"]["options"] = {"command": f"test -f {order}/covered"}
 json.dump(project, open(path, "w", encoding="utf-8"), indent=2)
 PY2
 git -C "$REPO" commit --quiet --no-verify -am "test: order the Linear e2e suite's budgets"
 recipe ci-test-linux
-expect_status "test-linux judging budgets after the suite" 0
-expect "test-linux judging budgets after the suite" ran "onetaskgraph-linear-e2e:budgets"
+expect_status "test-linux judging budgets after coverage" 0
+expect "test-linux judging budgets after coverage" ran "onetaskgraph-linear-e2e:budgets"
 [ "$(cat "$ORDER/tests" 2>/dev/null)" = ran ] \
-  || fail "test-linux judging budgets after the suite: onetaskgraph-linear-e2e:test ran $(wc -l <"$ORDER/tests" 2>/dev/null || echo 0) times, not once"
+  || fail "test-linux judging budgets after coverage: onetaskgraph-linear-e2e:test ran $(wc -l <"$ORDER/tests" 2>/dev/null || echo 0) times, not once"
 
 # 4. Nx answering with something other than a task graph fails the recipe rather than reading
 #    as a phase with nothing to run. The stand-in is Nx's own executable, so everything the

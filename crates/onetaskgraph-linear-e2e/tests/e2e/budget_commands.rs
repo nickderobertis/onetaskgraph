@@ -163,9 +163,9 @@ fn the_telemetry_the_journeys_write_is_what_test_declares_and_budgets_hashes() {
         targets["budgets"]
     );
     // Only the build's own directory is what `test` declares; a test's override is not. A plain
-    // run writes into it — which is how this suite's journeys record the budgets, uninstrumented
-    // — and so would an instrumented run standing in for `test`, so the reports, built plainly,
-    // find what they recorded. cargo-llvm-cov's own variable says a run is instrumented, whatever directory it
+    // run writes into it, and so does an instrumented run standing in for `test` — which is when
+    // this suite's journeys record the budgets — so the reports, built plainly, find what they
+    // recorded. cargo-llvm-cov's own variable says a run is instrumented, whatever directory it
     // builds into, so a run that moved would fail here rather than leave `budgets` nothing.
     if std::env::var_os(telemetry::DIRECTORY).is_none() {
         let instrumented = std::env::var_os("LLVM_PROFILE_FILE").is_some();

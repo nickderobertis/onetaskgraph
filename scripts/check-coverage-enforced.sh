@@ -18,7 +18,9 @@ import re
 import sys
 from pathlib import Path
 
-MIN_LINES = 95
+# The user's decision of 2026-10-30: 92 over the instrumented suites, the live crates' suites
+# running uninstrumented. The SDKs keep floors of their own at or above it.
+MIN_LINES = 92
 problems = []
 
 
@@ -86,12 +88,13 @@ if not re.search(r'cargo llvm-cov report\b[^\n]*(\\\n[^\n]*)*--fail-under-lines 
         "scripts/rust-coverage.sh: the --report step does not pass --fail-under-lines "
         '"$MIN_LINES" to `cargo llvm-cov report`, so the floor is declared but never enforced'
     )
-if not re.search(r"cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report", coverage_script):
+# The crate run is the `run="$(...)"` one; the build-only one beside it would match them too.
+if not re.search(r"run=\"\$\(cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report", coverage_script):
     problems.append(
         "scripts/rust-coverage.sh: a crate's run no longer passes --no-report, so it clears "
         "every sibling's profiles before it starts and the report is over one crate at best"
     )
-if not re.search(r"cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report[^\n]*(\\\n[^\n]*)*\bnextest\b", coverage_script):
+if not re.search(r"run=\"\$\(cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report[^\n]*(\\\n[^\n]*)*\bnextest\b", coverage_script):
     problems.append(
         "scripts/rust-coverage.sh: a crate's run is no longer `cargo llvm-cov --no-report "
         "nextest`, the one shape the coverage runs share with every repository of this host"
@@ -100,8 +103,9 @@ if not re.search(r"cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report[^\n]*(\\\n[^\n
 # A crate is named by its directory, which is what the coverage command and the
 # aggregate's dependency list both spell; the project file's own name is held to it.
 # A crate tagged `coverage:uninstrumented` runs its whole suite in `test` and contributes no
-# coverage, by the user's decision of 2026-10-30: its coverage target is a no-op and the
-# aggregate leaves it out. Every other crate is measured and in the union.
+# coverage, by the user's decision of 2026-10-30: its coverage target is a no-op, or only builds
+# its tests instrumented for another crate's measured run, and the aggregate leaves it out.
+# Every other crate is measured and in the union.
 crate_names = set()
 UNINSTRUMENTED = "coverage:uninstrumented"
 for project_file in sorted(Path("crates").glob("*/project.json")):
@@ -116,8 +120,21 @@ for project_file in sorted(Path("crates").glob("*/project.json")):
     if UNINSTRUMENTED in tags:
         if any(str(tag).startswith("test-in-coverage:") for tag in tags):
             problems.append(f"{display}: tagged {UNINSTRUMENTED} and test-in-coverage, so its suite would run nowhere on Linux")
-        if not coverage or coverage.get("executor") != "nx:noop":
-            problems.append(f"{display}: tagged {UNINSTRUMENTED}, but its coverage target still runs a measurement")
+        build_only = f"bash scripts/rust-coverage.sh --build-only {crate}"
+        if not coverage:
+            pass  # read_target named the file it cannot read
+        elif coverage.get("executor") == "nx:noop":
+            pass
+        elif command_of(coverage) != build_only:
+            problems.append(
+                f"{display}: tagged {UNINSTRUMENTED}, but its coverage target still runs a "
+                f"measurement; it is a no-op or '{build_only}'"
+            )
+        elif "workspace:coverage-clear" not in names_in(coverage.get("dependsOn")) or coverage.get("cache") is not False:
+            problems.append(
+                f"{display}: its build-only coverage target must depend on workspace:coverage-clear "
+                "and be uncached, or the clear can delete what it built and a cache hit skips the build"
+            )
         continue
     crate_names.add(crate)
     if not coverage:

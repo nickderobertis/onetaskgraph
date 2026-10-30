@@ -3,10 +3,9 @@
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-/// The variable that narrows a live crate's `test` to its credentialed journey
-/// (`scripts/live-crate-test.sh`) where an instrumented run stands in for the rest, so the
-/// journeys recording a budget run instrumented. No job sets it since the live and e2e suites
-/// run uninstrumented (coverage:uninstrumented); it is read for any caller that does.
+/// The variable `scripts/ci-job.sh` sets to `1` where the instrumented run stands in for a live
+/// crate's `test` (`scripts/live-crate-test.sh`), so the journeys recording a budget run
+/// instrumented rather than under `test`.
 pub const TESTS_UNDER_COVERAGE: &str = "ONETASKGRAPH_TESTS_UNDER_COVERAGE";
 
 /// The directory cargo-llvm-cov builds an instrumented run into, inside the target directory.

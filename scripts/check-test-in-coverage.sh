@@ -43,7 +43,8 @@ MEASURED = ["--no-report", "nextest", "--package", '"$CRATE"', "--all-features",
 coverage_script = Path("scripts/rust-coverage.sh").read_text(encoding="utf-8")
 joined = re.sub(r"\\\n\s*", " ", coverage_script)
 runs = [found.split() for found in re.findall(r"cargo llvm-cov (.*?) 2>&1", joined)]
-runs = [words for words in runs if "nextest" in words]
+# The build-only run (`--build-only`) selects no test, so it measures nothing a tag could claim.
+runs = [words for words in runs if "nextest" in words and "'none()'" not in words]
 measured = runs[0] if len(runs) == 1 else None
 if measured != MEASURED:
     problems.append(
@@ -142,9 +143,11 @@ for path in sorted(paths.split()):
 
 # The live crates: every cargo run of their `test` goes through scripts/live-crate-test.sh, which
 # names a test that opens a live session. Exactly the crates whose `test` is keyed on a live
-# credential name one. A crate tagged coverage:uninstrumented runs its whole suite in `test`, so
-# no job may narrow it to the journey; any other live crate's coverage is the whole-crate run
-# that covers what the narrowed `test` leaves — or a non-live test would be run by neither.
+# credential name one. On Linux the script narrows `test` to that journey and `coverage` runs
+# the rest, except for a crate tagged coverage:uninstrumented, whose whole suite the script runs
+# in `test` because its coverage runs nothing (scripts/check-ci-recipes.sh drives both arms).
+# So any other live crate's coverage is the whole-crate run — or a non-live test would be run
+# by neither.
 CREDENTIALS = {"GH_PROJECTS_TOKEN", "LINEAR_API_KEY"}
 table = {}
 credentialed = set()
@@ -185,12 +188,13 @@ for crate, arguments in sorted(table.items()):
         continue
     binary, test = arguments[1], arguments[2]
     if "coverage:uninstrumented" in project.get("tags", []):
-        # Its whole suite runs in `test`, which it does only while no job sets the variable
-        # that narrows scripts/live-crate-test.sh to the journey.
-        if re.search(r"^\s*export ONETASKGRAPH_TESTS_UNDER_COVERAGE=1", Path("scripts/ci-job.sh").read_text(encoding="utf-8"), re.M):
+        # Its whole suite runs in `test` only while the script that narrows a live crate's
+        # `test` to its journey leaves a tagged crate whole.
+        if '"coverage:uninstrumented"' not in Path("scripts/live-crate-test.sh").read_text(encoding="utf-8"):
             problems.append(
-                f"crates/{crate}: tagged coverage:uninstrumented, but scripts/ci-job.sh narrows its "
-                "test to the credentialed journey, and its coverage runs nothing"
+                f"crates/{crate}: tagged coverage:uninstrumented, but scripts/live-crate-test.sh "
+                "does not read the tag, so test-linux narrows its test to the credentialed journey "
+                "and its coverage runs nothing"
             )
     elif commands(project, "coverage") != [f"bash scripts/rust-coverage.sh {crate}"]:
         problems.append(

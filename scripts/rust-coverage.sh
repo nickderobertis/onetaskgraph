@@ -5,6 +5,9 @@
 #   rust-coverage.sh --clear     what a plain `cargo llvm-cov` does before every run
 #   rust-coverage.sh <crate>     one crate's tests under nextest, instrumented, profiles kept
 #   rust-coverage.sh --report    the one report over every crate's run, held to the floor
+#   rust-coverage.sh --build-only <crate>
+#                                that crate's tests built instrumented and none run, for a
+#                                suite another crate's run executes (no profile is written)
 #
 # `--no-report` is the whole reason the crates can share the directory under Nx's parallel
 # fan-out: a plain run clears every raw profile in it first, so two crates deleted each
@@ -16,8 +19,10 @@
 # typecheck, test) still run on all three platforms, so Windows is still gated.
 set -euo pipefail
 
-readonly REQUEST="${1:?usage: scripts/rust-coverage.sh --clear | <crate-name> | --report}"
-readonly MIN_LINES=95
+readonly REQUEST="${1:?usage: scripts/rust-coverage.sh --clear | <crate-name> | --report | --build-only <crate-name>}"
+# 92 over the instrumented suites, the live crates' suites running uninstrumented: the user's
+# decision of 2026-10-30, which replaced 95 over every suite.
+readonly MIN_LINES=92
 
 # ONE live session per run of the gate, and this is where the second one would come from.
 # `just check` runs `test` AND `coverage`, and `cargo llvm-cov --no-report nextest --package
@@ -92,7 +97,13 @@ if [ "$REQUEST" = "--report" ]; then
   exit 0
 fi
 
-readonly CRATE="$REQUEST"
+build_only=false
+if [ "$REQUEST" = "--build-only" ]; then
+  build_only=true
+  readonly CRATE="${2:?usage: scripts/rust-coverage.sh --build-only <crate-name>}"
+else
+  readonly CRATE="$REQUEST"
+fi
 
 # Validate the crate name against the real workspace before it is used as a Cargo
 # selector. Unchecked, a typo becomes a silent "measured nothing".
@@ -126,6 +137,19 @@ if ! printf '%s\n' "$members" | grep -qxF -- "$CRATE"; then
   printf '  %s\n' $members >&2
   echo "rust-coverage: re-run with one of those names, or with --clear or --report." >&2
   exit 1
+fi
+
+# A crate whose suite runs uninstrumented but whose test binaries another crate's measured
+# run drives (the GitHub Projects e2e pairs run the plugin's): built where that run finds
+# them, with a filter selecting no test, so nothing of the crate's own suite is measured.
+if "$build_only"; then
+  if ! built="$(cargo llvm-cov --no-report nextest --package "$CRATE" --all-features --locked \
+    -E 'none()' --no-tests=pass 2>&1)"; then
+    printf '%s\n' "$built" >&2
+    echo "rust-coverage: $CRATE's tests did not build under instrumentation — fix what cargo reports above, then re-run." >&2
+    exit 1
+  fi
+  exit 0
 fi
 
 # The e2e journeys spawn the built binary; cargo-llvm-cov exports the profile path into

@@ -54,10 +54,11 @@ case "$JOB" in
 1 run workspace:deny -"
     ;;
   test-linux)
-    # The e2e suites and the live crates' suites (tagged coverage:uninstrumented) run every
-    # case uninstrumented in `test`, credentialed journeys included, and contribute no
-    # coverage: the user's decision of 2026-10-30. Coverage, and its floor, is the other
-    # crates' instrumented runs alone.
+    # And the live e2e suites' `test` runs only their credentialed journeys, coverage running
+    # the rest of them, as it does every tagged crate's (scripts/live-crate-test.sh). The live
+    # crates' own suites (tagged coverage:uninstrumented) run every case uninstrumented in
+    # `test` and contribute no coverage: the user's decision of 2026-10-30.
+    export ONETASKGRAPH_TESTS_UNDER_COVERAGE=1
     # Exercise the relative interpreter without paying for a second distribution run.
     # check-relative-interpreter.sh owns the call-site comparison.
     export ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1
@@ -65,10 +66,10 @@ case "$JOB" in
     # whose credentialed journeys take one seat and so run one at a time, and the SDKs'
     # coverage, which would otherwise wait for every crate's.
     #
-    # The budgets are judged last, once every suite has run: the loopback journeys that record
-    # their telemetry run uninstrumented in `test` here, which writes it where `budgets` reads
-    # it. That `test` has already run in this job, so it is not run again, and the cache
-    # cannot answer for telemetry its key never saw.
+    # The budgets are judged last, once coverage has run: the loopback journeys that record
+    # their telemetry are coverage's here, and scripts/rust-coverage.sh writes it where
+    # `budgets` reads it. Their `test` has already run in this job, so it is not run again,
+    # and the cache cannot answer for telemetry its key never saw.
     phases="1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e
 1 affected test *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 affected test-uncovered,coverage tag:layer:sdk,tag:coverage:uninstrumented

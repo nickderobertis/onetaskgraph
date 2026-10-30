@@ -336,13 +336,17 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   destination pre-populated as the copy would leave it and an assertion that nothing
   changed.** That proves what a copy *would* write; it does not prove one landed, and the
   difference is the whole of what the journey is for.
-- **Coverage: 95% lines over the union of every measured crate's run, enforced once, and
-  that reverses an earlier decision.** By the user's decision of 2026-10-30 the e2e suites
-  and the live crates' suites — the crates tagged `coverage:uninstrumented` — run every case
-  uninstrumented in `test` and are not part of that union: their `coverage` target is a no-op,
-  `workspace:coverage` does not depend on it, and `scripts/check-coverage-enforced.sh` holds
-  the three to one another. Measured before the change the union was 95.75% of lines; over
-  the remaining suites it is 52.18%, below the floor, which is left at 95% for the user. Each crate's `coverage` target runs its own tests
+- **Coverage: 92% lines over the union of every measured crate's run, enforced once, and
+  that reverses an earlier decision.** By the user's decision of 2026-10-30 the live crates'
+  own suites (`onetaskgraph-github-projects` and `onetaskgraph-linear`, tagged
+  `coverage:uninstrumented`) run every case uninstrumented in `test` and are not part of that
+  union, and the floor over the rest is 92%, not 95%. Their `coverage` target measures nothing:
+  the Linear plugin's is a no-op, and the GitHub Projects plugin's only builds its tests
+  instrumented (`rust-coverage.sh --build-only`), because its e2e suite's measured entry-point
+  pairs run them. `workspace:coverage` does not depend on either, and
+  `scripts/check-coverage-enforced.sh` holds tag, target and aggregate to one another. Measured
+  on `54327de7`, the union was 95.75% of lines with every suite instrumented, and is 92.69%
+  without the live crates' suites. Each crate's `coverage` target runs its own tests
   instrumented and keeps its raw profiles (`cargo llvm-cov --no-report nextest -p <crate>`,
   the one shape every Rust repository of this host measures with) in cargo-llvm-cov's one
   `target/llvm-cov-target`; the `workspace` project's `coverage` target depends on every
