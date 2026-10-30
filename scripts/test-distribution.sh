@@ -103,7 +103,14 @@ try:
 except OSError:
     pass
 slowest = [f"{seconds:.0f}s {label[:50]}" for label, seconds in sorted(cases.items(), key=lambda item: -item[1])[:8]]
-print("distribution timing: slowest lines: " + "; ".join(lines) + " | slowest packaging cases: " + "; ".join(slowest))
+ranges = {}
+for site, seconds in spent.items():
+    name, _, number = site.rpartition(":")
+    if name == "test-distribution.sh":
+        start = int(number) // 100 * 100
+        ranges[start] = ranges.get(start, 0.0) + seconds
+by_range = [f"{start}-{start + 99} {seconds:.0f}s" for start, seconds in sorted(ranges.items())]
+print("distribution timing: slowest lines: " + "; ".join(lines) + " | slowest packaging cases: " + "; ".join(slowest) + " | by line range: " + "; ".join(by_range))
 PY
 }
 cleanup() {
@@ -165,6 +172,9 @@ fi
 # file while the Rust integration tests are spawning it (scripts/check-workspace-config.sh).
 [[ -f "$root/target/debug/$binary" ]] || { echo "distribution test found no $root/target/debug/$binary; next: run 'scripts/nx.sh run onetaskgraph:build' from the workspace root, then rerun scripts/test-distribution.sh" >&2; exit 1; }
 if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
+# The cases below tamper with this archive and put it back; a kept copy puts back the very
+# archive this made, without compressing the binary again.
+cp "$tmp/releases/$tag/$name" "$tmp/pristine-$name"
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 install_output=$(ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh")
 printf '%s\n' "$install_output" | grep -q "installed $tag to" || { echo "installer success omitted its destination; next: inspect the success contract" >&2; exit 1; }
@@ -213,7 +223,7 @@ grep -q 'unsafe member path' "$tmp/error" || { cat "$tmp/error" >&2; echo "unsaf
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="ftp://invalid/releases" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "unsupported download scheme was accepted; next: inspect source validation" >&2; exit 1; fi
 grep -q 'download base must use' "$tmp/error" || { cat "$tmp/error" >&2; echo "unsupported-scheme failure omitted its reason; next: inspect source diagnostics" >&2; exit 1; }
 rm "$tmp/releases/$tag/$name"
-if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
+cp "$tmp/pristine-$name" "$tmp/releases/$tag/$name"
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 cat > "$tmp/release-server.py" <<'PY'
 import http.server
@@ -315,7 +325,7 @@ if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > 
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "archive without binary was accepted; next: inspect binary validation" >&2; exit 1; fi
 grep -q 'archive binary is not a regular file' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing-archive-binary failure omitted its reason; next: inspect archive diagnostics" >&2; exit 1; }
 rm "$tmp/releases/$tag/$name"
-if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
+cp "$tmp/pristine-$name" "$tmp/releases/$tag/$name"
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 mkdir "$tmp/no-hash-path"
 for utility in awk cp dirname grep install mkdir mktemp rm sed tar uname; do
