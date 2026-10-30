@@ -438,7 +438,11 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   and the default branch runs `just gate`, which is `deny` plus that same `check`.
   CI derives its base explicitly from the merge base or `github.event.before`, because
   an implicit base can select the wrong changes. Pushes run no repository checks;
-  contributors can run `NX_BASE=<ref> just check` or `just gate` manually.
+  contributors can run `NX_BASE=<ref> just check` or `just gate` manually. A push to main
+  does build, testing nothing, the Rust cache `test-linux` and `test-windows` restore
+  (`.github/workflows/rust-cache-warm.yml`): a pull request restores only a cache saved on
+  its own ref or on main, so nothing else could give a new one a warm build. It has no macOS
+  leg, so a push to main still schedules no Mac job.
   `scripts/check-live-lane-selection.sh`, a command in `scripts:test`, holds all of that:
   it puts the five diffs to the real decision over real git states, drives the real recipes
   for both CI paths, puts three diffs to real Nx, and ENUMERATES the paths from

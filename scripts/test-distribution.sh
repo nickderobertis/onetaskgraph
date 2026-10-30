@@ -81,6 +81,18 @@ case "$(uname -s):$(uname -m)" in
   MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) target=x86_64-pc-windows-msvc; ext=zip; binary=onetaskgraph.exe;;
 esac
 name="onetaskgraph-${tag}-${target}.${ext}"
+# The release build this journey packages, in one place: the Rust cache warmer
+# (.github/workflows/rust-cache-warm.yml) runs it alone, `--release-build-only`, so the units
+# it leaves for the pull-request jobs to restore are exactly the ones built here.
+build_release_wheel() {
+  (cd "$root" && "$python_bin" scripts/cli_wheel_lock.py uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$1")
+}
+# Exit 2 is a usage error: any argument but --release-build-only alone.
+case "$#:${1:-}" in
+  0:) ;;
+  1:--release-build-only) build_release_wheel "$tmp/python-wheel"; exit 0 ;;
+  *) echo "distribution test takes no argument or --release-build-only alone, not '$*'; next: run scripts/test-distribution.sh with none" >&2; exit 2 ;;
+esac
 # The binary is what onetaskgraph:build produced and this target depends on; nothing here
 # builds it, because a cargo invocation of that package from anywhere else replaces the
 # file while the Rust integration tests are spawning it (scripts/check-workspace-config.sh).
@@ -366,7 +378,7 @@ for supported in linux:x64 linux:arm64 darwin:arm64 win32:x64; do
 done
 uv run --quiet --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }
 mkdir -p "$tmp/python-wheel"
-(cd "$root" && "$python_bin" scripts/cli_wheel_lock.py uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$tmp/python-wheel")
+build_release_wheel "$tmp/python-wheel"
 "$python_bin" "$root/scripts/test-release-products.py" --wheel-dir "$tmp/python-wheel" --target "$target"
 cli_wheel=$(find "$tmp/python-wheel" -maxdepth 1 -type f -name 'onetaskgraph_cli-*.whl' -print -quit)
 [[ -n $cli_wheel ]] || { echo "Python CLI build produced no wheel; next: inspect the maturin package configuration" >&2; exit 1; }
