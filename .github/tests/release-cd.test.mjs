@@ -110,11 +110,15 @@ function recipe(job, args, env = {}) {
   });
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
-function runAsync(command, args, env) {
+// A run still going after `bound` is stopped and fails with what it wrote and every process
+// alive then, so a release build that hangs on the hosted runner says what it waited on
+// instead of holding the job to its timeout.
+function runAsync(command, args, env, bound = 15 * 60 * 1000) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: checkout,
       env: { ...process.env, ...ownTarget, ...env },
+      detached: true,
     });
     let output = "";
     child.stdout.on("data", (data) => {
@@ -123,8 +127,20 @@ function runAsync(command, args, env) {
     child.stderr.on("data", (data) => {
       output += data;
     });
+    const timer = setTimeout(() => {
+      const alive = spawnSync("ps", ["-eo", "pid,ppid,etime,args"], { encoding: "utf8" })
+        .stdout.split("\n")
+        .filter((line) => /cargo|rustc|maturin|\buv\b/.test(line))
+        .join("\n");
+      output += `\nbuild processes alive then:\n${alive}\n${command} ${args.join(" ")} was still running after ${bound / 1000} s`;
+      // The process group this spawn started, and nothing else.
+      process.kill(-child.pid, "SIGKILL");
+    }, bound);
     child.on("error", reject);
-    child.on("close", (status) => resolve({ status, output }));
+    child.on("close", (status) => {
+      clearTimeout(timer);
+      resolve({ status, output });
+    });
   });
 }
 
@@ -143,7 +159,7 @@ esac`;
 }
 
 function expectStatus(result, status, what) {
-  assert.equal(result.status, status, `${what}:\n${result.output.slice(-4000)}`);
+  assert.equal(result.status, status, `${what}:\n${result.output.slice(-12000)}`);
 }
 
 function control(value) {
