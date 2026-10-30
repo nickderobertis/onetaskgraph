@@ -336,8 +336,13 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   destination pre-populated as the copy would leave it and an assertion that nothing
   changed.** That proves what a copy *would* write; it does not prove one landed, and the
   difference is the whole of what the journey is for.
-- **Coverage: 95% lines over the union of every crate's run, enforced once, and that
-  reverses an earlier decision.** Each crate's `coverage` target runs its own tests
+- **Coverage: 95% lines over the union of every measured crate's run, enforced once, and
+  that reverses an earlier decision.** By the user's decision of 2026-10-30 the e2e suites
+  and the live crates' suites — the crates tagged `coverage:uninstrumented` — run every case
+  uninstrumented in `test` and are not part of that union: their `coverage` target is a no-op,
+  `workspace:coverage` does not depend on it, and `scripts/check-coverage-enforced.sh` holds
+  the three to one another. Measured before the change the union was 95.75% of lines; over
+  the remaining suites it is 52.18%, below the floor, which is left at 95% for the user. Each crate's `coverage` target runs its own tests
   instrumented and keeps its raw profiles (`cargo llvm-cov --no-report nextest -p <crate>`,
   the one shape every Rust repository of this host measures with) in cargo-llvm-cov's one
   `target/llvm-cov-target`; the `workspace` project's `coverage` target depends on every

@@ -184,7 +184,15 @@ for crate, arguments in sorted(table.items()):
         )
         continue
     binary, test = arguments[1], arguments[2]
-    if commands(project, "coverage") != [f"bash scripts/rust-coverage.sh {crate}"]:
+    if "coverage:uninstrumented" in project.get("tags", []):
+        # Its whole suite runs in `test`, which it does only while no job sets the variable
+        # that narrows scripts/live-crate-test.sh to the journey.
+        if re.search(r"^\s*export ONETASKGRAPH_TESTS_UNDER_COVERAGE=1", Path("scripts/ci-job.sh").read_text(encoding="utf-8"), re.M):
+            problems.append(
+                f"crates/{crate}: tagged coverage:uninstrumented, but scripts/ci-job.sh narrows its "
+                "test to the credentialed journey, and its coverage runs nothing"
+            )
+    elif commands(project, "coverage") != [f"bash scripts/rust-coverage.sh {crate}"]:
         problems.append(
             f"crates/{crate}: its coverage is not the whole-crate run, so the tests "
             "its test target leaves to it would run nowhere"

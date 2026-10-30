@@ -99,12 +99,23 @@ if not re.search(r"cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report[^\n]*(\\\n[^\n
 
 # A crate is named by its directory, which is what the coverage command and the
 # aggregate's dependency list both spell; the project file's own name is held to it.
+# A crate tagged `coverage:uninstrumented` runs its whole suite in `test` and contributes no
+# coverage, by the user's decision of 2026-10-30: its coverage target is a no-op and the
+# aggregate leaves it out. Every other crate is measured and in the union.
 crate_names = set()
+UNINSTRUMENTED = "coverage:uninstrumented"
 for project_file in sorted(Path("crates").glob("*/project.json")):
     crate = project_file.parent.name
-    crate_names.add(crate)
     display = project_file.as_posix()
     coverage = read_target(project_file, "coverage")
+    tags = json.loads(project_file.read_text(encoding="utf-8")).get("tags", [])
+    if UNINSTRUMENTED in tags:
+        if any(str(tag).startswith("test-in-coverage:") for tag in tags):
+            problems.append(f"{display}: tagged {UNINSTRUMENTED} and test-in-coverage, so its suite would run nowhere on Linux")
+        if not coverage or coverage.get("executor") != "nx:noop":
+            problems.append(f"{display}: tagged {UNINSTRUMENTED}, but its coverage target still runs a measurement")
+        continue
+    crate_names.add(crate)
     if not coverage:
         continue
     if command_of(coverage) != f"bash scripts/rust-coverage.sh {crate}":
@@ -156,10 +167,12 @@ if aggregate:
             "so that crate's run is missing from the union the floor is enforced over"
         )
     for unknown in sorted(depended - crate_names):
-        problems.append(
-            f"{workspace_display}: coverage depends on {unknown!r}'s coverage target, which "
-            "is not a crate of this workspace"
+        reason = (
+            f"which is tagged {UNINSTRUMENTED} and measures nothing"
+            if Path("crates", unknown, "project.json").is_file()
+            else "which is not a crate of this workspace"
         )
+        problems.append(f"{workspace_display}: coverage depends on {unknown!r}'s coverage target, {reason}")
 
 # The Python SDK carries its own floor in pyproject.toml.
 pyproject = Path("sdks/python/pyproject.toml").read_text(encoding="utf-8")

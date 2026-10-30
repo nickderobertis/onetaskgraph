@@ -394,7 +394,8 @@ for path, project in sorted(projects_by_path.items()):
             "on onetaskgraph:build; add that dependency so the binary is built once before it "
             "starts and is not being written while it runs"
         )
-    if "coverage" in targets_by_path.get(path, {}) and not reaches(name, "coverage", BINARY_COVERAGE):
+    measured = project.get("targets", {}).get("coverage", {}).get("executor") != "nx:noop"
+    if measured and "coverage" in targets_by_path.get(path, {}) and not reaches(name, "coverage", BINARY_COVERAGE):
         problems.append(
             f"{display}: coverage spawns the instrumented binary in target/llvm-cov-target, "
             "which onetaskgraph:coverage builds, but does not depend on it; add that "

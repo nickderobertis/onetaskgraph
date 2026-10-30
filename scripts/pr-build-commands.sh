@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Print, one command per line, every build test-linux makes of this workspace's Rust units,
 # read from where each is declared rather than restated: each crate's `test` target's cargo
-# commands from its project.json, with --no-run, and the credentialed journey's binary a
-# scripts/live-crate-test.sh command there builds under ONETASKGRAPH_TESTS_UNDER_COVERAGE=1; the instrumented run scripts/rust-coverage.sh
+# commands from its project.json, with --no-run, and the whole crate a scripts/live-crate-test.sh
+# command there builds; the instrumented run scripts/rust-coverage.sh
 # makes of each crate, with a filter selecting no test (cargo-llvm-cov refuses --no-report
 # beside --no-run); and the distribution journey's release build.
 #
@@ -57,14 +57,15 @@ for found in sorted(pathlib.Path("crates").glob("*/project.json"), key=lambda fo
         if command.startswith("cargo test "):
             out.append(command.replace(" --quiet", "") + " --no-run")
             built += 1
-        # A live crate's credentialed journey alone, which is what its `test` target builds on
-        # Linux, where test-linux sets ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 and coverage runs
-        # the rest (scripts/live-crate-test.sh).
+        # A live crate's whole suite, which is what scripts/live-crate-test.sh builds on Linux,
+        # where nothing narrows it to the journey: the crate, and the package it also builds.
         elif command.startswith("bash scripts/live-crate-test.sh "):
             words = shlex.split(command)[2:]
             if len(words) not in (3, 5) or (len(words) == 5 and words[3] != "--also-build"):
                 refuse(path, f"its `test` target runs `{command}`, which is not scripts/live-crate-test.sh's <crate> <test-binary> <test> [--also-build <package>]")
-            out.append(f"cargo test -p {words[0]} --all-features --locked --test {words[1]} --no-run")
+            if len(words) == 5:
+                out.append(f"cargo test -p {words[4]} --all-features --locked --no-run")
+            out.append(f"cargo test -p {words[0]} --all-features --locked --no-run")
             built += 1
         # A guard script of this repository drives the units the cargo commands built.
         elif not command.startswith("bash scripts/check-"):
@@ -80,7 +81,17 @@ run = re.search(r'run="\$\((cargo llvm-cov\b.*?) 2>&1\)"', coverage, re.S)
 if not run or '"$CRATE"' not in run.group(1):
     sys.exit("pr-build-commands: scripts/rust-coverage.sh has no `run=\"$(cargo llvm-cov ... \"$CRATE\" ... 2>&1)\"`; next: point this at its instrumented run")
 instrumented = " ".join(run.group(1).replace("\\\n", " ").split())
-crates = sorted({m for c in out for m in re.findall(r"(?:-p|--package) (\S+)", c)})
+uninstrumented = set()
+for found in pathlib.Path("crates").glob("*/project.json"):
+    try:
+        project = json.loads(found.read_text(encoding="utf-8"))
+    except ValueError:
+        continue
+    if "coverage:uninstrumented" in project.get("tags", []):
+        uninstrumented.add(found.parent.name)
+# The crates test-linux measures: every one a test command builds but those whose suites run
+# uninstrumented (coverage:uninstrumented), which it never builds under cargo-llvm-cov.
+crates = sorted({m for c in out for m in re.findall(r"(?:-p|--package) (\S+)", c)} - uninstrumented)
 if not crates:
     sys.exit("pr-build-commands: no crate's test target runs `cargo test`; next: restore the crates' test targets")
 for crate in crates:

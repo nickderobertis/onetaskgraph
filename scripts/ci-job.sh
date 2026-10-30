@@ -54,9 +54,10 @@ case "$JOB" in
 1 run workspace:deny -"
     ;;
   test-linux)
-    # And the live crates' `test` runs only their credentialed journeys, coverage running the
-    # rest of them, as it does every tagged crate's (scripts/live-crate-test.sh).
-    export ONETASKGRAPH_TESTS_UNDER_COVERAGE=1
+    # The e2e suites and the live crates' suites (tagged coverage:uninstrumented) run every
+    # case uninstrumented in `test`, credentialed journeys included, and contribute no
+    # coverage: the user's decision of 2026-10-30. Coverage, and its floor, is the other
+    # crates' instrumented runs alone.
     # Exercise the relative interpreter without paying for a second distribution run.
     # check-relative-interpreter.sh owns the call-site comparison.
     export ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1
@@ -70,7 +71,7 @@ case "$JOB" in
     # and the cache cannot answer for telemetry its key never saw.
     phases="1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e
 1 affected test *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
-1 affected test-uncovered,coverage tag:layer:sdk
+1 affected test-uncovered,coverage tag:layer:sdk,tag:coverage:uninstrumented
 1 affected test-uncovered,coverage *,!tag:layer:sdk
 1 run scripts:distribution-check -
 1 run scripts:distribution-test -
