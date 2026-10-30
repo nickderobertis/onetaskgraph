@@ -1654,7 +1654,7 @@ impl Engine {
     }
 
     /// The built source called `name`, when it can be written through.
-    fn creatable(
+    pub(super) fn creatable(
         &self,
         name: &SourceName,
         record: MetadataRecord,

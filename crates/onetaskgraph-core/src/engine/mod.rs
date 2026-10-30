@@ -32,6 +32,7 @@ mod join;
 mod local;
 mod metadata;
 mod narrow;
+mod projection;
 mod rendered;
 mod resume;
 mod stored;
@@ -884,6 +885,21 @@ pub enum EngineError {
         asset: String,
     },
 
+    /// A human task projection its durable intent, its routing or its tracker evidence does not
+    /// authorize — nothing further was sent for it.
+    #[error(
+        "human task projection {item_id:?} was refused: {message}\n\
+         next: {next}"
+    )]
+    ProjectionRefused {
+        /// The request's external idempotency identity.
+        item_id: String,
+        /// Why it was refused.
+        message: String,
+        /// What resolves it.
+        next: String,
+    },
+
     /// `task create` or `document create` named a source whose plugin has no write side.
     #[error(
         "source {name} cannot create a {record}: its plugin is {kind}, which has no write side\n\
@@ -1671,6 +1687,8 @@ pub struct Engine {
     copy_expect: std::sync::Mutex<Option<String>>,
     /// Which tracker each source reads, as its configuration declares and its plugin answers.
     designators: designators::Designators,
+    /// Each source's human task projection authority, as its configuration declares it.
+    projections: BTreeMap<SourceName, Result<crate::task_projection::ProjectionSource, String>>,
 }
 
 /// One operation's hold on every source's visibility reads, released when dropped — on every
@@ -1752,6 +1770,7 @@ impl Engine {
         ));
         engine.caches = caches;
         engine.designators = designators::Designators::configured(config);
+        engine.projections = crate::task_projection::configured(config);
         engine
     }
 
@@ -1789,6 +1808,7 @@ impl Engine {
             caches: BTreeMap::new(),
             copy_expect: std::sync::Mutex::new(None),
             designators: designators::Designators::default(),
+            projections: BTreeMap::new(),
         }
     }
 

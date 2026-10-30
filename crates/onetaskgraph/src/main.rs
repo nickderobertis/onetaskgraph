@@ -640,6 +640,9 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         Command::Task {
             command: TaskCommand::Assets(args),
         } => task_assets(out, loaded, args).await,
+        Command::Task {
+            command: TaskCommand::ProjectHuman(args),
+        } => project_human(out, loaded, &args.input).await,
         Command::Project {
             command: ProjectCommand::Create(args),
         } => rendered::create_project(out, loaded, args).await,
@@ -1608,6 +1611,107 @@ async fn locate(
     Ok(EXIT_OK)
 }
 
+/// Project one human task from the request at `input`, refused before any source is
+/// started when the request is not exactly a v1 `HumanTaskProjection`.
+async fn project_human(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    input: &std::path::Path,
+) -> Result<u8, Failure> {
+    let (bytes, from) = if input.as_os_str() == "-" {
+        let mut bytes = Vec::new();
+        io::Read::read_to_end(&mut io::stdin().lock(), &mut bytes).map_err(|error| {
+            Failure::decided(
+                "projection-input",
+                format!(
+                    "could not read the projection request from standard input: {error}\n\
+                     next: pass it with --input FILE instead."
+                ),
+            )
+        })?;
+        (bytes, "standard input".to_owned())
+    } else {
+        let bytes = std::fs::read(input).map_err(|error| {
+            Failure::decided(
+                "projection-input",
+                format!(
+                    "--input {}: could not read it: {error}\n\
+                     next: name a readable file holding the request.",
+                    input.display()
+                ),
+            )
+        })?;
+        (bytes, format!("--input {}", input.display()))
+    };
+    let request: onetaskgraph_core::task_projection::HumanTaskProjection =
+        serde_json::from_slice(&bytes).map_err(|error| {
+            Failure::decided(
+                "projection-input",
+                format!(
+                    "{from} is not a v1 HumanTaskProjection request: {error}\n\
+                     next: send exactly the fields `onetaskgraph schema` publishes for \
+                     HumanTaskProjection; questions are not projected."
+                ),
+            )
+        })?;
+    let host = current_host().ok_or_else(|| {
+        Failure::decided(
+            "projection-host",
+            "this host's name could not be read\n\
+             next: set ONETASKGRAPH_HOST to the host a source's task_projection names."
+                .to_owned(),
+        )
+    })?;
+    // A host no source names is refused here, from the configuration alone, before any
+    // source is started: the comparison is the configured spelling against this one, so it
+    // answers alike whatever the platform's own host-name conventions are.
+    if !loaded.config.sources().values().any(|source| {
+        source
+            .task_projection()
+            .is_some_and(|projection| projection.host.as_str() == host)
+    }) {
+        return Err(Failure::decided(
+            "projection-host",
+            format!(
+                "host {host:?} is not the host any source's task_projection names\n\
+                 next: run this on the host sources.<name>.task_projection.host names, or set \
+                 ONETASKGRAPH_HOST to it."
+            ),
+        ));
+    }
+    let engine = engine(loaded);
+    let projected = engine
+        .project_human(&request, &host)
+        .await
+        .map_err(|error| write_failed(&engine, &error))?;
+    let rendered = rendering(
+        loaded,
+        &projected,
+        |projected| format!("{} {}", projected.task(), projected.url()),
+        "the projection",
+    )?;
+    emit(out, rendered.trim_end(), "the projection")?;
+    Ok(EXIT_OK)
+}
+
+/// The host this process runs on: `ONETASKGRAPH_HOST`, else what the `hostname` command — the
+/// one spelling every platform this ships for answers alike — prints, trimmed.
+fn current_host() -> Option<String> {
+    if let Some(host) = std::env::var(onetaskgraph_core::config::HOST_VARIABLE)
+        .ok()
+        .filter(|host| !host.is_empty())
+    {
+        return Some(host);
+    }
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|host| host.trim().to_owned())
+        .filter(|host| !host.is_empty())
+}
+
 /// Name every item a copy left unwritten, and say what the exit code will mean: `4`, the
 /// code a copy that landed and could not finish everything exits with, when there is one.
 fn failed_exit(report: &CopyReport) -> u8 {
@@ -2308,6 +2412,7 @@ mod tests {
                 "task render",
                 "task answers",
                 "task assets",
+                "task project-human",
                 "project list",
                 "project show",
                 "project deps",

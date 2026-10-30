@@ -271,7 +271,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 49
+    assert emitted_bundle["version"] == 50
     assert "LocateReport" in bundle["roots"]
     assert "reachable" in emitted_bundle["roots"]["SourceRoute"]["required"]
     assert "task locate" in emitted_bundle["commands"]

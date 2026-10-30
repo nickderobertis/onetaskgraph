@@ -112,6 +112,8 @@ mod failures;
 // edge, which AGENTS.md forbids depending on the engine at any depth; what the GitHub Projects
 // plugin owes it is proven behind that plugin's own edge, in its e2e suite.
 mod graph;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no narrower edge for it: it drives the binary against a loopback board and Linear workspace with no credential and no network in about a second. Routing a human task across two plugins is the engine's and the configuration's, so it cannot sit behind one plugin crate's edge, which AGENTS.md forbids depending on the engine at any depth.
+mod human_routes;
 mod journeys;
 // `task locate` against the copy after it: placement, counterpart and refusals.
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the journeys drive the binary against folders of Markdown, the loopback board and a counting Linear stand-in, with the released onevcs boundary commands behind a recorder, in seconds. What they prove — that locate places and looks up through the copy's own path — is the engine's, so no plugin crate's edge is narrower, and AGENTS.md forbids any plugin crate to depend on the engine.

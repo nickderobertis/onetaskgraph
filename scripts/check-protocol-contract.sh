@@ -158,6 +158,22 @@ NOT_METHODS = {
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does"
     ),
+    "placement_context": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, keeping no placement between processes"
+    ),
+    "prime_placement": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, taking nothing, so every create crosses as its own `write_task`"
+    ),
+    "written_context": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, keeping nothing of a task it wrote"
+    ),
+    "prime_written": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, taking nothing, so every update crosses as its own `update_task`"
+    ),
     "check_status_write": (
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, and the plugin's own write refuses a status it has no name for"

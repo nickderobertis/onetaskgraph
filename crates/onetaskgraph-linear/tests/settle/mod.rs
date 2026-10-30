@@ -274,7 +274,14 @@ pub async fn settled_tasks(
     .await
 }
 
-/// [`settled`] over the set a walk in pages of one reaches.
+/// A walk in pages of one that reaches, in order, exactly what one whole page of fifty reports,
+/// once that page holds `expected` — read as a pair, again while either disagrees.
+///
+/// A walk compared once against a page read once is two listings racing the index: a run
+/// had a walk settle on all three of its issues and the very next walk come back with none,
+/// while a whole page between them reported all three. Each attempt therefore reads the
+/// page and then walks, and passes only when the page holds `expected` and the walk reached
+/// the page's rows in the page's order. An `Err` names the last pair once `bound` is spent.
 pub async fn settled_walk(
     bound: Bound,
     source: &dyn TaskSource,
@@ -283,12 +290,41 @@ pub async fn settled_walk(
     what: &str,
     expected: &[String],
 ) -> Result<(), String> {
-    settled(bound, what, expected, || async move {
-        let mut walked = walked_task_titles(source, query, most, what).await?;
-        walked.sort();
-        Ok(walked)
-    })
-    .await
+    let mut expected = expected.to_vec();
+    expected.sort();
+    let started = Instant::now();
+    let mut reads = 0;
+    loop {
+        let whole = source
+            .query_tasks(
+                query,
+                &PageRequest {
+                    cursor: None,
+                    limit: 50,
+                },
+            )
+            .await
+            .map_err(|error| format!("{what} could not read its whole page: {error}"))?
+            .items
+            .into_iter()
+            .map(|task| task.title)
+            .collect::<Vec<_>>();
+        let walked = walked_task_titles(source, query, most, what).await?;
+        reads += 1;
+        let mut held = whole.clone();
+        held.sort();
+        if held == expected && walked == whole {
+            return Ok(());
+        }
+        if reads >= bound.reads {
+            return Err(format!(
+                "{what} reached {walked:?} where one whole page reports {whole:?} rather than \
+                 {expected:?}, still after {reads} reads over {:?}",
+                started.elapsed()
+            ));
+        }
+        tokio::time::sleep(bound.interval).await;
+    }
 }
 
 /// The root field `graphql::ISSUE_LABEL` answers under, whose `nodes` are the labels it found.

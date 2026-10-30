@@ -654,6 +654,7 @@ pub mod change_token;
 mod expected;
 pub use expected::{CONTEXT_VERSION, WHOLE_MEMBERS, context_shapes};
 mod pacing;
+mod projection;
 mod visibility;
 
 use accounting::Accounting;
@@ -3689,7 +3690,8 @@ impl StatusTarget {
 /// [`GitHubProjectsConfig::repository`]. [`GitHubProjectsSource::creation_target`] makes
 /// that choice and says what it refuses before `createIssue`.
 // llmlint: ignore-end[comments_earn_their_place, contracts_have_one_source_or_a_drift_gate]
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 struct RepositoryTarget {
     owner: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only after `owner/name` validation in `new`.
     name: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only after `owner/name` validation in `new`.
@@ -3743,6 +3745,22 @@ impl RepositoryTarget {
 
     fn slug(&self) -> String {
         format!("{}/{}", self.owner, self.name)
+    }
+}
+
+/// Read back from a kept context as the `owner/name` it was written as, refused unless
+/// [`RepositoryTarget::parse`] takes it.
+impl TryFrom<String> for RepositoryTarget {
+    type Error = String;
+
+    fn try_from(slug: String) -> Result<Self, Self::Error> {
+        Self::parse(&slug).map_err(|error| error.to_string())
+    }
+}
+
+impl From<RepositoryTarget> for String {
+    fn from(target: RepositoryTarget) -> Self {
+        target.slug()
     }
 }
 
@@ -3943,6 +3961,24 @@ pub struct GitHubProjectsSource {
     /// What [`expected`] holds for a write the store's cache expects: the journal while one is
     /// open, the issues primed from the cache, and the comments known on each.
     expected: expected::Held,
+    /// What [`projection`] holds for a producer's projection: a kept placement awaiting its
+    /// setup-context token, and where the last create was placed.
+    projection: projection::Held,
+}
+
+/// The board item a single field update's answer names, refused unless it is `item_id`.
+fn field_update_item<'a>(data: &'a Value, item_id: &str) -> Result<&'a Value, SourceError> {
+    let returned = data
+        .pointer("/updateProjectV2ItemFieldValue/projectV2Item")
+        .ok_or_else(|| SourceError::Malformed {
+            message: "GitHub field update returned no project item".into(),
+        })?;
+    if required_str(returned, "id")? != item_id {
+        return Err(SourceError::Malformed {
+            message: "GitHub field update returned the wrong project item".into(),
+        });
+    }
+    Ok(returned)
 }
 
 /// GitHub's closed single-select color vocabulary.
@@ -5070,6 +5106,7 @@ impl GitHubProjectsSource {
             repository_cache: Mutex::new(BTreeMap::new()),
             ledger,
             expected: expected::Held::default(),
+            projection: projection::Held::default(),
         })
     }
 
@@ -6307,6 +6344,11 @@ impl GitHubProjectsSource {
     ) -> Result<(), SourceError> {
         let fields_known = self.board_cache()?.is_some() || self.fields_cache()?.is_some();
         if fields_known || self.repository_cache()?.contains_key(repository) {
+            return Ok(());
+        }
+        // A placement an earlier process kept is taken only while the project issue this create
+        // has just read shows its setup-context token unchanged; see `projection`.
+        if self.placed_by_kept(repository, incoming.parent) {
             return Ok(());
         }
         let data = self
@@ -8450,6 +8492,48 @@ impl GitHubProjectsSource {
             None => None,
         };
 
+        // A record primed from what a producer wrote holds no body anybody read, so an update
+        // changing the body reads it first: by the `Status` write's own answer when the update
+        // moves the option — the mutation answering with the issue whole — and otherwise by
+        // reading the issue. The body is then composed against what GitHub holds now.
+        let mut option_selected = false;
+        // The mark stays until a read lands, so an update that writes no body, or one whose
+        // read fails, leaves the next update of it to read the body too.
+        if (update.content.is_some()
+            || !update.metadata_set.is_empty()
+            || !update.metadata_remove.is_empty()
+            || update.delivers.is_some()
+            || edges.is_some())
+            && self.is_unread(id)
+        {
+            let live = match status_move.as_ref().filter(|moving| moving.moves.option()) {
+                Some(moving) => {
+                    option_selected = true;
+                    Some(
+                        self.select_reading_body(
+                            moving.board.as_str(),
+                            &item.item_id,
+                            &moving.field,
+                            &moving.option,
+                        )
+                        .await?,
+                    )
+                }
+                None => {
+                    self.forget(id)?;
+                    let Some(read) = self.item_by_id(id).await? else {
+                        return Ok(None);
+                    };
+                    read.raw_body
+                }
+            };
+            let (visible, read_slot) = metadata_body(live.clone())?;
+            self.mark_read(id);
+            item.raw_body = live;
+            item.body = visible;
+            item.slot = read_slot;
+        }
+
         let mut slot = item.slot.clone();
         for (key, value) in &update.metadata_set {
             slot.insert(key.as_str().to_owned(), value.clone());
@@ -8515,7 +8599,10 @@ impl GitHubProjectsSource {
         // closes, as a whole write does — then the `blockedBy` difference, then the body.
         let mut board_writes: Vec<(&BoardId, (String, Value))> = Vec::new();
         let mut clears: Vec<(&BoardId, &str)> = Vec::new();
-        if let Some(moving) = status_move.as_ref().filter(|moving| moving.moves.option()) {
+        if let Some(moving) = status_move
+            .as_ref()
+            .filter(|moving| moving.moves.option() && !option_selected)
+        {
             board_writes.push((
                 &moving.board,
                 (
@@ -8690,17 +8777,7 @@ impl GitHubProjectsSource {
                 },"readPriority":false,"priorityName":PRIORITY_FIELD}),
             )
             .await?;
-        let returned = data
-            .pointer("/updateProjectV2ItemFieldValue/projectV2Item")
-            .ok_or_else(|| SourceError::Malformed {
-                message: "GitHub field update returned no project item".into(),
-            })?;
-        if required_str(returned, "id")? != item_id {
-            return Err(SourceError::Malformed {
-                message: "GitHub field update returned the wrong project item".into(),
-            });
-        }
-        Ok(())
+        field_update_item(&data, item_id).map(|_| ())
     }
 
     /// GitHub accepts one value per field mutation; aliases combine those mutations in
@@ -13194,6 +13271,18 @@ impl TaskSource for GitHubProjectsSource {
     }
     fn unprime(&self, id: &NativeId) {
         self.unprime_held(id);
+    }
+    fn placement_context(&self) -> Option<Value> {
+        self.placement_held()
+    }
+    fn prime_placement(&self, context: &Value) -> bool {
+        self.prime_placement_held(context)
+    }
+    fn written_context(&self, id: &NativeId) -> Option<Value> {
+        self.written_held(id)
+    }
+    fn prime_written(&self, id: &NativeId, context: &Value, task: &Task) -> bool {
+        self.prime_written_held(id, context, task)
     }
     fn begin_journal(&self) {
         self.expected.begin();

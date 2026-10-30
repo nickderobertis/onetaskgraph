@@ -315,6 +315,52 @@ pub trait TaskSource: Send + Sync {
         false
     }
 
+    /// What this source read in this process about where it creates — the node ids of the
+    /// repository it filed in — under a setup-context token, or `None`.
+    ///
+    /// The token is the source's own digest of every input the context depends on: the
+    /// container's field definitions and options, the repository it creates in, the project it
+    /// files under and the visibility it was declared. Immutable placement knowledge only: it
+    /// holds no item's title, content or membership, and nothing that authorizes a versioned
+    /// write. Defaulted to `None`.
+    fn placement_context(&self) -> Option<serde_json::Value> {
+        None
+    }
+
+    /// Hold `context`, which [`placement_context`](Self::placement_context) gave in an earlier
+    /// process, for the next create to take only if its token still holds — computed from a
+    /// read that create makes anyway, so taking it adds no request and a changed input is read
+    /// afresh rather than reused. Answers whether it held it; a context this source cannot read
+    /// is not held. Defaulted to holding nothing.
+    fn prime_placement(&self, context: &serde_json::Value) -> bool {
+        let _ = context;
+        false
+    }
+
+    /// The ids — never the title or the content — a later process needs to write task `id`,
+    /// which this process wrote, without reading it first, or `None`. Defaulted to `None`.
+    fn written_context(&self, id: &NativeId) -> Option<serde_json::Value> {
+        let _ = id;
+        None
+    }
+
+    /// Take `context`, which [`written_context`](Self::written_context) gave, with `task`'s
+    /// fields, as the record of `id` — so the next [`update_task`](Self::update_task) of it
+    /// sends only its mutations. What the caller holds of the body is never written: an update
+    /// that changes the body reads it first — in the answer to one of its own mutations where it
+    /// can — and composes it against what the backend holds now. Answers whether it took them;
+    /// a context it cannot read is not taken, and the update then reads as it always does.
+    /// Defaulted to taking nothing.
+    fn prime_written(
+        &self,
+        id: &NativeId,
+        context: &serde_json::Value,
+        task: &crate::Task,
+    ) -> bool {
+        let _ = (id, context, task);
+        false
+    }
+
     /// Drop whatever [`prime_write`](Self::prime_write) took for `id`, and the board context
     /// with it, so the next write of it reads afresh.
     fn unprime(&self, id: &NativeId) {

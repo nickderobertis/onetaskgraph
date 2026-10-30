@@ -978,6 +978,22 @@ impl TaskSource for CachedSource {
         self.inner.prime_write(id, context, board)
     }
 
+    fn placement_context(&self) -> Option<Value> {
+        self.inner.placement_context()
+    }
+
+    fn prime_placement(&self, context: &Value) -> bool {
+        self.inner.prime_placement(context)
+    }
+
+    fn written_context(&self, id: &NativeId) -> Option<Value> {
+        self.inner.written_context(id)
+    }
+
+    fn prime_written(&self, id: &NativeId, context: &Value, task: &Task) -> bool {
+        self.inner.prime_written(id, context, task)
+    }
+
     fn unprime(&self, id: &NativeId) {
         self.inner.unprime(id);
     }

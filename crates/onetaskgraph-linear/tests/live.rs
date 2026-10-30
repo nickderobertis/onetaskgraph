@@ -72,7 +72,7 @@ mod settle;
 use settle::{
     LINEAR_DOCUMENT_LISTING, LINEAR_INDEX, LINEAR_REPLICA, settled, settled_content,
     settled_document_absent, settled_documents, settled_label, settled_projects, settled_tasks,
-    settled_walk, task_titles, token_moved, walked_task_titles,
+    settled_walk, task_titles, token_moved,
 };
 
 /// The two workflow states this fixture files its issues under.
@@ -552,24 +552,11 @@ async fn drive_every_declared_capability(
     }
 
     // Paging: a limit smaller than the result set walks to exhaustion, reaching every row
-    // exactly once and in the order one whole page reports them. The walk is a listing like
-    // the others and waits out the index the same way, so the order is compared over a set
-    // the index has already caught up with rather than over a walk that raced it.
+    // exactly once and in the order one whole page reports them. The walk and the page are
+    // listings like the others and wait out the index together, so the order is compared over
+    // a pair read once the index has caught up rather than over two reads that raced it.
     let walk = "a walk in pages of one over this run's own three issues";
     settled_walk(LINEAR_INDEX, source, &scoped(), 10, walk, &all_three).await?;
-    let whole = source
-        .query_tasks(&scoped(), &page(50))
-        .await
-        .map_err(|error| format!("live whole-page read failed: {error}"))?
-        .items
-        .into_iter()
-        .map(|task| task.title)
-        .collect::<Vec<_>>();
-    let walked = walked_task_titles(source, &scoped(), 10, walk).await?;
-    ensure!(
-        walked == whole,
-        "a walk in pages of one reached {walked:?} where one whole page reports {whole:?}"
-    );
 
     // `max_page_size`: the source clamps a limit one above its declared ceiling to that
     // ceiling instead of passing it on, so the read succeeds rather than being refused

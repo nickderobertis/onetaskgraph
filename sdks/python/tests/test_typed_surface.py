@@ -41,6 +41,8 @@ from onetaskgraph_sdk import (
     FailureDocument,
     FieldsReport,
     GlobalId,
+    HumanTaskProjected,
+    HumanTaskProjection,
     IssuesCompleted,
     ItemType,
     LinearConfig,
@@ -145,6 +147,12 @@ from onetaskgraph_sdk._generated.models import (
 )
 from onetaskgraph_sdk._generated.models import (
     GlobalId as ModelsGlobalId,
+)
+from onetaskgraph_sdk._generated.models import (
+    HumanTaskProjected as ModelsHumanTaskProjected,
+)
+from onetaskgraph_sdk._generated.models import (
+    HumanTaskProjection as ModelsHumanTaskProjection,
 )
 from onetaskgraph_sdk._generated.models import (
     IssuesCompleted as ModelsIssuesCompleted,
@@ -341,6 +349,8 @@ FROM_ROOT: dict[str, object] = {
     "FailureDocument": FailureDocument,
     "FieldsReport": FieldsReport,
     "GlobalId": GlobalId,
+    "HumanTaskProjected": HumanTaskProjected,
+    "HumanTaskProjection": HumanTaskProjection,
     "IssuesCompleted": IssuesCompleted,
     "ItemType": ItemType,
     "LinearConfig": LinearConfig,
@@ -413,6 +423,8 @@ FROM_MODELS: dict[str, object] = {
     "FailureDocument": ModelsFailureDocument,
     "FieldsReport": ModelsFieldsReport,
     "GlobalId": ModelsGlobalId,
+    "HumanTaskProjected": ModelsHumanTaskProjected,
+    "HumanTaskProjection": ModelsHumanTaskProjection,
     "IssuesCompleted": ModelsIssuesCompleted,
     "ItemType": ModelsItemType,
     "LinearConfig": ModelsLinearConfig,
@@ -551,6 +563,8 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "FailureDocument": FailureDocument,
     "FieldsReport": FieldsReport,
     "GlobalId": GlobalId,
+    "HumanTaskProjected": HumanTaskProjected,
+    "HumanTaskProjection": HumanTaskProjection,
     "IssuesCompleted": IssuesCompleted,
     "LinearConfig": LinearConfig,
     "LocateReport": LocateReport,
@@ -614,6 +628,8 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "FailureDocument": ModelsFailureDocument,
     "FieldsReport": ModelsFieldsReport,
     "GlobalId": ModelsGlobalId,
+    "HumanTaskProjected": ModelsHumanTaskProjected,
+    "HumanTaskProjection": ModelsHumanTaskProjection,
     "IssuesCompleted": ModelsIssuesCompleted,
     "LinearConfig": ModelsLinearConfig,
     "LocateReport": ModelsLocateReport,

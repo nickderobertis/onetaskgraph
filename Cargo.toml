@@ -36,6 +36,7 @@ onetaskgraph-github-live = { path = "crates/onetaskgraph-github-live" }
 # `onetaskgraph-live` is: only the test-only e2e members name it.
 onetaskgraph-e2e-support = { path = "crates/onetaskgraph-e2e-support" }
 
+url = "2.5.8"
 async-trait = "0.1.92"
 # An asset's bytes over the stdio plugin protocol. Already in this lockfile through reqwest, so
 # naming it adds no crate to the closure.

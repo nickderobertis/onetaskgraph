@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         EffectiveConfig,
         FieldsReport,
         GlobalId,
+        HumanTaskProjected,
         IssuesCompleted,
         LocateReport,
         MetadataSet,
@@ -1398,6 +1399,24 @@ class GeneratedClient:
             page_size=page_size,
             set=set,
             term_scope=_strings("task_priority_set", "term_scope", term_scope),
+        )
+
+    async def task_project_human(
+        self,
+        input: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> HumanTaskProjected:
+        """Run ``onetaskgraph task project-human``."""
+        return await self._invoke(
+            ["task", "project-human"],
+            _models.HumanTaskProjected,
+            input=input,
+            default_sources=default_sources,
+            page_size=page_size,
+            set=set,
         )
 
     async def task_render(
