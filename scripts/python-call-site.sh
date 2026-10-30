@@ -8,7 +8,7 @@
 # <probe directory>/current names. The script is the first `.sh` argument of the parent
 # process, from its last `scripts/` on, or `bash -c <digest>` for an inline body such as a
 # release workflow step; the program is the script path from its last `scripts/` on (or its
-# name), `-m <module>`, or `-c <digest>` or `stdin <digest>` of the code itself, which is read
+# name), `-m <module>`, `-W`/`-X` without its argument, or `-c <digest>` or `stdin <digest>` of the code itself, which is read
 # here and handed on to the interpreter unchanged. A site it cannot name is recorded as
 # `unknown`; an unwritable record refuses the call, because the comparison needs its evidence.
 python_call_site_record() {
@@ -48,7 +48,15 @@ python_call_site_record() {
     case "$1" in
       -c) program="-c $(printf '%s' "${2:-}" | digest_of)"; break ;;
       -m) program="-m ${2:-}"; break ;;
-      -W | -X) shift 2 ;;
+      # Each takes the next argument; one given none is recorded as such and left for the
+      # interpreter to refuse, rather than looping on a shift that cannot consume it.
+      -W | -X)
+        if [ "$#" -lt 2 ]; then
+          program="$1 without its argument"
+          break
+        fi
+        shift 2
+        ;;
       -) break ;;
       -*) shift ;;
       *) program="${1##*scripts/}"; [ "$1" = "$program" ] && program="$(basename "$1")" || program="scripts/$program"; break ;;

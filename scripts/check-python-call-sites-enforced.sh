@@ -123,3 +123,42 @@ grep -q 'could not append the Python call site' "$tmp/record-error" \
   && grep -q 'next: check free space and write permissions' "$tmp/record-error" \
   || fail "the recorder refused without the failed operation and repair: $(cat "$tmp/record-error")" \
     "name the recording operation and how to repair its destination"
+
+# The recorder names the program past the interpreter's options, through a probe shim built as
+# scripts/check-relative-interpreter.sh builds it, and the real interpreter still runs after it:
+# a module, and a script behind -W and -X. A lone -W or -X is recorded and left to the
+# interpreter, which refuses it, rather than looping on a shift that cannot consume it.
+probe="$tmp/options"
+mkdir -p "$probe/bin" || fail "could not create $probe" "check 'df -h', then rerun"
+printf '%s\n' options >"$probe/current"
+real_python3="$(command -v python3)" || fail "python3 is not on PATH" "install python3 and rerun"
+case $real_python3 in
+  /* | ?:[\\/]*) ;;
+  *) real_python3="$(cd "$(dirname "$real_python3")" && pwd)/$(basename "$real_python3")" ;;
+esac
+printf '#!/usr/bin/env bash\n. "%s" "%s" "$@"\nexec "%s" "$@"\n' \
+  "$root/scripts/python-call-site.sh" "$probe" "$real_python3" >"$probe/bin/python3"
+chmod +x "$probe/bin/python3"
+mkdir -p "$tmp/sites/scripts"
+printf '%s\n' 'import sys' 'print("ran", sys.flags.utf8_mode)' >"$tmp/sites/scripts/site.py"
+caller="$tmp/sites/scripts/caller.sh"
+printf '%s\n' '#!/usr/bin/env bash' '"$@"' >"$caller"
+ran() {
+  local out
+  out="$(cd "$tmp/sites" && timeout 60 bash "$caller" "$probe/bin/python3" "$@" 2>&1 | tr -d '\r')" \
+    || fail "the probe interpreter failed for '$*': $out" "make scripts/python-call-site.sh hand every invocation on"
+  printf '%s' "$out"
+}
+[ "$(ran -m json.tool <<<'{}')" = "{}" ] || fail "-m json.tool did not run through the recorder" "keep stdin and the arguments intact"
+[ "$(ran -W ignore scripts/site.py)" = "ran 0" ] || fail "-W ignore scripts/site.py did not run through the recorder" "keep the arguments intact"
+[ "$(ran -X utf8 scripts/site.py)" = "ran 1" ] || fail "-X utf8 scripts/site.py did not run through the recorder" "keep the arguments intact"
+for lone in -W -X; do
+  status=0
+  (cd "$tmp/sites" && timeout 60 bash "$caller" "$probe/bin/python3" "$lone") >"$tmp/lone" 2>&1 || status=$?
+  [ "$status" -ne 124 ] || fail "a lone $lone hung the recorder" "record an option given no argument and stop parsing"
+  [ "$status" -ne 0 ] || fail "a lone $lone was not refused by the interpreter" "hand the invocation on unchanged"
+done
+expected="$(printf 'scripts/caller.sh\t%s\n' '-m json.tool' scripts/site.py scripts/site.py '-W without its argument' '-X without its argument')"
+[ "$(tr -d '\r' <"$probe/call-sites.options")" = "$expected" ] \
+  || fail "the recorder named these call sites: $(cat "$probe/call-sites.options")" \
+    "record the caller and the program past -W and -X, and -m with its module"
