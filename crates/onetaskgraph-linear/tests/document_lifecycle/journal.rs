@@ -12,8 +12,8 @@ pub const TESTS_UNDER_COVERAGE: &str = "ONETASKGRAPH_TESTS_UNDER_COVERAGE";
 /// [`TESTS_UNDER_COVERAGE`], the plain build of the same profile, which is where the budgets'
 /// report runs read it. The same rule as `onetaskgraph_e2e_support::telemetry::build_directory`,
 /// restated because a plugin's tests may not depend on the engine's harness;
-/// `onetaskgraph-linear-e2e`'s `journal_build_directory_agrees_with_the_harness` holds the two to
-/// one answer.
+/// `onetaskgraph-linear-e2e`'s `journal_build_directory_agrees_with_the_harness` holds it, and
+/// [`under_coverage`] beside it, to the harness's answers.
 pub fn build_directory(
     executable: &std::path::Path,
     under_coverage: bool,
@@ -32,6 +32,23 @@ pub fn build_directory(
         return Some(target.join(profile));
     }
     Some(directory)
+}
+
+/// Whether [`TESTS_UNDER_COVERAGE`] is set: `1`, or unset or empty, exactly as
+/// `scripts/live-crate-test.sh` and `onetaskgraph_e2e_support::telemetry::under_coverage` read it.
+///
+/// # Errors
+///
+/// Any other value, named, because it is neither of the two modes.
+pub fn under_coverage(value: Option<&std::ffi::OsStr>) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some(value) if value.is_empty() => Ok(false),
+        Some(value) if value == "1" => Ok(true),
+        Some(value) => Err(format!(
+            "{TESTS_UNDER_COVERAGE} is {value:?}; it is 1 or unset (scripts/live-crate-test.sh)"
+        )),
+    }
 }
 
 #[derive(Clone)]
@@ -137,7 +154,8 @@ impl Journal {
             .unwrap_or_else(|| {
                 let exe = std::env::current_exe().expect("test executable");
                 let under_coverage =
-                    std::env::var_os(TESTS_UNDER_COVERAGE).is_some_and(|value| value == "1");
+                    under_coverage(std::env::var_os(TESTS_UNDER_COVERAGE).as_deref())
+                        .unwrap_or_else(|problem| panic!("{problem}"));
                 build_directory(&exe, under_coverage)
                     .expect("a test executable sits inside a build directory")
                     .join("telemetry")

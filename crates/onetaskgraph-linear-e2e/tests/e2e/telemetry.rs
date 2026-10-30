@@ -355,4 +355,18 @@ fn journal_build_directory_agrees_with_the_harness() {
         ),
         Some(PathBuf::from("/w/target/debug"))
     );
+    // And both read the variable alike: `1` or nothing, every other value refused.
+    for value in [
+        None,
+        Some(""),
+        Some("1"),
+        Some("0"),
+        Some("yes"),
+        Some("true"),
+    ] {
+        let value = value.map(std::ffi::OsStr::new);
+        let theirs = onetaskgraph_e2e_support::telemetry::under_coverage(value);
+        assert_eq!(journal::under_coverage(value), theirs, "{value:?}");
+    }
+    assert!(journal::under_coverage(Some(std::ffi::OsStr::new("yes"))).is_err());
 }
