@@ -326,3 +326,33 @@ fn live_documents_recorded(budget: &str) -> Result<(f64, Option<String>), String
     }
     Ok((total as f64, Some(details.join("; "))))
 }
+
+/// The Linear journals restate the harness's build-directory rule, because the plugin's own tests
+/// may not depend on it; the two answer every shape of path alike.
+#[test]
+fn journal_build_directory_agrees_with_the_harness() {
+    use crate::linear_assets::document_lifecycle::journal;
+    for executable in [
+        "/w/target/debug/deps/e2e-1234",
+        "/w/target/llvm-cov-target/debug/deps/e2e-1234",
+        "/w/target/llvm-cov-target/release/deps/live-1",
+        "/w/target/debug/e2e",
+        "/w/elsewhere/deps/e2e",
+    ] {
+        for under_coverage in [false, true] {
+            let path = Path::new(executable);
+            assert_eq!(
+                journal::build_directory(path, under_coverage),
+                onetaskgraph_e2e_support::telemetry::build_directory(path, under_coverage),
+                "{executable} under_coverage={under_coverage}"
+            );
+        }
+    }
+    assert_eq!(
+        journal::build_directory(
+            Path::new("/w/target/llvm-cov-target/debug/deps/e2e-1234"),
+            true
+        ),
+        Some(PathBuf::from("/w/target/debug"))
+    );
+}

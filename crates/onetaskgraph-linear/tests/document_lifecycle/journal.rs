@@ -4,6 +4,36 @@ use std::sync::{Arc, Mutex};
 /// The journey every create made while a lane prepares its standing set is filed under:
 /// in an ordinary journal it is a cold rebuild, reported beside that pass and never in it.
 pub const COLD_REBUILD: &str = "cold-rebuild";
+/// The variable `scripts/ci-job.sh` sets to `1` where the instrumented run stands in for a
+/// live crate's `test`, so these journals are written by a build under `llvm-cov-target`.
+pub const TESTS_UNDER_COVERAGE: &str = "ONETASKGRAPH_TESTS_UNDER_COVERAGE";
+
+/// The build directory a journal belongs under: the test executable's own, or, under
+/// [`TESTS_UNDER_COVERAGE`], the plain build of the same profile, which is where the budgets'
+/// report runs read it. The same rule as `onetaskgraph_e2e_support::telemetry::build_directory`,
+/// restated because a plugin's tests may not depend on the engine's harness;
+/// `onetaskgraph-linear-e2e`'s `journal_build_directory_agrees_with_the_harness` holds the two to
+/// one answer.
+pub fn build_directory(
+    executable: &std::path::Path,
+    under_coverage: bool,
+) -> Option<std::path::PathBuf> {
+    let mut directory = executable.parent()?.to_path_buf();
+    if directory.file_name().is_some_and(|leaf| leaf == "deps") {
+        directory.pop();
+    }
+    if under_coverage
+        && let (Some(profile), Some(instrumented)) = (directory.file_name(), directory.parent())
+        && instrumented
+            .file_name()
+            .is_some_and(|leaf| leaf == "llvm-cov-target")
+        && let Some(target) = instrumented.parent()
+    {
+        return Some(target.join(profile));
+    }
+    Some(directory)
+}
+
 #[derive(Clone)]
 pub struct Journal {
     lane: &'static str,
@@ -106,10 +136,10 @@ impl Journal {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| {
                 let exe = std::env::current_exe().expect("test executable");
-                exe.parent()
-                    .expect("deps")
-                    .parent()
-                    .expect("profile")
+                let under_coverage =
+                    std::env::var_os(TESTS_UNDER_COVERAGE).is_some_and(|value| value == "1");
+                build_directory(&exe, under_coverage)
+                    .expect("a test executable sits inside a build directory")
                     .join("telemetry")
                     .join(if self.lane == "plugin" {
                         "onetaskgraph-linear"

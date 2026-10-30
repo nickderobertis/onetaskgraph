@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Hand this invocation to the relative-interpreter check before any build work begins.
-if [ "${ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER:-}" = 1 ]; then
+# Hand this invocation to the relative-interpreter check before any build work begins. Only
+# the whole journey is the check's to run: it takes no arguments to pass on, so a run with one
+# (the warmer's `--release-build-only`, the targeted pass's `--interpreter-only`) runs here.
+if [ "${ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER:-}" = 1 ] && [ "$#" -eq 0 ]; then
   exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-relative-interpreter.sh" scripts/test-distribution.sh
 fi
 # One run of this journey at a time in a tree, held for the whole run: two runs build, move
