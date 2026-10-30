@@ -1,3 +1,5 @@
+import { graphReadSet } from "./workflow-graph.mjs";
+
 // Repository files read by each journey target, beyond the workflow graph.
 // Globs include the source payloads cargo, maturin and npm build/package, not just their
 // manifests. ci-contexts.spec reconciles this inventory with the target that runs them;
@@ -43,6 +45,7 @@ export const policyJourneyReadSet = ["bun.lock", "rust-toolchain.toml", "scripts
 
 export const policyJourneyFiles = [
   ".github/policy/tests/boundaries.test.mjs",
+  ".github/policy/tests/inventory.test.mjs",
   ".github/policy/tests/policy-carriers.test.mjs",
   ".github/policy/tests/policy-routing.test.mjs",
   ".github/policy/tests/policy.test.mjs",
@@ -58,3 +61,45 @@ export const cdJourneyFiles = [
   ".github/tests/release-plz.test.mjs",
   ".github/tests/release.test.mjs",
 ];
+
+// github-workflow-policy is rooted beside .github's own files rather than at .github, so it
+// names the .github files it reads as one workspace glob: its own reads, not an outside one.
+export const GITHUB_READS = "{workspaceRoot}/.github/**/*";
+
+// What a journey target's inputs get wrong against the read set of the tests it runs: every
+// outside read it is not keyed on, and every workspace input its tests do not read.
+export function inputProblems(project, target) {
+  const expand = (inputs) =>
+    inputs.flatMap((input) =>
+      typeof input === "string" && project.namedInputs?.[input]
+        ? expand(project.namedInputs[input])
+        : [input],
+    );
+  const graph = graphReadSet().filter((path) => !path.startsWith(".github/"));
+  if (!graph.length) throw Error("the graph reads no outside file, so this proves nothing");
+  const outside = [
+    ...new Set([
+      ...graph,
+      ...(target === "cd-journeys"
+        ? cdJourneyReadSet
+        : target === "policy-tests"
+          ? policyJourneyReadSet
+          : []),
+    ]),
+  ];
+  const inputs = expand(project.targets[target].inputs ?? ["default"]);
+  const github = target === "policy-tests" ? [GITHUB_READS] : [];
+  return [
+    ...github
+      .filter((entry) => !inputs.includes(entry))
+      .map((entry) => `${target} is not keyed on ${entry.slice("{workspaceRoot}/".length)}`),
+    ...outside
+      .filter((path) => !inputs.includes(`{workspaceRoot}/${path}`))
+      .map((path) => `${target} is not keyed on ${path}`),
+    ...inputs
+      .filter((entry) => String(entry).startsWith("{workspaceRoot}/"))
+      .filter((input) => !github.includes(input))
+      .filter((input) => !outside.includes(input.slice("{workspaceRoot}/".length)))
+      .map((input) => `${target} is keyed on ${input}, which its tests do not read`),
+  ];
+}
