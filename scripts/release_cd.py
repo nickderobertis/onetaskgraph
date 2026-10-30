@@ -342,21 +342,27 @@ def describe_maturin_staging() -> None:
             print(f"release-cd: alive beside it: {line.strip()}", file=sys.stderr)
 
 
-def build_target(row: PlatformTarget, tag: ReleaseTag, dist: Path) -> None:
+def build_target(row: PlatformTarget, tag: ReleaseTag, dist: Path, prebuilt: bool = False) -> None:
+    """Build one target's wheel with maturin, package it, and test-install what was packaged.
+
+    `prebuilt` starts at the packaging, over the wheel already in <dist>/wheels/<target>: every
+    step after maturin, in the same order, for a run whose wheel an earlier one built.
+    """
     with cli_wheel_lock():
         wheels = dist / "wheels" / row.target
-        shutil.rmtree(wheels, ignore_errors=True)
-        wheels.mkdir(parents=True)
-        try:
-            run(
-                [tool("uv"), "tool", "run", "--from", maturin_requirement(), "maturin", "build", "--release", "--locked", "--target", row.target, "--out", str(wheels)],
-                f"maturin could not build the {row.target} wheel",
-                "fix the build error above; the wheel's binary is the one every other artifact carries",
-                env={**os.environ, "RUSTFLAGS": "-D warnings"},
-            )
-        except ReleaseStepFailed:
-            describe_maturin_staging()
-            raise
+        if not prebuilt:
+            shutil.rmtree(wheels, ignore_errors=True)
+            wheels.mkdir(parents=True)
+            try:
+                run(
+                    [tool("uv"), "tool", "run", "--from", maturin_requirement(), "maturin", "build", "--release", "--locked", "--target", row.target, "--out", str(wheels)],
+                    f"maturin could not build the {row.target} wheel",
+                    "fix the build error above; the wheel's binary is the one every other artifact carries",
+                    env={**os.environ, "RUSTFLAGS": "-D warnings"},
+                )
+            except ReleaseStepFailed:
+                describe_maturin_staging()
+                raise
         package_target(row, tag, dist)
         run(
             [PYTHON_EXECUTABLE, "scripts/verify-release-products.py", "--target", row.target, "--npm", row.npm_platform, "--tag", tag, "--ext", row.extension, "--dist", str(dist), "--install"],
@@ -364,7 +370,6 @@ def build_target(row: PlatformTarget, tag: ReleaseTag, dist: Path) -> None:
             "nothing was published; fix the artifact the verification named above and rerun the build",
             capture=True,
         )
-
 
 def package_target(row: PlatformTarget, tag: ReleaseTag, dist: Path) -> None:
     """Package the archive, its checksum and the npm platform package from the wheel's binary.
@@ -453,7 +458,7 @@ def write_manifest(dist: Path, platform: PlanPlatform, tag: ReleaseTag) -> None:
     manifest_path(dist, platform).write_text(json.dumps({"tag": tag, "platform": platform, "artifacts": entries}, indent=2) + "\n", encoding="utf-8")
 
 
-def build(platform: PlanPlatform, tag: ReleaseTag, dist: Path, announce: bool = True) -> None:
+def build(platform: PlanPlatform, tag: ReleaseTag, dist: Path, announce: bool = True, prebuilt: bool = False) -> None:
     require_tree_version(tag)
     dist.mkdir(parents=True, exist_ok=True)
     manifest_path(dist, platform).unlink(missing_ok=True)
@@ -461,7 +466,7 @@ def build(platform: PlanPlatform, tag: ReleaseTag, dist: Path, announce: bool = 
         build_independent(tag, dist)
     else:
         for row in platform_targets(platform):
-            build_target(row, tag, dist)
+            build_target(row, tag, dist, prebuilt)
     write_manifest(dist, platform, tag)
     if announce:
         say(f"built {platform} for {tag}: {', '.join(artifact.file for artifact in plan(platform, tag))}")
@@ -1015,7 +1020,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         sub = command(name, help_text)
         sub.add_argument("--from", dest="registry", required=True, choices=["github", "pypi", "npm", "crates"])
         sub.add_argument("--wait", type=seconds, default=600.0, help="seconds to keep asking a registry that has not caught up (default 600)")
-    command("run", "build, test-install, then publish to every registry in dry-run mode").add_argument("--dry-run", action="store_true", required=True)
+    run_parser = command("run", "build, test-install, then publish to every registry in dry-run mode")
+    run_parser.add_argument("--dry-run", action="store_true", required=True)
+    run_parser.add_argument("--prebuilt", action="store_true", help="start at the packaging, over the wheels already in <dist>/wheels: every step after maturin, in order")
     args = parser.parse_args(None if argv is None else list(argv))
     try:
         tag = validate_tag(args.tag)
@@ -1046,7 +1053,9 @@ def main(argv: Iterable[str] | None = None) -> int:
                     parser.error("`available` is the publish job's check: --platform independent --from github|pypi|npm")
                 available(tag, args.registry, args.wait)
             case "run":
-                build(args.platform, tag, dist, announce=False)
+                if args.prebuilt and args.platform == "independent":
+                    parser.error("`--prebuilt` starts after a platform's maturin build: --platform linux, linux-arm64, macos or windows")
+                build(args.platform, tag, dist, announce=False, prebuilt=args.prebuilt)
                 registries = INDEPENDENT_REGISTRIES if args.platform == "independent" else PLATFORM_REGISTRIES
                 planned = "; ".join(would_publish(publishable(args.platform, tag, dist, registry), registry) for registry in registries)
                 say(f"built {args.platform} for {tag}; dry run: {planned}")

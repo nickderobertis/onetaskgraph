@@ -112,9 +112,8 @@ function recipe(job, args, env = {}) {
 }
 // A run still going after `bound` is stopped and fails with what it wrote and the build
 // processes alive then, so a release build that hangs on the hosted runner says what it
-// waited on before the job's own timeout. The bound sits above the release compile this run
-// can pay on a contended runner (over nine minutes, hosted), and below that timeout.
-function runAsync(command, args, env, bound = 22 * 60 * 1000) {
+// waited on before the job's own timeout.
+function runAsync(command, args, env, bound = 15 * 60 * 1000) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: checkout,
@@ -334,9 +333,15 @@ test("a test-install that fails stops the Linux recipe before any publication", 
   const failing = shims(join(scratch, "failing-shims"), {
     npm: 'case "$1" in install) echo "simulated test-install failure" >&2; exit 1;; esac',
   });
+  // The wheel the Linux recipe built above, so this run starts where the build hands over: the
+  // recipe's own packaging, test-install and publication, in its own order, without a second
+  // release build of the same tree.
+  const failingDist = join(scratch, "dist-failing");
+  mkdirSync(failingDist, { recursive: true });
+  execFileSync("cp", ["-R", join(dist, "wheels"), join(failingDist, "wheels")]);
   const result = spawnSync(
     "just",
-    ["release-linux", "run", "--tag", tag, "--dry-run", "--dist", join(scratch, "dist-failing")],
+    ["release-linux", "run", "--tag", tag, "--dry-run", "--prebuilt", "--dist", failingDist],
     {
       cwd: checkout,
       encoding: "utf8",
@@ -345,6 +350,10 @@ test("a test-install that fails stops the Linux recipe before any publication", 
   );
   const output = `${result.stdout}${result.stderr}`;
   assert.notEqual(result.status, 0, output);
+  assert.ok(
+    !invocations().some((line) => /maturin build/.test(line)),
+    "a prebuilt run built nothing",
+  );
   assert.match(output, /simulated test-install failure/);
   assert.match(output, /did not install and run/);
   assert.match(output, /nothing was published/);
@@ -357,6 +366,22 @@ test("a test-install that fails stops the Linux recipe before any publication", 
   assert.ok(
     !commands.some((line) => /^(uv publish|npm publish|cargo publish|gh |curl )/.test(line)),
   );
+  // A prebuilt run over a dist holding no wheel refuses at its packaging, installing nothing.
+  writeFileSync(log, "");
+  const empty = join(scratch, "dist-prebuilt-empty");
+  mkdirSync(join(empty, "wheels", "x86_64-unknown-linux-gnu"), { recursive: true });
+  const refused = recipe("linux", [
+    "run",
+    "--tag",
+    tag,
+    "--dry-run",
+    "--prebuilt",
+    "--dist",
+    empty,
+  ]);
+  assert.notEqual(refused.status, 0, refused.output);
+  assert.match(refused.output, /no wheel for x86_64-unknown-linux-gnu/);
+  assert.ok(!invocations().some((line) => line.startsWith("npm install")), refused.output);
 });
 
 test("the Linux job publishes exactly what it built, re-runs only what is missing, and installs it back", {
