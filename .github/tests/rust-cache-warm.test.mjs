@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { existsSync } from "node:fs";
+import { test } from "node:test";
 import { parse } from "yaml";
 import { HASHED_ENV_PREFIXES } from "../rust-cache-key.mjs";
 import { read, root } from "../workflow-graph.mjs";
@@ -18,12 +18,48 @@ const SETUP = "actions-rust-lang/setup-rust-toolchain@";
 const UNINSTALL = "rustup toolchain uninstall stable";
 const WARM = /^bash scripts\/warm-rust-cache\.sh(?: (--instrumented))?$/;
 
+const isMapping = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+// The shape every helper below reads, refused naming the file and the place it breaks rather
+// than surfacing later as a TypeError: a mapping whose `jobs`, `env` and each job's `env`,
+// `strategy.matrix.include` and `steps` — each step's `with`, `uses` and `run` — are what a
+// workflow spells them as.
+function shaped(file, document) {
+  const refuse = (where, what) => {
+    throw Error(`${file}: ${where} is not ${what}`);
+  };
+  if (!isMapping(document)) refuse("the document", "a mapping");
+  if (document.env !== undefined && !isMapping(document.env)) refuse("env", "a mapping");
+  if (!isMapping(document.jobs)) refuse("jobs", "a mapping");
+  for (const [id, job] of Object.entries(document.jobs)) {
+    if (!isMapping(job)) refuse(`jobs.${id}`, "a mapping");
+    if (job.env !== undefined && !isMapping(job.env)) refuse(`jobs.${id}.env`, "a mapping");
+    const include = job.strategy?.matrix?.include;
+    if (include !== undefined && !(Array.isArray(include) && include.every(isMapping)))
+      refuse(`jobs.${id}.strategy.matrix.include`, "a list of mappings");
+    if (job.phases !== undefined && typeof job.phases !== "string")
+      refuse(`jobs.${id}.phases`, "a string");
+    if (job.steps === undefined) continue;
+    if (!Array.isArray(job.steps)) refuse(`jobs.${id}.steps`, "a list");
+    job.steps.forEach((step, index) => {
+      const where = `jobs.${id}.steps[${index}]`;
+      if (!isMapping(step)) refuse(where, "a mapping");
+      if (step.with !== undefined && !isMapping(step.with)) refuse(`${where}.with`, "a mapping");
+      for (const field of ["uses", "run"])
+        if (step[field] !== undefined && typeof step[field] !== "string")
+          refuse(`${where}.${field}`, "a string");
+    });
+  }
+  return document;
+}
+
 function sources() {
   const ciJob = new URL("scripts/ci-job.sh", root);
+  const load = (file) => shaped(file, parse(read(file)));
   return {
-    warmer: parse(read(".github/workflows/rust-cache-warm.yml")),
-    ci: parse(read(".github/workflows/ci.yml")),
-    fixture: existsSync(new URL(FIXTURE, root)) ? parse(read(FIXTURE)) : { jobs: {} },
+    warmer: load(".github/workflows/rust-cache-warm.yml"),
+    ci: load(".github/workflows/ci.yml"),
+    fixture: existsSync(new URL(FIXTURE, root)) ? load(FIXTURE) : { jobs: {} },
     ciJob: existsSync(ciJob) ? read("scripts/ci-job.sh") : undefined,
   };
 }
@@ -308,4 +344,21 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
       `${name} must be refused with ${expected}: ${JSON.stringify(found)}`,
     );
   }
+});
+
+test("a workflow not shaped as one is refused naming where", () => {
+  assert.throws(() => shaped("w.yml", null), /w\.yml: the document is not a mapping/);
+  assert.throws(() => shaped("w.yml", { jobs: [] }), /w\.yml: jobs is not a mapping/);
+  assert.throws(
+    () => shaped("w.yml", { jobs: { warm: { steps: {} } } }),
+    /w\.yml: jobs\.warm\.steps is not a list/,
+  );
+  assert.throws(
+    () => shaped("w.yml", { jobs: { warm: { steps: [{ run: 1 }] } } }),
+    /w\.yml: jobs\.warm\.steps\[0\]\.run is not a string/,
+  );
+  assert.throws(
+    () => shaped("w.yml", { jobs: { warm: { strategy: { matrix: { include: "x" } } } } }),
+    /w\.yml: jobs\.warm\.strategy\.matrix\.include is not a list of mappings/,
+  );
 });
