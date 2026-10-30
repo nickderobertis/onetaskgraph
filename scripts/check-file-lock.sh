@@ -103,7 +103,7 @@ grep -qF "file-lock: could not run $scratch/no-such-program" <<<"$output" && gre
 journey="$scratch/journey"
 mkdir -p "$journey/scripts"
 cp "$ROOT/scripts/file-lock.sh" "$journey/scripts/file-lock.sh"
-awk '/with_file_lock "\$journey_root\/target\/.test-distribution.lock/ { found = 1 }
+awk '/with_file_lock .*\/\.test-distribution\.lock/ { found = 1 }
   { print } found && /^fi$/ { exit }' "$ROOT/scripts/test-distribution.sh" >"$journey/scripts/test-distribution.sh"
 grep -q 'with_file_lock' "$journey/scripts/test-distribution.sh" && tail -n 1 "$journey/scripts/test-distribution.sh" | grep -qx 'fi' \
   || fail "scripts/test-distribution.sh no longer takes its lock in a block this check can find"
