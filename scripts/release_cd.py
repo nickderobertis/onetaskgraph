@@ -26,7 +26,7 @@ names it and what to do next); 2 an invalid invocation.
 
 from __future__ import annotations
 
-from cli_wheel_lock import cli_wheel_lock
+from cli_wheel_lock import cli_wheel_lock, target_directory
 
 import argparse
 import email.parser
@@ -331,7 +331,7 @@ def describe_maturin_staging() -> None:
     one's staged file away. Every build this repository makes takes that lock; when one still
     fails that way, this names the staged files and every maturin and cargo process alive.
     """
-    staging = ROOT / "target" / "maturin"
+    staging = target_directory() / "maturin"
     entries = sorted(path.name for path in staging.iterdir()) if staging.is_dir() else []
     print(f"release-cd: target/maturin holds: {', '.join(entries) or 'nothing'}", file=sys.stderr)
     if os.name == "nt":
@@ -383,7 +383,7 @@ def package_target(row: PlatformTarget, tag: ReleaseTag, dist: Path) -> None:
     carriers.mkdir(parents=True)
     (dist / "assets").mkdir(parents=True, exist_ok=True)
     binary = "onetaskgraph.exe" if row.extension == "zip" else "onetaskgraph"
-    canonical = ROOT / "target" / row.target / "release" / binary
+    canonical = target_directory() / row.target / "release" / binary
     run([PYTHON_EXECUTABLE, "scripts/release-wheel-binary.py", "--wheels", str(wheels), "--binary", str(canonical.relative_to(ROOT))], f"could not take the {row.target} binary out of its wheel", "rebuild the wheel and rerun")
     archive = dist / "assets" / expected["archive"].file
     if row.extension == "zip":

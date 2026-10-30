@@ -88,18 +88,34 @@ function shims(directory, extra = {}) {
 function invocations() {
   return existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : [];
 }
+// The release builds here write a target directory of their own, sharing the checkout's as
+// cargo's build directory: maturin stages under <target directory>/maturin, and the CLI-wheel
+// lock is that directory's, so these journeys neither share staging with nor wait on a
+// distribution journey building into the checkout's target beside them.
+const ownTarget = {
+  CARGO_TARGET_DIR: join(checkout, "target", "release-cd"),
+  CARGO_BUILD_BUILD_DIR: join(checkout, "target"),
+};
 function recipe(job, args, env = {}) {
   const result = spawnSync("just", [`release-${job}`, ...args], {
     cwd: checkout,
     encoding: "utf8",
-    env: { ...process.env, PATH: `${shims(join(scratch, "shims"))}:${process.env.PATH}`, ...env },
+    env: {
+      ...process.env,
+      ...ownTarget,
+      PATH: `${shims(join(scratch, "shims"))}:${process.env.PATH}`,
+      ...env,
+    },
     maxBuffer: 1 << 26,
   });
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
 function runAsync(command, args, env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: checkout, env: { ...process.env, ...env } });
+    const child = spawn(command, args, {
+      cwd: checkout,
+      env: { ...process.env, ...ownTarget, ...env },
+    });
     let output = "";
     child.stdout.on("data", (data) => {
       output += data;
@@ -307,7 +323,7 @@ test("a test-install that fails stops the Linux recipe before any publication", 
     {
       cwd: checkout,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${failing}:${process.env.PATH}` },
+      env: { ...process.env, ...ownTarget, PATH: `${failing}:${process.env.PATH}` },
     },
   );
   const output = `${result.stdout}${result.stderr}`;

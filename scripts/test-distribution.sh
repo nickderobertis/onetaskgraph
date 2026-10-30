@@ -15,7 +15,9 @@ if [ "${ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED:-}" != 1 ] && [ "$*" != --inter
   journey_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
   [ -r "$journey_root/scripts/file-lock.sh" ] && source "$journey_root/scripts/file-lock.sh" || { echo "distribution test could not load $journey_root/scripts/file-lock.sh; next: restore it with 'git checkout -- scripts/file-lock.sh', then rerun" >&2; exit 1; }
   export ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED=1
-  with_file_lock "$journey_root/target/.test-distribution.lock" bash "$journey_root/scripts/test-distribution.sh" "$@"
+  # The lock is the target directory's this journey builds into: CARGO_TARGET_DIR's, as
+  # scripts/cli_wheel_lock.py reads it, else this checkout's.
+  with_file_lock "${CARGO_TARGET_DIR:-$journey_root/target}/.test-distribution.lock" bash "$journey_root/scripts/test-distribution.sh" "$@"
   exit 0
 fi
 report_failure() {
