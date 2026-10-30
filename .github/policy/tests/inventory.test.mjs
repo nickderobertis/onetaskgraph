@@ -12,7 +12,8 @@ import {
   policyJourneyFiles,
   policyJourneyReadSet,
 } from "../../test-inputs.mjs";
-import { graphReadSet } from "../../workflow-graph.mjs";
+import { parse } from "yaml";
+import { graphReadSet, read } from "../../workflow-graph.mjs";
 
 // This project's inputs are every .github file, so an edit on either side of these
 // reconciliations — this project's command, github-workflows', test-inputs.mjs or a test file
@@ -97,4 +98,102 @@ test("a crate edit selects the CD journeys without the policy journeys", () => {
       `${file}: github-workflow-policy`,
     );
   }
+});
+
+// A release guard may skip Windows only where what it drives runs on Linux alone in production;
+// then it must still run in full, unconditionally, in test-linux. Derived from
+// scripts:distribution-check rather than listed, so a guard that starts skipping is held too.
+const WINDOWS = ["*Windows_NT*", "*msys*", "*cygwin*", "*win32*"];
+const MOVED_OFF_WINDOWS = [
+  "scripts/check-release-pr-sync.sh",
+  "scripts/check-release-tooling-selection.sh",
+  "scripts/check-crate-sibling-resolution.sh",
+  "scripts/check-crate-sibling-resolution-same-second.sh",
+];
+
+function windowsSkips(sources) {
+  const scripts = JSON.parse(sources["scripts/project.json"]);
+  const options = scripts.targets["distribution-check"].options;
+  return (options.commands ?? [options.command])
+    .map((command) => command.match(/^bash (scripts\/check-[a-z0-9-]+\.sh)$/)?.[1])
+    .filter((guard) => guard && /skipped on Windows/.test(sources[guard]));
+}
+
+function skipProblems(sources) {
+  const problems = [];
+  for (const guard of windowsSkips(sources)) {
+    const skip = sources[guard].match(
+      /case "\$\{OS:-\}\$\{OSTYPE:-\}" in\n\s*([^\n]+)\)\n[^\n]*skipped on Windows[^\n]*\n\s*exit 0/,
+    );
+    if (!skip) {
+      problems.push(`${guard} skips Windows in a shape this inventory cannot read`);
+      continue;
+    }
+    for (const pattern of skip[1].split("|").map((alternative) => alternative.trim()))
+      if (!WINDOWS.includes(pattern)) problems.push(`${guard} also skips ${pattern}`);
+  }
+  const ci = parse(sources[".github/workflows/ci.yml"]);
+  const job = ci.jobs["test-linux"];
+  if (job?.["runs-on"] !== "ubuntu-latest")
+    problems.push("test-linux does not run on ubuntu-latest");
+  if (!job?.steps?.some((step) => step.run === "just ci-test-linux"))
+    problems.push("test-linux does not run `just ci-test-linux`");
+  if (!/\nci-test-linux[^\n]*:\n[^\n]*scripts\/ci-job\.sh test-linux\b/.test(sources.justfile))
+    problems.push("`just ci-test-linux` does not run scripts/ci-job.sh test-linux");
+  const arm = sources["scripts/ci-job.sh"].match(
+    /\n {2}test-linux\)\n[\s\S]*?phases="([\s\S]*?)"\n/,
+  );
+  if (!arm?.[1].split("\n").includes("1 run scripts:distribution-check -"))
+    problems.push("test-linux's phases do not run scripts:distribution-check unconditionally");
+  return problems;
+}
+
+function guardSources() {
+  const paths = [
+    "scripts/project.json",
+    ".github/workflows/ci.yml",
+    "justfile",
+    "scripts/ci-job.sh",
+  ];
+  const sources = Object.fromEntries(paths.map((path) => [path, read(path)]));
+  const scripts = JSON.parse(sources["scripts/project.json"]);
+  for (const command of scripts.targets["distribution-check"].options.commands) {
+    const guard = command.match(/^bash (scripts\/check-[a-z0-9-]+\.sh)$/)?.[1];
+    if (guard) sources[guard] = read(guard);
+  }
+  return sources;
+}
+
+test("every release guard that skips Windows runs in full in test-linux", () => {
+  const sources = guardSources();
+  for (const guard of MOVED_OFF_WINDOWS) assert.ok(windowsSkips(sources).includes(guard), guard);
+  assert.deepEqual(skipProblems(sources), []);
+});
+
+test("a skip widened past Windows, or test-linux leaving distribution-check, is refused", () => {
+  const original = guardSources();
+  const refused = (edit, expected) => {
+    const sources = structuredClone(original);
+    edit(sources);
+    assert.ok(
+      skipProblems(sources).some((problem) => expected.test(problem)),
+      `${expected}: ${JSON.stringify(skipProblems(sources))}`,
+    );
+  };
+  refused((sources) => {
+    const guard = MOVED_OFF_WINDOWS[0];
+    sources[guard] = sources[guard].replace("*win32*)", "*win32* | *linux*)");
+  }, /check-release-pr-sync\.sh also skips \*linux\*/);
+  refused((sources) => {
+    sources["scripts/ci-job.sh"] = sources["scripts/ci-job.sh"].replace(
+      /(\n {2}test-linux\)[\s\S]*?)1 run scripts:distribution-check -\n/,
+      (_, before) => before,
+    );
+  }, /do not run scripts:distribution-check unconditionally/);
+  refused((sources) => {
+    sources[".github/workflows/ci.yml"] = sources[".github/workflows/ci.yml"].replace(
+      /(\n {2}test-linux:\n(?: {4}[^\n]*\n)*? {4}runs-on: )ubuntu-latest/,
+      "$1windows-latest",
+    );
+  }, /test-linux does not run on ubuntu-latest/);
 });

@@ -17,7 +17,10 @@
       "{workspaceRoot}/scripts/release_products.py",
       "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/rust-toolchain.toml",
-      "{workspaceRoot}/scripts/ci-job.sh"
+      "{workspaceRoot}/scripts/ci-job.sh",
+      "{workspaceRoot}/scripts/project.json",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/scripts/check-*.sh"
     ]
   },
   "targets": {
