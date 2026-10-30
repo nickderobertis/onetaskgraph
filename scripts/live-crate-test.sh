@@ -3,15 +3,13 @@
 #
 #   scripts/live-crate-test.sh <crate> <test-binary> <test> [--also-build <package>]
 #
-# Every test of the crate, ordinarily. With ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 — which
-# scripts/ci-job.sh sets on Linux, where the instrumented run stands in for `test` —
-# only the crate's credentialed journey, the one `<test>` of `<test-binary>` that opens a live
-# session: its `coverage` target runs the whole crate under nextest anyway (with the
-# credentials cleared, so the journey skips there), and the journey is the one test that has to
-# run here, credentialed. Every case still runs once, in the same job. Each crate names its
-# journey in its own `test` target, and scripts/check-test-in-coverage.sh holds what each names
-# to the crate's live journeys and its coverage run, so a non-live test cannot end up run by
-# neither target.
+# Every test of the crate, which is what every job runs: the live crates are tagged
+# coverage:uninstrumented, so their whole suite, credentialed journey included, runs here.
+# With ONETASKGRAPH_TESTS_UNDER_COVERAGE=1, which no job sets, only the crate's credentialed
+# journey runs, the one `<test>` of `<test-binary>` that opens a live session, for a caller
+# whose instrumented run covers the rest. Each crate names its journey in its own `test`
+# target, and scripts/check-test-in-coverage.sh holds what each names to its live journeys
+# and refuses a job that narrows an uninstrumented crate's `test` that way.
 #
 # `--also-build <package>` builds that package's test binaries first, for a crate whose whole
 # suite runs them; the credentialed journey alone needs none of them.

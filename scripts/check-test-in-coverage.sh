@@ -140,11 +140,11 @@ for path in sorted(paths.split()):
                 f"on; test runs `{suite[0]}` and coverage `{covered[0]}`"
             )
 
-# The live crates: on Linux their `test` runs only the credentialed journey each
-# names to scripts/live-crate-test.sh, and `coverage` runs the rest. So exactly the crates whose
-# `test` is keyed on a live credential name one, each a test that opens a live session, every
-# cargo run of their `test` goes through that script, and their coverage is the whole-crate run
-# — or a non-live test would be run by neither target.
+# The live crates: every cargo run of their `test` goes through scripts/live-crate-test.sh, which
+# names a test that opens a live session. Exactly the crates whose `test` is keyed on a live
+# credential name one. A crate tagged coverage:uninstrumented runs its whole suite in `test`, so
+# no job may narrow it to the journey; any other live crate's coverage is the whole-crate run
+# that covers what the narrowed `test` leaves — or a non-live test would be run by neither.
 CREDENTIALS = {"GH_PROJECTS_TOKEN", "LINEAR_API_KEY"}
 table = {}
 credentialed = set()

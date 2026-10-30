@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 /// The journey every create made while a lane prepares its standing set is filed under:
 /// in an ordinary journal it is a cold rebuild, reported beside that pass and never in it.
 pub const COLD_REBUILD: &str = "cold-rebuild";
-/// The variable `scripts/ci-job.sh` sets to `1` where the instrumented run stands in for a
-/// live crate's `test`, so these journals are written by a build under `llvm-cov-target`.
+/// The variable that has an instrumented run stand in for a live crate's `test`, so these
+/// journals are written by a build under `llvm-cov-target`; no job sets it since the Linear
+/// suites run uninstrumented, but a caller that does still has its journals found.
 pub const TESTS_UNDER_COVERAGE: &str = "ONETASKGRAPH_TESTS_UNDER_COVERAGE";
 
 /// The build directory a journal belongs under: the test executable's own, or, under
