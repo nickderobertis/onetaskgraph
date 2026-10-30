@@ -125,6 +125,12 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         subprocess.run([PYTHON_EXECUTABLE, 'scripts/release-wheel-binary.py', '--wheels', str(wheels), '--binary', str(canonical)], cwd=tree, check=True, stdout=subprocess.DEVNULL)
         package = ['just', f'release-{selected.platform}', 'package', '--tag', f'v{version}', '--dist', shlex.quote(str(tree / 'dist'))]
         subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
+        # Every refusal below corrupts the products this one packaging produced and is judged
+        # against them; they are kept here once and put back at the end, rather than packaged
+        # again, for the final verification.
+        pristine = tree / 'pristine'
+        shutil.copytree(tree / 'dist', pristine / 'dist')
+        shutil.copy2(canonical, pristine / binary)
         command = [PYTHON_EXECUTABLE, 'scripts/verify-release-products.py', '--target', target, '--npm', selected.npm_platform, '--tag', f'v{version}', '--ext', selected.extension, '--dist', str(tree / 'dist')]
         installed = subprocess.run(command + ['--install'], cwd=tree, capture_output=True, text=True)
         if installed.returncode:
@@ -344,9 +350,11 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             refuses(reason)
             canonical.write_bytes(original_binary)
             wheel_path.write_bytes(original_wheel)
-        # Each corrupted case replaces its predecessor; restore pristine products once,
+        # Each corrupted case replaces its predecessor; restore the pristine products once,
         # before the final successful verification, rather than between corruptions.
-        subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
+        shutil.rmtree(tree / 'dist')
+        shutil.copytree(pristine / 'dist', tree / 'dist')
+        shutil.copy2(pristine / binary, canonical)
         subprocess.run(command, cwd=tree, check=True, stdout=subprocess.DEVNULL)
 
 

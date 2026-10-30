@@ -8,6 +8,15 @@
 # against. Real cargo does the resolving. Nothing here reaches crates.io, and CARGO_HOME is a
 # scratch directory, so the index this writes cache for is never the user's.
 set -euo pipefail
+# What this drives runs on Linux alone in production, so on Windows it proves nothing a release
+# relies on; test-linux and test-macos still run it, and test-windows spends its time on what
+# Windows runs.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-crate-sibling-resolution: skipped on Windows (crate sibling resolution runs only in the release's publish job on ubuntu-latest); the Linux and macOS lanes run it" >&2
+    exit 0
+    ;;
+esac
 
 fatal() {
   echo "check-crate-sibling-resolution: $1" >&2
