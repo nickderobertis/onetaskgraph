@@ -22,7 +22,7 @@ classification authorizing skipped work; explicit manual diagnostics require suc
 work. It exits 1 for malformed inputs or failed/cancelled/missing prerequisites, prints
 errors to stderr, and distinguishes omission from executed proof in stdout.
 
-`macos-budget.mjs --metric jobs-per-run|runs-per-change --telemetry PATH` exits 0 after
+`policy/macos-budget.mjs --metric jobs-per-run|runs-per-change --telemetry PATH` exits 0 after
 validating and reporting current telemetry, and 1 for invalid invocation, missing/stale
 recordings or report IO failure. Numeric limits live solely in budgets.yaml. The internal
 Python semantic comparator exits 0 with a boolean result and 1 for unreadable refs,

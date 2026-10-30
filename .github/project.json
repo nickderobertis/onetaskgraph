@@ -9,8 +9,7 @@
       "!{projectRoot}/node_modules/**/*",
       "!{projectRoot}/.telemetry/**/*",
       "!{projectRoot}/linear-documents-policy/**/*",
-      "!{projectRoot}/policy/**/*",
-      "!{projectRoot}/macos-budget.mjs"
+      "!{projectRoot}/policy/**/*"
     ],
     "workflowGraph": [
       "default",
@@ -133,5 +132,5 @@
       "inputs": ["workflowGraph", "cdJourneys"]
     }
   },
-  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace,external_service_suite_stays_out_of_the_affected_tier] The task requires this private workflow-tooling project and lockfile to stay isolated from public SDK dependency resolution; its bootstrap installs only YAML, Actions expressions and budget reporting in .github. Its cdJourneys input names the release plumbing the CD journeys under tests/ drive \u2014 scripts/release_cd.py and every script and manifest a CD job runs (including the justfile the real release recipes read, plus the crates and SDK sources the release builds and packages) \u2014 so a change to how a release is produced selects them, while graph-only checks retain their narrower workflow inputs. The Linear document policy under linear-documents-policy/ and the workflow policy journeys with their macOS budgets (github-workflow-policy, .github/policy/project.json) are separate projects excluded from this one's inputs, so an edit to either alone selects no publication journey, and an edit to a crate selects the publication journeys without the policy journeys (manager reply 233). The CD journeys' crate publication reads index.crates.io and static.crates.io without a credential \u2014 the public reads every cargo build in the affected tier already makes for its dependencies \u2014 through the double's index proxy and cargo's own verification build; they write only to loopback doubles, and dropping cargo's verification build to avoid them would stop proving each crate builds with its siblings resolved from a registry. JSON has no comment to scope this to the test target."
+  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace,external_service_suite_stays_out_of_the_affected_tier] The task requires this private workflow-tooling project and lockfile to stay isolated from public SDK dependency resolution; its bootstrap installs only YAML, Actions expressions and budget reporting in .github. Its cdJourneys input names the release plumbing the CD journeys under tests/ drive \u2014 scripts/release_cd.py and every script and manifest a CD job runs (including the justfile the real release recipes read, plus the crates and SDK sources the release builds and packages) \u2014 so a change to how a release is produced selects them, while graph-only checks retain their narrower workflow inputs. linear-documents-policy/ and policy/ (github-workflow-policy) are projects of their own, excluded here. The CD journeys' crate publication reads index.crates.io and static.crates.io without a credential \u2014 the public reads every cargo build in the affected tier already makes for its dependencies \u2014 through the double's index proxy and cargo's own verification build; they write only to loopback doubles, and dropping cargo's verification build to avoid them would stop proving each crate builds with its siblings resolved from a registry. JSON has no comment to scope this to the test target."
 }

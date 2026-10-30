@@ -108,7 +108,7 @@ test("real budget reporter rejects missing and stale recordings without rerunnin
     join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "budget-boundary-"),
   );
   try {
-    const reporter = fileURLToPath(new URL("../../macos-budget.mjs", import.meta.url));
+    const reporter = fileURLToPath(new URL("../macos-budget.mjs", import.meta.url));
     const path = join(scratch, "recording.json");
     const command = [reporter, "--metric", "jobs-per-run", "--telemetry", path];
     assert.notEqual(spawnSync(process.execPath, command, { encoding: "utf8" }).status, 0);
@@ -147,7 +147,7 @@ test("real reporters write both measurements through the SDK result boundary", (
       execFileSync(
         process.execPath,
         [
-          fileURLToPath(new URL("../../macos-budget.mjs", import.meta.url)),
+          fileURLToPath(new URL("../macos-budget.mjs", import.meta.url)),
           "--metric",
           metric,
           "--telemetry",
@@ -347,7 +347,7 @@ test("reporter rejects invalid invocations and an unwritable SDK result destinat
     join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "reporter-io-"),
   );
   try {
-    const reporter = fileURLToPath(new URL("../../macos-budget.mjs", import.meta.url));
+    const reporter = fileURLToPath(new URL("../macos-budget.mjs", import.meta.url));
     for (const args of [
       [],
       ["--metric", "other", "--telemetry", "missing"],
@@ -485,7 +485,7 @@ test("real reporter invalidates previously valid telemetry when workflow source 
     const telemetry = join(scratch, "recording.json");
     writeFileSync(telemetry, JSON.stringify(recording()));
     const command = [
-      join(scratch, ".github/macos-budget.mjs"),
+      join(scratch, ".github/policy/macos-budget.mjs"),
       "--metric",
       "jobs-per-run",
       "--telemetry",

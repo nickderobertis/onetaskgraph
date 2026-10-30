@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { report } from "@onebudgetspec/sdk";
-import { validateTelemetry } from "./telemetry.ts";
-import { digest } from "./workflow-graph.mjs";
+import { validateTelemetry } from "../telemetry.ts";
+import { digest } from "../workflow-graph.mjs";
 
 try {
   const args = process.argv.slice(2);

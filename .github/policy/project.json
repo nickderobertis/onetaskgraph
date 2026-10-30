@@ -3,7 +3,7 @@
   "name": "github-workflow-policy",
   "projectType": "library",
   "tags": ["lang:javascript", "layer:workspace"],
-  "//": "The workflow policy journeys (tests/) and the macOS budgets judged from their telemetry (budgets.yaml, reported by .github/macos-budget.mjs), split out of github-workflows so a crate or SDK edit — which selects github-workflows' CD journeys, keyed on what a release builds — does not also run them (manager reply 233). Nx assigns a file to the project whose root holds it, so they live under this root; github-workflows' default input leaves this directory out, and .github/tests/ci-contexts.spec.mjs reconciles both projects' read sets, runs every test file exactly once between them and proves the selection against real Nx.",
+  "//": "Nx gives a file to the project whose root holds it, so the workflow policy journeys and the macOS budgets live under this root: a crate or SDK edit selects github-workflows' CD journeys without them. .github/tests/ci-contexts.spec.mjs reconciles both projects' read sets and selection.",
   "namedInputs": {
     "default": [
       "{projectRoot}/**/*",
@@ -32,13 +32,13 @@
     "format-check": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bun run biome format .github/policy .github/macos-budget.mjs"
+        "command": "bun run biome format .github/policy"
       }
     },
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bun run biome lint --error-on-warnings .github/policy .github/macos-budget.mjs"
+        "command": "bun run biome lint --error-on-warnings .github/policy"
       }
     },
     "policy-tests": {
