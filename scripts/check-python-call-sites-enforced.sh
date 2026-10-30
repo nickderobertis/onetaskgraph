@@ -145,20 +145,34 @@ caller="$tmp/sites/scripts/caller.sh"
 printf '%s\n' '#!/usr/bin/env bash' '"$@"' >"$caller"
 ran() {
   local out
-  out="$(cd "$tmp/sites" && timeout 60 bash "$caller" "$probe/bin/python3" "$@" 2>&1 | tr -d '\r')" \
+  out="$(cd "$tmp/sites" && bash "$caller" "$probe/bin/python3" "$@" 2>&1 | tr -d '\r')" \
     || fail "the probe interpreter failed for '$*': $out" "make scripts/python-call-site.sh hand every invocation on"
   printf '%s' "$out"
 }
 [ "$(ran -m json.tool <<<'{}')" = "{}" ] || fail "-m json.tool did not run through the recorder" "keep stdin and the arguments intact"
 [ "$(ran -W ignore scripts/site.py)" = "ran 0" ] || fail "-W ignore scripts/site.py did not run through the recorder" "keep the arguments intact"
 [ "$(ran -X utf8 scripts/site.py)" = "ran 1" ] || fail "-X utf8 scripts/site.py did not run through the recorder" "keep the arguments intact"
+# The lone options run as this script's own child, by a process id it holds, so a recorder
+# that loops is stopped here after a minute rather than by a `timeout` macOS does not ship.
 for lone in -W -X; do
+  (cd "$tmp/sites" && exec "$probe/bin/python3" "$lone") >"$tmp/lone" 2>&1 &
+  lone_pid=$!
+  waited=0
+  while kill -0 "$lone_pid" 2>/dev/null && [ "$waited" -lt 60 ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if kill -0 "$lone_pid" 2>/dev/null; then
+    kill "$lone_pid" 2>/dev/null || true
+    wait "$lone_pid" 2>/dev/null || true
+    fail "a lone $lone hung the recorder" "record an option given no argument and stop parsing"
+  fi
   status=0
-  (cd "$tmp/sites" && timeout 60 bash "$caller" "$probe/bin/python3" "$lone") >"$tmp/lone" 2>&1 || status=$?
-  [ "$status" -ne 124 ] || fail "a lone $lone hung the recorder" "record an option given no argument and stop parsing"
+  wait "$lone_pid" || status=$?
   [ "$status" -ne 0 ] || fail "a lone $lone was not refused by the interpreter" "hand the invocation on unchanged"
 done
-expected="$(printf 'scripts/caller.sh\t%s\n' '-m json.tool' scripts/site.py scripts/site.py '-W without its argument' '-X without its argument')"
+expected="$(printf 'scripts/caller.sh\t%s\n' '-m json.tool' scripts/site.py scripts/site.py
+printf 'scripts/check-python-call-sites-enforced.sh\t%s\n' '-W without its argument' '-X without its argument')"
 [ "$(tr -d '\r' <"$probe/call-sites.options")" = "$expected" ] \
   || fail "the recorder named these call sites: $(cat "$probe/call-sites.options")" \
     "record the caller and the program past -W and -X, and -m with its module"
