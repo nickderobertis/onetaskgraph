@@ -167,7 +167,9 @@ expect check-workspace-config.sh "an e2e suite whose test spawns the binary with
   "crates/onetaskgraph-linear-e2e/project.json: test spawns target/debug/onetaskgraph (through onetaskgraph-e2e-support) but does not depend on onetaskgraph:build"
 restore "$LINEAR_E2E_PROJECT"
 
-mutate "$LINEAR_E2E_PROJECT" 'document["targets"]["coverage"]["dependsOn"].remove("onetaskgraph:coverage")'
+# Every e2e suite runs uninstrumented today (coverage:uninstrumented), so the case makes this one
+# measured again, as its coverage target was, without the instrumented build it would spawn.
+mutate "$LINEAR_E2E_PROJECT" 'document["tags"].remove("coverage:uninstrumented"); document["targets"]["coverage"] = {"executor": "nx:run-commands", "dependsOn": ["workspace:coverage-clear"], "options": {"command": "bash scripts/rust-coverage.sh onetaskgraph-linear-e2e"}, "cache": False}'
 expect check-workspace-config.sh "an e2e suite whose coverage does not depend on the instrumented build" \
   "crates/onetaskgraph-linear-e2e/project.json: coverage spawns the instrumented binary"
 restore "$LINEAR_E2E_PROJECT"
@@ -252,10 +254,21 @@ fi
 
 # --- check-coverage-enforced.sh: the floor is one report over every crate's run.
 
-mutate "$WORKSPACE_PROJECT" 'document["targets"]["coverage"]["dependsOn"][0]["projects"].remove("onetaskgraph-linear")'
+mutate "$WORKSPACE_PROJECT" 'document["targets"]["coverage"]["dependsOn"][0]["projects"].remove("onetaskgraph-local-md")'
 expect check-coverage-enforced.sh "a crate dropped from the aggregate's dependencies" \
-  "coverage does not depend on 'onetaskgraph-linear''s coverage target"
+  "coverage does not depend on 'onetaskgraph-local-md''s coverage target"
 restore "$WORKSPACE_PROJECT"
+
+# A crate whose suite runs uninstrumented measures nothing, so the aggregate leaving it out is
+# the rule, and its coverage target measuring anything is refused.
+mutate "$WORKSPACE_PROJECT" 'document["targets"]["coverage"]["dependsOn"][0]["projects"].append("onetaskgraph-linear")'
+expect check-coverage-enforced.sh "an uninstrumented crate put back in the aggregate" \
+  "tagged coverage:uninstrumented and measures nothing"
+restore "$WORKSPACE_PROJECT"
+mutate "$LINEAR_E2E_PROJECT" 'document["targets"]["coverage"] = {"executor": "nx:run-commands", "options": {"command": "bash scripts/rust-coverage.sh onetaskgraph-linear-e2e"}}'
+expect check-coverage-enforced.sh "an uninstrumented crate whose coverage still measures" \
+  "but its coverage target still runs a measurement"
+restore "$LINEAR_E2E_PROJECT"
 
 mutate "$WORKSPACE_PROJECT" 'document["targets"]["coverage"]["options"]["commands"] = ["bash scripts/check-coverage-enforced.sh"]'
 expect check-coverage-enforced.sh "an aggregate that no longer reports" \

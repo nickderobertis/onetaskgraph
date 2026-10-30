@@ -108,7 +108,11 @@ for project_file in sorted(Path("crates").glob("*/project.json")):
     crate = project_file.parent.name
     display = project_file.as_posix()
     coverage = read_target(project_file, "coverage")
-    tags = json.loads(project_file.read_text(encoding="utf-8")).get("tags", [])
+    try:
+        document = json.loads(project_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        document = {}  # read_target below names the file it cannot read
+    tags = document.get("tags", []) if isinstance(document, dict) else []
     if UNINSTRUMENTED in tags:
         if any(str(tag).startswith("test-in-coverage:") for tag in tags):
             problems.append(f"{display}: tagged {UNINSTRUMENTED} and test-in-coverage, so its suite would run nowhere on Linux")

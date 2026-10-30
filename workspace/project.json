@@ -188,7 +188,18 @@
       "executor": "nx:run-commands",
       "dependsOn": [
         {
-          "projects": ["onetaskgraph", "onetaskgraph-core", "onetaskgraph-e2e-support", "onetaskgraph-in-memory", "onetaskgraph-live", "onetaskgraph-local-md", "onetaskgraph-plugin-api", "onetaskgraph-status-options", "onetaskgraph-live-janitor", "onetaskgraph-github-live"],
+          "projects": [
+            "onetaskgraph",
+            "onetaskgraph-core",
+            "onetaskgraph-e2e-support",
+            "onetaskgraph-in-memory",
+            "onetaskgraph-live",
+            "onetaskgraph-local-md",
+            "onetaskgraph-plugin-api",
+            "onetaskgraph-status-options",
+            "onetaskgraph-live-janitor",
+            "onetaskgraph-github-live"
+          ],
           "target": "coverage"
         }
       ],

@@ -137,12 +137,15 @@ fn real_nx_orders_both_contributions_and_keeps_one_main_task() {
             .unwrap(),
     )
     .unwrap();
+    // The suite runs every case uninstrumented in `test` (the user's decision of 2026-10-30), so
+    // its coverage measures nothing and waits on no instrumented build.
     assert!(
-        project["targets"]["coverage"]["dependsOn"]
+        project["tags"]
             .as_array()
             .unwrap()
-            .contains(&json!("onetaskgraph-github-projects:coverage")),
-        "the instrumented pair needs the plugin's compiled fixture and main binaries first"
+            .contains(&json!("coverage:uninstrumented"))
+            && project["targets"]["coverage"]["executor"] == json!("nx:noop"),
+        "the suite runs uninstrumented, so its coverage target is a no-op"
     );
     let budgets = dependencies["onetaskgraph-github-projects-e2e:budgets"]
         .as_array()

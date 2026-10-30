@@ -76,7 +76,9 @@ if [ "$REQUEST" = "--report" ]; then
     --show-missing-lines \
     --fail-under-lines "$MIN_LINES" 2>&1)"; then
     printf '%s\n' "$report" >&2
-    if printf '%s\n' "$report" | grep -q '^TOTAL '; then
+    # A here-string, not a pipe: grep -q stops at the first match, and under pipefail a long
+    # report's writer killed by that early exit would make the floor read as no report at all.
+    if grep -q '^TOTAL ' <<<"$report"; then
       echo "rust-coverage: the workspace is below ${MIN_LINES}% line coverage over every crate's run." >&2
       echo "rust-coverage: the uncovered lines are listed above — cover them with a test that" >&2
       echo "rust-coverage: drives the real behaviour, not one written to move the number." >&2

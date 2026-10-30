@@ -11,6 +11,9 @@
 # scripts/check-warm-rust-cache.sh holds scripts/warm-rust-cache.sh to these shapes, and
 # scripts/check-warm-rust-cache-reuse.sh runs them over what the warmer built.
 set -euo pipefail
+# Nothing here opens a live session, and its lines name whole live packages: the credentials
+# go before anything runs, so a caller replaying them as printed opens none either.
+unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
 
 fail() {
   echo "pr-build-commands: $1" >&2
