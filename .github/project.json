@@ -111,7 +111,7 @@
       },
       "inputs": ["workflowGraph"],
       "cache": true,
-      "//": "The required contexts use the workflow graph read set. This spec also reconciles each journey target with its own external reads and the complete test-file inventory."
+      "//": "The required contexts use the workflow graph read set. This spec also reconciles this project's own journey targets with their external reads; the test-file inventory across both projects is policy/tests/inventory.test.mjs's."
     },
     "test": {
       "executor": "nx:noop",
