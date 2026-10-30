@@ -95,15 +95,13 @@ case "$JOB" in
 1 run scripts:distribution-test -"
     ;;
   test-windows)
-    # As test-macos, with a slot per core of the 4-core runner. One is the Linear crates':
-    # their suites spend most of their time waiting on the loopback servers and processes they
-    # drive, not computing. One is the engine's e2e suite's, the job's longest, so it starts
-    # at once: in the shared phase Nx reached it 12-18 minutes in, behind every other crate.
+    # As test-macos, with a slot per core of the 4-core runner, one of them the Linear crates':
+    # its suites spend most of their time waiting on the loopback servers and processes they
+    # drive, not computing.
     # The workflow suites as on test-macos. The distribution journey names its slowest steps
     # here, where it is slowest.
     export ONETASKGRAPH_DISTRIBUTION_TIMINGS=1
-    phases="1 affected test,budgets onetaskgraph-linear,onetaskgraph-linear-e2e,onetaskgraph-e2e,github-workflows,github-workflow-policy --parallel=2
-1 affected test,budgets *,!onetaskgraph-e2e
+    phases="1 affected test,budgets onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows,github-workflow-policy --parallel=3
 1 affected test,budgets *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 affected rust-cache-action -
 1 run scripts:distribution-check -
