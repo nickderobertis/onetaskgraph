@@ -51,7 +51,9 @@ def verify_installed_cli(executable: Path, version: str) -> None:
 
 def verify(product: ReleaseProduct, install: bool, staging: Path) -> None:
     binary = product.binary_name
-    canonical = Path(f'target/{product.target}/release/{binary}').read_bytes()
+    # The target directory cargo wrote, as scripts/release-wheel-binary.py reads it.
+    built = Path(os.environ.get('CARGO_TARGET_DIR') or 'target')
+    canonical = (built / product.target / 'release' / binary).read_bytes()
     archive = staging / 'assets' / f'onetaskgraph-{product.tag}-{product.target}.{product.extension}'
     if product.extension == 'zip':
         with zipfile.ZipFile(archive) as packed:
