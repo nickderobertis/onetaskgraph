@@ -4,7 +4,8 @@
 # project.json, and a stand-in `cargo` that prints what a real one would: `Compiling` lines for
 # the builds a case names, and `Finished` unless a case silences it. An incomplete warm — a build of the job's
 # compiling a dependency again — has to fail naming that dependency and the build; a complete
-# one has to pass, warming first unless given --warmed, which warms nothing; a scan that cannot
+# one has to pass, warming first unless given --warmed, which warms nothing — and both hold when
+# cargo's output is coloured, as it is on the hosted runner; a scan that cannot
 # see a rebuild, because the control's incomplete warm reports none, and a build whose cargo
 # output never reached the scan, have to fail.
 #
@@ -51,12 +52,15 @@ if [ "$1" = metadata ]; then
   echo '{"packages":[{"name":"onetaskgraph-plugin-api"}]}'
   exit 0
 fi
+# $REUSE_COLOR prints each status word as a coloured run does, as CARGO_TERM_COLOR=always does.
+on=; off=
+[ -n "${REUSE_COLOR:-}" ] && on=$'\033[1m\033[92m' && off=$'\033[0m'
 if { [ "$1" = llvm-cov ] && [ "${CARGO_TARGET_DIR##*/}" = empty ] && [ -z "${REUSE_BLIND:-}" ]; } \
   || { [ -n "${REUSE_REBUILD:-}" ] && [[ "$*" == *"$REUSE_REBUILD"* ]]; }; then
-  echo "   Compiling serde v1.0.0" >&2
+  echo "${on}   Compiling${off} serde v1.0.0" >&2
 fi
 [ -n "${REUSE_SILENT:-}" ] && [[ "$*" == *"$REUSE_SILENT"* ]] && exit 0
-echo "    Finished \`test\` profile" >&2
+echo "${on}    Finished${off} \`test\` profile" >&2
 STUB
 chmod +x "$scratch/bin/cargo"
 
@@ -87,6 +91,13 @@ if run incomplete REUSE_REBUILD=llvm-cov; then
 fi
 grep -q "serde (by 'cargo llvm-cov --no-report nextest --package onetaskgraph-plugin-api" "$scratch/incomplete.log" \
   || { cat "$scratch/incomplete.log" >&2; fail "the refusal does not name the dependency and the build that compiled it" "list each as '<crate> (by '<build>')'"; }
+
+run colored REUSE_COLOR=1 || { cat "$scratch/colored.log" >&2; fail "a complete warm whose cargo output is coloured was refused" "strip ANSI escapes before scanning a build's log"; }
+if run colored-incomplete REUSE_COLOR=1 REUSE_REBUILD=llvm-cov; then
+  fail "a coloured instrumented build that compiled serde again passed" "strip ANSI escapes before scanning a build's log"
+fi
+grep -q "serde (by 'cargo llvm-cov --no-report nextest --package onetaskgraph-plugin-api" "$scratch/colored-incomplete.log" \
+  || { cat "$scratch/colored-incomplete.log" >&2; fail "the refusal of a coloured rebuild does not name the dependency and the build that compiled it" "strip ANSI escapes before scanning a build's log"; }
 
 if run blind REUSE_BLIND=1; then
   fail "a scan that saw no rebuild in the control's incomplete warm passed" "keep the control in scripts/check-warm-rust-cache-reuse.sh"

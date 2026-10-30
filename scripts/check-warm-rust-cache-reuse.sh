@@ -72,10 +72,17 @@ print("\n".join(package["name"] for package in packages))
 ' \
   | tr -d '\r')" || fail "could not list the workspace's crates" "run 'cargo metadata --no-deps' and fix what it reports"
 
+# plain <log>: the log as text, without the ANSI escapes a coloured run puts before each status
+# word — the hosted runner sets CARGO_TERM_COLOR=always, which reaches cargo under cargo-llvm-cov
+# and nextest alike, and a scan anchored on '^ *Compiling' would otherwise match no line at all.
+plain() {
+  sed "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" "$1" | tr -d '\r'
+}
+
 # rebuilt <log>: the non-workspace crates a build log says cargo compiled, one per line.
 rebuilt() {
   local status=0
-  sed -n 's/^ *Compiling \([^ ]*\) v.*/\1/p' "$1" | tr -d '\r' | sort -u \
+  plain "$1" | sed -n 's/^ *Compiling \([^ ]*\) v.*/\1/p' | sort -u \
     | grep -vxF -f <(printf '%s\n' $members) || status=$?
   # 1 is grep's "nothing left", which is the answer; anything above it is grep failing.
   [ "$status" -le 1 ] || fail "grep failed (exit $status) filtering $1" "re-run; if it repeats, check the scratch directory is readable"
@@ -90,8 +97,9 @@ replay() {
     # shellcheck disable=SC2086 # Each line is the words of one command.
     $build </dev/null >"$log" 2>&1 || { cat "$log" >&2; fail "'$build' failed" "fix what it reports above"; }
     # Cargo's own closing line, so this build's output reached the scan: a command whose cargo
-    # output went elsewhere would otherwise report nothing compiled and pass.
-    grep -Eq '^ *Finished ' "$log" || { cat "$log" >&2; fail "'$build' printed no cargo 'Finished' line, so this scan cannot see what it compiled" "let that command's cargo output reach its standard error"; }
+    # output went elsewhere would otherwise report nothing compiled and pass. No `grep -q`: its
+    # early exit would fail plain's sed on a closed pipe, which pipefail reports.
+    plain "$log" | grep -E '^ *Finished ' >/dev/null || { cat "$log" >&2; fail "'$build' printed no cargo 'Finished' line, so this scan cannot see what it compiled" "let that command's cargo output reach its standard error"; }
     rebuilt "$log" | sed "s|\$| (by '$build')|" >>"$2"
   done <"$1"
 }
