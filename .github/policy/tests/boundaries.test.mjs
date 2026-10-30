@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
-import { validateTelemetry } from "../telemetry.ts";
+import { validateTelemetry } from "../../telemetry.ts";
 import {
   digest,
   evaluate,
@@ -27,7 +27,7 @@ import {
   read,
   root,
   workflows,
-} from "../workflow-graph.mjs";
+} from "../../workflow-graph.mjs";
 
 function recording() {
   const scenario = {
@@ -108,7 +108,7 @@ test("real budget reporter rejects missing and stale recordings without rerunnin
     join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "budget-boundary-"),
   );
   try {
-    const reporter = fileURLToPath(new URL("../macos-budget.mjs", import.meta.url));
+    const reporter = fileURLToPath(new URL("../../macos-budget.mjs", import.meta.url));
     const path = join(scratch, "recording.json");
     const command = [reporter, "--metric", "jobs-per-run", "--telemetry", path];
     assert.notEqual(spawnSync(process.execPath, command, { encoding: "utf8" }).status, 0);
@@ -147,7 +147,7 @@ test("real reporters write both measurements through the SDK result boundary", (
       execFileSync(
         process.execPath,
         [
-          fileURLToPath(new URL("../macos-budget.mjs", import.meta.url)),
+          fileURLToPath(new URL("../../macos-budget.mjs", import.meta.url)),
           "--metric",
           metric,
           "--telemetry",
@@ -259,8 +259,8 @@ test("workflow_run fan-out follows actual declarations and rejects cycles", () =
 });
 
 test("local Bun parser rejects unsupported CLI arguments at its real entrypoint", () => {
-  const helper = fileURLToPath(new URL("../semantic-json.mjs", import.meta.url));
-  const input = readFileSync(new URL("../../bun.lock", import.meta.url), "utf8");
+  const helper = fileURLToPath(new URL("../../semantic-json.mjs", import.meta.url));
+  const input = readFileSync(new URL("../../../bun.lock", import.meta.url), "utf8");
   for (const args of [["--unknown"], ["extra"], ["--parse-only", "--parse-only"]]) {
     const result = spawnSync(process.execPath, [helper, ...args], { input, encoding: "utf8" });
     assert.notEqual(result.status, 0);
@@ -284,8 +284,8 @@ test("classifier and carriers enforce invocation and actual filesystem IO failur
     join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "cli-io-"),
   );
   try {
-    const classifier = fileURLToPath(new URL("../macos-policy.mjs", import.meta.url));
-    const carrier = fileURLToPath(new URL("../macos-result.mjs", import.meta.url));
+    const classifier = fileURLToPath(new URL("../../macos-policy.mjs", import.meta.url));
+    const carrier = fileURLToPath(new URL("../../macos-result.mjs", import.meta.url));
     const event = join(scratch, "event.json");
     writeFileSync(event, JSON.stringify({ event_name: "push" }));
     for (const args of [[], ["other"], ["classify", "--unknown", event]])
@@ -347,7 +347,7 @@ test("reporter rejects invalid invocations and an unwritable SDK result destinat
     join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "reporter-io-"),
   );
   try {
-    const reporter = fileURLToPath(new URL("../macos-budget.mjs", import.meta.url));
+    const reporter = fileURLToPath(new URL("../../macos-budget.mjs", import.meta.url));
     for (const args of [
       [],
       ["--metric", "other", "--telemetry", "missing"],
@@ -676,7 +676,7 @@ test("workflow names are validated and status overrides preserve dependent-job s
 });
 
 test("failing architecture discovery propagates the real shell exit and removes its scratch directory", () => {
-  const module = new URL("../workflow-graph.mjs", import.meta.url).href;
+  const module = new URL("../../workflow-graph.mjs", import.meta.url).href;
   const { FORCE_COLOR, NO_COLOR, ...inherited } = process.env;
   // Hosted runners force colour, so Node's error dump carries ANSI codes
   // around the status; the assertion must read the same either way.

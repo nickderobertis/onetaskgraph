@@ -8,7 +8,7 @@
 # crate, so the next pull request's prefix restore of the previous save is as warm. Each leg
 # restores its own previous save, so a push builds only what changed.
 # scripts/warm-rust-cache.sh says what is built and why.
-# .github/tests/rust-cache-warm.test.mjs holds each leg to its job's key and build inputs.
+# .github/policy/tests/rust-cache-warm.test.mjs holds each leg to its job's key and build inputs.
 
 name: rust cache warm
 

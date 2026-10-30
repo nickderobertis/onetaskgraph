@@ -266,7 +266,13 @@ export function graphReadSet() {
       .map((p) => `.github/${p}`),
     ...readdirSync(new URL(".github/workflows/", root)).map((p) => `.github/workflows/${p}`),
     ...readdirSync(new URL(".github/reusable/", root)).map((p) => `.github/reusable/${p}`),
-    ...readdirSync(new URL(".github/tests/", root), { recursive: true, withFileTypes: true })
+    ...["tests", "policy/tests"]
+      .flatMap((directory) =>
+        readdirSync(new URL(`.github/${directory}/`, root), {
+          recursive: true,
+          withFileTypes: true,
+        }),
+      )
       .filter((entry) => entry.isFile())
       .map((entry) =>
         relative(fileURLToPath(root), join(entry.parentPath, entry.name)).replaceAll("\\", "/"),

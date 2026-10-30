@@ -21,7 +21,7 @@ try {
     !telemetry.scenarios?.length ||
     !telemetry.lifecycles?.length
   )
-    throw Error("Missing or stale macOS telemetry; run github-workflows:test");
+    throw Error("Missing or stale macOS telemetry; run github-workflow-policy:test");
   const runs = telemetry.scenarios.flatMap((s) =>
     s.runs.map((r) => ({ ...r, scenario: s.id, diff: s.diff, fork: s.fork, optional: s.vars })),
   );
@@ -62,6 +62,6 @@ try {
   report(value, detail);
   console.log(JSON.stringify({ metric: args[1], value }));
 } catch (error) {
-  console.error(`${error.message}; next: run github-workflows:test and retry the reporter`);
+  console.error(`${error.message}; next: run github-workflow-policy:test and retry the reporter`);
   process.exitCode = 1;
 }

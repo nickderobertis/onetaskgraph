@@ -298,7 +298,7 @@ github-workflows-bootstrap:
 
 # Focused workflow graph, required-context and budget proofs.
 github-workflows-check:
-    @{{nx}} run-many -t check --projects github-workflows
+    @{{nx}} run-many -t check --projects github-workflows,github-workflow-policy
 
 # Explicit scheduled creation or standing-set recovery; mode comes from the caller.
 linear-document-creation:

@@ -1579,8 +1579,9 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   the installer and npm launcher refuse it by name. Its native install/run proof precedes
   its own publication. The production packaging journey and
   `.github/tests/` hold payload hashes, required names, event routing and reusable calls;
-  `github-workflows:test` records ignored telemetry and its `budgets` target alone applies
-  the two limits in `.github/budgets.yaml`. No Mac work runs on schedules or downstream
+  `github-workflow-policy:test` records ignored telemetry and its `budgets` target alone applies
+  the two limits in `.github/policy/budgets.yaml` — a project of its own, so a crate edit that
+  selects `github-workflows`' CD journeys does not also run the policy proofs. No Mac work runs on schedules or downstream
   automatic triggers.
 - **Registry lag alone never proposes a release.** `scripts/select-release-version.sh`
   recovers a partly failed publish only when `release-plz.toml`'s own `release_commits`

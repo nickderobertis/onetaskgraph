@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import { workflows } from "../workflow-graph.mjs";
+import { workflows } from "../../workflow-graph.mjs";
 import { history } from "./policy-fixture.mjs";
 
 test("actual carrier run bodies preserve success, failure, cancellation, missing and authorized omission", () => {

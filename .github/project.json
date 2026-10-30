@@ -8,7 +8,9 @@
       "{projectRoot}/**/*",
       "!{projectRoot}/node_modules/**/*",
       "!{projectRoot}/.telemetry/**/*",
-      "!{projectRoot}/linear-documents-policy/**/*"
+      "!{projectRoot}/linear-documents-policy/**/*",
+      "!{projectRoot}/policy/**/*",
+      "!{projectRoot}/macos-budget.mjs"
     ],
     "workflowGraph": [
       "default",
@@ -53,12 +55,6 @@
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/package.json"
-    ],
-    "policyJourneys": [
-      "workflowGraph",
-      "{workspaceRoot}/bun.lock",
-      "{workspaceRoot}/rust-toolchain.toml",
-      "{workspaceRoot}/scripts/ci-job.sh"
     ]
   },
   "targets": {
@@ -70,7 +66,7 @@
     },
     "check": {
       "executor": "nx:noop",
-      "dependsOn": ["format-check", "lint", "typecheck", "coverage", "budgets"]
+      "dependsOn": ["format-check", "lint", "typecheck", "coverage"]
     },
     "format": {
       "executor": "nx:run-commands",
@@ -120,31 +116,12 @@
     },
     "test": {
       "executor": "nx:noop",
-      "dependsOn": ["ci-jobs", "ci-contexts", "policy-tests", "cd-journeys"],
+      "dependsOn": ["ci-jobs", "ci-contexts", "cd-journeys"],
       "cache": false
-    },
-    "budgets": {
-      "executor": "nx:run-commands",
-      "dependsOn": ["test"],
-      "options": {
-        "command": "bun run onebudgetspec check .github/budgets.yaml"
-      },
-      "cache": false,
-      "inputs": ["workflowGraph"]
     },
     "coverage": {
       "executor": "nx:noop",
       "//": "Declared empty to preserve the repository standard target inventory, as scripts:coverage does; this private workflow tooling has executable subprocess and graph contracts but no separate coverage metric or new product coverage threshold."
-    },
-    "policy-tests": {
-      "executor": "nx:run-commands",
-      "dependsOn": ["bootstrap"],
-      "options": {
-        "command": "node --test .github/tests/boundaries.test.mjs .github/tests/policy-carriers.test.mjs .github/tests/policy-routing.test.mjs .github/tests/policy.test.mjs .github/tests/release-shortcut.test.mjs .github/tests/reusable.test.mjs .github/tests/rust-cache-warm.test.mjs .github/tests/rust-cache.test.mjs"
-      },
-      "cache": false,
-      "outputs": ["{projectRoot}/.telemetry/macos-policy.json"],
-      "inputs": ["policyJourneys"]
     },
     "cd-journeys": {
       "executor": "nx:run-commands",
@@ -156,5 +133,5 @@
       "inputs": ["workflowGraph", "cdJourneys"]
     }
   },
-  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace,external_service_suite_stays_out_of_the_affected_tier] The task requires this private workflow-tooling project and lockfile to stay isolated from public SDK dependency resolution; its bootstrap installs only YAML, Actions expressions and budget reporting in .github. Its cdJourneys input names the release plumbing the CD journeys under tests/ drive \u2014 scripts/release_cd.py and every script and manifest a CD job runs (including the justfile the real release recipes read, plus the crates and SDK sources the release builds and packages) \u2014 so a change to how a release is produced selects them, while graph-only checks retain their narrower workflow inputs. The Linear document policy under linear-documents-policy/ is a separate inexpensive project; it is excluded from this one's inputs so an edit to it alone selects no publication journey. The CD journeys' crate publication reads index.crates.io and static.crates.io without a credential \u2014 the public reads every cargo build in the affected tier already makes for its dependencies \u2014 through the double's index proxy and cargo's own verification build; they write only to loopback doubles, and dropping cargo's verification build to avoid them would stop proving each crate builds with its siblings resolved from a registry. JSON has no comment to scope this to the test target."
+  "//": "llmlint: ignore-file[projects_stay_in_one_js_workspace,external_service_suite_stays_out_of_the_affected_tier] The task requires this private workflow-tooling project and lockfile to stay isolated from public SDK dependency resolution; its bootstrap installs only YAML, Actions expressions and budget reporting in .github. Its cdJourneys input names the release plumbing the CD journeys under tests/ drive \u2014 scripts/release_cd.py and every script and manifest a CD job runs (including the justfile the real release recipes read, plus the crates and SDK sources the release builds and packages) \u2014 so a change to how a release is produced selects them, while graph-only checks retain their narrower workflow inputs. The Linear document policy under linear-documents-policy/ and the workflow policy journeys with their macOS budgets (github-workflow-policy, .github/policy/project.json) are separate projects excluded from this one's inputs, so an edit to either alone selects no publication journey, and an edit to a crate selects the publication journeys without the policy journeys (manager reply 233). The CD journeys' crate publication reads index.crates.io and static.crates.io without a credential \u2014 the public reads every cargo build in the affected tier already makes for its dependencies \u2014 through the double's index proxy and cargo's own verification build; they write only to loopback doubles, and dropping cargo's verification build to avoid them would stop proving each crate builds with its siblings resolved from a registry. JSON has no comment to scope this to the test target."
 }

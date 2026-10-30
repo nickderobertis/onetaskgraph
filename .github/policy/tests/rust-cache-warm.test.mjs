@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parse } from "yaml";
-import { HASHED_ENV_PREFIXES } from "../rust-cache-key.mjs";
-import { read } from "../workflow-graph.mjs";
+import { HASHED_ENV_PREFIXES } from "../../rust-cache-key.mjs";
+import { read } from "../../workflow-graph.mjs";
 
 // Each leg of rust-cache-warm.yml must save exactly the cache its pull-request job restores:
 // the same shared key, the same toolchain and rust-cache inputs on the same runner, and the

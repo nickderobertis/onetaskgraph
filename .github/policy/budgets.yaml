@@ -7,8 +7,8 @@ budgets:
       five-runner pool. It is bounded inside each run because one run can occupy several
       shared Mac slots while the lifecycle run count stays within its bound.
     measure: reported
-    # llmlint: ignore[budget_commands_measure_directly] The task fixes this exact `node .github/macos-budget.mjs --metric ... --telemetry ...` surface; it reads the one telemetry file the github-workflows:test journey records and reports one figure through the SDK, re-running nothing.
-    command: [node, macos-budget.mjs, --metric, jobs-per-run, --telemetry, .telemetry/macos-policy.json]
+    # llmlint: ignore[budget_commands_measure_directly] The task fixes this exact `node .github/macos-budget.mjs --metric ... --telemetry ...` surface; it reads the one telemetry file the github-workflow-policy:test journey records and reports one figure through the SDK, re-running nothing.
+    command: [node, ../macos-budget.mjs, --metric, jobs-per-run, --telemetry, ../.telemetry/macos-policy.json]
     unit: jobs
     direction: max
     threshold: 1
@@ -19,8 +19,8 @@ budgets:
       Records distinct Mac-spending runs across the complete single-push lifecycle to
       protect queue capacity shared with dependent releases.
     measure: reported
-    # llmlint: ignore[budget_commands_measure_directly] The task fixes this exact `node .github/macos-budget.mjs --metric ... --telemetry ...` surface; it reads the one telemetry file the github-workflows:test journey records and reports one figure through the SDK, re-running nothing.
-    command: [node, macos-budget.mjs, --metric, runs-per-change, --telemetry, .telemetry/macos-policy.json]
+    # llmlint: ignore[budget_commands_measure_directly] The task fixes this exact `node .github/macos-budget.mjs --metric ... --telemetry ...` surface; it reads the one telemetry file the github-workflow-policy:test journey records and reports one figure through the SDK, re-running nothing.
+    command: [node, ../macos-budget.mjs, --metric, runs-per-change, --telemetry, ../.telemetry/macos-policy.json]
     unit: runs
     direction: max
     # 3: the PR's test-macos, the base push's warm-macos (rust-cache-warm.yml, a macOS warmer

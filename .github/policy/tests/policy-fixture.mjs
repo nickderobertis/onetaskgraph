@@ -7,13 +7,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { read, root, validateEventInventory } from "../workflow-graph.mjs";
+import { read, root, validateEventInventory } from "../../workflow-graph.mjs";
 
 validateEventInventory(JSON.parse(read(".github/event-classes.json")));
 
 export const policy =
   process.env.MACOS_POLICY_TEST_PROGRAM ||
-  fileURLToPath(new URL("../macos-policy.mjs", import.meta.url));
+  fileURLToPath(new URL("../../macos-policy.mjs", import.meta.url));
 export const scratchRoot = process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir();
 export const history = mkdtempSync(resolve(scratchRoot, "macos-policy-"));
 export function git(...args) {

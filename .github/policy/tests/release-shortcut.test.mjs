@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { read, root } from "../workflow-graph.mjs";
+import { read, root } from "../../workflow-graph.mjs";
 
 // The release-PR shortcut, driven as the three test jobs run it, over a real scratch
 // repository whose `main` holds the release-owned manifests a release-plz pull request bumps.

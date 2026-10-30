@@ -13,8 +13,8 @@ import {
   resolve as resolveValue,
   root,
   workflows,
-} from "../workflow-graph.mjs";
-import { Lexer } from "../actions-expressions.mjs";
+} from "../../workflow-graph.mjs";
+import { Lexer } from "../../actions-expressions.mjs";
 import {
   base,
   classify,
