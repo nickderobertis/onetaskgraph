@@ -797,9 +797,10 @@ listing, and once before waiting out the quiescence window, to the window's end 
 makes before one call to the destination's plugin: a plugin that answers that call with several
 requests — a board's `createIssue` followed by the card's field writes — is renewed for once
 before them, not between them. A renewal that finds the intent naming another attempt — one that
-took it over after this copy's lease ran out — stops the copy with `create-in-progress` before
-that write, sending nothing more and taking nothing back, since what it wrote is now the other
-attempt's to finish. On the normal path the cost is exact: an update and an `unchanged`
+took it over after this copy's lease ran out — or finds it gone, that attempt having since linked
+the counterpart or released it, stops the copy with `create-in-progress` before that write,
+naming what it found, sending nothing more and taking nothing back, since what it wrote is now the
+other attempt's to finish. On the normal path the cost is exact: an update and an `unchanged`
 copy send what they always sent, to the destination and to the source; an uninterrupted create
 from a folder of Markdown sends the destination exactly what it always did and no remote party
 anything for its intent, whose take and release are lock-guarded file writes; and one from a
