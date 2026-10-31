@@ -735,8 +735,12 @@ the id sent is the key with its version nibble — the first digit of its third 
 `8213b96a-ad84-54be-990c-798d8c12c97b` is sent as `8213b96a-ad84-44be-990c-798d8c12c97b`. The
 transform is deterministic, so every attempt sends and looks up one id; the slot keeps the key
 verbatim. What Linear answers a create naming an id it already holds is not documented, so the
-store reads the item by that id after *any* failed create carrying a key, and writes it whole
-when it is there.
+store reads the item by that id after *any* failed create carrying a key — an error, or an answer
+lost on the way — and writes it whole when it is there. A keyed create Linear answers under any
+other id, or under none, is refused as an answer the copy cannot vouch for, naming the id Linear
+gave, and the destination is to be inspected before copying again: the refusal says so, and it
+does not by itself keep a later retry from creating again, since that retry looks the item up by
+the id it sent and an item Linear stored under another is not found there.
 
 **The key is deterministic**: the version-5 UUID, under the namespace
 `7a1c3f0e-5b2d-4c8a-9e61-0f4d2b7c5a39`, of `<source qualified id>|<destination source
@@ -784,7 +788,9 @@ proceed under one key. Linear then still creates one issue. A board may create t
 detected where the listing can see it: every board create made from a hosted source, and every
 create that resolves an earlier attempt's intent, lists the repository by key once more, and an
 attempt that finds more than one issue carrying it answers that item `failed` with the kind
-`create-duplicated`, naming them all and recording no link. What this guarantees is at most one
+`create-duplicated`, naming them all and recording no link. The attempt whose intent the other
+overwrote finds that at the first write it asks to send after its `createIssue`, and stops there
+with `create-in-progress`, its issue left as `createIssue` made it. What this guarantees is at most one
 link, and every attempt either linking or refusing with what it saw — not that only one attempt
 creates.
 
@@ -799,10 +805,16 @@ whose create is listed late — leaves a second issue that no process reports.
 destination write it sends after its create request — a write that finishes the item, a comment
 it carries, and a write that finishes an earlier attempt's create alike — never before a read or a
 listing, and once before waiting out the quiescence window, to the window's end plus
-`create_lease_seconds`, so no renewal falls during the wait. A renewal is one write the engine
-makes before one call to the destination's plugin: a plugin that answers that call with several
-requests — a board's `createIssue` followed by the card's field writes — is renewed for once
-before them, not between them. A renewal that finds the intent naming another attempt — one that
+`create_lease_seconds`, so no renewal falls during the wait. That holds inside a plugin call too:
+the engine runs every call it makes to a destination while it owns a create there under a
+`WriteGuard` — an additive part of the plugin interface, which a source that never asks it leaves
+exactly as it was — and a board asks it immediately before sending each write request but its
+`createIssue`: the card's field writes, its filing, its parent and dependencies, its content, its
+comments, and the delete that would take the issue back. Each ask renews the lease first; once
+one cannot be renewed the answer is a refusal, to that request and to every later one, so a board
+that has lost its create sends nothing more — not even that delete. A source that does not ask —
+a folder of Markdown, Linear, a source over the stdio protocol — is renewed for before each call,
+which for each of them is one write request. A renewal that finds the intent naming another attempt — one that
 took it over after this copy's lease ran out — or finds it gone, that attempt having since linked
 the counterpart or released it, stops the copy with `create-in-progress` before that write,
 naming what it found, sending nothing more and taking nothing back, since what it wrote is now the
@@ -813,7 +825,8 @@ anything for its intent, whose take and release are lock-guarded file writes; an
 hosted source sends Linear or a folder exactly what it always did, and a board that plus one
 repository listing after `createIssue`. The rare paths are bounded rather than counted. A hosted
 source is sent at most one intent write before the first destination write plus one renewal
-per destination write after its create, each its existing narrow metadata write, and the intent
+per destination write request sent while it owns the create — on a board, every write request of
+the creating call but `createIssue` itself — each its existing narrow metadata write, and the intent
 is removed in the link write it already sends. Resolving an intent adds, on a board, one listing
 — two when it waits, and one more after a create made because nothing was listed — a page each
 for every hundred issues created since five minutes before `at`, plus the reads the counterpart's

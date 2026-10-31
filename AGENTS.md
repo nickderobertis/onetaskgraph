@@ -77,7 +77,7 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,
   `MetadataMatch`, `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
-  `MetadataKey` and `MetadataRecord`; the targeted-update types `TaskUpdate`,
+  `MetadataKey`, `MetadataRecord` and `WriteGuard`; the targeted-update types `TaskUpdate`,
   `TaskUpdateOutcome` and `UpdatedField`; the
   comment types `Comment`, `CommentBody`, `NewComment`, `CommentOrigin`, `CommentCopy` and
   `TaskDetailRead`; the
@@ -1349,10 +1349,14 @@ them do; this is the inventory of what is owed, not a status board.
      and its version wherever it is not `null` (a board's, after a write), on a
      folder, a board and Linear; a refusal after the copy's read carries `held`, `task comment add`
      answers `item`, and both SDKs pass the guards and parse every new member.
-131. A holder renews its lease before each destination write after its create, and one that finds
-     another attempt holding its intent stops `create-in-progress`, writing nothing more; two
+131. A holder renews its lease before each destination write after its create — on a board
+     before each write request inside the plugin call that sent `createIssue`, through the
+     `WriteGuard` the engine installs — and one that finds another attempt holding its intent
+     stops `create-in-progress`, writing nothing more, a board's delete of what it made included;
+     a keyed Linear create answered under another id, or none, is refused for every kind; two
      copies from a hosted source paused at every interleaving of read, create and relist make at
-     most one link — both refusing `create-duplicated` on a board when both creates landed first,
+     most one link — on a board when both creates landed first, the holder refusing
+     `create-duplicated` and the other stopping `create-in-progress` after its `createIssue`,
      one issue under one id on Linear — and a malformed board listing by key refuses before any
      create is sent again.
 132. Every task copy and task write verb sends the board and Linear exactly the requests the v0.12.13
