@@ -710,13 +710,14 @@ pub mod graphql {
     /// status, and the `delivers` the engine keeps in step with it — is what Linear holds after
     /// the write, with no read before it and none after.
     pub const ISSUE_UPDATE_READ: &str = ISSUE_UPDATE;
-    /// Set an issue's priority on its own, and read back the priority Linear now holds.
+    /// Set an issue's priority on its own, and read back the issue as Linear now holds it.
     ///
-    /// The same `issueUpdate` as [`ISSUE_UPDATE`], selecting `priority` in the payload
-    /// because a narrow priority write answers with what the source reads back rather than
-    /// an echo of what it sent. A document of its own rather than a wider [`ISSUE_UPDATE`],
-    /// so every other issue write keeps asking for exactly what it reads.
-    pub const ISSUE_PRIORITY_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id priority}} }";
+    /// The same `issueUpdate` as [`ISSUE_UPDATE`], selecting what a read of the issue selects
+    /// and `priority` once more, as 0.6.0's priority write did, because a narrow priority write answers with what the source reads back rather
+    /// than an echo of what it sent — and with the issue's token, so the write answers what the
+    /// task holds after it without a read. A document of its own, spelled apart from
+    /// [`ISSUE_UPDATE`], so a request log tells a priority write from every other update.
+    pub const ISSUE_PRIORITY_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} priority}} }";
     /// Rewrite an issue whole, and read back in the same request the first page of the
     /// relations it holds — the ones a whole write reconciles.
     ///
@@ -1581,6 +1582,9 @@ struct LinearSource {
     /// [`TaskSource::written_location`] answers, so a copy records where it landed an item it
     /// created without reading it.
     locations: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), String>>,
+    /// What each item this instance wrote holds, as its latest write's own answer said — what
+    /// [`TaskSource::written_task`] and [`TaskSource::written_version`] answer.
+    answered: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Answered>>,
     /// What [`TaskSource::read_ahead_origins_for_copy`] read, until the next write or
     /// [`TaskSource::end_command`]; see [`origins::OriginsAhead`].
     origins_ahead: std::sync::Mutex<origins::OriginsAhead>,
@@ -1626,6 +1630,7 @@ impl LinearSource {
             stored: std::sync::Mutex::new(std::collections::HashMap::new()),
             written: std::sync::Mutex::new(std::collections::HashMap::new()),
             locations: std::sync::Mutex::new(std::collections::HashMap::new()),
+            answered: std::sync::Mutex::new(std::collections::HashMap::new()),
             origins_ahead: std::sync::Mutex::new(origins::OriginsAhead::default()),
         })
     }
@@ -1958,6 +1963,20 @@ impl LinearSource {
         query: &str,
         variables: Value,
     ) -> Result<Result<Value, Refusal>, SourceError> {
+        // Every mutation but a create is asked for immediately before it is sent — a create's
+        // relations, the whole write that finishes a create answered as an id already held, an
+        // upload, a comment — so a copy that owns the create renews its hold first, and one that
+        // has lost it sends nothing more. A write retried later is asked for again here.
+        if query.trim_start().starts_with("mutation")
+            && ![
+                graphql::ISSUE_CREATE,
+                graphql::PROJECT_CREATE,
+                graphql::DOCUMENT_CREATE,
+            ]
+            .contains(&query)
+        {
+            <dyn onetaskgraph_plugin_api::WriteGuard>::check().await?;
+        }
         let response = client
             .post(&self.endpoint.0)
             .header("Authorization", self.key.expose_secret())
@@ -2777,9 +2796,19 @@ impl LinearSource {
         if optional_str(issue, "identifier")? != Some(asked.0.as_str()) {
             written_is(issue, asked)?;
         }
-        optional(&json!({ "issue": issue }), "issue", |v| {
+        let task = optional(&json!({ "issue": issue }), "issue", |v| {
             map_task(v, &self.name, &self.statuses, self.spelling())
-        })
+        })?;
+        if let Some(task) = &task {
+            self.answered().insert(
+                (MetadataRecord::Task, asked.clone()),
+                Answered {
+                    version: task.version.clone(),
+                    task: Some(task.clone()),
+                },
+            );
+        }
+        Ok(task)
     }
 
     /// The one long-form field a Linear item has, with this source's own slot at the end.
@@ -2943,6 +2972,7 @@ impl LinearSource {
                 };
                 let deleted = self.send(query, json!({"id":id})).await?;
                 mutation_payload(&deleted, mutation)?;
+                self.unknown_version(near);
             }
             if let Some(next) = page_next(&relations)? {
                 cursor = Some(next);
@@ -3034,6 +3064,7 @@ impl LinearSource {
                 )
             };
             let data = self.send(query, json!({"input":input})).await?;
+            self.unknown_version(near);
             let mutation = if matches!(kind, WriteKind::Project) {
                 MutationRoot::ProjectRelationCreate
             } else {
@@ -3288,6 +3319,38 @@ impl TaskSource for LinearSource {
             .get(&(record, id.clone()))
             .cloned();
         web_address(held.as_deref())
+    }
+    /// The issue, project or document whose own id is `key`'s v4-shaped transform — see
+    /// [`linear_id_of_key`] — the id a create carrying it was sent under here; Linear answers a
+    /// read by id at once, so it never lags.
+    async fn created_with_key(
+        &self,
+        record: MetadataRecord,
+        key: &str,
+        _since: Option<chrono::DateTime<chrono::Utc>>,
+        _target: &onetaskgraph_plugin_api::WriteTarget<'_>,
+    ) -> Result<Vec<NativeId>, SourceError> {
+        let id = NativeId(linear_id_of_key(key)?);
+        Ok(match record {
+            MetadataRecord::Task => self.get_task(&id).await?.map(|task| task.id),
+            MetadataRecord::Project => self.get_project(&id).await?.map(|project| project.id),
+            MetadataRecord::Document => self.get_document(&id).await?.map(|document| document.id),
+        }
+        .into_iter()
+        .collect())
+    }
+    /// The task as this instance's latest write of it was answered with — never a request.
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        self.answered()
+            .get(&(MetadataRecord::Task, id.clone()))
+            .and_then(|answered| answered.task.clone())
+    }
+    /// The token the answer to this instance's latest write of the item spelled, when it
+    /// carried every part a read spells one from.
+    async fn written_version(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        self.answered()
+            .get(&(record, id.clone()))
+            .and_then(|answered| answered.version.clone())
     }
     /// The content the latest write of the item selected in its own answer, the metadata slot
     /// and its separator removed; see the ruling on what Linear stores.
@@ -3546,6 +3609,9 @@ impl TaskSource for LinearSource {
         // keys: a key of either name travelling beside the field would be a second answer to
         // the same question, and the field is the one the contract names.
         let mut metadata = write.item.metadata.clone();
+        // A create's key is the issue's own id here, and stays in its slot as every source keeps
+        // it, so a later copy reads the issue as the one it wrote.
+        let create_key = create_key_of(&metadata, write.target.as_ref());
         set_task_list(&mut metadata, TaskRef::DELIVERS_KEY, &write.item.delivers);
         set_task_list(
             &mut metadata,
@@ -3576,21 +3642,46 @@ impl TaskSource for LinearSource {
                 {
                     let mut input = input;
                     input["teamId"] = Value::String(team.0);
+                    if let Some(key) = &create_key {
+                        input["id"] = Value::String(linear_id_of_key(key)?);
+                    }
                     json!({"input":input})
                 },
                 MutationRoot::IssueCreate,
             ),
         };
-        let data = self.send(query, variables).await.inspect_err(|_| {
-            self.forget_vocabulary();
-        })?;
+        let data = match self.send(query, variables).await {
+            Ok(data) => data,
+            // Answered as an id another request already holds: that request's issue is this
+            // create's, so it is read by the id and written whole, finishing what it left.
+            Err(error) => {
+                self.forget_vocabulary();
+                if let Some(key) = &create_key
+                    && let Some(held) = self.get_task(&NativeId(linear_id_of_key(key)?)).await?
+                {
+                    let item = write.item.clone();
+                    return self
+                        .write_task(&ItemWrite {
+                            target: Some(held.id),
+                            item,
+                            depends_on: write.depends_on.clone(),
+                        })
+                        .await;
+                }
+                return Err(error);
+            }
+        };
         let issue =
             mutation_payload(&data, root)?
                 .get("issue")
                 .ok_or_else(|| SourceError::Malformed {
                     message: format!("missing {}.issue", root.as_str()),
                 })?;
-        let id = NativeId(backend_id(issue, "id")?.into());
+        let id = created_as(
+            NativeId(backend_id(issue, "id")?.into()),
+            create_key.as_deref(),
+            "issue",
+        )?;
         self.hold_stored(MetadataRecord::Task, &id, issue)?;
         let held = held_relations(write.target.as_ref(), issue)?;
         self.write_relations(&id, &edges, WriteKind::Task, held)
@@ -3632,6 +3723,7 @@ impl TaskSource for LinearSource {
             &edges,
             WriteKind::Project,
         )?;
+        let create_key = create_key_of(&write.item.metadata, write.target.as_ref());
         // A project's long form is its `content`, not its `description`: Linear documents the
         // second as "the short description of the project", and the first — the project's
         // Markdown body — is the one with room for a description and a metadata slot.
@@ -3648,20 +3740,44 @@ impl TaskSource for LinearSource {
                 {
                     let mut input = input;
                     input["teamIds"] = json!([team]);
+                    if let Some(key) = &create_key {
+                        input["id"] = Value::String(linear_id_of_key(key)?);
+                    }
                     json!({"input":input})
                 },
                 MutationRoot::ProjectCreate,
             ),
         };
-        let data = self.send(query, variables).await.inspect_err(|_| {
-            self.forget_vocabulary();
-        })?;
+        let data = match self.send(query, variables).await {
+            Ok(data) => data,
+            // Answered as an id another request already holds: that request's project is this
+            // create's, so it is read by the id and written whole, as an issue's is.
+            Err(error) => {
+                self.forget_vocabulary();
+                if let Some(key) = &create_key
+                    && let Some(held) = self.get_project(&NativeId(linear_id_of_key(key)?)).await?
+                {
+                    return self
+                        .write_project(&ItemWrite {
+                            target: Some(held.id),
+                            item: write.item.clone(),
+                            depends_on: write.depends_on.clone(),
+                        })
+                        .await;
+                }
+                return Err(error);
+            }
+        };
         let project = mutation_payload(&data, root)?
             .get("project")
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {}.project", root.as_str()),
             })?;
-        let id = NativeId(backend_id(project, "id")?.into());
+        let id = created_as(
+            NativeId(backend_id(project, "id")?.into()),
+            create_key.as_deref(),
+            "project",
+        )?;
         self.hold_stored(MetadataRecord::Project, &id, project)?;
         let held = held_relations(write.target.as_ref(), project)?;
         self.write_relations(&id, &edges, WriteKind::Project, held)
@@ -3834,6 +3950,7 @@ impl TaskSource for LinearSource {
             Vec::new(),
         )?;
         let project = self.filed_in(write.item.project.as_ref(), "document")?;
+        let create_key = create_key_of(&write.item.metadata, write.target.as_ref());
         let (query, variables, root) = match &write.target {
             Some(id) => {
                 // A target this workspace does not hold is refused rather than created:
@@ -3871,6 +3988,9 @@ impl TaskSource for LinearSource {
                     Some(project) => input["projectId"] = Value::String(project.clone()),
                     None => input["teamId"] = Value::String(self.team_id().await?.0),
                 }
+                if let Some(key) = &create_key {
+                    input["id"] = Value::String(linear_id_of_key(key)?);
+                }
                 (
                     graphql::DOCUMENT_CREATE,
                     json!({ "input": input }),
@@ -3878,13 +3998,35 @@ impl TaskSource for LinearSource {
                 )
             }
         };
-        let data = self.send(query, variables).await?;
+        let data = match self.send(query, variables).await {
+            Ok(data) => data,
+            // Answered as an id another request already holds: that request's document is this
+            // create's, so it is read by the id and written whole, as an issue's is.
+            Err(error) => {
+                if let Some(key) = &create_key
+                    && let Some(held) = self.get_document(&NativeId(linear_id_of_key(key)?)).await?
+                {
+                    return self
+                        .write_document(&ItemWrite {
+                            target: Some(held.id),
+                            item: write.item.clone(),
+                            depends_on: Vec::new(),
+                        })
+                        .await;
+                }
+                return Err(error);
+            }
+        };
         let document = mutation_payload(&data, root)?
             .get("document")
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {}.document", root.as_str()),
             })?;
-        let id = NativeId(backend_id(document, "id")?.into());
+        let id = created_as(
+            NativeId(backend_id(document, "id")?.into()),
+            create_key.as_deref(),
+            "document",
+        )?;
         self.hold_stored(MetadataRecord::Document, &id, document)?;
         Ok(id)
     }
@@ -4099,7 +4241,33 @@ impl TaskSource for LinearSource {
                 message: "missing issueUpdate.issue".into(),
             })?;
         written_is(issue, &task.id)?;
-        issue_priority(issue).map(Some)
+        let priority = issue_priority(issue)?;
+        // The issue as the answer selects it, token and all — a whole issue whose fields do not
+        // read refused as any read's would be — or, from an answer selecting only the priority,
+        // the issue as read before with the priority it answered, at no token.
+        let answered = if issue.get("title").is_some() {
+            let written = map_task(issue, &self.name, &self.statuses, self.spelling())?;
+            Answered {
+                version: written.version.clone(),
+                task: Some(written),
+            }
+        } else {
+            Answered {
+                version: None,
+                task: Some(Task {
+                    priority,
+                    version: None,
+                    ..task.clone()
+                }),
+            }
+        };
+        self.answered()
+            .insert((MetadataRecord::Task, task.id.clone()), answered.clone());
+        if task.id != *id {
+            self.answered()
+                .insert((MetadataRecord::Task, id.clone()), answered);
+        }
+        Ok(Some(priority))
     }
     async fn set_task_content(
         &self,
@@ -4238,6 +4406,57 @@ impl TaskSource for LinearSource {
             .write_project_content(&project.id, rewritten.as_deref())
             .await?;
         map_project(&written, &self.statuses, self.spelling()).map(Some)
+    }
+    /// One metadata key taken off a project or a document, on the terms of its
+    /// `set_*_metadata`: one read, and — only when the slot holds the key — one update carrying
+    /// the content alone. A task's goes through `update_task`, its one `issueUpdate`.
+    async fn remove_record_metadata(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        match record {
+            MetadataRecord::Task => {
+                let mut update = onetaskgraph_plugin_api::TaskUpdate::default();
+                update.metadata_remove.insert(key.clone());
+                Ok(self
+                    .update_task(id, &update)
+                    .await?
+                    .map(|outcome| outcome.task.version))
+            }
+            MetadataRecord::Project => {
+                let Some((project, description)) = self.project_held(id, Read::ForWrite).await?
+                else {
+                    return Ok(None);
+                };
+                let (_, mut slot) = metadata_description(description.clone())?;
+                if slot.remove(key.as_str()).is_none() {
+                    return Ok(Some(project.version));
+                }
+                let rewritten = reslotted(description.as_deref(), &slot)?;
+                let written = self
+                    .write_project_content(&project.id, rewritten.as_deref())
+                    .await?;
+                Ok(Some(
+                    map_project(&written, &self.statuses, self.spelling())?.version,
+                ))
+            }
+            MetadataRecord::Document => {
+                let Some((document, content)) = self.document_held(id).await? else {
+                    return Ok(None);
+                };
+                let (_, mut slot) = metadata_description(content.clone())?;
+                if slot.remove(key.as_str()).is_none() {
+                    return Ok(Some(document.version));
+                }
+                let rewritten = reslotted(content.as_deref(), &slot)?;
+                let written = self
+                    .write_document_content(&document.id, rewritten.as_deref())
+                    .await?;
+                Ok(Some(map_document(&written)?.version))
+            }
+        }
     }
     /// One metadata key of a document, on the terms of `set_task_metadata`: one read, and one
     /// `documentUpdate` carrying the content alone.
@@ -4406,6 +4625,7 @@ impl TaskSource for LinearSource {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+        self.answered().clear();
         Ok(())
     }
 }
@@ -4646,6 +4866,7 @@ impl LinearSource {
             MetadataRecord::Task | MetadataRecord::Document => payload.get("title").is_some(),
             MetadataRecord::Project => payload.get("name").is_some(),
         };
+        self.note_answered(record, id, whole.then_some(payload));
         let mut written = self
             .written
             .lock()
@@ -4656,6 +4877,67 @@ impl LinearSource {
             written.remove(&(record, id.clone()));
         }
         Ok(())
+    }
+
+    fn answered(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<(MetadataRecord, NativeId), Answered>>
+    {
+        // A memo of what responses said: one a panic left behind is read as it stands.
+        self.answered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Note what a long-form write of the `record` `id` was answered with — the whole item
+    /// when its selection carried one, and nothing it can vouch for otherwise.
+    fn note_answered(&self, record: MetadataRecord, id: &NativeId, payload: Option<&Value>) {
+        let answered = payload.map(|payload| match record {
+            MetadataRecord::Task => {
+                let task = map_task(payload, &self.name, &self.statuses, self.spelling()).ok();
+                Answered {
+                    version: task.as_ref().and_then(|task| task.version.clone()),
+                    task,
+                }
+            }
+            MetadataRecord::Project => Answered {
+                version: map_project(payload, &self.statuses, self.spelling())
+                    .ok()
+                    .and_then(|project| project.version),
+                task: None,
+            },
+            MetadataRecord::Document => Answered {
+                version: map_document(payload)
+                    .ok()
+                    .and_then(|document| document.version),
+                task: None,
+            },
+        });
+        let mut held = self.answered();
+        match answered {
+            Some(answered) => {
+                held.insert((record, id.clone()), answered);
+            }
+            None => {
+                held.remove(&(record, id.clone()));
+            }
+        }
+    }
+
+    /// Forget the token an earlier answer gave `id`: a later write of its relations moves what
+    /// a read would spell, and Linear's answer to that write does not say what.
+    fn unknown_version(&self, id: &NativeId) {
+        for answered in self
+            .answered()
+            .iter_mut()
+            .filter(|((_, held), _)| held == id)
+            .map(|(_, answered)| answered)
+        {
+            answered.version = None;
+            if let Some(task) = answered.task.as_mut() {
+                task.version = None;
+            }
+        }
     }
 
     /// The whole item the latest long-form write of the `record` `id` was answered with,
@@ -4728,6 +5010,16 @@ impl LinearSource {
             }
         }
     }
+}
+
+/// What a write's own answer said one item holds, for [`TaskSource::written_task`] and
+/// [`TaskSource::written_version`].
+#[derive(Clone)]
+struct Answered {
+    /// The item's token after the write, when the answer vouched for one.
+    version: Option<String>,
+    /// The task, for a task whose answer carried it whole.
+    task: Option<Task>,
 }
 
 /// What one read of an item by id is for, which decides whether an attached cache widens it.
@@ -5585,6 +5877,73 @@ fn classification_of(
         .map_err(|message| SourceError::Malformed { message })?;
     metadata.remove(Classification::METADATA_KEY);
     Ok(classification)
+}
+
+/// `answered`, the id a create's answer gives, held to the id a keyed create sent: Linear's
+/// published schema takes a caller's `id` as the item's own, so an answer naming another is one
+/// this source cannot vouch for — and it says so rather than answer an id a retry's lookup by key
+/// would never find. A refusal is all it is: the item stands where Linear put it, and a later
+/// retry looking it up by the id sent will not find it there.
+fn created_as(answered: NativeId, key: Option<&str>, kind: &str) -> Result<NativeId, SourceError> {
+    let Some(key) = key else {
+        return Ok(answered);
+    };
+    let sent = linear_id_of_key(key)?;
+    if answered.0 == sent {
+        Ok(answered)
+    } else {
+        Err(SourceError::Malformed {
+            message: format!(
+                "Linear answered a {kind} create sent with id {sent} as {}, not the id it was sent; \
+                 next: inspect that {kind} before copying again, since a retry looks for the id \
+                 that was sent",
+                answered.0
+            ),
+        })
+    }
+}
+
+/// The create key a create of a new item carries, which it sends as the item's own id.
+fn create_key_of(
+    metadata: &std::collections::BTreeMap<String, Value>,
+    target: Option<&NativeId>,
+) -> Option<String> {
+    metadata
+        .get(MetadataKey::CREATE_KEY)
+        .and_then(|key| key.as_str().map(str::to_owned))
+        .filter(|_| target.is_none())
+}
+
+/// The id a create carrying `key` is sent to Linear under: the key — a version-5 UUID — with its
+/// version nibble set to 4 and its RFC 4122 variant kept, because Linear's published schema
+/// (`IssueCreateInput.id`, `ProjectCreateInput.id` and `DocumentCreateInput.id` in
+/// linear/linear's `packages/sdk/src/schema.graphql`) documents the id as "in UUID v4 format".
+/// Deterministic, so every attempt at one create sends, and looks up, the same id; the key itself
+/// stays verbatim in the item's slot at `onetaskgraph.create_key`.
+///
+/// # Errors
+///
+/// [`SourceError::Malformed`] for a key that is not a hyphenated RFC 4122 UUID.
+pub fn linear_id_of_key(key: &str) -> Result<String, SourceError> {
+    let shaped = key.len() == 36
+        && key.char_indices().all(|(at, character)| match at {
+            8 | 13 | 18 | 23 => character == '-',
+            _ => character.is_ascii_hexdigit(),
+        });
+    if !shaped {
+        return Err(SourceError::Malformed {
+            message: format!("create key {key:?} is not a hyphenated UUID"),
+        });
+    }
+    // The variant is kept, so it has to be RFC 4122's already for the id to be a v4 UUID.
+    let mut id = key.to_ascii_lowercase();
+    if !matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b') {
+        return Err(SourceError::Malformed {
+            message: format!("create key {key:?} is not an RFC 4122 UUID"),
+        });
+    }
+    id.replace_range(14..15, "4");
+    Ok(id)
 }
 
 fn map_document(v: &Value) -> Result<Document, SourceError> {

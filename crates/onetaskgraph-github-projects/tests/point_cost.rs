@@ -40,6 +40,7 @@ use onetaskgraph_github_projects::{
 /// selects a connection. That is a figure rather than an exemption: a mutation that grew a
 /// connection would move it.
 const PRICES: &[(&str, u64)] = &[
+    (graphql::ISSUES_BY_CREATION, 1),
     (graphql::SEARCH_ISSUES, 5),
     (graphql::ISSUE, 1),
     (graphql::ISSUE_BOARD_ITEMS, 1),

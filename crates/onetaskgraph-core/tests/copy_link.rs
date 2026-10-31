@@ -126,6 +126,10 @@ impl Watched {
     }
 
     fn fault_of(&self, id: &NativeId, key: &MetadataKey) -> Option<Fault> {
+        // Every fault is a link's: the intent a create records is written as it always is.
+        if key.as_str() == MetadataKey::CREATING_KEY {
+            return None;
+        }
         let faults = if key.is_copy_locations() {
             &self.location_faults
         } else {
@@ -240,6 +244,30 @@ impl TaskSource for Watched {
         }
         let written = self.inner.set_task_metadata(id, key, value).await?;
         self.after(id, key, written)
+    }
+
+    /// The link write a copy makes while it also takes an intent to create off the item, held
+    /// to the same faults as the narrow write of the link alone.
+    async fn update_task(
+        &self,
+        id: &NativeId,
+        update: &onetaskgraph_plugin_api::TaskUpdate,
+    ) -> Result<Option<onetaskgraph_plugin_api::TaskUpdateOutcome>, SourceError> {
+        let linked = update
+            .metadata_set
+            .keys()
+            .find(|key| key.is_copies())
+            .cloned();
+        if let Some(key) = &linked
+            && let Some(answer) = self.before(id, key)?
+        {
+            return Ok(answer);
+        }
+        let outcome = self.inner.update_task(id, update).await?;
+        match &linked {
+            Some(key) => self.after(id, key, outcome),
+            None => Ok(outcome),
+        }
     }
 
     async fn set_project_metadata(
@@ -444,6 +472,7 @@ fn copy_of(items: &[&str], scope: CopyScope) -> CopyRequest {
         expect: None,
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
+        conditions: Default::default(),
     }
 }
 
@@ -1423,5 +1452,33 @@ async fn an_explicit_target_refuses_non_task_scopes_before_reading() {
             engine.copy(&request).await,
             Err(EngineError::TargetTaskNeedsOne)
         ));
+    }
+}
+
+#[tokio::test]
+async fn a_destination_guard_on_a_project_or_document_copy_is_refused_before_reading() {
+    // No source is configured: a guard the engine read anything for would fail on that instead.
+    let engine = Engine::new(Vec::new(), Vec::new());
+    for scope in [CopyScope::Documents, CopyScope::Projects { tasks: true }] {
+        for conditions in [
+            onetaskgraph_core::CopyConditions {
+                status: vec![onetaskgraph_plugin_api::StatusCategory::Todo],
+                ..Default::default()
+            },
+            onetaskgraph_core::CopyConditions {
+                priority: vec![onetaskgraph_plugin_api::Priority::None],
+                ..Default::default()
+            },
+        ] {
+            let mut request = copy_of(&["from:P-1"], scope.clone());
+            request.conditions = conditions;
+            assert!(
+                matches!(
+                    engine.copy(&request).await,
+                    Err(EngineError::ConditionsNotTasks)
+                ),
+                "{scope:?}"
+            );
+        }
     }
 }

@@ -20,6 +20,16 @@ use crate::fixtures::{
     qualified,
 };
 
+/// A write's answer without the `result` every task write now adds, which the journey holds
+/// apart.
+fn without_result(answer: &Value) -> Value {
+    let mut answer = answer.clone();
+    if let Some(members) = answer.as_object_mut() {
+        members.remove("result");
+    }
+    answer
+}
+
 /// The priority the shared dataset gives each of its tasks.
 const HELD: [(&str, &str); 4] = [
     ("T-1", "high"),
@@ -281,7 +291,13 @@ fn a_priority_set_on_its_own_answers_what_the_source_holds_and_moves_nothing_els
             &sandbox,
             &["--json", "task", "priority", "set", &id, "urgent"],
         );
-        assert_eq!(set, json!({"id": id, "priority": "urgent"}), "{}", row.name);
+        assert_eq!(
+            without_result(&set),
+            json!({"id": id, "priority": "urgent"}),
+            "{}",
+            row.name
+        );
+        assert_eq!(set["result"]["priority"], "urgent", "{}", row.name);
         let human = exits(
             row.name,
             &sandbox,
@@ -360,7 +376,15 @@ fn a_content_set_replaces_the_body_with_the_files_bytes_and_moves_no_other_membe
         );
         // The content the task then holds: exactly the bytes sent, from a source that reports
         // nothing else of what it stores.
-        assert_eq!(set, json!({"id": id, "content": body}), "{}", row.name);
+        assert_eq!(
+            without_result(&set),
+            json!({"id": id, "content": body}),
+            "{}",
+            row.name
+        );
+        // Every source this verb's own write answers for says what the task then holds; one
+        // hosted over the stdio protocol answers no more than the protocol carries.
+        assert!(set.get("result").is_some(), "{}: {set}", row.name);
         let human = exits(
             row.name,
             &sandbox,

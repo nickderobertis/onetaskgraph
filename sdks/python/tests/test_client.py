@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import tomllib
+import uuid
 from collections.abc import Coroutine, Mapping
 from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -700,7 +701,10 @@ def test_task_copy_create_drives_the_binary(binary: Path, tmp_path: Path) -> Non
     assert [(item.root.source.root, landed(item), item.root.action) for item in created.items] == [
         ("from:T-2", "into:T-2", "created")
     ]
-    assert without_record(run(client.task_show(id="into:T-2")).items[0].item.metadata) == {
+    held = without_record(run(client.task_show(id="into:T-2")).items[0].item.metadata)
+    # The key of the create that made it, which a retried copy finds it by.
+    assert isinstance(held.pop("onetaskgraph.create_key"), str)
+    assert held == {
         "onetaskgraph.edges_on_record": 1,
         "onetaskgraph.origin": "from:T-2",
     }
@@ -942,6 +946,8 @@ def test_document_copy_drives_the_binary_and_refuses_a_destination_with_no_docum
     # a document unchanged at both ends.
     for key in ("onetaskgraph.copied_version", "onetaskgraph.copied_destination_version"):
         assert dumped["metadata"].pop(key).startswith("sha256:")
+    # The create's key, written with the create so a retry finds this document: a version-5 UUID.
+    assert uuid.UUID(dumped["metadata"].pop("onetaskgraph.create_key")).version == 5
     assert dumped == {
         "id": "D-1",
         "title": "Memory document",

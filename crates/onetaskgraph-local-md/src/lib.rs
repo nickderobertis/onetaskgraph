@@ -98,6 +98,7 @@ use serde::{Deserialize, Serialize};
 mod assets;
 pub mod change_token;
 mod containment;
+mod hold;
 #[cfg(windows)]
 mod probe;
 #[cfg(any(windows, test))]
@@ -218,6 +219,8 @@ pub struct LocalMdSource {
     /// naming a task of its own.
     name: Option<SourceName>,
     statuses: BTreeMap<String, StatusCategory>,
+    /// The holds this source has taken on its records' files.
+    holds: hold::Holds,
 }
 
 #[derive(Debug, Deserialize)]
@@ -456,6 +459,21 @@ enum Kind {
     Document,
 }
 
+fn held_as(record: onetaskgraph_plugin_api::MetadataRecord, id: &NativeId) -> hold::HeldRecord {
+    hold::HeldRecord {
+        record,
+        id: id.clone(),
+    }
+}
+
+fn kind_of(record: onetaskgraph_plugin_api::MetadataRecord) -> Kind {
+    match record {
+        onetaskgraph_plugin_api::MetadataRecord::Task => Kind::Task,
+        onetaskgraph_plugin_api::MetadataRecord::Project => Kind::Project,
+        onetaskgraph_plugin_api::MetadataRecord::Document => Kind::Document,
+    }
+}
+
 impl Kind {
     const fn directory(self) -> &'static str {
         match self {
@@ -522,6 +540,7 @@ impl LocalMdSource {
                 .into_iter()
                 .map(|(k, v)| (k.to_lowercase(), v))
                 .collect(),
+            holds: hold::Holds::default(),
         })
     }
 
@@ -1358,6 +1377,142 @@ impl TaskSource for LocalMdSource {
     }
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.write_task_with(write, None)
+    }
+    /// The lock file beside the record's own file, as [`hold`] says.
+    fn hold_item(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+    ) -> Result<bool, SourceError> {
+        let Some(file) = self.locate(kind_of(record), id)? else {
+            return Ok(false);
+        };
+        self.holds.take(&held_as(record, id), &file)?;
+        Ok(true)
+    }
+    fn release_item(&self, record: onetaskgraph_plugin_api::MetadataRecord, id: &NativeId) {
+        self.holds.release(&held_as(record, id));
+    }
+    /// The record's file, byte for byte.
+    fn item_snapshot(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+    ) -> Option<Vec<u8>> {
+        let file = self.locate(kind_of(record), id).ok()??;
+        std::fs::read(file).ok()
+    }
+    /// The record's file put back to `snapshot` under its hold, staged and renamed into place.
+    fn restore_item(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+        snapshot: &[u8],
+    ) -> Result<(), SourceError> {
+        let Some(file) = self.locate(kind_of(record), id)? else {
+            return Ok(());
+        };
+        self.holds.take(&held_as(record, id), &file)?;
+        let text = String::from_utf8(snapshot.to_vec()).map_err(|error| SourceError::Malformed {
+            message: format!("the snapshot of {} is not UTF-8: {error}", file.display()),
+        });
+        let written = text.and_then(|text| replace_atomically(&file, &text));
+        self.holds.release(&held_as(record, id));
+        written
+    }
+    /// Take one key out of a record's front matter, every other byte of the file as it was —
+    /// held to reading back as that record less that one key, as a metadata write is.
+    async fn remove_record_metadata(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        let Some(before) = self.record_metadata(record, id).await? else {
+            return Ok(None);
+        };
+        let Some(path) = self.locate(kind_of(record), id)? else {
+            return Ok(None);
+        };
+        if before.contains_key(key.as_str()) {
+            let text = Self::read_text(&path)?;
+            let edited = with_metadata_entry(&text, key.as_str(), None)
+                .map_err(|unnarrow| unnarrow.refusal_to("remove", &path, key.as_str()))?;
+            // Held to reading back as the record less that one key before anything is written,
+            // so a removal that would read back otherwise — or not at all — leaves the file as
+            // it was.
+            let mut wanted = before;
+            wanted.remove(key.as_str());
+            if self.metadata_in(record, &path, &edited).ok().as_ref() != Some(&wanted) {
+                return Err(Unnarrow {
+                    reason: "the edited file would read back as more than that one key removed"
+                        .to_owned(),
+                    next: TIDY_BLOCK,
+                }
+                .refusal_to("remove", &path, key.as_str()));
+            }
+            replace_atomically(&path, &edited)?;
+        }
+        Ok(Some(self.written_version(record, id).await))
+    }
+    /// Every record whose file carries `key` at the create key — read off this
+    /// machine, where a create lands at once, so it never lags.
+    async fn created_with_key(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        key: &str,
+        _since: Option<chrono::DateTime<chrono::Utc>>,
+        _target: &WriteTarget<'_>,
+    ) -> Result<Vec<NativeId>, SourceError> {
+        let wanted = serde_json::Value::String(key.to_owned());
+        let carries = |metadata: &BTreeMap<String, serde_json::Value>| {
+            metadata.get(MetadataKey::CREATE_KEY) == Some(&wanted)
+        };
+        Ok(match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => self
+                .parse_work_records(WorkKind::Task, &ProjectFilter::Any)?
+                .into_iter()
+                .map(task)
+                .filter(|task| carries(&task.metadata))
+                .map(|task| task.id)
+                .collect(),
+            onetaskgraph_plugin_api::MetadataRecord::Project => self
+                .parse_work_records(WorkKind::Project, &ProjectFilter::Any)?
+                .into_iter()
+                .map(project)
+                .filter(|project| carries(&project.metadata))
+                .map(|project| project.id)
+                .collect(),
+            onetaskgraph_plugin_api::MetadataRecord::Document => self
+                .parse_document_records(&ProjectFilter::Any)?
+                .into_iter()
+                .filter(|document| carries(&document.metadata))
+                .map(|document| document.id)
+                .collect(),
+        })
+    }
+    /// The task as its file now holds it: what this source's latest write of it wrote, read off
+    /// this machine — no remote party is asked anything.
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        self.get_task(id).await.ok().flatten()
+    }
+    /// The token of the record's file as this source's latest write of it left it.
+    async fn written_version(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+    ) -> Option<String> {
+        match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => {
+                self.get_task(id).await.ok().flatten()?.version
+            }
+            onetaskgraph_plugin_api::MetadataRecord::Project => {
+                self.get_project(id).await.ok().flatten()?.version
+            }
+            onetaskgraph_plugin_api::MetadataRecord::Document => {
+                self.get_document(id).await.ok().flatten()?.version
+            }
+        }
     }
     /// The file the record is, as a read reports it: its canonical absolute path, found without
     /// reading it.
@@ -4385,6 +4540,46 @@ const TIDY_BLOCK: &str = "write the file's `metadata:` as a block mapping indent
                           one `key: value` entry to a line, and set the key again";
 
 impl LocalMdSource {
+    /// The metadata a `record`'s file at `path` would read as, were it `text`.
+    fn metadata_in(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        path: &Path,
+        text: &str,
+    ) -> Result<BTreeMap<String, serde_json::Value>, SourceError> {
+        Ok(match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => {
+                task(self.parse_text(WorkKind::Task, path, text)?).metadata
+            }
+            onetaskgraph_plugin_api::MetadataRecord::Project => {
+                project(self.parse_text(WorkKind::Project, path, text)?).metadata
+            }
+            onetaskgraph_plugin_api::MetadataRecord::Document => {
+                self.parse_document_text(path, text)?.metadata
+            }
+        })
+    }
+
+    /// The metadata of the `record` `id` as its file now reads, or `None` when there is none.
+    async fn record_metadata(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+    ) -> Result<Option<BTreeMap<String, serde_json::Value>>, SourceError> {
+        Ok(match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => {
+                self.get_task(id).await?.map(|task| task.metadata)
+            }
+            onetaskgraph_plugin_api::MetadataRecord::Project => {
+                self.get_project(id).await?.map(|project| project.metadata)
+            }
+            onetaskgraph_plugin_api::MetadataRecord::Document => self
+                .get_document(id)
+                .await?
+                .map(|document| document.metadata),
+        })
+    }
+
     /// Set `key` to `value` in the metadata of the record `id` names under `kind`, by the rules
     /// [`STAGING_SUFFIX`] states.
     ///

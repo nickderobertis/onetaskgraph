@@ -83,6 +83,20 @@ fn parsed(who: &str, rendered: &str) -> Value {
         .unwrap_or_else(|error| panic!("{who}: not one JSON document ({error}):\n{rendered}"))
 }
 
+/// An added comment's answer, once its `item` is checked to name `task` and taken off: what is
+/// left is the comment itself.
+fn added_to(who: &str, task: &str, mut answer: Value) -> Value {
+    let item = answer
+        .as_object_mut()
+        .and_then(|members| members.remove("item"));
+    assert_eq!(
+        item,
+        Some(json!(task)),
+        "{who}: the answer names the task: {answer}"
+    );
+    answer
+}
+
 /// A comment in exactly the shape C1 states: six members, `id` and `body` always strings,
 /// every other member a string or `null`.
 fn a_comment(who: &str, comment: &Value) {
@@ -202,6 +216,7 @@ fn a_comment_added_through_the_binary_is_listed_edited_and_deleted_on_every_sour
                     None,
                 ),
             );
+            let first = added_to(&who, &task, first);
             a_comment(&who, &first);
             assert_eq!(first["body"], first_body, "{who}: stored byte for byte");
 
@@ -216,6 +231,7 @@ fn a_comment_added_through_the_binary_is_listed_edited_and_deleted_on_every_sour
                     Some(second_body),
                 ),
             );
+            let second = added_to(&who, &task, second);
             a_comment(&who, &second);
             assert_eq!(second["body"], second_body, "{who}: stored byte for byte");
             assert_ne!(first["id"], second["id"], "{who}");
@@ -452,6 +468,7 @@ fn an_in_memory_source_lists_edits_and_deletes_the_comments_it_holds_in_one_invo
                 Some("Added from standard input.\n\n## and a heading\n"),
             ),
         );
+        let added = added_to(who, &task, added);
         a_comment(who, &added);
         assert_eq!(
             added["body"], "Added from standard input.\n\n## and a heading\n",

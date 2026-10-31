@@ -77,7 +77,7 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,
   `MetadataMatch`, `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
-  `MetadataKey` and `MetadataRecord`; the targeted-update types `TaskUpdate`,
+  `MetadataKey`, `MetadataRecord` and `WriteGuard`; the targeted-update types `TaskUpdate`,
   `TaskUpdateOutcome` and `UpdatedField`; the
   comment types `Comment`, `CommentBody`, `NewComment`, `CommentOrigin`, `CommentCopy` and
   `TaskDetailRead`; the
@@ -1336,6 +1336,51 @@ them do; this is the inventory of what is owed, not a status board.
      afresh once an option changes; a person's body edit survives every terminal projection;
      and an approval creates and resolves its review task through `task project-human`, a stale
      version refusing the approval and leaving the review open.
+127. A task, project or document copy stopped at a point of a create — after its intent, with
+     its create's answer dropped, before its link — and run again leaves exactly one destination
+     item carrying the source's origin on a folder, a board and Linear, reported `via: "intent"`
+     where the item existed, with the link recorded and no `onetaskgraph.creating` left; an
+     uninterrupted create writes its intent before its first destination write and none after,
+     the created item carries `onetaskgraph.create_key` (Linear: its v4-shaped transform as its
+     id), a dry run writes neither, `metadata set` refuses the key, `task locate` answers the
+     counterpart `via: "intent"` writing nothing, another attempt's live lease refuses
+     `create-in-progress` before any destination write, and a copy whose every write is taken
+     back leaves the copied file byte for byte; a folder's lock beside the file is held by one
+     live copy process at a time and, its holder killed, taken by the next at once whatever its
+     file is dated; and a `--no-link` create and one from a source that cannot keep the intent
+     record none.
+128. `task copy --when-destination-status … --otherwise refuse|preserve-destination` writes over a
+     counterpart only at the named categories, answers any other `failed` as `destination-status`
+     with `held` and exits `4` — or keeps its status — and `--when-destination-priority` keeps a
+     priority a person set while writing every other field; both are decided on the copy's own
+     read — from the cache under `--expect`, with no read of the destination — cost no request,
+     leave a create alone, report `status_condition` and `priority_condition`, and a later
+     unguarded copy of the unchanged source writes what was kept; a status guard beside
+     `preserve-destination`, and `--otherwise` alone, are refused before any request.
+129. A GitHub Projects source's `creation_owners` refuses, as `creation-owner` and writing
+     nothing, a create filed in another owner's repository by `task copy`, `--create`, a member
+     create and a dry run; allows an owner spelled in another case; never refuses an update; holds
+     a routed copy to the destination it placed it at; refuses a malformed login at load; and
+     `task locate` answers it as `creates_in.refused` without failing.
+130. Every landed copy outcome's `result` — and `task update`, `status set`, `priority set`,
+     `content set` and `metadata set`'s — holds the status and priority `task show` then reads,
+     and its version wherever it is not `null` (a board's, after a write), on a
+     folder, a board and Linear; a refusal after the copy's read carries `held`, `task comment add`
+     answers `item`, and both SDKs pass the guards and parse every new member.
+131. A holder renews its lease before each destination write after its create — on a board
+     and on Linear before each write request inside the plugin call that sent the create, a
+     Linear create's relations and the whole write finishing one answered as an id held
+     included, through the `WriteGuard` the engine installs — and one that finds another attempt holding its intent
+     stops `create-in-progress`, writing nothing more, a board's delete of what it made included;
+     a keyed Linear create answered under another id, or none, is refused for every kind; two
+     copies from a hosted source paused at every interleaving of read, create and relist make at
+     most one link — on a board when both creates landed first, the holder refusing
+     `create-duplicated` and the other stopping `create-in-progress` after its `createIssue`,
+     one issue under one id on Linear — and a malformed board listing by key refuses before any
+     create is sent again.
+132. Every task copy and task write verb sends the board and Linear exactly the requests the v0.12.13
+     binary sent for the same commands, but the one relist a board create from a hosted source
+     owes.
 
 ## The public boundary
 

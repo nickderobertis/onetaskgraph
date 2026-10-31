@@ -79,6 +79,7 @@ schemars = { version = "1.2.2", features = ["chrono04"] }
 secrecy = "0.10.3"
 # A template's digest: `sha256:` over every file of its chain.
 sha2 = "0.10.9"
+uuid = { version = "1.29.0", default-features = false, features = ["std", "v5", "serde"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "native-tls-vendored"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

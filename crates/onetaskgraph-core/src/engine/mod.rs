@@ -76,10 +76,11 @@ pub use comment::{
 pub use copy::MirrorTarget;
 pub(crate) use copy::spent_between;
 pub use copy::{
-    BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
-    CopyReport, CopyRequest, CopyScope, CopyVia, CreatesIn, LocateLookup, LocateReport,
-    LocateRequest, Located, LocatedCounterpart, MatchBy, NoCounterpart, NotATask, PublicProjection,
-    PublicProjections, Spent, StatusPolicy,
+    BudgetSpent, CommentCounts, CopyAction, CopyConditions, CopyItems, CopyLink, CopyLookup,
+    CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, CreatesIn, LocateLookup,
+    LocateReport, LocateRequest, Located, LocatedCounterpart, MatchBy, NoCounterpart, NotATask,
+    Otherwise, PriorityCondition, PublicProjection, PublicProjections, Spent, StatusCondition,
+    StatusPolicy,
 };
 pub(crate) use copy::{malformed_links, malformed_locations};
 pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};
@@ -337,6 +338,57 @@ pub struct DependencyRequest {
     pub completeness: Completeness,
     /// Which page.
     pub paging: Paging,
+}
+
+/// What a copy found another attempt doing with the intent to create an item's counterpart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreateHolder {
+    /// Holding it under a live lease, which ends at this instant.
+    Lease {
+        /// When the other attempt's lease ends.
+        until: chrono::DateTime<chrono::Utc>,
+    },
+    /// Having created the counterpart and linked it, since this copy planned to create one.
+    Linked {
+        /// The counterpart the other attempt linked.
+        counterpart: GlobalId,
+    },
+    /// Having taken it over and then settled or released it, so it no longer names this copy.
+    Released,
+}
+
+impl std::fmt::Display for CreateHolder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lease { until } => {
+                let until = until.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                write!(
+                    formatter,
+                    "is being created at its destination by another copy, whose lease runs \
+                     until {until}\nnext: let that copy finish, or copy it again once {until} \
+                     has passed."
+                )
+            }
+            Self::Linked { counterpart } => write!(
+                formatter,
+                "was created at its destination by another copy, which linked {counterpart}\n\
+                 next: copy it again, which updates {counterpart}."
+            ),
+            Self::Released => write!(
+                formatter,
+                "is no longer being created by this copy: another copy took its create over\n\
+                 next: copy it again, which finds whatever that copy made."
+            ),
+        }
+    }
+}
+
+/// `ids` joined for a message, in their order.
+fn joined(ids: &[GlobalId]) -> String {
+    ids.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// What the engine refuses before it asks any source.
@@ -1264,6 +1316,8 @@ pub enum EngineError {
         target: GlobalId,
         /// The source task being copied.
         item: GlobalId,
+        /// What the named task held, as the copy's read of it before writing found it.
+        held: Option<Box<crate::cache::WriteResult>>,
     },
 
     /// `--create` was given beside a flag that says how to look for a counterpart, when
@@ -1308,6 +1362,104 @@ pub enum EngineError {
          next: copy the projects or documents without --status, or copy the tasks with it."
     )]
     StatusesNotTasks,
+
+    /// A project or a document copy was given a condition on the counterpart it updates:
+    /// `--when-destination-status`, `--otherwise` and `--when-destination-priority` condition
+    /// a task copy alone.
+    #[error(
+        "a copy conditions the counterpart it updates only when it copies tasks\n\
+         next: copy the projects or documents without --when-destination-status, --otherwise \
+         or --when-destination-priority, or copy the tasks with them."
+    )]
+    ConditionsNotTasks,
+
+    /// Another copy attempt holds, or has settled, the intent to create this item's
+    /// counterpart, so this copy wrote nothing more and sent nothing more to the destination.
+    #[error("{item} {by}")]
+    CreateInProgress {
+        /// The source item being copied.
+        item: GlobalId,
+        /// What the other attempt was found doing.
+        by: CreateHolder,
+    },
+
+    /// More than one item at the destination carries the key of the create copying this item,
+    /// so none of them was linked: a duplicate, reported rather than adopted.
+    #[error(
+        "{item} has more than one counterpart at {destination} carrying its create key: \
+         {}\n\
+         next: delete all but one of them at {destination}, then copy {item} again to link \
+         the one left.",
+        joined(.found)
+    )]
+    CreateDuplicated {
+        /// The source item being copied.
+        item: GlobalId,
+        /// The destination source.
+        destination: SourceName,
+        /// Every item carrying the key, qualified, in the order the destination listed them.
+        found: Vec<GlobalId>,
+    },
+
+    /// A create would file its issue somewhere the destination's own policy on where it
+    /// creates refuses — a GitHub Projects source's `creation_owners` — so nothing of it was
+    /// written.
+    #[error(
+        "{item} was not copied: {reason}\n\
+         next: name a repository of an allowed owner on {item}, set the source's repository to \
+         one, or add the owner to creation_owners on source {destination}."
+    )]
+    CreationOwner {
+        /// The source item whose create was refused.
+        item: GlobalId,
+        /// The destination source.
+        destination: SourceName,
+        /// The destination's own reason, naming the repository and the allowed owners.
+        reason: String,
+    },
+
+    /// `--otherwise` was given without `--when-destination-status`, which is what it is the
+    /// other branch of.
+    #[error(
+        "--otherwise says what a copy does with an item whose destination status is not one \
+         --when-destination-status names, and none was named\n\
+         next: name the categories with --when-destination-status, or drop --otherwise."
+    )]
+    OtherwiseWithoutStatus,
+
+    /// `--when-destination-status` was given beside `--status-policy preserve-destination`,
+    /// which makes no status write for it to guard.
+    #[error(
+        "--when-destination-status guards the status a copy writes, and --status-policy \
+         preserve-destination writes none over an existing item\n\
+         next: drop --when-destination-status, or copy with --status-policy source."
+    )]
+    StatusConditionPreserved,
+
+    /// A task copy's counterpart was at a status category `--when-destination-status` does not
+    /// name, under `--otherwise refuse`: nothing was written for it.
+    #[error(
+        "{item} was not copied: its counterpart {destination} is at {spelled}, which is not one \
+         of {named}\n\
+         next: copy it with --otherwise preserve-destination to keep that status, or name \
+         {spelled} with --when-destination-status if the copy may write over it.",
+        spelled = copy::spelled_category(*.held),
+        named = .allowed
+            .iter()
+            .map(|category| copy::spelled_category(*category))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )]
+    DestinationStatus {
+        /// The source item being copied.
+        item: GlobalId,
+        /// The counterpart it would have updated.
+        destination: GlobalId,
+        /// The counterpart's status category.
+        held: StatusCategory,
+        /// The categories the condition names, in the order the caller named them.
+        allowed: Vec<StatusCategory>,
+    },
 
     /// A copy of documents was asked to carry comments: a document holds none, so only a task
     /// or a project copy carries them.
@@ -1574,6 +1726,18 @@ pub enum EngineError {
     },
 }
 
+impl EngineError {
+    /// What the destination item a copy refused to write held, as the copy's read of it before
+    /// writing found it — for a refusal made after that read, and `None` for every other.
+    #[must_use]
+    pub fn held(&self) -> Option<&crate::cache::WriteResult> {
+        match self {
+            Self::TargetTaskOrigin { held, .. } => held.as_deref(),
+            _ => None,
+        }
+    }
+}
+
 /// One side's `line` of a [`EngineError::StoredContentDiverged`] as its message shows it: the
 /// line quoted, or that side's content having ended before it.
 fn diverged_line(text: Option<&str>, line: usize) -> String {
@@ -1689,6 +1853,14 @@ pub struct Engine {
     designators: designators::Designators,
     /// Each source's human task projection authority, as its configuration declares it.
     projections: BTreeMap<SourceName, Result<crate::task_projection::ProjectionSource, String>>,
+    /// The clock a copy waits on while an earlier attempt's create may still be listed.
+    clock: SharedClock,
+    /// Each source's settings for a create safe to retry, by name; a source not named keeps
+    /// the defaults.
+    creates: BTreeMap<SourceName, crate::config::CreateSettings>,
+    /// This engine's own name for the copy attempts it makes, recorded on every intent to
+    /// create it takes, so an intent another process holds is told from its own.
+    attempt: copy::intent::Attempt,
 }
 
 /// One operation's hold on every source's visibility reads, released when dropped — on every
@@ -1771,6 +1943,11 @@ impl Engine {
         engine.caches = caches;
         engine.designators = designators::Designators::configured(config);
         engine.projections = crate::task_projection::configured(config);
+        engine.creates = config
+            .sources()
+            .iter()
+            .map(|(name, source)| (name.clone(), source.create()))
+            .collect();
         engine
     }
 
@@ -1809,6 +1986,9 @@ impl Engine {
             copy_expect: std::sync::Mutex::new(None),
             designators: designators::Designators::default(),
             projections: BTreeMap::new(),
+            clock: clock.clone(),
+            creates: BTreeMap::new(),
+            attempt: copy::intent::attempt(),
         }
     }
 

@@ -39,6 +39,14 @@ class GlobalId(RootModel[str]):
     ]
 
 
+class Priority(StrEnum):
+    PriorityNone = "none"
+    PriorityUrgent = "urgent"
+    PriorityHigh = "high"
+    PriorityMedium = "medium"
+    PriorityLow = "low"
+
+
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -140,18 +148,6 @@ class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown
     ]
 
 
-class WriteResult(BaseModel):
-    parts: Annotated[
-        list[WritePart], Field(description="One per mutation sent, in the order sent.")
-    ]
-    version: Annotated[
-        str | None,
-        Field(
-            description="The task's version after the write, where the last response determines it."
-        ),
-    ] = None
-
-
 class DeliveredWritten(BaseModel):
     deliverer: Annotated[
         GlobalId,
@@ -249,6 +245,33 @@ class Status(BaseModel):
         Field(description="The normalised value filters compare against."),
     ]
     name: Annotated[str, Field(description="The source's own label for this status.")]
+
+
+class WriteResult(BaseModel):
+    parts: Annotated[
+        list[WritePart] | None,
+        Field(
+            description="One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`."
+        ),
+    ] = None
+    priority: Annotated[
+        Priority | None,
+        Field(
+            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+        ),
+    ] = None
+    status: Annotated[
+        Status | None,
+        Field(
+            description="The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
+        ),
+    ] = None
+    version: Annotated[
+        str | None,
+        Field(
+            description="The item's version after the write, where the write's responses determine it."
+        ),
+    ] = None
 
 
 class DeliveredFailed(BaseModel):

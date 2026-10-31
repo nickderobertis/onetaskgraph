@@ -20,6 +20,7 @@ mod capability;
 mod clock;
 mod comment;
 mod error;
+mod guard;
 mod id;
 mod issue;
 mod metadata;
@@ -47,6 +48,7 @@ pub use comment::{
     Comment, CommentBody, CommentCopy, CommentOrigin, NewComment, TaskDetailRead, commentless,
 };
 pub use error::SourceError;
+pub use guard::WriteGuard;
 pub use id::{NativeId, SOURCE_NAME_PATTERN, SourceName};
 pub use issue::{
     ClosedAs, Completion, ContradictedItem, HeldTask, ISSUE_REF_PATTERN, IssueHolding, IssueRef,

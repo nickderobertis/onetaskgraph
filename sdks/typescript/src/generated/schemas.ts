@@ -976,9 +976,43 @@ export const runtimeSchemas = {
         ],
         "type": "object"
       },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
       "NativeId": {
         "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
         "type": "string"
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
       },
       "Spent": {
         "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
@@ -1002,6 +1036,69 @@ export const runtimeSchemas = {
           "budgets"
         ],
         "type": "object"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
       },
       "WriteFallback": {
         "description": "That an expected write read its target before writing, and why.",
@@ -1097,26 +1194,50 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "WriteResult": {
-        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "description": "What an item holds once a write is done, read off the write's own responses — and, for an\nexpected write, what each mutation it sent came to.\n\nEvery write verb and every item a copy lands answers one, with no request added for it: a\nfield the write kept is what the read before it held. `version` is `null` where the source\ncannot vouch for a token from its write's responses — a GitHub board for an item it has just\nwritten, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would\nthen give.",
         "properties": {
           "parts": {
-            "description": "One per mutation sent, in the order sent.",
+            "description": "One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`.",
             "items": {
               "$ref": "#/$defs/WritePart"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Priority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
           },
           "version": {
-            "description": "The task's version after the write, where the last response determines it.",
+            "description": "The item's version after the write, where the write's responses determine it.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "required": [
-          "parts"
-        ],
         "type": "object"
       }
     },
@@ -1156,6 +1277,17 @@ export const runtimeSchemas = {
       "id": {
         "$ref": "#/$defs/NativeId",
         "description": "The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
+      },
+      "item": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GlobalId"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The qualified id of the task the comment was added to — present on `task comment add`'s\nanswer, so a caller records what it commented on from the answer alone."
       },
       "origin": {
         "anyOf": [
@@ -1962,6 +2094,11 @@ export const runtimeSchemas = {
             "const": "match",
             "description": "A search of the destination by the caller's `--match-by`.",
             "type": "string"
+          },
+          {
+            "const": "intent",
+            "description": "The item the destination holds under the key of a create an earlier attempt of this\ncopy recorded its intent for, at `onetaskgraph.creating`: that attempt's create,\nfinished rather than made twice.",
+            "type": "string"
           }
         ]
       },
@@ -2398,6 +2535,11 @@ export const runtimeSchemas = {
             "const": "match",
             "description": "A search of the destination by the caller's `--match-by`.",
             "type": "string"
+          },
+          {
+            "const": "intent",
+            "description": "The item the destination holds under the key of a create an earlier attempt of this\ncopy recorded its intent for, at `onetaskgraph.creating`: that attempt's create,\nfinished rather than made twice.",
+            "type": "string"
           }
         ]
       },
@@ -2497,6 +2639,54 @@ export const runtimeSchemas = {
         ],
         "type": "object"
       },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
+      "PriorityCondition": {
+        "description": "What a guarded copy found a counterpart's priority at, and whether that met the condition.",
+        "properties": {
+          "held": {
+            "$ref": "#/$defs/Priority",
+            "description": "The counterpart's priority, as the copy's own pre-write read held it."
+          },
+          "met": {
+            "description": "Whether that priority is one the condition names.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "held",
+          "met"
+        ],
+        "type": "object"
+      },
       "SourceName": {
         "description": "The name a configuration document gives one configured source.",
         "pattern": "^[a-z0-9][a-z0-9-]*$",
@@ -2522,6 +2712,87 @@ export const runtimeSchemas = {
         "required": [
           "requests",
           "budgets"
+        ],
+        "type": "object"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      },
+      "StatusCondition": {
+        "description": "What a guarded copy found a counterpart's status at, and whether that met the condition.",
+        "properties": {
+          "held": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The counterpart's status category, as the copy's own pre-write read held it."
+          },
+          "met": {
+            "description": "Whether that category is one the condition names.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "held",
+          "met"
         ],
         "type": "object"
       },
@@ -2619,26 +2890,50 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "WriteResult": {
-        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "description": "What an item holds once a write is done, read off the write's own responses — and, for an\nexpected write, what each mutation it sent came to.\n\nEvery write verb and every item a copy lands answers one, with no request added for it: a\nfield the write kept is what the read before it held. `version` is `null` where the source\ncannot vouch for a token from its write's responses — a GitHub board for an item it has just\nwritten, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would\nthen give.",
         "properties": {
           "parts": {
-            "description": "One per mutation sent, in the order sent.",
+            "description": "One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`.",
             "items": {
               "$ref": "#/$defs/WritePart"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Priority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
           },
           "version": {
-            "description": "The task's version after the write, where the last response determines it.",
+            "description": "The item's version after the write, where the write's responses determine it.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "required": [
-          "parts"
-        ],
         "type": "object"
       }
     },
@@ -2858,6 +3153,17 @@ export const runtimeSchemas = {
         ],
         "description": "That the write had to read its target first, and why — absent when it sent only its\nmutations."
       },
+      "held": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+      },
       "placed": {
         "anyOf": [
           {
@@ -2869,6 +3175,17 @@ export const runtimeSchemas = {
         ],
         "description": "Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
       },
+      "priority_condition": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PriorityCondition"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+      },
       "result": {
         "anyOf": [
           {
@@ -2878,7 +3195,7 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ],
-        "description": "What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+        "description": "What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
       },
       "source": {
         "$ref": "#/$defs/GlobalId",
@@ -2894,6 +3211,17 @@ export const runtimeSchemas = {
           }
         ],
         "description": "What the write spent at the sources that meter their own requests — the fallback's\nread included."
+      },
+      "status_condition": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/StatusCondition"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
       }
     },
     "required": [
@@ -3211,6 +3539,17 @@ export const runtimeSchemas = {
             ],
             "description": "That the write had to read its target first, and why — absent when it sent only its\nmutations."
           },
+          "held": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WriteResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+          },
           "placed": {
             "anyOf": [
               {
@@ -3222,6 +3561,17 @@ export const runtimeSchemas = {
             ],
             "description": "Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
           },
+          "priority_condition": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PriorityCondition"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+          },
           "result": {
             "anyOf": [
               {
@@ -3231,7 +3581,7 @@ export const runtimeSchemas = {
                 "type": "null"
               }
             ],
-            "description": "What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+            "description": "What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
           },
           "source": {
             "$ref": "#/$defs/GlobalId",
@@ -3247,6 +3597,17 @@ export const runtimeSchemas = {
               }
             ],
             "description": "What the write spent at the sources that meter their own requests — the fallback's\nread included."
+          },
+          "status_condition": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StatusCondition"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
           }
         },
         "required": [
@@ -3280,6 +3641,11 @@ export const runtimeSchemas = {
           {
             "const": "match",
             "description": "A search of the destination by the caller's `--match-by`.",
+            "type": "string"
+          },
+          {
+            "const": "intent",
+            "description": "The item the destination holds under the key of a create an earlier attempt of this\ncopy recorded its intent for, at `onetaskgraph.creating`: that attempt's create,\nfinished rather than made twice.",
             "type": "string"
           }
         ]
@@ -3496,6 +3862,54 @@ export const runtimeSchemas = {
         ],
         "type": "object"
       },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
+      "PriorityCondition": {
+        "description": "What a guarded copy found a counterpart's priority at, and whether that met the condition.",
+        "properties": {
+          "held": {
+            "$ref": "#/$defs/Priority",
+            "description": "The counterpart's priority, as the copy's own pre-write read held it."
+          },
+          "met": {
+            "description": "Whether that priority is one the condition names.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "held",
+          "met"
+        ],
+        "type": "object"
+      },
       "SourceName": {
         "description": "The name a configuration document gives one configured source.",
         "pattern": "^[a-z0-9][a-z0-9-]*$",
@@ -3521,6 +3935,479 @@ export const runtimeSchemas = {
         "required": [
           "requests",
           "budgets"
+        ],
+        "type": "object"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      },
+      "StatusCondition": {
+        "description": "What a guarded copy found a counterpart's status at, and whether that met the condition.",
+        "properties": {
+          "held": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The counterpart's status category, as the copy's own pre-write read held it."
+          },
+          "met": {
+            "description": "Whether that category is one the condition names.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "held",
+          "met"
+        ],
+        "type": "object"
+      },
+      "WriteFallback": {
+        "description": "That an expected write read its target before writing, and why.",
+        "properties": {
+          "read": {
+            "description": "Always `true`: the write made one read.",
+            "type": "boolean"
+          },
+          "reason": {
+            "description": "Why it could not take what it needed from the cache.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "read",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "properties": {
+              "outcome": {
+                "const": "landed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "rejected",
+                "type": "string"
+              },
+              "stale": {
+                "default": false,
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "const": "unknown",
+                "type": "string"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "fields": {
+            "additionalProperties": true,
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object"
+          },
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WriteResult": {
+        "description": "What an item holds once a write is done, read off the write's own responses — and, for an\nexpected write, what each mutation it sent came to.\n\nEvery write verb and every item a copy lands answers one, with no request added for it: a\nfield the write kept is what the read before it held. `version` is `null` where the source\ncannot vouch for a token from its write's responses — a GitHub board for an item it has just\nwritten, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would\nthen give.",
+        "properties": {
+          "parts": {
+            "description": "One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`.",
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Priority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
+          },
+          "version": {
+            "description": "The item's version after the write, where the write's responses determine it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "What a copy did, one entry per item.\n\nThe same per-item outcomes reach every consumer: the machine-readable output renders\nthis, the rendered output renders this, and a Rust caller is handed it.",
+    "properties": {
+      "delivered": {
+        "default": [],
+        "description": "One entry per delivered task the copy kept in step with a task it landed, after the\nwhole copy was complete — see `task status set`, which reports the same entries. Left\nout when there were none.\n\nA failed entry does not undo the copy: the tasks it landed stay landed, and the\ncommand exits `4`.",
+        "items": {
+          "$ref": "#/$defs/Delivered"
+        },
+        "type": "array"
+      },
+      "delivers_rewritten": {
+        "default": 0,
+        "description": "`delivers` entries the copy rewrote to the destination's own id for a member of the\ncopied set, over the whole invocation. Every other entry arrives qualified and is not\ncounted. Left out when zero, as the three figures above are.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "items": {
+        "description": "One entry per item the copy considered, in the order it considered them.",
+        "items": {
+          "$ref": "#/$defs/CopyOutcome"
+        },
+        "type": "array"
+      },
+      "references_ambiguous": {
+        "default": 0,
+        "description": "How many of [`Self::references_unresolved`] were left alone because the\ncorrespondence was **ambiguous** rather than merely absent. A sub-count, never\nlarger than it.\n\nSplit out because the two mean different things to a reader. A reference with no\ncounterpart is ordinary and expected under the bound above — the design working. An\nambiguous one says the destination holds duplicate records for one work item, or the\nsource reports one location for two records, and re-running the copy will never\nclear it.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "references_rewritten": {
+        "default": 0,
+        "description": "Reference occurrences the copy rewrote to the destination's own location for the\nrecord they name.\n\nA silent bound is indistinguishable from a bug, so the copy says what it did to the\nreferences the documents it carried hold. This and the two below are totals over the\nwhole invocation rather than figures per document, and all three default to zero, so\na consumer written against the output before they existed is unaffected.\n\n**What these figures do not claim.** The referent set is a document's own project,\nso a reference to a record in a *different* project is never recognised at all and\ncannot appear in [`Self::references_unresolved`] either. These are the references\nthe copy recognised; they are not a census of every reference a document holds.\nNoticing an out-of-scope reference would need exactly the unbounded destination walk\nthis design refuses.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "references_unresolved": {
+        "default": 0,
+        "description": "Reference occurrences the copy recognised and left byte-for-byte as they were,\nbecause the correspondence could not be established.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "spent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What this copy spent, summed over the sources in the command that meter their own\nrequests — and absent, never zero, when none of them does.\n\nOmitted from the wire when absent, like the three figures above, so a consumer\nwritten against the output before it existed reads the same document."
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "title": "CopyReport",
+    "type": "object"
+  },
+  "CopyVia": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the explicit target\ntask, the link the item records, its own origin, a search of the destination for an item\nrecording it as its origin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
+    "oneOf": [
+      {
+        "const": "target-task",
+        "description": "The destination task explicitly named by the caller and verified by origin.",
+        "type": "string"
+      },
+      {
+        "const": "link",
+        "description": "The item's `onetaskgraph.copies` entry for the destination named an item whose own\norigin names this one back. Found by one read by id, and no scan.",
+        "type": "string"
+      },
+      {
+        "const": "origin",
+        "description": "The item's own `onetaskgraph.origin` named the destination item: a copy-back.",
+        "type": "string"
+      },
+      {
+        "const": "scan",
+        "description": "A search of the destination for an item recording this one as its origin.",
+        "type": "string"
+      },
+      {
+        "const": "match",
+        "description": "A search of the destination by the caller's `--match-by`.",
+        "type": "string"
+      },
+      {
+        "const": "intent",
+        "description": "The item the destination holds under the key of a create an earlier attempt of this\ncopy recorded its intent for, at `onetaskgraph.creating`: that attempt's create,\nfinished rather than made twice.",
+        "type": "string"
+      }
+    ],
+    "title": "CopyVia"
+  },
+  "CreateSettings": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "How a copy out of one source keeps a create safe to retry: its two settings, each in whole\nseconds, read off the source's own block beside `cache` and `routes`.\n\n`create_lease_seconds` is how long the intent a copy records on the item it copies, at\n`onetaskgraph.creating`, stays its own before another attempt may take it over — read off\nthe copy's **source**. `create_quiescence_seconds` is how long after an intent was first\ntaken a retry waits for an earlier attempt's create to become listed before creating again\n— read off the copy's **destination**, and only where that destination's lookup by create\nkey can lag a create. Both default to 120 and are left out of a configuration that does not\nset them.",
+    "properties": {
+      "create_lease_seconds": {
+        "description": "Seconds an intent to create stays the holder's own; 120 when absent.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "create_quiescence_seconds": {
+        "description": "Seconds after an intent was first taken that a retry waits for the earlier create to be\nlisted; 120 when absent.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      }
+    },
+    "title": "CreateSettings",
+    "type": "object"
+  },
+  "CredentialLayer": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Which layer answered for one credential name.",
+    "oneOf": [
+      {
+        "const": "environment",
+        "description": "The process environment already defined it, so the file's value is unused.",
+        "type": "string"
+      },
+      {
+        "const": "secrets-file",
+        "description": "The credentials file supplied it.",
+        "type": "string"
+      }
+    ],
+    "title": "CredentialLayer"
+  },
+  "DeletedComment": {
+    "$defs": {
+      "BudgetSpent": {
+        "description": "What one command spent against one budget.",
+        "properties": {
+          "amount": {
+            "description": "How much was spent against it, in that unit.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "budget": {
+            "description": "The budget, as the source names it — `graphql`, `rest`.",
+            "type": "string"
+          },
+          "lower_bound": {
+            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
+            "type": "boolean"
+          },
+          "unit": {
+            "description": "What it is metered in — `points`, `requests`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "budget",
+          "unit",
+          "amount",
+          "lower_bound"
+        ],
+        "type": "object"
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
+      "Spent": {
+        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
+        "properties": {
+          "budgets": {
+            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
+            "items": {
+              "$ref": "#/$defs/BudgetSpent"
+            },
+            "type": "array"
+          },
+          "requests": {
+            "description": "How many HTTP requests those sources sent for this command.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "budgets"
+        ],
+        "type": "object"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
         ],
         "type": "object"
       },
@@ -3663,315 +4550,50 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "WriteResult": {
-        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "description": "What an item holds once a write is done, read off the write's own responses — and, for an\nexpected write, what each mutation it sent came to.\n\nEvery write verb and every item a copy lands answers one, with no request added for it: a\nfield the write kept is what the read before it held. `version` is `null` where the source\ncannot vouch for a token from its write's responses — a GitHub board for an item it has just\nwritten, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would\nthen give.",
         "properties": {
           "parts": {
-            "description": "One per mutation sent, in the order sent.",
+            "description": "One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`.",
             "items": {
               "$ref": "#/$defs/WritePart"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Priority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
           },
           "version": {
-            "description": "The task's version after the write, where the last response determines it.",
+            "description": "The item's version after the write, where the write's responses determine it.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "required": [
-          "parts"
-        ],
-        "type": "object"
-      }
-    },
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "What a copy did, one entry per item.\n\nThe same per-item outcomes reach every consumer: the machine-readable output renders\nthis, the rendered output renders this, and a Rust caller is handed it.",
-    "properties": {
-      "delivered": {
-        "default": [],
-        "description": "One entry per delivered task the copy kept in step with a task it landed, after the\nwhole copy was complete — see `task status set`, which reports the same entries. Left\nout when there were none.\n\nA failed entry does not undo the copy: the tasks it landed stay landed, and the\ncommand exits `4`.",
-        "items": {
-          "$ref": "#/$defs/Delivered"
-        },
-        "type": "array"
-      },
-      "delivers_rewritten": {
-        "default": 0,
-        "description": "`delivers` entries the copy rewrote to the destination's own id for a member of the\ncopied set, over the whole invocation. Every other entry arrives qualified and is not\ncounted. Left out when zero, as the three figures above are.",
-        "format": "uint64",
-        "minimum": 0,
-        "type": "integer"
-      },
-      "items": {
-        "description": "One entry per item the copy considered, in the order it considered them.",
-        "items": {
-          "$ref": "#/$defs/CopyOutcome"
-        },
-        "type": "array"
-      },
-      "references_ambiguous": {
-        "default": 0,
-        "description": "How many of [`Self::references_unresolved`] were left alone because the\ncorrespondence was **ambiguous** rather than merely absent. A sub-count, never\nlarger than it.\n\nSplit out because the two mean different things to a reader. A reference with no\ncounterpart is ordinary and expected under the bound above — the design working. An\nambiguous one says the destination holds duplicate records for one work item, or the\nsource reports one location for two records, and re-running the copy will never\nclear it.",
-        "format": "uint64",
-        "minimum": 0,
-        "type": "integer"
-      },
-      "references_rewritten": {
-        "default": 0,
-        "description": "Reference occurrences the copy rewrote to the destination's own location for the\nrecord they name.\n\nA silent bound is indistinguishable from a bug, so the copy says what it did to the\nreferences the documents it carried hold. This and the two below are totals over the\nwhole invocation rather than figures per document, and all three default to zero, so\na consumer written against the output before they existed is unaffected.\n\n**What these figures do not claim.** The referent set is a document's own project,\nso a reference to a record in a *different* project is never recognised at all and\ncannot appear in [`Self::references_unresolved`] either. These are the references\nthe copy recognised; they are not a census of every reference a document holds.\nNoticing an out-of-scope reference would need exactly the unbounded destination walk\nthis design refuses.",
-        "format": "uint64",
-        "minimum": 0,
-        "type": "integer"
-      },
-      "references_unresolved": {
-        "default": 0,
-        "description": "Reference occurrences the copy recognised and left byte-for-byte as they were,\nbecause the correspondence could not be established.",
-        "format": "uint64",
-        "minimum": 0,
-        "type": "integer"
-      },
-      "spent": {
-        "anyOf": [
-          {
-            "$ref": "#/$defs/Spent"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "description": "What this copy spent, summed over the sources in the command that meter their own\nrequests — and absent, never zero, when none of them does.\n\nOmitted from the wire when absent, like the three figures above, so a consumer\nwritten against the output before it existed reads the same document."
-      }
-    },
-    "required": [
-      "items"
-    ],
-    "title": "CopyReport",
-    "type": "object"
-  },
-  "CopyVia": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the explicit target\ntask, the link the item records, its own origin, a search of the destination for an item\nrecording it as its origin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
-    "oneOf": [
-      {
-        "const": "target-task",
-        "description": "The destination task explicitly named by the caller and verified by origin.",
-        "type": "string"
-      },
-      {
-        "const": "link",
-        "description": "The item's `onetaskgraph.copies` entry for the destination named an item whose own\norigin names this one back. Found by one read by id, and no scan.",
-        "type": "string"
-      },
-      {
-        "const": "origin",
-        "description": "The item's own `onetaskgraph.origin` named the destination item: a copy-back.",
-        "type": "string"
-      },
-      {
-        "const": "scan",
-        "description": "A search of the destination for an item recording this one as its origin.",
-        "type": "string"
-      },
-      {
-        "const": "match",
-        "description": "A search of the destination by the caller's `--match-by`.",
-        "type": "string"
-      }
-    ],
-    "title": "CopyVia"
-  },
-  "CredentialLayer": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "description": "Which layer answered for one credential name.",
-    "oneOf": [
-      {
-        "const": "environment",
-        "description": "The process environment already defined it, so the file's value is unused.",
-        "type": "string"
-      },
-      {
-        "const": "secrets-file",
-        "description": "The credentials file supplied it.",
-        "type": "string"
-      }
-    ],
-    "title": "CredentialLayer"
-  },
-  "DeletedComment": {
-    "$defs": {
-      "BudgetSpent": {
-        "description": "What one command spent against one budget.",
-        "properties": {
-          "amount": {
-            "description": "How much was spent against it, in that unit.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "budget": {
-            "description": "The budget, as the source names it — `graphql`, `rest`.",
-            "type": "string"
-          },
-          "lower_bound": {
-            "description": "Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it.",
-            "type": "boolean"
-          },
-          "unit": {
-            "description": "What it is metered in — `points`, `requests`.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "budget",
-          "unit",
-          "amount",
-          "lower_bound"
-        ],
-        "type": "object"
-      },
-      "NativeId": {
-        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
-        "type": "string"
-      },
-      "Spent": {
-        "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
-        "properties": {
-          "budgets": {
-            "description": "What those requests spent, one entry per budget and unit, ordered by budget name.",
-            "items": {
-              "$ref": "#/$defs/BudgetSpent"
-            },
-            "type": "array"
-          },
-          "requests": {
-            "description": "How many HTTP requests those sources sent for this command.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "requests",
-          "budgets"
-        ],
-        "type": "object"
-      },
-      "WriteFallback": {
-        "description": "That an expected write read its target before writing, and why.",
-        "properties": {
-          "read": {
-            "description": "Always `true`: the write made one read.",
-            "type": "boolean"
-          },
-          "reason": {
-            "description": "Why it could not take what it needed from the cache.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "read",
-          "reason"
-        ],
-        "type": "object"
-      },
-      "WritePart": {
-        "description": "One mutation of an expected write.",
-        "oneOf": [
-          {
-            "description": "The backend answered that it was applied.",
-            "properties": {
-              "outcome": {
-                "const": "landed",
-                "type": "string"
-              }
-            },
-            "required": [
-              "outcome"
-            ],
-            "type": "object"
-          },
-          {
-            "description": "The backend answered that it was refused.",
-            "properties": {
-              "error": {
-                "description": "What the backend said.",
-                "type": "string"
-              },
-              "outcome": {
-                "const": "rejected",
-                "type": "string"
-              },
-              "stale": {
-                "default": false,
-                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "outcome",
-              "error"
-            ],
-            "type": "object"
-          },
-          {
-            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
-            "properties": {
-              "error": {
-                "description": "What went wrong.",
-                "type": "string"
-              },
-              "outcome": {
-                "const": "unknown",
-                "type": "string"
-              }
-            },
-            "required": [
-              "outcome",
-              "error"
-            ],
-            "type": "object"
-          }
-        ],
-        "properties": {
-          "fields": {
-            "additionalProperties": true,
-            "description": "Each field it set, with the value the response shows.",
-            "type": "object"
-          },
-          "part": {
-            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "part",
-          "fields"
-        ],
-        "type": "object"
-      },
-      "WriteResult": {
-        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
-        "properties": {
-          "parts": {
-            "description": "One per mutation sent, in the order sent.",
-            "items": {
-              "$ref": "#/$defs/WritePart"
-            },
-            "type": "array"
-          },
-          "version": {
-            "description": "The task's version after the write, where the last response determines it.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "parts"
-        ],
         "type": "object"
       }
     },
@@ -5881,6 +6503,36 @@ export const runtimeSchemas = {
         ],
         "type": "object"
       },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
       "Spent": {
         "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
         "properties": {
@@ -5903,6 +6555,69 @@ export const runtimeSchemas = {
           "budgets"
         ],
         "type": "object"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
       },
       "WriteFallback": {
         "description": "That an expected write read its target before writing, and why.",
@@ -5998,26 +6713,50 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "WriteResult": {
-        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "description": "What an item holds once a write is done, read off the write's own responses — and, for an\nexpected write, what each mutation it sent came to.\n\nEvery write verb and every item a copy lands answers one, with no request added for it: a\nfield the write kept is what the read before it held. `version` is `null` where the source\ncannot vouch for a token from its write's responses — a GitHub board for an item it has just\nwritten, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would\nthen give.",
         "properties": {
           "parts": {
-            "description": "One per mutation sent, in the order sent.",
+            "description": "One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`.",
             "items": {
               "$ref": "#/$defs/WritePart"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Priority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
           },
           "version": {
-            "description": "The task's version after the write, where the last response determines it.",
+            "description": "The item's version after the write, where the write's responses determine it.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "required": [
-          "parts"
-        ],
         "type": "object"
       }
     },
@@ -6044,7 +6783,7 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ],
-        "description": "What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+        "description": "What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
       },
       "spent": {
         "anyOf": [
@@ -6239,6 +6978,36 @@ export const runtimeSchemas = {
           }
         ]
       },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
       "SourceName": {
         "description": "The name a configuration document gives one configured source.",
         "pattern": "^[a-z0-9][a-z0-9-]*$",
@@ -6266,6 +7035,69 @@ export const runtimeSchemas = {
           "budgets"
         ],
         "type": "object"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
       },
       "WriteFallback": {
         "description": "That an expected write read its target before writing, and why.",
@@ -6361,26 +7193,50 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "WriteResult": {
-        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "description": "What an item holds once a write is done, read off the write's own responses — and, for an\nexpected write, what each mutation it sent came to.\n\nEvery write verb and every item a copy lands answers one, with no request added for it: a\nfield the write kept is what the read before it held. `version` is `null` where the source\ncannot vouch for a token from its write's responses — a GitHub board for an item it has just\nwritten, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would\nthen give.",
         "properties": {
           "parts": {
-            "description": "One per mutation sent, in the order sent.",
+            "description": "One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`.",
             "items": {
               "$ref": "#/$defs/WritePart"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Priority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
           },
           "version": {
-            "description": "The task's version after the write, where the last response determines it.",
+            "description": "The item's version after the write, where the write's responses determine it.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "required": [
-          "parts"
-        ],
         "type": "object"
       }
     },
@@ -6402,6 +7258,17 @@ export const runtimeSchemas = {
         ],
         "description": "That the write had to read its target first, and why — absent when it sent only its\nmutations."
       },
+      "held": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "What the destination item a copy refused to write held, as the copy's read of it\nbefore writing found it — present only for a refusal made after that read, such as\n`target-task-origin`."
+      },
       "result": {
         "anyOf": [
           {
@@ -6411,7 +7278,7 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ],
-        "description": "What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+        "description": "What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
       },
       "spent": {
         "anyOf": [
@@ -8370,12 +9237,24 @@ export const runtimeSchemas = {
             "const": "match",
             "description": "A search of the destination by the caller's `--match-by`.",
             "type": "string"
+          },
+          {
+            "const": "intent",
+            "description": "The item the destination holds under the key of a create an earlier attempt of this\ncopy recorded its intent for, at `onetaskgraph.creating`: that attempt's create,\nfinished rather than made twice.",
+            "type": "string"
           }
         ]
       },
       "CreatesIn": {
         "description": "Where a create would file a task's issue.",
         "properties": {
+          "refused": {
+            "description": "Why the destination's own policy on where it creates — a GitHub Projects source's\n`creation_owners` — would refuse a create there, as the copy's refusal says it; absent\nwhen it would not. The locate itself never fails for it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "repository": {
             "$ref": "#/$defs/Repository",
             "description": "The repository, as a normalized origin `host/owner/name`."
@@ -8637,6 +9516,36 @@ export const runtimeSchemas = {
         "description": "One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments\nseparated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].\n\nValidated wherever one is built, deserialized included, so a plugin handed one never has\nto ask whether it names a key this product owns.",
         "type": "string"
       },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
       "Spent": {
         "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
         "properties": {
@@ -8659,6 +9568,69 @@ export const runtimeSchemas = {
           "budgets"
         ],
         "type": "object"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
       },
       "WriteFallback": {
         "description": "That an expected write read its target before writing, and why.",
@@ -8754,26 +9726,50 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "WriteResult": {
-        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "description": "What an item holds once a write is done, read off the write's own responses — and, for an\nexpected write, what each mutation it sent came to.\n\nEvery write verb and every item a copy lands answers one, with no request added for it: a\nfield the write kept is what the read before it held. `version` is `null` where the source\ncannot vouch for a token from its write's responses — a GitHub board for an item it has just\nwritten, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would\nthen give.",
         "properties": {
           "parts": {
-            "description": "One per mutation sent, in the order sent.",
+            "description": "One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`.",
             "items": {
               "$ref": "#/$defs/WritePart"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Priority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
           },
           "version": {
-            "description": "The task's version after the write, where the last response determines it.",
+            "description": "The item's version after the write, where the write's responses determine it.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "required": [
-          "parts"
-        ],
         "type": "object"
       }
     },
@@ -20299,6 +21295,36 @@ export const runtimeSchemas = {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
       },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
       "Spent": {
         "description": "What one command spent, summed over the sources in it that meter their own requests.\n\n**Source-owned.** Every figure is what a source said it sent and spent while the command\nran, read through [`TaskSource::metering`](onetaskgraph_plugin_api::TaskSource::metering)\nbefore the command and again after it. The engine adds the differences up by name and\ninterprets none of them, which is why the budget and unit names are open vocabulary.",
         "properties": {
@@ -20321,6 +21347,69 @@ export const runtimeSchemas = {
           "budgets"
         ],
         "type": "object"
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
       },
       "WriteFallback": {
         "description": "That an expected write read its target before writing, and why.",
@@ -20416,26 +21505,50 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "WriteResult": {
-        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "description": "What an item holds once a write is done, read off the write's own responses — and, for an\nexpected write, what each mutation it sent came to.\n\nEvery write verb and every item a copy lands answers one, with no request added for it: a\nfield the write kept is what the read before it held. `version` is `null` where the source\ncannot vouch for a token from its write's responses — a GitHub board for an item it has just\nwritten, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would\nthen give.",
         "properties": {
           "parts": {
-            "description": "One per mutation sent, in the order sent.",
+            "description": "One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`.",
             "items": {
               "$ref": "#/$defs/WritePart"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Priority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
           },
           "version": {
-            "description": "The task's version after the write, where the last response determines it.",
+            "description": "The item's version after the write, where the write's responses determine it.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "required": [
-          "parts"
-        ],
         "type": "object"
       }
     },
@@ -22538,6 +23651,69 @@ export const runtimeSchemas = {
         ],
         "type": "object"
       },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "properties": {
+          "category": {
+            "$ref": "#/$defs/StatusCategory",
+            "description": "The normalised value filters compare against."
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "const": "draft",
+            "description": "Written down but not yet committed to as work.",
+            "type": "string"
+          },
+          {
+            "const": "backlog",
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string"
+          },
+          {
+            "const": "todo",
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string"
+          },
+          {
+            "const": "queued",
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Being worked on.",
+            "type": "string"
+          },
+          {
+            "const": "done",
+            "description": "Finished.",
+            "type": "string"
+          },
+          {
+            "const": "cancelled",
+            "description": "Abandoned.",
+            "type": "string"
+          },
+          {
+            "const": "unknown",
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string"
+          }
+        ]
+      },
       "WriteFallback": {
         "description": "That an expected write read its target before writing, and why.",
         "properties": {
@@ -22632,26 +23808,50 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "WriteResult": {
-        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "description": "What an item holds once a write is done, read off the write's own responses — and, for an\nexpected write, what each mutation it sent came to.\n\nEvery write verb and every item a copy lands answers one, with no request added for it: a\nfield the write kept is what the read before it held. `version` is `null` where the source\ncannot vouch for a token from its write's responses — a GitHub board for an item it has just\nwritten, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would\nthen give.",
         "properties": {
           "parts": {
-            "description": "One per mutation sent, in the order sent.",
+            "description": "One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`.",
             "items": {
               "$ref": "#/$defs/WritePart"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Priority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
           },
           "version": {
-            "description": "The task's version after the write, where the last response determines it.",
+            "description": "The item's version after the write, where the write's responses determine it.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "required": [
-          "parts"
-        ],
         "type": "object"
       }
     },
@@ -23200,6 +24400,36 @@ export const runtimeSchemas = {
         "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
         "type": "string"
       },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "const": "none",
+            "description": "No priority is set.",
+            "type": "string"
+          },
+          {
+            "const": "urgent",
+            "description": "Drop everything for it.",
+            "type": "string"
+          },
+          {
+            "const": "high",
+            "description": "Next, before the rest.",
+            "type": "string"
+          },
+          {
+            "const": "medium",
+            "description": "In its turn.",
+            "type": "string"
+          },
+          {
+            "const": "low",
+            "description": "When there is nothing more pressing.",
+            "type": "string"
+          }
+        ]
+      },
       "SourceName": {
         "description": "The name a configuration document gives one configured source.",
         "pattern": "^[a-z0-9][a-z0-9-]*$",
@@ -23385,26 +24615,50 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "WriteResult": {
-        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "description": "What an item holds once a write is done, read off the write's own responses — and, for an\nexpected write, what each mutation it sent came to.\n\nEvery write verb and every item a copy lands answers one, with no request added for it: a\nfield the write kept is what the read before it held. `version` is `null` where the source\ncannot vouch for a token from its write's responses — a GitHub board for an item it has just\nwritten, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would\nthen give.",
         "properties": {
           "parts": {
-            "description": "One per mutation sent, in the order sent.",
+            "description": "One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`.",
             "items": {
               "$ref": "#/$defs/WritePart"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Priority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
           },
           "version": {
-            "description": "The task's version after the write, where the last response determines it.",
+            "description": "The item's version after the write, where the write's responses determine it.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "required": [
-          "parts"
-        ],
         "type": "object"
       }
     },
@@ -24833,26 +26087,50 @@ export const runtimeSchemas = {
         "type": "object"
       },
       "WriteResult": {
-        "description": "What each mutation of an expected write came to, built from the mutations' own responses.",
+        "description": "What an item holds once a write is done, read off the write's own responses — and, for an\nexpected write, what each mutation it sent came to.\n\nEvery write verb and every item a copy lands answers one, with no request added for it: a\nfield the write kept is what the read before it held. `version` is `null` where the source\ncannot vouch for a token from its write's responses — a GitHub board for an item it has just\nwritten, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would\nthen give.",
         "properties": {
           "parts": {
-            "description": "One per mutation sent, in the order sent.",
+            "description": "One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`.",
             "items": {
               "$ref": "#/$defs/WritePart"
             },
-            "type": "array"
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Priority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
           },
           "version": {
-            "description": "The task's version after the write, where the last response determines it.",
+            "description": "The item's version after the write, where the write's responses determine it.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "required": [
-          "parts"
-        ],
         "type": "object"
       }
     },

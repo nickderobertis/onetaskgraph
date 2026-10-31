@@ -1005,6 +1005,21 @@ answers each by the trait's default — `TaskSource::placement_context` and
 projection crosses as the plugin's own `write_task` and `update_task`, each reading what it needs
 as it always does. A plugin written against this document implements nothing more.
 
+Nor is anything that makes a copy's create safe to retry, or that reports what a write left an
+item holding: for a hosted source the engine answers each by the trait's default.
+`TaskSource::created_with_key` finds nothing, and `TaskSource::create_key_lags` is `false`, so a
+retried copy onto a hosted destination waits for nothing and creates as it always did.
+`TaskSource::creation_refusal` refuses nothing, so the plugin's own `write_task` decides where
+anything it creates is filed. `TaskSource::hold_item` offers no hold and
+`TaskSource::release_item` releases nothing, so a hosted source's intents are advisory.
+`TaskSource::item_snapshot` keeps no snapshot, so `TaskSource::restore_item` is never asked.
+`TaskSource::remove_record_metadata` crosses for a task as `update_task` removing the one key,
+and for a project or a document is refused, which the engine meets by writing the record back
+whole without the key, as its `write_project` or `write_document`. `TaskSource::written_task` and
+`TaskSource::written_version` know nothing of a write, so a write's `result` carries a `null`
+`version` for a source hosted over this protocol. A plugin written against this document
+implements nothing more.
+
 ### 4.9a Image assets on `write_task` and `write_document`
 
 A task's or a document's content references an image **asset** as a Markdown image whose

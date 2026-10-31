@@ -30,6 +30,14 @@ class FailureClass(StrEnum):
     FailureClassTransient = "transient"
 
 
+class Priority(StrEnum):
+    PriorityNone = "none"
+    PriorityUrgent = "urgent"
+    PriorityHigh = "high"
+    PriorityMedium = "medium"
+    PriorityLow = "low"
+
+
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -54,6 +62,17 @@ class Spent(BaseModel):
             ge=0,
         ),
     ]
+
+
+class StatusCategory(StrEnum):
+    StatusCategoryDraft = "draft"
+    StatusCategoryBacklog = "backlog"
+    StatusCategoryTodo = "todo"
+    StatusCategoryQueued = "queued"
+    StatusCategoryInProgress = "in-progress"
+    StatusCategoryDone = "done"
+    StatusCategoryCancelled = "cancelled"
+    StatusCategoryUnknown = "unknown"
 
 
 class WriteFallback(BaseModel):
@@ -120,18 +139,6 @@ class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown
     ]
 
 
-class WriteResult(BaseModel):
-    parts: Annotated[
-        list[WritePart], Field(description="One per mutation sent, in the order sent.")
-    ]
-    version: Annotated[
-        str | None,
-        Field(
-            description="The task's version after the write, where the last response determines it."
-        ),
-    ] = None
-
-
 class Failure(BaseModel):
     class_: Annotated[
         FailureClass,
@@ -165,6 +172,41 @@ class Failure(BaseModel):
     ]
 
 
+class Status(BaseModel):
+    category: Annotated[
+        StatusCategory,
+        Field(description="The normalised value filters compare against."),
+    ]
+    name: Annotated[str, Field(description="The source's own label for this status.")]
+
+
+class WriteResult(BaseModel):
+    parts: Annotated[
+        list[WritePart] | None,
+        Field(
+            description="One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`."
+        ),
+    ] = None
+    priority: Annotated[
+        Priority | None,
+        Field(
+            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+        ),
+    ] = None
+    status: Annotated[
+        Status | None,
+        Field(
+            description="The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
+        ),
+    ] = None
+    version: Annotated[
+        str | None,
+        Field(
+            description="The item's version after the write, where the write's responses determine it."
+        ),
+    ] = None
+
+
 class FailureDocument(BaseModel):
     failure: Annotated[Failure, Field(description="Why the command failed.")]
     fallback: Annotated[
@@ -173,10 +215,16 @@ class FailureDocument(BaseModel):
             description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
         ),
     ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the destination item a copy refused to write held, as the copy's read of it\nbefore writing found it — present only for a refusal made after that read, such as\n`target-task-origin`."
+        ),
+    ] = None
     result: Annotated[
         WriteResult | None,
         Field(
-            description="What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+            description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
     spent: Annotated[

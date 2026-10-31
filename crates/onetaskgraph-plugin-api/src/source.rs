@@ -1399,6 +1399,27 @@ pub trait TaskSource: Send + Sync {
         None
     }
 
+    /// The task `id` as this source holds it after its latest write of it in the current
+    /// command, when what that write sent and was answered with says so — its status, its
+    /// priority and its change token among the rest.
+    ///
+    /// Answered without a request to a remote party: a hosted source answers from the
+    /// responses its own write already received, and a source on this machine from what it
+    /// wrote. Its `version` is `None` where those responses cannot vouch for a token the next
+    /// read would give. A caller treats `None` as not knowing. Defaulted to `None`.
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        let _ = id;
+        None
+    }
+
+    /// The change token the `record` `id` holds after this source's latest write of it in the
+    /// current command, on the terms [`Self::written_task`] answers a task's — `None` where the
+    /// write's own responses cannot vouch for one. Defaulted to `None`.
+    async fn written_version(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        let _ = (record, id);
+        None
+    }
+
     /// Add one comment to `task`, answering with the comment as the source now holds it, or
     /// `None` when this source holds no such task.
     ///
@@ -1925,6 +1946,143 @@ pub trait TaskSource: Send + Sync {
         &self,
         target: &WriteTarget<'_>,
     ) -> Result<Option<Repository>, SourceError> {
+        let _ = target;
+        Ok(None)
+    }
+
+    /// Take this source's exclusive, cross-process hold on the `record` `id`, waiting for a
+    /// holder that is still at work and taking over one a dead process left — `true` once it is
+    /// held, `false` for a source that offers no such hold. A caller releases it with
+    /// [`Self::release_item`], always.
+    ///
+    /// What a copy decides its intent to create under: on a source that answers `true`, exactly
+    /// one attempt on one host owns a create of the item. A hosted source has no lock to offer,
+    /// and its intents are advisory. Defaulted to `false`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the hold could not be taken.
+    fn hold_item(&self, record: MetadataRecord, id: &NativeId) -> Result<bool, SourceError> {
+        let _ = (record, id);
+        Ok(false)
+    }
+
+    /// Release the hold [`Self::hold_item`] took on the `record` `id`. Defaulted to nothing.
+    fn release_item(&self, record: MetadataRecord, id: &NativeId) {
+        let _ = (record, id);
+    }
+
+    /// The `record` `id` exactly as this source stores it, byte for byte, when it can give that
+    /// back with [`Self::restore_item`] — `None` otherwise. Read off this machine, never a
+    /// request. Defaulted to `None`.
+    fn item_snapshot(&self, record: MetadataRecord, id: &NativeId) -> Option<Vec<u8>> {
+        let _ = (record, id);
+        None
+    }
+
+    /// Put the `record` `id` back to `snapshot`, byte for byte, under its hold: what a copy that
+    /// took every write back leaves of an item it recorded an intent on. Defaulted to doing
+    /// nothing, since a source answering no snapshot is never asked.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the item could not be put back.
+    fn restore_item(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        snapshot: &[u8],
+    ) -> Result<(), SourceError> {
+        let _ = (record, id, snapshot);
+        Ok(())
+    }
+
+    /// Remove one key of the metadata of the `record` `id` and change nothing else, answering
+    /// the record's version token once it is gone — `Some(None)` when this source spells none —
+    /// or `None` when this source holds no such record. Removing a key the record does not hold
+    /// writes nothing.
+    ///
+    /// What a copy asks to take its intent to create — [`MetadataKey::CREATING_KEY`] — off a
+    /// project or a document once the counterpart is linked. Defaulted for a task to
+    /// [`Self::update_task`] removing the key, and for a project or a document to the refusal
+    /// a source writing no metadata answers, which the engine meets by writing the record
+    /// back whole without the key. A source that can take one key off narrowly owes an
+    /// override.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source cannot remove the key on its own, and
+    /// whatever else the source could not do the write for.
+    async fn remove_record_metadata(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        if record != MetadataRecord::Task {
+            return Err(crate::metadata::unwritable_metadata(self.kind(), record));
+        }
+        let mut update = TaskUpdate::default();
+        update.metadata_remove.insert(key.clone());
+        Ok(self
+            .update_task(id, &update)
+            .await?
+            .map(|outcome| outcome.task.version))
+    }
+
+    /// Every `record` this source holds whose create carried the create key `key` — see
+    /// [`MetadataKey::CREATE_KEY`] — created at or after `since` when that is given: what a
+    /// retried copy asks to find the item its earlier attempt created. `target` is the create
+    /// the key was taken for, so a source filing creates in more than one place looks where
+    /// that one would have landed.
+    ///
+    /// Read-only, and never through a search index: a source answers from where its creates
+    /// land, by the key, so the answer is as fresh as [`Self::create_key_lags`] says. Defaulted
+    /// to none, the answer of a source that keeps no such key — a retried copy then creates
+    /// again, as it always did.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the lookup could not be made.
+    async fn created_with_key(
+        &self,
+        record: MetadataRecord,
+        key: &str,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        target: &WriteTarget<'_>,
+    ) -> Result<Vec<NativeId>, SourceError> {
+        let _ = (record, key, since, target);
+        Ok(Vec::new())
+    }
+
+    /// Whether [`Self::created_with_key`] can miss an item created moments ago — a hosted
+    /// backend that lists a new item only after a delay — so a retry waits out the source's
+    /// quiescence window before believing it absent. Defaulted to `false`.
+    fn create_key_lags(&self) -> bool {
+        false
+    }
+
+    /// Why this source's own policy on where it creates would refuse a create of `target`,
+    /// or `None` when it would not — asked before anything of the create is written, and by a
+    /// read-only answer of where a copy would land.
+    ///
+    /// A refusal here is the source's configured restriction on the place a create would file
+    /// in — a GitHub Projects source's `creation_owners` — and never a refusal of the item
+    /// itself, which [`Self::check_task_write`] answers. It is answered rather than returned
+    /// as an error so a caller that only reports where a create would go can say so without
+    /// failing. Read-only, as [`Self::creation_repository`] is, and reading only what that
+    /// rule reads; a source with no such restriction reads nothing at all.
+    ///
+    /// Defaulted to `None`, the answer of every source with no such policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the rule deciding where the create would file could not
+    /// be applied — refused as the create would refuse it, or a read it needs failed.
+    async fn creation_refusal(
+        &self,
+        target: &WriteTarget<'_>,
+    ) -> Result<Option<String>, SourceError> {
         let _ = target;
         Ok(None)
     }

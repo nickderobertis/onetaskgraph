@@ -1901,12 +1901,56 @@ impl From<StatusPolicyArgs> for onetaskgraph_core::StatusPolicy {
     }
 }
 
+/// What a status-guarded copy does with a task whose destination status the guard does not
+/// name.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum OtherwiseArgs {
+    /// Write nothing for it and report it `failed` as `destination-status`; the copy exits 4.
+    Refuse,
+    /// Copy it as --status-policy preserve-destination does, keeping its status.
+    PreserveDestination,
+}
+
+impl From<OtherwiseArgs> for onetaskgraph_core::Otherwise {
+    fn from(value: OtherwiseArgs) -> Self {
+        match value {
+            OtherwiseArgs::Refuse => Self::Refuse,
+            OtherwiseArgs::PreserveDestination => Self::PreserveDestination,
+        }
+    }
+}
+
 /// `onetaskgraph task copy`.
 #[derive(Debug, Args)]
 pub struct TaskCopyArgs {
     /// Which status to use for existing destination items. Creates use the source status.
     #[arg(long, value_enum, default_value = "source")]
     pub status_policy: StatusPolicyArgs,
+
+    /// Write an existing destination task's status only while it is at this category; repeat
+    /// for several. A task whose destination status is at another is handled by --otherwise.
+    ///
+    /// Decided on the copy's own read of the destination task, so it adds no request; a create
+    /// is unaffected. Refused beside --status-policy preserve-destination, which writes no
+    /// status to guard.
+    #[arg(long = "when-destination-status", value_name = "CATEGORY")]
+    pub when_destination_status: Vec<StatusArg>,
+
+    /// What to do with a task whose destination status --when-destination-status does not
+    /// name: `refuse` (the default) writes nothing for it and reports it `failed` as
+    /// `destination-status`, exiting 4; `preserve-destination` copies it keeping its status.
+    /// Taken only beside --when-destination-status.
+    #[arg(long, value_enum, value_name = "WHAT")]
+    pub otherwise: Option<OtherwiseArgs>,
+
+    /// Write the source's priority over an existing destination task's only while the
+    /// destination task is at this priority; repeat for several. At any other priority the
+    /// destination task keeps its own, and every other field is written as without this flag.
+    ///
+    /// Decided on the copy's own read of the destination task, so it adds no request; a create
+    /// takes the source's priority.
+    #[arg(long = "when-destination-priority", value_name = "PRIORITY")]
+    pub when_destination_priority: Vec<PriorityArg>,
 
     /// The qualified ids to copy, `<source>:<native-id>` — or none, and the narrowing below
     /// names the tasks instead.

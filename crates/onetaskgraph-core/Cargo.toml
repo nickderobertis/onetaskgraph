@@ -44,6 +44,7 @@ serde_json.workspace = true
 serde-saphyr.workspace = true
 serde_path_to_error.workspace = true
 sha2.workspace = true
+uuid.workspace = true
 thiserror.workspace = true
 # The simulated clock's client: a wait completes on a `oneshot` its listening thread fires.
 # No runtime is started here; the waits run on whichever runtime the caller started.

@@ -36,6 +36,7 @@ class CopyVia(StrEnum):
     CopyViaOrigin = "origin"
     CopyViaScan = "scan"
     CopyViaMatch = "match"
+    CopyViaIntent = "intent"
 
 
 class GlobalId(RootModel[str]):
@@ -91,6 +92,12 @@ class Spent(BaseModel):
 
 
 class CreatesIn(BaseModel):
+    refused: Annotated[
+        str | None,
+        Field(
+            description="Why the destination's own policy on where it creates — a GitHub Projects source's\n`creation_owners` — would refuse a create there, as the copy's refusal says it; absent\nwhen it would not. The locate itself never fails for it."
+        ),
+    ] = None
     repository: Annotated[
         Repository,
         Field(description="The repository, as a normalized origin `host/owner/name`."),

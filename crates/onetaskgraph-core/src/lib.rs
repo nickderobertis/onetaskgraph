@@ -55,22 +55,25 @@ pub use clock::{
     ClockChoice, SIMULATED_CLOCK_VARIABLE, attach as attach_simulated_clock, clock_choice,
     process_clock,
 };
-pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceCacheConfig, SourceConfig};
+pub use config::{
+    Config, ConfigError, CreateSettings, Loaded, OutputFormat, SourceCacheConfig, SourceConfig,
+};
 pub use engine::boundary;
 pub use engine::{
     Body, BudgetSpent, CommentCounts, CommentList, CommentWritten, CompleteAction, Completeness,
-    ConfiguredSource, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome, CopyReport,
-    CopyRequest, CopyScope, CopyVia, CreatesIn, DeletedComment, Delivered, DeliveryOutcome,
-    DependencyRequest, DocumentDetail, DocumentFilters, DocumentRequest, Engine, EngineError,
-    Filters, GraphDirection, GraphEdge, GraphNode, GroupKey, HeldAsset, IssueCompleted,
-    IssuesCompleted, LabelRequest, LeftBehind, LocateLookup, LocateReport, LocateRequest, Located,
-    LocatedCounterpart, MatchBy, MetadataSet, MirrorTarget, NoCounterpart, NotATask,
-    PROJECT_GRAPH_SCHEMA_VERSION, Paging, ProjectGraph, ProjectGraphRequest, ProjectRequest,
-    ProjectSelector, ProjectStatusSet, PublicProjection, PublicProjections, Qualified,
-    QualifiedEdge, QualifiedEndpoint, ReconcileOutcome, SearchHit, SearchKind, SearchRequest,
-    SourceListing, SourceState, Spent, StatusPolicy, StatusReconciled, StatusesReconciled,
-    TaskAssetNames, TaskAssetsError, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet,
-    TaskRequest, TaskStatusSet, TaskUpdated, graph_label, settled,
+    ConfiguredSource, CopyAction, CopyConditions, CopyItems, CopyLink, CopyLookup, CopyOutcome,
+    CopyReport, CopyRequest, CopyScope, CopyVia, CreateHolder, CreatesIn, DeletedComment,
+    Delivered, DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters,
+    DocumentRequest, Engine, EngineError, Filters, GraphDirection, GraphEdge, GraphNode, GroupKey,
+    HeldAsset, IssueCompleted, IssuesCompleted, LabelRequest, LeftBehind, LocateLookup,
+    LocateReport, LocateRequest, Located, LocatedCounterpart, MatchBy, MetadataSet, MirrorTarget,
+    NoCounterpart, NotATask, Otherwise, PROJECT_GRAPH_SCHEMA_VERSION, Paging, PriorityCondition,
+    ProjectGraph, ProjectGraphRequest, ProjectRequest, ProjectSelector, ProjectStatusSet,
+    PublicProjection, PublicProjections, Qualified, QualifiedEdge, QualifiedEndpoint,
+    ReconcileOutcome, SearchHit, SearchKind, SearchRequest, SourceListing, SourceState, Spent,
+    StatusCondition, StatusPolicy, StatusReconciled, StatusesReconciled, TaskAssetNames,
+    TaskAssetsError, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet, TaskRequest,
+    TaskStatusSet, TaskUpdated, graph_label, settled,
 };
 pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,

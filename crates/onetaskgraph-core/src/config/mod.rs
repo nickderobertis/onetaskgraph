@@ -85,9 +85,96 @@ pub struct SourceConfig {
     cache: SourceCacheConfig,
     public_alias: Option<onetaskgraph_plugin_api::Designator>,
     task_projection: Option<TaskProjectionConfig>,
+    create: CreateSettings,
+}
+
+/// How a copy out of one source keeps a create safe to retry: its two settings, each in whole
+/// seconds, read off the source's own block beside `cache` and `routes`.
+///
+/// `create_lease_seconds` is how long the intent a copy records on the item it copies, at
+/// `onetaskgraph.creating`, stays its own before another attempt may take it over — read off
+/// the copy's **source**. `create_quiescence_seconds` is how long after an intent was first
+/// taken a retry waits for an earlier attempt's create to become listed before creating again
+/// — read off the copy's **destination**, and only where that destination's lookup by create
+/// key can lag a create. Both default to 120 and are left out of a configuration that does not
+/// set them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CreateSettings {
+    /// Seconds an intent to create stays the holder's own; 120 when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // llmlint: ignore[invalid_states_unrepresentable] Schema DTO, as every plugin configuration here is: the configuration schema both SDKs are generated from describes these as whole numbers, and `CreateSettings::checked` refuses zero and anything past `MAX_SECONDS` when the configuration loads, naming the key, before any engine is built — `the_create_settings_are_shown_by_their_layer_and_refused_out_of_range` drives it.
+    pub create_lease_seconds: Option<u64>,
+    /// Seconds after an intent was first taken that a retry waits for the earlier create to be
+    /// listed; 120 when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // llmlint: ignore[invalid_states_unrepresentable] As `create_lease_seconds` above.
+    pub create_quiescence_seconds: Option<u64>,
+}
+
+impl CreateSettings {
+    /// The default of each setting, in seconds.
+    pub const DEFAULT_SECONDS: u64 = 120;
+
+    /// The longest either setting may be, in seconds: a day. A lease or a wait longer than that
+    /// is a mistake rather than a policy, and refusing it at load keeps every time an intent is
+    /// spelled with well inside what a timestamp can hold.
+    pub const MAX_SECONDS: u64 = 86_400;
+
+    /// Refuse a setting of zero or past [`Self::MAX_SECONDS`], naming the source and the key.
+    fn checked(self, source: &str) -> Result<Self, ConfigError> {
+        for (key, value) in [
+            ("create_lease_seconds", self.create_lease_seconds),
+            ("create_quiescence_seconds", self.create_quiescence_seconds),
+        ] {
+            if let Some(value) = value
+                && !(1..=Self::MAX_SECONDS).contains(&value)
+            {
+                return Err(ConfigError::setting(
+                    format!("sources.{source}.{key}"),
+                    format!(
+                        "{value} is not a whole number of seconds from 1 to {}",
+                        Self::MAX_SECONDS
+                    ),
+                    format!(
+                        "set {key} to between 1 and {} seconds, or remove it for the default of {}.",
+                        Self::MAX_SECONDS,
+                        Self::DEFAULT_SECONDS
+                    ),
+                ));
+            }
+        }
+        Ok(self)
+    }
+
+    /// How long an intent stays its holder's own.
+    #[must_use]
+    pub fn lease(self) -> chrono::TimeDelta {
+        seconds(self.create_lease_seconds)
+    }
+
+    /// How long a retry waits for an earlier create to be listed.
+    #[must_use]
+    pub fn quiescence(self) -> chrono::TimeDelta {
+        seconds(self.create_quiescence_seconds)
+    }
+}
+
+/// A setting as a duration: [`CreateSettings::checked`] bounds it at load, and a value past the
+/// bound is read as the bound rather than trusted.
+fn seconds(setting: Option<u64>) -> chrono::TimeDelta {
+    let bounded = setting
+        .unwrap_or(CreateSettings::DEFAULT_SECONDS)
+        .min(CreateSettings::MAX_SECONDS);
+    chrono::TimeDelta::try_seconds(i64::try_from(bounded).unwrap_or(0)).unwrap_or_default()
 }
 
 impl SourceConfig {
+    /// How a copy out of, or into, this source keeps a create safe to retry.
+    #[must_use]
+    pub fn create(&self) -> CreateSettings {
+        self.create
+    }
+
     /// Where, and on which host's authority, human task projections into this source keep
     /// their durable intents — `None` for a source that receives none.
     #[must_use]
@@ -189,6 +276,10 @@ struct SourceShape {
     public_alias: Option<Value>,
     #[serde(default)]
     task_projection: Option<TaskProjectionConfig>,
+    #[serde(default)]
+    create_lease_seconds: Option<u64>,
+    #[serde(default)]
+    create_quiescence_seconds: Option<u64>,
 }
 
 /// A source's `task_projection`: the host-local authority over human task projections
@@ -520,6 +611,11 @@ impl Config {
             };
             let routes = routes::parse(&name, &source.routes)?;
             let public_alias = public_alias(&key, source.public_alias.as_ref())?;
+            let create = CreateSettings {
+                create_lease_seconds: source.create_lease_seconds,
+                create_quiescence_seconds: source.create_quiescence_seconds,
+            }
+            .checked(name.as_str())?;
             sources.insert(
                 name,
                 SourceConfig {
@@ -531,6 +627,7 @@ impl Config {
                     cache: source.cache,
                     public_alias,
                     task_projection: source.task_projection,
+                    create,
                 },
             );
         }

@@ -128,6 +128,15 @@ fn one_key_of_a_task_a_project_and_a_document_is_set_and_nothing_else_moves() {
                 &format!("{who} metadata set"),
             );
             let file = std::fs::canonicalize(root.join(relative)).expect("the record resolves");
+            // A task's answer adds what the task then holds; the rest is as it always was.
+            let mut answer = answer;
+            if kind == "task" {
+                let result = answer
+                    .as_object_mut()
+                    .and_then(|members| members.remove("result"))
+                    .expect("a task write answers what it left");
+                assert_eq!(result["status"], before["status"], "{who}: {result}");
+            }
             assert_eq!(
                 answer,
                 json!({"id": id, "key": "myapp.review", "value": {"approved": true, "by": ["nick"]},

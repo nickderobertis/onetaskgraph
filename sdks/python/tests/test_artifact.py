@@ -293,7 +293,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 50
+    assert emitted_bundle["version"] == 51
     assert "LocateReport" in bundle["roots"]
     assert "reachable" in emitted_bundle["roots"]["SourceRoute"]["required"]
     assert "task locate" in emitted_bundle["commands"]
@@ -512,7 +512,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # which rule found where it landed, and what became of the link it records at
     # `onetaskgraph.copies` — on the three actions that land an item, and not on an orphan.
     for root, words in (
-        ("CopyVia", {"target-task", "link", "origin", "scan", "match"}),
+        ("CopyVia", {"target-task", "link", "origin", "scan", "match", "intent"}),
         # Version 36 added `skipped`, the link a `--no-link` copy leaves unwritten.
         ("CopyLink", {"recorded", "unchanged", "unrecorded", "skipped"}),
     ):

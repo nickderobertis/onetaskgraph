@@ -94,6 +94,7 @@ fn many(items: &[&str], scope: CopyScope) -> CopyRequest {
         expect: None,
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
+        conditions: Default::default(),
     }
 }
 
@@ -400,6 +401,15 @@ fn reserved_value(key: &str, end: &str) -> Value {
         return json!({format!("{end}.png"): {
             "sha256": "a".repeat(64),
             "url": format!("https://{end}.example/{end}.png"),
+        }});
+    }
+    // An intent to create is an object of intents by destination, one for a destination this
+    // copy does not write to, so the copy reads it as one and leaves it where it is.
+    if key == "onetaskgraph.creating" {
+        return json!({format!("{end}-elsewhere"): {
+            "key": "11111111-2222-5333-8444-555555555555", "at": "2026-01-01T00:00:00Z",
+            "attempt": "00000000-0000-4000-8000-000000000001",
+            "lease_until": "2026-01-01T00:00:00Z",
         }});
     }
     json!(format!("{key} at the {end}"))

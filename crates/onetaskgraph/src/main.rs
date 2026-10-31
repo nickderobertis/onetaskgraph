@@ -189,6 +189,10 @@ fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
                 .unwrap_or_default(),
+            held: FAILED_HELD
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take(),
         };
         // Best effort, and deliberately silent: the stderr line above already said why the
         // command failed, and a reader that has gone away cannot be told anything more.
@@ -733,6 +737,19 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             request.comments = args.comments;
             request.status_policy = args.status_policy.into();
             request.expect.clone_from(&args.expect.expect);
+            request.conditions = onetaskgraph_core::CopyConditions {
+                status: args
+                    .when_destination_status
+                    .iter()
+                    .map(|status| status.category())
+                    .collect(),
+                otherwise: args.otherwise.map(Into::into),
+                priority: args
+                    .when_destination_priority
+                    .iter()
+                    .map(|priority| priority.priority())
+                    .collect(),
+            };
             copy(out, loaded, &request).await
         }
 
@@ -1002,6 +1019,11 @@ static TERM_SCOPE: OnceLock<Option<Vec<String>>> = OnceLock::new();
 /// command answers with — its parts' outcomes are what a caller acts on, the failure or not.
 static FAILED_WRITE: std::sync::Mutex<Option<ExpectedWrite>> = std::sync::Mutex::new(None);
 
+/// What the destination item a copy refused to write held, for the failure document — set
+/// only for a refusal made after the copy's read of that item.
+static FAILED_HELD: std::sync::Mutex<Option<onetaskgraph_core::WriteResult>> =
+    std::sync::Mutex::new(None);
+
 /// The engine a write of `id` runs on, expecting the version `expect` names when it names one.
 fn expecting(loaded: &Loaded, id: &GlobalId, expect: &ExpectArgs) -> Result<Engine, Failure> {
     let engine = engine(loaded);
@@ -1021,6 +1043,9 @@ fn write_failed(engine: &Engine, error: &onetaskgraph_core::EngineError) -> Fail
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(expected);
     }
+    *FAILED_HELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = error.held().cloned();
     Failure::from(error)
 }
 
@@ -1383,7 +1408,8 @@ async fn comment(
                 .add_comment(&task, &comment)
                 .await
                 .map_err(|error| write_failed(&engine, &error))?;
-            let added = written_comment(&engine, &task, added);
+            let mut added = written_comment(&engine, &task, added);
+            added.item = Some(task.clone());
             rendering(loaded, &added, render::comment_written, "the comment")?
         }
         CommentCommand::List(args) => {
@@ -1431,6 +1457,7 @@ fn written_comment(
     };
     CommentWritten {
         comment,
+        item: None,
         result,
         fallback,
         spent,
@@ -1869,6 +1896,7 @@ fn copy_request(
         expect: None,
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
+        conditions: Default::default(),
     })
 }
 

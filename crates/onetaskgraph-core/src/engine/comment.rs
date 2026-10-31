@@ -69,6 +69,10 @@ pub struct CommentWritten {
     /// The comment.
     #[serde(flatten)]
     pub comment: Comment,
+    /// The qualified id of the task the comment was added to — present on `task comment add`'s
+    /// answer, so a caller records what it commented on from the answer alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<GlobalId>,
     /// What each mutation an expected write sent came to — present when the write was made
     /// with `--expect` on a source that reports its writes' parts.
     #[serde(default, skip_serializing_if = "Option::is_none")]

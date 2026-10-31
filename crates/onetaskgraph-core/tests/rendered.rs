@@ -885,6 +885,7 @@ async fn copy_into_back(
             expect: None,
             status_policy: onetaskgraph_core::StatusPolicy::Source,
             statuses: Vec::new(),
+            conditions: Default::default(),
         })
         .await
         .expect("the copy runs")

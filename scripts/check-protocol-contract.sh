@@ -174,6 +174,46 @@ NOT_METHODS = {
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, taking nothing, so every update crosses as its own `update_task`"
     ),
+    "created_with_key": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, finding nothing, so a retried copy creates as it always did"
+    ),
+    "create_key_lags": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, `false`, so a retry waits for nothing"
+    ),
+    "creation_refusal": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, refusing nothing"
+    ),
+    "hold_item": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, offering no hold, so its intents are advisory"
+    ),
+    "release_item": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, releasing nothing"
+    ),
+    "item_snapshot": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, keeping no snapshot"
+    ),
+    "restore_item": (
+        "not a message: §4.9 says it is never asked of a hosted source, which keeps no "
+        "snapshot"
+    ),
+    "remove_record_metadata": (
+        "not a message: §4.9 says it crosses for a task as `update_task` and is refused for a "
+        "project or a document, which the engine writes back whole"
+    ),
+    "written_task": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, knowing nothing of a write"
+    ),
+    "written_version": (
+        "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
+        "default does, so a write's `result` carries a `null` `version`"
+    ),
     "check_status_write": (
         "not a message: §4.9 says the engine answers it for a hosted source as the trait's "
         "default does, and the plugin's own write refuses a status it has no name for"
