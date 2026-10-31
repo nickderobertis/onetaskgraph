@@ -1634,3 +1634,53 @@ fn a_recreate_after_a_stale_link_takes_a_key_of_its_own_and_its_retry_keeps_it()
         "the retry kept the key its first attempt took"
     );
 }
+
+#[test]
+fn a_source_that_will_not_keep_the_key_is_copied_as_it_always_was_with_no_intent() {
+    // Metadata written on one line, which the folder will not edit one key of without
+    // rewriting the rest: the intent cannot be recorded, so the copy goes on without it.
+    let stores = Stores::new();
+    let text = "---\ntitle: Task A\nstatus: todo\nmetadata: {caller.tag: one}\n---\nThe body.\n";
+    std::fs::write(stores.notes.join("tasks/A.md"), text).expect("the note");
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "board"]);
+    assert_eq!(copied["items"][0]["action"], "created", "{copied:#}");
+    assert_eq!(copied["items"][0]["link"], "unrecorded", "{copied:#}");
+    assert_eq!(stores.board.items_titled("Task A").len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(stores.notes.join("tasks/A.md")).expect("the note"),
+        text,
+        "no intent and no link written"
+    );
+}
+
+#[test]
+fn a_source_record_gone_before_its_intent_is_copied_as_it_always_was_with_no_intent() {
+    let stores = Stores::new();
+    let issue = a_linear_issue(&stores);
+    let native = issue.trim_start_matches("linear:").to_owned();
+    // The copy reads the issue to plan it, and Linear trashes it before the intent is taken.
+    let reads = stores.linear.served().len();
+    let trashed = native.clone();
+    stores.linear.after_request(
+        move |document, variables| {
+            document == onetaskgraph_linear::graphql::ISSUE && variables["id"] == json!(native)
+        },
+        0,
+        move |workspace| workspace.trash_issue(&trashed),
+    );
+    let output = stores.run(&["--json", "task", "copy", &issue, "--to", "board"], None);
+    let sent: Vec<String> = stores.linear.served()[reads..]
+        .iter()
+        .map(|(document, _)| document.chars().take(60).collect())
+        .collect();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}\n{sent:#?}",
+        stderr(&output)
+    );
+    let copied: Value = serde_json::from_str(&stdout(&output)).expect("a report");
+    assert_eq!(copied["items"][0]["action"], "created", "{copied:#}");
+    assert_eq!(copied["items"][0]["link"], "unrecorded", "{copied:#}");
+    assert_eq!(board_issues_of(&stores, &issue).len(), 1, "{sent:#?}");
+}

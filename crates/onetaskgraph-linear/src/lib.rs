@@ -3289,8 +3289,9 @@ impl TaskSource for LinearSource {
             .cloned();
         web_address(held.as_deref())
     }
-    /// The issue whose own id is `key`: a create's key is the id it was created under here, and
-    /// Linear answers a read by id at once, so it never lags.
+    /// The issue, project or document whose own id is `key`'s v4-shaped transform — see
+    /// [`linear_id_of_key`] — the id a create carrying it was sent under here; Linear answers a
+    /// read by id at once, so it never lags.
     async fn created_with_key(
         &self,
         record: MetadataRecord,

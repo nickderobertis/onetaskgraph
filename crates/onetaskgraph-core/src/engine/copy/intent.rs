@@ -13,9 +13,10 @@
 //! lags a create is given until the source's quiescence window after the intent was first taken
 //! to list it, and only then is created in again, with the same key.
 //!
-//! Who owns an intent depends on the copy's source. An item whose source reports a path on this
-//! machine is taken, renewed and released under an exclusive lock file beside it, so exactly one
-//! attempt on one host owns a create. A hosted source offers no lock, so its intent is advisory:
+//! Who owns an intent depends on the copy's source. An item whose source gives a hold on it
+//! through `TaskSource::hold_item` — a folder of Markdown's exclusive lock file beside it — is
+//! taken, renewed and released under that hold, so exactly one attempt on one host owns a create.
+//! A source that gives none, as a hosted one does, leaves its intent advisory:
 //! a live lease another attempt holds still refuses, but two attempts that read before either
 //! wrote both proceed, and a destination whose lookup lags is listed again by key after the
 //! create so a duplicate is reported rather than linked.
