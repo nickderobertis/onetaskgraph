@@ -43,8 +43,8 @@ def test_wheel_installs_and_queries_through_public_import(tmp_path: Path, binary
     )
     # The requirements carry the workspace's onetaskgraph-cli, whose install builds the binary
     # in release. Built for the host triple, under the lock the distribution journey's wheel
-    # build holds, it reuses the units that build and test 19's left in the shared build
-    # directory instead of compiling the release graph a third time beside them.
+    # build holds, it reuses the units that build and the Linux release recipe's CD journey
+    # left in the shared build directory instead of compiling the release graph a third time.
     root = package.parents[1]
     host = subprocess.run(
         ["rustc", "-vV"], check=True, capture_output=True, text=True, encoding="utf-8"

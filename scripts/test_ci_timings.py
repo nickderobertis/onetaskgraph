@@ -138,13 +138,17 @@ class CiTimingsTest(unittest.TestCase):
         run = self.start_log_work()
         log = self.scratch / 'starts'
         before = int(time.time())
+        announced = []
         for script, project, target in [
             ('scripts/check-outer.sh', 'scripts', 'test'),
             ('scripts/check-inner.sh', 'onetaskgraph-github-projects', 'test'),
             ('scripts/check-inner.sh', 'scripts', 'lint'),
             ('scripts/other.sh', 'scripts', 'test'),
         ]:
-            self.assertEqual(run(script, log, project, target).returncode, 0)
+            result = run(script, log, project, target)
+            self.assertEqual(result.returncode, 0)
+            announced.append(result.stderr)
+        self.assertEqual(announced, ['script-start-log: scripts/check-outer.sh started\n', '', '', ''])
         lines = log.read_text(encoding='utf-8').splitlines()
         self.assertEqual(len(lines), 1, lines)
         moment, path = lines[0].split(' ', 1)
