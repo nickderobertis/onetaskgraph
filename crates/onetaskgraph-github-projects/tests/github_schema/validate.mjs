@@ -11,7 +11,16 @@
 // graphql-js is imported from the pinned tarball beside this file (see `mod.rs` for why).
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, normalize, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -57,15 +66,16 @@ function* tarFiles(archive) {
   }
 }
 
-// The directory graphql-js is imported from, unpacked from the pinned tarball the first time
-// and found there afterwards. It is unpacked beside its final place and renamed into it whole,
-// so a process never imports a half-written copy, and concurrent first runs leave one.
+// The directory graphql-js is imported from, unpacked from the pinned tarball. The tarball is
+// held to its integrity on every start, and a copy already unpacked is imported only when it
+// holds exactly the tarball's files, byte for byte — a marker alone vouches for nothing, since a
+// changed file keeps it. Any other copy is replaced: unpacked beside its final place and renamed
+// into it whole, so a process never imports a half-written copy, and concurrent first runs
+// leave one.
 function graphqlPackage() {
   const here = dirname(fileURLToPath(import.meta.url));
   const target = join(here, "node_modules", "graphql");
   const marker = join(target, ".onetaskgraph-integrity");
-  const unpacked = () => existsSync(marker) && readFileSync(marker, "utf8") === GRAPHQL_INTEGRITY;
-  if (unpacked()) return target;
   const tarball = readFileSync(join(here, GRAPHQL_TARBALL));
   const integrity = `sha512-${createHash("sha512").update(tarball).digest("base64")}`;
   if (integrity !== GRAPHQL_INTEGRITY) {
@@ -73,15 +83,31 @@ function graphqlPackage() {
       `${GRAPHQL_TARBALL} has integrity ${integrity}, not the ${GRAPHQL_INTEGRITY} npm publishes`,
     );
   }
+  const files = new Map(tarFiles(gunzipSync(tarball)));
+  const unpacked = () => {
+    if (!existsSync(marker) || readFileSync(marker, "utf8") !== GRAPHQL_INTEGRITY) return false;
+    const present = readdirSync(target, { recursive: true })
+      .map(String)
+      .filter((relative) => statSync(join(target, relative)).isFile());
+    return (
+      present.length === files.size + 1 &&
+      present.every(
+        (relative) =>
+          relative === ".onetaskgraph-integrity" ||
+          (files.has(relative) && readFileSync(join(target, relative)).equals(files.get(relative))),
+      )
+    );
+  };
+  if (unpacked()) return target;
   const staging = join(here, "node_modules", `.graphql-${process.pid}-${Date.now()}`);
   rmSync(staging, { recursive: true, force: true });
-  for (const [relative, contents] of tarFiles(gunzipSync(tarball))) {
+  for (const [relative, contents] of files) {
     const file = join(staging, relative);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, contents);
   }
   writeFileSync(join(staging, ".onetaskgraph-integrity"), GRAPHQL_INTEGRITY);
-  // A copy unpacked from another pin is replaced; one another process has just renamed into
+  // A copy that is not the tarball's is replaced; one another process has just renamed into
   // place is kept, and this process's own is discarded.
   if (existsSync(target) && !unpacked()) rmSync(target, { recursive: true, force: true });
   try {

@@ -18,8 +18,9 @@
 //!
 //! It is not in the workspace's `package.json` either, because that file is an input of every
 //! project in the graph: naming it there selects every crate's tests, the live lanes included,
-//! for a change to this one crate's test double. `validate.mjs` unpacks the tarball once into the
-//! ignored `node_modules` beside it and imports it from there.
+//! for a change to this one crate's test double. `validate.mjs` unpacks the tarball into the
+//! ignored `node_modules` beside it and imports it from there, holding that copy to the tarball's
+//! files byte for byte on every start and unpacking it again when it differs.
 //!
 //! One `bun` process per test process holds the schema, built once, and answers one JSON line
 //! per request; requests from every thread are put to it in turn. A request nested past what

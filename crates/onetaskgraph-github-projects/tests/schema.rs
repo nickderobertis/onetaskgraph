@@ -1741,49 +1741,60 @@ fn the_schema_check_refuses_a_graphql_tarball_npm_did_not_publish() {
     );
 }
 
-/// A copy of graphql-js already unpacked beside the check from another pin — its marker naming
-/// another integrity, its code not this release's — is replaced by the pinned tarball's before
-/// anything is imported, so the validation cannot stay on a release the pin has moved past.
+/// A copy of graphql-js already unpacked beside the check that is not the pinned tarball's —
+/// one from another pin, its marker naming another integrity, and one whose marker names the
+/// pin but whose code was changed after it was unpacked — is replaced by the pinned tarball's
+/// before anything is imported, so the validation runs only the code npm published.
 #[test]
-fn the_schema_check_replaces_a_graphql_copy_unpacked_from_another_pin() {
+fn the_schema_check_replaces_a_graphql_copy_that_is_not_the_pinned_tarballs() {
     let tests = concat!(env!("CARGO_MANIFEST_DIR"), "/tests");
-    let scratch = tempfile::tempdir().expect("a scratch directory");
-    for file in ["validate.mjs", "graphql-17.0.2.tgz"] {
-        std::fs::copy(
-            format!("{tests}/github_schema/{file}"),
-            scratch.path().join(file),
+    for marker in [
+        "sha512-another",
+        "sha512-FRWbddMxfkjiB7z+aQDWIR+E34xo9I8c9mtK2RPv8PmMzKRvrdsreHL/Ui/TmwHJfhHChEtsFPyMHKI+xuarQQ==",
+    ] {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        for file in ["validate.mjs", "graphql-17.0.2.tgz"] {
+            std::fs::copy(
+                format!("{tests}/github_schema/{file}"),
+                scratch.path().join(file),
+            )
+            .expect("the schema check is copied");
+        }
+        let stale = scratch.path().join("node_modules/graphql");
+        std::fs::create_dir_all(&stale).expect("a stale copy's directory");
+        std::fs::write(stale.join(".onetaskgraph-integrity"), marker).expect("its marker");
+        std::fs::write(
+            stale.join("index.mjs"),
+            "throw new Error('the stale copy was imported');\n",
         )
-        .expect("the schema check is copied");
-    }
-    let stale = scratch.path().join("node_modules/graphql");
-    std::fs::create_dir_all(&stale).expect("a stale copy's directory");
-    std::fs::write(stale.join(".onetaskgraph-integrity"), "sha512-another").expect("its marker");
-    std::fs::write(
-        stale.join("index.mjs"),
-        "throw new Error('the stale copy was imported');\n",
-    )
-    .expect("its code");
+        .expect("its code");
 
-    let output = std::process::Command::new("bun")
-        .arg(scratch.path().join("validate.mjs"))
-        .arg(format!("{tests}/fixtures/github-schema.docs.graphql"))
-        .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .expect("bun runs the schema check");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let answer: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap_or_default())
-        .unwrap_or_else(|_| panic!("the schema check answered {stdout:?}"));
-    assert_eq!(answer["ready"], serde_json::json!(true), "{answer}");
-    assert!(output.status.success(), "{answer}");
-    assert!(
-        std::fs::read_to_string(stale.join(".onetaskgraph-integrity"))
-            .is_ok_and(|marker| marker.starts_with("sha512-FRWbddMx")),
-        "the stale copy is replaced by the pinned one"
-    );
-    assert!(
-        std::fs::read_to_string(stale.join("index.mjs"))
-            .is_ok_and(|code| !code.contains("the stale copy was imported")),
-        "the stale copy's code is gone"
-    );
+        let output = std::process::Command::new("bun")
+            .arg(scratch.path().join("validate.mjs"))
+            .arg(format!("{tests}/fixtures/github-schema.docs.graphql"))
+            .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("bun runs the schema check");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let answer: serde_json::Value =
+            serde_json::from_str(stdout.lines().next().unwrap_or_default())
+                .unwrap_or_else(|_| panic!("the schema check answered {stdout:?}"));
+        assert_eq!(
+            answer["ready"],
+            serde_json::json!(true),
+            "{marker}: {answer}"
+        );
+        assert!(output.status.success(), "{marker}: {answer}");
+        assert!(
+            std::fs::read_to_string(stale.join(".onetaskgraph-integrity"))
+                .is_ok_and(|marker| marker.starts_with("sha512-FRWbddMx")),
+            "{marker}: the stale copy is replaced by the pinned one"
+        );
+        assert!(
+            std::fs::read_to_string(stale.join("index.mjs"))
+                .is_ok_and(|code| !code.contains("the stale copy was imported")),
+            "{marker}: the stale copy's code is gone"
+        );
+    }
 }
