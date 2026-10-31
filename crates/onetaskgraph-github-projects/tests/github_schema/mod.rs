@@ -12,8 +12,9 @@
 //! stands alone; every selected field exists on its type — introspection included, against the
 //! specification's own introspection types — with each argument known and given once, every
 //! required one given and every literal one of its type; two selections answering under one
-//! name on one type select the same field with the same arguments; a leaf has no selection and
-//! a composite one; every fragment is used, its name unique, its type existing and able to
+//! name, through any fragment and at any depth, answer with one shape and — unless they sit on
+//! two different object types — select the same field with the same arguments, their
+//! sub-selections merging the same way; a leaf has no selection and a composite one; every fragment is used, its name unique, its type existing and able to
 //! apply where it is spread, and none spreads itself; every directive is defined, allowed where
 //! it stands, not repeated unless repeatable, and given its required arguments; every variable
 //! used is declared, every declared one used and declared once, each at an input type, its
@@ -21,9 +22,8 @@
 //! and the variables are an object whose every value coerces to its declared type, with no
 //! input field the type does not define and every required one present. What it does not hold
 //! a request to is what only GitHub's executor knows — a node id's existence, a permission, a
-//! rate or a node-count limit, a custom scalar's spelling — nor whether two same-named
-//! selections on mutually exclusive object types return the same shape. Its messages follow
-//! GitHub's wording where GitHub's is known.
+//! rate or a node-count limit, a custom scalar's spelling. Its messages follow GitHub's
+//! wording where GitHub's is known.
 //!
 //! Included by path from the loopback board in `onetaskgraph-e2e-support` as well as from this
 //! crate's own tests, so both doubles hold to one implementation.
@@ -291,6 +291,42 @@ impl Position<'_> {
             described: self.described,
         }
     }
+}
+
+/// One field a selection set selects, flattened out of its fragments.
+struct Collected<'q> {
+    /// The name it answers under: its alias, or its own name.
+    answer: String,
+    /// The type it is selected on.
+    on: String,
+    name: String,
+    /// Its arguments as written, sorted by name.
+    arguments: String,
+    /// What it returns, when its type defines it.
+    returns: Option<Ty>,
+    selection: &'q query::SelectionSet<'q, String>,
+}
+
+/// The specification's `SameResponseShape` at one level: the same list and non-null wrappers,
+/// and the same leaf type where either answer is a leaf. Two composite answers are compared
+/// field by field by the caller.
+fn same_shape(first: &Ty, second: &Ty) -> bool {
+    match (first, second) {
+        (Ty::NonNull(first), Ty::NonNull(second)) | (Ty::List(first), Ty::List(second)) => {
+            same_shape(first, second)
+        }
+        (Ty::Named(first), Ty::Named(second)) => {
+            (is_composite(first) && is_composite(second)) || first == second
+        }
+        _ => false,
+    }
+}
+
+fn is_object(name: &str) -> bool {
+    matches!(
+        index().types.get(name),
+        Some(schema::TypeDefinition::Object(_))
+    )
 }
 
 struct Walk<'q> {
@@ -588,50 +624,88 @@ impl<'q> Walk<'q> {
         }
     }
 
-    /// Two selections answering under one response name in one selection set — through any
-    /// fragment — must be the same field with the same arguments, unless they sit on two
-    /// different object types, which can never both apply.
+    /// The specification's `FieldsInSetCanMerge` over one selection set, through every
+    /// fragment in it: two selections answering under one name must have answers of one shape,
+    /// and — unless they sit on two different object types, which can never both apply — be
+    /// the same field with the same arguments, the two sub-selections merging the same way all
+    /// the way down.
     fn mergeable(&mut self, parent: &str, selection: &'q query::SelectionSet<'q, String>) {
-        let mut fields = Vec::new();
-        self.collect_fields(parent, selection, &mut fields, &mut Vec::new());
-        let mut reported = HashSet::new();
-        for (at, (answer, on, name, arguments)) in fields.iter().enumerate() {
-            for (other_answer, other_on, other_name, other_arguments) in &fields[at + 1..] {
-                let exclusive = on != other_on
-                    && matches!(
-                        index().types.get(on.as_str()),
-                        Some(schema::TypeDefinition::Object(_))
-                    )
-                    && matches!(
-                        index().types.get(other_on.as_str()),
-                        Some(schema::TypeDefinition::Object(_))
-                    );
-                if answer != other_answer || exclusive || !reported.insert(answer.clone()) {
-                    continue;
-                }
-                if name != other_name {
-                    self.errors.push(format!(
-                        "Field '{answer}' has a field conflict: {name} or {other_name}?"
-                    ));
-                } else if arguments != other_arguments {
-                    self.errors.push(format!(
-                        "Field '{answer}' has an argument conflict: {{{arguments}}} or \
-                         {{{other_arguments}}}?"
-                    ));
-                } else {
-                    reported.remove(answer);
+        let fields = self.collected(parent, selection);
+        for (at, first) in fields.iter().enumerate() {
+            for second in &fields[at + 1..] {
+                if first.answer == second.answer
+                    && let Some(conflict) = self.conflict(first, second, false)
+                    && !self.errors.contains(&conflict)
+                {
+                    self.errors.push(conflict);
                 }
             }
         }
     }
 
-    /// Every field a selection set selects, flattened through its fragments: the name it
-    /// answers under, the type it is selected on, its name and its arguments as written.
+    /// Why two selections answering under one name cannot be merged, if they cannot.
+    /// `exclusive` is whether some enclosing pair already sat on two different object types.
+    fn conflict(
+        &self,
+        first: &Collected<'q>,
+        second: &Collected<'q>,
+        exclusive: bool,
+    ) -> Option<String> {
+        let answer = &first.answer;
+        let exclusive =
+            exclusive || (first.on != second.on && is_object(&first.on) && is_object(&second.on));
+        if !exclusive {
+            if first.name != second.name {
+                return Some(format!(
+                    "Field '{answer}' has a field conflict: {} or {}?",
+                    first.name, second.name
+                ));
+            }
+            if first.arguments != second.arguments {
+                return Some(format!(
+                    "Field '{answer}' has an argument conflict: {{{}}} or {{{}}}?",
+                    first.arguments, second.arguments
+                ));
+            }
+        }
+        // A field its type does not define is reported where it is selected.
+        let (Some(first_type), Some(second_type)) = (&first.returns, &second.returns) else {
+            return None;
+        };
+        if !same_shape(first_type, second_type) {
+            return Some(format!(
+                "Field '{answer}' has a return_type conflict: `{first_type}` or `{second_type}`?"
+            ));
+        }
+        if !(is_composite(first_type.base()) && is_composite(second_type.base())) {
+            return None;
+        }
+        let first_fields = self.collected(first_type.base(), first.selection);
+        let second_fields = self.collected(second_type.base(), second.selection);
+        first_fields.iter().find_map(|nested| {
+            second_fields
+                .iter()
+                .filter(|other| other.answer == nested.answer)
+                .find_map(|other| self.conflict(nested, other, exclusive))
+        })
+    }
+
+    /// Every field a selection set selects, flattened through its fragments.
+    fn collected(
+        &self,
+        parent: &str,
+        selection: &'q query::SelectionSet<'q, String>,
+    ) -> Vec<Collected<'q>> {
+        let mut fields = Vec::new();
+        self.collect_fields(parent, selection, &mut fields, &mut Vec::new());
+        fields
+    }
+
     fn collect_fields(
         &self,
         parent: &str,
         selection: &'q query::SelectionSet<'q, String>,
-        fields: &mut Vec<(String, String, String, String)>,
+        fields: &mut Vec<Collected<'q>>,
         entered: &mut Vec<&'q str>,
     ) {
         for item in &selection.items {
@@ -643,12 +717,19 @@ impl<'q> Walk<'q> {
                         .map(|(name, value)| format!("{name}: {value}"))
                         .collect::<Vec<_>>();
                     arguments.sort();
-                    fields.push((
-                        field.alias.clone().unwrap_or_else(|| field.name.clone()),
-                        parent.to_owned(),
-                        field.name.clone(),
-                        arguments.join(", "),
-                    ));
+                    let returns = if field.name == "__typename" {
+                        Some(Ty::NonNull(Box::new(Ty::Named("String".to_owned()))))
+                    } else {
+                        field_of(parent, &field.name).map(|defined| Ty::of(&defined.field_type))
+                    };
+                    fields.push(Collected {
+                        answer: field.alias.clone().unwrap_or_else(|| field.name.clone()),
+                        on: parent.to_owned(),
+                        name: field.name.clone(),
+                        arguments: arguments.join(", "),
+                        returns,
+                        selection: &field.selection_set,
+                    });
                 }
                 query::Selection::InlineFragment(fragment) => {
                     let on = match &fragment.type_condition {

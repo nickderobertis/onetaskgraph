@@ -725,4 +725,71 @@ fn the_board_refuses_the_status_option_update_0_12_13_sent_as_github_does() {
             .any(|option| option["name"] == "Cancelled")
     );
 }
+
+/// The board refuses two selections whose merged response would answer one name with two
+/// different fields — even when each selection is valid on its own, the conflict sitting a
+/// level down — as GitHub refuses them, and nothing of the request is answered.
+#[test]
+fn the_board_refuses_selections_whose_merged_response_conflicts() {
+    let (_sandbox, board) = configured();
+    let refused = |query: &str, variables: Value| {
+        let answered = board.graphql_response(query, &variables);
+        assert!(answered.get("data").is_none(), "{answered}");
+        answered["errors"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the board ran {query}: {answered}"))
+            .iter()
+            .map(|error| error["message"].as_str().expect("a message").to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        refused("query { viewer { a: login } viewer { a: id } }", json!({})),
+        ["Field 'a' has a field conflict: login or id?"]
+    );
+    // Two fragments that can never both apply may select different fields under one name,
+    // but never ones whose answers have different shapes.
+    assert_eq!(
+        refused(
+            "query($id:ID!){node(id:$id){... on Issue{x:title} ... on PullRequest{x:number}}}",
+            json!({"id": "I_1"})
+        ),
+        ["Field 'x' has a return_type conflict: `String!` or `Int!`?"]
+    );
+    assert_eq!(
+        refused(
+            "query($id:ID!){node(id:$id){... on Issue{x:author{login}} \
+             ... on PullRequest{x:author{y:login}} ... on PullRequest{x:author{y:url}}}}",
+            json!({"id": "I_1"})
+        ),
+        ["Field 'y' has a field conflict: login or url?"]
+    );
+}
+
+/// Repeated selections whose merged response is consistent are what GitHub runs, and the board
+/// answers them.
+#[test]
+fn the_board_answers_repeated_selections_that_merge() {
+    let (_sandbox, board) = configured();
+    let answered = board.graphql_response(
+        "query($id:ID!){node(id:$id){... on ProjectV2{title shortDescription readme}} \
+         node(id:$id){... on ProjectV2{title}}}",
+        &json!({"id": "PVT-board"}),
+    );
+    assert!(answered.get("errors").is_none(), "{answered}");
+    assert_eq!(answered["data"]["node"]["title"], "Fixture board");
+    for compatible in [
+        "query { viewer { a: login } viewer { a: login name } }",
+        "query($id:ID!){node(id:$id){... on Issue{x:title} ... on PullRequest{x:title}}}",
+        "query($id:ID!){node(id:$id){... on Issue{x:number} ... on PullRequest{x:number}}}",
+    ] {
+        let variables = if compatible.contains("$id") {
+            json!({"id": "I_1"})
+        } else {
+            json!({})
+        };
+        if let Err(errors) = github_schema::validate(compatible, &variables) {
+            panic!("GitHub runs {compatible}: {errors:?}");
+        }
+    }
+}
 // llmlint: ignore-end[tests_mirror_real_usage]

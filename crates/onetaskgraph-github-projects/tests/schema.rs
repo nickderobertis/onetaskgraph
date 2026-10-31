@@ -1267,6 +1267,17 @@ fn the_schema_check_refuses_a_request_breaking_each_rule_its_documentation_lists
         "Field 'repositories' has an argument conflict: {first: 1} or {first: 2}?"
     );
     assert_eq!(
+        refused("query { viewer { a: login } viewer { a: id } }", json!({})),
+        "Field 'a' has a field conflict: login or id?"
+    );
+    assert_eq!(
+        refused(
+            "query($id:ID!){node(id:$id){... on Issue{x:title} ... on PullRequest{x:number}}}",
+            json!({"id": "I_1"})
+        ),
+        "Field 'x' has a return_type conflict: `String!` or `Int!`?"
+    );
+    assert_eq!(
         refused("query{node(id:\"A\",id:\"B\"){id}}", json!({})),
         "There can be only one argument named \"id\""
     );
