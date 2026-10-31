@@ -1241,6 +1241,14 @@ struct Journal {
     /// Every item whose create was sent and not yet answered: a copy failing with one here
     /// cannot say whether the create landed.
     sending: Vec<GlobalId>,
+    /// Every item, by its source id and the destination, whose create this copy has sent — or
+    /// whose earlier attempt's create it took over — while it holds the intent: each further
+    /// destination write for it renews the lease first.
+    owned: Vec<(GlobalId, SourceName)>,
+    /// Whether a renewal found another attempt holding an intent this copy had held: the copy
+    /// then stops, writing nothing more — not even to take its own writes back, which are the
+    /// new holder's to resolve.
+    ownership_lost: bool,
 }
 
 /// One write sent again, as its own request, because the destination stores other content than
@@ -2469,13 +2477,49 @@ impl Engine {
         }
     }
 
+    /// Renew the lease of the intent `source` holds for `destination`, when this copy owns that
+    /// create — before a destination write it sends after its create request — and stop, marking
+    /// the journal, once another attempt holds it.
+    async fn renew_owned(
+        &self,
+        source: &GlobalId,
+        destination: &SourceName,
+        journal: &mut Journal,
+    ) -> Result<(), EngineError> {
+        if !journal
+            .owned
+            .iter()
+            .any(|(item, to)| item == source && to == destination)
+        {
+            return Ok(());
+        }
+        let renewed = self.renew_intent(source, destination, None).await;
+        if matches!(renewed, Err(EngineError::CreateInProgress { .. })) {
+            journal.ownership_lost = true;
+        }
+        renewed
+    }
+
     /// Record the intent to create `item`'s counterpart on the item it is copied from, when the
     /// copy creates one and may write to that item — taking over an earlier attempt's when its
     /// lease has run out, and refusing, before anything is written, when it has not.
     async fn intend(&self, item: &mut Planned) -> Result<bool, EngineError> {
-        let (Target::Create, Item::Task(task)) = (&item.target, &item.item) else {
+        // A create, and an earlier attempt's create this copy found by its intent and finishes:
+        // either way the copy holds the intent while it writes.
+        let found_by_intent = matches!(
+            item.target,
+            Target::Update {
+                found: Found::Intent,
+                ..
+            }
+        );
+        let (Target::Create | Target::Update { .. }, Item::Task(task)) = (&item.target, &item.item)
+        else {
             return Ok(false);
         };
+        if matches!(item.target, Target::Update { .. }) && !found_by_intent {
+            return Ok(false);
+        }
         if item.skipped || item.withheld {
             return Ok(false);
         }
@@ -2498,7 +2542,10 @@ impl Engine {
         .await?;
         let earlier = intent::held(&task.metadata, &item.to);
         let replaces = link_of(&task.metadata, &item.to);
-        let key = intent::key(&item.source, &item.to, replaces.as_ref());
+        let key = match &earlier {
+            Ok(Some(earlier)) if found_by_intent => earlier.key,
+            _ => intent::key(&item.source, &item.to, replaces.as_ref()),
+        };
         // A source that will not hold the key — a file it cannot edit narrowly, an item it no
         // longer answers for, a write it drops — copies as it always did, with no intent, as it
         // then records no link either. Only another attempt's live lease refuses.
@@ -2584,6 +2631,9 @@ impl Engine {
     /// a destination that is not as they left it will copy again over a tree nobody
     /// described.
     async fn undo(&self, mut journal: Journal, error: EngineError) -> EngineError {
+        if journal.ownership_lost {
+            return error;
+        }
         // A copy that takes every write back made nothing, so its intents are taken back with
         // its links, byte for byte; one whose writes may have landed unseen — an answer that
         // never arrived — keeps each intent for its retry to resolve, giving up only the lease.
@@ -4803,6 +4853,15 @@ impl Engine {
                     _ => None,
                 };
                 if self.intend(item).await? {
+                    if matches!(
+                        item.target,
+                        Target::Update {
+                            found: Found::Intent,
+                            ..
+                        }
+                    ) {
+                        journal.owned.push((item.source.clone(), item.to.clone()));
+                    }
                     journal.intents.push((
                         item.source.clone(),
                         item.to.clone(),
@@ -5137,11 +5196,23 @@ impl Engine {
                         depends_on: edges,
                     });
                 }
+                for index in chunk {
+                    let item = &planned[*index];
+                    journal.sending.push(item.source.clone());
+                    if item.intent.is_some() {
+                        journal
+                            .owned
+                            .push((item.source.clone(), destination.name().clone()));
+                    }
+                }
                 let ids = destination
                     .source()
                     .write_tasks(&writes)
                     .await
                     .map_err(|error| create_refused(destination, Creating::Tasks, error))?;
+                journal
+                    .sending
+                    .retain(|sending| chunk.iter().all(|index| &planned[*index].source != sending));
                 let distinct: BTreeSet<&NativeId> = ids.iter().collect();
                 if ids.len() != chunk.len() || distinct.len() != ids.len() {
                     return Err(create_refused(
@@ -7142,9 +7213,8 @@ impl Engine {
             }
         }
         if let Some(plan) = &item.comment_plan {
-            if target.is_none() {
-                self.renew_intent(&item.source, &item.to, None).await?;
-            }
+            self.renew_owned(&item.source, destination.name(), journal)
+                .await?;
             self.write_comments(destination, &written.native, plan, journal)
                 .await?;
         }
@@ -8254,6 +8324,9 @@ impl Engine {
         stamping: Stamping,
         journal: &mut Journal,
     ) -> Result<NativeId, EngineError> {
+        // A further write of an item whose create this copy sent renews its lease first.
+        self.renew_owned(&item.source, destination.name(), journal)
+            .await?;
         let created_kind = item.item.level();
         let suggested = target
             .clone()
@@ -8376,6 +8449,11 @@ impl Engine {
         }
         if target.is_none() {
             journal.sending.push(item.source.clone());
+            if item.intent.is_some() {
+                journal
+                    .owned
+                    .push((item.source.clone(), destination.name().clone()));
+            }
         }
         let mut sent = match &landing {
             Item::Task(task) => task.content.clone(),

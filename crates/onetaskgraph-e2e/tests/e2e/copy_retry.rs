@@ -653,3 +653,133 @@ fn two_copies_of_one_never_copied_task_started_at_once_make_one_issue_and_one_li
         "{metadata:#}"
     );
 }
+
+/// Whether a request is a board write the engine sends after a create's own: a comment added.
+fn adds_comment(document: &str, _: &Value) -> bool {
+    document.contains("addComment(")
+}
+
+/// The intent the note's file records for the board, read off the file as it stands.
+fn board_intent(notes: &std::path::Path) -> Option<(String, String)> {
+    let text = std::fs::read_to_string(notes.join("tasks/A.md")).ok()?;
+    let line = text
+        .lines()
+        .find(|line| line.contains("onetaskgraph.creating"))?;
+    let value: Value = serde_json::from_str(line.split_once(':')?.1.trim()).ok()?;
+    let entry = &value["board"];
+    Some((
+        entry["attempt"].as_str()?.to_owned(),
+        entry["lease_until"].as_str()?.to_owned(),
+    ))
+}
+
+/// A note with one comment, copied with `--comments` onto the board from a folder leasing its
+/// intents for two seconds, the board holding its next answer for three once it has answered
+/// the create: the comment write that follows is sent after the first lease would have run out.
+fn slow_create_with_a_comment() -> Stores {
+    let stores = Stores::leased(2);
+    let body = stores.sandbox.project().join("comment.md");
+    std::fs::write(&body, "A word.\n").expect("a comment body");
+    stores.json(&[
+        "task",
+        "comment",
+        "add",
+        NOTE,
+        "--body-file",
+        body.to_str().expect("a path"),
+    ]);
+    stores.board.after_request(creates_issue, 0, |_| {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    });
+    stores
+}
+
+#[test]
+fn a_holder_renews_its_lease_before_each_destination_write_after_its_create() {
+    let stores = slow_create_with_a_comment();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let notes = stores.notes.clone();
+    let record = seen.clone();
+    // Read the source's intent at the moment the comment write is answered: the holder's, and
+    // leased past now.
+    stores.board.after_request(adds_comment, 0, move |_| {
+        *record.lock().unwrap() = Some((board_intent(&notes), chrono::Utc::now()));
+    });
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "board", "--comments"]);
+    assert_eq!(copied["items"][0]["action"], "created", "{copied:#}");
+    let (intent, at) = seen
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the comment was written");
+    let (_, until) = intent.expect("the intent stood while the comment was written");
+    let until = chrono::DateTime::parse_from_rfc3339(&until).expect("a time");
+    assert!(
+        until > at,
+        "the lease was renewed before the comment write: it ran until {until}, written at {at}"
+    );
+    assert!(
+        stores
+            .source_metadata()
+            .get("onetaskgraph.creating")
+            .is_none()
+    );
+}
+
+#[test]
+fn a_holder_that_finds_another_attempt_holding_its_intent_writes_nothing_more() {
+    let stores = slow_create_with_a_comment();
+    // Another attempt takes the create over while the board is answering the create.
+    let notes = stores.notes.clone();
+    stores.board.after_request(creates_issue, 0, move |_| {
+        let path = notes.join("tasks/A.md");
+        let text = std::fs::read_to_string(&path).expect("the note");
+        let (attempt, _) = board_intent(&notes).expect("the holder's intent");
+        let text = text.replace(&attempt, "00000000-0000-4000-8000-000000000001");
+        std::fs::write(path, text).expect("taken over");
+    });
+    let creates = count(&stores.board, creates_issue);
+    let output = stores.run(
+        &[
+            "--json",
+            "task",
+            "copy",
+            NOTE,
+            "--to",
+            "board",
+            "--comments",
+        ],
+        None,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}\n{:#?}",
+        stdout(&output),
+        stores
+            .board
+            .served()
+            .iter()
+            .map(|(document, _)| document.chars().take(70).collect::<String>())
+            .collect::<Vec<_>>()
+    );
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(
+        failure["failure"]["kind"], "create-in-progress",
+        "{failure:#}"
+    );
+    assert_eq!(
+        count(&stores.board, creates_issue),
+        creates + 1,
+        "its one create"
+    );
+    assert_eq!(
+        count(&stores.board, adds_comment),
+        0,
+        "no comment written after the loss"
+    );
+    // Nothing was taken back: the issue is the new holder's to resolve, and its intent stands.
+    assert_eq!(stores.board.items_titled("Task A").len(), 1);
+    let (attempt, _) = board_intent(&stores.notes).expect("the new holder's intent");
+    assert_eq!(attempt, "00000000-0000-4000-8000-000000000001");
+}
