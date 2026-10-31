@@ -35,6 +35,12 @@ fn lock_of(file: &Path) -> PathBuf {
 impl Holds {
     /// Wait for and take the lock beside `file`.
     pub(crate) fn take(&self, file: &Path) -> Result<(), SourceError> {
+        self.take_within(file, STALE * 2)
+    }
+
+    /// [`Self::take`], waiting for a live holder no longer than `patience`: reached only while
+    /// other processes keep making the lock afresh, since one lock goes stale well within it.
+    fn take_within(&self, file: &Path, patience: Duration) -> Result<(), SourceError> {
         let lock = lock_of(file);
         let started = Instant::now();
         loop {
@@ -91,7 +97,7 @@ impl Holds {
                             }
                         }
                     }
-                    if started.elapsed() > STALE * 2 {
+                    if started.elapsed() > patience {
                         return Err(SourceError::Unavailable {
                             message: format!(
                                 "{} is held by another process that has not let go of it; next: \
@@ -121,5 +127,31 @@ impl Holds {
         {
             let _ = std::fs::remove_file(lock);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The wait's bound, with a patience short enough to reach: in use it is a minute, and a
+    /// lock outlives that only while other processes keep making it afresh, which no test can
+    /// stage in less. Everything else about the hold is driven through the plugin, in
+    /// `tests/item_hold.rs`.
+    #[test]
+    fn a_live_holder_waited_on_past_the_patience_is_refused() {
+        let folder = tempfile::tempdir().expect("a folder");
+        let file = folder.path().join("T-1.md");
+        std::fs::write(&file, "").expect("a record");
+        std::fs::write(lock_of(&file), "").expect("a live holder's lock");
+        let refused = Holds::default()
+            .take_within(&file, Duration::from_millis(50))
+            .expect_err("still held");
+        assert!(
+            matches!(&refused, SourceError::Unavailable { message }
+                if message.contains("has not let go")),
+            "{refused:?}"
+        );
+        assert!(lock_of(&file).exists(), "the holder's lock is left");
     }
 }
