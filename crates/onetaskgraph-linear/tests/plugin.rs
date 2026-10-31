@@ -2758,6 +2758,26 @@ async fn projects_labels_both_issue_directions_and_forward_project_edges_map() {
     );
 }
 
+/// A request that never reached Linear names what the connection met: reqwest's own message
+/// stops at "error sending request", and the cause — refused, reset, no local port left — is
+/// only beneath it.
+#[tokio::test]
+async fn a_request_that_never_reached_linear_names_the_operating_systems_cause() {
+    // Nothing is listening on port 1, so the send itself fails.
+    let refused = source("http://127.0.0.1:1/graphql")
+        .health()
+        .await
+        .unwrap_err();
+    let SourceError::Unavailable { message } = refused else {
+        panic!("an unreachable endpoint is an unavailable source: {refused:?}");
+    };
+    assert!(message.contains("error sending request"), "{message}");
+    assert!(
+        message.contains("(os error"),
+        "the operating system's cause is named: {message}"
+    );
+}
+
 /// A status Linear will not run a document under says which part of it Linear refused.
 ///
 /// Linear answers a rejected document with 400 and its error envelope in the body, so a

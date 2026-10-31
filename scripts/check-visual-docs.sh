@@ -379,6 +379,54 @@ elif channel and container.group(1) != channel.group(1):
         "version is declared; bring the image tag to it."
     )
 
+# ci.yml's `lint` job captures too, by the same two scripts inside the same image, as steps
+# of its own rather than through the reusable workflow. Its image and its scripts are held to
+# the same two sources, so neither capture can drift from the toolchain or from the other.
+ci = read(".github/workflows/ci.yml")
+ci_images = re.findall(r"\brust:([0-9]+\.[0-9]+\.[0-9]+)-bookworm\b", ci)
+if not ci_images:
+    problems.append(
+        ".github/workflows/ci.yml: the lint job's visual docs capture must run in a pinned "
+        "`rust:<X.Y.Z>-bookworm` image, as visual-docs.yml's does."
+    )
+for image in ci_images:
+    if channel and image != channel.group(1):
+        problems.append(
+            f".github/workflows/ci.yml: captures in rust:{image}-bookworm while "
+            f"rust-toolchain.toml pins {channel.group(1)}. rust-toolchain.toml is where that "
+            "version is declared; bring the image tag to it."
+        )
+for script in ("scripts/screenshots-freeze.sh ensure", "scripts/screenshots.sh"):
+    if script not in ci:
+        problems.append(
+            f".github/workflows/ci.yml: the lint job's capture does not run `{script}`, which "
+            "visual-docs.yml's capture-command and the recipes run."
+        )
+# Its screencomp is visual-docs.yml's, its lane is read from screencomp.toml as the reusable
+# workflow reads it, and the trees it captures into are the ones it reports from.
+pinned = used.group(1) if used else None
+for ref in re.findall(r"nickderobertis/screencomp(?:/[\w-]+)?@(\S+)", ci) + re.findall(
+    r"(?m)^\s*version:\s*(v\S+)\s*$", ci
+):
+    if ref != pinned:
+        problems.append(
+            f".github/workflows/ci.yml: uses screencomp {ref} while visual-docs.yml pins "
+            f"{pinned}. One screencomp classifies every capture; bring ci.yml's to that pin."
+        )
+if lane and re.search(rf"\b{re.escape(lane)}\b", ci):
+    problems.append(
+        f".github/workflows/ci.yml: names the lane {lane!r}. The one place it is declared is "
+        "[capture].arches in screencomp.toml; read it with `screencomp arches`, as the lint "
+        "job's lane step does."
+    )
+for tree, given in (("shots/current", "current"), ("shots/verify", "verify-second")):
+    if f"SHOTS_OUT={tree}/" not in ci or not re.search(rf"(?m)^\s*{given}:\s*{tree}\s*$", ci):
+        problems.append(
+            f".github/workflows/ci.yml: the lint job does not capture into {tree}/<lane> and "
+            f"report from it as `{given}: {tree}`, so its report reads a tree its capture "
+            "never wrote."
+        )
+
 for tree in ("/shots/current/", "/shots/verify/", f"/{gallery.strip('/')}/"):
     if tree not in ignored:
         problems.append(

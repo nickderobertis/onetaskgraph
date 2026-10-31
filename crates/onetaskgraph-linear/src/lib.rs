@@ -506,6 +506,23 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+/// A transport error with every cause beneath it: reqwest's own message stops at "error sending
+/// request", and what the connection actually met — refused, reset, a local port it could not
+/// take — is only in its sources.
+pub(crate) fn with_causes(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut message = error.to_string();
+    let mut cause = error.source();
+    while let Some(next) = cause {
+        let said = next.to_string();
+        if !message.ends_with(&said) {
+            message.push_str(": ");
+            message.push_str(&said);
+        }
+        cause = next.source();
+    }
+    message
+}
+
 pub mod change_token;
 /// Ownership prefix for Linear live-test artifacts and scheduled orphan recovery.
 pub const LIVE_ARTIFACT_TITLE_PREFIX: &str = "onetaskgraph live cleanup ";
@@ -1967,7 +1984,7 @@ impl LinearSource {
             .send()
             .await
             .map_err(|e| SourceError::Unavailable {
-                message: e.to_string(),
+                message: with_causes(&e),
             })?;
         let status = response.status();
         let retry = reset_wait(response.headers()).map(|wait| {

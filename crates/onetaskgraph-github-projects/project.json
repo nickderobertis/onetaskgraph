@@ -2,7 +2,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "onetaskgraph-github-projects",
   "projectType": "library",
-  "tags": ["lang:rust", "layer:plugin", "live:github-projects"],
+  "tags": ["lang:rust", "layer:plugin", "live:github-projects", "coverage:uninstrumented"],
   "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[external_service_suite_stays_out_of_the_affected_tier] JSON has no comment to scope this to `test`, whose live tests reach a real API; affected selection is the edge they sit behind, so they run only when this crate changed. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `coverage`: the line floor is one report over every crate's instrumented run, so workspace:coverage runs this crate's whether or not the change reached it. `test` still selects by the graph.",
   "implicitDependencies": [
     "onetaskgraph-github-live",
@@ -50,7 +50,7 @@
       "executor": "nx:run-commands",
       "options": {
         "commands": [
-          "cargo test --quiet -p onetaskgraph-github-projects --all-features --locked",
+          "bash scripts/live-crate-test.sh onetaskgraph-github-projects live real_projects_v2_contract_writes_and_leaves_no_residue",
           "bash scripts/check-live-decline.sh onetaskgraph-github-projects",
           "bash scripts/check-budget-decline.sh"
         ],
@@ -98,7 +98,9 @@
         },
         {
           "env": "GITHUB_LIVE_SOURCE_REVISION"
-        }
+        },
+        "{workspaceRoot}/scripts/live-crate-test.sh",
+        { "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE" }
       ],
       "outputs": ["{workspaceRoot}/target/debug/telemetry/github-live-session"]
     },
@@ -106,11 +108,10 @@
       "executor": "nx:run-commands",
       "dependsOn": ["workspace:coverage-clear"],
       "options": {
-        "command": "bash scripts/rust-coverage.sh onetaskgraph-github-projects"
+        "command": "bash scripts/rust-coverage.sh --build-only onetaskgraph-github-projects"
       },
-      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
-      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run."
+      "//": "Its suite runs every case uninstrumented, in `test`, and contributes no line coverage: the user's decision of 2026-10-30. This only builds its test binaries instrumented and runs none, because onetaskgraph-github-projects-e2e's measured entry-point pairs run them from target/llvm-cov-target. scripts/check-coverage-enforced.sh holds the tag, this target and workspace:coverage's dependency list to one another."
     }
   }
 }

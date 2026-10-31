@@ -18,7 +18,9 @@ import re
 import sys
 from pathlib import Path
 
-MIN_LINES = 95
+# The user's decision of 2026-10-30: 92 over the instrumented suites, the live crates' suites
+# running uninstrumented. The SDKs keep floors of their own at or above it.
+MIN_LINES = 92
 problems = []
 
 
@@ -86,12 +88,13 @@ if not re.search(r'cargo llvm-cov report\b[^\n]*(\\\n[^\n]*)*--fail-under-lines 
         "scripts/rust-coverage.sh: the --report step does not pass --fail-under-lines "
         '"$MIN_LINES" to `cargo llvm-cov report`, so the floor is declared but never enforced'
     )
-if not re.search(r"cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report", coverage_script):
+# The crate run is the `run="$(...)"` one; the build-only one beside it would match them too.
+if not re.search(r"run=\"\$\(cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report", coverage_script):
     problems.append(
         "scripts/rust-coverage.sh: a crate's run no longer passes --no-report, so it clears "
         "every sibling's profiles before it starts and the report is over one crate at best"
     )
-if not re.search(r"cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report[^\n]*(\\\n[^\n]*)*\bnextest\b", coverage_script):
+if not re.search(r"run=\"\$\(cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report[^\n]*(\\\n[^\n]*)*\bnextest\b", coverage_script):
     problems.append(
         "scripts/rust-coverage.sh: a crate's run is no longer `cargo llvm-cov --no-report "
         "nextest`, the one shape the coverage runs share with every repository of this host"
@@ -99,12 +102,41 @@ if not re.search(r"cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report[^\n]*(\\\n[^\n
 
 # A crate is named by its directory, which is what the coverage command and the
 # aggregate's dependency list both spell; the project file's own name is held to it.
+# A crate tagged `coverage:uninstrumented` runs its whole suite in `test` and contributes no
+# coverage, by the user's decision of 2026-10-30: its coverage target is a no-op, or only builds
+# its tests instrumented for another crate's measured run, and the aggregate leaves it out.
+# Every other crate is measured and in the union.
 crate_names = set()
+UNINSTRUMENTED = "coverage:uninstrumented"
 for project_file in sorted(Path("crates").glob("*/project.json")):
     crate = project_file.parent.name
-    crate_names.add(crate)
     display = project_file.as_posix()
     coverage = read_target(project_file, "coverage")
+    try:
+        document = json.loads(project_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        document = {}  # read_target below names the file it cannot read
+    tags = document.get("tags", []) if isinstance(document, dict) else []
+    if UNINSTRUMENTED in tags:
+        if any(str(tag).startswith("test-in-coverage:") for tag in tags):
+            problems.append(f"{display}: tagged {UNINSTRUMENTED} and test-in-coverage, so its suite would run nowhere on Linux")
+        build_only = f"bash scripts/rust-coverage.sh --build-only {crate}"
+        if not coverage:
+            pass  # read_target named the file it cannot read
+        elif coverage.get("executor") == "nx:noop":
+            pass
+        elif command_of(coverage) != build_only:
+            problems.append(
+                f"{display}: tagged {UNINSTRUMENTED}, but its coverage target still runs a "
+                f"measurement; it is a no-op or '{build_only}'"
+            )
+        elif "workspace:coverage-clear" not in names_in(coverage.get("dependsOn")) or coverage.get("cache") is not False:
+            problems.append(
+                f"{display}: its build-only coverage target must depend on workspace:coverage-clear "
+                "and be uncached, or the clear can delete what it built and a cache hit skips the build"
+            )
+        continue
+    crate_names.add(crate)
     if not coverage:
         continue
     if command_of(coverage) != f"bash scripts/rust-coverage.sh {crate}":
@@ -156,10 +188,12 @@ if aggregate:
             "so that crate's run is missing from the union the floor is enforced over"
         )
     for unknown in sorted(depended - crate_names):
-        problems.append(
-            f"{workspace_display}: coverage depends on {unknown!r}'s coverage target, which "
-            "is not a crate of this workspace"
+        reason = (
+            f"which is tagged {UNINSTRUMENTED} and measures nothing"
+            if Path("crates", unknown, "project.json").is_file()
+            else "which is not a crate of this workspace"
         )
+        problems.append(f"{workspace_display}: coverage depends on {unknown!r}'s coverage target, {reason}")
 
 # The Python SDK carries its own floor in pyproject.toml.
 pyproject = Path("sdks/python/pyproject.toml").read_text(encoding="utf-8")

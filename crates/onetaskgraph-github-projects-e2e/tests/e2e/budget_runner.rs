@@ -6,12 +6,9 @@ pub(super) fn directory() -> PathBuf {
     if let Some(directory) = std::env::var_os("GITHUB_ASSET_TELEMETRY_DIR") {
         return directory.into();
     }
-    let executable = std::env::current_exe().unwrap();
-    let mut directory = executable.parent().unwrap().to_path_buf();
-    if directory.file_name().is_some_and(|name| name == "deps") {
-        directory.pop();
-    }
-    directory.join("telemetry/onetaskgraph-github-projects-e2e")
+    onetaskgraph_e2e_support::telemetry::running_build_directory()
+        .unwrap()
+        .join("telemetry/onetaskgraph-github-projects-e2e")
 }
 #[derive(Clone, Copy)]
 pub(super) enum Workload {

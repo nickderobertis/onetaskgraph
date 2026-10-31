@@ -9,6 +9,14 @@
 # credential absent and read exactly like a pass. AGENTS.md records why that step is where a
 # second session per lane would otherwise come from.
 set -euo pipefail
+# The step this drives runs on Linux alone (scripts/check-fixture-discrimination.sh skips off
+# it), so off Linux there is no process to watch; the Linux lane drives it.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32* | *darwin*)
+    echo "check-fixture-discrimination-credential-free: skipped off Linux (the step it drives runs on Linux alone); the Linux lane runs it" >&2
+    exit 0
+    ;;
+esac
 
 fatal() {
   echo "check-fixture-discrimination-credential-free: $1" >&2
@@ -38,7 +46,8 @@ done
 #
 # tr: a value captured from python carries that python's line endings, and on the Windows
 # runner each one arrives as CR LF.
-CREDENTIALS_AND_DEMAND="$(python3 - "$ROOT/$LANE" <<'PY'
+CREDENTIALS_AND_DEMAND="$(
+  python3 - "$ROOT/$LANE" <<'PY'
 import pathlib
 import re
 import sys
@@ -68,7 +77,9 @@ mkdir -p "$scratch/bin" "$scratch/invocations" || fatal \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 
 # The stand-in answers the two outcomes the step demands — green, then a harness that
-# compiled, ran and FAILED — so the step reaches its own conclusion. It finds where to record
+# compiled, ran and FAILED — so the step reaches its own conclusion, and the one `cargo
+# metadata` the step reads its build directory and workspace members from, with a document
+# shaped as cargo's. It finds where to record
 # from its own path rather than from a variable, so a step that later cleared more of the
 # environment could not silently stop it recording. Names only, never values: a name is the
 # whole of what is asked, and a credential exported empty is still one the step failed to
@@ -77,12 +88,34 @@ cat >"$scratch/bin/cargo" <<'STANDIN'
 #!/usr/bin/env bash
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-record="$here/../invocations"
+record="$here/../invocations/${DEPINFO_STYLE:-posix}"
+mkdir -p "$record"
 index=1
 while [ -e "$record/$index.names" ]; do index=$((index + 1)); done
 python3 -c 'import os, sys; sys.stdout.write("".join(name + "\n" for name in sorted(os.environ)))' \
   >"$record/$index.names"
-if [ "$index" -eq 1 ]; then
+if [ "${1:-}" = metadata ]; then
+  printf '{"target_directory": "%s/../build-dir", "workspace_members": ["member"], "packages": [{"id": "member", "name": "onetaskgraph-github-projects"}]}\n' "$here"
+  exit 0
+fi
+: >"$record/$index.test"
+# What a real build leaves in the build directory: a dep-info file naming the suite's sources
+# by their path in the tree it was run from, which the step holds to the copy's own directory.
+mkdir -p "$here/../build-dir/debug/deps"
+dep_info="$here/../build-dir/debug/deps/plugin-standin$index.d"
+{
+  printf '%s:' "$dep_info"
+  if [ "${DEPINFO_STYLE:-posix}" != posix ]; then
+    printf ' %s' crates/*/tests/plugin.rs | sed 's,/,\\,g'
+  else
+    printf ' %s' crates/*/tests/plugin.rs
+  fi
+  if [ "${DEPINFO_STYLE:-posix}" = contaminated ]; then
+    printf ' crates\\onetaskgraph-github-projects\\tests\\plugin.rs'
+  fi
+  printf '\n'
+} >"$dep_info"
+if [ "$(find "$record" -name '*.test' | wc -l | tr -d ' ')" -eq 1 ]; then
   echo "test result: ok. 128 passed; 0 failed; 0 ignored"
   exit 0
 fi
@@ -111,21 +144,31 @@ STEP_STATUS=0
 # The directive sits on the line above the invocation rather than at the head of the
 # paragraph, because its scope is that one line and a reader — or a judge — counting from a
 # directive five continuation lines up cannot tell which line it reached.
-# llmlint: ignore[work_goes_through_command_surface] The line below starts the step under test directly, because what it is under test FOR is the environment that very process receives, which no wrapper can hand it.
-STEP_OUTPUT="$(env "${seeded[@]}" bash "$STEP" 2>&1)" && STEP_STATUS=0 || STEP_STATUS=$?
+for depinfo_style in posix windows contaminated; do
+  # llmlint: ignore[work_goes_through_command_surface] The line below starts the step under test directly, because what it is under test FOR is the environment that very process receives, which no wrapper can hand it.
+  STEP_OUTPUT="$(env "${seeded[@]}" "DEPINFO_STYLE=$depinfo_style" bash "$STEP" 2>&1)" && STEP_STATUS=0 || STEP_STATUS=$?
+  if [ "$depinfo_style" = contaminated ]; then
+    if [ "$STEP_STATUS" -ne 0 ] && [[ "$STEP_OUTPUT" == *"mutated one."* ]]; then
+      continue
+    fi
+    fatal "the Windows dep-info naming both the copy and the real crate was accepted or refused for another reason: $STEP_OUTPUT" \
+      "restore the shared-build isolation check, then rerun"
+  fi
 
-if [ "$STEP_STATUS" -ne 0 ]; then
-  echo "check-fixture-discrimination-credential-free: $STEP did not reach its own conclusion" >&2
-  echo "check-fixture-discrimination-credential-free: behind the stand-in cargo, so the" >&2
-  echo "check-fixture-discrimination-credential-free: recordings say nothing about what its" >&2
-  echo "check-fixture-discrimination-credential-free: invocations received. It said:" >&2
-  printf '%s\n' "$STEP_OUTPUT" | sed 's/^/    /' >&2
-  echo "check-fixture-discrimination-credential-free: next: if the step now needs more of" >&2
-  echo "check-fixture-discrimination-credential-free: cargo than a pass and then a" >&2
-  echo "check-fixture-discrimination-credential-free: 'test result: FAILED', teach the" >&2
-  echo "check-fixture-discrimination-credential-free: stand-in in this check to answer it." >&2
-  exit 1
-fi
+  if [ "$STEP_STATUS" -ne 0 ]; then
+    echo "check-fixture-discrimination-credential-free: $STEP did not reach its own conclusion" >&2
+    echo "check-fixture-discrimination-credential-free: behind the stand-in cargo, so the" >&2
+    echo "check-fixture-discrimination-credential-free: recordings say nothing about what its" >&2
+    echo "check-fixture-discrimination-credential-free: invocations received. It said:" >&2
+    printf '%s\n' "$STEP_OUTPUT" | sed 's/^/    /' >&2
+    echo "check-fixture-discrimination-credential-free: next: if the step now needs more of" >&2
+    echo "check-fixture-discrimination-credential-free: cargo than a pass and then a" >&2
+    echo "check-fixture-discrimination-credential-free: 'test result: FAILED', teach the" >&2
+    echo "check-fixture-discrimination-credential-free: stand-in in this check to answer it." >&2
+    exit 1
+  fi
+
+done
 
 recordings="$(find "$scratch/invocations" -name '*.names' | sort)" || fatal \
   "could not list what the stand-in cargo recorded under $scratch/invocations" \

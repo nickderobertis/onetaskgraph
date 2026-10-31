@@ -2,7 +2,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "onetaskgraph-e2e",
   "projectType": "application",
-  "tags": ["lang:rust", "layer:e2e"],
+  "tags": ["lang:rust", "layer:e2e", "test-in-coverage:crate"],
   "//": "A test-only member holding only tests/, which spawn the binary onetaskgraph:build made: the engine's and the command line's own journeys. Its implicitDependencies are its Cargo dependencies and the crates the binary it drives links, so any change the engine or the binary can see selects it; the binary itself is named in its `default` named input, since a package with only binaries cannot be a Cargo dependency. scripts/check-nx-graph.sh reconciles both against the Cargo graph.",
   "implicitDependencies": [
     "onetaskgraph-core",

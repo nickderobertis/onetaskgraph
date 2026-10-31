@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
-import { validateTelemetry } from "../telemetry.ts";
+import { validateTelemetry } from "../../telemetry.ts";
 import {
   digest,
   evaluate,
@@ -27,7 +27,7 @@ import {
   read,
   root,
   workflows,
-} from "../workflow-graph.mjs";
+} from "../../workflow-graph.mjs";
 
 function recording() {
   const scenario = {
@@ -259,8 +259,8 @@ test("workflow_run fan-out follows actual declarations and rejects cycles", () =
 });
 
 test("local Bun parser rejects unsupported CLI arguments at its real entrypoint", () => {
-  const helper = fileURLToPath(new URL("../semantic-json.mjs", import.meta.url));
-  const input = readFileSync(new URL("../../bun.lock", import.meta.url), "utf8");
+  const helper = fileURLToPath(new URL("../../semantic-json.mjs", import.meta.url));
+  const input = readFileSync(new URL("../../../bun.lock", import.meta.url), "utf8");
   for (const args of [["--unknown"], ["extra"], ["--parse-only", "--parse-only"]]) {
     const result = spawnSync(process.execPath, [helper, ...args], { input, encoding: "utf8" });
     assert.notEqual(result.status, 0);
@@ -284,8 +284,8 @@ test("classifier and carriers enforce invocation and actual filesystem IO failur
     join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "cli-io-"),
   );
   try {
-    const classifier = fileURLToPath(new URL("../macos-policy.mjs", import.meta.url));
-    const carrier = fileURLToPath(new URL("../macos-result.mjs", import.meta.url));
+    const classifier = fileURLToPath(new URL("../../macos-policy.mjs", import.meta.url));
+    const carrier = fileURLToPath(new URL("../../macos-result.mjs", import.meta.url));
     const event = join(scratch, "event.json");
     writeFileSync(event, JSON.stringify({ event_name: "push" }));
     for (const args of [[], ["other"], ["classify", "--unknown", event]])
@@ -313,6 +313,7 @@ test("classifier and carriers enforce invocation and actual filesystem IO failur
         JSON.stringify({
           "macos-lanes": { result: "success", outputs: { macosRequired: "false", reason } },
           macos: { result: "skipped" },
+          "test-macos": { result: "skipped" },
         }),
       );
       assert.notEqual(
@@ -328,6 +329,7 @@ test("classifier and carriers enforce invocation and actual filesystem IO failur
           outputs: { macosRequired: "false", reason: "authorized semantic release" },
         },
         macos: { result: "skipped" },
+        "test-macos": { result: "skipped" },
       }),
     );
     assert.notEqual(
@@ -483,7 +485,7 @@ test("real reporter invalidates previously valid telemetry when workflow source 
     const telemetry = join(scratch, "recording.json");
     writeFileSync(telemetry, JSON.stringify(recording()));
     const command = [
-      join(scratch, ".github/macos-budget.mjs"),
+      join(scratch, ".github/policy/macos-budget.mjs"),
       "--metric",
       "jobs-per-run",
       "--telemetry",
@@ -674,7 +676,7 @@ test("workflow names are validated and status overrides preserve dependent-job s
 });
 
 test("failing architecture discovery propagates the real shell exit and removes its scratch directory", () => {
-  const module = new URL("../workflow-graph.mjs", import.meta.url).href;
+  const module = new URL("../../workflow-graph.mjs", import.meta.url).href;
   const { FORCE_COLOR, NO_COLOR, ...inherited } = process.env;
   // Hosted runners force colour, so Node's error dump carries ANSI codes
   // around the status; the assertion must read the same either way.

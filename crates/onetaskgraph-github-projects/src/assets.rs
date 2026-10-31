@@ -315,7 +315,10 @@ impl GitHubProjectsSource {
                             ),
                     );
                     return Err(SourceError::Unavailable {
-                        message: format!("GitHub asset {name} {stage} request failed: {error}"),
+                        message: format!(
+                            "GitHub asset {name} {stage} request failed: {}",
+                            super::transport_error(&error)
+                        ),
                     });
                 }
             };

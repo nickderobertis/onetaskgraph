@@ -7,26 +7,88 @@ import hashlib
 import platform
 import io
 import json
+import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import tomllib
 import zipfile
-from release_products import PLATFORM_TARGETS, RustTarget, VerificationReport, validate_target
+from release_products import PLATFORM_TARGETS, PlatformTarget, RustTarget, VerificationReport, validate_tag, validate_target
+from release_cd import plan
 from product_versions import SEMANTIC_VERSION_RE, SemanticVersion
 
 PYTHON_EXECUTABLE = str(Path(sys.executable).resolve())
+# Where the distribution journey asks for its timing (ONETASKGRAPH_DISTRIBUTION_TIMINGS=1), it
+# names a file here, and each refusal and packaging run records what it took there for the
+# journey's one summary line; nothing is printed.
+TIMINGS = os.environ.get('ONETASKGRAPH_PRODUCTS_TIMINGS_FILE')
+
+
+def timed(label: str, started: float) -> None:
+    if TIMINGS:
+        with open(TIMINGS, 'a', encoding='utf-8') as record:
+            record.write(f'{time.monotonic() - started:.1f}\t{label}\n')
+# Tampered fixtures are judged by their payload, never by compression level.
+FIXTURE_COMPRESSION = 1
+
+
+def target_row(target: RustTarget) -> PlatformTarget:
+    candidates = [row for row in PLATFORM_TARGETS if row.target == target]
+    if len(candidates) != 1:
+        raise argparse.ArgumentError(None, 'unsupported --target; choose one PLATFORM_TARGETS in scripts/release_products.py declares')
+    return candidates[0]
+
+
+def staging_tree(root: Path, tree: Path) -> None:
+    """The files the production packaging phase reads."""
+    shutil.copytree(root / 'scripts', tree / 'scripts')
+    shutil.copytree(root / 'npm/platforms', tree / 'npm/platforms')
+    shutil.copy2(root / 'justfile', tree / 'justfile')
+
+
+def stage_only(binary: Path, target: RustTarget) -> None:
+    """Drive the real packaging phase with the relative-interpreter PATH, without rebuilding.
+
+    Only the wheel input is constructed here; release_cd.py performs the same extraction,
+    archive/checksum creation and carrier packaging the full distribution journey drives.
+    """
+    root = Path(__file__).resolve().parents[1]
+    selected = target_row(target)
+    manifest = json.loads((root / 'npm/platforms' / selected.npm_platform / 'package.json').read_text())
+    value = manifest.get('version') if isinstance(manifest, dict) else None
+    if not isinstance(value, str) or not SEMANTIC_VERSION_RE.fullmatch(value):
+        raise ValueError('invalid carrier version; restore the version written by scripts/set-version.sh')
+    version = SemanticVersion(value)
+    tag = validate_tag(f'v{version}')
+    with tempfile.TemporaryDirectory(prefix='release staging-') as scratch:
+        tree = Path(scratch)
+        staging_tree(root, tree)
+        probe = os.environ.get('ONETASKGRAPH_RELATIVE_INTERPRETER_PROBE')
+        if probe:
+            shutil.copytree(root / probe, tree / probe, ignore=shutil.ignore_patterns('call-sites.*', 'stdin.*'))
+        wheel_name, = [artifact.file for artifact in plan(selected.platform, tag)
+                       if artifact.target == target and artifact.kind == 'wheel']
+        wheels = tree / 'dist/wheels' / target
+        wheels.mkdir(parents=True)
+        name = 'onetaskgraph.exe' if selected.extension == 'zip' else 'onetaskgraph'
+        with zipfile.ZipFile(wheels / wheel_name, 'w', zipfile.ZIP_DEFLATED, compresslevel=FIXTURE_COMPRESSION) as wheel:
+            wheel.write(binary, f'onetaskgraph_cli-{version}.data/scripts/{name}')
+        subprocess.run(['just', f'release-{selected.platform}',
+                        'package', '--tag', tag, '--dist', shlex.quote(str(tree / 'dist'))],
+                       cwd=tree, check=True, stdout=subprocess.DEVNULL)
+        asset = tree / 'dist/assets' / f'onetaskgraph-{tag}-{target}.{selected.extension}'
+        if not asset.is_file() or not Path(f'{asset}.sha256').is_file():
+            raise ValueError(f'the packaging phase staged no {asset.name} and checksum')
 
 
 def run(wheel_dir: Path, target: RustTarget) -> None:
     root = Path(__file__).resolve().parents[1]
-    candidates = [row for row in PLATFORM_TARGETS if row.target == target]
-    if len(candidates) != 1:
-        raise argparse.ArgumentError(None, 'unsupported --target; choose one PLATFORM_TARGETS in scripts/release_products.py declares')
-    selected = candidates[0]
+    selected = target_row(target)
     manifest = tomllib.loads((root / 'pyproject.toml').read_text())
     project = manifest.get('project')
     if not isinstance(project, dict):
@@ -43,10 +105,9 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         if rejected.returncode != 1 or 'invalid manifest project table' not in rejected.stderr:
             raise ValueError('malformed project table did not produce its boundary diagnostic')
     binary = 'onetaskgraph.exe' if selected.extension == 'zip' else 'onetaskgraph'
-    with tempfile.TemporaryDirectory(prefix='release-products-') as scratch:
+    with tempfile.TemporaryDirectory(prefix='release products-') as scratch:
         tree = Path(scratch)
-        shutil.copytree(root / 'scripts', tree / 'scripts')
-        shutil.copytree(root / 'npm/platforms', tree / 'npm/platforms')
+        staging_tree(root, tree)
         wheels = tree / 'dist/wheels' / target
         shutil.copytree(wheel_dir.resolve(), wheels)
         canonical = tree / f'target/{target}/release/{binary}'
@@ -65,7 +126,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             raise ValueError('multiple wheels were accepted by extraction')
         duplicate.unlink()
         for entries in [[], [f'cli.data/scripts/{binary}', f'other.data/scripts/{binary}']]:
-            with zipfile.ZipFile(wheel_path, 'w') as malformed:
+            with zipfile.ZipFile(wheel_path, 'w', compresslevel=FIXTURE_COMPRESSION) as malformed:
                 for entry in entries:
                     malformed.writestr(entry, b'invalid')
             rejected = subprocess.run(extraction, cwd=tree, capture_output=True, text=True)
@@ -73,10 +134,20 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
                 raise ValueError('malformed wheel scripts were accepted by extraction')
         wheel_path.write_bytes(original_wheel)
         subprocess.run([PYTHON_EXECUTABLE, 'scripts/release-wheel-binary.py', '--wheels', str(wheels), '--binary', str(canonical)], cwd=tree, check=True, stdout=subprocess.DEVNULL)
-        package = [PYTHON_EXECUTABLE, 'scripts/release_cd.py', '--platform', selected.platform, 'package', '--tag', f'v{version}', '--dist', str(tree / 'dist')]
+        package = ['just', f'release-{selected.platform}', 'package', '--tag', f'v{version}', '--dist', shlex.quote(str(tree / 'dist'))]
+        started = time.monotonic()
         subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
+        timed('packaging', started)
+        # Every refusal below corrupts the products this one packaging produced and is judged
+        # against them; they are kept here once and put back at the end, rather than packaged
+        # again, for the final verification.
+        pristine = tree / 'pristine'
+        shutil.copytree(tree / 'dist', pristine / 'dist')
+        shutil.copy2(canonical, pristine / binary)
         command = [PYTHON_EXECUTABLE, 'scripts/verify-release-products.py', '--target', target, '--npm', selected.npm_platform, '--tag', f'v{version}', '--ext', selected.extension, '--dist', str(tree / 'dist')]
+        started = time.monotonic()
         installed = subprocess.run(command + ['--install'], cwd=tree, capture_output=True, text=True)
+        timed('first install', started)
         if installed.returncode:
             print(installed.stderr, file=sys.stderr)
             raise subprocess.CalledProcessError(installed.returncode, command, installed.stdout, installed.stderr)
@@ -86,7 +157,9 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             raise ValueError('installer did not emit the documented single JSON verification result')
 
         def refuses(reason: str) -> None:
+            started = time.monotonic()
             result = subprocess.run(command + ['--install'], cwd=tree, capture_output=True, text=True)
+            timed(f'refusal: {reason}', started)
             if result.returncode == 0 or reason not in result.stderr:
                 raise ValueError(f'tampered staged product did not fail for {reason}: status={result.returncode}, stderr={result.stderr}; repair the production verifier before publishing')
 
@@ -113,7 +186,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         def alter_wheel(suffix: str, replacement: bytes) -> None:
             with zipfile.ZipFile(wheel_path) as wheel:
                 members = [(info, wheel.read(info.filename)) for info in wheel.infolist()]
-            with zipfile.ZipFile(wheel_path, 'w') as wheel:
+            with zipfile.ZipFile(wheel_path, 'w', compresslevel=FIXTURE_COMPRESSION) as wheel:
                 for info, contents in members:
                     wheel.writestr(info, replacement if info.filename.endswith(suffix) else contents)
 
@@ -122,10 +195,10 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         archive = tree / 'dist/assets' / f'onetaskgraph-v{version}-{target}.{selected.extension}'
         original_archive = archive.read_bytes()
         if selected.extension == 'zip':
-            with zipfile.ZipFile(archive, 'w') as packed:
+            with zipfile.ZipFile(archive, 'w', compresslevel=FIXTURE_COMPRESSION) as packed:
                 packed.writestr(binary, original_binary + b'corrupt')
         else:
-            with tarfile.open(archive, 'w:gz') as packed:
+            with tarfile.open(archive, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                 info = tarfile.TarInfo(binary)
                 info.size = len(original_binary) + len(b'corrupt')
                 packed.addfile(info, io.BytesIO(original_binary + b'corrupt'))
@@ -135,18 +208,18 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             archive.write_bytes(b'not a tar archive')
             refuses('verification failed')
             for names in [[], [binary, binary], [binary, 'extra']]:
-                with tarfile.open(archive, 'w:gz') as packed:
+                with tarfile.open(archive, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                     for name in names:
                         info = tarfile.TarInfo(name)
                         info.size = len(original_binary)
                         packed.addfile(info, io.BytesIO(original_binary))
                 refuses('expected exactly one archive CLI entry')
-            with tarfile.open(archive, 'w:gz') as packed:
+            with tarfile.open(archive, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                 info = tarfile.TarInfo('nested/' + binary)
                 info.size = len(original_binary)
                 packed.addfile(info, io.BytesIO(original_binary))
             refuses('archive CLI must be at the root')
-            with tarfile.open(archive, 'w:gz') as packed:
+            with tarfile.open(archive, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                 info = tarfile.TarInfo(binary)
                 info.type = tarfile.SYMTYPE
                 info.linkname = 'other'
@@ -162,7 +235,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         original_carrier = carrier.read_bytes()
         with tarfile.open(carrier) as packed:
             members = [(info, packed.extractfile(info).read() if info.isfile() else None) for info in packed.getmembers()]
-        with tarfile.open(carrier, 'w:gz') as packed:
+        with tarfile.open(carrier, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
             for info, contents in members:
                 if info.name == f'package/bin/{binary}':
                     contents += b'corrupt'
@@ -174,14 +247,14 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             contract_members = [(info, packed.extractfile(info).read() if info.isfile() else None) for info in packed.getmembers()]
         for path, kind in [(f'package/bin/{binary}', 'carrier CLI entry'), ('package/package.json', 'carrier manifest entry')]:
             for duplicate in [False, True]:
-                with tarfile.open(carrier, 'w:gz') as packed:
+                with tarfile.open(carrier, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                     for info, data in contract_members:
                         if info.name != path or duplicate:
                             packed.addfile(info, io.BytesIO(data) if data is not None else None)
                         if info.name == path and duplicate:
                             packed.addfile(info, io.BytesIO(data) if data is not None else None)
                 refuses('expected exactly one ' + kind)
-            with tarfile.open(carrier, 'w:gz') as packed:
+            with tarfile.open(carrier, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                 for info, data in contract_members:
                     if info.name == path:
                         bad = tarfile.TarInfo(path)
@@ -193,7 +266,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             refuses(kind + ' must be a regular file')
             carrier.write_bytes(original_carrier)
         # llmlint: ignore[changed_behavior_has_e2e] This fixture explicitly opens in write mode ('w:gz'); the real native product journey and distribution test execute this malformed-manifest refusal and its recovery.
-        with tarfile.open(carrier, 'w:gz') as packed:
+        with tarfile.open(carrier, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
             for info, data in contract_members:
                 if info.name == 'package/package.json':
                     info = tarfile.TarInfo(info.name)
@@ -238,7 +311,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         original_carrier = carrier.read_bytes()
         with tarfile.open(carrier) as packed:
             members = [(info, packed.extractfile(info).read() if info.isfile() else None) for info in packed.getmembers()]
-        with tarfile.open(carrier, 'w:gz') as packed:
+        with tarfile.open(carrier, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
             for info, contents in members:
                 if info.name == 'package/package.json':
                     manifest = json.loads(contents)
@@ -251,7 +324,7 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
         for field, invalid, reason in [('version', '999.0.0', 'carrier identity mismatch'), ('os', ['foreign'], 'carrier platform mismatch'), ('cpu', ['foreign'], 'carrier platform mismatch')]:
             with tarfile.open(carrier) as packed:
                 members = [(info, packed.extractfile(info).read() if info.isfile() else None) for info in packed.getmembers()]
-            with tarfile.open(carrier, 'w:gz') as packed:
+            with tarfile.open(carrier, 'w:gz', compresslevel=FIXTURE_COMPRESSION) as packed:
                 for info, contents in members:
                     if info.name == 'package/package.json':
                         manifest = json.loads(contents)
@@ -287,20 +360,28 @@ def run(wheel_dir: Path, target: RustTarget) -> None:
             text = io.StringIO()
             csv.writer(text, lineterminator='\n').writerows(rows)
             contents[record] = (contents[record][0], text.getvalue().encode())
-            with zipfile.ZipFile(wheel_path, 'w') as wheel:
+            with zipfile.ZipFile(wheel_path, 'w', compresslevel=FIXTURE_COMPRESSION) as wheel:
                 for info, data in contents.values():
                     wheel.writestr(info, data)
+            started = time.monotonic()
             subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
+            timed('packaging', started)
             refuses(reason)
             canonical.write_bytes(original_binary)
             wheel_path.write_bytes(original_wheel)
-            subprocess.run(package, cwd=tree, check=True, stdout=subprocess.DEVNULL)
+        # Each corrupted case replaces its predecessor; restore the pristine products once,
+        # before the final successful verification, rather than between corruptions.
+        shutil.rmtree(tree / 'dist')
+        shutil.copytree(pristine / 'dist', tree / 'dist')
+        shutil.copy2(pristine / binary, canonical)
         subprocess.run(command, cwd=tree, check=True, stdout=subprocess.DEVNULL)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, epilog='Exit codes: 0 journey passed; 1 packaging/install/proof failure; 2 invalid invocation. Repair the named packaging phase or staged product before retrying.')
-    parser.add_argument('--wheel-dir', type=Path, required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument('--wheel-dir', type=Path)
+    inputs.add_argument('--stage-only', type=Path, metavar='BINARY', help='run packaging alone over this built binary')
     parser.add_argument('--target', required=True)
     args = parser.parse_args()
     try:
@@ -308,7 +389,10 @@ def main() -> None:
     except ValueError as error:
         parser.error(f'{error}; next: choose a Rust target scripts/release_products.py declares')
     try:
-        run(args.wheel_dir, RustTarget(args.target))
+        if args.stage_only is not None:
+            stage_only(args.stage_only, RustTarget(args.target))
+        else:
+            run(args.wheel_dir, RustTarget(args.target))
     except argparse.ArgumentError as error:
         parser.error(f'{error}; next: choose a Rust target scripts/release_products.py declares')
     except (ValueError, KeyError, OSError, subprocess.CalledProcessError, zipfile.BadZipFile, tarfile.TarError) as error:

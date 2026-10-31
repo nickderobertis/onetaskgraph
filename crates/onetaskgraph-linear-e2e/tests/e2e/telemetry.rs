@@ -7,7 +7,8 @@
 //! `budget_runner::report` reads it back with [`recorded`] for `onebudgetspec check`. The
 //! directory is `<target>/<profile>/telemetry/onetaskgraph-linear-e2e`, found from the running
 //! test executable the way `onetaskgraph_e2e_support::binary` finds the binary, so the writer and
-//! the reader agree on it whatever the target directory is. It is never committed, and it is the
+//! the reader agree on it whatever the target directory is — an instrumented writer standing in
+//! for `test` included (`onetaskgraph_e2e_support::telemetry::build_directory`). It is never committed, and it is the
 //! `test` target's declared output, so a cache hit of that target restores what its last run
 //! recorded. [`DIRECTORY`] names another, so a test can drive the runner over telemetry of its
 //! own without touching what the journeys recorded.
@@ -30,15 +31,9 @@ pub fn directory() -> PathBuf {
     if let Some(directory) = std::env::var_os(DIRECTORY) {
         return PathBuf::from(directory);
     }
-    let executable = std::env::current_exe().expect("the running test executable has a path");
-    let mut directory = executable
-        .parent()
+    onetaskgraph_e2e_support::telemetry::running_build_directory()
         .expect("a test executable sits inside a build directory")
-        .to_path_buf();
-    if directory.file_name().is_some_and(|leaf| leaf == "deps") {
-        directory.pop();
-    }
-    directory.join(Path::new(BELOW_BUILD))
+        .join(Path::new(BELOW_BUILD))
 }
 
 /// Record `value` as `budget`'s telemetry: the figure and how it was reached, and no judgement
@@ -330,4 +325,48 @@ fn live_documents_recorded(budget: &str) -> Result<(f64, Option<String>), String
         }
     }
     Ok((total as f64, Some(details.join("; "))))
+}
+
+/// The Linear journals restate the harness's build-directory rule, because the plugin's own tests
+/// may not depend on it; the two answer every shape of path alike.
+#[test]
+fn journal_build_directory_agrees_with_the_harness() {
+    use crate::linear_assets::document_lifecycle::journal;
+    for executable in [
+        "/w/target/debug/deps/e2e-1234",
+        "/w/target/llvm-cov-target/debug/deps/e2e-1234",
+        "/w/target/llvm-cov-target/release/deps/live-1",
+        "/w/target/debug/e2e",
+        "/w/elsewhere/deps/e2e",
+    ] {
+        for under_coverage in [false, true] {
+            let path = Path::new(executable);
+            assert_eq!(
+                journal::build_directory(path, under_coverage),
+                onetaskgraph_e2e_support::telemetry::build_directory(path, under_coverage),
+                "{executable} under_coverage={under_coverage}"
+            );
+        }
+    }
+    assert_eq!(
+        journal::build_directory(
+            Path::new("/w/target/llvm-cov-target/debug/deps/e2e-1234"),
+            true
+        ),
+        Some(PathBuf::from("/w/target/debug"))
+    );
+    // And both read the variable alike: `1` or nothing, every other value refused.
+    for value in [
+        None,
+        Some(""),
+        Some("1"),
+        Some("0"),
+        Some("yes"),
+        Some("true"),
+    ] {
+        let value = value.map(std::ffi::OsStr::new);
+        let theirs = onetaskgraph_e2e_support::telemetry::under_coverage(value);
+        assert_eq!(journal::under_coverage(value), theirs, "{value:?}");
+    }
+    assert!(journal::under_coverage(Some(std::ffi::OsStr::new("yes"))).is_err());
 }

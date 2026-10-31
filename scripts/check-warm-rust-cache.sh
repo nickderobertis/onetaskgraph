@@ -2,8 +2,9 @@
 # Drive scripts/warm-rust-cache.sh over a scratch copy of itself, behind a stand-in `cargo` that
 # answers `cargo metadata` with two crates and records every other invocation, and a stand-in
 # distribution journey that records its arguments. Each leg must build every crate's test units
-# with every feature and with its defaults, the Linux leg each crate's instrumented units too,
-# and both the distribution journey's release build alone; any other invocation is refused.
+# with every feature and with its defaults, the Linux leg each crate's instrumented units and
+# the crate publication's packaging verification too, and both the distribution journey's
+# release build alone; any other invocation is refused.
 # Each build scripts/pr-build-commands.sh reads test-linux making has to be one of those
 # shapes. A build the warmer stops making leaves every later pull request cold, and nothing
 # else says so.
@@ -30,6 +31,9 @@ trap 'rm -rf "$scratch"' EXIT
 tree="$scratch/tree"
 { mkdir -p "$tree/scripts" "$scratch/bin" && cp "$root/scripts/warm-rust-cache.sh" "$tree/scripts/"; } \
   || fail "could not plant the warmer in $scratch" "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+# Spelled as the warmer resolves its own root, `cd` and `pwd`: macOS's TMPDIR ends in a slash,
+# and the doubled one it leaves in $scratch is not in the target directory the warmer names.
+tree="$(cd "$tree" && pwd)"
 cat >"$tree/scripts/test-distribution.sh" <<'STUB'
 echo "distribution $*" >>"$WARM_RECORD"
 STUB
@@ -57,6 +61,7 @@ expected() {
     echo "cargo test --quiet --no-run --locked -p $crate"
     [ "$1" = plain ] || echo "cargo llvm-cov --no-report nextest --package $crate --all-features --locked -E none() --no-tests=pass"
   done
+  [ "$1" = plain ] || echo "cargo package -p alpha -p beta --locked --allow-dirty --target-dir $tree/target/crate-publication"
   echo "distribution --release-build-only"
 }
 
@@ -86,7 +91,7 @@ def shape(line):
     for word in words[1:]:
         if skip:
             skip = False
-        elif word in ("-p", "--package", "--test", "-E"):
+        elif word in ("-p", "--package", "--test", "-E", "--target-dir"):
             skip = True
         elif word not in ("--quiet", "--no-run", "--no-tests=pass"):
             kept.append(word)
@@ -131,7 +136,7 @@ WARM_FAIL="-p beta" leg broken --instrumented || status=$?
 journey="$scratch/journey"
 journey_bin="$scratch/journey-bin"
 { mkdir -p "$journey/scripts" "$journey/crates/onetaskgraph" "$journey_bin" \
-  && cp "$root/scripts/test-distribution.sh" "$root/scripts/cli_wheel_lock.py" "$journey/scripts/"; } \
+  && cp "$root/scripts/test-distribution.sh" "$root/scripts/cli_wheel_lock.py" "$root/scripts/file-lock.sh" "$journey/scripts/"; } \
   || fail "could not plant the distribution journey in $scratch" "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 printf '[package]\nname = "onetaskgraph"\nversion = "1.2.3"\n' >"$journey/crates/onetaskgraph/Cargo.toml"
 cat >"$scratch/uv.rs" <<'RUST'

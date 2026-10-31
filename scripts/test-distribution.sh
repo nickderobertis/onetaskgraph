@@ -1,5 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Hand this invocation to the relative-interpreter check before any build work begins. Only
+# the whole journey is the check's to run: it takes no arguments to pass on, so a run with one
+# (the warmer's `--release-build-only`, the targeted pass's `--interpreter-only`) runs here.
+if [ "${ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER:-}" = 1 ] && [ "$#" -eq 0 ]; then
+  exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-relative-interpreter.sh" scripts/test-distribution.sh
+fi
+# One run of this journey at a time in a tree, held for the whole run: two runs build, move
+# and package the same files under target/ — test-macos failed when maturin found
+# target/maturin changed under it, when scripts:test re-ran the whole journey beside
+# scripts:distribution-test.
+# `--interpreter-only` builds and moves nothing, so it takes no lock and waits on no journey.
+if [ "${ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED:-}" != 1 ] && [ "$*" != --interpreter-only ]; then
+  journey_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  [ -r "$journey_root/scripts/file-lock.sh" ] && source "$journey_root/scripts/file-lock.sh" || { echo "distribution test could not load $journey_root/scripts/file-lock.sh; next: restore it with 'git checkout -- scripts/file-lock.sh', then rerun" >&2; exit 1; }
+  export ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED=1
+  # The lock is the target directory's this journey builds into: CARGO_TARGET_DIR's, as
+  # scripts/cli_wheel_lock.py reads it, else this checkout's.
+  with_file_lock "${CARGO_TARGET_DIR:-$journey_root/target}/.test-distribution.lock" bash "$journey_root/scripts/test-distribution.sh" "$@"
+  exit 0
+fi
 report_failure() {
   echo "distribution setup failed at line $2 (exit $1): $3; next: rerun scripts/test-distribution.sh and fix that command" >&2
 }
@@ -57,7 +77,15 @@ start_server() {
     exit 1
   }
 }
+# The trace above, summed per line: what each line spent until the next one began.
+report_timings() {
+  [ -s "$tmp/journey.trace" ] || return 0
+  "$python_bin" "$root/scripts/ci_timings.py" trace "$tmp/journey.trace" "$tmp/products.timings" >&2 \
+    || echo "distribution test: its timing summary failed, for the reason above; the journey's own result stands" >&2
+}
 cleanup() {
+  { set +x; } 2>/dev/null
+  report_timings
   stop_server "${http_server_pid:-}"
   stop_server "${registry_server_pid:-}"
   stop_server "${npm_registry_server_pid:-}"
@@ -87,17 +115,36 @@ name="onetaskgraph-${tag}-${target}.${ext}"
 build_release_wheel() {
   (cd "$root" && "$python_bin" scripts/cli_wheel_lock.py uv tool run --from 'maturin>=1.9,<2' maturin build --release --locked --target "$target" --out "$1")
 }
-# Exit 2 is a usage error: any argument but --release-build-only alone.
+# Exit 2 is a usage error: any argument but --release-build-only or --interpreter-only alone.
+# `--interpreter-only` is this journey's own call sites for scripts/test-python-call-sites.sh:
+# every one of them starts "$python_bin", resolved above, and runs it from inside a scratch
+# tree, so the resolution followed by a change of directory is the whole of what they share.
 case "$#:${1:-}" in
   0:) ;;
   1:--release-build-only) build_release_wheel "$tmp/python-wheel"; exit 0 ;;
-  *) echo "distribution test takes no argument or --release-build-only alone, not '$*'; next: run scripts/test-distribution.sh with none" >&2; exit 2 ;;
+  1:--interpreter-only) (cd "$tmp" && "$python_bin" -c 'pass'); exit 0 ;;
+  *) echo "distribution test takes no argument, --release-build-only or --interpreter-only alone, not '$*'; next: run scripts/test-distribution.sh with none" >&2; exit 2 ;;
 esac
+# Asked for with ONETASKGRAPH_DISTRIBUTION_TIMINGS=1 (scripts/ci-job.sh asks on the hosted
+# Windows runner, where this journey is slow and nothing else says where), every line of the
+# whole journey is timed into a trace, and one line on exit names its slowest lines and its
+# slowest packaging cases (scripts/test-release-products.py records those). bash 5's
+# EPOCHREALTIME costs no process per line; an older bash (macOS's 3.2) is not traced.
+if [ "${ONETASKGRAPH_DISTRIBUTION_TIMINGS:-}" = 1 ] && [ "${BASH_VERSINFO[0]}" -ge 5 ]; then
+  exec 7>"$tmp/journey.trace"
+  export ONETASKGRAPH_PRODUCTS_TIMINGS_FILE="$tmp/products.timings"
+  BASH_XTRACEFD=7
+  PS4='+${EPOCHREALTIME} ${BASH_SOURCE##*/}:${LINENO}: '
+  set -x
+fi
 # The binary is what onetaskgraph:build produced and this target depends on; nothing here
 # builds it, because a cargo invocation of that package from anywhere else replaces the
 # file while the Rust integration tests are spawning it (scripts/check-workspace-config.sh).
 [[ -f "$root/target/debug/$binary" ]] || { echo "distribution test found no $root/target/debug/$binary; next: run 'scripts/nx.sh run onetaskgraph:build' from the workspace root, then rerun scripts/test-distribution.sh" >&2; exit 1; }
 if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
+# The cases below tamper with this archive and put it back; a kept copy puts back the very
+# archive this made, without compressing the binary again.
+cp "$tmp/releases/$tag/$name" "$tmp/pristine-$name"
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 install_output=$(ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh")
 printf '%s\n' "$install_output" | grep -q "installed $tag to" || { echo "installer success omitted its destination; next: inspect the success contract" >&2; exit 1; }
@@ -146,7 +193,7 @@ grep -q 'unsafe member path' "$tmp/error" || { cat "$tmp/error" >&2; echo "unsaf
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="ftp://invalid/releases" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "unsupported download scheme was accepted; next: inspect source validation" >&2; exit 1; fi
 grep -q 'download base must use' "$tmp/error" || { cat "$tmp/error" >&2; echo "unsupported-scheme failure omitted its reason; next: inspect source diagnostics" >&2; exit 1; }
 rm "$tmp/releases/$tag/$name"
-if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
+cp "$tmp/pristine-$name" "$tmp/releases/$tag/$name"
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 cat > "$tmp/release-server.py" <<'PY'
 import http.server
@@ -248,7 +295,7 @@ if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > 
 if ONETASKGRAPH_VERSION="$tag" ONETASKGRAPH_RELEASE_BASE_URL="file://$tmp/releases" ONETASKGRAPH_CHECKSUM_BASE_URL="file://$tmp/canonical" ONETASKGRAPH_INSTALL_DIR="$tmp/bin" "$root/scripts/install.sh" 2>"$tmp/error"; then echo "archive without binary was accepted; next: inspect binary validation" >&2; exit 1; fi
 grep -q 'archive binary is not a regular file' "$tmp/error" || { cat "$tmp/error" >&2; echo "missing-archive-binary failure omitted its reason; next: inspect archive diagnostics" >&2; exit 1; }
 rm "$tmp/releases/$tag/$name"
-if [[ $ext == zip ]]; then (cd "$root/target/debug" && 7z a "$tmp/releases/$tag/$name" "$binary" >/dev/null); else tar -czf "$tmp/releases/$tag/$name" -C "$root/target/debug" "$binary"; fi
+cp "$tmp/pristine-$name" "$tmp/releases/$tag/$name"
 if command -v sha256sum >/dev/null; then sha256sum "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; else shasum -a 256 "$tmp/releases/$tag/$name" > "$tmp/canonical/$tag/$name.sha256"; fi
 mkdir "$tmp/no-hash-path"
 for utility in awk cp dirname grep install mkdir mktemp rm sed tar uname; do
@@ -376,13 +423,37 @@ for supported in linux:x64 linux:arm64 darwin:arm64 win32:x64; do
     *) echo "the launcher resolved '$resolved' for $supported_key, not its own carrier's binary; next: inspect the package map in npm/cli/bin/onetaskgraph.js" >&2; exit 1;;
   esac
 done
-uv run --quiet --locked --package onetaskgraph-sdk onetaskgraph --help | grep -q 'Usage:' || { echo "Python SDK dependency did not supply the real command; next: inspect the SDK carrier dependency" >&2; exit 1; }
 mkdir -p "$tmp/python-wheel"
 build_release_wheel "$tmp/python-wheel"
 "$python_bin" "$root/scripts/test-release-products.py" --wheel-dir "$tmp/python-wheel" --target "$target"
 cli_wheel=$(find "$tmp/python-wheel" -maxdepth 1 -type f -name 'onetaskgraph_cli-*.whl' -print -quit)
 [[ -n $cli_wheel ]] || { echo "Python CLI build produced no wheel; next: inspect the maturin package configuration" >&2; exit 1; }
 uv run --quiet --isolated --no-project --with "$cli_wheel" onetaskgraph --help | grep -q 'Usage:' || { echo "installed Python CLI wheel did not render help; next: inspect the wheel's binary entry point" >&2; exit 1; }
+# The SDK's own dependency supplies that command: the SDK alone is installed, from this tree
+# and without the workspace's sources, so the onetaskgraph-cli it requires resolves to the
+# wheel just built. The command it installs is held to that wheel's bytes, so a resolution
+# that reached the registry instead cannot pass for it.
+uv run --quiet --isolated --no-project --no-sources --find-links "$tmp/python-wheel" --with "$root/sdks/python" python - "$cli_wheel" <<'PY' || { echo "Python SDK dependency did not supply the real command from the CLI wheel just built; next: inspect the onetaskgraph-cli dependency in sdks/python/pyproject.toml" >&2; exit 1; }
+import hashlib, shutil, subprocess, sys, zipfile
+
+installed = shutil.which("onetaskgraph")
+if installed is None:
+    raise SystemExit("installing the SDK installed no onetaskgraph command")
+with zipfile.ZipFile(sys.argv[1]) as wheel:
+    scripts = [n for n in wheel.namelist() if ".data/scripts/" in n and n.split("/")[-1] in ("onetaskgraph", "onetaskgraph.exe")]
+    if len(scripts) != 1:
+        raise SystemExit(f"the CLI wheel carries {scripts}, not one onetaskgraph command")
+    built = hashlib.sha256(wheel.read(scripts[0])).hexdigest()
+with open(installed, "rb") as command:
+    if hashlib.sha256(command.read()).hexdigest() != built:
+        raise SystemExit(f"{installed} is not the command the CLI wheel just built carries")
+shown = subprocess.run([installed, "--help"], capture_output=True, text=True, encoding="utf-8")
+if shown.returncode != 0 or "Usage:" not in shown.stdout:
+    raise SystemExit(
+        f"{installed} --help exited {shown.returncode}; it must exit 0 and print its usage: "
+        f"{shown.stdout}{shown.stderr}"
+    )
+PY
 assert_version_error() {
   expected_message=$1
   shift

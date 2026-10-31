@@ -336,8 +336,17 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   destination pre-populated as the copy would leave it and an assertion that nothing
   changed.** That proves what a copy *would* write; it does not prove one landed, and the
   difference is the whole of what the journey is for.
-- **Coverage: 95% lines over the union of every crate's run, enforced once, and that
-  reverses an earlier decision.** Each crate's `coverage` target runs its own tests
+- **Coverage: 92% lines over the union of every measured crate's run, enforced once, and
+  that reverses an earlier decision.** By the user's decision of 2026-10-30 the live crates'
+  own suites (`onetaskgraph-github-projects` and `onetaskgraph-linear`, tagged
+  `coverage:uninstrumented`) run every case uninstrumented in `test` and are not part of that
+  union, and the floor over the rest is 92%, not 95%. Their `coverage` target measures nothing:
+  the Linear plugin's is a no-op, and the GitHub Projects plugin's only builds its tests
+  instrumented (`rust-coverage.sh --build-only`), because its e2e suite's measured entry-point
+  pairs run them. `workspace:coverage` does not depend on either, and
+  `scripts/check-coverage-enforced.sh` holds tag, target and aggregate to one another. Measured
+  on `54327de7`, the union was 95.75% of lines with every suite instrumented, and is 92.69%
+  without the live crates' suites. Each crate's `coverage` target runs its own tests
   instrumented and keeps its raw profiles (`cargo llvm-cov --no-report nextest -p <crate>`,
   the one shape every Rust repository of this host measures with) in cargo-llvm-cov's one
   `target/llvm-cov-target`; the `workspace` project's `coverage` target depends on every
@@ -358,7 +367,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   list reconciled against the crates in the tree both ways, so a crate cannot fall out of
   the union in silence. The *measurement* is skipped on Windows with a printed notice
   (instrumentation there does not attribute subprocess coverage); the functional lanes
-  still gate that platform.
+  still gate that platform. **The pull-request jobs measure on Linux alone**, by the user's
+  decision of 2026-10-17: `test-macos` and `test-windows` run every suite once,
+  uninstrumented (`scripts/ci-job.sh`).
 - **One target directory per clone, and the binary the journeys spawn is built once.**
   `.cargo/config.toml` points every cargo invocation inside a clone at `<clone>/target` and
   builds dev and test at `debug = 0`, with no debuginfo; nothing in the tree names a target directory of its
@@ -439,10 +450,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   CI derives its base explicitly from the merge base or `github.event.before`, because
   an implicit base can select the wrong changes. Pushes run no repository checks;
   contributors can run `NX_BASE=<ref> just check` or `just gate` manually. A push to main
-  does build, testing nothing, the Rust cache `test-linux` and `test-windows` restore
-  (`.github/workflows/rust-cache-warm.yml`): a pull request restores only a cache saved on
-  its own ref or on main, so nothing else could give a new one a warm build. It has no macOS
-  leg, so a push to main still schedules no Mac job.
+  does build, testing nothing, the Rust cache `test-linux`, `test-windows` and `test-macos`
+  restore (`.github/workflows/rust-cache-warm.yml`): a pull request restores only a cache
+  saved on its own ref or on main, so nothing else could give a new one a warm build.
   `scripts/check-live-lane-selection.sh`, a command in `scripts:test`, holds all of that:
   it puts the five diffs to the real decision over real git states, drives the real recipes
   for both CI paths, puts three diffs to real Nx, and ENUMERATES the paths from
@@ -523,6 +533,11 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   would take the other's. It cannot happen while the lane runs in exactly one process per
   attempt — the other steps clear the credential — so a change that runs a second
   credentialed process per attempt must revisit it; `tests/sweep_gate.rs` pins it.
+  The asset entry point is the main one's second process and still writes after it, never
+  beside it: the e2e suite's test target no longer waits on the plugin's, so its loopback
+  binaries run during the main session, but the asset journey makes no request until the
+  main record is complete, which follows the main journey's own cleanup, or the main entry
+  point has ended without it (`wait_for_current_main` in that suite's `tests/live.rs`).
   **The scheduled janitor is cleanup, not a test lane.**
   `.github/workflows/live-janitor.yml` runs hourly or by human dispatch, never from a
   project's `test` or `coverage` target. It enumerates issues, their board #1 items,
@@ -1605,17 +1620,22 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   combines the former Mac check and install assertions sequentially. Linux carriers keep
   `check (macos-latest)` and `install path (macos-latest)` required on every PR, using
   `always()` and `.github/macos-result.mjs` to refuse failed, cancelled or missing proofs.
-  Main pushes never schedule Mac. `.github/macos-policy.mjs` admits a release-only PR
-  only from a same-repository `release-plz-` branch with a semantic version/changelog-only
-  diff; an unreadable PR requires coverage. The author is not authority: release-plz
+  Main pushes never schedule Mac, with one exception the user approved on 2026-10-17: the
+  build-only `warm-macos` job of `.github/workflows/rust-cache-warm.yml`, because a pull
+  request waits on its slowest job and `test-macos` restores no other cache. It skips a
+  release merge — a push `.github/semantic-release.py` reads as versions and changelogs alone,
+  which rust-cache does not store — so `onetaskgraph-macos-runs-per-change` is 3, not 2.
+  `.github/macos-policy.mjs` admits a release-only PR only from a same-repository
+  `release-plz-` branch with a semantic version/changelog-only diff; an unreadable PR requires coverage. The author is not authority: release-plz
   uses the owner's PAT. An explicit manual diagnostic is default off.
   A release's one Mac job is `build-macos`, which builds the Apple Silicon wheel once and
   uses its binary for the archive and npm carrier; Intel macOS is no longer released, and
   the installer and npm launcher refuse it by name. Its native install/run proof precedes
   its own publication. The production packaging journey and
   `.github/tests/` hold payload hashes, required names, event routing and reusable calls;
-  `github-workflows:test` records ignored telemetry and its `budgets` target alone applies
-  the two limits in `.github/budgets.yaml`. No Mac work runs on schedules or downstream
+  `github-workflow-policy:test` records ignored telemetry and its `budgets` target alone applies
+  the two limits in `.github/policy/budgets.yaml` — a project of its own, so a crate edit that
+  selects `github-workflows`' CD journeys does not also run the policy proofs. No Mac work runs on schedules or downstream
   automatic triggers.
 - **Registry lag alone never proposes a release.** `scripts/select-release-version.sh`
   recovers a partly failed publish only when `release-plz.toml`'s own `release_commits`
@@ -1729,9 +1749,13 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   looking for, live-session paths that "do not all consult the decision". The first of those
   refused this repository's own merge path. Resolve it once, absolutely, where the script
   resolves it. `scripts/check-relative-interpreter.sh`, a command in `scripts:test`, runs the
-  three scripts that need it again with a relative entry first on PATH — and refuses to run
+  scripts that need it again with a relative entry first on PATH — and refuses to run
   at all when the host cannot reproduce the defect, because a simulation that did not take
-  would look exactly like a pass.
+  would look exactly like a pass. The distribution journey is put to it whole on Linux alone
+  (test-linux runs it under that check); elsewhere `scripts/test-python-call-sites.sh` puts
+  each Python call site the journey reaches to it through the real scripts, by the user's
+  decision of 2026-10-28, and test-linux fails when the journey started Python from a script
+  that targeted pass did not (`scripts/check-python-call-sites-enforced.sh` watches it fail).
 - **A loopback board keeps its connections alive, and a proxy in front of one forwards
   through `loopback::Upstream`.** Answering every request `Connection: close` cost a TCP
   connection per request — one run of the GitHub Projects suite opened about 37,000 and held

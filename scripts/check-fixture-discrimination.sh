@@ -20,6 +20,16 @@ set -euo pipefail
 # The demand goes with the credentials, or the skip that clearing produces would fail this
 # step for a session it is deliberately not running. AGENTS.md records the rest.
 unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
+# What this asserts is a property of the suite, not of the platform: the same substitution
+# reaches the same assertion everywhere, and the crate's own suite still runs on every runner.
+# test-linux runs it, through scripts:distribution-test; the others spend their time on what
+# depends on them (.github/policy/tests/inventory.test.mjs holds that).
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32* | *darwin*)
+    echo "check-fixture-discrimination: skipped off Linux (it checks the GitHub Projects suite's fixtures, the same on every platform); the Linux lane runs it" >&2
+    exit 0
+    ;;
+esac
 
 fatal() {
   echo "check-fixture-discrimination: $1" >&2
@@ -65,11 +75,74 @@ copy_tracked_files "$ROOT" "$scratch/repo" || fatal \
   "could not copy $ROOT's tracked files into $scratch/repo" \
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 
-# Its own target directory, inside the scratch tree: sharing this repository's would make
-# every later `just test` rebuild what this check displaced, and the crate's dependencies
-# are already unpacked in the cargo registry, so a cold build here is under a minute.
+# Its own target directory, inside the scratch tree, for what cargo hands back — so nothing
+# it builds is uplifted over this repository's own artifacts — and this repository's build
+# directory for everything cargo builds on the way, so every registry dependency the gate's
+# own test build left is reused rather than compiled again, which on the Windows runner was
+# most of this check's time. Cargo hashes a workspace crate by its path relative to the
+# workspace, and does not rebuild one for a changed CARGO_MANIFEST_DIR, so a crate of the copy
+# built into this repository's slot would bake in a path that is deleted when this exits and
+# be read as fresh by the next build here. So every workspace crate of the copy gets a profile
+# of its own — a codegen-unit count no build of this repository uses, with nothing observable
+# — which hashes it apart, and the copy's files are touched so each of those is built afresh
+# for this tree rather than taken from an earlier run's.
 readonly CRATE=onetaskgraph-github-projects
-readonly SOURCE="crates/$CRATE/src/lib.rs"
+# The copy's crate lives under a directory of its own name. Sharing the build directory puts
+# the copy's test executables beside this repository's, each with a dep-info file naming its
+# sources by their path relative to the workspace, and the last of them is the mutated suite.
+# A test that finds a sibling crate's test executable by the source its dep-info names —
+# live_pair.rs finds the plugin's `plugin` and `live` that way — would otherwise take the
+# copy's newest one, mutated, whenever this ran beside or before it in one build directory.
+# Under another directory no copy's dep-info names this crate's sources.
+readonly COPY_DIR="crates/$CRATE-fixture-discrimination"
+mv "$scratch/repo/crates/$CRATE" "$scratch/repo/$COPY_DIR" || fatal \
+  "could not move the copy's crate to $COPY_DIR" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+COPY_MANIFEST="$scratch/repo/Cargo.toml" COPY_CRATE="$CRATE" COPY_TO="$COPY_DIR" python3 - <<'PY' || fatal \
+  "could not point the copy's workspace dependency at $COPY_DIR" \
+  "the message above names what changed; update this check to the root manifest's shape now"
+import os
+import pathlib
+
+path = pathlib.Path(os.environ["COPY_MANIFEST"])
+before = f'path = "crates/{os.environ["COPY_CRATE"]}"'
+text = path.read_text(encoding="utf-8")
+if text.count(before) != 1:
+    raise SystemExit(f"check-fixture-discrimination: {before} appears {text.count(before)} times in Cargo.toml, not once")
+path.write_text(text.replace(before, f'path = "{os.environ["COPY_TO"]}"'), encoding="utf-8")
+PY
+readonly SOURCE="$COPY_DIR/src/lib.rs"
+METADATA="$(cd "$ROOT" && cargo metadata --no-deps --format-version 1)" || fatal \
+  "could not read $ROOT's cargo metadata, which names the build directory this check shares" \
+  "run 'cargo metadata --no-deps' in $ROOT and fix what it reports, then rerun"
+BUILD_DIR="$(printf '%s' "$METADATA" \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' \
+  | tr -d '\r')"
+readonly BUILD_DIR
+# What this run writes into the shared build directory is judged against this mark at the end.
+touch "$scratch/started" || fatal \
+  "could not mark when this run began in $scratch" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+APART=()
+while IFS= read -r member; do
+  [ -n "$member" ] || continue
+  APART+=(--config "profile.dev.package.$member.codegen-units=255"
+    --config "profile.test.package.$member.codegen-units=255")
+done < <(printf '%s' "$METADATA" | python3 -c '
+import json, sys
+metadata = json.load(sys.stdin)
+members = set(metadata["workspace_members"])
+for package in metadata["packages"]:
+    if package["id"] in members:
+        print(package["name"])
+' | tr -d '\r')
+[ -n "$BUILD_DIR" ] && [ "${#APART[@]}" -gt 0 ] || fatal \
+  "could not read $ROOT's target directory and workspace members from cargo metadata" \
+  "run 'cargo metadata --no-deps' in $ROOT and fix what it reports, then rerun"
+readonly APART
+find "$scratch/repo" -type f -exec touch {} + || fatal \
+  "could not touch the scratch copy's files, which keeps its crates from an earlier run's" \
+  "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 
 SUITE_OUTPUT=""
 SUITE_STATUS=0
@@ -81,7 +154,8 @@ run_suite() {
   # of the repository under test. The same reason cargo is invoked directly in
   # scripts/check-isolation-enforced.sh and scripts/check-real-release-preparation.sh.
   SUITE_OUTPUT="$(cd "$scratch/repo" \
-    && CARGO_TARGET_DIR="$scratch/target" cargo test -q -p "$CRATE" 2>&1)" \
+    && CARGO_TARGET_DIR="$scratch/target" CARGO_BUILD_BUILD_DIR="$BUILD_DIR" \
+      cargo test -q -p "$CRATE" "${APART[@]}" 2>&1)" \
     && SUITE_STATUS=0 || SUITE_STATUS=$?
 }
 
@@ -157,3 +231,35 @@ case "$SUITE_OUTPUT" in
     exit 1
     ;;
 esac
+
+# The copy's test executables in the shared build directory name its sources under COPY_DIR
+# and never this crate's own, which is what keeps a test that finds the plugin's test
+# executables by their dep-info off the copy's. Only files naming COPY_DIR are the copy's: this
+# repository's own build of the crate may be writing beside them while this runs.
+copies="$(find "$BUILD_DIR/debug/deps" -name '*.d' -newer "$scratch/started" -type f \
+  -exec grep -El "crates[/\\\\]+${CRATE}-fixture-discrimination[/\\\\]+" {} + 2>/dev/null || true)"
+if [ -z "$copies" ]; then
+  echo "check-fixture-discrimination: no dep-info written by this run names $COPY_DIR/, so the" >&2
+  echo "check-fixture-discrimination: copy was not built from the directory it was moved to." >&2
+  echo "check-fixture-discrimination: next: check that the copy's crate is moved to COPY_DIR before" >&2
+  echo "check-fixture-discrimination: run_suite and that BUILD_DIR is the build directory cargo uses, then rerun." >&2
+  exit 1
+fi
+named=""
+while IFS= read -r copy; do
+  if grep -Eq "crates[/\\\\]+${CRATE}[/\\\\]+" "$copy"; then
+    named="$copy"
+    break
+  fi
+done <<EOF
+$copies
+EOF
+if [ -n "$named" ]; then
+  echo "check-fixture-discrimination: the copy's build wrote $named, which names" >&2
+  echo "check-fixture-discrimination: crates/$CRATE/, so a test that finds that crate's test" >&2
+  echo "check-fixture-discrimination: executables by the sources they name could take the copy's" >&2
+  echo "check-fixture-discrimination: mutated one." >&2
+  echo "check-fixture-discrimination: next: build the copy's crate from a directory of another name" >&2
+  echo "check-fixture-discrimination: (COPY_DIR in this check), then rerun." >&2
+  exit 1
+fi

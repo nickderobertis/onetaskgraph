@@ -355,9 +355,10 @@ done
 # 5e. No cargo at all, and no cargo-binstall: nothing can install, and the refusal names
 #     the toolchain to install. The stand-in cargo is left off PATH for this one case.
 home="$scratch/home-3d"
-PATH_WITHOUT_CARGO="$(path_without_tool cargo)"
+# Both tools' directories go: a runner image can keep cargo-binstall somewhere cargo is not.
+PATH_WITHOUT_CARGO="$(PATH="$(path_without_tool cargo)"; path_without_tool cargo-binstall)"
 if ( PATH="$PATH_WITHOUT_CARGO"; hash -r 2>/dev/null; command -v cargo >/dev/null 2>&1 || command -v cargo-binstall >/dev/null 2>&1 ); then
-  report "cargo or cargo-binstall is still reachable after dropping every directory that carries cargo, so the no-toolchain case cannot pose its question"
+  report "cargo or cargo-binstall is still reachable after dropping every directory that carries either, so the no-toolchain case cannot pose its question"
 else
   OUTPUT="$(cd "$ROOT" && PATH="$PATH_WITHOUT_CARGO" ONETASKGRAPH_TOOLS_HOME="$home" bash "$RESOLVER" ensure 2>&1)" && STATUS=0 || STATUS=$?
   [ "$STATUS" -eq 1 ] && grep -qF -- "cargo is not on PATH" <<<"$OUTPUT" && grep -qF -- "rustup.rs" <<<"$OUTPUT" || {

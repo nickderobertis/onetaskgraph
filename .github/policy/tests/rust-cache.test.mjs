@@ -14,10 +14,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { parse } from "yaml";
-import { HASHED_ENV_PREFIXES } from "../rust-cache-key.mjs";
-import { read } from "../workflow-graph.mjs";
+import { HASHED_ENV_PREFIXES } from "../../rust-cache-key.mjs";
+import { read } from "../../workflow-graph.mjs";
 import { test } from "node:test";
-import { workflows } from "../workflow-graph.mjs";
+import { workflows } from "../../workflow-graph.mjs";
 
 function cleanupProblems(all) {
   const problems = [];

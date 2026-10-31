@@ -18,6 +18,15 @@
 # when it was given no validator — so the registry is first asked directly: a plain request
 # must carry no Last-Modified, and one carrying If-Modified-Since must still get the file.
 set -euo pipefail
+# What this drives runs on Linux alone in production, so on Windows it proves nothing a release
+# relies on; test-linux and test-macos still run it, and test-windows spends its time on what
+# Windows runs.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-crate-sibling-resolution-same-second: skipped on Windows (crate sibling resolution runs only in the release's publish job on ubuntu-latest); the Linux and macOS lanes run it" >&2
+    exit 0
+    ;;
+esac
 
 fatal() {
   echo "check-crate-sibling-resolution-same-second: $1" >&2
