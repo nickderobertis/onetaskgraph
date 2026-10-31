@@ -476,7 +476,8 @@ test("the read figures are the requests the double served", () => {
     run.results["onetaskgraph-pr-read-requests"].value,
     figures["onetaskgraph-pr-read-requests"],
   );
-  // And the two together are every request the tail made.
+  // Every request falls to the release or to one pull request, so a read neither figure
+  // counts cannot hide between them.
   assert.equal(
     figures["onetaskgraph-release-read-requests"] +
       pullRequests

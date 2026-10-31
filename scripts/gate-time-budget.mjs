@@ -12,8 +12,12 @@ try {
   let text;
   try {
     text = readFileSync(RECORD, "utf8");
-  } catch {
-    throw Error("no gate record at .gate-time.json: run `just gate`, which writes it");
+  } catch (error) {
+    throw Error(
+      error.code === "ENOENT"
+        ? "no gate record at .gate-time.json: run `just gate`, which writes it"
+        : `cannot read .gate-time.json (${error.message}): make it a readable file, or delete it, and run \`just gate\``,
+    );
   }
   let record;
   try {

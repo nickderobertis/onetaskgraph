@@ -168,6 +168,14 @@ test("a missing record fails the gate", () => {
   assert.match(ran.out, /checking onetaskgraph-gate-time failed \(onebudgetspec exit 3\)/);
 });
 
+test("a record that cannot be read fails the check naming why", () => {
+  const dir = tree();
+  mkdirSync(recordPath(dir));
+  const ran = gate(dir, "--check");
+  assert.equal(ran.status, 3, ran.out);
+  assert.match(ran.out, /cannot read \.gate-time\.json \(EISDIR/);
+});
+
 test("a recorded failed gate is no figure, and fails the check", () => {
   const dir = tree();
   seed(dir, 100, 1);

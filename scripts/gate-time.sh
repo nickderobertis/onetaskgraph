@@ -41,7 +41,6 @@ if [ "$1" = --check ] && [ $# -eq 1 ]; then
   exit 0
 fi
 
-# What failed, the filesystem's own words for why, and what to do about it.
 record_failed() {
   echo "gate-time: cannot $1 $record: ${2:-it is still there}" >&2
   echo "gate-time: next: make .gate-time.json at the repository root a writable file (or" \
