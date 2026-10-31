@@ -398,7 +398,9 @@ fn run_pair(scenario: &str) {
             .take_while(|call| budget_reads.contains(&call.operation_sha256.as_str()))
             .count();
         let probes: Vec<_> = phase[rechecked..].to_vec();
-        assert_eq!(probes.len(), 29);
+        // One probe per document reconciled — `ISSUES_BY_CREATION`, a retried copy's listing by
+        // create key, among them.
+        assert_eq!(probes.len(), 30);
         assert_eq!(
             probes[1].outcome,
             if scenario == "aliases" {

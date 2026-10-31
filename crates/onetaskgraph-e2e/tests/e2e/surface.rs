@@ -302,7 +302,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 50);
+    assert_eq!(bundle["version"], 51);
     assert!(bundle["roots"]["HumanTaskProjection"].is_object());
     assert!(bundle["roots"]["HumanTaskProjected"].is_object());
     assert!(bundle["roots"]["LocateReport"].is_object());
@@ -997,6 +997,8 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         MetadataKey::COPIED_WITH_COMMENTS_KEY,
         MetadataKey::COPIED_DESTINATION_VERSION_KEY,
         MetadataKey::EDGES_ON_RECORD_KEY,
+        MetadataKey::CREATING_KEY,
+        MetadataKey::CREATE_KEY,
         onetaskgraph_core::GlobalId::ORIGIN_KEY,
     ]
     .into_iter()
@@ -1020,8 +1022,24 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         .collect();
     assert_eq!(listed, spelled, "the keys docs/metadata.md lists");
     let words = [
-        "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-        "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+        "",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
     ];
     assert!(
         bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),
