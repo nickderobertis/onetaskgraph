@@ -238,17 +238,11 @@ done <<EOF
 $phases
 EOF
 wait_for_phases
+# On test-windows, each scripts:test guard's time, reported on the job's one closing line.
+guard_timings=""
 if [ -s "$scratch/script-timings" ]; then
-  # Each guard's start to the next one's, the last's to now; a python command between two
-  # guards counts in the first one's figure.
-  "$PYTHON" - "$scratch/script-timings" "$(date +%s)" <<'PY'
-import sys
-starts = [line.split(" ", 1) for line in open(sys.argv[1], encoding="utf-8").read().splitlines()]
-ends = [int(start) for start, _ in starts[1:]] + [int(sys.argv[2])]
-figures = [f"{end - int(start)}s {name.rsplit('/', 1)[-1]}" for (start, name), end in zip(starts, ends)]
-sys.stdout.reconfigure(newline="\n")
-print("ci-job: scripts:test guard timings, each to the next one's start (the last to the job's end): " + "; ".join(figures))
-PY
+  guard_timings="$("$PYTHON" scripts/ci_timings.py guards "$scratch/script-timings" "$(date +%s)" | tr -d '\r')" \
+    || echo "ci-job: $JOB: the guard timing summary failed, for the reason above; the job's result stands" >&2
 fi
 status=0
 for index in $(seq 1 "$phase"); do
@@ -268,6 +262,6 @@ if "$select_only"; then
   [ "$status" -ne 0 ] || echo "ci-job: $JOB: selects $(summary selected)"
 else
   ran="$(summary ran)"
-  [ -z "$ran" ] || echo "ci-job: $JOB: ran $ran"
+  [ -z "$ran" ] || echo "ci-job: $JOB: ran $ran${guard_timings:+ | $guard_timings}"
 fi
 exit "$status"

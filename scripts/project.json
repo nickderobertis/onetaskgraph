@@ -67,6 +67,7 @@
           "bash scripts/check-scoped-release-plz.sh",
           "bash scripts/check-file-lock.sh",
           "python3 scripts/test_cli_wheel_lock.py",
+          "python3 scripts/test_ci_timings.py",
           "bash scripts/check-ci-recipes.sh",
           "bash scripts/check-warm-rust-cache.sh",
           "bash scripts/check-warm-rust-cache-reuse-enforced.sh",

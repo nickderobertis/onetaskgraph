@@ -80,38 +80,8 @@ start_server() {
 # The trace above, summed per line: what each line spent until the next one began.
 report_timings() {
   [ -s "$tmp/journey.trace" ] || return 0
-  "$python_bin" - "$tmp/journey.trace" "$tmp/products.timings" >&2 <<'PY' || true
-import re, sys
-spent, text, previous = {}, {}, None
-with open(sys.argv[1], encoding="utf-8", errors="replace") as trace:
-    for line in trace:
-        match = re.match(r"^\++(\d+\.\d+) (\S+:\d+): (.*)", line)
-        if not match:
-            continue
-        moment, site = float(match.group(1)), match.group(2)
-        if previous is not None:
-            spent[previous[0]] = spent.get(previous[0], 0.0) + moment - previous[1]
-        previous = (site, moment)
-        text.setdefault(site, match.group(3)[:110])
-lines = [f"{seconds:.0f}s {site} {text[site][:60]}" for site, seconds in sorted(spent.items(), key=lambda item: -item[1])[:8]]
-cases = {}
-try:
-    with open(sys.argv[2], encoding="utf-8") as recorded:
-        for row in recorded:
-            seconds, label = row.rstrip("\n").split("\t", 1)
-            cases[label] = cases.get(label, 0.0) + float(seconds)
-except OSError:
-    pass
-slowest = [f"{seconds:.0f}s {label[:50]}" for label, seconds in sorted(cases.items(), key=lambda item: -item[1])[:8]]
-ranges = {}
-for site, seconds in spent.items():
-    name, _, number = site.rpartition(":")
-    if name == "test-distribution.sh":
-        start = int(number) // 100 * 100
-        ranges[start] = ranges.get(start, 0.0) + seconds
-by_range = [f"{start}-{start + 99} {seconds:.0f}s" for start, seconds in sorted(ranges.items())]
-print("distribution timing: slowest lines: " + "; ".join(lines) + " | slowest packaging cases: " + "; ".join(slowest) + " | by line range: " + "; ".join(by_range))
-PY
+  "$python_bin" "$root/scripts/ci_timings.py" trace "$tmp/journey.trace" "$tmp/products.timings" >&2 \
+    || echo "distribution test: its timing summary failed, for the reason above; the journey's own result stands" >&2
 }
 cleanup() {
   { set +x; } 2>/dev/null
