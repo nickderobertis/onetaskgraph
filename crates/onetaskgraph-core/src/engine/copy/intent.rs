@@ -479,7 +479,7 @@ impl Engine {
                 && let Some(linked) = linked
             {
                 return Err(EngineError::CreateInProgress {
-                    item: id.to_string(),
+                    item: id.clone(),
                     by: CreateHolder::Linked {
                         counterpart: linked,
                     },
@@ -491,7 +491,7 @@ impl Engine {
             && held.held_by_another(self.attempt, now)
         {
             return Err(EngineError::CreateInProgress {
-                item: id.to_string(),
+                item: id.clone(),
                 by: CreateHolder::Lease {
                     until: held.lease_until,
                 },
@@ -563,7 +563,7 @@ impl Engine {
             _ if !refuses => return Ok(()),
             Some(held) => {
                 return Err(EngineError::CreateInProgress {
-                    item: id.to_string(),
+                    item: id.clone(),
                     by: CreateHolder::Lease {
                         until: held.lease_until,
                     },
@@ -571,7 +571,7 @@ impl Engine {
             }
             None => {
                 return Err(EngineError::CreateInProgress {
-                    item: id.to_string(),
+                    item: id.clone(),
                     by: super::link_of(&metadata, destination)
                         .map_or(CreateHolder::Released, |counterpart| CreateHolder::Linked {
                             counterpart,
@@ -744,8 +744,8 @@ impl Engine {
                 [] => {}
                 several => {
                     return Err(EngineError::CreateDuplicated {
-                        item: id.to_string(),
-                        destination: destination.name().to_string(),
+                        item: id.clone(),
+                        destination: destination.name().clone(),
                         found: several
                             .iter()
                             .map(|native| GlobalId::new(destination.name().clone(), native.clone()))

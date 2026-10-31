@@ -1377,8 +1377,8 @@ pub enum EngineError {
     /// counterpart, so this copy wrote nothing more and sent nothing more to the destination.
     #[error("{item} {by}")]
     CreateInProgress {
-        /// The source item being copied, qualified.
-        item: String,
+        /// The source item being copied.
+        item: GlobalId,
         /// What the other attempt was found doing.
         by: CreateHolder,
     },
@@ -1393,10 +1393,10 @@ pub enum EngineError {
         joined(.found)
     )]
     CreateDuplicated {
-        /// The source item being copied, qualified.
-        item: String,
+        /// The source item being copied.
+        item: GlobalId,
         /// The destination source.
-        destination: String,
+        destination: SourceName,
         /// Every item carrying the key, qualified, in the order the destination listed them.
         found: Vec<GlobalId>,
     },
@@ -1410,10 +1410,10 @@ pub enum EngineError {
          one, or add the owner to creation_owners on source {destination}."
     )]
     CreationOwner {
-        /// The source item whose create was refused, qualified.
-        item: String,
+        /// The source item whose create was refused.
+        item: GlobalId,
         /// The destination source.
-        destination: String,
+        destination: SourceName,
         /// The destination's own reason, naming the repository and the allowed owners.
         reason: String,
     },
@@ -1439,20 +1439,26 @@ pub enum EngineError {
     /// A task copy's counterpart was at a status category `--when-destination-status` does not
     /// name, under `--otherwise refuse`: nothing was written for it.
     #[error(
-        "{item} was not copied: its counterpart {destination} is at {held}, which is not one \
-         of {allowed}\n\
+        "{item} was not copied: its counterpart {destination} is at {spelled}, which is not one \
+         of {named}\n\
          next: copy it with --otherwise preserve-destination to keep that status, or name \
-         {held} with --when-destination-status if the copy may write over it."
+         {spelled} with --when-destination-status if the copy may write over it.",
+        spelled = copy::spelled_category(*.held),
+        named = .allowed
+            .iter()
+            .map(|category| copy::spelled_category(*category))
+            .collect::<Vec<_>>()
+            .join(", ")
     )]
     DestinationStatus {
-        /// The source item being copied, qualified.
-        item: String,
-        /// The counterpart it would have updated, qualified.
-        destination: String,
-        /// The counterpart's status category, spelled as the command line spells it.
-        held: String,
-        /// The categories the condition names, spelled the same way and joined by `, `.
-        allowed: String,
+        /// The source item being copied.
+        item: GlobalId,
+        /// The counterpart it would have updated.
+        destination: GlobalId,
+        /// The counterpart's status category.
+        held: StatusCategory,
+        /// The categories the condition names, in the order the caller named them.
+        allowed: Vec<StatusCategory>,
     },
 
     /// A copy of documents was asked to carry comments: a document holds none, so only a task

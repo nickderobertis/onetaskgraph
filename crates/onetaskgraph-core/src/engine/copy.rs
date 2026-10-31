@@ -6536,8 +6536,8 @@ impl Engine {
                 .map_err(|error| refused(destination, error))?
         {
             return Err(EngineError::CreationOwner {
-                item: id.to_string(),
-                destination: destination.name().to_string(),
+                item: id.clone(),
+                destination: destination.name().clone(),
                 reason,
             });
         }
@@ -7270,8 +7270,8 @@ impl Engine {
                 .await?;
             if listed.len() > 1 {
                 let error = EngineError::CreateDuplicated {
-                    item: item.source.to_string(),
-                    destination: destination.name().to_string(),
+                    item: item.source.clone(),
+                    destination: destination.name().clone(),
                     found: listed
                         .iter()
                         .map(|native| qualified(native.clone()))
@@ -9691,6 +9691,11 @@ fn landed_location(
 }
 
 /// The title and metadata of either kind of item.
+/// A status category as the command line spells it, for a refusal's message.
+pub(super) fn spelled_category(category: StatusCategory) -> String {
+    query::spelled(category)
+}
+
 fn described(item: &Item) -> (&str, &BTreeMap<String, Value>) {
     match item {
         Item::Task(task) => (&task.title, &task.metadata),
@@ -9783,15 +9788,10 @@ fn decide_conditions(
                 refused.insert(
                     index,
                     EngineError::DestinationStatus {
-                        item: item.source.to_string(),
-                        destination: GlobalId::new(item.to.clone(), id).to_string(),
-                        held: query::spelled(held_category),
-                        allowed: conditions
-                            .status
-                            .iter()
-                            .map(|category| query::spelled(*category))
-                            .collect::<Vec<_>>()
-                            .join(", "),
+                        item: item.source.clone(),
+                        destination: GlobalId::new(item.to.clone(), id),
+                        held: held_category,
+                        allowed: conditions.status.clone(),
                     },
                 );
             }

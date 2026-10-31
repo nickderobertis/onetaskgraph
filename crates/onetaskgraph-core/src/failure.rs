@@ -242,11 +242,11 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::CreateInProgress { .. } => ("create-in-progress".to_owned(), None, None),
         EngineError::CreateDuplicated { destination, .. } => (
             "create-duplicated".to_owned(),
-            configured(destination),
+            Some(destination.clone()),
             None,
         ),
         EngineError::CreationOwner { destination, .. } => {
-            ("creation-owner".to_owned(), configured(destination), None)
+            ("creation-owner".to_owned(), Some(destination.clone()), None)
         }
         EngineError::OtherwiseWithoutStatus => ("otherwise-without-status".to_owned(), None, None),
         EngineError::StatusConditionPreserved => {
@@ -254,9 +254,7 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         }
         EngineError::DestinationStatus { destination, .. } => (
             "destination-status".to_owned(),
-            destination
-                .split_once(':')
-                .and_then(|(source, _)| configured(source)),
+            Some(destination.source.clone()),
             None,
         ),
         EngineError::CommentsNotDocuments => ("comments-not-documents".to_owned(), None, None),
