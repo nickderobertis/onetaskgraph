@@ -1198,7 +1198,7 @@ async fn check_status(
 type Intended = (
     GlobalId,
     SourceName,
-    Option<(std::path::PathBuf, Vec<u8>)>,
+    Option<Vec<u8>>,
     Option<intent::Intent>,
 );
 
@@ -2499,11 +2499,10 @@ impl Engine {
         let earlier = intent::held(&task.metadata, &item.to);
         let replaces = link_of(&task.metadata, &item.to);
         let key = intent::key(&item.source, &item.to, replaces.as_ref());
-        let local = Self::is_local(task);
         // A source that will not hold the key — a file it cannot edit narrowly, an item it no
         // longer answers for, a write it drops — copies as it always did, with no intent, as it
         // then records no link either. Only another attempt's live lease refuses.
-        let taken = match self
+        let (taken, local) = match self
             .take_intent(&item.source, &item.to, key, None, Some(replaces.as_ref()))
             .await
         {
@@ -2604,8 +2603,8 @@ impl Engine {
             let _ = if keep {
                 self.renew_intent(&item, &destination, Some(chrono::Utc::now()))
                     .await
-            } else if let Some((path, bytes)) = snapshot {
-                self.restore_snapshot(&path, &bytes);
+            } else if let Some(bytes) = snapshot {
+                self.restore_snapshot(&item, &bytes);
                 Ok(())
             } else {
                 self.drop_intent(&item, &destination).await
@@ -4796,12 +4795,11 @@ impl Engine {
                 // A file on this machine is kept as it was, byte for byte, so a copy that takes
                 // everything back leaves it exactly so.
                 let snapshot = match &item.item {
-                    Item::Task(task) => match &task.location {
-                        Some(Location::Path(path)) => std::fs::read(path)
-                            .ok()
-                            .map(|bytes| (std::path::PathBuf::from(path), bytes)),
-                        _ => None,
-                    },
+                    Item::Task(_) => self.readable(&item.source.source).ok().and_then(|source| {
+                        source
+                            .source()
+                            .item_snapshot(MetadataRecord::Task, &item.source.native)
+                    }),
                     _ => None,
                 };
                 if self.intend(item).await? {

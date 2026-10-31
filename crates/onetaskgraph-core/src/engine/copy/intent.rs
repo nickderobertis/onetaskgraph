@@ -23,10 +23,9 @@
 //! [`TaskSource::created_with_key`]: onetaskgraph_plugin_api::TaskSource::created_with_key
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeDelta, Utc};
-use onetaskgraph_plugin_api::{Location, MetadataKey, NativeId, SourceName, Task, TaskUpdate};
+use onetaskgraph_plugin_api::{MetadataKey, NativeId, SourceName, Task, TaskUpdate};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -43,9 +42,6 @@ pub const NAMESPACE: uuid::Uuid = uuid::Uuid::from_u128(0x7a1c_3f0e_5b2d_4c8a_9e
 /// How far before an intent's `at` a lookup by key reaches, for a destination clock that runs
 /// behind this host's.
 pub const CLOCK_SKEW: TimeDelta = TimeDelta::seconds(300);
-
-/// How long a lock file beside an item may stand before it is taken to be a dead process's.
-const STALE_LOCK: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The key of the create that copies `source` into `destination`, replacing the link `replaces`
 /// names when it replaces one: the same for every attempt at that create, and a different one
@@ -198,55 +194,45 @@ pub(crate) fn replaced(
     (!entries.is_empty()).then_some(Value::Object(entries))
 }
 
-/// An exclusive lock beside one item's file on this machine, removed when dropped.
+/// A source's hold on one item, released when dropped — on every path out of the decision it
+/// guards. Taken through [`TaskSource::hold_item`], so how an item is held is its source's:
+/// a folder of Markdown takes a lock file beside the item's own.
 ///
-/// Taken by creating `<file>.lock` exclusively, which every platform's filesystem refuses a
-/// second process, and released by removing it. A lock older than a few seconds' work is a
-/// dead process's, and is taken over. It excludes nothing across hosts or on a network
-/// filesystem that does not honour an exclusive create.
-pub(crate) struct ItemLock {
-    path: PathBuf,
+/// [`TaskSource::hold_item`]: onetaskgraph_plugin_api::TaskSource::hold_item
+pub(crate) struct Hold<'a> {
+    source: &'a ResolvedSource,
+    id: NativeId,
+    held: bool,
 }
 
-impl ItemLock {
-    /// Wait for and take the lock beside `item`.
-    fn take(item: &Path) -> std::io::Result<Self> {
-        let mut path = item.as_os_str().to_owned();
-        path.push(".lock");
-        let path = PathBuf::from(path);
-        let started = std::time::Instant::now();
-        loop {
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(_) => return Ok(Self { path }),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let stale = std::fs::metadata(&path)
-                        .and_then(|held| held.modified())
-                        .ok()
-                        .and_then(|modified| modified.elapsed().ok())
-                        .is_some_and(|age| age > STALE_LOCK);
-                    if stale {
-                        let _ = std::fs::remove_file(&path);
-                        continue;
-                    }
-                    if started.elapsed() > STALE_LOCK * 2 {
-                        return Err(error);
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                Err(error) => return Err(error),
-            }
+impl Hold<'_> {
+    /// Whether the source offered a hold, so the decision under it is exclusive on this host.
+    pub(crate) fn held(&self) -> bool {
+        self.held
+    }
+}
+
+impl Drop for Hold<'_> {
+    fn drop(&mut self) {
+        if self.held {
+            self.source
+                .source()
+                .release_item(onetaskgraph_plugin_api::MetadataRecord::Task, &self.id);
         }
     }
 }
 
-impl Drop for ItemLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
+/// Take `source`'s hold on the task `id`.
+fn hold<'a>(source: &'a ResolvedSource, id: &NativeId) -> Result<Hold<'a>, EngineError> {
+    let held = source
+        .source()
+        .hold_item(onetaskgraph_plugin_api::MetadataRecord::Task, id)
+        .map_err(|error| refused(source, error))?;
+    Ok(Hold {
+        source,
+        id: id.clone(),
+        held,
+    })
 }
 
 /// The test-only point a copy stops at by exiting, as a process killed there would:
@@ -264,43 +250,21 @@ impl Engine {
         self.creates.get(source).copied().unwrap_or_default()
     }
 
-    /// The task `id` as its source holds it now, and the lock beside its file when it has one on
-    /// this machine — the read an intent is decided on.
-    async fn locked_read(
+    /// The task `id` as its source holds it now, read under the source's hold on it when it
+    /// offers one — the read an intent is decided on.
+    async fn locked_read<'a>(
         &self,
-        source: &ResolvedSource,
+        source: &'a ResolvedSource,
         id: &GlobalId,
-    ) -> Result<(Task, Option<ItemLock>), EngineError> {
+    ) -> Result<(Task, Hold<'a>), EngineError> {
+        let hold = hold(source, &id.native)?;
         let task = source
             .source()
             .get_task(&id.native)
             .await
             .map_err(|error| refused(source, error))?
             .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
-        let lock = match &task.location {
-            Some(Location::Path(path)) => {
-                Some(ItemLock::take(Path::new(path)).map_err(|error| {
-                    refused(
-                        source,
-                        onetaskgraph_plugin_api::SourceError::Unavailable {
-                            message: format!("could not lock {path} to record a create: {error}"),
-                        },
-                    )
-                })?)
-            }
-            _ => None,
-        };
-        // Read again under the lock, so what is decided is what no other process can change.
-        let task = match lock {
-            Some(_) => source
-                .source()
-                .get_task(&id.native)
-                .await
-                .map_err(|error| refused(source, error))?
-                .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?,
-            None => task,
-        };
-        Ok((task, lock))
+        Ok((task, hold))
     }
 
     /// The intent `task` records for `destination`, or the refusal of an entry that is not one.
@@ -323,11 +287,6 @@ impl Engine {
         })
     }
 
-    /// Whether `id`'s source keeps it on this machine, where an intent is lock-guarded.
-    pub(crate) fn is_local(task: &Task) -> bool {
-        matches!(task.location, Some(Location::Path(_)))
-    }
-
     /// Take, or take over, the intent to create `id`'s counterpart in `destination` under
     /// `key`, leased until `lease_until` — refusing as `create-in-progress` when another attempt
     /// holds a live lease, before anything is written.
@@ -338,9 +297,9 @@ impl Engine {
         key: uuid::Uuid,
         lease_until: Option<DateTime<Utc>>,
         planned_link: Option<Option<&GlobalId>>,
-    ) -> Result<Intent, EngineError> {
+    ) -> Result<(Intent, bool), EngineError> {
         let source = self.writable(&id.source)?;
-        let (task, _lock) = self.locked_read(source, id).await?;
+        let (task, hold) = self.locked_read(source, id).await?;
         let now = now();
         // Another copy that created and linked the counterpart since this one planned to create
         // it has finished what this one would start: it is refused rather than made twice.
@@ -389,7 +348,7 @@ impl Engine {
             .await
             .map_err(|error| refused(source, error))?
             .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
-        Ok(intent)
+        Ok((intent, hold.held()))
     }
 
     /// Renew this attempt's intent to create `id`'s counterpart in `destination`, before a
@@ -446,11 +405,15 @@ impl Engine {
             .map_or(true, |found| !found.is_empty())
     }
 
-    /// Put a file on this machine back to `bytes`, under its lock: what a copy that took every
-    /// write back leaves of an item whose intent it recorded.
-    pub(crate) fn restore_snapshot(&self, path: &Path, bytes: &[u8]) {
-        if let Ok(_lock) = ItemLock::take(path) {
-            let _ = std::fs::write(path, bytes);
+    /// Put the task `id` back to `snapshot`, byte for byte, through its source: what a copy that
+    /// took every write back leaves of an item whose intent it recorded.
+    pub(crate) fn restore_snapshot(&self, id: &GlobalId, snapshot: &[u8]) {
+        if let Ok(source) = self.writable(&id.source) {
+            let _ = source.source().restore_item(
+                onetaskgraph_plugin_api::MetadataRecord::Task,
+                &id.native,
+                snapshot,
+            );
         }
     }
 
@@ -504,20 +467,14 @@ impl Engine {
                 message: error.to_string(),
             }
         })?;
-        let read = source.source().get_task(&id.native).await?;
-        let Some(task) = read else {
-            return Ok(None);
-        };
-        let _lock = match &task.location {
-            Some(Location::Path(path)) => ItemLock::take(Path::new(path)).ok(),
-            _ => None,
-        };
-        let task = match _lock {
-            Some(_) => match source.source().get_task(&id.native).await? {
-                Some(task) => task,
-                None => return Ok(None),
+        let _hold = hold(source, &id.native).map_err(|error| match error {
+            EngineError::SourceRefused { error, .. } => error,
+            other => onetaskgraph_plugin_api::SourceError::Refused {
+                message: other.to_string(),
             },
-            None => task,
+        })?;
+        let Some(task) = source.source().get_task(&id.native).await? else {
+            return Ok(None);
         };
         let mut update = TaskUpdate::default();
         update.metadata_set.insert(MetadataKey::copies(), links);

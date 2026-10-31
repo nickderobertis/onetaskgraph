@@ -1950,6 +1950,53 @@ pub trait TaskSource: Send + Sync {
         Ok(None)
     }
 
+    /// Take this source's exclusive, cross-process hold on the `record` `id`, waiting for a
+    /// holder that is still at work and taking over one a dead process left — `true` once it is
+    /// held, `false` for a source that offers no such hold. A caller releases it with
+    /// [`Self::release_item`], always.
+    ///
+    /// What a copy decides its intent to create under: on a source that answers `true`, exactly
+    /// one attempt on one host owns a create of the item. A hosted source has no lock to offer,
+    /// and its intents are advisory. Defaulted to `false`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the hold could not be taken.
+    fn hold_item(&self, record: MetadataRecord, id: &NativeId) -> Result<bool, SourceError> {
+        let _ = (record, id);
+        Ok(false)
+    }
+
+    /// Release the hold [`Self::hold_item`] took on the `record` `id`. Defaulted to nothing.
+    fn release_item(&self, record: MetadataRecord, id: &NativeId) {
+        let _ = (record, id);
+    }
+
+    /// The `record` `id` exactly as this source stores it, byte for byte, when it can give that
+    /// back with [`Self::restore_item`] — `None` otherwise. Read off this machine, never a
+    /// request. Defaulted to `None`.
+    fn item_snapshot(&self, record: MetadataRecord, id: &NativeId) -> Option<Vec<u8>> {
+        let _ = (record, id);
+        None
+    }
+
+    /// Put the `record` `id` back to `snapshot`, byte for byte, under its hold: what a copy that
+    /// took every write back leaves of an item it recorded an intent on. Defaulted to doing
+    /// nothing, since a source answering no snapshot is never asked.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the item could not be put back.
+    fn restore_item(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        snapshot: &[u8],
+    ) -> Result<(), SourceError> {
+        let _ = (record, id, snapshot);
+        Ok(())
+    }
+
     /// Every `record` this source holds whose create carried the create key `key` — see
     /// [`MetadataKey::CREATE_KEY`] — created at or after `since` when that is given: what a
     /// retried copy asks to find the item its earlier attempt created. `target` is the create

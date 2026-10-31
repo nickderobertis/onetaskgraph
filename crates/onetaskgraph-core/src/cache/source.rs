@@ -1161,6 +1161,27 @@ impl TaskSource for CachedSource {
         self.inner.create_key_lags()
     }
 
+    fn hold_item(&self, record: MetadataRecord, id: &NativeId) -> Result<bool, SourceError> {
+        self.inner.hold_item(record, id)
+    }
+
+    fn release_item(&self, record: MetadataRecord, id: &NativeId) {
+        self.inner.release_item(record, id);
+    }
+
+    fn item_snapshot(&self, record: MetadataRecord, id: &NativeId) -> Option<Vec<u8>> {
+        self.inner.item_snapshot(record, id)
+    }
+
+    fn restore_item(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        snapshot: &[u8],
+    ) -> Result<(), SourceError> {
+        self.inner.restore_item(record, id, snapshot)
+    }
+
     async fn written_task(&self, id: &NativeId) -> Option<Task> {
         self.inner.written_task(id).await
     }

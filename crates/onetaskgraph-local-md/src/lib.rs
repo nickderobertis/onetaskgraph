@@ -98,6 +98,7 @@ use serde::{Deserialize, Serialize};
 mod assets;
 pub mod change_token;
 mod containment;
+mod hold;
 #[cfg(windows)]
 mod probe;
 #[cfg(any(windows, test))]
@@ -218,6 +219,8 @@ pub struct LocalMdSource {
     /// naming a task of its own.
     name: Option<SourceName>,
     statuses: BTreeMap<String, StatusCategory>,
+    /// The holds this source has taken on its records' files.
+    holds: hold::Holds,
 }
 
 #[derive(Debug, Deserialize)]
@@ -456,6 +459,15 @@ enum Kind {
     Document,
 }
 
+/// The kind of record a contract `MetadataRecord` names here.
+fn kind_of(record: onetaskgraph_plugin_api::MetadataRecord) -> Kind {
+    match record {
+        onetaskgraph_plugin_api::MetadataRecord::Task => Kind::Task,
+        onetaskgraph_plugin_api::MetadataRecord::Project => Kind::Project,
+        onetaskgraph_plugin_api::MetadataRecord::Document => Kind::Document,
+    }
+}
+
 impl Kind {
     const fn directory(self) -> &'static str {
         match self {
@@ -522,6 +534,7 @@ impl LocalMdSource {
                 .into_iter()
                 .map(|(k, v)| (k.to_lowercase(), v))
                 .collect(),
+            holds: hold::Holds::default(),
         })
     }
 
@@ -1358,6 +1371,50 @@ impl TaskSource for LocalMdSource {
     }
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.write_task_with(write, None)
+    }
+    /// The lock file beside the record's own file, as [`hold`] says.
+    fn hold_item(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+    ) -> Result<bool, SourceError> {
+        let Some(file) = self.locate(kind_of(record), id)? else {
+            return Ok(false);
+        };
+        self.holds.take(&file)?;
+        Ok(true)
+    }
+    fn release_item(&self, record: onetaskgraph_plugin_api::MetadataRecord, id: &NativeId) {
+        if let Ok(Some(file)) = self.locate(kind_of(record), id) {
+            self.holds.release(&file);
+        }
+    }
+    /// The record's file, byte for byte.
+    fn item_snapshot(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+    ) -> Option<Vec<u8>> {
+        let file = self.locate(kind_of(record), id).ok()??;
+        std::fs::read(file).ok()
+    }
+    /// The record's file put back to `snapshot` under its hold, staged and renamed into place.
+    fn restore_item(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+        snapshot: &[u8],
+    ) -> Result<(), SourceError> {
+        let Some(file) = self.locate(kind_of(record), id)? else {
+            return Ok(());
+        };
+        self.holds.take(&file)?;
+        let text = String::from_utf8(snapshot.to_vec()).map_err(|error| SourceError::Malformed {
+            message: format!("the snapshot of {} is not UTF-8: {error}", file.display()),
+        });
+        let written = text.and_then(|text| replace_atomically(&file, &text));
+        self.holds.release(&file);
+        written
     }
     /// Every record whose file carries `key` at the create key — read off this
     /// machine, where a create lands at once, so it never lags.
