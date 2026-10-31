@@ -459,7 +459,6 @@ enum Kind {
     Document,
 }
 
-/// The record a hold on the `record` `id` is kept under.
 fn held_as(record: onetaskgraph_plugin_api::MetadataRecord, id: &NativeId) -> hold::HeldRecord {
     hold::HeldRecord {
         record,

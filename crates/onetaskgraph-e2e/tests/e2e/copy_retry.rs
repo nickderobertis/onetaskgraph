@@ -2617,3 +2617,33 @@ fn an_unreadable_intent_write_read_back_as_a_record_gone_copies_as_it_always_was
     assert_eq!(copied["items"][0]["link"], "unrecorded", "{copied:#}");
     assert_eq!(board_issues_of(&stores, &issue).len(), 1, "one issue");
 }
+
+#[test]
+fn an_unreadable_intent_write_read_back_under_another_key_refuses_the_copy_before_any_create() {
+    let stores = Stores::new();
+    let issue = a_linear_issue(&stores);
+    // This attempt's own name beside a key it did not compute is not this copy's create either.
+    garble_the_intent_write_then(&stores, |workspace| {
+        workspace.bend_answers(
+            |document, _| document == onetaskgraph_linear::graphql::ISSUE,
+            1,
+            |_, data| {
+                let description = data["issue"]["description"].as_str().unwrap_or_default();
+                let intent = description
+                    .find("\"onetaskgraph.creating\"")
+                    .expect("the slot holds the intent");
+                let at = intent
+                    + description[intent..]
+                        .find("\"key\":\"")
+                        .expect("the intent names a key")
+                    + "\"key\":\"".len();
+                let mut bent = description.to_owned();
+                bent.replace_range(at..at + 36, "00000000-0000-5000-8000-000000000000");
+                assert_ne!(bent, description, "the key was another: {description}");
+                data["issue"]["description"] = json!(bent);
+            },
+        );
+    });
+    let output = stores.run(&["--json", "task", "copy", &issue, "--to", "board"], None);
+    refused_unprotected(&stores, &issue, &output, "create-in-progress");
+}
