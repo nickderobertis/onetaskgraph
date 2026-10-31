@@ -1,0 +1,140 @@
+# This repository's CI, CD and local-gate budgets. Every figure is read from telemetry, never
+# measured afresh, and each is checked at one place:
+#
+# - `release-tail`: the seven GitHub Actions figures, measured by scripts/actions-budget-figures.sh
+#   (dero-skills' create-repo copy, edited only there) from onevcs's read-only host answers. The
+#   last step of release.yml's `publish` checks them, reporting only: nothing reads its result.
+# - `host-variable`: the local gate's wall clock, which `just gate` records (scripts/gate-time.sh)
+#   and checks, warning when over, because a development machine's timing varies too much to
+#   refuse on.
+#
+# Every other check of this file excludes both labels. The workloads below are the shapes the
+# thresholds were set at: 46 releases and 126 merged pull requests in 30 days (2026-09-15 to
+# 2026-10-15), one release carrying 2 merged pull requests at the median, 4 at p90 and 9 at most,
+# each pull request's last commit running the 4 CI jobs (lint, test-linux, test-windows,
+# test-macos), and one release running its 6 CD jobs (release-plz, build-linux,
+# build-linux-arm64, build-macos, build-windows, publish).
+schema_version: 1
+budgets:
+  # Workload: one release carrying 2 merged PRs at the median, 4 at p90 and 9 at most, each PR's
+  # last commit running the 4 CI jobs.
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The brief requires a 30-minute line per CI check and per CD job beside the 90-minute release cycle that contains them, job counts per PR push and per release, and GitHub reads per release and per pull request; each is the unit the user acts on and is enforced or reported at a different moment.
+  - id: onetaskgraph-ci-check-time
+    description: >-
+      The longest counted job of each pull request's last-commit CI runs, over the pull requests
+      one release carries, from GitHub's job timestamps. It protects the 30-minute line each check
+      is held to, because one slow check holds every change behind it.
+    labels: [release-tail]
+    measure: reported
+    command: [bash, scripts/actions-budget-figures.sh, longest-job, --stage, pr]
+    unit: seconds
+    direction: max
+    threshold: 1800
+    timeout_seconds: 300
+  # Workload: one release's 6 CD jobs — release-plz, build-linux, build-linux-arm64, build-macos,
+  # build-windows and publish, timed up to the tail's moment.
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The brief requires a 30-minute line per CI check and per CD job beside the 90-minute release cycle that contains them, job counts per PR push and per release, and GitHub reads per release and per pull request; each is the unit the user acts on and is enforced or reported at a different moment.
+  - id: onetaskgraph-cd-job-time
+    description: >-
+      The longest counted job of one release's CD runs — release-plz's run at the release commit
+      and the Release run, publish included up to the tail's moment. It protects the 30-minute
+      line each CD job is held to, a slow job being the actionable unit inside the release cycle.
+    labels: [release-tail]
+    measure: reported
+    command: [bash, scripts/actions-budget-figures.sh, longest-job, --stage, cd]
+    unit: seconds
+    direction: max
+    threshold: 1800
+    timeout_seconds: 300
+  # Workload: one release carrying 2 merged PRs at the median, 4 at p90 and 9 at most, each PR's
+  # last commit running the 4 CI jobs.
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The brief requires a 30-minute line per CI check and per CD job beside the 90-minute release cycle that contains them, job counts per PR push and per release, and GitHub reads per release and per pull request; each is the unit the user acts on and is enforced or reported at a different moment.
+  - id: onetaskgraph-release-cycle-time
+    description: >-
+      Per pull request one release carries, its last commit's checks plus its merge to the end of
+      publish; the maximum over the release's pull requests. It protects the 90-minute line from
+      final checks to a published release.
+    labels: [release-tail]
+    measure: reported
+    command: [bash, scripts/actions-budget-figures.sh, release-cycle-time]
+    unit: seconds
+    direction: max
+    threshold: 5400
+    timeout_seconds: 300
+  # Workload: one release carrying 2 merged PRs at the median, 4 at p90 and 9 at most, each PR's
+  # last commit running the 4 CI jobs.
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The brief requires a 30-minute line per CI check and per CD job beside the 90-minute release cycle that contains them, job counts per PR push and per release, and GitHub reads per release and per pull request; each is the unit the user acts on and is enforced or reported at a different moment.
+  - id: onetaskgraph-ci-job-count
+    description: >-
+      The most counted jobs any pull request of one release ran at its last commit, over every
+      workflow its pull_request event started. It protects this repository's share of the
+      account-wide 20-job concurrency limit: lint plus one test job per platform.
+    labels: [release-tail]
+    measure: reported
+    command: [bash, scripts/actions-budget-figures.sh, job-count, --stage, pr]
+    unit: jobs
+    direction: max
+    threshold: 4
+    timeout_seconds: 300
+  # Workload: one release's 6 CD jobs, publish itself included as the job running the tail.
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The brief requires a 30-minute line per CI check and per CD job beside the 90-minute release cycle that contains them, job counts per PR push and per release, and GitHub reads per release and per pull request; each is the unit the user acts on and is enforced or reported at a different moment.
+  - id: onetaskgraph-cd-job-count
+    description: >-
+      The counted jobs of one release's CD runs, publish included as the job running the tail. It
+      protects this repository's CD share of the account-wide 20-job concurrency limit:
+      release-plz, four build jobs and publish.
+    labels: [release-tail]
+    measure: reported
+    command: [bash, scripts/actions-budget-figures.sh, job-count, --stage, cd]
+    unit: jobs
+    direction: max
+    threshold: 6
+    timeout_seconds: 300
+  # Workload: one release of the six-job CD shape, its release commit carrying release-plz's push
+  # run and the Release run; one release carrying 2 merged PRs at the median, 4 at p90 and 9 at
+  # most, each PR's last commit running the 4 CI jobs.
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The brief requires a 30-minute line per CI check and per CD job beside the 90-minute release cycle that contains them, job counts per PR push and per release, and GitHub reads per release and per pull request; each is the unit the user acts on and is enforced or reported at a different moment.
+  - id: onetaskgraph-release-read-requests
+    description: >-
+      The REST requests the release's own reads cost — the releases listing, the comparison, the
+      closed-pull-request page, the runs at the release commit and the jobs of its CD runs —
+      summed from onevcs's answers. It protects the tail's GitHub reads from growing with this
+      repository's CD shape, whatever number of pull requests a release carries.
+    labels: [release-tail]
+    measure: reported
+    command: [bash, scripts/actions-budget-figures.sh, release-read-requests]
+    unit: requests
+    direction: max
+    threshold: 6
+    timeout_seconds: 300
+  # Workload: one release whose pull request heads each ran the one CI workflow; one release
+  # carrying 2 merged PRs at the median, 4 at p90 and 9 at most, each PR's last commit running
+  # the 4 CI jobs.
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The brief requires a 30-minute line per CI check and per CD job beside the 90-minute release cycle that contains them, job counts per PR push and per release, and GitHub reads per release and per pull request; each is the unit the user acts on and is enforced or reported at a different moment.
+  - id: onetaskgraph-pr-read-requests
+    description: >-
+      The most REST requests any one pull request of the release needed — its runs at head and the
+      jobs of each CI run there — from onevcs's answers. It protects the reads each pull request
+      costs from growing with the workflows a pull request starts.
+    labels: [release-tail]
+    measure: reported
+    command: [bash, scripts/actions-budget-figures.sh, pr-read-requests]
+    unit: requests
+    direction: max
+    threshold: 2
+    timeout_seconds: 300
+  # Workload: one `just gate` run on a development host such as a 14-core aarch64 machine, with
+  # the Nx cache as that run finds it.
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The brief requires a 30-minute line per CI check and per CD job beside the 90-minute release cycle that contains them, job counts per PR push and per release, and GitHub reads per release and per pull request; each is the unit the user acts on and is enforced or reported at a different moment.
+  - id: onetaskgraph-gate-time
+    description: >-
+      The wall clock of one `just gate` run on a development machine, from the start and end the
+      recipe records on that run. It holds the local gate to the same 30-minute line as each CI
+      job, as a warning, since a development machine's timing varies too much to refuse on.
+    labels: [host-variable]
+    measure: reported
+    command: [node, scripts/gate-time-budget.mjs]
+    unit: seconds
+    direction: max
+    threshold: 1800
+    timeout_seconds: 30
