@@ -91,6 +91,69 @@ async fn guarded_status_options_preserve_the_complete_existing_options_and_assig
     );
 }
 
+/// The Status-option update 0.12.13 sent — `projectId` inside `UpdateProjectV2FieldInput`,
+/// which GitHub does not define — put to this board over HTTP as GitHub was sent it, is
+/// answered as GitHub answered it: HTTP 200, GraphQL's `errors` naming the field, no `data`,
+/// and the board's Status options as they were. The same setup without that field then lands.
+#[tokio::test]
+async fn the_status_option_update_the_previous_release_sent_is_refused_over_http_and_changes_nothing()
+ {
+    let fixture = board(vec![Item::issue("I_task", "task").status("Todo")]);
+    fixture.status_options_missing_queued();
+    let before = fixture.state.lock().unwrap().guarded_status_options.clone();
+    let body = json!({
+        "query": onetaskgraph_github_projects::graphql::STATUS_OPTIONS_UPDATE,
+        "variables": {"input": {
+            "projectId": "PVT_board", "fieldId": "PVTSSF_status",
+            "singleSelectOptions": [{"name": "Queued", "color": "GRAY", "description": ""}],
+        }},
+    })
+    .to_string();
+    let address = fixture
+        .endpoint
+        .trim_start_matches("http://")
+        .trim_end_matches("/graphql")
+        .to_owned();
+    let mut stream = std::net::TcpStream::connect(&address).expect("the board accepts");
+    write!(
+        stream,
+        "POST /graphql HTTP/1.1\r\nhost: {address}\r\nauthorization: Bearer test-token\r\n\
+         content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .expect("the request is sent");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("the board answers");
+    let (head, answer) = response.split_once("\r\n\r\n").expect("an HTTP answer");
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+    let answer: Value = serde_json::from_str(answer).expect("a JSON answer");
+    assert!(answer.get("data").is_none(), "{answer}");
+    let errors = answer["errors"].as_array().expect("GraphQL's errors");
+    assert!(
+        errors.iter().any(|error| error["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("UpdateProjectV2FieldInput")
+                && message.contains("unknown field \"projectId\""))),
+        "{answer}"
+    );
+    assert!(
+        !fixture
+            .seen()
+            .iter()
+            .any(|entry| entry[0] == "updateProjectV2Field"),
+        "a refused request reaches no board state"
+    );
+    assert_eq!(fixture.state.lock().unwrap().guarded_status_options, before);
+
+    let report = status_options_source(&fixture)
+        .status_options(StatusOptionsMode::Apply)
+        .await
+        .expect("the setup this release sends lands");
+    assert_eq!(report.outcome, StatusOptionsOutcome::Applied);
+}
+
 #[tokio::test]
 async fn guarded_status_options_count_a_terminal_category_s_option_as_configured() {
     // A terminal write selects its mapped option before it closes, and refuses when the
