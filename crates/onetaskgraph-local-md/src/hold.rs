@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use onetaskgraph_plugin_api::SourceError;
+use onetaskgraph_plugin_api::{MetadataRecord, NativeId, SourceError};
 
 /// How long a fallback lock file may stand before it is taken to be a dead process's: far longer
 /// than the read and the one metadata write it guards. The kernel's locks are never judged by it.
@@ -46,7 +46,14 @@ enum Held {
 /// deleted or moved while held is still released — shared by every clone of the source, so a
 /// clone releases what another took.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Holds(Arc<Mutex<HashMap<String, Held>>>);
+pub(crate) struct Holds(Arc<Mutex<HashMap<HeldRecord, Held>>>);
+
+/// The record a hold guards: its kind and its id, so two kinds sharing an id are two records.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct HeldRecord {
+    pub(crate) record: MetadataRecord,
+    pub(crate) id: NativeId,
+}
 
 fn lock_of(file: &Path) -> PathBuf {
     let mut path = file.as_os_str().to_owned();
@@ -177,14 +184,14 @@ fn refused_lock(
 
 impl Holds {
     /// Wait for and take the lock beside `file`, held as the record `record` names.
-    pub(crate) fn take(&self, record: &str, file: &Path) -> Result<(), SourceError> {
+    pub(crate) fn take(&self, record: &HeldRecord, file: &Path) -> Result<(), SourceError> {
         self.take_within(record, file, STALE * 2)
     }
 
     /// [`Self::take`], waiting for a live holder no longer than `patience`.
     fn take_within(
         &self,
-        record: &str,
+        record: &HeldRecord,
         file: &Path,
         patience: Duration,
     ) -> Result<(), SourceError> {
@@ -205,12 +212,12 @@ impl Holds {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(record.to_owned(), held);
+            .insert(record.clone(), held);
         Ok(())
     }
 
     /// Release the lock this source holds for `record`, wherever its file now is.
-    pub(crate) fn release(&self, record: &str) {
+    pub(crate) fn release(&self, record: &HeldRecord) {
         let held = self
             .0
             .lock()
@@ -300,6 +307,13 @@ fn take_created(lock: &Path, started: Instant, patience: Duration) -> Result<(),
 mod tests {
     use super::*;
 
+    fn task_t1() -> HeldRecord {
+        HeldRecord {
+            record: MetadataRecord::Task,
+            id: NativeId("T-1".to_owned()),
+        }
+    }
+
     fn record() -> (tempfile::TempDir, PathBuf) {
         let folder = tempfile::tempdir().expect("a folder");
         let file = folder.path().join("T-1.md");
@@ -315,9 +329,9 @@ mod tests {
     fn a_live_holder_waited_on_past_the_patience_is_refused() {
         let (_folder, file) = record();
         let holder = Holds::default();
-        holder.take("task T-1", &file).expect("held");
+        holder.take(&task_t1(), &file).expect("held");
         let refused = Holds::default()
-            .take_within("task T-1", &file, Duration::from_millis(50))
+            .take_within(&task_t1(), &file, Duration::from_millis(50))
             .expect_err("still held");
         assert!(
             matches!(&refused, SourceError::Unavailable { message }
@@ -325,10 +339,10 @@ mod tests {
             "{refused:?}"
         );
         assert!(lock_of(&file).exists(), "the holder's lock is left");
-        holder.release("task T-1");
+        holder.release(&task_t1());
         assert!(!lock_of(&file).exists(), "released, the lock file goes");
         Holds::default()
-            .take_within("task T-1", &file, Duration::from_millis(50))
+            .take_within(&task_t1(), &file, Duration::from_millis(50))
             .expect("free once released");
     }
 
@@ -345,9 +359,9 @@ mod tests {
             drop(left);
             let holds = Holds::default();
             holds
-                .take_within("task T-1", &file, Duration::from_millis(50))
+                .take_within(&task_t1(), &file, Duration::from_millis(50))
                 .expect("taken at once");
-            holds.release("task T-1");
+            holds.release(&task_t1());
             assert!(!lock_of(&file).exists());
         }
     }

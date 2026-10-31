@@ -459,9 +459,12 @@ enum Kind {
     Document,
 }
 
-/// The name a hold on the `record` `id` is kept under.
-fn held_as(record: onetaskgraph_plugin_api::MetadataRecord, id: &NativeId) -> String {
-    format!("{record:?} {}", id.0)
+/// The record a hold on the `record` `id` is kept under.
+fn held_as(record: onetaskgraph_plugin_api::MetadataRecord, id: &NativeId) -> hold::HeldRecord {
+    hold::HeldRecord {
+        record,
+        id: id.clone(),
+    }
 }
 
 fn kind_of(record: onetaskgraph_plugin_api::MetadataRecord) -> Kind {
