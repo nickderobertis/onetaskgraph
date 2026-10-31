@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{GitHubBoardFields, github_projects_with_board};
+use onetaskgraph_e2e_support::sdk::{self, Sdk};
 
 /// The board's configured repository, owned by a login `creation_owners` names in another case.
 const CONFIGURED: &str = "Example-Owner/onetaskgraph";
@@ -245,6 +246,29 @@ fn locate_reports_a_refused_create_without_failing_and_an_allowed_one_without_th
         "{located:#}"
     );
     let reason = refused["refused"].as_str().expect("a refusal");
+    // Both SDKs parse the refusal into their generated `CreatesIn`, as the binary wrote it.
+    let cache_home = setup.sandbox.subdirectory("cache-home");
+    for (which, script) in [
+        (
+            Sdk::Python,
+            "r=await c.task_locate([task],to='board')\n print(r.items[0].creates_in.model_dump_json())",
+        ),
+        (
+            Sdk::TypeScript,
+            "const r = await client.taskLocate([id], {to: 'board'}); \
+             console.log(JSON.stringify(r.items[0].creates_in));",
+        ),
+    ] {
+        let parsed = sdk::run(
+            &setup.sandbox,
+            &cache_home,
+            which,
+            script,
+            "plan:lone",
+            None,
+        );
+        assert_eq!(&parsed, refused, "{which:?}");
+    }
     assert!(
         reason.contains(OTHER) && reason.contains("example-owner"),
         "{reason}"
