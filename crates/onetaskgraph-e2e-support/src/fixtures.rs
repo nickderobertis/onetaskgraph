@@ -2090,10 +2090,10 @@ impl GitHubBoardFields {
         self.graphql_over_http(query, variables)["data"].clone()
     }
 
-    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] One request to this shared board through the harness's own `graphql_over_http`, beside `graphql`: the board's refusal of a request GitHub's schema rejects is its private request loop's, so only this handle can show it.
     /// Send this board one GraphQL request, as [`Self::graphql`] does, and answer the whole
     /// response body — `errors` as well as `data` — which is what a journey needs to say the
     /// board refused a request the way GitHub refuses it.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] One request to this shared board through the harness's own `graphql_over_http`, beside `graphql`: the board's refusal of a request GitHub's schema rejects is its private request loop's, so only this handle can show it.
     pub fn graphql_response(&self, query: &str, variables: &Value) -> Value {
         self.graphql_over_http(query, variables)
     }

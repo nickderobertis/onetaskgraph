@@ -27,9 +27,9 @@ pub mod fixtures;
 // each request to before it answers. The GitHub Projects plugin crate owns it and this includes
 // it from there, private to the board: a GitHub suite that calls it directly includes it the
 // same way, so nothing outside GitHub's own tests reaches it through this harness.
-// llmlint: ignore[code_lands_in_the_domain_that_owns_it] Its one caller is the loopback GitHub board, which lives in this harness for the reason `GitHubBoard` in fixtures.rs records; the check a board applies to each request has to compile where that board's request loop does, and the implementation itself stays in the GitHub Projects plugin's tests.
 #[allow(dead_code)] // the board calls `refuse` alone; the plugin's own suites call the rest
 #[path = "../../onetaskgraph-github-projects/tests/github_schema/mod.rs"]
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] Its one caller is the loopback GitHub board, which lives in this harness for the reason `GitHubBoard` in fixtures.rs records; the check a board applies to each request has to compile where that board's request loop does, and the implementation itself stays in the GitHub Projects plugin's tests.
 mod github_schema;
 pub mod images;
 pub mod linear_markdown;
