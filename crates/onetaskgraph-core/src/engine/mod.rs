@@ -76,10 +76,11 @@ pub use comment::{
 pub use copy::MirrorTarget;
 pub(crate) use copy::spent_between;
 pub use copy::{
-    BudgetSpent, CommentCounts, CopyAction, CopyItems, CopyLink, CopyLookup, CopyOutcome,
-    CopyReport, CopyRequest, CopyScope, CopyVia, CreatesIn, LocateLookup, LocateReport,
-    LocateRequest, Located, LocatedCounterpart, MatchBy, NoCounterpart, NotATask, PublicProjection,
-    PublicProjections, Spent, StatusPolicy,
+    BudgetSpent, CommentCounts, CopyAction, CopyConditions, CopyItems, CopyLink, CopyLookup,
+    CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, CreatesIn, LocateLookup,
+    LocateReport, LocateRequest, Located, LocatedCounterpart, MatchBy, NoCounterpart, NotATask,
+    Otherwise, PriorityCondition, PublicProjection, PublicProjections, Spent, StatusCondition,
+    StatusPolicy,
 };
 pub(crate) use copy::{malformed_links, malformed_locations};
 pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};
@@ -1308,6 +1309,53 @@ pub enum EngineError {
          next: copy the projects or documents without --status, or copy the tasks with it."
     )]
     StatusesNotTasks,
+
+    /// A project or a document copy was given a condition on the counterpart it updates:
+    /// `--when-destination-status`, `--otherwise` and `--when-destination-priority` condition
+    /// a task copy alone.
+    #[error(
+        "a copy conditions the counterpart it updates only when it copies tasks\n\
+         next: copy the projects or documents without --when-destination-status, --otherwise \
+         or --when-destination-priority, or copy the tasks with them."
+    )]
+    ConditionsNotTasks,
+
+    /// `--otherwise` was given without `--when-destination-status`, which is what it is the
+    /// other branch of.
+    #[error(
+        "--otherwise says what a copy does with an item whose destination status is not one \
+         --when-destination-status names, and none was named\n\
+         next: name the categories with --when-destination-status, or drop --otherwise."
+    )]
+    OtherwiseWithoutStatus,
+
+    /// `--when-destination-status` was given beside `--status-policy preserve-destination`,
+    /// which makes no status write for it to guard.
+    #[error(
+        "--when-destination-status guards the status a copy writes, and --status-policy \
+         preserve-destination writes none over an existing item\n\
+         next: drop --when-destination-status, or copy with --status-policy source."
+    )]
+    StatusConditionPreserved,
+
+    /// A task copy's counterpart was at a status category `--when-destination-status` does not
+    /// name, under `--otherwise refuse`: nothing was written for it.
+    #[error(
+        "{item} was not copied: its counterpart {destination} is at {held}, which is not one \
+         of {allowed}\n\
+         next: copy it with --otherwise preserve-destination to keep that status, or name \
+         {held} with --when-destination-status if the copy may write over it."
+    )]
+    DestinationStatus {
+        /// The source item being copied, qualified.
+        item: String,
+        /// The counterpart it would have updated, qualified.
+        destination: String,
+        /// The counterpart's status category, spelled as the command line spells it.
+        held: String,
+        /// The categories the condition names, spelled the same way and joined by `, `.
+        allowed: String,
+    },
 
     /// A copy of documents was asked to carry comments: a document holds none, so only a task
     /// or a project copy carries them.

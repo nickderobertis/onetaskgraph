@@ -38,6 +38,8 @@ pub(super) enum Slot {
 /// The outcome of an item the copy left unwritten because of `error`.
 pub(super) fn failed(source: GlobalId, error: &EngineError) -> CopyOutcome {
     CopyOutcome {
+        status_condition: None,
+        priority_condition: None,
         expected: crate::cache::ExpectedWrite::default(),
         source,
         action: CopyAction::Failed {
@@ -48,7 +50,7 @@ pub(super) fn failed(source: GlobalId, error: &EngineError) -> CopyOutcome {
 }
 
 /// A status category as the command line spells it.
-fn spelled(category: StatusCategory) -> String {
+pub(super) fn spelled(category: StatusCategory) -> String {
     serde_json::to_value(category)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
@@ -87,6 +89,8 @@ impl Engine {
             }
             slots.push(Slot::Done(Box::new(CopyOutcome {
                 expected: crate::cache::ExpectedWrite::default(),
+                status_condition: None,
+                priority_condition: None,
                 source: id.clone(),
                 action: CopyAction::Skipped {
                     reason: format!(
@@ -235,6 +239,8 @@ impl Engine {
         });
         Ok(Some(CopyOutcome {
             expected: crate::cache::ExpectedWrite::default(),
+            status_condition: None,
+            priority_condition: None,
             source: listed.id.clone(),
             action: CopyAction::Unchanged {
                 destination: landed,

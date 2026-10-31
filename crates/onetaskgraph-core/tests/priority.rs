@@ -50,6 +50,7 @@ fn copy_to(destination: &str, items: &[&str]) -> CopyRequest {
         expect: None,
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
+        conditions: Default::default(),
     }
 }
 

@@ -61,6 +61,11 @@ mod copy;
 // Markdown in seconds. The rule they prove is the engine's copy, which carries comments between
 // every pair of plugins, so no one plugin crate's edge is narrower.
 mod copy_comments;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary from a folder of Markdown into the loopback board and the loopback
+// Linear workspace in seconds. The guards they prove are the engine's copy, decided on the read
+// it makes of any destination, so no one plugin crate's edge is narrower.
+mod copy_guards;
 mod copy_link;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
 // journeys drive the binary from a loopback board and a folder of Markdown into a folder of

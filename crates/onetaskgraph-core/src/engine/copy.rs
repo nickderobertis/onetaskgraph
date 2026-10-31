@@ -61,9 +61,9 @@ use onetaskgraph_plugin_api::{
     AssetPayload, AssetUploads, AssetWrite, Capabilities, Classification, Comment, CommentCopy,
     Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
     ItemKind, ItemWrite, Location, MetadataKey, MetadataMatch, MetadataRecord, Metering, NativeId,
-    Page, PageRequest, Project, ProjectFilter, ProjectQuery, Repository, SourceError, SourceName,
-    Status, StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef, TextFields, TextQuery,
-    WriteTarget,
+    Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SourceError,
+    SourceName, Status, StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef, TextFields,
+    TextQuery, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -96,6 +96,56 @@ pub enum StatusPolicy {
     Source,
     /// Keep an existing destination item's status; creates carry the source status.
     PreserveDestination,
+}
+
+/// What a status-guarded copy does with an item whose destination status is not one of the
+/// categories it names — `--otherwise`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Otherwise {
+    /// Write nothing for that item and report it `failed`, as `destination-status`.
+    #[default]
+    Refuse,
+    /// Copy that item as [`StatusPolicy::PreserveDestination`] copies it.
+    PreserveDestination,
+}
+
+/// The conditions a task copy puts on the counterpart it updates, decided on the copy's own
+/// read of that counterpart before anything is written — `--when-destination-status`,
+/// `--otherwise` and `--when-destination-priority`.
+///
+/// Empty, the default, is no condition: the copy writes exactly what it did before these
+/// existed. A create is never conditioned, because there is no destination item to hold a
+/// value; neither is a project or a document, which a task copy does not update.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CopyConditions {
+    /// The categories a counterpart's status has to be at for the copy to write its status as
+    /// it would without the condition. Empty sets no condition.
+    pub status: Vec<StatusCategory>,
+    /// What happens to a counterpart at another category; `None` is [`Otherwise::Refuse`].
+    /// Refused, as [`EngineError::OtherwiseWithoutStatus`], beside an empty `status`.
+    pub otherwise: Option<Otherwise>,
+    /// The priorities a counterpart's priority has to be at for the copy to write the source's
+    /// priority over it; at any other the counterpart keeps its own, and every other field is
+    /// written as it would be. Empty sets no condition.
+    pub priority: Vec<Priority>,
+}
+
+/// What a guarded copy found a counterpart's status at, and whether that met the condition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StatusCondition {
+    /// The counterpart's status category, as the copy's own pre-write read held it.
+    pub held: StatusCategory,
+    /// Whether that category is one the condition names.
+    pub met: bool,
+}
+
+/// What a guarded copy found a counterpart's priority at, and whether that met the condition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PriorityCondition {
+    /// The counterpart's priority, as the copy's own pre-write read held it.
+    pub held: Priority,
+    /// Whether that priority is one the condition names.
+    pub met: bool,
 }
 
 /// A request to copy work into one configured destination.
@@ -175,6 +225,10 @@ pub struct CopyRequest {
     /// task copy takes it: beside a project or a document copy it is refused as
     /// [`EngineError::StatusesNotTasks`] before anything is read.
     pub statuses: Vec<StatusCategory>,
+    /// The conditions on the counterpart each task updates — see [`CopyConditions`]. Only a
+    /// task copy takes them: beside a project or a document copy any condition is refused, as
+    /// [`EngineError::ConditionsNotTasks`], before anything is read.
+    pub conditions: CopyConditions,
 }
 
 /// A copy selection option, named as the command line spells it in a conflict refusal.
@@ -496,6 +550,16 @@ pub struct CopyOutcome {
     /// `fallback` and what it `spent` — absent for every other item.
     #[serde(flatten)]
     pub expected: ExpectedWrite,
+    /// What `--when-destination-status` found the counterpart's status at, and whether that
+    /// met it — present only when the copy was given the condition and this item was an update
+    /// of a task, a refused one included.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_condition: Option<StatusCondition>,
+    /// What `--when-destination-priority` found the counterpart's priority at, and whether
+    /// that met it — present only when the copy was given the condition and this item was an
+    /// update of a task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_condition: Option<PriorityCondition>,
 }
 
 /// What a `--comments` copy did to one task's comments at the destination.
@@ -1602,6 +1666,21 @@ struct Planned {
     /// Whether the copy found it unchanged at both ends by its change tokens alone, so nothing
     /// of it is written or compared.
     skipped: bool,
+    /// What the copy's status condition found at the counterpart it updates — `None` when the
+    /// copy set none, or creates the item.
+    status_condition: Option<StatusCondition>,
+    /// What the copy's priority condition found at the counterpart task it updates — `None`
+    /// when the copy set none, or creates the item. Unmet, the counterpart keeps its priority.
+    priority_condition: Option<PriorityCondition>,
+}
+
+impl Planned {
+    /// Whether the counterpart keeps its own priority, because the copy's priority condition
+    /// did not hold of it.
+    fn keeps_priority(&self) -> bool {
+        self.priority_condition
+            .is_some_and(|condition| !condition.met)
+    }
 }
 
 /// One item read out of its source, before anything decides where it lands.
@@ -1938,6 +2017,22 @@ impl Engine {
         }
         if !request.statuses.is_empty() && request.scope != CopyScope::Tasks {
             return Err(EngineError::StatusesNotTasks);
+        }
+        let conditions = &request.conditions;
+        if (!conditions.status.is_empty()
+            || conditions.otherwise.is_some()
+            || !conditions.priority.is_empty())
+            && request.scope != CopyScope::Tasks
+        {
+            return Err(EngineError::ConditionsNotTasks);
+        }
+        if conditions.otherwise.is_some() && conditions.status.is_empty() {
+            return Err(EngineError::OtherwiseWithoutStatus);
+        }
+        if !conditions.status.is_empty()
+            && request.status_policy == StatusPolicy::PreserveDestination
+        {
+            return Err(EngineError::StatusConditionPreserved);
         }
         let destination = self.writable(&request.destination)?;
         // Before anything is read, and from the declaration rather than from a failed
@@ -4281,6 +4376,8 @@ impl Engine {
                     continue;
                 }
                 orphans.push(CopyOutcome {
+                    status_condition: None,
+                    priority_condition: None,
                     expected: ExpectedWrite::default(),
                     source: origin,
                     action: CopyAction::Orphaned {
@@ -4362,6 +4459,7 @@ impl Engine {
         // Once a document's references point where they land, and before anything is compared
         // with the destination or written to it: every status is what its destination will
         // store, so an unchanged item reads as unchanged.
+        let mut refused_for_status = decide_conditions(request, &mut planned);
         self.store_statuses(&mut planned).await?;
         // A task copy carries every task past one its destination cannot represent: each is
         // asked about before anything is written, and one refused is left out — reported
@@ -4371,12 +4469,19 @@ impl Engine {
         if request.scope == CopyScope::Tasks && project.is_none() {
             let mut kept = Vec::with_capacity(planned.len());
             for (index, item) in planned.into_iter().enumerate() {
-                match self.unrepresentable(&item, running).await? {
+                let refusal = match refused_for_status.remove(&index) {
+                    Some(error) => Some(error),
+                    None => self.unrepresentable(&item, running).await?,
+                };
+                match refusal {
                     None => kept.push(item),
                     Some(error) => {
                         running.resolvable.retain(|copied| copied != &item.source);
                         running.counterparts.remove(&item.source.to_string());
-                        left_out.push((index, failed(item.source.clone(), &error)));
+                        let mut outcome = failed(item.source.clone(), &error);
+                        outcome.status_condition = item.status_condition;
+                        outcome.priority_condition = item.priority_condition;
+                        left_out.push((index, outcome));
                     }
                 }
             }
@@ -4449,6 +4554,8 @@ impl Engine {
                     .source()
                     .status_as_written(ItemKind::Task, &task.status)
                     == held_task.status;
+            // And likewise a priority a guarded copy kept beside the same source token.
+            let priority_matches = item.keeps_priority() || task.priority == held_task.priority;
             // A counterpart an earlier release landed lacks the mark a copy now leaves on a task
             // whose edges are all on its record, and is written once more to carry it.
             let marked = self.declared(&item.to) == crate::config::SourceVisibility::Private
@@ -4457,6 +4564,7 @@ impl Engine {
                     .metadata
                     .contains_key(MetadataKey::EDGES_ON_RECORD_KEY);
             item.skipped = status_matches
+                && priority_matches
                 && marked
                 && self.token_covers_a_copy(&item.source.source, item.carried.is_some())
                 && as_written
@@ -6085,6 +6193,8 @@ impl Engine {
             carried,
             comment_plan: None,
             skipped: false,
+            status_condition: None,
+            priority_condition: None,
         })
     }
 
@@ -6628,6 +6738,8 @@ impl Engine {
             action,
             placed: item.placed.clone(),
             expected: ExpectedWrite::default(),
+            status_condition: item.status_condition,
+            priority_condition: item.priority_condition,
         };
         // The one read of the destination item, made where its target was found, used to
         // decide whether the write changes anything and — if the copy cannot finish — to
@@ -9122,6 +9234,77 @@ fn described(item: &Item) -> (&str, &BTreeMap<String, Value>) {
 /// item this copy creates: that list is the store's to keep, at the destination. The
 /// `onetaskgraph.copies` link is kept on the same terms: it says where the *destination*
 /// item was copied to, which is the destination's to hold, never the source's to send.
+/// Decide each task's conditions on the counterpart it updates from the copy's own read of
+/// that counterpart, before anything is written: record what each found, turn an item whose
+/// status is unmet under `--otherwise preserve-destination` into one that keeps its status, and
+/// answer every item an unmet status refuses, by its index in `planned`.
+///
+/// No read is made here: the counterpart is what [`Planned::held`] already holds, read where
+/// the target was found — from the cache under `--expect`. A create, and an item whose
+/// counterpart was not read, are never conditioned.
+fn decide_conditions(
+    request: &CopyRequest,
+    planned: &mut [Planned],
+) -> HashMap<usize, EngineError> {
+    let conditions = &request.conditions;
+    let mut refused = HashMap::new();
+    if conditions.status.is_empty() && conditions.priority.is_empty() {
+        return refused;
+    }
+    for (index, item) in planned.iter_mut().enumerate() {
+        let (Target::Update { id, .. }, Some(Item::Task(held))) =
+            (&item.target, item.held.as_ref().map(|held| &held.item))
+        else {
+            continue;
+        };
+        if !matches!(item.item, Item::Task(_)) {
+            continue;
+        }
+        let id = id.clone();
+        let held_category = held.status.category;
+        let held_priority = held.priority;
+        if !conditions.priority.is_empty() {
+            item.priority_condition = Some(PriorityCondition {
+                held: held_priority,
+                met: conditions.priority.contains(&held_priority),
+            });
+        }
+        if conditions.status.is_empty() {
+            continue;
+        }
+        let met = conditions.status.contains(&held_category);
+        item.status_condition = Some(StatusCondition {
+            held: held_category,
+            met,
+        });
+        if met {
+            continue;
+        }
+        match conditions.otherwise.unwrap_or_default() {
+            Otherwise::PreserveDestination => {
+                item.status_policy = StatusPolicy::PreserveDestination;
+            }
+            Otherwise::Refuse => {
+                refused.insert(
+                    index,
+                    EngineError::DestinationStatus {
+                        item: item.source.to_string(),
+                        destination: GlobalId::new(item.to.clone(), id).to_string(),
+                        held: query::spelled(held_category),
+                        allowed: conditions
+                            .status
+                            .iter()
+                            .map(|category| query::spelled(*category))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    },
+                );
+            }
+        }
+    }
+    refused
+}
+
 fn outgoing(
     item: &Planned,
     id: NativeId,
@@ -9154,6 +9337,10 @@ fn outgoing(
             status: match (item.status_policy, held.map(|held| &held.item)) {
                 (StatusPolicy::PreserveDestination, Some(Item::Task(held))) => held.status.clone(),
                 _ => task.status.clone(),
+            },
+            priority: match held.map(|held| &held.item) {
+                Some(Item::Task(held)) if item.keeps_priority() => held.priority,
+                _ => task.priority,
             },
             classification,
             ..(**task).clone()
@@ -9743,8 +9930,11 @@ fn recorded_unchanged(
         && classification_of(&held.item) == classification_of(outgoing)
         && match (&held.item, outgoing) {
             (Item::Task(held), Item::Task(outgoing)) => {
+                // A status and a priority a guarded copy kept beside the source's token are
+                // still written by a later copy that does not keep them.
                 targets(&held.delivers, destination) == targets(&outgoing.delivers, destination)
                     && held.status == outgoing.status
+                    && held.priority == outgoing.priority
                     && held.project == outgoing.project
             }
             (Item::Project(held), Item::Project(outgoing)) => held.status == outgoing.status,

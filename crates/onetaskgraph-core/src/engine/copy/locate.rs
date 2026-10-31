@@ -198,6 +198,7 @@ impl Engine {
             no_link: true,
             expect: None,
             statuses: Vec::new(),
+            conditions: Default::default(),
         };
         let destination = self.writable(&copy.destination)?;
         let metered = self.metered(&copy, destination)?;
@@ -304,6 +305,8 @@ impl Engine {
                     carried: None,
                     comment_plan: None,
                     skipped: false,
+                    status_condition: None,
+                    priority_condition: None,
                 };
                 // A dry run's filing lookup, so it creates no member project; what it would have
                 // written is nothing, and the journal is dropped with nothing in it to undo.

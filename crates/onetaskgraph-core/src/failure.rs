@@ -233,6 +233,18 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         ),
         EngineError::QueryNotTasks => ("query-not-tasks".to_owned(), None, None),
         EngineError::StatusesNotTasks => ("statuses-not-tasks".to_owned(), None, None),
+        EngineError::ConditionsNotTasks => ("conditions-not-tasks".to_owned(), None, None),
+        EngineError::OtherwiseWithoutStatus => ("otherwise-without-status".to_owned(), None, None),
+        EngineError::StatusConditionPreserved => {
+            ("status-condition-preserved".to_owned(), None, None)
+        }
+        EngineError::DestinationStatus { destination, .. } => (
+            "destination-status".to_owned(),
+            destination
+                .split_once(':')
+                .and_then(|(source, _)| configured(source)),
+            None,
+        ),
         EngineError::CommentsNotDocuments => ("comments-not-documents".to_owned(), None, None),
         EngineError::NoPriority { name, .. } => ("no-priority".to_owned(), configured(name), None),
         EngineError::CommentsNotWritable { name, .. }

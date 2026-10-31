@@ -733,6 +733,19 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             request.comments = args.comments;
             request.status_policy = args.status_policy.into();
             request.expect.clone_from(&args.expect.expect);
+            request.conditions = onetaskgraph_core::CopyConditions {
+                status: args
+                    .when_destination_status
+                    .iter()
+                    .map(|status| status.category())
+                    .collect(),
+                otherwise: args.otherwise.map(Into::into),
+                priority: args
+                    .when_destination_priority
+                    .iter()
+                    .map(|priority| priority.priority())
+                    .collect(),
+            };
             copy(out, loaded, &request).await
         }
 
@@ -1869,6 +1882,7 @@ fn copy_request(
         expect: None,
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
+        conditions: Default::default(),
     })
 }
 
