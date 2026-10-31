@@ -6850,6 +6850,11 @@ fn linear_serve(
     json!({"endpoint":endpoint,"team":"FIX","status_mapping":linear_default_mapping()})
 }
 
+/// The priority write v0.12.13 and every release before it sent, selecting the priority alone:
+/// answered as the one this build sends is, so a journey can measure that release's binary over
+/// this loopback — see `crates/onetaskgraph-e2e/tests/e2e/release_requests.rs`.
+const RELEASED_ISSUE_PRIORITY_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id priority}} }";
+
 /// The `status_mapping` every Linear workspace here is configured with unless a journey gives
 /// its own: a name for each category the shared dataset and the shared journeys write, for
 /// both kinds, each one a name the workspace's vocabulary holds for both.
@@ -7069,7 +7074,7 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                 )
         }
         // The two narrow issue writes: exactly one member, and nothing beside it.
-        graphql::ISSUE_PRIORITY_UPDATE => {
+        graphql::ISSUE_PRIORITY_UPDATE | RELEASED_ISSUE_PRIORITY_UPDATE => {
             exact_linear_variable_keys(variables, &["id", "input"])
                 && variables
                     .get("id")
@@ -7401,6 +7406,7 @@ fn linear_response(
         graphql::ISSUE_CREATE,
         graphql::ISSUE_UPDATE,
         graphql::ISSUE_PRIORITY_UPDATE,
+        RELEASED_ISSUE_PRIORITY_UPDATE,
         graphql::PROJECT_CREATE,
         graphql::PROJECT_UPDATE,
         graphql::PROJECT_STATUS_UPDATE,
@@ -7595,7 +7601,7 @@ fn linear_response(
     // input member it was not sent as it was.
     if matches!(
         operation,
-        graphql::ISSUE_UPDATE | graphql::ISSUE_PRIORITY_UPDATE
+        graphql::ISSUE_UPDATE | graphql::ISSUE_PRIORITY_UPDATE | RELEASED_ISSUE_PRIORITY_UPDATE
     ) && vars["input"].get("labelIds").is_none()
     {
         return linear_narrow_issue_update(data, &vars, operation);

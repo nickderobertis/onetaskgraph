@@ -1,0 +1,122 @@
+{
+  "into board": {
+    "content set": {
+      "board": [
+        "query node __typename id number title body url createdAt updatedAt state stateReason repository parent subIssuesSummary commentCount:comments relationshipEvents:timelineItems labels projectItems id title body parent subIssuesSummary",
+        "mutation updateIssue"
+      ],
+      "linear": []
+    },
+    "create": {
+      "board": [
+        "query boardFields:repositoryOwner repository o0:repositoryOwner include s0:search include o1:repositoryOwner include s1:search include o2:repositoryOwner include s2:search include o3:repositoryOwner include s3:search include o4:repositoryOwner include s4:search include o5:repositoryOwner include s5:search include o6:repositoryOwner include s6:search include o7:repositoryOwner include s7:search include o8:repositoryOwner include s8:search include o9:repositoryOwner include s9:search include __typename id number title body url createdAt updatedAt state stateReason repository parent subIssuesSummary commentCount:comments relationshipEvents:timelineItems labels projectItems",
+        "mutation createIssue",
+        "query i0:node include i1:node include i2:node include i3:node include i4:node include i5:node include i6:node include i7:node include i8:node include i9:node include i10:node include i11:node include i12:node include i13:node include i14:node include i15:node include i16:node include i17:node include i18:node include i19:node include i20:node include",
+        "mutation field0:updateProjectV2ItemFieldValue include field1:updateProjectV2ItemFieldValue include field2:updateProjectV2ItemFieldValue include field3:updateProjectV2ItemFieldValue include field4:updateProjectV2ItemFieldValue include field5:updateProjectV2ItemFieldValue include field6:updateProjectV2ItemFieldValue include field7:updateProjectV2ItemFieldValue include field8:updateProjectV2ItemFieldValue include field9:updateProjectV2ItemFieldValue include field10:updateProjectV2ItemFieldValue include field11:updateProjectV2ItemFieldValue include field12:updateProjectV2ItemFieldValue include field13:updateProjectV2ItemFieldValue include field14:updateProjectV2ItemFieldValue include field15:updateProjectV2ItemFieldValue include field16:updateProjectV2ItemFieldValue include field17:updateProjectV2ItemFieldValue include field18:updateProjectV2ItemFieldValue include"
+      ],
+      "linear": []
+    },
+    "metadata set": {
+      "board": [
+        "query node __typename id number title body url createdAt updatedAt state stateReason repository parent subIssuesSummary commentCount:comments relationshipEvents:timelineItems labels projectItems id title body parent subIssuesSummary",
+        "mutation updateIssue"
+      ],
+      "linear": []
+    },
+    "priority set": {
+      "board": [
+        "query node __typename id number title body url createdAt updatedAt state stateReason repository parent subIssuesSummary commentCount:comments relationshipEvents:timelineItems labels projectItems id title body parent subIssuesSummary",
+        "mutation updateProjectV2ItemFieldValue"
+      ],
+      "linear": []
+    },
+    "status set": {
+      "board": [
+        "query node __typename id number title body url createdAt updatedAt state stateReason repository parent subIssuesSummary commentCount:comments relationshipEvents:timelineItems labels projectItems id title body parent subIssuesSummary",
+        "mutation updateProjectV2ItemFieldValue"
+      ],
+      "linear": []
+    },
+    "unchanged": {
+      "board": [
+        "query node __typename id number title body url createdAt updatedAt state stateReason repository parent subIssuesSummary commentCount:comments relationshipEvents:timelineItems labels projectItems id title body parent subIssuesSummary"
+      ],
+      "linear": []
+    },
+    "update": {
+      "board": [
+        "query node __typename id number title body url createdAt updatedAt state stateReason repository parent subIssuesSummary commentCount:comments relationshipEvents:timelineItems labels projectItems id title body parent subIssuesSummary",
+        "mutation updateIssue"
+      ],
+      "linear": []
+    }
+  },
+  "into linear": {
+    "content set": {
+      "board": [],
+      "linear": [
+        "query issue",
+        "mutation issueUpdate"
+      ]
+    },
+    "create": {
+      "board": [],
+      "linear": [
+        "query issues projects organization teams projectStatuses",
+        "mutation issueCreate"
+      ]
+    },
+    "metadata set": {
+      "board": [],
+      "linear": [
+        "query issue",
+        "mutation issueUpdate"
+      ]
+    },
+    "priority set": {
+      "board": [],
+      "linear": [
+        "query issue",
+        "mutation issueUpdate"
+      ]
+    },
+    "status set": {
+      "board": [],
+      "linear": [
+        "query organization teams projectStatuses",
+        "mutation issueUpdate"
+      ]
+    },
+    "unchanged": {
+      "board": [],
+      "linear": [
+        "query issue",
+        "query issue"
+      ]
+    },
+    "update": {
+      "board": [],
+      "linear": [
+        "query issue",
+        "mutation issueUpdate"
+      ]
+    }
+  },
+  "linear into board": {
+    "create": {
+      "board": [
+        "query boardFields:repositoryOwner repository o0:repositoryOwner include s0:search include o1:repositoryOwner include s1:search include o2:repositoryOwner include s2:search include o3:repositoryOwner include s3:search include o4:repositoryOwner include s4:search include o5:repositoryOwner include s5:search include o6:repositoryOwner include s6:search include o7:repositoryOwner include s7:search include o8:repositoryOwner include s8:search include o9:repositoryOwner include s9:search include __typename id number title body url createdAt updatedAt state stateReason repository parent subIssuesSummary commentCount:comments relationshipEvents:timelineItems labels projectItems",
+        "mutation createIssue",
+        "query i0:node include i1:node include i2:node include i3:node include i4:node include i5:node include i6:node include i7:node include i8:node include i9:node include i10:node include i11:node include i12:node include i13:node include i14:node include i15:node include i16:node include i17:node include i18:node include i19:node include i20:node include",
+        "mutation field0:updateProjectV2ItemFieldValue include field1:updateProjectV2ItemFieldValue include field2:updateProjectV2ItemFieldValue include field3:updateProjectV2ItemFieldValue include field4:updateProjectV2ItemFieldValue include field5:updateProjectV2ItemFieldValue include field6:updateProjectV2ItemFieldValue include field7:updateProjectV2ItemFieldValue include field8:updateProjectV2ItemFieldValue include field9:updateProjectV2ItemFieldValue include field10:updateProjectV2ItemFieldValue include field11:updateProjectV2ItemFieldValue include field12:updateProjectV2ItemFieldValue include field13:updateProjectV2ItemFieldValue include field14:updateProjectV2ItemFieldValue include field15:updateProjectV2ItemFieldValue include field16:updateProjectV2ItemFieldValue include field17:updateProjectV2ItemFieldValue include field18:updateProjectV2ItemFieldValue include"
+      ],
+      "linear": [
+        "query issue",
+        "query issue",
+        "query issue",
+        "mutation issueUpdate",
+        "mutation issueUpdate"
+      ]
+    }
+  }
+}

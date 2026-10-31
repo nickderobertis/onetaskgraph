@@ -208,3 +208,8 @@ mod update;
 // and the loopback Linear workspace in seconds. What a write reports it left is the engine's
 // copy and write verbs read across every plugin, so no one plugin crate's edge is narrower.
 mod write_results;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journey drives the binary into the loopback board and Linear workspace in seconds, and holds
+// what it sends to a golden recorded from the v0.12.13 binary. The copy and the write verbs are
+// the engine's, across plugins, so no one plugin crate's edge is narrower.
+mod release_requests;
