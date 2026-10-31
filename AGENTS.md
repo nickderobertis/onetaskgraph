@@ -341,9 +341,10 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   own suites (`onetaskgraph-github-projects` and `onetaskgraph-linear`, tagged
   `coverage:uninstrumented`) run every case uninstrumented in `test` and are not part of that
   union, and the floor over the rest is 92%, not 95%. Their `coverage` target measures nothing:
-  the Linear plugin's is a no-op, and the GitHub Projects plugin's only builds its tests
-  instrumented (`rust-coverage.sh --build-only`), because its e2e suite's measured entry-point
-  pairs run them. `workspace:coverage` does not depend on either, and
+  the Linear plugin's is a no-op, and the GitHub Projects plugin's only builds instrumented
+  the two test binaries its e2e suite's measured entry-point pairs run, `plugin` and `live`
+  (`rust-coverage.sh --build-only … --test plugin --test live`) — the rest built instrumented
+  were CPU nothing ran. `workspace:coverage` does not depend on either, and
   `scripts/check-coverage-enforced.sh` holds tag, target and aggregate to one another. Measured
   on `54327de7`, the union was 95.75% of lines with every suite instrumented, and is 92.69%
   without the live crates' suites. Each crate's `coverage` target runs its own tests
