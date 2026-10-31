@@ -7,6 +7,8 @@ use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{
     GitHubBoardFields, document, github_projects_with_board, github_projects_with_board_failing,
 };
+use onetaskgraph_e2e_support::github_schema;
+use onetaskgraph_github_projects::graphql::STATUS_OPTIONS_UPDATE;
 
 // llmlint: ignore-block[tests_mirror_real_usage] Every test below drives the compiled CLI
 // against the real loopback HTTP boundary. What the verb owes is a wire effect — the whole
@@ -594,5 +596,133 @@ fn a_board_with_no_priority_mapping_sets_up_its_status_field_alone() {
         "no Priority field is created"
     );
     assert!(mutations(&board).is_empty());
+}
+
+/// The board the live field setup failed on: a configured Status option missing and no
+/// Priority field. Every request the setup sends is one GitHub's complete published schema
+/// accepts — the board refuses any other, as GitHub does — and both fields end up configured
+/// with no item's status or priority moved.
+#[test]
+fn a_board_missing_a_status_option_and_the_priority_field_is_set_up_by_requests_github_accepts() {
+    let (sandbox, board) = configured();
+    board.without_option("Cancelled");
+    board.without_priority_field();
+    let status_before = board.status_options();
+    let values_before = values(&sandbox);
+
+    let planned = report(&sandbox, &["--json", "sources", "fields", "board"]);
+    assert_eq!(planned["fields"][0]["missing"], json!(["Cancelled"]));
+    assert_eq!(planned["fields"][1]["exists"], false);
+    assert!(mutations(&board).is_empty(), "a plan writes nothing");
+
+    let applied = sandbox
+        .command()
+        .args(["sources", "fields", "board", "--apply"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    assert_eq!(
+        stdout(&applied),
+        "board: added and verified Status options: task: Cancelled; project: Cancelled\n\
+         board: created the Priority field with: Urgent, High, Medium, Low\n"
+    );
+
+    for (query, variables) in board.served() {
+        if let Err(errors) = github_schema::validate(&query, &variables) {
+            panic!("GitHub would refuse {query} with {variables}: {errors:?}");
+        }
+    }
+    let sent = mutations(&board);
+    assert_eq!(sent.len(), 2, "{sent:?}");
+    assert!(sent[0].0.contains("updateProjectV2Field(input:$input)"));
+    let options = sent[0].1["input"]["singleSelectOptions"].clone();
+    assert_eq!(
+        sent[0].1["input"],
+        json!({"fieldId": "FIELD-status", "singleSelectOptions": options})
+    );
+    assert!(sent[1].0.contains("createProjectV2Field(input:$input)"));
+
+    let status_after = board.status_options();
+    assert!(
+        status_before
+            .iter()
+            .all(|option| status_after.contains(option))
+    );
+    assert!(
+        status_after
+            .iter()
+            .any(|option| option["name"] == "Cancelled")
+    );
+    let priorities: Vec<Value> = board
+        .priority_options()
+        .expect("the field was created")
+        .iter()
+        .map(|option| option["name"].clone())
+        .collect();
+    assert_eq!(
+        priorities,
+        [
+            json!("Urgent"),
+            json!("High"),
+            json!("Medium"),
+            json!("Low")
+        ]
+    );
+    assert_eq!(
+        values(&sandbox),
+        values_before,
+        "no item's status or priority moved"
+    );
+
+    let again = report(
+        &sandbox,
+        &["--json", "sources", "fields", "board", "--apply"],
+    );
+    for field in again["fields"].as_array().expect("fields") {
+        assert_eq!(field["outcome"], "unchanged", "{again}");
+    }
+}
+
+/// The request 0.12.13's field setup sent — `projectId` inside `UpdateProjectV2FieldInput`,
+/// which GitHub does not define — is refused by the board exactly as GitHub refused it, and
+/// nothing on the board changes.
+#[test]
+fn the_board_refuses_the_status_option_update_0_12_13_sent_as_github_does() {
+    let (_sandbox, board) = configured();
+    board.without_option("Cancelled");
+    let before = board.status_options();
+    let mut options = before.clone();
+    options.push(json!({"name": "Cancelled", "color": "GRAY", "description": ""}));
+
+    let answered = board.graphql_response(
+        STATUS_OPTIONS_UPDATE,
+        &json!({"input": {"projectId": "PVT-board", "fieldId": "FIELD-status",
+                          "singleSelectOptions": options}}),
+    );
+    assert_eq!(
+        answered,
+        json!({"errors": [{"message": "Variable $input of type UpdateProjectV2FieldInput! was \
+            provided invalid value for projectId (Field is not defined on \
+            UpdateProjectV2FieldInput)"}]})
+    );
+    assert_eq!(
+        board.status_options(),
+        before,
+        "a refused request changes nothing"
+    );
+
+    // The same update without it is the one GitHub runs.
+    let answered = board.graphql_response(
+        STATUS_OPTIONS_UPDATE,
+        &json!({"input": {"fieldId": "FIELD-status", "singleSelectOptions": options}}),
+    );
+    assert!(answered.get("errors").is_none(), "{answered}");
+    assert!(
+        board
+            .status_options()
+            .iter()
+            .any(|option| option["name"] == "Cancelled")
+    );
 }
 // llmlint: ignore-end[tests_mirror_real_usage]

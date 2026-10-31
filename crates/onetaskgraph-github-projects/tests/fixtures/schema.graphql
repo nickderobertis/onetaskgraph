@@ -7,6 +7,10 @@
 # this source does writes the board's own fields. `updateProjectV2Field` is present only
 # for the guarded status-options document, whose caller sends all existing option ids and
 # verifies every id and item assignment after GitHub replaces the complete option set.
+# Its input carries no `projectId`: GitHub's `UpdateProjectV2FieldInput` names the field by
+# `fieldId` alone. This subset once said otherwise and the field setup shipped sending it; the
+# whole published schema beside this file, `github-schema.docs.graphql`, is what every GitHub
+# double now validates requests against (README.md).
 #
 # `createProjectV2Field` (with `CreateProjectV2FieldInput`, `ProjectV2CustomFieldType` and
 # `CreateProjectV2FieldPayload`) and `clearProjectV2ItemFieldValue` (with
@@ -216,7 +220,6 @@ input ProjectV2FieldValue {
   singleSelectOptionId: String
 }
 input UpdateProjectV2FieldInput {
-  projectId: ID!
   fieldId: ID!
   singleSelectOptions: [ProjectV2SingleSelectFieldOptionInput!]
 }

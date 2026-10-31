@@ -14,6 +14,8 @@
 //! - [`clock`]: the simulated clock a spawned binary's pacing and backoff run on;
 //! - [`sdk`]: one script run through either SDK, as a caller of it reads through the binary;
 //! - [`onevcs`]: the released onevcs boundary commands over a home of synthetic identities;
+//! - [`github_schema`]: GitHub's own validation of a request, which every loopback GitHub board
+//!   puts each request to before it answers;
 //!
 //! Not published, and depended on only by path from the test-only e2e members.
 
@@ -23,6 +25,10 @@ use std::sync::OnceLock;
 pub mod clock;
 pub mod common;
 pub mod fixtures;
+// The GitHub Projects plugin's own suite validates against the same file, so the plugin crate
+// owns it and both doubles include it from there rather than holding two validators.
+#[path = "../../onetaskgraph-github-projects/tests/github_schema/mod.rs"]
+pub mod github_schema;
 pub mod images;
 pub mod linear_markdown;
 pub mod linear_vocabulary;

@@ -238,3 +238,27 @@ documentation-derived and carries no captured response.
 `public: Boolean!`, "Returns true if the project is public." It is what
 `graphql::PROJECT_VISIBILITY` selects, the board half of the visibility a write to a source
 declared private is held to.
+
+## `github-schema.docs.graphql` — GitHub's complete published schema
+
+`github-schema.docs.graphql` is GitHub.com's public GraphQL schema file exactly as GitHub
+distributes it, whole and unedited: <https://docs.github.com/public/fpt/schema.docs.graphql>,
+retrieved 2026-10-31 (served `last-modified: Mon, 26 Oct 2026 10:30:11 GMT`), 1,561,946 bytes,
+SHA-256 `ee690896ae7d9126765c6a660174b40c9d1974b70db36af8559117b9c4a7b7a6`. To refresh it,
+download that URL over the file and record the new date, size and digest here.
+
+It is not a reduction, and that is its purpose. `schema.graphql` above is a subset written by
+the same hand as the documents it checks, and in 0.12.13 it defined `projectId` on
+`UpdateProjectV2FieldInput` — which GitHub does not — so the field setup's Status-option
+update passed both that check and the loopback board and was refused by the live API with
+`Variable $input of type UpdateProjectV2FieldInput! was provided invalid value for projectId
+(Field is not defined on UpdateProjectV2FieldInput)`. Against this file:
+
+- `tests/github_schema/mod.rs` validates a request — its selection, arguments, fragments and
+  each variable's value — the way GitHub's executor does before running anything;
+- `tests/schema.rs` holds every document in `graphql::DOCUMENTS` to it, and the field setup's
+  requests with the variables they are sent with;
+- this crate's board (`tests/plugin.rs`) and the shared loopback board every binary journey
+  drives (`onetaskgraph-e2e-support`, which includes that module by path) refuse any request
+  it rejects, answering as GitHub does: HTTP 200, `errors`, no `data`.
+

@@ -8,6 +8,10 @@
 use graphql_parser::{query, schema};
 use std::collections::{HashMap, HashSet};
 
+// Shared with the two GitHub doubles, which call the halves of it this file does not.
+#[allow(dead_code)]
+mod github_schema;
+
 #[test]
 fn status_option_colors_match_the_pinned_graphql_vocabulary() {
     use onetaskgraph_github_projects::StatusOptionColor;
@@ -1033,4 +1037,129 @@ fn every_batch_document_declares_and_sends_exactly_the_slots_its_constant_counts
             );
         }
     }
+}
+
+/// Every document this source sends holds to GitHub's complete published schema, not only to
+/// the reduced subset above: the subset is written by the same hand as the documents, which is
+/// how a field-setup input GitHub does not define passed the check above in 0.12.13.
+#[test]
+fn every_production_document_validates_against_githubs_complete_published_schema() {
+    let refused = onetaskgraph_github_projects::graphql::DOCUMENTS
+        .iter()
+        .filter_map(|(document, doing)| {
+            github_schema::validate_document(document)
+                .err()
+                .map(|errors| format!("{doing}: {errors:?}"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        refused.is_empty(),
+        "GitHub would refuse:\n{}",
+        refused.join("\n")
+    );
+}
+
+/// The field setup's two writes, with the variables it sends, are what GitHub accepts — and
+/// the input 0.12.13 sent is refused with the message GitHub answered it with.
+#[test]
+fn the_field_setup_requests_validate_and_the_input_0_12_13_sent_is_refused() {
+    use onetaskgraph_github_projects::graphql::{CREATE_FIELD, STATUS_OPTIONS_UPDATE};
+    use serde_json::json;
+
+    let options = json!([
+        {"id": "opt-todo", "name": "Todo", "color": "GRAY", "description": ""},
+        {"name": "Cancelled", "color": "GRAY", "description": ""},
+    ]);
+    github_schema::validate(
+        STATUS_OPTIONS_UPDATE,
+        &json!({"input": {"fieldId": "PVTSSF-status", "singleSelectOptions": options}}),
+    )
+    .expect("adding a Status option is a request GitHub runs");
+    github_schema::validate(
+        CREATE_FIELD,
+        &json!({"input": {"projectId": "PVT-board", "dataType": "SINGLE_SELECT",
+            "name": "Priority", "singleSelectOptions": [
+                {"name": "Critical", "color": "GRAY", "description": ""},
+                {"name": "Low", "color": "GRAY", "description": ""}]}}),
+    )
+    .expect("creating the Priority field is a request GitHub runs");
+    github_schema::validate(
+        CREATE_FIELD,
+        &json!({"input": {"projectId": "PVT-board", "dataType": "TEXT", "name": "Origin"}}),
+    )
+    .expect("creating a metadata field is a request GitHub runs");
+
+    assert_eq!(
+        github_schema::validate(
+            STATUS_OPTIONS_UPDATE,
+            &json!({"input": {"projectId": "PVT-board", "fieldId": "PVTSSF-status",
+                "singleSelectOptions": options}}),
+        ),
+        Err(vec![
+            "Variable $input of type UpdateProjectV2FieldInput! was provided invalid value for \
+             projectId (Field is not defined on UpdateProjectV2FieldInput)"
+                .to_owned()
+        ])
+    );
+}
+
+/// The doubles refuse a selection GitHub's schema rejects as well as a variable it rejects:
+/// each request below is one GitHub answers with `errors` and runs none of.
+#[test]
+fn the_schema_check_refuses_each_kind_of_request_github_rejects() {
+    use serde_json::json;
+
+    let refused = |document: &str, variables: serde_json::Value| {
+        github_schema::validate(document, &variables)
+            .expect_err(document)
+            .join("; ")
+    };
+    assert_eq!(
+        refused("query{viewer{loginName}}", json!({})),
+        "Field 'loginName' doesn't exist on type 'User'"
+    );
+    assert_eq!(
+        refused("query{viewer{login(first:1)}}", json!({})),
+        "Field 'login' doesn't accept argument 'first'"
+    );
+    assert_eq!(
+        refused("query{viewer}", json!({})),
+        "Field must have selections (field 'viewer' returns User but has no selections. Did you \
+         mean 'viewer { ... }'?)"
+    );
+    assert_eq!(
+        refused("query{node{id}}", json!({})),
+        "Field 'node' is missing required arguments: id"
+    );
+    assert_eq!(
+        refused(
+            "query($id:ID!){node(id:$id){... on Labelled{id}}}",
+            json!({"id": "I_1"})
+        ),
+        "No such type Labelled, so it can't be a fragment condition"
+    );
+    assert_eq!(
+        refused(
+            "query($id:ID!,$unused:Int){node(id:$id){id}}",
+            json!({"id": "I_1"})
+        ),
+        "Variable $unused is declared by anonymous query but not used"
+    );
+    assert_eq!(
+        refused(
+            "mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){clientMutationId}}",
+            json!({"input": {"projectId": "PVT_1", "dataType": "PRIORITY", "name": "Priority"}})
+        ),
+        "Variable $input of type CreateProjectV2FieldInput! was provided invalid value for \
+         dataType (Expected \"PRIORITY\" to be one of: DATE, ITERATION, MULTI_SELECT, NUMBER, SINGLE_SELECT, TEXT)"
+    );
+    assert_eq!(
+        refused(
+            "mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){clientMutationId}}",
+            json!({"input": {"projectId": "PVT_1", "dataType": "SINGLE_SELECT",
+                "name": "Priority", "singleSelectOptions": [{"name": "High", "color": "GRAY"}]}})
+        ),
+        "Variable $input of type CreateProjectV2FieldInput! was provided invalid value for \
+         singleSelectOptions.description (Expected value to not be null)"
+    );
 }

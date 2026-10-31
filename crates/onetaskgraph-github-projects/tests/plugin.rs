@@ -44,6 +44,12 @@ mod board;
 
 use board::{FIXTURE_BUDGET_LIMIT, Pricing, ample_allowance};
 
+// GitHub's own validation of a request against its complete published schema, which this
+// board puts every request to before it answers. Shared with `tests/schema.rs` and the e2e
+// loopback board, each of which calls only part of it.
+#[allow(dead_code)]
+mod github_schema;
+
 // `status_mapping` scoped by item kind, over this file's board: a module of this target
 // rather than a target of its own because it is this board it drives.
 mod status_by_kind;
@@ -1481,6 +1487,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                          date: {served_at}\r\n"
                     ),
                     match unbound_refusal(&served, query, variables)
+                        .or_else(|| schema_refusal(query, variables))
                         .or_else(|| refused(&served, query, variables))
                     {
                         Some(message) => {
@@ -1545,6 +1552,21 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         }
     });
     Fixture { endpoint, state }
+}
+
+/// GitHub's refusal of a request its complete published schema rejects — a field, an argument
+/// or an input field it does not define, a value of the wrong type — or `None` when GitHub
+/// would run it. GitHub answers every such message at once, before any of the request runs.
+fn schema_refusal(query: &str, variables: &Value) -> Option<String> {
+    let empty = json!({});
+    let variables = if variables.is_null() {
+        &empty
+    } else {
+        variables
+    };
+    github_schema::validate(query, variables)
+        .err()
+        .map(|errors| errors.join("; "))
 }
 
 /// GitHub's refusal of a request that leaves a non-null variable unbound, recorded, or
