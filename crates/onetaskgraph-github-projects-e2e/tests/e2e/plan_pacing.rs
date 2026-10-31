@@ -463,15 +463,20 @@ fn an_empty_primary_bucket_is_waited_out_until_its_reset() {
         r#"{"message":"API rate limit exceeded for user ID 1."}"#,
         1,
     );
+    let finished = chrono::Utc::now().timestamp();
     success(&output);
     let waits: Vec<&Slept> = slept.iter().filter(|slept| slept.cause.is_some()).collect();
     assert_eq!(waits.len(), 1, "{waits:?}");
     assert_eq!(waits[0].cause.as_deref(), Some("primary-reset"));
     // The reset is a wall-clock second, which the source reads against the wall clock once the
-    // refusal is in hand: the wait is to it, which a second boundary passed meanwhile shortens.
+    // refusal is in hand: the wait is to it, from a second no earlier than the one `reset` was
+    // counted from and no later than the one the command had ended by. How long the board and
+    // the copy took to get there — real time, on a loaded or instrumented runner — moves only
+    // where in that span it falls.
+    let earliest = Duration::from_secs(u64::try_from(reset - finished).unwrap_or(0));
     assert!(
-        [29, 30].map(Duration::from_secs).contains(&waits[0].length),
-        "{waits:?}\n{}\n{}",
+        (earliest..=Duration::from_secs(30)).contains(&waits[0].length),
+        "{waits:?} is not within {earliest:?}..=30s\n{}\n{}",
         stdout(&output),
         stderr(&output)
     );
