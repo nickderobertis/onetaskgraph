@@ -1536,6 +1536,10 @@ fn the_schema_check_refuses_a_request_breaking_each_validation_rule() {
         github_schema::refuse(&json!({"query": "query a{viewer{login}}", "operationName": "c"})),
         Some(json!({"errors": [{"message": "Unknown operation named \"c\"."}]}))
     );
+    assert_eq!(
+        github_schema::refuse(&json!({"query": "query a{viewer{login}}", "operationName": 1})),
+        Some(json!({"errors": [{"message": "operationName must be a string, not 1"}]}))
+    );
 }
 
 /// A malformed or adversarial request is refused, never answered by a crash or an exhausted

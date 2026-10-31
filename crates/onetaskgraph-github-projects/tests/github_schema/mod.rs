@@ -319,7 +319,15 @@ pub fn validate_document(document: &str) -> Result<(), Vec<String>> {
 #[must_use]
 pub fn refuse(body: &Value) -> Option<Value> {
     let document = body.get("query")?.as_str()?;
-    let operation_name = body.get("operationName").and_then(Value::as_str);
+    let operation_name = match body.get("operationName") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(name)) => Some(name.as_str()),
+        Some(other) => {
+            return Some(serde_json::json!({"errors": [{
+                "message": format!("operationName must be a string, not {other}")
+            }]}));
+        }
+    };
     let empty = Value::Object(serde_json::Map::new());
     let variables = body
         .get("variables")
