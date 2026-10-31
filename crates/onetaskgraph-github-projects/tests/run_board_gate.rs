@@ -759,7 +759,7 @@ fn assert_isolated(account: &Account, tokens: &[String], reports: &[Report]) {
 }
 
 #[test]
-fn two_concurrent_sessions_of_each_entry_point_pass_on_boards_of_their_own() {
+fn two_concurrent_board_lifecycles_of_each_entry_point_pass_on_boards_of_their_own() {
     let account = Arc::new(Mutex::new(Account::new()));
     let origin = serve(Arc::clone(&account));
     let sessions = [

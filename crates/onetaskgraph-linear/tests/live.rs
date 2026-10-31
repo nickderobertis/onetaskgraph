@@ -1800,10 +1800,19 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     let created = &document_lifecycle::Created::default();
     let lane_endpoint = endpoint.clone();
     let lane_key = key.clone();
-    document_lifecycle::lease::holding(
-        lease.as_ref(),
-        &linear_graphql,
-        &lane_key,
+    document_lifecycle::lease::holding(lease.as_ref(), &linear_graphql, &lane_key, async {
+        // Exclusivity is Linear's refusal of a second create under a held id: proven
+        // against Linear on every claim, before anything is done over the member.
+        if let Some(lease) = &lease {
+            document_lifecycle::lease::verify_exclusive(
+                &linear_graphql,
+                &lane_key,
+                &team_id,
+                lease,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        }
         guard_plugin_invocation(
             &lane_endpoint,
             &lane_key,
@@ -1891,8 +1900,9 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
                     panic!("Linear live capability journey failed: {error}")
                 });
             },
-        ),
-    )
+        )
+        .await
+    })
     .await;
     let refused = namespace.refusals();
     assert!(
@@ -3854,6 +3864,7 @@ mod pool {
                 "the lease listing cursor did not advance",
             ),
             ("unreadable-created-at", "unreadable createdAt"),
+            ("untitled", "a lease issue answered no title"),
         ] {
             let replay = replay();
             // One lease already there, so a listing holds a row whose time is read.
@@ -3968,6 +3979,29 @@ mod pool {
             !sent.iter().any(|query| query.contains("projectStatuses")),
             "{sent:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_claim_proves_a_second_create_under_its_id_is_refused_and_refuses_to_run_if_not() {
+        let replay = replay();
+        let held = claim(&replay, LeaseLane::Plugin, &holder(run(1)))
+            .await
+            .unwrap();
+        lease::verify_exclusive(&replay.endpoint, "synthetic", "team", &held)
+            .await
+            .unwrap();
+        // The lease still names its holder: the refused probe changed nothing.
+        let title = replay.state.lock().unwrap().issues[&held.id]["title"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(!title.ends_with("duplicate-probe"), "{title}");
+        // A Linear that took the second create is one no lease can rest on.
+        replay.state.lock().unwrap().accept_duplicate_ids = true;
+        let refused = lease::verify_exclusive(&replay.endpoint, "synthetic", "team", &held)
+            .await
+            .unwrap_err();
+        assert!(refused.contains("not exclusive"), "{refused}");
     }
 
     #[tokio::test]

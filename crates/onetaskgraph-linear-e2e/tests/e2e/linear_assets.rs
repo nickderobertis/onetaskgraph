@@ -1648,6 +1648,18 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
         "https://api.linear.app/graphql",
         &lifecycle_key,
         || {
+            // Exclusivity is Linear's refusal of a second create under a held id: proven
+            // against Linear on every claim, before anything is done over the member.
+            if let Some(lease) = &lease {
+                runtime
+                    .block_on(document_lifecycle::lease::verify_exclusive(
+                        "https://api.linear.app/graphql",
+                        &lifecycle_key,
+                        team_id,
+                        lease,
+                    ))
+                    .unwrap_or_else(|error| panic!("{error}"));
+            }
             guard_asset_invocation(
                 &runtime,
                 &lifecycle_endpoint,

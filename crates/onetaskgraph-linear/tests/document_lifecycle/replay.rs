@@ -54,9 +54,12 @@ pub struct State {
     pub lose_next_issue_create_ack: bool,
     /// Refuse every `issueDelete`, and every `issueUpdate`, while set.
     pub refuse_issue_deletes: bool,
-    /// How the pool's lease listing is misanswered: `"no-page-info"`, `"repeated-cursor"`, or
-    /// `"unreadable-created-at"`.
+    /// How the pool's lease listing is misanswered: `"no-page-info"`, `"repeated-cursor"`,
+    /// `"untitled"`, or `"unreadable-created-at"`.
     pub lease_listing_fault: Option<&'static str>,
+    /// Take a create under an id already held as an overwrite, as a Linear whose ids were not
+    /// exclusive would.
+    pub accept_duplicate_ids: bool,
     pub refuse_issue_updates: bool,
     pub rate_limited: usize,
     serial: usize,
@@ -207,6 +210,11 @@ impl Replay {
                         "no-page-info" => {
                             connection.as_object_mut().unwrap().remove("pageInfo");
                         }
+                        "untitled" => {
+                            for node in connection["nodes"].as_array_mut().unwrap() {
+                                node.as_object_mut().unwrap().remove("title");
+                            }
+                        }
                         "repeated-cursor" => {
                             let after = request["variables"]["after"].as_str().unwrap_or("0");
                             connection["pageInfo"] = json!({"hasNextPage":true,"endCursor":after});
@@ -354,6 +362,7 @@ fn respond(state: &mut State, request: &Value) -> Value {
             let create = root.ends_with("Create");
             let keyed = v["input"]["id"].as_str().map(str::to_owned);
             if create
+                && !state.accept_duplicate_ids
                 && let Some(id) = &keyed
                 && (state.documents.contains_key(id)
                     || state.projects.contains_key(id)

@@ -177,7 +177,10 @@ async fn read_leases(
             .as_array()
             .ok_or("the lease listing answered no nodes")?
         {
-            let title = node["title"].as_str().unwrap_or_default();
+            // A row that does not say what it is could be the newest held lease: fail closed.
+            let title = node["title"]
+                .as_str()
+                .ok_or("a lease issue answered no title")?;
             let id = node["id"]
                 .as_str()
                 .filter(|id| !id.is_empty())
@@ -273,6 +276,44 @@ pub async fn claim(
          {} hours after it was claimed",
         STALE_AFTER.as_secs_f64() / 3600.0
     ))
+}
+
+/// Asks Linear to create `held`'s issue a second time, under the same id, and requires the
+/// refusal that every claim's exclusivity rests on: a Linear that took the second create would
+/// let two claimants hold one member, so the lane fails here, naming that, rather than run.
+/// The issue is read back afterwards to show it still names this holder.
+pub async fn verify_exclusive(
+    endpoint: &str,
+    key: &str,
+    team_id: &str,
+    held: &Held,
+) -> Result<(), String> {
+    let held_title = lease_title(Lease::new(
+        held.scope(),
+        held.lane,
+        generation(held.generation)?,
+        LeaseHolder::Released,
+    )?);
+    let decoy = format!("{held_title} duplicate-probe");
+    let second = send(
+        endpoint,
+        key,
+        LEASE_CREATE,
+        json!({"input":{"id":held.id,"title":decoy,"teamId":team_id}}),
+    )
+    .await;
+    let still = send(endpoint, key, LEASE, json!({"id":held.id})).await?;
+    let title = still.pointer("/issue/title").and_then(Value::as_str);
+    let accepted =
+        second.is_ok_and(|data| data.pointer("/issueCreate/success") == Some(&json!(true)));
+    if accepted || title == Some(decoy.as_str()) {
+        return Err(format!(
+            "Linear accepted a second create under pool member {}'s lease id {}, so a lease is \
+             not exclusive and no run may lease a member; the pool's leases rest on that refusal",
+            held.index, held.id
+        ));
+    }
+    Ok(())
 }
 
 /// Claims member `index` alone, once: `None` when a run still going holds it.
