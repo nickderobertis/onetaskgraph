@@ -114,7 +114,7 @@ impl Stores {
 }
 
 #[test]
-fn an_uninterrupted_create_records_its_intent_first_and_leaves_none_behind() {
+fn a_create_stopped_after_its_intent_holds_it_and_its_retry_creates_under_that_key() {
     for destination in ["folder", "board", "linear"] {
         let stores = Stores::new();
         let before = std::fs::read_to_string(stores.notes.join("tasks/A.md")).unwrap();
@@ -535,21 +535,43 @@ fn a_retry_pages_back_through_the_repository_to_the_issue_its_key_names_and_no_f
 
 #[test]
 fn an_intent_entry_that_is_not_one_is_refused_and_nothing_is_created() {
-    let stores = Stores::new();
-    std::fs::write(
-        stores.notes.join("tasks/A.md"),
-        "---\ntitle: Task A\nstatus: todo\nmetadata:\n  onetaskgraph.creating:\n    board: 5\n\
-         ---\nThe body.\n",
-    )
-    .expect("a malformed intent");
-    let output = stores.run(&["--json", "task", "copy", NOTE, "--to", "board"], None);
-    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("onetaskgraph.creating"),
-        "names the entry: {}",
-        stderr(&output)
-    );
-    assert!(stores.board.items_titled("Task A").is_empty());
+    // Not an object at all, and one whose time is past what any copy could have written.
+    let key = "8213b96a-ad84-54be-990c-798d8c12c97b";
+    let attempt = "5db60da7-f0de-4044-9aec-2fa2f9f4be74";
+    for entry in [
+        "5".to_owned(),
+        format!(
+            "{{\"key\": \"{key}\", \"at\": \"1969-12-31T23:59:59Z\", \"attempt\": \
+             \"{attempt}\", \"lease_until\": \"2020-01-01T00:00:00Z\"}}"
+        ),
+        format!(
+            "{{\"key\": \"{key}\", \"at\": \"2020-01-01T00:00:00Z\", \"attempt\": \
+             \"{attempt}\", \"lease_until\": \"0001-01-01T00:00:00Z\"}}"
+        ),
+    ] {
+        let stores = Stores::new();
+        std::fs::write(
+            stores.notes.join("tasks/A.md"),
+            format!(
+                "---\ntitle: Task A\nstatus: todo\nmetadata:\n  onetaskgraph.creating:\n    \
+                 board: {entry}\n---\nThe body.\n"
+            ),
+        )
+        .expect("a malformed intent");
+        let output = stores.run(&["--json", "task", "copy", NOTE, "--to", "board"], None);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{entry}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("onetaskgraph.creating"),
+            "{entry}: names the entry: {}",
+            stderr(&output)
+        );
+        assert!(stores.board.items_titled("Task A").is_empty(), "{entry}");
+    }
 }
 
 #[test]
@@ -734,50 +756,45 @@ fn a_holder_renews_its_lease_before_each_destination_write_after_its_create() {
 
 #[test]
 fn a_holder_that_finds_another_attempt_holding_its_intent_writes_nothing_more() {
-    let stores = slow_create_with_a_comment();
-    // Another attempt takes the create over while the board is answering the create.
-    let notes = stores.notes.clone();
-    stores.board.after_request(creates_issue, 0, move |_| {
-        let path = notes.join("tasks/A.md");
-        let text = std::fs::read_to_string(&path).expect("the note");
-        let (attempt, _) = board_intent(&notes).expect("the holder's intent");
-        let text = text.replace(&attempt, "00000000-0000-4000-8000-000000000001");
-        std::fs::write(path, text).expect("taken over");
-    });
+    // The note has a comment, so after its create the copy has one more board write to send.
+    let stores = Stores::new();
+    let body = stores.sandbox.project().join("comment.md");
+    std::fs::write(&body, "A word.\n").expect("a comment body");
+    stores.json(&[
+        "task",
+        "comment",
+        "add",
+        NOTE,
+        "--body-file",
+        body.to_str().expect("a path"),
+    ]);
+    // The first copy creates the issue and is held there until its one-second lease has run
+    // out, as a copy stalled after its create would be.
+    let first = Paused::copying(&stores, &[NOTE], "first", &["after-create"]);
+    first.reached("after-create");
+    let (holder, _) = board_intent(&stores.notes).expect("the first copy's intent");
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    // A second copy finds the issue by its key and takes the create over, then dies.
+    let second = stores.run(
+        &["task", "copy", NOTE, "--to", "board", "--comments"],
+        Some("after-intent"),
+    );
+    assert_eq!(second.status.code(), Some(86), "{}", stderr(&second));
+    let (taker, _) = board_intent(&stores.notes).expect("the second copy's intent");
+    assert_ne!(taker, holder, "the second copy holds the intent now");
+
     let creates = count(&stores.board, creates_issue);
-    let output = stores.run(
-        &[
-            "--json",
-            "task",
-            "copy",
-            NOTE,
-            "--to",
-            "board",
-            "--comments",
-        ],
-        None,
-    );
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "{}\n{:#?}",
-        stdout(&output),
-        stores
-            .board
-            .served()
-            .iter()
-            .map(|(document, _)| document.chars().take(70).collect::<String>())
-            .collect::<Vec<_>>()
-    );
-    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    first.release("after-create");
+    let (code, failure) = first.finish();
+    assert_eq!(code, Some(1), "{failure:#}");
     assert_eq!(
         failure["failure"]["kind"], "create-in-progress",
         "{failure:#}"
     );
     assert_eq!(
         count(&stores.board, creates_issue),
-        creates + 1,
-        "its one create"
+        creates,
+        "no create after the loss"
     );
     assert_eq!(
         count(&stores.board, adds_comment),
@@ -787,7 +804,7 @@ fn a_holder_that_finds_another_attempt_holding_its_intent_writes_nothing_more() 
     // Nothing was taken back: the issue is the new holder's to resolve, and its intent stands.
     assert_eq!(stores.board.items_titled("Task A").len(), 1);
     let (attempt, _) = board_intent(&stores.notes).expect("the new holder's intent");
-    assert_eq!(attempt, "00000000-0000-4000-8000-000000000001");
+    assert_eq!(attempt, taker);
 }
 
 #[test]
@@ -854,6 +871,11 @@ struct Paused {
 
 impl Paused {
     fn start(stores: &Stores, issue: &str, name: &str, points: &[&str]) -> Self {
+        Self::copying(stores, &[issue], name, points)
+    }
+
+    /// A copy of `items` onto the board, with `--comments` when the first is the note.
+    fn copying(stores: &Stores, items: &[&str], name: &str, points: &[&str]) -> Self {
         let directory = stores.sandbox.subdirectory(name);
         let spec = points
             .iter()
@@ -864,7 +886,10 @@ impl Paused {
             .sandbox
             .subprocess(onetaskgraph_e2e_support::binary())
             .env("OTG_TEST_PAUSE_AT", spec)
-            .args(["--json", "task", "copy", issue, "--to", "board"])
+            .args(["--json", "task", "copy"])
+            .args(items)
+            .args(["--to", "board"])
+            .args((items.first() == Some(&NOTE)).then_some("--comments"))
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -1215,4 +1240,119 @@ fn a_project_copy_whose_create_is_taken_back_leaves_its_file_byte_for_byte() {
         before,
         "the project file is as it was"
     );
+}
+
+#[test]
+fn a_linear_project_or_document_create_answered_as_an_id_held_is_read_by_that_id_and_written_whole()
+{
+    for kind in ["project", "document"] {
+        let stores = Stores::new();
+        with_a_project_and_a_document(&stores);
+        let (arguments, id) = record_copy(kind, "linear");
+        let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        let stopped = stores.run(&arguments, Some("after-intent"));
+        assert_eq!(
+            stopped.status.code(),
+            Some(86),
+            "{kind}: {}",
+            stderr(&stopped)
+        );
+        let key = record_metadata(&stores, kind, id)["onetaskgraph.creating"]["linear"]["key"]
+            .as_str()
+            .expect("the intent's key")
+            .to_owned();
+        // The earlier attempt's create lands only once the retry has looked for it by its id and
+        // not found it: the retry's own create, sent with the same id, is refused as taken.
+        let held = onetaskgraph_linear::linear_id_of_key(&key).expect("a key");
+        let looked_up = if kind == "project" {
+            onetaskgraph_linear::graphql::PROJECT
+        } else {
+            onetaskgraph_linear::graphql::DOCUMENT
+        };
+        let landed = held.clone();
+        stores.linear.after_request(
+            move |document, variables| document == looked_up && variables["id"] == json!(landed),
+            0,
+            move |workspace| {
+                if kind == "project" {
+                    workspace.add_project(json!({
+                        "id": held, "title": "Project P, as first sent", "content": "The plan.",
+                        "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                    }));
+                } else {
+                    workspace.add_document(json!({
+                        "id": held, "title": "Document D, as first sent",
+                        "content": "The design.", "labels": [],
+                    }));
+                }
+            },
+        );
+        let title = if kind == "project" {
+            "Project P"
+        } else {
+            "Document D"
+        };
+        let before = stores.linear.served().len();
+        let copied = stores.json(&arguments);
+        // Its create was sent, refused as an id taken, the item read by that id and written
+        // whole after it.
+        let (create, rewrite) = if kind == "project" {
+            (
+                onetaskgraph_linear::graphql::PROJECT_CREATE,
+                onetaskgraph_linear::graphql::PROJECT_REWRITE,
+            )
+        } else {
+            (
+                onetaskgraph_linear::graphql::DOCUMENT_CREATE,
+                onetaskgraph_linear::graphql::DOCUMENT_UPDATE,
+            )
+        };
+        let sent: Vec<String> = stores.linear.served()[before..]
+            .iter()
+            .map(|(document, _)| document.clone())
+            .collect();
+        let after_create = sent
+            .iter()
+            .position(|document| document == create)
+            .map(|created| &sent[created + 1..])
+            .unwrap_or_default();
+        let read = after_create
+            .iter()
+            .position(|document| document == looked_up);
+        assert!(
+            read.is_some_and(|read| after_create[read + 1..].contains(&rewrite.to_owned())),
+            "{kind}: a create, a read by its id, then a whole write: {sent:#?}"
+        );
+        let destination = copied["items"][0]["destination"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        assert_eq!(
+            destination,
+            format!(
+                "linear:{}",
+                onetaskgraph_linear::linear_id_of_key(&key).unwrap()
+            ),
+            "{kind}: the item the earlier attempt made: {copied:#}"
+        );
+        let all = stores.json(&[kind, "list", "--source", "linear"])["items"]
+            .as_array()
+            .expect("a page")
+            .iter()
+            .filter(|item| {
+                item["item"]["title"]
+                    .as_str()
+                    .is_some_and(|shown| shown.starts_with(title))
+            })
+            .count();
+        assert_eq!(all, 1, "{kind}: one item");
+        let shown = &stores.json(&[kind, "show", &destination])["items"][0]["item"];
+        assert_eq!(shown["title"], title, "{kind}: written whole: {shown:#}");
+        assert!(
+            record_metadata(&stores, kind, id)
+                .get("onetaskgraph.creating")
+                .is_none(),
+            "{kind}"
+        );
+    }
 }

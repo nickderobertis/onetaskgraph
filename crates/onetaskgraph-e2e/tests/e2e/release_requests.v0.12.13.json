@@ -37,6 +37,13 @@
       ],
       "linear": []
     },
+    "task update": {
+      "board": [
+        "query node __typename id number title body url createdAt updatedAt state stateReason repository parent subIssuesSummary commentCount:comments relationshipEvents:timelineItems labels projectItems id title body parent subIssuesSummary",
+        "mutation updateIssue"
+      ],
+      "linear": []
+    },
     "unchanged": {
       "board": [
         "query node __typename id number title body url createdAt updatedAt state stateReason repository parent subIssuesSummary commentCount:comments relationshipEvents:timelineItems labels projectItems id title body parent subIssuesSummary"
@@ -87,6 +94,13 @@
         "mutation issueUpdate"
       ]
     },
+    "task update": {
+      "board": [],
+      "linear": [
+        "query issue",
+        "mutation issueUpdate"
+      ]
+    },
     "unchanged": {
       "board": [],
       "linear": [
@@ -98,6 +112,8 @@
       "board": [],
       "linear": [
         "query issue",
+        "query issue",
+        "query organization teams projectStatuses",
         "mutation issueUpdate"
       ]
     }

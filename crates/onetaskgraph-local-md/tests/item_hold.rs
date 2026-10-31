@@ -6,7 +6,7 @@
 //! instance waits for the first to let go and finds the file as the first left it.
 
 use std::fs;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use onetaskgraph_plugin_api::{
     MetadataRecord, NativeId, SecretResolver, SourceName, SourcePlugin, TaskSource,
@@ -48,26 +48,30 @@ fn a_hold_excludes_another_instance_until_it_is_released() {
     assert!(first.hold_item(MetadataRecord::Task, &id).expect("held"));
     let lock = root.path().join("tasks/T-1.md.lock");
     assert!(lock.exists(), "the hold is a lock file beside the record");
-    let started = Instant::now();
+    // The second instance says when it holds the record; until the first lets go it has not.
+    let (held, holding) = std::sync::mpsc::channel();
     let waiter = std::thread::spawn({
         let root = root.path().to_owned();
         move || {
             let second = instance(&root);
-            second
+            let taken = second
                 .hold_item(MetadataRecord::Task, &NativeId("T-1".to_owned()))
-                .expect("held once released")
+                .expect("held once released");
+            held.send(taken).expect("the test is listening");
         }
     });
-    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        holding.recv_timeout(Duration::from_millis(300)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+        "the second instance holds nothing while the first does"
+    );
     first.release_item(MetadataRecord::Task, &id);
-    assert!(
-        waiter.join().expect("the second hold"),
-        "the second instance holds it next"
+    assert_eq!(
+        holding.recv_timeout(Duration::from_secs(30)),
+        Ok(true),
+        "the second instance holds it once the first lets go"
     );
-    assert!(
-        started.elapsed() >= Duration::from_millis(250),
-        "it waited for the first to let go"
-    );
+    waiter.join().expect("the second hold");
     assert!(lock.exists(), "the second instance holds it now");
 }
 

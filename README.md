@@ -850,7 +850,8 @@ Every `created`, `updated` and `unchanged` item of a copy that writes carries `r
 status exactly as `task show` spells it and `priority` `null` for a project or a document (and
 `status` for a document). It is read off the write's own answers, and a field the copy kept — a
 preserved status, a priority the guard kept, an `unchanged` item — off the copy's read before it;
-no request is added for it, and a dry run carries none. `task update`, `task status set`, `task
+no request is added for it, so a dry run carries none, and nor does an item a repeat copy
+`skipped`, which read nothing of the destination. `task update`, `task status set`, `task
 priority set`, `task content set` and `task metadata set` answer the same `result` under
 `--json`, on the same terms; under `--expect` it also carries the `parts` it always did. A
 `failed` item the copy refused after reading its counterpart — `destination-status` — carries

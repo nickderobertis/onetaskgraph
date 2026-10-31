@@ -114,10 +114,10 @@ def test_otherwise_without_a_status_guard_is_refused_before_anything_is_read(
     assert refused.value.failure.kind == "otherwise-without-status"
 
 
-def test_every_write_verb_answers_what_it_left_and_a_comment_names_its_task(
+def test_a_priority_set_answers_what_it_left_and_a_comment_names_its_task(
     binary: Path, store: Path
 ) -> None:
-    """A write answers `result` at the version a read then gives; a comment names its task."""
+    """A priority set answers `result` at the version a read then gives; a comment names its task."""
     client = client_at(binary, store)
     set_ = asyncio.run(client.task_priority_set("plan:ready", "low"))
     assert set_.result is not None and set_.result.priority == "low"
@@ -128,7 +128,7 @@ def test_every_write_verb_answers_what_it_left_and_a_comment_names_its_task(
     assert added.item is not None and added.item.root == "plan:ready"
 
 
-def test_a_copy_stopped_after_its_intent_is_finished_by_its_retry_found_via_intent(
+def test_a_copy_stopped_before_its_link_is_finished_by_its_retry_found_via_intent(
     binary: Path, store: Path
 ) -> None:
     """A copy stopped before its link is finished by its retry, found via its intent."""

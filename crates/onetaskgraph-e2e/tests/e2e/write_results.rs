@@ -210,6 +210,26 @@ fn every_landed_outcome_reports_what_task_show_then_reads() {
         stores.note("A", "Task A, dry", "todo", "low");
         let dry = stores.json(&["task", "copy", "notes:A", "--to", destination, "--dry-run"]);
         assert!(only_outcome(&dry).get("result").is_none(), "{dry:#}");
+
+        // A copy that skips the task reads nothing of the destination, and so reports no result
+        // rather than spend a request on one.
+        let comments = [
+            "task",
+            "copy",
+            "--source",
+            "notes",
+            "--to",
+            destination,
+            "--comments",
+        ];
+        stores.json(&comments);
+        let skipped = stores.json(&comments);
+        let outcome = only_outcome(&skipped);
+        assert_eq!(outcome["skipped"], true, "{destination}: {skipped:#}");
+        assert!(
+            outcome.get("result").is_none(),
+            "{destination}: {skipped:#}"
+        );
     }
 }
 

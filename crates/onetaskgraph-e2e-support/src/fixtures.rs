@@ -7297,10 +7297,24 @@ impl LinearWorkspace {
     /// Hold one more issue, `row` in the shape the dataset's tasks take, after every issue held
     /// already — as a person creating one in Linear would.
     pub fn add_issue(&self, row: Value) {
+        self.add_row("tasks", row);
+    }
+
+    /// Hold one more project, as another request created it — a row in the dataset's shape.
+    pub fn add_project(&self, row: Value) {
+        self.add_row("projects", row);
+    }
+
+    /// Hold one more document, as another request created it — a row in the dataset's shape.
+    pub fn add_document(&self, row: Value) {
+        self.add_row("documents", row);
+    }
+
+    fn add_row(&self, collection: &str, row: Value) {
         let mut data = self.state.lock().unwrap();
-        data["tasks"]
+        data[collection]
             .as_array_mut()
-            .expect("the workspace holds issues")
+            .expect("the workspace holds the collection")
             .push(row);
     }
 }

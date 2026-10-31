@@ -40,10 +40,17 @@ import { CONFIGURATION_PREFIX } from "./ambient.ts";
 const binary = resolve(import.meta.dir, "../../../target/debug/onetaskgraph");
 
 // Each item of a copy's report without the `result` every landed item now carries, checked to be
-// there first on each one that landed: what is left is what the report always said.
-function withoutResults(items: unknown[]): unknown[] {
+// there on each one that landed and absent from every other — a dry run's, which writes nothing,
+// and a skipped item's, which reads nothing of the destination: what is left is what the report
+// always said.
+const LANDED = new Set(["created", "updated", "unchanged"]);
+function withoutResults(items: unknown[], dryRun = false): unknown[] {
   return items.map((item) => {
-    if (typeof item !== "object" || item === null || !("result" in item)) return item;
+    if (typeof item !== "object" || item === null) return item;
+    const fields = item as Record<string, unknown>;
+    const landed = !dryRun && fields.skipped !== true && LANDED.has(String(fields.action));
+    expect("result" in item).toBe(landed);
+    if (!("result" in item)) return item;
     const { result, ...rest } = item as { result: unknown } & Record<string, unknown>;
     expect(typeof result).toBe("object");
     return rest;
@@ -322,7 +329,7 @@ test("copy drives the real binary and reports what it did to each item", async (
     const planned = await copyClient.taskCopy(["from:T-1"], "into", { dryRun: true });
     // Null only for a dry run that would create: nothing was, so there is no id.
     // A dry run says which rule would have answered, and leaves the link out: it writes none.
-    expect(withoutResults(planned.items)).toEqual([
+    expect(withoutResults(planned.items, true)).toEqual([
       { source: "from:T-1", action: "created", destination: null, via: "created" },
     ]);
 
@@ -608,7 +615,7 @@ test("a document copy drives the real binary and is refused by a source with non
     const documentClient = new OnetaskgraphClient({ binaryPath: binary, cwd: documentRoot });
 
     const planned = await documentClient.documentCopy(["from:D-1"], "notes", { dryRun: true });
-    expect(withoutResults(planned.items)).toEqual([
+    expect(withoutResults(planned.items, true)).toEqual([
       { source: "from:D-1", action: "created", destination: null, via: "created" },
     ]);
 

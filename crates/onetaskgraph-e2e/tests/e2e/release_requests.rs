@@ -213,7 +213,7 @@ fn copies_and_writes_into(destination: &str) -> Value {
             ],
         ),
         (
-            "update",
+            "task update",
             vec!["task", "update", &landed, "--title", "Updated"],
         ),
     ] {
