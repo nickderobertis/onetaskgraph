@@ -23,7 +23,8 @@
 //! files byte for byte on every start and unpacking it again when it differs.
 //!
 //! One `bun` process per test process holds the schema, built once, and answers one JSON line
-//! per request; requests from every thread are put to it in turn. A request nested past what
+//! per request; requests from every thread are put to it in turn, and one already answered is
+//! not sent again (see [`Validators`]). A request nested past what
 //! it can recurse through is refused rather than crashing it — JavaScript reports an exhausted
 //! stack as an exception — and the variables' nesting is bounded here before they are sent.
 //!
@@ -36,10 +37,11 @@
 //! crate's own tests, so both doubles hold to one implementation.
 
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
 // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] A dated snapshot of an external contract by design: it is pinned to the provenance in fixtures/README.md, which states its gates and why upstream freshness is not one.
 /// GitHub's published GraphQL schema, whole.
@@ -133,8 +135,8 @@ impl Validator {
         serde_json::from_str(&line).expect("the GitHub schema check answers one JSON line")
     }
 
-    fn ask(&mut self, request: &Value) -> Vec<Value> {
-        let mut line = request.to_string();
+    fn ask(&mut self, request: &str) -> Vec<Value> {
+        let mut line = request.to_owned();
         line.push('\n');
         self.input
             .write_all(line.as_bytes())
@@ -165,17 +167,64 @@ fn errors(document: &str, operation_name: Option<&str>, variables: Option<&Value
         "operationName": operation_name,
         "variables": variables,
         "coerce": variables.is_some(),
-    });
-    validator().ask(&request)
+    })
+    .to_string();
+    validators().answer(request)
 }
 
-/// The one validator of this test process, started on first use.
-fn validator() -> std::sync::MutexGuard<'static, Validator> {
-    static VALIDATOR: OnceLock<Mutex<Validator>> = OnceLock::new();
-    VALIDATOR
-        .get_or_init(|| Mutex::new(Validator::start()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+/// The most answers [`Validators`] keeps before it starts again from none: far more distinct
+/// requests than one test process sends, and a bound on what an adversarial test can make it
+/// hold.
+const ANSWERS_KEPT: usize = 16_384;
+
+/// This test process's validator, and the answers it has given.
+///
+/// Every test thread's requests go to the one validator in turn, so a test timing a double's
+/// answers on the real clock counts the other threads' requests against its own: on the Windows
+/// lane, tests giving a read 0.3s, or a retry less than twice its backoff, missed by whole
+/// seconds when every request was sent. So a request already answered is answered again from
+/// [`Validators::answers`] without being sent — the validation is a function of the request and
+/// the schema alone, both fixed for the life of the process — and `validate.mjs` keeps each
+/// document's validation, so one sent again with new variables costs only their coercion. A
+/// pool of validators was tried and had the slower tail: each process validates every document
+/// afresh, and they contend for the same cores as the tests.
+struct Validators {
+    validator: Mutex<Validator>,
+    answers: Mutex<HashMap<String, Vec<Value>>>,
+}
+
+impl Validators {
+    fn kept(&self) -> MutexGuard<'_, HashMap<String, Vec<Value>>> {
+        self.answers.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn validator(&self) -> MutexGuard<'_, Validator> {
+        self.validator
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn answer(&self, request: String) -> Vec<Value> {
+        if let Some(answer) = self.kept().get(&request) {
+            return answer.clone();
+        }
+        let answer = self.validator().ask(&request);
+        let mut answers = self.kept();
+        if answers.len() >= ANSWERS_KEPT {
+            answers.clear();
+        }
+        answers.insert(request, answer.clone());
+        answer
+    }
+}
+
+/// The validator of this test process, started on first use.
+fn validators() -> &'static Validators {
+    static VALIDATORS: OnceLock<Validators> = OnceLock::new();
+    VALIDATORS.get_or_init(|| Validators {
+        validator: Mutex::new(Validator::start()),
+        answers: Mutex::new(HashMap::new()),
+    })
 }
 
 /// Starts this process's validator now, if it has not started, rather than inside the first
@@ -183,13 +232,13 @@ fn validator() -> std::sync::MutexGuard<'static, Validator> {
 /// double whose test times its answers on the real clock would otherwise count that against
 /// whichever request came first. Each double calls it before it starts listening.
 pub fn warm() {
-    drop(validator());
+    validators();
 }
 
 /// The SHA-256, in lowercase hex, of the schema file the validator built — [`SCHEMA`]'s bytes,
 /// read from the same path.
 pub fn schema_sha256() -> String {
-    validator().schema_sha256.clone()
+    validators().validator().schema_sha256.clone()
 }
 
 /// How deeply `value` nests, measured without recursion so that no depth of it can exhaust

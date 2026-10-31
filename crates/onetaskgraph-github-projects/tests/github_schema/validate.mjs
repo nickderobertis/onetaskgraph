@@ -180,16 +180,34 @@ const answered = (errors) => ({
   }),
 });
 
-function answer({ query, operationName, variables, coerce }) {
-  let document;
+// The most documents `checked` keeps before it starts again from none: far more distinct
+// documents than one test process sends, and a bound on what an adversarial test can make it hold.
+const DOCUMENTS_KEPT = 4096;
+const documents = new Map();
+
+// `query` parsed and put to every validation rule — `{ document }` when it passes, `{ refused }`
+// with the answer when it does not — kept by its text, because a test process sends the same few
+// documents with many different variables and neither step depends on them.
+function checked(query) {
+  const kept = documents.get(query);
+  if (kept) return kept;
+  let result;
   try {
-    document = parse(query, { maxTokens: MAX_TOKENS });
+    const document = parse(query, { maxTokens: MAX_TOKENS });
+    const invalid = validate(schema, document);
+    result = invalid.length > 0 ? { refused: answered(invalid) } : { document };
   } catch (error) {
-    if (error instanceof GraphQLError) return answered([error]);
-    throw error;
+    if (!(error instanceof GraphQLError)) throw error;
+    result = { refused: answered([error]) };
   }
-  const invalid = validate(schema, document);
-  if (invalid.length > 0) return answered(invalid);
+  if (documents.size >= DOCUMENTS_KEPT) documents.clear();
+  documents.set(query, result);
+  return result;
+}
+
+function answer({ query, operationName, variables, coerce }) {
+  const { document, refused } = checked(query);
+  if (refused) return refused;
   if (!coerce) return { errors: [] };
   const operation = getOperationAST(document, operationName ?? undefined);
   if (!operation) {
