@@ -1,0 +1,14 @@
+{
+  "path": "repos/nickderobertis/onetaskgraph/releases?per_page=100",
+  "fetched_from": {
+    "release": "v0.12.13",
+    "read": "the releases listing"
+  },
+  "repository": "nickderobertis/onetaskgraph",
+  "recorded": {
+    "at": "Sat, 31 Oct 2026 15:52:30 GMT",
+    "with": "gh api --include --method GET 'repos/nickderobertis/onetaskgraph/releases?per_page=100'",
+    "read_only": true,
+    "as": "exactly what gh printed: the status line, every response header and the body, unedited"
+  }
+}

@@ -35,6 +35,17 @@ files:
     # graphql-js as npm publishes it, a gzipped tarball held to npm's integrity by
     # tests/github_schema/validate.mjs, which stays judged.
     - "crates/onetaskgraph-github-projects/tests/github_schema/graphql-17.0.2.tgz"
+    # GitHub's own responses, recorded byte for byte as `gh api --include` printed them, which
+    # the release-tail journey replays: about 6 MB that nobody wrote and that, like the logs
+    # above, would put a diff-scoped run past the harness's input limit. Each one's sidecar
+    # (`*.http.source.json`) and the README beside them, which say what each is, stay judged.
+    - ".github/policy/tests/fixtures/release-tail/recordings/*.http"
+    # dero-skills' create-repo figures script, copied byte for byte and edited only there: its
+    # header says so, create-repo's check_repo_baseline.py compares the copy with the source,
+    # and .github/policy/tests/release-tail.test.mjs refuses a copy whose body no longer matches its
+    # own `sha256` line. It is judged where it is written; a finding here could only be answered
+    # by editing a copy the contract forbids editing.
+    - "scripts/actions-budget-figures.sh"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
 # (composed alongside this file) selects them in fallback mode — codex + gpt-6.1-sol

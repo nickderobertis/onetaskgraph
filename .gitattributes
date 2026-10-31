@@ -9,3 +9,7 @@
 # The vendored screenshot font is binary; `text=auto` above detects that, and this says so
 # outright so no future eol rule can be read as reaching it.
 *.ttf -text
+
+# Recorded GitHub responses, byte for byte as `gh api --include` printed them: their header
+# lines end in CRLF, which is what the release-tail replay serves back.
+.github/policy/tests/fixtures/release-tail/recordings/*.http -text
