@@ -20,7 +20,6 @@ use crate::fixtures::{
     linear_default_mapping, linear_workspace,
 };
 
-/// Where the golden lives.
 fn golden() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/release_requests.v0.12.13.json")
 }

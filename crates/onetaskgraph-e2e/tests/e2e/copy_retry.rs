@@ -1714,3 +1714,73 @@ fn an_intent_found_malformed_when_the_copy_comes_to_take_it_refuses_the_copy() {
         "nothing created"
     );
 }
+
+#[test]
+fn a_no_link_retry_waits_for_an_earlier_issue_and_writes_nothing_to_its_source() {
+    let stores = Stores::new();
+    let first = unlisted_first_attempt(&stores);
+    let board = stores.board.clone();
+    let listed = first.clone();
+    stores
+        .board
+        .after_request(lists_by_key, 0, move |_| board.list_issue(&listed));
+    let before = std::fs::read(stores.notes.join("tasks/A.md")).expect("the note");
+    let creates = count(&stores.board, creates_issue);
+    let lookups = count(&stores.board, lists_by_key);
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "board", "--no-link"]);
+    assert_eq!(copied["items"][0]["via"], "intent", "{copied:#}");
+    assert_eq!(
+        count(&stores.board, creates_issue),
+        creates,
+        "nothing created"
+    );
+    assert_eq!(
+        count(&stores.board, lists_by_key) - lookups,
+        2,
+        "one lookup, then one after the wait"
+    );
+    assert_eq!(
+        std::fs::read(stores.notes.join("tasks/A.md")).expect("the note"),
+        before,
+        "no lease, no link and no intent removed: the note is as it was"
+    );
+}
+
+#[test]
+fn a_dry_run_reads_an_earlier_intent_and_neither_waits_writes_nor_creates() {
+    // Its issue listed: the dry run answers it by its key.
+    let stores = Stores::new();
+    let stopped = stores.run(
+        &["task", "copy", NOTE, "--to", "board"],
+        Some("before-link"),
+    );
+    assert_eq!(stopped.status.code(), Some(86), "{}", stderr(&stopped));
+    let before = std::fs::read(stores.notes.join("tasks/A.md")).expect("the note");
+    let creates = count(&stores.board, creates_issue);
+    let planned = stores.json(&["task", "copy", NOTE, "--to", "board", "--dry-run"]);
+    assert_eq!(planned["items"][0]["via"], "intent", "{planned:#}");
+    assert_eq!(count(&stores.board, creates_issue), creates);
+    assert_eq!(
+        std::fs::read(stores.notes.join("tasks/A.md")).expect("the note"),
+        before
+    );
+
+    // Its issue not listed yet: the dry run looks once and does not wait for it.
+    let stores = Stores::new();
+    unlisted_first_attempt(&stores);
+    let before = std::fs::read(stores.notes.join("tasks/A.md")).expect("the note");
+    let creates = count(&stores.board, creates_issue);
+    let lookups = count(&stores.board, lists_by_key);
+    let planned = stores.json(&["task", "copy", NOTE, "--to", "board", "--dry-run"]);
+    assert_eq!(planned["items"][0]["action"], "created", "{planned:#}");
+    assert_eq!(
+        count(&stores.board, lists_by_key) - lookups,
+        1,
+        "one lookup, and no wait"
+    );
+    assert_eq!(count(&stores.board, creates_issue), creates);
+    assert_eq!(
+        std::fs::read(stores.notes.join("tasks/A.md")).expect("the note"),
+        before
+    );
+}
