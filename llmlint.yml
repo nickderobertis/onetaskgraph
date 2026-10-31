@@ -32,6 +32,9 @@ files:
     # comment without ceasing to be GitHub's file. Its consumer, tests/github_schema/mod.rs,
     # stays judged.
     - "crates/onetaskgraph-github-projects/tests/fixtures/github-schema.docs.graphql"
+    # graphql-js as npm publishes it, a gzipped tarball held to npm's integrity by
+    # tests/github_schema/validate.mjs, which stays judged.
+    - "crates/onetaskgraph-github-projects/tests/github_schema/graphql-17.0.2.tgz"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
 # (composed alongside this file) selects them in fallback mode — codex + gpt-6.1-sol

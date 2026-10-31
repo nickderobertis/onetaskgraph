@@ -1394,6 +1394,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         next: 0,
         limits: Limits::default(),
     }));
+    github_schema::warm();
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
     let served = Arc::clone(&state);
@@ -14917,11 +14918,7 @@ fn the_pinned_delete_mutations_are_the_ones_the_live_lane_introspects() {
 /// It says nothing of whether GitHub has published a newer file since.
 #[test]
 fn the_vendored_github_schema_hashes_to_the_digest_its_readme_records() {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(github_schema::SCHEMA.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let digest = github_schema::schema_sha256();
     let readme = include_str!("fixtures/README.md");
     assert!(
         readme.contains(&format!("SHA-256 `{digest}`")),

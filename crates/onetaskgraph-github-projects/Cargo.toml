@@ -30,8 +30,6 @@ onetaskgraph-live.workspace = true
 # The lane's artifact names and repositories, which the janitor reads too.
 onetaskgraph-github-live.workspace = true
 serde_json.workspace = true
-# The digest `tests/plugin.rs` pins the vendored copy of GitHub's published schema to.
-sha2.workspace = true
 # `test-util` for a paused clock: the fixture wait's deadline is proven on virtual time, where
 # no host's pace can move it.
 tokio = { workspace = true, features = ["test-util"] }

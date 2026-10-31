@@ -1666,7 +1666,7 @@ fn the_schema_check_refuses_a_schema_breaking_any_rule_but_the_tolerated_one() {
     let tolerated = "interface Node { id: ID! } \
                      type Card implements Node { id: ID! @deprecated(reason: \"gone\") } \
                      type Query { node: Node card: Card }";
-    assert_eq!(first_answer(tolerated), json!({"ready": true}));
+    assert_eq!(first_answer(tolerated)["ready"], json!(true));
 
     let invalid = first_answer("type Empty type Query { empty: Empty }");
     assert!(
@@ -1675,5 +1675,49 @@ fn the_schema_check_refuses_a_schema_breaking_any_rule_but_the_tolerated_one() {
             .is_some_and(|message| message.contains("is invalid")
                 && message.contains("Type Empty must define one or more fields.")),
         "{invalid}"
+    );
+}
+
+/// graphql-js is npm's own published tarball, and a copy of it that does not hash to the
+/// integrity npm records is refused before anything is unpacked or imported from it — so the
+/// validation every GitHub double runs cannot quietly become some other code. The check is run
+/// from a scratch directory holding `validate.mjs` beside a tarball one byte off npm's.
+#[test]
+fn the_schema_check_refuses_a_graphql_tarball_npm_did_not_publish() {
+    let tests = concat!(env!("CARGO_MANIFEST_DIR"), "/tests");
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    std::fs::copy(
+        format!("{tests}/github_schema/validate.mjs"),
+        scratch.path().join("validate.mjs"),
+    )
+    .expect("the schema check is copied");
+    let mut tarball = std::fs::read(format!("{tests}/github_schema/graphql-17.0.2.tgz"))
+        .expect("the pinned graphql-js tarball is readable");
+    let last = tarball.len() - 1;
+    tarball[last] ^= 0xff;
+    std::fs::write(scratch.path().join("graphql-17.0.2.tgz"), tarball)
+        .expect("the altered tarball is written");
+
+    let output = std::process::Command::new("bun")
+        .arg(scratch.path().join("validate.mjs"))
+        .arg(format!("{tests}/fixtures/github-schema.docs.graphql"))
+        .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("bun runs the schema check");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let answer: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap_or_default())
+        .unwrap_or_else(|_| panic!("the schema check answered {stdout:?}"));
+    assert!(!output.status.success(), "{answer}");
+    assert!(
+        answer["internal"].as_str().is_some_and(|message| {
+            message.contains("graphql-17.0.2.tgz has integrity sha512-")
+                && message.contains("not the sha512-FRWbddMx")
+        }),
+        "{answer}"
+    );
+    assert!(
+        !scratch.path().join("node_modules").exists(),
+        "nothing is unpacked from a tarball npm did not publish"
     );
 }

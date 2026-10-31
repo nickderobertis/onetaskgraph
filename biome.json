@@ -14,8 +14,7 @@
       "!**/dist",
       "!sdks/typescript/src/generated",
       "!**/.venv",
-      "!gh-secrets.json",
-      "!crates/onetaskgraph-github-projects/tests/fixtures/github-schema.docs.graphql"
+      "!gh-secrets.json"
     ]
   },
   "formatter": {

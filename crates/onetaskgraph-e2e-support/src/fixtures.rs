@@ -3777,6 +3777,7 @@ fn github_projects_board_at(
     extra: Vec<Value>,
 ) -> (Value, GitHubBoardFields) {
     sandbox.secrets_file(GITHUB_FIXTURE_SECRETS);
+    crate::github_schema::warm();
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
     let endpoint = format!(
         "http://{}/graphql",

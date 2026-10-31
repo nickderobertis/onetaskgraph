@@ -7,8 +7,9 @@
 //! published file whole; `fixtures/README.md` holds its provenance and why it is not a
 //! reduction.
 //!
-//! The validation is graphql-js's — the GraphQL Foundation's reference implementation, pinned
-//! in the workspace's `package.json` — run by `validate.mjs` beside this file: every rule of the
+//! The validation is graphql-js's — the GraphQL Foundation's reference implementation, npm's
+//! own `graphql-17.0.2.tgz` committed beside this file and held to npm's published integrity —
+//! run by `validate.mjs` beside this file: every rule of the
 //! specification's Validation section (`specifiedRules`) and, for a request, the coercion of
 //! its variables (`CoerceVariableValues`, §6.1.2). It is not a Rust crate because none fits this
 //! workspace's dependency policy unchanged: `apollo-compiler` brings second versions of
@@ -16,6 +17,11 @@
 //! `graphql-tools` a licence the policy does not admit. A hand-written validator over
 //! `graphql-parser` came before all of them, and kept missing rules: nested selection merging,
 //! a fragment cycle that overflowed the stack, duplicate input fields a parser collapsed.
+//!
+//! It is not in the workspace's `package.json` either, because that file is an input of every
+//! project in the graph: naming it there selects every crate's tests, the live lanes included,
+//! for a change to this one crate's test double. `validate.mjs` unpacks the tarball once into the
+//! ignored `node_modules` beside it and imports it from there.
 //!
 //! One `bun` process per test process holds the schema, built once, and answers one JSON line
 //! per request; requests from every thread are put to it in turn. A request nested past what
@@ -56,6 +62,8 @@ struct Validator {
     _child: Child,
     input: ChildStdin,
     output: BufReader<ChildStdout>,
+    /// The SHA-256, in lowercase hex, of the schema file the process built.
+    schema_sha256: String,
 }
 
 impl Validator {
@@ -84,14 +92,18 @@ impl Validator {
             _child: child,
             input,
             output,
+            schema_sha256: String::new(),
         };
         let ready = validator.read();
         assert_eq!(
-            ready,
-            json!({"ready": true}),
-            "the GitHub schema check did not start; run `bun install` (or `just bootstrap`) \
-             at the workspace root so graphql-js is installed"
+            ready["ready"],
+            json!(true),
+            "the GitHub schema check did not start: {ready}"
         );
+        validator.schema_sha256 = ready["schema_sha256"]
+            .as_str()
+            .expect("the GitHub schema check reports the schema's digest")
+            .to_owned();
         validator
     }
 
@@ -135,18 +147,36 @@ fn errors(document: &str, operation_name: Option<&str>, variables: Option<&Value
             json!({"message": format!("Variables nest deeper than {NESTING_LIMIT} levels")}),
         ];
     }
-    static VALIDATOR: OnceLock<Mutex<Validator>> = OnceLock::new();
     let request = json!({
         "query": document,
         "operationName": operation_name,
         "variables": variables,
         "coerce": variables.is_some(),
     });
+    validator().ask(&request)
+}
+
+/// The one validator of this test process, started on first use.
+fn validator() -> std::sync::MutexGuard<'static, Validator> {
+    static VALIDATOR: OnceLock<Mutex<Validator>> = OnceLock::new();
     VALIDATOR
         .get_or_init(|| Mutex::new(Validator::start()))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .ask(&request)
+}
+
+/// Starts this process's validator now, if it has not started, rather than inside the first
+/// request a double answers: building GitHub's schema takes a fraction of a second, and a
+/// double whose test times its answers on the real clock would otherwise count that against
+/// whichever request came first. Each double calls it before it starts listening.
+pub fn warm() {
+    drop(validator());
+}
+
+/// The SHA-256, in lowercase hex, of the schema file the validator built — [`SCHEMA`]'s bytes,
+/// read from the same path.
+pub fn schema_sha256() -> String {
+    validator().schema_sha256.clone()
 }
 
 /// How deeply `value` nests, measured without recursion so that no depth of it can exhaust
