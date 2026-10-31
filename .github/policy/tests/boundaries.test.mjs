@@ -279,13 +279,12 @@ test("local Bun parser rejects unsupported CLI arguments at its real entrypoint"
   assert.equal(JSON.parse(accepted.stdout).workspaces["sdks/typescript"].name, "@onetaskgraph/sdk");
 });
 
-test("classifier and carriers enforce invocation and actual filesystem IO failure contracts", () => {
+test("the classifier enforces invocation and actual filesystem IO failure contracts", () => {
   const scratch = mkdtempSync(
     join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "cli-io-"),
   );
   try {
     const classifier = fileURLToPath(new URL("../../macos-policy.mjs", import.meta.url));
-    const carrier = fileURLToPath(new URL("../../macos-result.mjs", import.meta.url));
     const event = join(scratch, "event.json");
     writeFileSync(event, JSON.stringify({ event_name: "push" }));
     for (const args of [[], ["other"], ["classify", "--unknown", event]])
@@ -302,41 +301,6 @@ test("classifier and carriers enforce invocation and actual filesystem IO failur
       },
     );
     assert.notEqual(outputFailure.status, 0);
-    const needs = join(scratch, "needs.json");
-    for (const path of [join(scratch, "missing.json"), scratch])
-      assert.notEqual(spawnSync(process.execPath, [carrier, path], { encoding: "utf8" }).status, 0);
-    writeFileSync(needs, "{bad");
-    assert.notEqual(spawnSync(process.execPath, [carrier, needs], { encoding: "utf8" }).status, 0);
-    for (const reason of [undefined, null, {}, "", " \n"]) {
-      writeFileSync(
-        needs,
-        JSON.stringify({
-          "macos-lanes": { result: "success", outputs: { macosRequired: "false", reason } },
-          macos: { result: "skipped" },
-          "test-macos": { result: "skipped" },
-        }),
-      );
-      assert.notEqual(
-        spawnSync(process.execPath, [carrier, needs], { encoding: "utf8" }).status,
-        0,
-      );
-    }
-    writeFileSync(
-      needs,
-      JSON.stringify({
-        "macos-lanes": {
-          result: "success",
-          outputs: { macosRequired: "false", reason: "authorized semantic release" },
-        },
-        macos: { result: "skipped" },
-        "test-macos": { result: "skipped" },
-      }),
-    );
-    assert.notEqual(
-      spawnSync(process.execPath, [carrier, needs, "extra"], { encoding: "utf8" }).status,
-      0,
-    );
-    assert.equal(spawnSync(process.execPath, [carrier, needs], { encoding: "utf8" }).status, 0);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -391,10 +355,10 @@ test("event workload rejects new workflow triggers, actions and diagnostic input
       workflow.on.pull_request = { types: ["edited"] };
     },
     (workflow) => {
-      workflow.on.workflow_dispatch.inputs.extra = { type: "boolean", default: false };
+      workflow.on.workflow_dispatch = { inputs: { extra: { type: "boolean", default: false } } };
     },
     (workflow) => {
-      workflow.on.workflow_dispatch.inputs.macos.type = "string";
+      workflow.on.workflow_dispatch = { inputs: { macos: { type: "string" } } };
     },
   ]) {
     const definitions = workflows();

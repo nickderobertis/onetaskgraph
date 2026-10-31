@@ -1,0 +1,29 @@
+HTTP/2.0 200 OK
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: ETag, Link, Location, Retry-After, X-GitHub-OTP, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Used, X-RateLimit-Resource, X-RateLimit-Reset, X-OAuth-Scopes, X-Accepted-OAuth-Scopes, X-Poll-Interval, X-GitHub-Media-Type, X-GitHub-SSO, X-GitHub-Request-Id, Deprecation, Sunset, Warning
+Cache-Control: private, max-age=60, s-maxage=60
+Content-Security-Policy: default-src 'none'
+Content-Type: application/json; charset=utf-8
+Date: Sat, 31 Oct 2026 15:52:56 GMT
+Etag: W/"2adf4e88137611dffbfbb766c9a38731196a8d32194aa7f4d1724cba92e8ccb7"
+Referrer-Policy: origin-when-cross-origin, strict-origin-when-cross-origin
+Server: github.com
+Strict-Transport-Security: max-age=31536000; includeSubdomains; preload
+Vary: Accept, Authorization, Cookie, X-GitHub-OTP,Accept-Encoding, Accept, X-Requested-With
+X-Accepted-Oauth-Scopes: 
+X-Content-Type-Options: nosniff
+X-Frame-Options: deny
+X-Github-Api-Version-Selected: 2022-11-28
+X-Github-Edge-Region: iad
+X-Github-Media-Type: github.v3; format=json
+X-Github-Request-Id: 60B4:7C7C2:53EF8E:1189902:6AE60ED8
+X-Oauth-Client-Id: 178c6fc778ccc68e1d6a
+X-Oauth-Scopes: gist, read:org, repo, workflow
+X-Ratelimit-Limit: 5000
+X-Ratelimit-Remaining: 4771
+X-Ratelimit-Reset: 1793463659
+X-Ratelimit-Resource: core
+X-Ratelimit-Used: 229
+X-Xss-Protection: 0
+
+{"total_count":1,"jobs":[{"id":123966220789,"run_id":41026640747,"workflow_name":"Release-plz","head_branch":"main","run_url":"https://api.github.com/repos/nickderobertis/onetaskgraph/actions/runs/41026640747","run_attempt":1,"node_id":"CR_kwDOUBBgxs8AAAAc3PZp9Q","head_sha":"3b6b228f168ab17c94613a831e1eec96a225d949","url":"https://api.github.com/repos/nickderobertis/onetaskgraph/actions/jobs/123966220789","html_url":"https://github.com/nickderobertis/onetaskgraph/actions/runs/41026640747/job/123966220789","status":"completed","conclusion":"success","created_at":"2026-10-30T08:28:14Z","started_at":"2026-10-30T08:28:16Z","completed_at":"2026-10-30T08:29:12Z","name":"release-plz","steps":[{"name":"Set up job","status":"completed","conclusion":"success","number":1,"started_at":"2026-10-30T08:28:17Z","completed_at":"2026-10-30T08:28:19Z"},{"name":"Decide whether this repository can release","status":"completed","conclusion":"success","number":2,"started_at":"2026-10-30T08:28:19Z","completed_at":"2026-10-30T08:28:19Z"},{"name":"Run actions/checkout@v7","status":"completed","conclusion":"success","number":3,"started_at":"2026-10-30T08:28:19Z","completed_at":"2026-10-30T08:28:26Z"},{"name":"Run actions-rust-lang/setup-rust-toolchain@v1","status":"completed","conclusion":"success","number":4,"started_at":"2026-10-30T08:28:26Z","completed_at":"2026-10-30T08:28:41Z"},{"name":"Run astral-sh/setup-uv@v7","status":"completed","conclusion":"success","number":5,"started_at":"2026-10-30T08:28:41Z","completed_at":"2026-10-30T08:28:43Z"},{"name":"Run taiki-e/install-action@v2","status":"completed","conclusion":"success","number":6,"started_at":"2026-10-30T08:28:43Z","completed_at":"2026-10-30T08:28:44Z"},{"name":"Provision the pinned release-plz into the repository-scoped tool location","status":"completed","conclusion":"success","number":7,"started_at":"2026-10-30T08:28:44Z","completed_at":"2026-10-30T08:28:46Z"},{"name":"Tag and cut the GitHub Release with the PAT","status":"completed","conclusion":"success","number":8,"started_at":"2026-10-30T08:28:46Z","completed_at":"2026-10-30T08:28:55Z"},{"name":"Open or update the release pull request","status":"completed","conclusion":"success","number":9,"started_at":"2026-10-30T08:28:55Z","completed_at":"2026-10-30T08:29:09Z"},{"name":"Enable auto-merge","status":"completed","conclusion":"success","number":10,"started_at":"2026-10-30T08:29:09Z","completed_at":"2026-10-30T08:29:10Z"},{"name":"Post Run astral-sh/setup-uv@v7","status":"completed","conclusion":"success","number":18,"started_at":"2026-10-30T08:29:10Z","completed_at":"2026-10-30T08:29:10Z"},{"name":"Post Run actions-rust-lang/setup-rust-toolchain@v1","status":"completed","conclusion":"success","number":19,"started_at":"2026-10-30T08:29:10Z","completed_at":"2026-10-30T08:29:11Z"},{"name":"Post Run actions/checkout@v7","status":"completed","conclusion":"success","number":20,"started_at":"2026-10-30T08:29:11Z","completed_at":"2026-10-30T08:29:11Z"},{"name":"Complete job","status":"completed","conclusion":"success","number":21,"started_at":"2026-10-30T08:29:11Z","completed_at":"2026-10-30T08:29:11Z"}],"check_run_url":"https://api.github.com/repos/nickderobertis/onetaskgraph/check-runs/123966220789","labels":["ubuntu-latest"],"runner_id":1000288428,"runner_name":"GitHub Actions 1000288428","runner_group_id":0,"runner_group_name":"GitHub Actions"}]}

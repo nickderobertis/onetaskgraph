@@ -810,47 +810,28 @@ for expectation in not-selected run; do
     fixture_plugin_source
   fi
 
-  # CI runs check for pull requests and gate for the default branch.
-  expect_path "the change-request path" check "$BASE" "$expectation"
-  expect_path "the default-branch path" gate "$BASE" "$expectation"
+  # A contributor's two gates. CI's own path, test-linux's `just ci-test-linux`, is held by
+  # case 4 to reach the same decision; nothing runs either of these on the default branch.
+  expect_path "the everyday gate" check "$BASE" "$expectation"
+  expect_path "the full gate" gate "$BASE" "$expectation"
 
   reset_fixture
 done
 
-# Selecting must not have taken anything away from the gate. `gate-generated` is the Linux
-# aggregate the default branch runs, and it is the recipe that reaches every stage held
-# outside affected selection.
+# Selecting must not have taken anything away from the gate. `gate-generated` is the widest
+# aggregate, and it is the recipe that reaches every stage held outside affected selection.
 fixture_plugin_source
 drive gate-generated "$BASE"
 expect_unconditional_targets
 reset_fixture
 
-# 6. The bases those paths derive.
+# 6. The base those paths derive.
 #
-# Case 5 hands each path a base; this is where that base comes from. Each derivation is
-# shell only its own lane runs, so the ways it can be wrong — a branch the remote has never
-# seen, a push of two refs, a ref being deleted, a predecessor this checkout does not have
-# — are exactly the ways nothing else would notice. An implicit base is how affected
-# selection quietly starts comparing against the wrong commit, and on the default branch it
-# compares against this very commit and selects nothing at all.
-#
-# The tree is two commits ahead of $BASE throughout, so the four answers a derivation can
-# give — this commit, its predecessor, $BASE and the merge base with the default branch —
-# are four different shas and no case can pass by returning the wrong one.
-
-fixture_plugin_source
-
-readonly ZERO_SHA="0000000000000000000000000000000000000000"
-readonly UNKNOWN_SHA="0123456789abcdef0123456789abcdef01234567"
-HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
-# What `HEAD~1` names here, which is the fixture's own first commit rather than $BASE: the
-# workflow's last resort is the commit before this one, whatever that is.
-PREDECESSOR="$(git -C "$REPO" rev-parse HEAD~1)"
-readonly HEAD_SHA PREDECESSOR
-
-# The default branch's own derivation is shell in the workflow, and the workflow is the only
-# place it lives — so it is read out of the step that declares it and run, rather than
-# restated here where it could drift from what CI does.
+# Case 5 hands each path a base; this is where CI's comes from. Every credentialed step names
+# its NX_BASE (case 4), and that base must be the output of a step running
+# scripts/ci-pr-base.sh, the one derivation the pull-request jobs share — which
+# scripts/check-ci-recipes.sh drives over a real clone, its refusals included. An implicit or
+# hand-rolled base is how affected selection quietly starts comparing against the wrong commit.
 if ! (cd "$REPO" && "$PYTHON" - <<'PY'
 import re
 import sys
@@ -858,81 +839,42 @@ from pathlib import Path
 
 workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
 steps = re.split(r"(?m)^      - (?=name:|uses:)", workflow)
-declaring = [step for step in steps if re.search(r"(?m)^\s*id:\s*base\s*$", step)]
-if len(declaring) != 1:
+problems = []
+for step in steps:
+    base = re.search(r"(?m)^\s*NX_BASE:\s*\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.base\s*\}\}\s*$", step)
+    if not re.search(r"(?m)^\s*NX_BASE:", step):
+        continue
+    named = re.search(r"(?m)^\s*name:\s*(.+?)\s*$", step)
+    where = f"step {named.group(1)!r}" if named else "a step"
+    if not base:
+        problems.append(f"{where} sets NX_BASE from no step's `base` output")
+        continue
+    declaring = [
+        candidate
+        for candidate in steps
+        if re.search(rf"(?m)^\s*id:\s*{re.escape(base.group(1))}\s*$", candidate)
+    ]
+    if not declaring or not all(
+        re.search(r'(?m)^\s*run:\s*bash scripts/ci-pr-base\.sh "\$BASE_REF" "\$BASE_SHA"\s*$', candidate)
+        for candidate in declaring
+    ):
+        problems.append(
+            f"{where} takes NX_BASE from steps.{base.group(1)}, which does not run "
+            "`bash scripts/ci-pr-base.sh \"$BASE_REF\" \"$BASE_SHA\"`"
+        )
+if problems:
+    for problem in problems:
+        print(f"check-live-lane-selection: {problem}.", file=sys.stderr)
     print(
-        "check-live-lane-selection: expected exactly one workflow step with `id: base`, "
-        f"found {len(declaring)}.",
-        file=sys.stderr,
-    )
-    print(
-        "check-live-lane-selection: next: give the base derivation one step with that id, "
-        "or point this case at where it moved to.",
+        "check-live-lane-selection: next: derive the base with scripts/ci-pr-base.sh, as every "
+        "pull-request job does.",
         file=sys.stderr,
     )
     raise SystemExit(1)
-body = re.search(r"(?ms)^\s*run:\s*\|\s*\n(.*)\Z", declaring[0])
-if not body:
-    print(
-        "check-live-lane-selection: the workflow step with `id: base` has no block `run:` "
-        "body, so there is nothing to drive.",
-        file=sys.stderr,
-    )
-    print(
-        "check-live-lane-selection: next: keep that derivation as a `run: |` block, which "
-        "is what makes it drivable outside CI.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-lines = body.group(1).splitlines()
-margin = min((len(line) - len(line.lstrip()) for line in lines if line.strip()), default=0)
-sys.stdout.reconfigure(newline="\n")
-print("\n".join(line[margin:] for line in lines))
 PY
-) > "$scratch/base-step.sh" 2>"$scratch/base-step-error"; then
-  fail "the workflow's base derivation could not be read: $(cat "$scratch/base-step-error")"
-else
-  expect_workflow_base() {
-    local case_name="$1" where="$2" base_sha="$3" before_sha="$4" expected="$5" derived
-    : > "$scratch/github-output"
-    if ! (cd "$where" && GITHUB_OUTPUT="$scratch/github-output" BASE_REF=main \
-      BASE_SHA="$base_sha" BEFORE_SHA="$before_sha" bash "$scratch/base-step.sh") \
-      >"$scratch/base-step-output" 2>&1; then
-      fail "the workflow's base derivation failed for $case_name, so the lane would run with no base at all: $(cat "$scratch/base-step-output")"
-      return
-    fi
-    derived="$(sed -n 's/^base=//p' "$scratch/github-output" | tr -d '\r')"
-    if [ "$expected" = "none" ]; then
-      [ -z "$derived" ] || fail "the workflow derived '$derived' for $case_name, where there is no commit to compare against and Nx's own defaultBase is what should apply"
-      if ! grep -q "No base could be derived" "$scratch/base-step-output"; then
-        fail "the workflow derived no base for $case_name and said nothing about it, so a lane comparing against a default reads as one comparing against a commit: $(cat "$scratch/base-step-output")"
-      fi
-      return
-    fi
-    [ "$derived" = "$expected" ] || fail "the workflow derived '$derived' for $case_name, expected $expected"
-  }
-
-  expect_workflow_base "a change request" "$REPO" "$BASE" "" "$BASE"
-  expect_workflow_base "a push to the default branch" "$REPO" "" "$BASE" "$BASE"
-  expect_workflow_base "a push the remote has no predecessor for" "$REPO" "" "$ZERO_SHA" "$PREDECESSOR"
-  expect_workflow_base "a predecessor this checkout does not have" "$REPO" "" "$UNKNOWN_SHA" "$PREDECESSOR"
-
-  # A repository with one commit, where there is no predecessor of any kind: the lane must
-  # say so rather than name a commit, because Nx's own defaultBase is what then applies.
-  single="$scratch/single"
-  if git init --quiet "$single" 2>/dev/null \
-    && git -C "$single" config user.email "check-live-lane-selection@invalid" \
-    && git -C "$single" config user.name "check-live-lane-selection" \
-    && : > "$single/only" \
-    && git -C "$single" add only \
-    && git -C "$single" commit --quiet -m "the only commit"; then
-    expect_workflow_base "a push with no predecessor at all" "$single" "" "" none
-  else
-    fail "could not build the one-commit repository the no-predecessor case needs"
-  fi
+) 2>"$scratch/base-step-error"; then
+  fail "the workflow's base derivation is not scripts/ci-pr-base.sh: $(cat "$scratch/base-step-error")"
 fi
-
-reset_fixture
 
 # 1. Real Nx over real repository states.
 #

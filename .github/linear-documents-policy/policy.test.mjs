@@ -8,21 +8,19 @@ import { read, workflows } from "../workflow-graph.mjs";
 
 // The service owns the queue. Reconcile its actual declarations instead of simulating
 // a second scheduler whose behavior could disagree with Actions.
-test("ordinary, daily and explicit initialization retain three pending CI writers", () => {
+test("pull-request, daily and explicit initialization retain every pending CI writer", () => {
   const definitions = workflows();
   const ci = definitions["ci.yml"];
   const creation = definitions["linear-documents.yml"];
   assert.equal(ci.concurrency, undefined, "outer cancellation must not cancel pending checks");
-  // A push's credentials are on check's Linux leg; a pull request's on test-linux.
-  const ordinary = ci.jobs.check.concurrency;
-  assert.match(ordinary.group, /'linear-live-documents'/);
+  // The credentials are on test-linux alone; no job writes the standing set on a push.
   const pullRequest = ci.jobs["test-linux"].concurrency;
   assert.equal(pullRequest.group, "linear-live-documents");
   const daily = creation.jobs.documents.concurrency;
   assert.equal(daily.group, "linear-live-documents");
-  // Three simultaneous pending writers must all reach the service's 100-waiter queue;
-  // the default single pending setting would silently replace two required checks.
-  for (const declaration of [ordinary, pullRequest, daily, daily]) {
+  // Simultaneous pending writers must all reach the service's 100-waiter queue; the
+  // default single pending setting would silently replace a pending required check.
+  for (const declaration of [pullRequest, pullRequest, daily, daily]) {
     assert.equal(declaration["cancel-in-progress"], false);
     assert.equal(declaration.queue, "max");
   }
@@ -71,11 +69,14 @@ test("only the daily schedule creates fresh documents and manual dispatch initia
   }
   const credentialed = (job) =>
     definitions["ci.yml"].jobs[job].steps.filter((step) => step.env?.LINEAR_API_KEY);
-  const ordinarySteps = [...credentialed("check"), ...credentialed("test-linux")];
-  assert.ok(credentialed("test-linux").length > 0, "test-linux carries a pull request's session");
+  // test-linux is the one job any credential reaches.
+  for (const job of Object.keys(definitions["ci.yml"].jobs).filter((id) => id !== "test-linux"))
+    assert.deepEqual(credentialed(job), [], `${job} is handed LINEAR_API_KEY`);
+  const ordinarySteps = credentialed("test-linux");
+  assert.ok(ordinarySteps.length > 0, "test-linux carries a pull request's session");
   for (const step of ordinarySteps) {
     assert.equal(step.env.ONETASKGRAPH_LINEAR_DOCUMENT_MODE, "ordinary");
-    assert.match(step.run, /^just ((check|gate)-generated|ci-test-linux)$/);
+    assert.equal(step.run, "just ci-test-linux");
   }
 });
 

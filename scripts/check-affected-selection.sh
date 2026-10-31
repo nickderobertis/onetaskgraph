@@ -31,9 +31,9 @@ readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # What this proves is a property of the Nx PROJECT GRAPH — which edit selects which
 # project — and that graph is read from nx.json and the project.json files, which are
-# byte-identical on every platform. ci.yml keeps `deny` Linux-only for exactly this
-# reason: "the graph is the same on every platform, so running it three times would buy
-# nothing."
+# byte-identical on every platform. ci.yml runs the supply chain in its Linux `lint` job
+# alone for exactly this reason: the graph is the same on every platform, so running it three
+# times would buy nothing.
 #
 # On Windows it cannot run at all, and the obstacle is the runner rather than the graph:
 # the severance below needs a REAL copy of node_modules, bun's layout there is hundreds of

@@ -5,7 +5,7 @@ import { definitions, refusals } from "./workflow-definitions.mjs";
 
 // The pull request's four jobs, read from the workflow files exactly as GitHub reads them.
 // Its inputs (the github-workflows project's `ci-jobs` target) are this directory alone, so it
-// reads nothing outside it: whether today's required contexts are still reported needs the run
+// reads nothing outside it: whether the required checks are still reported needs the run
 // graph, which reads files outside it, and is ci-contexts.spec.mjs's.
 
 const FOUR = {
