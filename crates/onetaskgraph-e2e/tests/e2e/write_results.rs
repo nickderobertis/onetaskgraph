@@ -433,3 +433,37 @@ fn assert_versioned(result: &Value, shown: &Value, versioned: bool, destination:
         assert_eq!(result["version"], Value::Null, "{destination}");
     }
 }
+
+#[test]
+fn a_linear_task_the_copy_gave_relations_reports_no_version_and_what_it_holds() {
+    let stores = Stores::new();
+    stores.note("B", "Task B", "todo", "low");
+    std::fs::write(
+        stores.notes.join("tasks/A.md"),
+        "---\ntitle: Task A\nstatus: todo\npriority: high\ndepends_on: [B]\n---\nBody.\n",
+    )
+    .expect("a dependent task");
+    let copied = stores.json(&["task", "copy", "notes:A", "notes:B", "--to", "linear"]);
+    let items = copied["items"].as_array().expect("outcomes");
+    let dependent = items
+        .iter()
+        .find(|outcome| outcome["source"] == "notes:A")
+        .expect("A's outcome");
+    let landed = dependent["destination"].as_str().expect("an id");
+    let shown = stores.shown(landed);
+    // Its relation was written after the write that answered its token, and Linear's answer to
+    // a relation write does not say what the token became: it is left out rather than guessed.
+    assert_eq!(dependent["result"]["version"], Value::Null, "{copied:#}");
+    assert!(shown["version"].is_string(), "a read gives one: {shown:#}");
+    assert_eq!(dependent["result"]["status"], shown["status"]);
+    assert_eq!(dependent["result"]["priority"], shown["priority"]);
+    let blocking = items
+        .iter()
+        .find(|outcome| outcome["source"] == "notes:B")
+        .expect("B's outcome");
+    let deps = stores.json(&["task", "deps", landed]);
+    assert_eq!(
+        deps["items"][0]["to"]["id"], blocking["destination"],
+        "the relation landed: {deps:#}"
+    );
+}

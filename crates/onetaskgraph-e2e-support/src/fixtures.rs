@@ -1113,11 +1113,11 @@ struct BoardPlacement {
     waiting: Vec<(Value, Duration, Option<Duration>)>,
 }
 
-/// The board this fixture keeps, and everything a request may change on it.
-// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 /// How a loopback board rewrites its answers to `Repository.issues`.
 type IssueListingBend = Box<dyn Fn(&mut Value) + Send + Sync>;
 
+/// The board this fixture keeps, and everything a request may change on it.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 struct GitHubBoard {
     /// Issues `Repository.issues` does not list yet, by id: one GitHub committed and its
     /// listing has not caught up with.

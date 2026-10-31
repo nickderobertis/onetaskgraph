@@ -1355,7 +1355,7 @@ them do; this is the inventory of what is owed, not a status board.
      most one link — both refusing `create-duplicated` on a board when both creates landed first,
      one issue under one id on Linear — and a malformed board listing by key refuses before any
      create is sent again.
-132. Every copy and task write verb sends the board and Linear exactly the requests the v0.12.13
+132. Every task copy and task write verb sends the board and Linear exactly the requests the v0.12.13
      binary sent for the same commands, but the one relist a board create from a hosted source
      owes.
 

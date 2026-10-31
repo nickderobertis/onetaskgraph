@@ -252,7 +252,7 @@ fn measured_now() -> BTreeMap<String, Value> {
 }
 
 #[test]
-fn every_copy_and_write_sends_what_v0_12_13_sent_but_the_one_relist_owed() {
+fn every_task_copy_and_task_write_sends_what_v0_12_13_sent_but_the_one_relist_owed() {
     let now = measured_now();
     if std::env::var_os("OTG_REQUESTS_RECORD").is_some() {
         std::fs::write(

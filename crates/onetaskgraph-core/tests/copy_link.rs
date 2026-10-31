@@ -1454,3 +1454,31 @@ async fn an_explicit_target_refuses_non_task_scopes_before_reading() {
         ));
     }
 }
+
+#[tokio::test]
+async fn a_destination_guard_on_a_project_or_document_copy_is_refused_before_reading() {
+    // No source is configured: a guard the engine read anything for would fail on that instead.
+    let engine = Engine::new(Vec::new(), Vec::new());
+    for scope in [CopyScope::Documents, CopyScope::Projects { tasks: true }] {
+        for conditions in [
+            onetaskgraph_core::CopyConditions {
+                status: vec![onetaskgraph_plugin_api::StatusCategory::Todo],
+                ..Default::default()
+            },
+            onetaskgraph_core::CopyConditions {
+                priority: vec![onetaskgraph_plugin_api::Priority::None],
+                ..Default::default()
+            },
+        ] {
+            let mut request = copy_of(&["from:P-1"], scope.clone());
+            request.conditions = conditions;
+            assert!(
+                matches!(
+                    engine.copy(&request).await,
+                    Err(EngineError::ConditionsNotTasks)
+                ),
+                "{scope:?}"
+            );
+        }
+    }
+}
