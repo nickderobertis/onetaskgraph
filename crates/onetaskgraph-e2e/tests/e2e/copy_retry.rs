@@ -2475,3 +2475,38 @@ fn finished_as_held(stores: &Stores, from: usize) {
         "a create, a read by its id, then a whole write: {sent:#?}"
     );
 }
+
+#[test]
+fn a_linear_source_answering_its_intent_write_malformed_has_the_intent_it_stored_settled() {
+    let stores = Stores::new();
+    let issue = a_linear_issue(&stores);
+    // Linear stores the intent and answers the write as no `issueUpdate` can be read. The copy
+    // reads the issue once to learn the intent landed, holds it, and takes it off with the link.
+    stores.linear.bend_answers(
+        |document, _| document == onetaskgraph_linear::graphql::ISSUE_UPDATE,
+        1,
+        |_, data| *data = json!({"issueUpdate": {"success": true, "issue": null}}),
+    );
+    let output = stores.run(&["--json", "task", "copy", &issue, "--to", "board"], None);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let copied: Value = serde_json::from_str(&stdout(&output)).expect("a report");
+    assert_eq!(copied["items"][0]["action"], "created", "{copied:#}");
+    assert_eq!(copied["items"][0]["link"], "recorded", "{copied:#}");
+    assert_eq!(board_issues_of(&stores, &issue).len(), 1, "one issue");
+    let metadata = stores.json(&["task", "show", &issue])["items"][0]["item"]["metadata"].clone();
+    assert_eq!(
+        metadata["onetaskgraph.copies"]["board"], copied["items"][0]["destination"],
+        "{metadata:#}"
+    );
+    assert!(
+        metadata.get("onetaskgraph.creating").is_none(),
+        "no intent left to refuse the next copy: {metadata:#}"
+    );
+    // So the next copy is not refused by a lease nobody holds, and creates nothing.
+    let again = stores.json(&["task", "copy", &issue, "--to", "board"]);
+    assert_eq!(
+        again["items"][0]["destination"], copied["items"][0]["destination"],
+        "{again:#}"
+    );
+    assert_eq!(board_issues_of(&stores, &issue).len(), 1, "still one issue");
+}

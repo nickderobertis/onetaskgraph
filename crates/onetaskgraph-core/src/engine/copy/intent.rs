@@ -584,17 +584,34 @@ impl Engine {
         .unwrap_or(Value::Null);
         // A source that will not keep the key — a narrow write it refuses, or answers as one it
         // cannot take — or no longer holds the record, is the one answer that is not a refusal.
-        match set_link_versioned(source, level, &id.native, &MetadataKey::creating(), &value).await
-        {
-            Ok(Some(_)) => Ok(Taken::Held {
+        let kept =
+            match set_link_versioned(source, level, &id.native, &MetadataKey::creating(), &value)
+                .await
+            {
+                Ok(Some(_)) => true,
+                Ok(None) | Err(SourceError::Refused { .. }) => false,
+                // An answer it cannot read says nothing of whether it wrote: a plugin refusing the
+                // namespace wrote nothing, while a backend whose answer was garbled stored the
+                // intent. The item, still under the hold, is read once to say which, so an intent it
+                // holds is settled by the link write rather than left to refuse the next copy.
+                Err(SourceError::Malformed { .. }) => metadata_of(source, level, &id.native)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|metadata| self::held(&metadata, destination).ok().flatten())
+                    .is_some_and(|landed| {
+                        landed.attempt == intent.attempt && landed.key == intent.key
+                    }),
+                Err(error) => return Err(refused(source, error)),
+            };
+        Ok(if kept {
+            Taken::Held {
                 intent,
                 exclusive: hold.held(),
-            }),
-            Ok(None) | Err(SourceError::Refused { .. } | SourceError::Malformed { .. }) => {
-                Ok(Taken::Unkept)
             }
-            Err(error) => Err(refused(source, error)),
-        }
+        } else {
+            Taken::Unkept
+        })
     }
 
     /// Renew this attempt's intent to create `id`'s counterpart in `destination`, before a
