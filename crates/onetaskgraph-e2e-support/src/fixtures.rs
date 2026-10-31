@@ -3957,6 +3957,20 @@ fn github_projects_board_at(
             served.variables.push(variables.clone());
             served.tokens.push(token.clone());
             served.arrivals.push(std::time::Instant::now());
+        }
+        // GitHub refuses a document its schema rejects before running any of it, answering
+        // HTTP 200 with `errors` and no `data`; so does this board, against GitHub's complete
+        // published schema, so a request GitHub would refuse cannot pass here. It is recorded
+        // above, as GitHub counts it, and changes nothing below.
+        if let Some(refusal) = crate::github_schema::refuse(&request) {
+            let body = refusal.to_string();
+            return Some(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ));
+        }
+        {
+            let mut served = board.lock().unwrap();
             served.membership_first = ["memberships", "boardItems"]
                 .iter()
                 .find_map(|name| variables[name].as_u64())
@@ -3973,17 +3987,6 @@ fn github_projects_board_at(
                     served.replacing[at].1 -= 1;
                 }
             }
-        }
-        // GitHub refuses a document its schema rejects before running any of it, answering
-        // HTTP 200 with `errors` and no `data`; so does this board, against GitHub's complete
-        // published schema, so a request GitHub would refuse cannot pass here. It is recorded
-        // above all the same, as GitHub counts it.
-        if let Some(refusal) = crate::github_schema::refuse(&request) {
-            let body = refusal.to_string();
-            return Some(format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ));
         }
         let visibility_wait = if query.contains("visibility:repositoryOwner") {
             board.lock().unwrap().project_visibility_retry_after.take()

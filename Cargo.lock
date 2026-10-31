@@ -1341,6 +1341,7 @@ name = "onetaskgraph-github-projects-e2e"
 version = "0.12.14"
 dependencies = [
  "chrono",
+ "graphql-parser",
  "libc",
  "onebudgetspec-core",
  "onetaskgraph-core",

@@ -7,7 +7,7 @@ use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::{
     GitHubBoardFields, document, github_projects_with_board, github_projects_with_board_failing,
 };
-use onetaskgraph_e2e_support::github_schema;
+use crate::github_schema;
 use onetaskgraph_github_projects::graphql::STATUS_OPTIONS_UPDATE;
 
 // llmlint: ignore-block[tests_mirror_real_usage] Every test below drives the compiled CLI
@@ -791,5 +791,34 @@ fn the_board_answers_repeated_selections_that_merge() {
             panic!("GitHub runs {compatible}: {errors:?}");
         }
     }
+}
+
+/// A request the board refuses changes nothing on it, as one GitHub refuses runs none of: a
+/// removal the board holds for the next request naming an item is still held after a refused
+/// request named it, and the item is still listed.
+#[test]
+fn a_request_the_board_refuses_changes_nothing_on_it() {
+    let (sandbox, board) = configured();
+    let listed = |sandbox: &Sandbox| {
+        report(sandbox, &["--json", "task", "list"])["items"]
+            .as_array()
+            .expect("a page of tasks")
+            .iter()
+            .any(|task| task["id"] == "board:T-2")
+    };
+    assert!(listed(&sandbox));
+    board.replace_after("T-2", 0, None);
+    let answered = board.graphql_response(
+        "query($id:ID!){node(id:$id){... on Issue{x:title x:body}}}",
+        &json!({"id": "T-2"}),
+    );
+    assert_eq!(
+        answered,
+        json!({"errors": [{"message": "Field 'x' has a field conflict: title or body?"}]})
+    );
+    assert!(
+        listed(&sandbox),
+        "a refused request removed the item it named"
+    );
 }
 // llmlint: ignore-end[tests_mirror_real_usage]
