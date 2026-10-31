@@ -31,6 +31,11 @@ struct Stores {
 
 impl Stores {
     fn new() -> Self {
+        Self::leased(1)
+    }
+
+    /// The stores, the folder of notes leasing an intent for `lease` seconds.
+    fn leased(lease: u64) -> Self {
         let sandbox = Sandbox::new();
         let (board_config, board) = github_projects_with_board(&sandbox);
         let (mut linear_config, linear) = linear_workspace(&sandbox, dataset());
@@ -47,7 +52,7 @@ impl Stores {
             "linear": {"plugin": "linear", "config": linear_config},
             // A lease of a second, so a retry of a killed copy takes over after a short wait.
             "notes": {"plugin": "local-md", "config": {"root": notes},
-                      "create_lease_seconds": 1},
+                      "create_lease_seconds": lease},
             "folder": {"plugin": "local-md", "config": {"root": folder}},
         })));
         std::fs::write(
@@ -231,16 +236,18 @@ fn a_create_whose_answer_never_arrived_is_found_by_its_retry_on_the_board() {
 }
 
 #[test]
-fn a_live_lease_another_attempt_holds_is_refused_before_any_destination_request() {
-    let stores = Stores::new();
-    let path = stores.notes.join("tasks/A.md");
-    std::fs::write(
-        &path,
-        "---\ntitle: Task A\nstatus: todo\nmetadata:\n  onetaskgraph.creating:\n    board:\n      \
-         key: 11111111-2222-5333-8444-555555555555\n      at: '2026-10-30T00:00:00Z'\n      \
-         attempt: another-attempt\n      lease_until: '2999-01-01T00:00:00Z'\n---\nThe body.\n",
-    )
-    .expect("an intent another attempt holds");
+fn a_live_lease_another_attempt_holds_is_refused_before_any_destination_write() {
+    // A copy killed right after recording its intent holds its lease for ten minutes.
+    let stores = Stores::leased(600);
+    let stopped = stores.run(
+        &["task", "copy", NOTE, "--to", "board"],
+        Some("after-intent"),
+    );
+    assert_ne!(stopped.status.code(), Some(0));
+    let until = stores.source_metadata()["onetaskgraph.creating"]["board"]["lease_until"]
+        .as_str()
+        .expect("the killed copy's lease")
+        .to_owned();
     let before = stores.board.served().len();
     let output = stores.run(&["--json", "task", "copy", NOTE, "--to", "board"], None);
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
@@ -253,13 +260,15 @@ fn a_live_lease_another_attempt_holds_is_refused_before_any_destination_request(
         failure["failure"]["message"]
             .as_str()
             .unwrap()
-            .contains("2999-01-01T00:00:00Z")
+            .contains(&until),
+        "names the lease's end: {failure:#}"
     );
-    let creates = stores.board.served()[before..]
+    let writes = stores.board.served()[before..]
         .iter()
         .filter(|(document, _)| document.trim_start().starts_with("mutation"))
         .count();
-    assert_eq!(creates, 0, "no destination write");
+    assert_eq!(writes, 0, "no destination write");
+    assert!(stores.board.items_titled("Task A").is_empty());
 }
 
 #[test]
@@ -439,5 +448,51 @@ fn a_copy_killed_after_its_create_answered_and_before_its_board_writes_is_finish
     assert_eq!(
         metadata["onetaskgraph.copies"]["board"],
         outcome["destination"]
+    );
+}
+
+#[test]
+fn the_create_settings_are_shown_by_their_layer_and_refused_out_of_range() {
+    let stores = Stores::new();
+    let shown = stores.json(&["config", "show"]);
+    let text = shown.to_string();
+    assert!(
+        text.contains("create_lease_seconds") && text.contains("create_quiescence_seconds"),
+        "{shown:#}"
+    );
+    for value in ["0", "86401"] {
+        let output = stores
+            .sandbox
+            .command()
+            .env("ONETASKGRAPH_SOURCES__NOTES__CREATE_LEASE_SECONDS", value)
+            .args(["config", "show"])
+            .assert()
+            .get_output()
+            .clone();
+        assert_ne!(output.status.code(), Some(0), "{value}");
+        assert!(
+            stderr(&output).contains("sources.notes.create_lease_seconds"),
+            "{value}: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn a_lock_a_dead_copy_left_beside_the_file_is_taken_over_and_released() {
+    let stores = Stores::new();
+    let lock = stores.notes.join("tasks/A.md.lock");
+    let file = std::fs::File::create(&lock).expect("a lock a dead copy left");
+    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(120))
+        .expect("an old lock");
+    drop(file);
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "folder"]);
+    assert_eq!(copied["items"][0]["action"], "created", "{copied:#}");
+    assert!(!lock.exists(), "the lock is released");
+    assert!(
+        stores
+            .source_metadata()
+            .get("onetaskgraph.creating")
+            .is_none()
     );
 }

@@ -3195,7 +3195,7 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ],
-        "description": "What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+        "description": "What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
       },
       "source": {
         "$ref": "#/$defs/GlobalId",
@@ -3581,7 +3581,7 @@ export const runtimeSchemas = {
                 "type": "null"
               }
             ],
-            "description": "What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+            "description": "What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
           },
           "source": {
             "$ref": "#/$defs/GlobalId",
@@ -4260,6 +4260,32 @@ export const runtimeSchemas = {
       }
     ],
     "title": "CopyVia"
+  },
+  "CreateSettings": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "How a copy out of one source keeps a create safe to retry: its two settings, each in whole\nseconds, read off the source's own block beside `cache` and `routes`.\n\n`create_lease_seconds` is how long the intent a copy records on the item it copies, at\n`onetaskgraph.creating`, stays its own before another attempt may take it over — read off\nthe copy's **source**. `create_quiescence_seconds` is how long after an intent was first\ntaken a retry waits for an earlier attempt's create to become listed before creating again\n— read off the copy's **destination**, and only where that destination's lookup by create\nkey can lag a create. Both default to 120 and are left out of a configuration that does not\nset them.",
+    "properties": {
+      "create_lease_seconds": {
+        "description": "Seconds an intent to create stays the holder's own; 120 when absent.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      },
+      "create_quiescence_seconds": {
+        "description": "Seconds after an intent was first taken that a retry waits for the earlier create to be\nlisted; 120 when absent.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+          "integer",
+          "null"
+        ]
+      }
+    },
+    "title": "CreateSettings",
+    "type": "object"
   },
   "CredentialLayer": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -6757,7 +6783,7 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ],
-        "description": "What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+        "description": "What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
       },
       "spent": {
         "anyOf": [
@@ -7252,7 +7278,7 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ],
-        "description": "What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+        "description": "What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
       },
       "spent": {
         "anyOf": [

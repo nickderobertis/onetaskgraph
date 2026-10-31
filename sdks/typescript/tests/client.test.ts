@@ -27,6 +27,7 @@ import {
   OnetaskgraphClient,
   OnetaskgraphExecutionError,
   OnetaskgraphValidationError,
+  otherwiseChoices,
   projectCopyFlags,
   projectGraphDirections,
   statusPolicies,
@@ -50,8 +51,8 @@ function withoutResults(items: unknown[]): unknown[] {
 }
 
 // A write verb's answer without the `result` it now carries, checked to be there first.
-function withoutResult<T extends object>(answer: T): Omit<T, "result"> {
-  const { result, ...rest } = answer as T & { result?: unknown };
+function withoutResult<T extends { result?: unknown }>(answer: T): Omit<T, "result"> {
+  const { result, ...rest } = answer;
   expect(typeof result).toBe("object");
   return rest;
 }
@@ -2430,6 +2431,18 @@ test("copy status policy choices agree with both CLI verbs", () => {
   }
 });
 
+test("the otherwise choices agree with the binary's task copy", () => {
+  const help = spawnSync(binary, ["task", "copy", "--help"], { encoding: "utf8" });
+  expect(help.status, help.stderr).toBe(0);
+  const block = help.stdout.split("--otherwise <WHAT>")[1]?.split(/\n +--/)[0];
+  expect(block).toBeDefined();
+  const choices = [...(block ?? "").matchAll(/^ +- ([a-z-]+):/gm)].map((match) => match[1]);
+  expect(choices).toEqual([...otherwiseChoices]);
+  for (const otherwise of otherwiseChoices) {
+    expect(taskCopyFlags({ otherwise })).toEqual(["--otherwise", otherwise]);
+  }
+});
+
 test("taskCopy guards its writes, reports what each held and left, and retries a create via its intent", async () => {
   // A folder `plan` holding one task, copied into the folder `snap` through the real binary.
   const store = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-guards-"));
@@ -2465,7 +2478,10 @@ test("taskCopy guards its writes, reports what each held and left, and retries a
     await expect(stopped.taskCopy(["plan:ready"], "snap")).rejects.toThrow();
     await new Promise((settle) => setTimeout(settle, 1500));
     const retried = await client.taskCopy(["plan:ready"], "snap");
-    const found = retried.items[0] as { via?: string; result?: { priority?: string } };
+    const found = retried.items[0];
+    if (found?.action !== "updated" && found?.action !== "unchanged") {
+      throw new Error(`the retry found the item its first attempt made: ${JSON.stringify(found)}`);
+    }
     expect(found.via).toBe("intent");
     expect(found.result?.priority).toBe("high");
     expect(readdirSync(resolve(store, "snap", "tasks"))).toHaveLength(1);
@@ -2478,15 +2494,11 @@ test("taskCopy guards its writes, reports what each held and left, and retries a
       otherwise: "refuse",
       whenDestinationPriority: ["high"],
     });
-    const outcome = refused.items[0] as {
-      action: string;
-      error?: { kind: string };
-      held?: { priority?: string };
-      status_condition?: { held: string; met: boolean };
-      priority_condition?: { held: string; met: boolean };
-    };
-    expect(outcome.action).toBe("failed");
-    expect(outcome.error?.kind).toBe("destination-status");
+    const outcome = refused.items[0];
+    if (outcome?.action !== "failed") {
+      throw new Error(`the counterpart was refused: ${JSON.stringify(outcome)}`);
+    }
+    expect(outcome.error.kind).toBe("destination-status");
     expect(outcome.held?.priority).toBe("high");
     expect(outcome.status_condition).toEqual({ held: "todo", met: false });
     expect(outcome.priority_condition).toEqual({ held: "high", met: true });

@@ -2502,13 +2502,14 @@ impl Engine {
         // A source that will not hold the key — a file it cannot edit narrowly, an item it no
         // longer answers for, a write it drops — copies as it always did, with no intent, as it
         // then records no link either. Only another attempt's live lease refuses.
-        let taken = match self.take_intent(&item.source, &item.to, &key, None).await {
+        let taken = match self.take_intent(&item.source, &item.to, key, None).await {
             Ok(taken) => taken,
             Err(error @ EngineError::CreateInProgress { .. }) => return Err(error),
             Err(_) => return Ok(false),
         };
         let destination = self.writable(&item.to)?;
-        item.relist = destination.source().create_key_lags() && (!local || earlier.is_some());
+        item.relist =
+            destination.source().create_key_lags() && (!local || matches!(earlier, Ok(Some(_))));
         item.intent = Some(taken);
         Ok(true)
     }
@@ -4992,7 +4993,8 @@ impl Engine {
                         held: metadata.get(MetadataKey::COPIES_KEY).cloned(),
                         held_locations: metadata.get(MetadataKey::COPY_LOCATIONS_KEY).cloned(),
                         location: landed_location(destination, item, &id.native),
-                        intent: item.intent.is_some() || intent::held(metadata, &item.to).is_some(),
+                        intent: item.intent.is_some()
+                            || !matches!(intent::held(metadata, &item.to), Ok(None)),
                     });
                 }
             }
@@ -6620,7 +6622,17 @@ impl Engine {
         // `--create` is believed: the item its create made, when the destination holds it,
         // is this item's counterpart rather than a reason to create a second.
         if item.level() == Level::Task
-            && let Some(intent) = intent::held(metadata, destination.name())
+            && let Some(intent) = intent::held(metadata, destination.name()).map_err(|problem| {
+                EngineError::SourceRefused {
+                    name: id.source.to_string(),
+                    error: SourceError::Malformed {
+                        message: format!(
+                            "{id}: {problem}; next: remove that entry once no copy of {id} is \
+                             running"
+                        ),
+                    },
+                }
+            })?
             && let Some(native) = self
                 .resolve_intent(
                     destination,
@@ -9534,21 +9546,6 @@ fn described(item: &Item) -> (&str, &BTreeMap<String, Value>) {
     }
 }
 
-/// The item as the destination should hold it.
-///
-/// `url`, `location`, `created_at` and `updated_at` are the destination's own and are
-/// never written — where the *source* holds an item says nothing about where the
-/// destination does, which is why a copied document does not arrive claiming the path or
-/// the link its source reported. The two reserved keys this product encodes typed fields
-/// under are removed, because those fields travel as themselves — leaving the encoding
-/// beside them would have the destination hold one thing twice, and disagree with itself
-/// the moment one changed.
-///
-/// A task's `delivers` is `delivers`, already resolved against the destination, and its
-/// `delivered_by` is the one the destination holds — never the source's, and empty for an
-/// item this copy creates: that list is the store's to keep, at the destination. The
-/// `onetaskgraph.copies` link is kept on the same terms: it says where the *destination*
-/// item was copied to, which is the destination's to hold, never the source's to send.
 /// What `item` holds, at the version it carries: a task's status and priority, a project's
 /// status, and a document's neither.
 fn item_result(item: &Item) -> WriteResult {
@@ -9650,6 +9647,21 @@ fn decide_conditions(
     refused
 }
 
+/// The item as the destination should hold it.
+///
+/// `url`, `location`, `created_at` and `updated_at` are the destination's own and are
+/// never written — where the *source* holds an item says nothing about where the
+/// destination does, which is why a copied document does not arrive claiming the path or
+/// the link its source reported. The two reserved keys this product encodes typed fields
+/// under are removed, because those fields travel as themselves — leaving the encoding
+/// beside them would have the destination hold one thing twice, and disagree with itself
+/// the moment one changed.
+///
+/// A task's `delivers` is `delivers`, already resolved against the destination, and its
+/// `delivered_by` is the one the destination holds — never the source's, and empty for an
+/// item this copy creates: that list is the store's to keep, at the destination. The
+/// `onetaskgraph.copies` link is kept on the same terms: it says where the *destination*
+/// item was copied to, which is the destination's to hold, never the source's to send.
 fn outgoing(
     item: &Planned,
     id: NativeId,
@@ -9692,7 +9704,7 @@ fn outgoing(
                 if let (Some(intent), None, Target::Create) = (&item.intent, held, &item.target) {
                     metadata.insert(
                         MetadataKey::CREATE_KEY.to_owned(),
-                        Value::String(intent.key.clone()),
+                        Value::String(intent.key()),
                     );
                 }
                 metadata

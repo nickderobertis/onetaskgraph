@@ -113,6 +113,37 @@ impl CreateSettings {
     /// The default of each setting, in seconds.
     pub const DEFAULT_SECONDS: u64 = 120;
 
+    /// The longest either setting may be, in seconds: a day. A lease or a wait longer than that
+    /// is a mistake rather than a policy, and refusing it at load keeps every time an intent is
+    /// spelled with well inside what a timestamp can hold.
+    pub const MAX_SECONDS: u64 = 86_400;
+
+    /// Refuse a setting of zero or past [`Self::MAX_SECONDS`], naming the source and the key.
+    fn checked(self, source: &str) -> Result<Self, ConfigError> {
+        for (key, value) in [
+            ("create_lease_seconds", self.create_lease_seconds),
+            ("create_quiescence_seconds", self.create_quiescence_seconds),
+        ] {
+            if let Some(value) = value
+                && !(1..=Self::MAX_SECONDS).contains(&value)
+            {
+                return Err(ConfigError::setting(
+                    format!("sources.{source}.{key}"),
+                    format!(
+                        "{value} is not a whole number of seconds from 1 to {}",
+                        Self::MAX_SECONDS
+                    ),
+                    format!(
+                        "set {key} to between 1 and {} seconds, or remove it for the default of {}.",
+                        Self::MAX_SECONDS,
+                        Self::DEFAULT_SECONDS
+                    ),
+                ));
+            }
+        }
+        Ok(self)
+    }
+
     /// How long an intent stays its holder's own.
     #[must_use]
     pub fn lease(self) -> chrono::TimeDelta {
@@ -126,11 +157,13 @@ impl CreateSettings {
     }
 }
 
+/// A setting as a duration: [`CreateSettings::checked`] bounds it at load, and a value past the
+/// bound is read as the bound rather than trusted.
 fn seconds(setting: Option<u64>) -> chrono::TimeDelta {
-    chrono::TimeDelta::seconds(
-        i64::try_from(setting.unwrap_or(CreateSettings::DEFAULT_SECONDS))
-            .unwrap_or(i64::MAX / 1000),
-    )
+    let bounded = setting
+        .unwrap_or(CreateSettings::DEFAULT_SECONDS)
+        .min(CreateSettings::MAX_SECONDS);
+    chrono::TimeDelta::try_seconds(i64::try_from(bounded).unwrap_or(0)).unwrap_or_default()
 }
 
 impl SourceConfig {
@@ -576,6 +609,11 @@ impl Config {
             };
             let routes = routes::parse(&name, &source.routes)?;
             let public_alias = public_alias(&key, source.public_alias.as_ref())?;
+            let create = CreateSettings {
+                create_lease_seconds: source.create_lease_seconds,
+                create_quiescence_seconds: source.create_quiescence_seconds,
+            }
+            .checked(name.as_str())?;
             sources.insert(
                 name,
                 SourceConfig {
@@ -587,10 +625,7 @@ impl Config {
                     cache: source.cache,
                     public_alias,
                     task_projection: source.task_projection,
-                    create: CreateSettings {
-                        create_lease_seconds: source.create_lease_seconds,
-                        create_quiescence_seconds: source.create_quiescence_seconds,
-                    },
+                    create,
                 },
             );
         }

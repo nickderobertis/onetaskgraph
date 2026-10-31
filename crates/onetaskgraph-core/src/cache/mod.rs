@@ -260,8 +260,10 @@ impl CacheUse {
 /// `spent` members of its JSON.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ExpectedWrite {
-    /// What each mutation the write sent came to, and the version it left the task at — for a
-    /// source that reports its writes' parts.
+    /// What the item holds once the write is done — its version, status and priority — and,
+    /// for a write made with `--expect` on a source that reports its writes' parts, what each
+    /// mutation it sent came to. Absent for a dry run and for an item nothing was written to
+    /// or read of.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<WriteResult>,
     /// That the write had to read its target first, and why — absent when it sent only its

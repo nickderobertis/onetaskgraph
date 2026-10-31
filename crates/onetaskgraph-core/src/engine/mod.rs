@@ -1806,7 +1806,7 @@ pub struct Engine {
     creates: BTreeMap<SourceName, crate::config::CreateSettings>,
     /// This engine's own name for the copy attempts it makes, recorded on every intent to
     /// create it takes, so an intent another process holds is told from its own.
-    attempt: String,
+    attempt: uuid::Uuid,
 }
 
 /// One operation's hold on every source's visibility reads, released when dropped — on every
@@ -1934,7 +1934,7 @@ impl Engine {
             projections: BTreeMap::new(),
             clock: clock.clone(),
             creates: BTreeMap::new(),
-            attempt: uuid::Uuid::new_v4().to_string(),
+            attempt: uuid::Uuid::new_v4(),
         }
     }
 

@@ -13496,10 +13496,22 @@ impl TaskSource for GitHubProjectsSource {
             if older || !next {
                 return Ok(found);
             }
-            after = issues
+            // A page that says another follows names where it starts, and never the page just
+            // read: anything else would ask for the same page again for ever.
+            let cursor = issues
                 .pointer("/pageInfo/endCursor")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
+            if cursor.is_none() || cursor == after {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "GitHub answered a page of repository {}'s issues that says another \
+                         follows without a new cursor to it",
+                        repository.slug()
+                    ),
+                });
+            }
+            after = cursor;
         }
     }
 

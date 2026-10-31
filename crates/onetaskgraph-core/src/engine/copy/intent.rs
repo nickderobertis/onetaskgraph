@@ -25,7 +25,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use onetaskgraph_plugin_api::{Location, MetadataKey, NativeId, SourceName, Task, TaskUpdate};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -51,62 +51,100 @@ const STALE_LOCK: std::time::Duration = std::time::Duration::from_secs(30);
 /// names when it replaces one: the same for every attempt at that create, and a different one
 /// for a `--recreate` after a stale link.
 #[must_use]
-pub fn key(source: &GlobalId, destination: &SourceName, replaces: Option<&GlobalId>) -> String {
+pub fn key(source: &GlobalId, destination: &SourceName, replaces: Option<&GlobalId>) -> uuid::Uuid {
     let name = format!(
         "{source}|{destination}|{}",
         replaces.map(ToString::to_string).unwrap_or_default()
     );
     uuid::Uuid::new_v5(&NAMESPACE, name.as_bytes())
-        .hyphenated()
-        .to_string()
 }
 
-/// One destination's entry of an item's `onetaskgraph.creating`.
+/// One destination's entry of an item's `onetaskgraph.creating`, each member read as what it
+/// is: a key and an attempt that are UUIDs, and two RFC 3339 UTC times.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Intent {
     /// The create's key.
-    pub(crate) key: String,
-    /// When the key was first taken, RFC 3339 UTC to the second.
-    pub(crate) at: String,
+    pub(crate) key: uuid::Uuid,
+    /// When the key was first taken, to the second.
+    #[serde(with = "seconds")]
+    pub(crate) at: DateTime<Utc>,
     /// The copy attempt holding it.
-    pub(crate) attempt: String,
-    /// Until when it holds it, RFC 3339 UTC to the second.
-    pub(crate) lease_until: String,
+    pub(crate) attempt: uuid::Uuid,
+    /// Until when it holds it, to the second.
+    #[serde(with = "seconds")]
+    pub(crate) lease_until: DateTime<Utc>,
 }
 
 impl Intent {
     fn at(&self) -> Option<DateTime<Utc>> {
-        parse(&self.at)
+        Some(self.at)
     }
 
-    fn lease_until(&self) -> Option<DateTime<Utc>> {
-        parse(&self.lease_until)
+    /// The key as the created item carries it.
+    pub(crate) fn key(&self) -> String {
+        self.key.hyphenated().to_string()
     }
 
     /// Whether another attempt than `attempt` holds this intent's lease at `now`.
-    fn held_by_another(&self, attempt: &str, now: DateTime<Utc>) -> bool {
-        self.attempt != attempt && self.lease_until().is_some_and(|until| until > now)
+    fn held_by_another(&self, attempt: uuid::Uuid, now: DateTime<Utc>) -> bool {
+        self.attempt != attempt && self.lease_until > now
+    }
+}
+
+/// An intent's times as RFC 3339 UTC to the second, and read back only as that.
+mod seconds {
+    use chrono::{DateTime, SecondsFormat, Utc};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(
+        when: &DateTime<Utc>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&when.to_rfc3339_opts(SecondsFormat::Secs, true))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<DateTime<Utc>, D::Error> {
+        let spelled = String::deserialize(deserializer)?;
+        DateTime::parse_from_rfc3339(&spelled)
+            .map(|when| when.with_timezone(&Utc))
+            .map_err(serde::de::Error::custom)
     }
 }
 
 /// `when`, as an intent spells a time.
-pub(crate) fn spelled(when: DateTime<Utc>) -> String {
-    when.to_rfc3339_opts(SecondsFormat::Secs, true)
+pub(crate) fn seconds_of(when: DateTime<Utc>) -> String {
+    when.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-fn parse(spelled: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(spelled)
-        .ok()
-        .map(|when| when.with_timezone(&Utc))
+/// Now, to the second, as an intent records a time.
+fn now() -> DateTime<Utc> {
+    let now = Utc::now();
+    DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now)
 }
 
-/// The intent `metadata` records for `destination`, when it records a well-formed one.
-pub(crate) fn held(metadata: &BTreeMap<String, Value>, destination: &SourceName) -> Option<Intent> {
-    metadata
-        .get(MetadataKey::CREATING_KEY)?
-        .get(destination.as_str())
-        .cloned()
-        .and_then(|entry| serde_json::from_value(entry).ok())
+/// The intent `metadata` records for `destination`, or why the entry there is not one: a
+/// malformed entry is refused rather than read as none, since reading it as none would let a
+/// second create through.
+pub(crate) fn held(
+    metadata: &BTreeMap<String, Value>,
+    destination: &SourceName,
+) -> Result<Option<Intent>, String> {
+    let Some(entry) = metadata
+        .get(MetadataKey::CREATING_KEY)
+        .and_then(|creating| creating.get(destination.as_str()))
+    else {
+        return Ok(None);
+    };
+    serde_json::from_value(entry.clone())
+        .map(Some)
+        .map_err(|error| {
+            format!(
+                "its {} entry for {destination} is not an intent to create — {error}",
+                MetadataKey::CREATING_KEY
+            )
+        })
 }
 
 /// `onetaskgraph.creating` as `held` holds it, with `destination`'s entry replaced by `intent`
@@ -236,6 +274,26 @@ impl Engine {
         Ok((task, lock))
     }
 
+    /// The intent `task` records for `destination`, or the refusal of an entry that is not one.
+    pub(crate) fn held_or_refused(
+        &self,
+        source: &ResolvedSource,
+        id: &GlobalId,
+        task: &Task,
+        destination: &SourceName,
+    ) -> Result<Option<Intent>, EngineError> {
+        held(&task.metadata, destination).map_err(|problem| {
+            refused(
+                source,
+                onetaskgraph_plugin_api::SourceError::Malformed {
+                    message: format!(
+                        "{id}: {problem}; next: remove that entry once no copy of {id} is running"
+                    ),
+                },
+            )
+        })
+    }
+
     /// Whether `id`'s source keeps it on this machine, where an intent is lock-guarded.
     pub(crate) fn is_local(task: &Task) -> bool {
         matches!(task.location, Some(Location::Path(_)))
@@ -248,34 +306,30 @@ impl Engine {
         &self,
         id: &GlobalId,
         destination: &SourceName,
-        key: &str,
+        key: uuid::Uuid,
         lease_until: Option<DateTime<Utc>>,
     ) -> Result<Intent, EngineError> {
         let source = self.writable(&id.source)?;
         let (task, _lock) = self.locked_read(source, id).await?;
-        let now = Utc::now();
-        let held = held(&task.metadata, destination);
+        let now = now();
+        let held = self.held_or_refused(source, id, &task, destination)?;
         if let Some(held) = &held
-            && held.held_by_another(&self.attempt, now)
+            && held.held_by_another(self.attempt, now)
         {
             return Err(EngineError::CreateInProgress {
                 item: id.to_string(),
-                until: held.lease_until.clone(),
+                until: seconds_of(held.lease_until),
             });
         }
+        let at = held
+            .as_ref()
+            .filter(|held| held.key == key)
+            .map_or(now, |held| held.at);
         let intent = Intent {
-            key: held
-                .as_ref()
-                .filter(|held| held.key == key)
-                .map_or_else(|| key.to_owned(), |held| held.key.clone()),
-            at: held
-                .as_ref()
-                .filter(|held| held.key == key)
-                .map_or_else(|| spelled(now), |held| held.at.clone()),
-            attempt: self.attempt.clone(),
-            lease_until: spelled(
-                lease_until.unwrap_or(now + self.create_settings(&id.source).lease()),
-            ),
+            key,
+            at,
+            attempt: self.attempt,
+            lease_until: lease_until.unwrap_or(now + self.create_settings(&id.source).lease()),
         };
         let value = replaced(
             task.metadata.get(MetadataKey::CREATING_KEY),
@@ -303,17 +357,16 @@ impl Engine {
     ) -> Result<(), EngineError> {
         let source = self.writable(&id.source)?;
         let (task, _lock) = self.locked_read(source, id).await?;
-        let Some(mut held) = held(&task.metadata, destination) else {
+        let Some(mut held) = self.held_or_refused(source, id, &task, destination)? else {
             return Ok(());
         };
         if held.attempt != self.attempt {
             return Err(EngineError::CreateInProgress {
                 item: id.to_string(),
-                until: held.lease_until,
+                until: seconds_of(held.lease_until),
             });
         }
-        held.lease_until =
-            spelled(until.unwrap_or(Utc::now() + self.create_settings(&id.source).lease()));
+        held.lease_until = until.unwrap_or(now() + self.create_settings(&id.source).lease());
         let value = replaced(
             task.metadata.get(MetadataKey::CREATING_KEY),
             destination,
@@ -364,7 +417,11 @@ impl Engine {
     ) -> Result<(), EngineError> {
         let source = self.writable(&id.source)?;
         let (task, _lock) = self.locked_read(source, id).await?;
-        if held(&task.metadata, destination).is_none_or(|held| held.attempt != self.attempt) {
+        if held(&task.metadata, destination)
+            .ok()
+            .flatten()
+            .is_none_or(|held| held.attempt != self.attempt)
+        {
             return Ok(());
         }
         let mut update = TaskUpdate::default();
@@ -455,7 +512,7 @@ impl Engine {
                 .source()
                 .created_with_key(
                     onetaskgraph_plugin_api::MetadataRecord::Task,
-                    &intent.key,
+                    &intent.key(),
                     since,
                     &onetaskgraph_plugin_api::WriteTarget::New {
                         repositories,
@@ -498,7 +555,7 @@ impl Engine {
             self.take_intent(
                 id,
                 destination.name(),
-                &intent.key,
+                intent.key,
                 Some(window_end + self.create_settings(&id.source).lease()),
             )
             .await?;
@@ -521,7 +578,7 @@ impl Engine {
             .source()
             .created_with_key(
                 onetaskgraph_plugin_api::MetadataRecord::Task,
-                &intent.key,
+                &intent.key(),
                 intent.at().map(|at| at - CLOCK_SKEW),
                 &onetaskgraph_plugin_api::WriteTarget::New {
                     repositories,

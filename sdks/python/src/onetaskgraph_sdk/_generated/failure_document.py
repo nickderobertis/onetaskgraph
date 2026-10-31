@@ -224,7 +224,7 @@ class FailureDocument(BaseModel):
     result: Annotated[
         WriteResult | None,
         Field(
-            description="What each mutation the write sent came to, and the version it left the task at — for a\nsource that reports its writes' parts."
+            description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
     spent: Annotated[
