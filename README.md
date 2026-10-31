@@ -744,7 +744,9 @@ one older than thirty seconds is a dead process's and is taken over): under the 
 reads the intent, refuses with the failure kind `create-in-progress` — naming the lease's end,
 having written nothing and sent the destination nothing — while another attempt's lease is live,
 and otherwise records its own `attempt` and a `lease_until` of now plus the source's
-`create_lease_seconds`. So on one host exactly one attempt owns a create; the lock excludes
+`create_lease_seconds`; a copy that finds, under the lock, that another copy created and
+linked the counterpart since it planned the create refuses the same way, naming that
+counterpart. So on one host exactly one attempt owns a create; the lock excludes
 nothing across hosts, or on a network filesystem that does not honour an exclusive create. A
 hosted source — a board or Linear as the copy's source — has no lock to offer, so its lease is
 advisory: a live one still refuses, but two attempts that read the item before either wrote both
