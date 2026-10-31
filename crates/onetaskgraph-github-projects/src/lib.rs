@@ -13495,6 +13495,7 @@ impl TaskSource for GitHubProjectsSource {
                 let id = node
                     .get("id")
                     .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
                     .ok_or_else(|| malformed("holding an issue with no id"))?;
                 let created = optional_time(node, "createdAt")?
                     .ok_or_else(|| malformed("holding an issue with no creation time"))?;
@@ -13524,6 +13525,7 @@ impl TaskSource for GitHubProjectsSource {
             let cursor = issues
                 .pointer("/pageInfo/endCursor")
                 .and_then(Value::as_str)
+                .filter(|cursor| !cursor.is_empty())
                 .map(str::to_owned);
             if cursor
                 .as_ref()

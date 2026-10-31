@@ -1087,7 +1087,7 @@ fn a_holder_renews_before_each_comment_write_and_stops_between_them_once_taken_o
 #[test]
 fn a_listing_by_key_the_board_answers_malformed_is_refused_and_nothing_is_created_again() {
     type Bend = fn(&mut Value);
-    let cases: [(&str, Bend); 8] = [
+    let cases: [(&str, Bend); 10] = [
         ("cursors that go round", |issues| {
             static PAGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             let page = PAGES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1120,6 +1120,12 @@ fn a_listing_by_key_the_board_answers_malformed_is_refused_and_nothing_is_create
         }),
         ("another page with no cursor to it", |issues| {
             issues["pageInfo"] = json!({"hasNextPage": true, "endCursor": null});
+        }),
+        ("an empty id", |issues| {
+            issues["nodes"][0]["id"] = json!("");
+        }),
+        ("another page with an empty cursor to it", |issues| {
+            issues["pageInfo"] = json!({"hasNextPage": true, "endCursor": ""});
         }),
     ];
     for (what, bend) in cases {
