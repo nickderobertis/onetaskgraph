@@ -1344,7 +1344,7 @@ them do; this is the inventory of what is owed, not a status board.
      `task locate` answers it as `creates_in.refused` without failing.
 130. Every landed copy outcome's `result` — and `task update`, `status set`, `priority set`,
      `content set` and `metadata set`'s — holds the status and priority `task show` then reads,
-     and its version wherever it is not `null` (a board's after a write; see the README), on a
+     and its version wherever it is not `null` (a board's, after a write), on a
      folder, a board and Linear; a refusal after the copy's read carries `held`, `task comment add`
      answers `item`, and both SDKs pass the guards and parse every new member.
 

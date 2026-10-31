@@ -1475,10 +1475,18 @@ fn a_field_write_that_fails_after_an_issue_is_filed_takes_the_issue_back() {
                   "config": github_projects_failing_a_field_write_once(&sandbox)}
     })));
 
+    let source_before = std::fs::read(root.join("tasks/A.md")).unwrap();
     let said = refused(&sandbox, &["task", "copy", "plans:A", "--to", "board"], 1);
     assert!(
         said.contains("Something went wrong while executing your query"),
         "the failure GitHub reported is what the caller is told: {said}"
+    );
+    // The intent to create the copy recorded on the task is taken back with everything else,
+    // byte for byte: nothing it made is left to resolve.
+    assert_eq!(
+        std::fs::read(root.join("tasks/A.md")).unwrap(),
+        source_before,
+        "the source task is as it was"
     );
     let listed = ok(&sandbox, &["task", "list", "--source", "board"]);
     assert_eq!(
