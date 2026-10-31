@@ -1104,10 +1104,10 @@ fn the_field_setup_requests_validate_and_the_input_0_12_13_sent_is_refused() {
 }
 
 /// The doubles refuse a selection GitHub's schema rejects as well as a variable it rejects:
-/// one request per validation rule the check holds a document to, each one GitHub answers
-/// with `errors` and runs none of.
+/// for each rule `github_schema`'s module documentation lists, a request breaking it, each
+/// one GitHub answers with `errors` and runs none of.
 #[test]
-fn the_schema_check_refuses_one_request_breaking_each_rule_it_holds_documents_to() {
+fn the_schema_check_refuses_a_request_breaking_each_rule_its_documentation_lists() {
     use serde_json::json;
 
     let refused = |document: &str, variables: serde_json::Value| {
@@ -1220,4 +1220,90 @@ fn the_schema_check_refuses_one_request_breaking_each_rule_it_holds_documents_to
     // And a nullable variable with a default is allowed where a non-null one is expected.
     github_schema::validate("query($id:ID = \"I_1\"){node(id:$id){id}}", &json!({}))
         .expect("a default makes a nullable variable usable in a non-null position");
+
+    // The document's own shape.
+    assert_eq!(
+        refused("query{viewer{login}} query{viewer{name}}", json!({})),
+        "This anonymous operation must be the only defined operation.; This anonymous \
+         operation must be the only defined operation."
+    );
+    assert_eq!(
+        refused("query a{viewer{login}} query a{viewer{name}}", json!({})),
+        "Operation name \"a\" must be unique"
+    );
+    assert_eq!(
+        refused("query{viewer{login}} fragment f on User{name}", json!({})),
+        "Fragment f was defined, but not used"
+    );
+    assert_eq!(
+        refused(
+            "query{viewer{...f}} fragment f on User{name} fragment f on User{login}",
+            json!({})
+        ),
+        "Fragment name \"f\" must be unique"
+    );
+    assert_eq!(
+        refused("query{viewer{...g}}", json!({})),
+        "Fragment g was used, but not defined"
+    );
+    assert_eq!(
+        refused("query{viewer{... on Issue{title}}}", json!({})),
+        "Fragment on Issue can't be spread inside User"
+    );
+    assert_eq!(
+        refused("query{viewer{login{name}}}", json!({})),
+        "Selections can't be made on scalars (field 'login' returns String but has selections)"
+    );
+    // Two selections under one name, and an argument given twice.
+    assert_eq!(
+        refused("query{viewer{x:login x:name}}", json!({})),
+        "Field 'x' has a field conflict: login or name?"
+    );
+    assert_eq!(
+        refused(
+            "query{viewer{repositories(first:1){totalCount} repositories(first:2){totalCount}}}",
+            json!({})
+        ),
+        "Field 'repositories' has an argument conflict: {first: 1} or {first: 2}?"
+    );
+    assert_eq!(
+        refused("query{node(id:\"A\",id:\"B\"){id}}", json!({})),
+        "There can be only one argument named \"id\""
+    );
+    assert_eq!(
+        refused(
+            "query{viewer{login @skip(if:false) @skip(if:false)}}",
+            json!({})
+        ),
+        "The directive \"skip\" can only be used once at this location."
+    );
+    assert_eq!(
+        refused(
+            "query{viewer{repositories(first:3000000000){totalCount}}}",
+            json!({})
+        ),
+        "Argument 'first' on Field 'repositories' has an invalid value (Expected 3000000000 to \
+         be a Int)"
+    );
+    // Variables: declared once, declared where used, a null default no licence, an object.
+    assert_eq!(
+        refused(
+            "query($id:ID!,$id:ID!){node(id:$id){id}}",
+            json!({"id": "I_1"})
+        ),
+        "There can only be one variable named \"id\""
+    );
+    assert_eq!(
+        refused("query{node(id:$id){id}}", json!({})),
+        "Variable $id is used by anonymous query but not declared"
+    );
+    assert_eq!(
+        refused("query($id:ID = null){node(id:$id){id}}", json!({})),
+        "Argument 'id' on Field 'node' has an invalid value (Nullability mismatch on variable \
+         $id and argument id (ID / ID!))"
+    );
+    assert_eq!(
+        refused("query{viewer{login}}", json!(["not", "an", "object"])),
+        "Variables must be a JSON object, not [\"not\",\"an\",\"object\"]"
+    );
 }

@@ -1,29 +1,29 @@
 //! GitHub's static validation of a GraphQL request, against the complete schema GitHub
 //! publishes.
 //!
-//! A test double that answers whatever it is sent proves nothing about whether GitHub would
-//! answer it: the guarded field setup of 0.12.13 sent `projectId` inside
-//! `UpdateProjectV2FieldInput`, the loopback board accepted it, and GitHub refused it before
-//! anything ran. So every GitHub double here puts each request to [`validate`] first and
-//! answers a refusal the way GitHub does — HTTP 200 with an `errors` array and no `data`.
-//!
-//! The schema is `fixtures/github-schema.docs.graphql`, GitHub's published schema file whole
-//! (its provenance is in `fixtures/README.md`), never a reduction of it: a reduction is a second
-//! statement of GitHub's contract written by the same hand as the request, which is how the
-//! defect above passed the pinned-subset drift check too.
+//! Every GitHub double here puts each request to [`validate`] first and answers a refusal the
+//! way GitHub does — HTTP 200 with an `errors` array and no `data` — so a request GitHub would
+//! refuse cannot pass a test. The schema is `fixtures/github-schema.docs.graphql`, GitHub's
+//! published file whole; `fixtures/README.md` holds its provenance and why it is not a
+//! reduction.
 //!
 //! The rules are the GraphQL specification's validation section as they reach a document and
-//! its variables: the document parses; every selected field exists on its type — introspection
-//! included, against the specification's own introspection types — with every argument known,
-//! every required one given and every literal one of its type; a leaf has no selection and a
-//! composite one; every fragment's type exists, can apply where it is spread, and no fragment
-//! spreads itself; every directive is defined, allowed where it stands and given its required
-//! arguments; every variable used is declared, every declared one used, each at an input type,
-//! its default of that type, and each use at a position its type and nullability fit; and each
-//! variable's value coerces to its declared type, with no input field the type does not define
-//! and every required one present. What it does not hold a request to is what only GitHub's
-//! executor knows — a node id's existence, a permission, a rate or a node-count limit, a
-//! custom scalar's spelling. Its messages follow GitHub's wording where GitHub's is known.
+//! its variables: the document parses, its operation names are unique and an anonymous one
+//! stands alone; every selected field exists on its type — introspection included, against the
+//! specification's own introspection types — with each argument known and given once, every
+//! required one given and every literal one of its type; two selections answering under one
+//! name on one type select the same field with the same arguments; a leaf has no selection and
+//! a composite one; every fragment is used, its name unique, its type existing and able to
+//! apply where it is spread, and none spreads itself; every directive is defined, allowed where
+//! it stands, not repeated unless repeatable, and given its required arguments; every variable
+//! used is declared, every declared one used and declared once, each at an input type, its
+//! default a constant of that type, and each use at a position its type and nullability fit;
+//! and the variables are an object whose every value coerces to its declared type, with no
+//! input field the type does not define and every required one present. What it does not hold
+//! a request to is what only GitHub's executor knows — a node id's existence, a permission, a
+//! rate or a node-count limit, a custom scalar's spelling — nor whether two same-named
+//! selections on mutually exclusive object types return the same shape. Its messages follow
+//! GitHub's wording where GitHub's is known.
 //!
 //! Included by path from the loopback board in `onetaskgraph-e2e-support` as well as from this
 //! crate's own tests, so both doubles hold to one implementation.
@@ -33,7 +33,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
-// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Both constants are dated snapshots of external contracts by design. SCHEMA is GitHub's published file, pinned to the digest fixtures/README.md records beside its source and retrieval date (tests/plugin.rs), and reconciled there with every contract the credentialed lane introspects from GitHub each run; a freshness gate against docs.github.com itself would turn the required check red on GitHub's publication cadence rather than on a change here, and the field-setup contract's live reconciliation is the manager's live field setup, which the dispatch that added this file names as outside its bar. INTROSPECTION is the GraphQL specification's normative text for its October 2021 edition, a fixed published version that does not drift.
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Dated snapshots of external contracts by design: SCHEMA is pinned to the provenance in fixtures/README.md, which states its gates and why upstream freshness is not one; INTROSPECTION is the fixed October 2021 edition of the GraphQL specification.
 /// GitHub's published GraphQL schema, whole.
 pub const SCHEMA: &str = include_str!("../fixtures/github-schema.docs.graphql");
 
@@ -300,6 +300,8 @@ struct Walk<'q> {
     errors: Vec<String>,
     /// The fragments being walked, outermost first: one spread inside itself is a cycle.
     entered: Vec<String>,
+    /// Every fragment some operation spreads.
+    spread: HashSet<String>,
 }
 
 /// Whether GitHub's static validation accepts `document` sent with `variables`; `Err` carries
@@ -323,6 +325,15 @@ fn check(document: &str, variables: Option<&Value>) -> Result<(), Vec<String>> {
         used: HashSet::new(),
         errors: Vec::new(),
         entered: Vec::new(),
+        spread: HashSet::new(),
+    };
+    let variables = match variables {
+        Some(Value::Object(_)) | None => variables,
+        Some(other) => {
+            return Err(vec![format!(
+                "Variables must be a JSON object, not {other}"
+            )]);
+        }
     };
     for definition in &parsed.definitions {
         if let query::Definition::Fragment(fragment) = definition
@@ -337,16 +348,50 @@ fn check(document: &str, variables: Option<&Value>) -> Result<(), Vec<String>> {
             ));
         }
     }
-    for definition in &parsed.definitions {
-        let query::Definition::Operation(operation) = definition else {
-            continue;
-        };
+    let operations = parsed
+        .definitions
+        .iter()
+        .filter_map(|definition| match definition {
+            query::Definition::Operation(operation) => Some(operation),
+            query::Definition::Fragment(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let mut named = HashSet::new();
+    for operation in &operations {
+        match operation_name(operation) {
+            None if operations.len() > 1 => walk
+                .errors
+                .push("This anonymous operation must be the only defined operation.".to_owned()),
+            Some(name) if !named.insert(name) => walk
+                .errors
+                .push(format!("Operation name \"{name}\" must be unique")),
+            _ => {}
+        }
         walk.operation(operation, variables);
+    }
+    for definition in &parsed.definitions {
+        if let query::Definition::Fragment(fragment) = definition
+            && !walk.spread.contains(fragment.name.as_str())
+        {
+            walk.errors.push(format!(
+                "Fragment {} was defined, but not used",
+                fragment.name
+            ));
+        }
     }
     if walk.errors.is_empty() {
         Ok(())
     } else {
         Err(walk.errors)
+    }
+}
+
+fn operation_name<'q>(operation: &'q query::OperationDefinition<'q, String>) -> Option<&'q str> {
+    match operation {
+        query::OperationDefinition::SelectionSet(_) => None,
+        query::OperationDefinition::Query(value) => value.name.as_deref(),
+        query::OperationDefinition::Mutation(value) => value.name.as_deref(),
+        query::OperationDefinition::Subscription(value) => value.name.as_deref(),
     }
 }
 
@@ -429,6 +474,7 @@ impl<'q> Walk<'q> {
         self.used.clear();
         self.entered.clear();
         self.directives(directives, location);
+        self.mergeable(root, selection);
         self.selection(root, selection);
         for definition in declared {
             if !self.used.contains(definition.name.as_str()) {
@@ -464,7 +510,10 @@ impl<'q> Walk<'q> {
             .declared
             .insert(
                 definition.name.clone(),
-                (kind.clone(), definition.default_value.is_some()),
+                (
+                    kind.clone(),
+                    non_null_default(definition.default_value.as_ref()),
+                ),
             )
             .is_some()
         {
@@ -539,7 +588,92 @@ impl<'q> Walk<'q> {
         }
     }
 
+    /// Two selections answering under one response name in one selection set — through any
+    /// fragment — must be the same field with the same arguments, unless they sit on two
+    /// different object types, which can never both apply.
+    fn mergeable(&mut self, parent: &str, selection: &'q query::SelectionSet<'q, String>) {
+        let mut fields = Vec::new();
+        self.collect_fields(parent, selection, &mut fields, &mut Vec::new());
+        let mut reported = HashSet::new();
+        for (at, (answer, on, name, arguments)) in fields.iter().enumerate() {
+            for (other_answer, other_on, other_name, other_arguments) in &fields[at + 1..] {
+                let exclusive = on != other_on
+                    && matches!(
+                        index().types.get(on.as_str()),
+                        Some(schema::TypeDefinition::Object(_))
+                    )
+                    && matches!(
+                        index().types.get(other_on.as_str()),
+                        Some(schema::TypeDefinition::Object(_))
+                    );
+                if answer != other_answer || exclusive || !reported.insert(answer.clone()) {
+                    continue;
+                }
+                if name != other_name {
+                    self.errors.push(format!(
+                        "Field '{answer}' has a field conflict: {name} or {other_name}?"
+                    ));
+                } else if arguments != other_arguments {
+                    self.errors.push(format!(
+                        "Field '{answer}' has an argument conflict: {{{arguments}}} or \
+                         {{{other_arguments}}}?"
+                    ));
+                } else {
+                    reported.remove(answer);
+                }
+            }
+        }
+    }
+
+    /// Every field a selection set selects, flattened through its fragments: the name it
+    /// answers under, the type it is selected on, its name and its arguments as written.
+    fn collect_fields(
+        &self,
+        parent: &str,
+        selection: &'q query::SelectionSet<'q, String>,
+        fields: &mut Vec<(String, String, String, String)>,
+        entered: &mut Vec<&'q str>,
+    ) {
+        for item in &selection.items {
+            match item {
+                query::Selection::Field(field) => {
+                    let mut arguments = field
+                        .arguments
+                        .iter()
+                        .map(|(name, value)| format!("{name}: {value}"))
+                        .collect::<Vec<_>>();
+                    arguments.sort();
+                    fields.push((
+                        field.alias.clone().unwrap_or_else(|| field.name.clone()),
+                        parent.to_owned(),
+                        field.name.clone(),
+                        arguments.join(", "),
+                    ));
+                }
+                query::Selection::InlineFragment(fragment) => {
+                    let on = match &fragment.type_condition {
+                        Some(query::TypeCondition::On(name)) => name.as_str(),
+                        None => parent,
+                    };
+                    self.collect_fields(on, &fragment.selection_set, fields, entered);
+                }
+                query::Selection::FragmentSpread(spread) => {
+                    let name = spread.fragment_name.as_str();
+                    if let Some(fragment) = self.fragments.get(name)
+                        && !entered.contains(&name)
+                    {
+                        let query::TypeCondition::On(on) = &fragment.type_condition;
+                        entered.push(name);
+                        self.collect_fields(on, &fragment.selection_set, fields, entered);
+                        entered.pop();
+                    }
+                }
+            }
+        }
+    }
+
     fn spread(&mut self, parent: &str, name: &str) {
+        self.spread.insert(name.to_owned());
         let Some(fragment) = self.fragments.get(name).copied() else {
             self.errors
                 .push(format!("Fragment {name} was used, but not defined"));
@@ -579,8 +713,19 @@ impl<'q> Walk<'q> {
     /// Every directive at one place in the document: defined, allowed at `location`, and given
     /// exactly the arguments its definition takes.
     fn directives(&mut self, given: &'q [query::Directive<'q, String>], location: &str) {
+        let mut seen = HashSet::new();
         for directive in given {
             let name = directive.name.as_str();
+            if !seen.insert(name)
+                && index()
+                    .directives
+                    .get(name)
+                    .is_some_and(|definition| !definition.repeatable)
+            {
+                self.errors.push(format!(
+                    "The directive \"{name}\" can only be used once at this location."
+                ));
+            }
             let Some(definition) = index().directives.get(name) else {
                 self.errors
                     .push(format!("Directive @{name} is not defined"));
@@ -620,7 +765,13 @@ impl<'q> Walk<'q> {
         defined: &'static [schema::InputValue<'static, String>],
         given: &'q [(String, query::Value<'q, String>)],
     ) {
+        let mut seen = HashSet::new();
         for (argument, value) in given {
+            if !seen.insert(argument.as_str()) {
+                self.errors.push(format!(
+                    "There can be only one argument named \"{argument}\""
+                ));
+            }
             collect_variables(value, &mut self.used);
             match defined.iter().find(|a| &a.name == argument) {
                 None => self
@@ -629,7 +780,7 @@ impl<'q> Walk<'q> {
                 Some(expected) => {
                     let position = Position {
                         kind: Ty::of(&expected.value_type),
-                        has_default: expected.default_value.is_some(),
+                        has_default: non_null_default(expected.default_value.as_ref()),
                         described: argument,
                     };
                     if let Err(problem) = literal(&position, value, &self.declared) {
@@ -691,6 +842,7 @@ impl<'q> Walk<'q> {
                      selections. Did you mean '{name} {{ ... }}'?)"
                 ));
             } else {
+                self.mergeable(returns, &field.selection_set);
                 self.selection(returns, &field.selection_set);
             }
         } else if !field.selection_set.items.is_empty() {
@@ -700,6 +852,12 @@ impl<'q> Walk<'q> {
             ));
         }
     }
+}
+
+/// Whether a default lets a nullable variable stand where a non-null one is expected: only a
+/// default that is itself not `null` does.
+fn non_null_default(default: Option<&query::Value<'_, String>>) -> bool {
+    default.is_some_and(|value| !matches!(value, query::Value::Null))
 }
 
 /// A directive location as GitHub's messages spell it: `inline fragments` for
@@ -886,8 +1044,10 @@ fn literal_named(
     declared: &Declared,
 ) -> Result<(), String> {
     let fits = match (name, value) {
-        ("Int", query::Value::Int(_))
-        | ("Float", query::Value::Int(_) | query::Value::Float(_))
+        ("Int", query::Value::Int(number)) => number
+            .as_i64()
+            .is_some_and(|number| i32::try_from(number).is_ok()),
+        ("Float", query::Value::Int(_) | query::Value::Float(_))
         | ("String", query::Value::String(_))
         | ("Boolean", query::Value::Boolean(_))
         | ("ID", query::Value::String(_) | query::Value::Int(_)) => true,
@@ -903,7 +1063,7 @@ fn literal_named(
                     };
                     let position = Position {
                         kind: Ty::of(&field.value_type),
-                        has_default: field.default_value.is_some(),
+                        has_default: non_null_default(field.default_value.as_ref()),
                         described,
                     };
                     literal(&position, inner, declared)?;
