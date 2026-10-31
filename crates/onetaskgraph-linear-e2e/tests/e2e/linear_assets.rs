@@ -3362,6 +3362,7 @@ fn the_pool_variable_turns_the_asset_entry_point_into_the_setup_and_skips_the_jo
             "--nocapture",
         ])
         .env(document_lifecycle::POOL_VARIABLE, "dry-run")
+        // llmlint: ignore[e2e_not_mocked] The real entry point runs as a subprocess, unmocked; what stands in for Linear is the repository's own recorded replay, because this proves which branch the entry takes without a credential. The credentialed lane is what reaches Linear.
         .env(document_lifecycle::LOOPBACK_VARIABLE, &replay.endpoint)
         .env("LINEAR_API_KEY", "synthetic")
         .env("LINEAR_WRITE_TEAM", "ENG")

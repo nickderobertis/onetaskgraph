@@ -321,6 +321,12 @@ impl Account {
                 .as_str()
                 .map_or(0, |after| after.parse().unwrap());
             let untyped = self.has("untyped-item");
+            if start == 0 && self.has("unsettled-listing") {
+                // A listing that answers a different count every time it is read.
+                let id = self.next("DI");
+                let board = self.by_id(variables["id"].as_str().unwrap()).unwrap();
+                board.items.push((id, TEMPLATE_DRAFT_TITLE.to_owned()));
+            }
             let lagging = start == 0 && self.lagging > 0;
             if lagging {
                 self.lagging -= 1;
@@ -1310,5 +1316,35 @@ fn a_template_listing_that_lags_its_writes_is_waited_out_and_never_overfilled() 
         drafts,
         usize::try_from(TEMPLATE_DRAFTS).unwrap(),
         "the template was overfilled"
+    );
+}
+
+#[test]
+fn a_template_count_that_never_settles_is_refused_writing_nothing() {
+    let account = Arc::new(Mutex::new(Account::new()));
+    {
+        let mut held = account.lock().unwrap();
+        held.boards.get_mut(&TEMPLATE).unwrap().items.truncate(3);
+        held.faults = vec!["unsettled-listing"];
+    }
+    let origin = serve(Arc::clone(&account));
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["session_child", "--exact", "--nocapture"])
+        .env("RUN_BOARD_GATE_ORIGIN", &origin)
+        .env("RUN_BOARD_GATE_ENTRY", "template-fill")
+        .env("RUN_BOARD_GATE_TOKEN", "operator")
+        .env("RUN_BOARD_GATE_RUN", "1")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(said.contains("did not settle across 6 reads"), "{said}");
+    assert!(
+        !account
+            .lock()
+            .unwrap()
+            .seen
+            .iter()
+            .any(|(_, document, _)| document.starts_with("mutation"))
     );
 }

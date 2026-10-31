@@ -594,7 +594,12 @@ pub async fn setup_pool(
             ));
             continue;
         };
-        let prepared = prepare(endpoint, key, team, team_id, scope, Mode::Ordinary, slots).await;
+        // The operator's run proves the lease exclusive exactly as a CI claim does, and so
+        // records Linear's own refusal of a second create under a held id.
+        let prepared = match lease::verify_exclusive(endpoint, key, team_id, &lease).await {
+            Ok(()) => prepare(endpoint, key, team, team_id, scope, Mode::Ordinary, slots).await,
+            Err(error) => Err(error),
+        };
         let released = lease.release(endpoint, key).await;
         let standing = prepared?;
         released?;
