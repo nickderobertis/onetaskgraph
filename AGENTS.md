@@ -1330,7 +1330,10 @@ them do; this is the inventory of what is owed, not a status board.
      id), a dry run writes neither, `metadata set` refuses the key, `task locate` answers the
      counterpart `via: "intent"` writing nothing, another attempt's live lease refuses
      `create-in-progress` before any destination write, and a copy whose every write is taken
-     back leaves the copied file byte for byte.
+     back leaves the copied file byte for byte; a folder's lock beside the file is held by one
+     live copy process at a time and, its holder killed, taken by the next at once whatever its
+     file is dated; and a `--no-link` create and one from a source that cannot keep the intent
+     record none.
 128. `task copy --when-destination-status … --otherwise refuse|preserve-destination` writes over a
      counterpart only at the named categories, answers any other `failed` as `destination-status`
      with `held` and exits `4` — or keeps its status — and `--when-destination-priority` keeps a

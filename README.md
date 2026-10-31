@@ -698,12 +698,12 @@ land a second one beside it.
      here and run it again against a second folder, the loopback board and the loopback Linear
      workspace, by `crates/onetaskgraph-e2e/tests/e2e/release_requests.rs`, which holds the
      request figures to the v0.12.13 binary's, and by
-     `crates/onetaskgraph-core/src/engine/copy/intent.rs`, the one place the key, the lease and
-     the lock are spelled. -->
+     `crates/onetaskgraph-core/src/engine/copy/intent.rs`, the one place the key and the lease
+     are spelled, and `crates/onetaskgraph-local-md/src/hold.rs`, the one place the lock is. -->
 **Every create a copy makes is safe to retry** — of a task, a project and a document alike —
-with no flag: a copy that dies or times out after the destination created its item, run again,
-finds and finishes that item rather than creating a second. Two reserved keys carry it, neither
-of which `metadata set` accepts:
+with no flag, but for the two named below: a copy that dies or times out after the destination
+created its item, run again, finds and finishes that item rather than creating a second. Two
+reserved keys carry it, neither of which `metadata set` accepts:
 
 - **`onetaskgraph.creating`**, on the item being copied, is an object keyed by destination
   source name, each `{"key": <UUID v5>, "at": <RFC 3339 UTC, when the key was first taken>,
@@ -725,6 +725,17 @@ of which `metadata set` accepts:
   create itself: in a GitHub issue body's metadata slot, in a folder of Markdown's file, and on
   Linear in its slot and, transformed, as the item's own `id` — sent as `IssueCreateInput.id`,
   `ProjectCreateInput.id` or `DocumentCreateInput.id`.
+
+**Two creates are outside it, and behave exactly as at v0.12.13**, recording no intent:
+
+- **A `--no-link` create.** Its whole promise is to write nothing to the source, and the intent is
+  a write to the source. Without one, its retry cannot be told from a deliberate second unlinked
+  copy of the same item — which is a thing a caller may want — so a second item is what a second
+  `--no-link` copy makes. It still resolves an intent another copy left, without writing.
+- **A create from a source that cannot store `onetaskgraph.creating`** — one with no write side,
+  one that refuses the narrow write of that key, or one that no longer holds the item. The intent
+  has nowhere to live, and an intent kept anywhere else would be work data outside its plugin, so
+  the create is made as it always was.
 
 **Linear is sent a v4-shaped id, not the key.** Linear's published schema
 ([`packages/sdk/src/schema.graphql`](https://github.com/linear/linear/blob/8397645/packages/sdk/src/schema.graphql)
@@ -772,16 +783,22 @@ writes: it answers the item the key names as `"via": "intent"`, or no counterpar
 intent is decided under the hold `TaskSource::hold_item` gives, and a copy that takes everything
 back puts the item back through `item_snapshot` and `restore_item` — defaulted, additive methods
 a source with no hold or no byte-exact snapshot leaves alone. A folder of Markdown takes, renews
-and releases it under an exclusive lock file beside the item (`<file>.lock`, created exclusively;
-one older than thirty seconds is a dead process's and is taken over, and one dated ahead of
-this host's clock, whose age cannot be told, is refused at once): under the lock the copy
+and releases it under an exclusive lock on a file beside the item, `<file>.lock`, which the
+kernel holds: an `flock` on Unix, and on Windows the file opened shared with nobody and deleted
+as it closes. Two live processes on one host never hold it at once, and a holder that exits or
+is killed releases it with no wait — its file is taken at once, whatever it is dated, and
+nothing is judged by its age. Only where the filesystem refuses `flock` does the lock fall back
+to creating the file exclusively (`O_EXCL`), and that fallback is weaker: one older than thirty
+seconds is taken to be a dead process's and taken over — so a holder slower than that can lose
+it — and one dated ahead of this host's clock, whose age cannot be told, is refused at once.
+Under the lock the copy
 reads the intent, refuses with the failure kind `create-in-progress` — naming the lease's end,
 having written nothing anywhere — while another attempt's lease is live,
 and otherwise records its own `attempt` and a `lease_until` of now plus the source's
 `create_lease_seconds`; a copy that finds, under the lock, that another copy created and
 linked the counterpart since it planned the create refuses the same way, naming that
 counterpart. So on one host exactly one attempt owns a create; the lock excludes
-nothing across hosts, or on a network filesystem that does not honour an exclusive create. A
+nothing across hosts, or on a network filesystem that does not honour the lock. A
 hosted source — a board or Linear as the copy's source — has no lock to offer, so its lease is
 advisory: a live one still refuses, but two attempts that read the item before either wrote both
 proceed under one key. Linear then still creates one issue. A board may create two, which is

@@ -498,13 +498,84 @@ fn the_create_settings_are_shown_by_their_layer_and_refused_out_of_range() {
     }
 }
 
+/// A plain copy of the note onto the board, waiting at each of `points` in its own directory.
+fn a_note_copy_paused_at(stores: &Stores, name: &str, points: &[&str]) -> Paused {
+    let directory = stores.sandbox.subdirectory(name);
+    let spec = points
+        .iter()
+        .map(|point| format!("{point}={}", directory.display()))
+        .collect::<Vec<_>>()
+        .join(",");
+    let child = stores
+        .sandbox
+        .subprocess(onetaskgraph_e2e_support::binary())
+        .env("OTG_TEST_PAUSE_AT", spec)
+        .args(["--json", "task", "copy", NOTE, "--to", "board"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("a copy starts");
+    Paused { child, directory }
+}
+
 #[test]
-fn a_lock_a_dead_copy_left_beside_the_file_is_taken_over_and_released() {
+fn a_folder_lock_is_held_by_one_live_process_and_released_at_once_when_its_holder_is_killed() {
     let stores = Stores::new();
     let lock = stores.notes.join("tasks/A.md.lock");
+    // The first copy waits at `intent-read`, holding the note's lock.
+    let mut first = a_note_copy_paused_at(&stores, "first", &["intent-read"]);
+    first.reached("intent-read");
+    assert!(
+        lock.exists(),
+        "the first copy holds the lock beside the note"
+    );
+    // A second copy of the same note asks for the lock and is not given it while the first lives.
+    let second = a_note_copy_paused_at(&stores, "second", &["intent-read"]);
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert!(
+        !second.directory.join("intent-read.paused").exists(),
+        "two live processes never hold the lock at once"
+    );
+    // The holder is killed while it holds the lock, so it never releases it itself.
+    first.child.kill().expect("the holder is killed");
+    let _ = first.child.wait();
+    // Whatever the file it left says of its age — dated an hour ahead, here — the lock is the
+    // kernel's to release, so the second takes it with no wait and no age-based takeover.
+    if let Ok(left) = std::fs::File::options().write(true).open(&lock) {
+        left.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+            .expect("the left file dated ahead");
+    }
+    let killed = std::time::Instant::now();
+    second.reached("intent-read");
+    assert!(
+        killed.elapsed() < std::time::Duration::from_secs(10),
+        "taken at once, not after an age: {:?}",
+        killed.elapsed()
+    );
+    second.release("intent-read");
+    let (code, answer) = second.finish();
+    assert_eq!(code, Some(0), "{answer:#}");
+    let outcome = &answer["items"][0];
+    assert_eq!(outcome["action"], "created", "{answer:#}");
+    assert_eq!(stores.board.items_titled("Task A").len(), 1, "one issue");
+    let metadata = stores.source_metadata();
+    assert_eq!(
+        metadata["onetaskgraph.copies"]["board"],
+        outcome["destination"]
+    );
+    assert!(metadata.get("onetaskgraph.creating").is_none());
+    assert!(!lock.exists(), "the second released the lock");
+}
+
+#[test]
+fn a_lock_file_no_live_process_holds_is_taken_at_once_whatever_its_date_and_released() {
+    let stores = Stores::new();
+    // A lock file a dead copy left, dated an hour ahead of this clock: no age could be told of it,
+    // and none is asked, because nothing holds it.
+    let lock = stores.notes.join("tasks/A.md.lock");
     let file = std::fs::File::create(&lock).expect("a lock a dead copy left");
-    file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(120))
-        .expect("an old lock");
+    file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+        .expect("a lock dated ahead");
     drop(file);
     let copied = stores.json(&["task", "copy", NOTE, "--to", "folder"]);
     assert_eq!(copied["items"][0]["action"], "created", "{copied:#}");
@@ -1543,26 +1614,24 @@ fn a_linear_project_or_document_create_answered_as_an_id_held_is_read_by_that_id
     }
 }
 
-/// Plant a lock beside the note's file dated an hour ahead of this host's clock: another host's,
-/// whose age this one cannot tell.
-fn lock_ahead(notes: &std::path::Path) -> PathBuf {
+/// Put a folder where the note's lock goes, so no lock can be made beside its file and the hold
+/// is refused at once.
+fn lock_unmakable(notes: &std::path::Path) -> PathBuf {
     let lock = notes.join("tasks/A.md.lock");
-    let file = std::fs::File::create(&lock).expect("another host's lock");
-    file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
-        .expect("an hour ahead");
+    let _ = std::fs::create_dir(&lock);
     lock
 }
 
 #[test]
 fn a_copy_whose_source_cannot_give_its_hold_is_refused_before_any_destination_write() {
     let stores = Stores::new();
-    let lock = lock_ahead(&stores.notes);
+    let lock = lock_unmakable(&stores.notes);
     let before = std::fs::read(stores.notes.join("tasks/A.md")).expect("the note");
     let creates = count(&stores.board, creates_issue);
     let output = stores.run(&["--json", "task", "copy", NOTE, "--to", "board"], None);
     assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
     assert!(
-        stderr(&output).contains("ahead of this host's clock"),
+        stderr(&output).contains("could not lock"),
         "names the lock: {}",
         stderr(&output)
     );
@@ -1576,8 +1645,8 @@ fn a_copy_whose_source_cannot_give_its_hold_is_refused_before_any_destination_wr
         before,
         "nothing written to the note"
     );
-    // Once the lock is gone, the copy goes through as it always did.
-    std::fs::remove_file(lock).expect("removed");
+    // Once the lock can be made, the copy goes through as it always did.
+    std::fs::remove_dir(lock).expect("removed");
     let copied = stores.json(&["task", "copy", NOTE, "--to", "board"]);
     assert_eq!(copied["items"][0]["action"], "created", "{copied:#}");
 }
@@ -1592,7 +1661,7 @@ fn a_copy_that_cannot_put_its_source_back_leaves_the_intent_for_its_retry_to_res
         |document, _| document == onetaskgraph_linear::graphql::ISSUE_CREATE,
         1,
         move |_, data| {
-            lock_ahead(&notes);
+            lock_unmakable(&notes);
             *data = json!({"issueCreate": {"success": false, "issue": null}});
         },
     );
@@ -1603,7 +1672,7 @@ fn a_copy_that_cannot_put_its_source_back_leaves_the_intent_for_its_retry_to_res
         !failure["failure"]["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("ahead of this host's clock"),
+            .contains("could not lock"),
         "the copy reports why it failed, not why it could not tidy up: {failure:#}"
     );
     let lock = stores.notes.join("tasks/A.md.lock");
@@ -1612,8 +1681,9 @@ fn a_copy_that_cannot_put_its_source_back_leaves_the_intent_for_its_retry_to_res
         text.contains("onetaskgraph.creating"),
         "the intent stands: {text}"
     );
-    // The lock gone and the lease run out, the retry resolves the intent and lands one issue.
-    std::fs::remove_file(lock).expect("removed");
+    // The lock makable again and the lease run out, the retry resolves the intent and lands one
+    // issue.
+    std::fs::remove_dir(lock).expect("removed");
     std::thread::sleep(std::time::Duration::from_millis(1500));
     stores.json(&["task", "copy", NOTE, "--to", "linear"]);
     assert_eq!(stores.carrying_origin("linear").len(), 1, "one issue");
@@ -1738,6 +1808,45 @@ fn an_intent_found_malformed_when_the_copy_comes_to_take_it_refuses_the_copy() {
         count(&stores.board, creates_issue),
         creates,
         "nothing created"
+    );
+}
+
+#[test]
+fn a_no_link_create_records_no_intent_and_carries_no_key_as_at_v0_12_13() {
+    let stores = Stores::new();
+    let before = std::fs::read(stores.notes.join("tasks/A.md")).expect("the note");
+    // A copy that took an intent would stop at its pause points for a minute: this one never
+    // reaches either.
+    let directory = stores.sandbox.subdirectory("unlinked");
+    let output = stores
+        .sandbox
+        .subprocess(onetaskgraph_e2e_support::binary())
+        .env(
+            "OTG_TEST_PAUSE_AT",
+            format!("before-intent={0},intent-read={0}", directory.display()),
+        )
+        .args(["--json", "task", "copy", NOTE, "--to", "board", "--no-link"])
+        .output()
+        .expect("the copy runs");
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        !directory.join("before-intent.paused").exists(),
+        "no intent was taken"
+    );
+    let copied: Value = serde_json::from_slice(&output.stdout).expect("a report");
+    let outcome = &copied["items"][0];
+    assert_eq!(outcome["action"], "created", "{copied:#}");
+    assert_eq!(
+        std::fs::read(stores.notes.join("tasks/A.md")).expect("the note"),
+        before,
+        "nothing at all written to the source"
+    );
+    let shown = stores.json(&["task", "show", outcome["destination"].as_str().unwrap()]);
+    assert!(
+        shown["items"][0]["item"]["metadata"]
+            .get("onetaskgraph.create_key")
+            .is_none(),
+        "{shown:#}"
     );
 }
 

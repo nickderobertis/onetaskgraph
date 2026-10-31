@@ -2,8 +2,8 @@
 //! copy decides its intent to create under, and what it puts back when it takes everything back.
 //!
 //! Driven through the real plugin over a real folder, two instances of it standing in for two
-//! processes: a hold is a lock file beside the record, created exclusively, so the second
-//! instance waits for the first to let go and finds the file as the first left it.
+//! processes: a hold is the kernel's lock on a file beside the record, so the second instance
+//! waits for the first to let go and finds the file as the first left it.
 
 use std::fs;
 use std::time::Duration;
@@ -168,25 +168,20 @@ async fn one_metadata_key_comes_off_a_project_and_a_document_and_nothing_else_mo
 }
 
 #[test]
-fn a_lock_written_ahead_of_this_clock_is_refused_at_once_and_one_that_cannot_be_made_is_refused() {
+fn a_lock_that_cannot_be_made_is_refused_at_once() {
     let root = folder();
     let id = NativeId("T-1".to_owned());
-    let lock = root.path().join("tasks/T-1.md.lock");
-    let file = fs::File::create(&lock).expect("another host's lock");
-    file.set_modified(std::time::SystemTime::now() + Duration::from_secs(3600))
-        .expect("an hour ahead");
-    drop(file);
     let source = instance(root.path());
-    let refused = source
-        .hold_item(MetadataRecord::Task, &id)
-        .expect_err("its age cannot be told");
+    // Something that is not a file stands where the lock goes.
+    let lock = root.path().join("tasks/T-1.md.lock");
+    fs::create_dir(&lock).expect("a folder in the lock's place");
+    let refused = source.hold_item(MetadataRecord::Task, &id);
     assert!(
-        matches!(&refused, onetaskgraph_plugin_api::SourceError::Unavailable { message }
-            if message.contains("ahead of this host's clock")),
+        matches!(&refused, Err(onetaskgraph_plugin_api::SourceError::Unavailable { message })
+            if message.contains("could not lock")),
         "{refused:?}"
     );
-    assert!(lock.exists(), "another host's lock is left where it is");
-    fs::remove_file(&lock).expect("removed");
+    fs::remove_dir(&lock).expect("removed");
 
     // A folder this process may not write in: no lock can be made beside the record.
     #[cfg(unix)]
@@ -203,29 +198,6 @@ fn a_lock_written_ahead_of_this_clock_is_refused_at_once_and_one_that_cannot_be_
         );
         assert!(!lock.exists());
     }
-}
-
-#[cfg(unix)]
-#[test]
-fn a_dead_process_lock_this_process_cannot_remove_is_refused_rather_than_tried_for_ever() {
-    use std::os::unix::fs::PermissionsExt;
-    let root = folder();
-    let id = NativeId("T-1".to_owned());
-    let lock = root.path().join("tasks/T-1.md.lock");
-    let file = fs::File::create(&lock).expect("a dead process's lock");
-    file.set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
-        .expect("an hour old");
-    drop(file);
-    let tasks = root.path().join("tasks");
-    fs::set_permissions(&tasks, fs::Permissions::from_mode(0o555)).expect("read-only");
-    let refused = instance(root.path()).hold_item(MetadataRecord::Task, &id);
-    fs::set_permissions(&tasks, fs::Permissions::from_mode(0o755)).expect("writable");
-    assert!(
-        matches!(&refused, Err(onetaskgraph_plugin_api::SourceError::Unavailable { message })
-            if message.contains("could not be removed")),
-        "{refused:?}"
-    );
-    assert!(lock.exists(), "the lock is left where it is");
 }
 
 #[test]
