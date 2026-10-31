@@ -241,7 +241,7 @@ async fn find_artifacts(
     Ok(found)
 }
 
-/// Retained CI objects are never run residue. Local sets use the same positive
+/// Retained CI objects and pool leases are never run residue. Local sets use the same positive
 /// registration evidence as disposable artifacts, after extracting their exact stamp.
 fn cleanup_matches(prefix: &str, name: &str, matches: &dyn Fn(&str, &str) -> bool) -> bool {
     use onetaskgraph_linear::live_artifact::classify_retained;
@@ -251,10 +251,9 @@ fn cleanup_matches(prefix: &str, name: &str, matches: &dyn Fn(&str, &str) -> boo
             .local_stamp()
             .is_some_and(|stamp| matches(prefix, &format!("{prefix}{stamp}")));
     }
-    if name
-        .strip_prefix(ARTIFACT_PREFIX)
-        .is_some_and(|suffix| suffix.starts_with("retained-"))
-    {
+    // A standing slot of any other scope, or a pool lease, is removed only by its own
+    // lifecycle: a lease by the claim that supersedes it, never by a sweep.
+    if onetaskgraph_linear::live_artifact::is_reserved_title(name) {
         return false;
     }
     matches(prefix, name)

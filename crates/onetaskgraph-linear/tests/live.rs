@@ -36,7 +36,7 @@ use onetaskgraph_plugin_api::{
 use secrecy::SecretString;
 mod document_lifecycle;
 use document_lifecycle::{Mode, Standing};
-use onetaskgraph_linear::live_artifact::{Scope, Slot};
+use onetaskgraph_linear::live_artifact::{LeaseLane, Scope, Slot};
 use serde_json::{Value, json};
 
 struct Environment;
@@ -1588,6 +1588,9 @@ async fn drive_documents(
     Ok(())
 }
 
+/// Where the lane sends what it sends to Linear itself rather than through its source.
+const LINEAR_GRAPHQL: &str = "https://api.linear.app/graphql";
+
 #[tokio::test]
 async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     // llmlint: ignore-block[live_tier_compiles_and_requires_credential,tests_assert_real_behavior] An absent credential or an unnamed scratch team skips only where none was expected — a contributor with no keys, and a fork pull request, which the host gives no secrets. `ONETASKGRAPH_LIVE_REQUIRED=1`, which .github/workflows/ci.yml sets on the one lane the credentials reach, turns each skip below into the failure this rule asks for.
@@ -1646,11 +1649,6 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     let stamp = onetaskgraph_live::artifact::Stamp::new(owner, now_micros()).to_string();
     let team_key = team.to_ascii_uppercase();
     let ci = env::var("GITHUB_ACTIONS").as_deref() == Ok("true");
-    let scope = if ci {
-        Scope::ci(&team_key).unwrap()
-    } else {
-        Scope::local(&team_key, &stamp).unwrap()
-    };
     let effective_mode = document_mode;
     if !ci && document_mode == Mode::Initialize {
         eprintln!(
@@ -1669,10 +1667,16 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
                 .join(&stamp),
         )
         .unwrap();
-    let endpoint = document_lifecycle::observer::start(
+    // Everything the source sends passes this run's namespace guard: a request naming
+    // another run's record is refused before it reaches Linear.
+    let namespace = std::sync::Arc::new(document_lifecycle::namespace::Namespace::new(
+        owner, &team_key,
+    ));
+    let endpoint = document_lifecycle::observer::guarded(
         "https://api.linear.app/graphql",
         &key,
         journal.clone(),
+        std::sync::Arc::clone(&namespace),
     );
     // The names the fixture files its issues and projects under are what this source's
     // `status_mapping` gives `todo` and `done`: Linear has no built-in names, so a source
@@ -1735,12 +1739,58 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         .unwrap_or_else(|error| {
             panic!("the Linear live lane cannot reach its scratch team: {error}")
         });
+    // The operator's one-time pool setup, asked for by `just linear-document-pool`, in place
+    // of the journey: every member's plugin slots, reported or created under its lease.
+    if let Some(setup) = document_lifecycle::PoolSetup::read().unwrap_or_else(|e| panic!("{e}")) {
+        let report = document_lifecycle::setup_pool(
+            LINEAR_GRAPHQL,
+            &key,
+            &team_key,
+            &team_id,
+            LeaseLane::Plugin,
+            &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+            &stamp,
+            setup,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the Linear plugin pool setup failed: {error}"));
+        for line in report {
+            println!("{line}");
+        }
+        return;
+    }
+    // A CI run works over the one standing pool member it leases, and no other run's: see
+    // `document_lifecycle::lease`. A local run's set is its own by its stamp already.
+    let lease = if ci {
+        Some(
+            document_lifecycle::lease::claim(
+                LINEAR_GRAPHQL,
+                &key,
+                &team_key,
+                &team_id,
+                LeaseLane::Plugin,
+                &stamp,
+                now_micros,
+            )
+            .await
+            .unwrap_or_else(|error| panic!("the Linear live lane cannot lease its slots: {error}")),
+        )
+    } else {
+        None
+    };
+    let scope = match &lease {
+        Some(lease) => {
+            namespace.leased(lease.index);
+            lease.scope()
+        }
+        None => Scope::local(&team_key, &stamp).unwrap(),
+    };
     // From the first create on, one guard retires what this invocation created: preparation,
     // the setup after it and the journey all run inside `guard_plugin_invocation`.
     let created = &document_lifecycle::Created::default();
     let lane_endpoint = endpoint.clone();
     let lane_key = key.clone();
-    guard_plugin_invocation(
+    let leased = document_lifecycle::unwinding(guard_plugin_invocation(
         &lane_endpoint,
         &lane_key,
         &team_key,
@@ -1825,8 +1875,22 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             }
             result.unwrap_or_else(|error| panic!("Linear live capability journey failed: {error}"));
         },
-    )
+    ))
     .await;
+    // Released on every way out, a failed or panicking journey included.
+    if let Some(lease) = &lease
+        && let Err(error) = lease.release(LINEAR_GRAPHQL, &lane_key).await
+    {
+        eprintln!("{error}");
+    }
+    if let Err(panic) = leased {
+        std::panic::resume_unwind(panic);
+    }
+    let refused = namespace.refusals();
+    assert!(
+        refused.is_empty(),
+        "the Linear live lane named records outside its run's namespace: {refused:?}"
+    );
 }
 
 /// The plugin lane's one invocation cleanup guard: it prepares the standing set and runs
@@ -1922,6 +1986,17 @@ async fn replay_drive_at(
     mode: Mode,
     stamp: u64,
 ) -> Result<(), String> {
+    replay_drive_as(endpoint, journal, standing, mode, stamp, Run::current()).await
+}
+/// [`replay_drive_at`] as `run`, so sessions of one test process can stand for distinct runs.
+async fn replay_drive_as(
+    endpoint: &str,
+    journal: &document_lifecycle::journal::Journal,
+    standing: document_lifecycle::Standing,
+    mode: Mode,
+    stamp: u64,
+    owner: Run,
+) -> Result<(), String> {
     let source = onetaskgraph_linear::Plugin.build(&SourceName::new("live").unwrap(),
         &json!({"endpoint":endpoint,"team":"ENG","status_mapping":{"todo":{"task":"Todo","project":"Planned"},"done":{"task":"Done"}}}),&ReplaySecrets).unwrap();
     let parent = if let Some(parent) = &standing.parent {
@@ -1929,7 +2004,7 @@ async fn replay_drive_at(
     } else {
         let data = document_lifecycle::send(endpoint, "synthetic",
             "mutation($input:ProjectCreateInput!){projectCreate(input:$input){success project{id}}}",
-            json!({"input":{"name":artifact_title(Run::current(), stamp),"teamIds":["team"]}})).await?;
+            json!({"input":{"name":artifact_title(owner, stamp),"teamIds":["team"]}})).await?;
         data["projectCreate"]["project"]["id"]
             .as_str()
             .ok_or("fresh parent create omitted id")?
@@ -1938,7 +2013,7 @@ async fn replay_drive_at(
     let run = LiveRun {
         endpoint: endpoint.to_owned(),
         key: "synthetic".into(),
-        id: Run::current(),
+        id: owner,
         stamp_micros: stamp,
         open_state: "Todo".into(),
         done_state: "Done".into(),
@@ -3114,4 +3189,532 @@ async fn standing_set_preparation_and_a_queued_pass_leave_a_live_journeys_label_
     .await
     .expect("the live journey's label still resolves on the first lookup after both passes");
     assert!(replay.state.lock().unwrap().schema_errors.is_empty());
+}
+
+mod pool {
+    //! The standing pool and its lease, against the replay: every claim exclusive, every
+    //! session of either lane over its own member, the team's document limit and the pool
+    //! held with eight sessions at once, and the namespace guard refusing a foreign record.
+    use super::*;
+    use document_lifecycle::lease::{self, Held, STALE_AFTER};
+    use document_lifecycle::namespace::Namespace;
+    use document_lifecycle::observer;
+    use onetaskgraph_linear::live_artifact::{POOL_SIZE, classify_lease};
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+
+    /// Drives every future at once, on this task, and hands back their outputs in order.
+    async fn join_all<F: std::future::Future>(futures: Vec<F>) -> Vec<F::Output> {
+        let mut futures: Vec<_> = futures.into_iter().map(Box::pin).collect();
+        let mut outputs: Vec<Option<F::Output>> = futures.iter().map(|_| None).collect();
+        std::future::poll_fn(|cx| {
+            let mut pending = false;
+            for (future, output) in futures.iter_mut().zip(outputs.iter_mut()) {
+                if output.is_none() {
+                    match future.as_mut().poll(cx) {
+                        std::task::Poll::Ready(value) => *output = Some(value),
+                        std::task::Poll::Pending => pending = true,
+                    }
+                }
+            }
+            if pending {
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(())
+            }
+        })
+        .await;
+        outputs.into_iter().map(Option::unwrap).collect()
+    }
+
+    fn run(process: u32) -> Run {
+        Run::read(&format!("9-{process}")).unwrap()
+    }
+    fn holder(owner: Run) -> String {
+        onetaskgraph_live::artifact::Stamp::new(owner, now_micros()).to_string()
+    }
+    /// The member a holder's claim tries first, as `lease::claim` derives it.
+    fn first_member(holder: &str) -> u8 {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(holder.as_bytes())[0] % POOL_SIZE + 1
+    }
+    async fn claim(
+        replay: &document_replay::Replay,
+        lane: LeaseLane,
+        holder: &str,
+    ) -> Result<Held, String> {
+        lease::claim(
+            &replay.endpoint,
+            "synthetic",
+            "ENG",
+            "team",
+            lane,
+            holder,
+            now_micros,
+        )
+        .await
+    }
+    fn leases(replay: &document_replay::Replay) -> Vec<(String, String)> {
+        replay
+            .state
+            .lock()
+            .unwrap()
+            .issues
+            .iter()
+            .filter(|(_, row)| {
+                row["title"]
+                    .as_str()
+                    .is_some_and(|t| classify_lease(t).is_some())
+            })
+            .map(|(id, row)| (id.clone(), row["title"].as_str().unwrap().to_owned()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn two_claimants_starting_at_one_member_each_hold_a_different_one() {
+        let replay = replay();
+        // Two holders whose claims start at the same member, so the create race is real.
+        let first = holder(run(1));
+        let second = (2..)
+            .map(|process| holder(run(process)))
+            .find(|candidate| first_member(candidate) == first_member(&first))
+            .unwrap();
+        let (a, b) = tokio::join!(
+            claim(&replay, LeaseLane::Plugin, &first),
+            claim(&replay, LeaseLane::Plugin, &second)
+        );
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert_ne!(a.index, b.index, "two live claims share one pool member");
+        assert_eq!(leases(&replay).len(), 2, "one lease issue per claim");
+        // The loser's create of the winner's id was refused by the double, as Linear refuses it.
+        let creates = replay
+            .state
+            .lock()
+            .unwrap()
+            .keyed
+            .iter()
+            .filter(|(_, request)| request["query"].as_str().unwrap().contains("issueCreate("))
+            .count();
+        assert!(
+            creates >= 3,
+            "the losing claimant tried the contended id first: {creates}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_released_or_ended_runs_lease_is_reclaimed_and_a_live_one_never_is() {
+        let replay = replay();
+        let owner = holder(run(1));
+        let held = claim(&replay, LeaseLane::Plugin, &owner).await.unwrap();
+        // Every other member taken by live runs: the next claim is refused, not queued.
+        let mut others = Vec::new();
+        for process in 2..=u32::from(POOL_SIZE) {
+            others.push(
+                claim(&replay, LeaseLane::Plugin, &holder(run(process)))
+                    .await
+                    .unwrap(),
+            );
+        }
+        let refused = claim(&replay, LeaseLane::Plugin, &holder(run(100)))
+            .await
+            .unwrap_err();
+        assert!(refused.contains("still going"), "{refused}");
+        // The asset lane's pool is its own: a full plugin pool takes nothing from it.
+        claim(&replay, LeaseLane::Assets, &holder(run(101)))
+            .await
+            .unwrap()
+            .release(&replay.endpoint, "synthetic")
+            .await
+            .unwrap();
+        // Released: the next claim takes that member under the next generation, and the
+        // superseded generation is gone.
+        held.release(&replay.endpoint, "synthetic").await.unwrap();
+        let next = claim(&replay, LeaseLane::Plugin, &holder(run(102)))
+            .await
+            .unwrap();
+        assert_eq!(
+            (next.index, next.generation),
+            (held.index, held.generation + 1)
+        );
+        assert!(replay.state.lock().unwrap().trashed.contains(&held.id));
+        // A lease older than any hosted job can run belongs to an ended run; one a moment
+        // short of that is still somebody's.
+        let ended = &others[0];
+        let old = |age: std::time::Duration| {
+            chrono::DateTime::from_timestamp_micros(
+                i64::try_from(now_micros() - u64::try_from(age.as_micros()).unwrap()).unwrap(),
+            )
+            .unwrap()
+            .to_rfc3339()
+        };
+        replay
+            .state
+            .lock()
+            .unwrap()
+            .issues
+            .get_mut(&ended.id)
+            .unwrap()["createdAt"] = json!(old(STALE_AFTER - std::time::Duration::from_secs(60)));
+        assert!(
+            claim(&replay, LeaseLane::Plugin, &holder(run(103)))
+                .await
+                .is_err()
+        );
+        replay
+            .state
+            .lock()
+            .unwrap()
+            .issues
+            .get_mut(&ended.id)
+            .unwrap()["createdAt"] = json!(old(STALE_AFTER + std::time::Duration::from_secs(60)));
+        let reclaimed = claim(&replay, LeaseLane::Plugin, &holder(run(104)))
+            .await
+            .unwrap();
+        assert_eq!(
+            (reclaimed.index, reclaimed.generation),
+            (ended.index, ended.generation + 1)
+        );
+    }
+
+    /// What one CI session of a lane did, as the double saw it.
+    struct Session {
+        key: String,
+        lease: Held,
+        standing: BTreeMap<&'static str, String>,
+        namespace: Arc<Namespace>,
+        result: Result<(), String>,
+    }
+
+    /// One whole ordinary CI session of `lane` as the live lane runs it: lease a member,
+    /// prepare its slots through the guarded observer, drive the lane's document paths over
+    /// them, release. Every request carries `key`, so the double can tell sessions apart.
+    async fn ci_session(
+        replay: &document_replay::Replay,
+        lane: LeaseLane,
+        key: &str,
+        owner: Run,
+    ) -> Session {
+        let journal = document_lifecycle::journal::Journal::new("plugin", "ordinary");
+        let namespace = Arc::new(Namespace::new(owner, "ENG"));
+        let raw = observer::start(&replay.endpoint, key, journal.clone());
+        let endpoint = observer::guarded(
+            &replay.endpoint,
+            key,
+            journal.clone(),
+            Arc::clone(&namespace),
+        );
+        let stamp = now_micros();
+        let lease = lease::claim(&raw, key, "ENG", "team", lane, &holder(owner), now_micros)
+            .await
+            .unwrap();
+        namespace.leased(lease.index);
+        let slots: &[Slot] = match lane {
+            LeaseLane::Plugin => &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+            LeaseLane::Assets => &[Slot::Assets],
+        };
+        let created = document_lifecycle::Created::default();
+        let result = async {
+            let standing = document_lifecycle::prepare_owned(
+                &endpoint, key, "ENG", "team", lease.scope(), Mode::Ordinary, slots, &created,
+            )
+            .await?;
+            let ids = standing.ids.clone();
+            match lane {
+                LeaseLane::Plugin => {
+                    replay_drive_as(&endpoint, &journal, standing, Mode::Ordinary, stamp, owner)
+                        .await?;
+                }
+                LeaseLane::Assets => {
+                    // The asset lane resets its destination to this run's own content first.
+                    let id = &ids["assets"];
+                    document_lifecycle::send(
+                        &endpoint,
+                        key,
+                        "mutation($id:String!,$input:DocumentUpdateInput!){documentUpdate(id:$id,input:$input){success document{id}}}",
+                        json!({"id":id,"input":{"content":format!("asset destination of {key}")}}),
+                    )
+                    .await?;
+                }
+            }
+            Ok::<_, String>(ids)
+        }
+        .await;
+        lease.release(&raw, key).await.unwrap();
+        let (standing, result) = match result {
+            Ok(ids) => (ids, Ok(())),
+            Err(error) => (BTreeMap::new(), Err(error)),
+        };
+        Session {
+            key: key.to_owned(),
+            lease,
+            standing,
+            namespace,
+            result,
+        }
+    }
+
+    /// Every record id a request names, by the guard's own reading of a request.
+    fn named(request: &Value) -> BTreeSet<String> {
+        fn walk(value: &Value, found: &mut BTreeSet<String>) {
+            match value {
+                Value::Object(object) => {
+                    for (key, child) in object {
+                        if let (true, Some(id)) =
+                            (key == "id" || key.ends_with("Id"), child.as_str())
+                        {
+                            found.insert(id.to_owned());
+                        }
+                        walk(child, found);
+                    }
+                }
+                Value::Array(items) => items.iter().for_each(|item| walk(item, found)),
+                _ => {}
+            }
+        }
+        let mut found = BTreeSet::new();
+        walk(&request["variables"], &mut found);
+        found
+    }
+
+    fn assert_isolated(replay: &document_replay::Replay, sessions: &[Session]) {
+        let keyed = replay.state.lock().unwrap().keyed.clone();
+        for session in sessions {
+            assert_eq!(session.result, Ok(()), "{} failed", session.key);
+            assert_eq!(session.namespace.refusals(), Vec::<String>::new());
+            for other in sessions.iter().filter(|other| other.key != session.key) {
+                let theirs: BTreeSet<String> = other
+                    .standing
+                    .values()
+                    .cloned()
+                    .chain([other.lease.id.clone()])
+                    .collect();
+                for (_, request) in keyed.iter().filter(|(key, _)| *key == session.key) {
+                    let overlap: Vec<_> = named(request).intersection(&theirs).cloned().collect();
+                    assert!(
+                        overlap.is_empty(),
+                        "{} named {}'s records {overlap:?} in {}",
+                        session.key,
+                        other.key,
+                        request["query"]
+                    );
+                }
+            }
+        }
+        let members: BTreeSet<_> = sessions
+            .iter()
+            .map(|s| (s.lease.lane == LeaseLane::Plugin, s.lease.index))
+            .collect();
+        assert_eq!(
+            members.len(),
+            sessions.len(),
+            "two sessions of one lane shared a member"
+        );
+    }
+
+    #[tokio::test]
+    async fn two_concurrent_sessions_of_each_linear_lane_pass_and_touch_only_their_own_records() {
+        let replay = replay();
+        let sessions = {
+            let (a, b, c, d) = tokio::join!(
+                ci_session(&replay, LeaseLane::Plugin, "plugin-a", run(1)),
+                ci_session(&replay, LeaseLane::Plugin, "plugin-b", run(2)),
+                ci_session(&replay, LeaseLane::Assets, "assets-a", run(3)),
+                ci_session(&replay, LeaseLane::Assets, "assets-b", run(4)),
+            );
+            vec![a, b, c, d]
+        };
+        assert_isolated(&replay, &sessions);
+        // Each session's destination holds what that session wrote, and no other's.
+        {
+            let state = replay.state.lock().unwrap();
+            for session in sessions
+                .iter()
+                .filter(|s| s.lease.lane == LeaseLane::Assets)
+            {
+                assert_eq!(
+                    state.documents[&session.standing["assets"]]["content"],
+                    json!(format!("asset destination of {}", session.key))
+                );
+            }
+        }
+        // Released on the way out: the next claim of every member may go ahead.
+        assert!(
+            leases(&replay)
+                .iter()
+                .all(|(_, title)| title.ends_with(" released"))
+        );
+    }
+
+    #[tokio::test]
+    async fn eight_concurrent_ci_sessions_stay_inside_the_team_document_limit_and_the_pool() {
+        let replay = replay();
+        // A team with room for exactly the whole pool, cold, and not one document more:
+        // 1000 documents, trash included, as Linear counts them. Each plugin member is three
+        // documents and each asset member one, so the pool's documents are bounded by its
+        // size and not by how many runs ever use it.
+        const LIMIT: usize = 1000;
+        let pool = usize::from(POOL_SIZE) * (3 + 1);
+        let initial = LIMIT - pool;
+        {
+            let mut state = replay.state.lock().unwrap();
+            state.document_limit = Some(LIMIT);
+            state.documents_ever = initial;
+        }
+        // Rounds of eight runs at once, each run both lanes, until every member is warm:
+        // claims start at a member their holder derives, so rounds spread over the pool.
+        for round in 0..4u32 {
+            let handles: Vec<_> = (0..8u32)
+                .flat_map(|n| {
+                    [
+                        (
+                            LeaseLane::Plugin,
+                            format!("plugin-{round}-{n}"),
+                            run(100 * round + n + 1),
+                        ),
+                        (
+                            LeaseLane::Assets,
+                            format!("assets-{round}-{n}"),
+                            run(100 * round + n + 50),
+                        ),
+                    ]
+                })
+                .collect();
+            let sessions = join_all(
+                handles
+                    .iter()
+                    .map(|(lane, key, owner)| ci_session(&replay, *lane, key, *owner))
+                    .collect(),
+            )
+            .await;
+            // None refused — for the limit, for the pool, or for anything else.
+            assert_isolated(&replay, &sessions);
+            let ever = replay.state.lock().unwrap().documents_ever;
+            assert!(ever <= LIMIT, "{ever} documents against a limit of {LIMIT}");
+        }
+        // Every document the four rounds created is a pool member's, made once.
+        let created = replay.state.lock().unwrap().documents_ever - initial;
+        assert!(created <= pool, "{created} documents for a pool of {pool}");
+        let documents = replay.state.lock().unwrap().documents.len();
+        assert_eq!(
+            documents, created,
+            "every created document is a standing member's"
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_setup_dry_runs_without_writing_then_initializes_once_skipping_a_held_member() {
+        use document_lifecycle::{PoolSetup, setup_pool};
+        let replay = replay();
+        let slots = [Slot::Filed, Slot::Loose, Slot::FollowUp];
+        let setup = |mode| {
+            setup_pool(
+                &replay.endpoint,
+                "synthetic",
+                "ENG",
+                "team",
+                LeaseLane::Plugin,
+                &slots,
+                "1-1-1",
+                mode,
+            )
+        };
+        let mutations = || {
+            replay
+                .state
+                .lock()
+                .unwrap()
+                .keyed
+                .iter()
+                .filter(|(_, request)| request["query"].as_str().unwrap().contains("mutation"))
+                .count()
+        };
+        let planned = setup(PoolSetup::DryRun).await.unwrap();
+        assert_eq!(planned.len(), usize::from(POOL_SIZE) * 4);
+        assert!(
+            planned.iter().all(|line| line.starts_with("would create ")),
+            "{planned:?}"
+        );
+        assert_eq!(mutations(), 0, "a dry run sent a mutation");
+        // A live run holding one member keeps it: initialization skips it.
+        let busy = claim(&replay, LeaseLane::Plugin, &holder(run(7)))
+            .await
+            .unwrap();
+        let done = setup(PoolSetup::Initialize).await.unwrap();
+        assert!(done.iter().any(|line| line
+            == &format!(
+                "pool member {} is leased by a run still going; skipped",
+                busy.index
+            )));
+        let created = replay.state.lock().unwrap().documents_ever;
+        assert_eq!(created, (usize::from(POOL_SIZE) - 1) * 3);
+        busy.release(&replay.endpoint, "synthetic").await.unwrap();
+        setup(PoolSetup::Initialize).await.unwrap();
+        assert_eq!(
+            replay.state.lock().unwrap().documents_ever,
+            usize::from(POOL_SIZE) * 3
+        );
+        // Idempotent: a second pass creates nothing, and a dry run then reports every slot present.
+        setup(PoolSetup::Initialize).await.unwrap();
+        assert_eq!(
+            replay.state.lock().unwrap().documents_ever,
+            usize::from(POOL_SIZE) * 3
+        );
+        let present = setup(PoolSetup::DryRun).await.unwrap();
+        assert!(
+            present.iter().all(|line| line.starts_with("present ")),
+            "{present:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_namespace_guard_refuses_a_request_naming_another_runs_record() {
+        let replay = replay();
+        let theirs = ci_session(&replay, LeaseLane::Assets, "theirs", run(1)).await;
+        assert_eq!(theirs.result, Ok(()));
+        let journal = document_lifecycle::journal::Journal::new("assets", "ordinary");
+        let namespace = Arc::new(Namespace::new(run(2), "ENG"));
+        let endpoint = observer::guarded(&replay.endpoint, "mine", journal, Arc::clone(&namespace));
+        namespace.leased(theirs.lease.index % POOL_SIZE + 1);
+        // Reading the team's standing documents teaches the guard whose each one is.
+        document_lifecycle::send(
+            &endpoint,
+            "mine",
+            document_lifecycle::DOCUMENTS,
+            json!({"after":null,"filter":{"title":{"containsIgnoreCase":"retained"}}}),
+        )
+        .await
+        .unwrap();
+        let target = &theirs.standing["assets"];
+        let refused = document_lifecycle::send(
+            &endpoint,
+            "mine",
+            "mutation($id:String!,$input:DocumentUpdateInput!){documentUpdate(id:$id,input:$input){success document{id}}}",
+            json!({"id":target,"input":{"content":"overwritten by another run"}}),
+        )
+        .await
+        .unwrap_err();
+        assert!(refused.contains("rejected"), "{refused}");
+        assert_eq!(namespace.refusals().len(), 1, "{:?}", namespace.refusals());
+        assert!(namespace.refusals()[0].contains(target.as_str()));
+        // And so is writing another run's identity into a title.
+        let title =
+            onetaskgraph_linear::live_artifact::retained_title(theirs.lease.scope(), Slot::Assets)
+                .unwrap();
+        assert!(document_lifecycle::send(
+            &endpoint,
+            "mine",
+            "mutation($input:DocumentCreateInput!){documentCreate(input:$input){success document{id}}}",
+            json!({"input":{"title":title,"content":"x","teamId":"team"}}),
+        )
+        .await
+        .is_err());
+        assert_eq!(namespace.refusals().len(), 2);
+        // Neither request reached the double; their destination is as they left it.
+        let state = replay.state.lock().unwrap();
+        assert!(!state.keyed.iter().any(|(key, request)| key == "mine"
+            && request["query"].as_str().unwrap().contains("mutation")));
+        assert_eq!(
+            state.documents[target]["content"],
+            json!("asset destination of theirs")
+        );
+    }
 }

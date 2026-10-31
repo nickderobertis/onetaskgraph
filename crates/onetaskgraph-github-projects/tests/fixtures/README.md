@@ -74,7 +74,11 @@ write surface — `Issue.parent`, `Issue.subIssues`, `Issue.subIssuesSummary`,
 was read from GitHub.com's own published schema artifact
 <https://docs.github.com/public/fpt/schema.docs.graphql> on 2026-08-27. The pinned-schema
 test validates every production operation's selected fields, arguments, variable types,
-fragment type conditions, and fixture keys against it; the credentialed live lane
+fragment type conditions, and fixture keys against it. The per-session board surface —
+`copyProjectV2`, `deleteProjectV2`, `addProjectV2DraftIssue`, their inputs and payloads,
+`ProjectV2Owner.id`, `ProjectV2Owner.projectsV2(after:first:query:)` and
+`ProjectV2Connection` — was read from that same artifact on 2026-10-31, keeping only the
+arguments and fields the live lane and janitor send; the credentialed live lane
 introspects the current mutation fields and input types as its mutation freshness check,
 then exercises reads without changing the configured board.
 

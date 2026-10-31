@@ -303,3 +303,11 @@ github-workflows-check:
 # Explicit scheduled creation or standing-set recovery; mode comes from the caller.
 linear-document-creation:
     @{{nx}} run-many -t live-documents --projects onetaskgraph-linear,onetaskgraph-linear-e2e --parallel=1
+
+# The operator's one-time setup of the standing Linear slot pool both live lanes lease from:
+# `just linear-document-pool dry-run` prints, member by member, what it would create and
+# sends no mutation; `just linear-document-pool initialize` creates every missing slot of
+# every member no live run holds, and a second run creates nothing. Needs LINEAR_API_KEY and
+# LINEAR_WRITE_TEAM; it writes to that team.
+linear-document-pool action:
+    @ONETASKGRAPH_LINEAR_POOL={{action}} ONETASKGRAPH_LIVE_REQUIRED=1 {{nx}} run-many -t live-documents --projects onetaskgraph-linear,onetaskgraph-linear-e2e --parallel=1 --skip-nx-cache

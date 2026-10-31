@@ -6,7 +6,9 @@ use std::collections::HashMap;
 
 use graphql_parser::{query, schema};
 use onetaskgraph_github_live::{
-    BOARD_WORKLOAD_DOCUMENT, DELETE_FIELD_DOCUMENT, RESIDUE_ITEMS_DOCUMENT,
+    ADD_DRAFT_DOCUMENT, BOARD_WORKLOAD_DOCUMENT, COPY_BOARD_DOCUMENT, DELETE_BOARD_DOCUMENT,
+    DELETE_FIELD_DOCUMENT, RESIDUE_ITEMS_DOCUMENT, RUN_BOARDS_DOCUMENT, TEMPLATE_DOCUMENT,
+    TEMPLATE_ITEMS_DOCUMENT,
 };
 use onetaskgraph_live_janitor::{BOARD_DOCUMENT, DELETE_ISSUE_DOCUMENT, DELETE_ITEM_DOCUMENT};
 
@@ -188,6 +190,12 @@ fn every_janitor_document_is_valid_against_the_pinned_schema() {
         DELETE_FIELD_DOCUMENT,
         BOARD_WORKLOAD_DOCUMENT,
         RESIDUE_ITEMS_DOCUMENT,
+        TEMPLATE_DOCUMENT,
+        COPY_BOARD_DOCUMENT,
+        DELETE_BOARD_DOCUMENT,
+        RUN_BOARDS_DOCUMENT,
+        TEMPLATE_ITEMS_DOCUMENT,
+        ADD_DRAFT_DOCUMENT,
     ] {
         validate(document);
     }

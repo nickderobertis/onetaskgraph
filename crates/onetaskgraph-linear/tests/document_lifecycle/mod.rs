@@ -1,5 +1,7 @@
 //! Shared infrastructure for the two real Linear document lanes.
 pub mod journal;
+pub mod lease;
+pub mod namespace;
 pub mod observer;
 use onetaskgraph_linear::live_artifact::{Scope, Slot, classify_retained, retained_title};
 use serde_json::{Value, json};
@@ -436,8 +438,8 @@ async fn prepare_tracked(
         }
         standing.titles.insert(slot_key(*slot), title);
     }
-    // An ordinary CI pass rebuilds a missing standing slot itself, under the shared CI
-    // concurrency group, and its journal files that create as a cold rebuild outside the
+    // An ordinary CI pass rebuilds a missing slot of the pool member it leased itself, which
+    // no other run can be using, and its journal files that create as a cold rebuild outside the
     // ordinary total. A non-CI set is the invocation's own and is created only on request.
     if mode == Mode::Ordinary
         && !scope.is_ci()
@@ -493,4 +495,105 @@ async fn prepare_tracked(
     }
     standing.parent = standing.ids.get("parent").cloned();
     Ok(standing)
+}
+
+/// What [`POOL_VARIABLE`] asks a lane to do instead of its journey: the operator's one-time
+/// setup of the standing pool, which every CI run would otherwise fill member by member.
+pub const POOL_VARIABLE: &str = "ONETASKGRAPH_LINEAR_POOL";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoolSetup {
+    /// Report, member by member, what initialization would create; send no mutation.
+    DryRun,
+    /// Create every missing slot of every member no live run holds.
+    Initialize,
+}
+impl PoolSetup {
+    /// `None` when the variable is unset: the lane runs its journey.
+    pub fn read() -> Result<Option<Self>, String> {
+        match std::env::var(POOL_VARIABLE).as_deref() {
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Ok("dry-run") => Ok(Some(Self::DryRun)),
+            Ok("initialize") => Ok(Some(Self::Initialize)),
+            _ => Err(format!("{POOL_VARIABLE} must be dry-run or initialize")),
+        }
+    }
+}
+
+/// Walks every member of `lane`'s pool: each slot `slots` names, and the parent project the
+/// filed slot needs, reported as present or — dry run — as what initialization would create,
+/// or — initialize — created, under that member's lease so no run is using it meanwhile. A
+/// member a live run holds is reported and left alone. Idempotent: a second run creates
+/// nothing. Returns one line per slot.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "prepare's lane identities plus the lease's holder and the setup asked for"
+)]
+pub async fn setup_pool(
+    endpoint: &str,
+    key: &str,
+    team: &str,
+    team_id: &str,
+    lane: onetaskgraph_linear::live_artifact::LeaseLane,
+    slots: &[Slot],
+    holder: &str,
+    setup: PoolSetup,
+) -> Result<Vec<String>, String> {
+    use onetaskgraph_linear::live_artifact::POOL_SIZE;
+    let mut wanted = slots.to_vec();
+    if slots.contains(&Slot::Filed) {
+        wanted.insert(0, Slot::Parent);
+    }
+    let mut report = Vec::new();
+    for index in 1..=POOL_SIZE {
+        let scope = Scope::pooled(team, index)?;
+        if setup == PoolSetup::DryRun {
+            for slot in &wanted {
+                let title = retained_title(scope, *slot)?;
+                let present = discover(endpoint, key, &title, team, *slot == Slot::Parent).await?;
+                report.push(match present {
+                    Some(id) => format!("present {title} ({id})"),
+                    None => format!(
+                        "would create {} {title}",
+                        if *slot == Slot::Parent {
+                            "project"
+                        } else {
+                            "document"
+                        }
+                    ),
+                });
+            }
+            continue;
+        }
+        let Some(lease) = lease::claim_member(
+            endpoint,
+            key,
+            team,
+            team_id,
+            lane,
+            holder,
+            onetaskgraph_live::artifact::now_micros,
+            index,
+        )
+        .await?
+        else {
+            report.push(format!(
+                "pool member {index} is leased by a run still going; skipped"
+            ));
+            continue;
+        };
+        let prepared = prepare(endpoint, key, team, team_id, scope, Mode::Ordinary, slots).await;
+        let released = lease.release(endpoint, key).await;
+        let standing = prepared?;
+        released?;
+        for slot in &wanted {
+            let name = slot_key(*slot);
+            report.push(format!(
+                "ready {} ({})",
+                standing.titles[name],
+                standing.ids.get(name).map_or("?", String::as_str)
+            ));
+        }
+    }
+    Ok(report)
 }

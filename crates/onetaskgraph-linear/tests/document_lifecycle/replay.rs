@@ -35,6 +35,17 @@ pub struct State {
     /// Discovery-only page size and deliberate pagination fault, applied over stored rows.
     pub discovery_pagination: Option<&'static str>,
     pub schema_errors: Vec<String>,
+    /// Every request as `(Authorization header, body)`, so concurrent sessions sending
+    /// different keys can each be told apart in one log.
+    pub keyed: Vec<(String, Value)>,
+    /// Linear's team document limit, which counts trashed documents as well as live ones:
+    /// a `documentCreate` once `documents_ever` has reached it is refused, as Linear refuses it.
+    pub document_limit: Option<usize>,
+    /// Every document the team has ever held, deleted ones included, seeded with the
+    /// documents a real team already holds before a test begins.
+    pub documents_ever: usize,
+    /// Ids Linear still holds in its trash: a create naming one is refused like a live one.
+    pub trashed: std::collections::BTreeSet<String>,
     serial: usize,
     rewrites: BTreeMap<String, String>,
 }
@@ -122,8 +133,9 @@ impl Replay {
         let serving = state.clone();
         std::thread::spawn(move || {
             for mut stream in listener.incoming().flatten() {
-                let request = read(&mut stream);
+                let (key, request) = read(&mut stream);
                 let mut state = serving.lock().unwrap();
+                state.keyed.push((key, request.clone()));
                 // Linear scores a document before it reads a row and refuses one over its
                 // cap with HTTP 400, so this replay does too, rather than answering it.
                 // A request with no query string fails to parse and is refused the same way.
@@ -211,7 +223,7 @@ impl Replay {
         }
     }
 }
-fn read(stream: &mut TcpStream) -> Value {
+fn read(stream: &mut TcpStream) -> (String, Value) {
     let mut bytes = Vec::new();
     let mut buf = [0; 8192];
     loop {
@@ -228,7 +240,18 @@ fn read(stream: &mut TcpStream) -> Value {
                 .parse()
                 .unwrap();
             if bytes.len() >= p + 4 + len {
-                return serde_json::from_slice(&bytes[p + 4..p + 4 + len]).unwrap();
+                let key = String::from_utf8_lossy(&bytes[..p])
+                    .lines()
+                    .find_map(|line| {
+                        line.split_once(':')
+                            .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                            .map(|(_, value)| value.trim().to_owned())
+                    })
+                    .unwrap_or_default();
+                return (
+                    key,
+                    serde_json::from_slice(&bytes[p + 4..p + 4 + len]).unwrap(),
+                );
             }
         }
     }
@@ -263,12 +286,34 @@ fn respond(state: &mut State, request: &Value) -> Value {
     ] {
         if q.contains(&format!("{root}(")) {
             let create = root.ends_with("Create");
-            let id = if create {
+            let keyed = v["input"]["id"].as_str().map(str::to_owned);
+            if create
+                && let Some(id) = &keyed
+                && (state.documents.contains_key(id)
+                    || state.projects.contains_key(id)
+                    || state.issues.contains_key(id)
+                    || state.trashed.contains(id))
+            {
+                // Linear refuses a create under an id it already holds, trashed or not.
+                return json!({"errors":[{"message":"Entity already exists","extensions":{"code":"INVALID_INPUT"}}]});
+            }
+            if root == "documentCreate"
+                && let Some(limit) = state.document_limit
+                && state.documents_ever >= limit
+            {
+                return json!({"errors":[{"message":"Usage limit exceeded: the team has reached its document limit","extensions":{"code":"USAGE_LIMIT_EXCEEDED"}}]});
+            }
+            let id = if let (true, Some(id)) = (create, &keyed) {
+                id.clone()
+            } else if create {
                 state.serial += 1;
                 format!("{field}-{}", state.serial)
             } else {
                 v["id"].as_str().unwrap().to_owned()
             };
+            if root == "documentCreate" {
+                state.documents_ever += 1;
+            }
             let table = match field {
                 "document" => &mut state.documents,
                 "project" => &mut state.projects,
@@ -297,6 +342,7 @@ fn respond(state: &mut State, request: &Value) -> Value {
             row["team"] = json!({"key":"ENG"});
             row["teams"] = json!({"nodes":[{"key":"ENG"}],"pageInfo":{"hasNextPage":false}});
             if create {
+                row["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
                 row["project"] = Value::Null;
                 row["labels"] = page(vec![]);
                 row["relations"] = page(vec![]);
@@ -304,7 +350,7 @@ fn respond(state: &mut State, request: &Value) -> Value {
             }
             for (key, value) in v["input"].as_object().unwrap() {
                 match key.as_str() {
-                    "teamId" | "teamIds" => {}
+                    "teamId" | "teamIds" | "id" => {}
                     "projectId" => {
                         row["project"] = if value.is_null() {
                             Value::Null
@@ -343,13 +389,17 @@ fn respond(state: &mut State, request: &Value) -> Value {
             return json!({"data":{root:{"success":true,field:row}}});
         }
     }
-    for (root, table) in [
-        ("documentDelete", &mut state.documents),
-        ("projectDelete", &mut state.projects),
-        ("issueDelete", &mut state.issues),
-    ] {
+    for root in ["documentDelete", "projectDelete", "issueDelete"] {
         if q.contains(&format!("{root}(")) {
-            table.remove(v["id"].as_str().unwrap());
+            let id = v["id"].as_str().unwrap();
+            let table = match root {
+                "documentDelete" => &mut state.documents,
+                "projectDelete" => &mut state.projects,
+                _ => &mut state.issues,
+            };
+            if table.remove(id).is_some() {
+                state.trashed.insert(id.to_owned());
+            }
             return json!({"data":{root:{"success":true}}});
         }
     }

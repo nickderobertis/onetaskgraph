@@ -24,7 +24,7 @@ pub(crate) mod document_lifecycle;
 #[path = "../../../onetaskgraph-linear/tests/document_lifecycle/replay_schema.rs"]
 mod document_replay_schema;
 use document_lifecycle::Mode;
-use onetaskgraph_linear::live_artifact::{Scope, Slot};
+use onetaskgraph_linear::live_artifact::{LeaseLane, Scope, Slot};
 
 #[derive(Default)]
 struct Upload {
@@ -1549,14 +1549,48 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
     )
     .to_string();
     let team_key = team.to_ascii_uppercase();
-    let scope = if ci {
-        Scope::ci(&team_key).unwrap()
-    } else {
-        Scope::local(&team_key, &owner_stamp).unwrap()
-    };
     let team_id = response["data"]["teams"]["nodes"][0]["id"]
         .as_str()
         .unwrap();
+    // The operator's one-time pool setup, asked for by `just linear-document-pool`, in place
+    // of the journey: every member's asset slot, reported or created under its lease.
+    if let Some(setup) = document_lifecycle::PoolSetup::read().unwrap() {
+        let report = runtime
+            .block_on(document_lifecycle::setup_pool(
+                "https://api.linear.app/graphql",
+                &key,
+                &team_key,
+                team_id,
+                LeaseLane::Assets,
+                &[Slot::Assets],
+                &owner_stamp,
+                setup,
+            ))
+            .unwrap_or_else(|error| panic!("the Linear asset pool setup failed: {error}"));
+        for line in report {
+            println!("{line}");
+        }
+        return;
+    }
+    // A CI run works over the one standing pool member it leases, and no other run's: see
+    // `document_lifecycle::lease`. A local run's destination is its own by its stamp already.
+    let lease = ci.then(|| {
+        runtime
+            .block_on(document_lifecycle::lease::claim(
+                "https://api.linear.app/graphql",
+                &key,
+                &team_key,
+                team_id,
+                LeaseLane::Assets,
+                &owner_stamp,
+                onetaskgraph_live::artifact::now_micros,
+            ))
+            .unwrap_or_else(|error| panic!("the Linear asset lane cannot lease its slot: {error}"))
+    });
+    let scope = match &lease {
+        Some(lease) => lease.scope(),
+        None => Scope::local(&team_key, &owner_stamp).unwrap(),
+    };
     let effective_mode = mode;
     if !ci && mode == Mode::Initialize {
         eprintln!(
@@ -1575,42 +1609,68 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
                 .join(&owner_stamp),
         )
         .unwrap();
-    let lifecycle_endpoint = document_lifecycle::observer::start(
+    // The lane's own Linear requests pass this run's namespace guard: one naming another
+    // run's record is refused before it reaches Linear.
+    let namespace = std::sync::Arc::new(document_lifecycle::namespace::Namespace::new(
+        onetaskgraph_live::artifact::Run::current(),
+        &team_key,
+    ));
+    if let Some(lease) = &lease {
+        namespace.leased(lease.index);
+    }
+    let lifecycle_endpoint = document_lifecycle::observer::guarded(
         "https://api.linear.app/graphql",
         &key,
         journal.clone(),
+        std::sync::Arc::clone(&namespace),
     );
     let created = document_lifecycle::Created::default();
-    guard_asset_invocation(
-        &runtime,
-        &lifecycle_endpoint,
-        &key,
-        &team_key,
-        team_id,
-        scope,
-        effective_mode,
-        &journal,
-        &created,
-        |standing| {
-            if ci && mode == Mode::Initialize {
-                journal.finish().unwrap();
-                return;
-            }
-            drive_live_assets(
-                &runtime,
-                &client,
-                &key,
-                &team,
-                &state_name,
-                standing,
-                scope,
-                mode,
-                &owner_stamp,
-                &journal,
-                &lifecycle_endpoint,
-                &created,
-            );
-        },
+    let leased = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        guard_asset_invocation(
+            &runtime,
+            &lifecycle_endpoint,
+            &key,
+            &team_key,
+            team_id,
+            scope,
+            effective_mode,
+            &journal,
+            &created,
+            |standing| {
+                if ci && mode == Mode::Initialize {
+                    journal.finish().unwrap();
+                    return;
+                }
+                drive_live_assets(
+                    &runtime,
+                    &client,
+                    &key,
+                    &team,
+                    &state_name,
+                    standing,
+                    scope,
+                    mode,
+                    &owner_stamp,
+                    &journal,
+                    &lifecycle_endpoint,
+                    &created,
+                );
+            },
+        )
+    }));
+    // Released on every way out, a failed or panicking journey included.
+    if let Some(lease) = &lease
+        && let Err(error) = runtime.block_on(lease.release("https://api.linear.app/graphql", &key))
+    {
+        eprintln!("{error}");
+    }
+    if let Err(panic) = leased {
+        std::panic::resume_unwind(panic);
+    }
+    let refused = namespace.refusals();
+    assert!(
+        refused.is_empty(),
+        "the Linear asset lane named records outside its run's namespace: {refused:?}"
     );
 }
 
