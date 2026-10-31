@@ -54,6 +54,16 @@
       "{workspaceRoot}/uv.lock",
       "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/package.json"
+    ],
+    "budgetJourneys": [
+      "workflowGraph",
+      "{workspaceRoot}/budgets.yaml",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/scripts/actions-budget-figures.sh",
+      "{workspaceRoot}/scripts/gate-time.sh",
+      "{workspaceRoot}/scripts/gate-time-budget.mjs"
     ]
   },
   "targets": {
@@ -101,7 +111,7 @@
       },
       "inputs": ["default"],
       "cache": true,
-      "//": "The pull request's four jobs, their keyed caches and the Rust cache warmer, read from the workflow files alone: keyed on this directory alone, it imports nothing that reads outside it, which the spec itself refuses. Whether today's required contexts are still reported needs the run graph, which reads files outside it, and is ci-contexts'."
+      "//": "The pull request's four jobs, their keyed caches and the Rust cache warmer, read from the workflow files alone: keyed on this directory alone, it imports nothing that reads outside it, which the spec itself refuses. Whether the required checks are still reported needs the run graph, which reads files outside it, and is ci-contexts'."
     },
     "ci-contexts": {
       "executor": "nx:run-commands",
@@ -113,9 +123,19 @@
       "cache": true,
       "//": "The required contexts use the workflow graph read set. This spec also reconciles this project's own journey targets with their external reads; the test-file inventory across both projects is policy/tests/inventory.test.mjs's."
     },
+    "budget-journeys": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/tests/ci-events.test.mjs .github/tests/gate-time.test.mjs .github/tests/release-tail.test.mjs"
+      },
+      "inputs": ["budgetJourneys"],
+      "cache": true,
+      "//": "Which jobs and workflows run on a pull request and on the release commit, the release tail as publish runs it over recorded GitHub answers (it installs publish's pinned onevcs and onebudgetspec from npm), and the timing wrapper `just gate` runs its body inside. Keyed on the workflow graph's read set and every outside file they read; ci-events also reads this repository's immutable git history."
+    },
     "test": {
       "executor": "nx:noop",
-      "dependsOn": ["ci-jobs", "ci-contexts", "cd-journeys"],
+      "dependsOn": ["ci-jobs", "ci-contexts", "budget-journeys", "cd-journeys"],
       "cache": false
     },
     "coverage": {

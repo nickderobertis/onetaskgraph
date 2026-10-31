@@ -8,8 +8,9 @@
 
 Deterministic SVGs of this CLI's **real** output, gated by
 [screencomp](https://github.com/nickderobertis/screencomp). Informational, like a bench —
-**never part of `just check` or `just gate`**; `.github/workflows/visual-docs.yml` owns the
-comparison in CI, and contributors run local capture and review commands manually.
+**never part of `just check` or `just gate`**; in CI a pull request's comparison is steps of
+`.github/workflows/ci.yml`'s `lint` job and `.github/workflows/visual-docs.yml` publishes the
+canonical gallery from main, and contributors run local capture and review commands manually.
 
 ## What it is
 

@@ -27,6 +27,11 @@ files:
     # them, which every figure is read from, stay judged.
     - "docs/measurements/**/*.json"
     - "docs/measurements/**/*.jsonl"
+    # GitHub's own responses, recorded byte for byte as `gh api --include` printed them, which
+    # the release-tail journey replays: about 6 MB that nobody wrote and that, like the logs
+    # above, would put a diff-scoped run past the harness's input limit. Each one's sidecar
+    # (`*.http.source.json`) and the README beside them, which say what each is, stay judged.
+    - ".github/tests/fixtures/release-tail/recordings/*.http"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
 # (composed alongside this file) selects them in fallback mode — codex + gpt-6.1-sol

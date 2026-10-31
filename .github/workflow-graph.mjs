@@ -502,6 +502,10 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
           event: {
             action: scenario.action,
             before: scenario.revisions?.before || "",
+            // A push's head commit, by the message a scenario gives it: visual-docs.yml skips
+            // release-plz's `chore: release v<version>` squash by it.
+            head_commit:
+              scenario.event === "push" ? { message: scenario.headCommitMessage || "" } : null,
             pull_request: {
               head: {
                 repo: {
@@ -529,14 +533,6 @@ export function jobs(workflow, scenario, policy, prefix = "", inputs = {}, ances
         (implicitSuccess || statusOverride) && (!job.if || Boolean(evaluate(job.if, context)));
       needs[id] = { result: enabled ? "success" : "skipped", outputs: {} };
       if (!enabled) continue;
-      if (id === "macos-lanes") {
-        context.steps = {
-          select: {
-            outputs: { macosRequired: String(policy.macosRequired), reason: policy.reason },
-          },
-        };
-        needs[id].outputs = resolve(job.outputs, context);
-      }
       if (id === "release-merge") needs[id] = releaseMerge(job, context, scenario);
       if (id === "arches") {
         configuredArches ||= JSON.parse(

@@ -27,8 +27,7 @@ export function put(path, text) {
 git("init", "-q");
 git("config", "user.email", "policy@example.invalid");
 git("config", "user.name", "Workflow contract");
-put(".github/macos-result.mjs", read(".github/macos-result.mjs"));
-put(".gitignore", "event.json\ngithub-output\nneeds.json\n.github/node_modules/\n");
+put(".gitignore", "event.json\ngithub-output\n.github/node_modules/\n");
 for (const file of ["macos-policy.mjs", "semantic-release.py", "semantic-json.mjs"])
   put(`.github/${file}`, read(`.github/${file}`));
 put("scripts/product_versions.py", read("scripts/product_versions.py"));

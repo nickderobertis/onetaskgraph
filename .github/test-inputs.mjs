@@ -67,12 +67,32 @@ export const policyJourneyReadSet = [
 export const policyJourneyFiles = [
   ".github/policy/tests/boundaries.test.mjs",
   ".github/policy/tests/inventory.test.mjs",
-  ".github/policy/tests/policy-carriers.test.mjs",
   ".github/policy/tests/policy-routing.test.mjs",
   ".github/policy/tests/policy.test.mjs",
   ".github/policy/tests/release-shortcut.test.mjs",
   ".github/policy/tests/reusable.test.mjs",
   ".github/policy/tests/rust-cache-warm.test.mjs",
+];
+
+// Repository files the budget journeys read, beyond the workflow graph: the root budgets file,
+// the copied figures script, the gate's recipe, wrapper and reporter, and the onebudgetspec pin
+// they run (package.json and its lockfile; onevcs's pin is release.yml's install step, which
+// the graph already reads). ci-events also reads this repository's own git history, which no
+// Nx input can name: the release commit and the push it pins are immutable.
+export const budgetJourneyReadSet = [
+  "budgets.yaml",
+  "justfile",
+  "package.json",
+  "bun.lock",
+  "scripts/actions-budget-figures.sh",
+  "scripts/gate-time.sh",
+  "scripts/gate-time-budget.mjs",
+];
+
+export const budgetJourneyFiles = [
+  ".github/tests/ci-events.test.mjs",
+  ".github/tests/gate-time.test.mjs",
+  ".github/tests/release-tail.test.mjs",
 ];
 
 // The one policy journey run on every platform, because the real action it runs does.
@@ -107,7 +127,9 @@ export function inputProblems(project, target) {
         ? cdJourneyReadSet
         : target === "policy-tests"
           ? policyJourneyReadSet
-          : []),
+          : target === "budget-journeys"
+            ? budgetJourneyReadSet
+            : []),
     ]),
   ];
   const inputs = expand(project.targets[target].inputs ?? ["default"]);

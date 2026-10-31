@@ -61,7 +61,7 @@
       "executor": "nx:run-commands",
       "dependsOn": ["bootstrap"],
       "options": {
-        "command": "node --test .github/policy/tests/boundaries.test.mjs .github/policy/tests/inventory.test.mjs .github/policy/tests/policy-carriers.test.mjs .github/policy/tests/policy-routing.test.mjs .github/policy/tests/policy.test.mjs .github/policy/tests/release-shortcut.test.mjs .github/policy/tests/reusable.test.mjs .github/policy/tests/rust-cache-warm.test.mjs"
+        "command": "node --test .github/policy/tests/boundaries.test.mjs .github/policy/tests/inventory.test.mjs .github/policy/tests/policy-routing.test.mjs .github/policy/tests/policy.test.mjs .github/policy/tests/release-shortcut.test.mjs .github/policy/tests/reusable.test.mjs .github/policy/tests/rust-cache-warm.test.mjs"
       },
       "cache": false,
       "outputs": ["{workspaceRoot}/.github/.telemetry/macos-policy.json"]

@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  budgetJourneyFiles,
   cdJourneyFiles,
   GITHUB_READS,
   inputProblems,
@@ -47,6 +48,7 @@ test("the two projects run every journey exactly once through its owning target"
     [policy, "policy-tests", policyJourneyFiles],
     [policy, "rust-cache-action", rustCacheJourneyFiles],
     [workflows, "cd-journeys", cdJourneyFiles],
+    [workflows, "budget-journeys", budgetJourneyFiles],
   ]) {
     assert.equal(project.targets.test.executor, "nx:noop");
     assert.ok(project.targets.test.dependsOn.includes(target));
@@ -64,7 +66,12 @@ test("the two projects run every journey exactly once through its owning target"
       .map((file) => `.github/${directory}/${file}`),
   );
   assert.deepEqual(
-    [...policyJourneyFiles, ...rustCacheJourneyFiles, ...cdJourneyFiles].sort(),
+    [
+      ...policyJourneyFiles,
+      ...rustCacheJourneyFiles,
+      ...cdJourneyFiles,
+      ...budgetJourneyFiles,
+    ].sort(),
     actual.sort(),
   );
 });

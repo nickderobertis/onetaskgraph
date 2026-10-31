@@ -84,7 +84,10 @@ test("release.yml is five jobs on the runners their names say, and release-plz.y
     const job = release.jobs[id];
     assert.equal(job["runs-on"], expected.runner, id);
     assert.equal(job["timeout-minutes"], 30, id);
-    for (const step of job.steps.filter((step) => step.run !== undefined)) {
+    // publish's last two steps are the release tail, after every phase: .github/tests/
+    // release-tail.test.mjs runs both as written and holds them to their shape.
+    const tail = id === "publish" ? job.steps.slice(-2) : [];
+    for (const step of job.steps.filter((step) => step.run !== undefined && !tail.includes(step))) {
       const parsed = phase(step);
       assert.ok(parsed, `${id} runs '${step.run}', which is not a phase of its recipe`);
       assert.equal(parsed.recipe, expected.recipe, `${id} runs another job's recipe`);
@@ -325,17 +328,18 @@ test("release routing prefix agrees with the production PR builder", () => {
   assert.match(read(".github/macos-policy.mjs"), /startsWith\("release-plz-"\)/);
 });
 
-test("Mac comparison base is the exact production body and environment exercised by the live-lane journey", () => {
+test("every pull-request job compares against the one merge-base derivation", () => {
   const ci = workflows()["ci.yml"];
-  const original = ci.jobs.check.steps.find((step) => step.id === "base");
-  const combined = ci.jobs.macos.steps.find((step) => step.id === "macos-base");
-  // scripts/check-live-lane-selection.sh executes original.run over merge-base,
-  // predecessor, HEAD~1 and missing-base histories; equality extends that same proof.
-  assert.equal(combined.run, original.run);
-  assert.deepEqual(combined.env, original.env);
+  const bases = ["lint", "test-linux", "test-windows", "test-macos"].map((id) =>
+    ci.jobs[id].steps.find((step) => step.id === "pr-base"),
+  );
+  // scripts/check-ci-recipes.sh drives scripts/ci-pr-base.sh over a real clone, its refusals
+  // included; every job runs it the same way, so that proof is each job's.
+  for (const step of bases) {
+    assert.equal(step.run, 'bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"');
+    assert.deepEqual(step.env, bases[0].env);
+  }
   assert.match(read("justfile"), /^check:.*distribution-test/m);
-  assert.ok(ci.jobs.macos.steps.some((step) => step.run === "just check"));
-  assert.ok(!ci.jobs.macos.steps.some((step) => step.run === "just distribution-test"));
 });
 
 test("telemetry records build-macos as the one Mac job of a release", () => {

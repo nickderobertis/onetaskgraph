@@ -467,12 +467,14 @@ def reaches_capture(recipe, seen=None):
     return any(reaches_capture(dependency, seen) for dependency in recipes[recipe]["deps"])
 
 
-for recipe in ("check", "gate", "test", "lint", "typecheck", "coverage", "format-check"):
+# `gate` runs `just gate-body` inside its timing wrapper rather than depending on it, so the
+# body is held by name too.
+for recipe in ("check", "gate", "gate-body", "test", "lint", "typecheck", "coverage", "format-check"):
     if reaches_capture(recipe):
         problems.append(
             f"justfile: `just {recipe}` reaches scripts/screenshots.sh. Screenshots are "
             "informational: the capture belongs to `just screenshots`, the manual screenshot guard "
-            "and .github/workflows/visual-docs.yml, and to nothing the gate runs."
+            "ci.yml's lint job and .github/workflows/visual-docs.yml, and to nothing the gate runs."
         )
 # Every Nx target of every project, by the COMMANDS it runs rather than by the files it
 # declares as inputs — this project's lint names the capture script as an input on purpose,
