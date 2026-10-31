@@ -617,6 +617,18 @@ if (process.env.ANSWER === "rewritten")
     .replace(/"updated_at":"[^"]*"/g, '"updated_at":"2026-11-01T00:00:00Z"');
 if (process.env.ANSWER === "changed" && name.startsWith("runs-at-pr-3824-head"))
   text = text.replace('"total_count":', '"total_count":1');
+// One recording drifting in a way the reconciliation must see: its status, a header it keeps,
+// or a field changing from a list to an object.
+if (name.startsWith("runs-at-pr-3824-head")) {
+  if (process.env.ANSWER === "status") text = text.replace(/^HTTP\\/2\\.0 200 OK/, "HTTP/2.0 404 Not Found");
+  if (process.env.ANSWER === "header") text = text.replace(/^Content-Type: .*$/im, "Content-Type: text/plain");
+  if (process.env.ANSWER === "container") {
+    const split = text.indexOf("\\r\\n\\r\\n") + 4;
+    const body = JSON.parse(text.slice(split));
+    body.workflow_runs = {};
+    text = text.slice(0, split) + JSON.stringify(body);
+  }
+}
 if (process.env.ANSWER === "no-separator") text = text.replaceAll("\\r\\n", "\\n");
 if (process.env.ANSWER === "no-status") text = text.replace(/^HTTP\\/[^\\n]*/, "garbage");
 if (process.env.ANSWER === "no-json") text = text.slice(0, text.indexOf("\\r\\n\\r\\n") + 5);
@@ -646,6 +658,19 @@ process.stdout.write(text);
     /^runs-at-pr-3824-head\.http: GitHub now answers otherwise at body\.total_count$/m,
   );
   assert.match(changed.stderr, /1 recording\(s\) no longer match GitHub/);
+  for (const [answer, at] of [
+    ["status", "status 200 is now 404"],
+    ["header", "header content-type"],
+    ["container", "body.workflow_runs"],
+  ]) {
+    const drifted = reconcile(answer);
+    assert.equal(drifted.status, 1, `${answer}: ${drifted.stderr}`);
+    assert.match(
+      drifted.stderr,
+      new RegExp(`^runs-at-pr-3824-head\\.http: GitHub now answers otherwise at .*${at}`, "m"),
+      answer,
+    );
+  }
   for (const [answer, says] of [
     ["none", /holds no response/],
     ["no-separator", /holds no response/],

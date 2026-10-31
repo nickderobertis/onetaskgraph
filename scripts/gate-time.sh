@@ -41,23 +41,31 @@ if [ "$1" = --check ] && [ $# -eq 1 ]; then
   exit 0
 fi
 
+# What failed, the filesystem's own words for why, and what to do about it.
 record_failed() {
-  echo "gate-time: cannot $1 $record; make .gate-time.json at the repository root a writable" \
-    "file (or remove whatever is there) and run \`just gate\` again." >&2
+  echo "gate-time: cannot $1 $record: ${2:-it is still there}" >&2
+  echo "gate-time: next: make .gate-time.json at the repository root a writable file (or" \
+    "remove whatever is there) and run \`just gate\` again." >&2
   exit 2
 }
 
 # A record left by an earlier gate never stands in for this one, even if this one is killed,
 # so it goes before the body starts and the gate refuses to run when it cannot.
-rm -f "$record" 2>/dev/null && [ ! -e "$record" ] || record_failed "remove the earlier record"
+if ! error="$(rm -f "$record" 2>&1)" || [ -e "$record" ]; then
+  record_failed "remove the earlier record" "$error"
+fi
 started="$(stamp)"
 "$@"
 status=$?
 ended="$(stamp)"
-printf '{"schema_version":1,"invocation":"%s-%s","started_at":"%s","ended_at":"%s","exit":%d}\n' \
-  "$$" "$started" "$started" "$ended" "$status" >"$record.$$" 2>/dev/null \
-  || record_failed "write the record beside"
-mv "$record.$$" "$record" 2>/dev/null || { rm -f "$record.$$"; record_failed "replace"; }
+if ! error="$( { printf '{"schema_version":1,"invocation":"%s-%s","started_at":"%s","ended_at":"%s","exit":%d}\n' \
+  "$$" "$started" "$started" "$ended" "$status" >"$record.$$"; } 2>&1)"; then
+  record_failed "write the record beside" "$error"
+fi
+if ! error="$(mv "$record.$$" "$record" 2>&1)"; then
+  rm -f "$record.$$"
+  record_failed "replace" "$error"
+fi
 
 if [ "$status" -ne 0 ]; then
   echo "gate-time: the gate failed (exit $status), so its wall clock is not checked; fix the" \

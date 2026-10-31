@@ -104,7 +104,7 @@ test("a record the wrapper cannot write fails the gate, and no earlier record st
   writeFileSync(join(recordPath(dir), "stale"), "");
   const ran = gate(dir, "bash", "-c", "echo the gate body ran");
   assert.equal(ran.status, 2, ran.out);
-  assert.match(ran.out, /cannot remove the earlier record/);
+  assert.match(ran.out, /cannot remove the earlier record .*: \S/);
   assert.doesNotMatch(ran.out, /the gate body ran/);
   assert.doesNotMatch(ran.out, /budget onetaskgraph-gate-time/);
 });
@@ -115,7 +115,7 @@ test("a record the wrapper cannot write after the body fails the gate, checking 
   const dir = tree();
   const ran = gate(dir, "bash", "-c", 'mkdir ".gate-time.json.$PPID"');
   assert.equal(ran.status, 2, ran.out);
-  assert.match(ran.out, /cannot write the record beside/);
+  assert.match(ran.out, /cannot write the record beside .*: .*[Ii]s a directory/);
   assert.doesNotMatch(ran.out, /budget onetaskgraph-gate-time/);
   assert.equal(existsSync(recordPath(dir)), false);
 });
@@ -127,7 +127,7 @@ test("a record the wrapper cannot put in place fails the gate and leaves no temp
   const ran = gate(dir, "bash", "-c", "mkdir .gate-time.json && chmod 555 .gate-time.json");
   try {
     assert.equal(ran.status, 2, ran.out);
-    assert.match(ran.out, /cannot replace/);
+    assert.match(ran.out, /cannot replace .*: .*[Pp]ermission denied/);
     assert.doesNotMatch(ran.out, /budget onetaskgraph-gate-time/);
     assert.deepEqual(
       readdirSync(dir).filter((name) => name.startsWith(".gate-time.json.")),
