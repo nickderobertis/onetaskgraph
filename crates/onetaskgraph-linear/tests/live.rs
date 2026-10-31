@@ -4002,6 +4002,17 @@ mod pool {
             .await
             .unwrap_err();
         assert!(refused.contains("not exclusive"), "{refused}");
+        // A probe refused for anything but its id — here, a rate limit — proves nothing.
+        replay.state.lock().unwrap().accept_duplicate_ids = false;
+        replay.state.lock().unwrap().request_limit = Some(0);
+        let unproven = lease::verify_exclusive(&replay.endpoint, "synthetic", "team", &held)
+            .await
+            .unwrap_err();
+        assert!(
+            unproven.contains("something other than its id"),
+            "{unproven}"
+        );
+        replay.state.lock().unwrap().request_limit = None;
         // A lease that reads back as another holder's, or not at all, is not this run's to use.
         let replay = self::replay();
         let held = claim(&replay, LeaseLane::Plugin, &holder(run(2)))
@@ -4030,6 +4041,31 @@ mod pool {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn a_pool_setup_that_fails_preparing_a_member_releases_its_lease_first() {
+        let replay = replay();
+        // A team with no room for a document: the first member's preparation is refused.
+        {
+            let mut state = replay.state.lock().unwrap();
+            state.document_limit = Some(0);
+        }
+        let failed = document_lifecycle::setup_pool(
+            &replay.endpoint,
+            "synthetic",
+            "ENG",
+            "team",
+            LeaseLane::Plugin,
+            &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+            "1-1-1",
+            document_lifecycle::PoolSetup::Initialize,
+        )
+        .await;
+        assert!(failed.is_err(), "{failed:?}");
+        let leases = leases(&replay);
+        assert_eq!(leases.len(), 1, "{leases:?}");
+        assert!(leases[0].1.ends_with(" released"), "{leases:?}");
     }
 
     #[tokio::test]
