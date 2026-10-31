@@ -264,11 +264,15 @@ update passed both that check and the loopback board and was refused by the live
 `Variable $input of type UpdateProjectV2FieldInput! was provided invalid value for projectId
 (Field is not defined on UpdateProjectV2FieldInput)`. Against this file:
 
-- `tests/github_schema/mod.rs` validates a request — its selection, arguments, fragments and
-  each variable's value — the way GitHub's executor does before running anything;
+- `tests/github_schema/mod.rs` validates a request — its selections, their merging, arguments,
+  fragments, directives and each variable's value — by the GraphQL specification's static
+  validation rules, which GitHub applies before running anything; its module documentation
+  lists them and what it leaves to GitHub's executor;
 - `tests/schema.rs` holds every document in `graphql::DOCUMENTS` to it, and the field setup's
   requests with the variables they are sent with;
 - this crate's board (`tests/plugin.rs`) and the shared loopback board every binary journey
   drives (`onetaskgraph-e2e-support`, which includes that module by path) refuse any request
-  it rejects, answering as GitHub does: HTTP 200, `errors`, no `data`.
+  it rejects, answering as GitHub does: HTTP 200, `errors`, no `data`, and changing nothing on
+  the board. The GitHub Projects e2e suite includes the module by path too, to show a
+  document the board does not answer is one GitHub runs.
 
