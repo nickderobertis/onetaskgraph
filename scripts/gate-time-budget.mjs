@@ -15,7 +15,14 @@ try {
   } catch {
     throw Error("no gate record at .gate-time.json: run `just gate`, which writes it");
   }
-  const record = JSON.parse(text);
+  let record;
+  try {
+    record = JSON.parse(text);
+  } catch {
+    throw Error(
+      ".gate-time.json is not JSON: delete it and run `just gate`, which writes it afresh",
+    );
+  }
   const started = Date.parse(record?.started_at);
   const ended = Date.parse(record?.ended_at);
   if (
@@ -25,9 +32,13 @@ try {
     ended < started ||
     !Number.isInteger(record.exit)
   )
-    throw Error(".gate-time.json is not a gate record scripts/gate-time.sh wrote: run `just gate`");
+    throw Error(
+      ".gate-time.json is not a gate record scripts/gate-time.sh wrote: delete it and run `just gate`",
+    );
   if (record.exit !== 0)
-    throw Error(`the recorded gate exited ${record.exit}: a failed gate has no wall clock to report`);
+    throw Error(
+      `the recorded gate exited ${record.exit}, and a failed gate has no wall clock to report: fix what it reported and run \`just gate\` again`,
+    );
   const seconds = Math.round((ended - started) / 1000);
   report(
     seconds,

@@ -24,7 +24,8 @@ writes them, over GitHub responses recorded from this repository under
 `tests/fixtures/release-tail/` (its README says how they were taken and how to reconcile
 them). `tests/ci-events.test.mjs` holds which workflows and jobs run on a pull request and
 on the release commit, and `tests/gate-time.test.mjs` the timing wrapper `just gate` runs
-inside; all three are `github-workflows:budget-journeys`.
+inside; those two are `github-workflows:budget-journeys`, and the release tail is
+`github-workflows:release-tail`, a target of its own because it installs from npm.
 
 `policy/macos-budget.mjs --metric jobs-per-run|runs-per-change --telemetry PATH` exits 0 after
 validating and reporting current telemetry, and 1 for invalid invocation, missing/stale

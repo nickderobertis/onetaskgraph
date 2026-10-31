@@ -62,7 +62,7 @@ test("a job behind one of the required checks going missing is refused", () => {
 const load = (file) => JSON.parse(readFileSync(new URL(file, import.meta.url), "utf8"));
 
 test("each target is keyed on the combined read set of the tests it runs", () => {
-  for (const target of ["ci-contexts", "budget-journeys", "cd-journeys"])
+  for (const target of ["ci-contexts", "budget-journeys", "release-tail", "cd-journeys"])
     assert.deepEqual(inputProblems(load("../project.json"), target), []);
 });
 

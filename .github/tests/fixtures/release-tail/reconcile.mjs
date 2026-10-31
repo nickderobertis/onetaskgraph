@@ -8,7 +8,7 @@
 // an invalid token, as it was recorded. Ignored, and only these, because GitHub rewrites them on
 // every answer or with no change to the record: the response's date, etag, last-modified,
 // rate-limit and request-id headers, and the `download_count` and `updated_at` fields in a body. Exit 0 when
-// every recording matches, 1 naming each that does not.
+// every recording matches, 1 naming each that does not, and 2 when a read cannot be made at all.
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 
@@ -60,29 +60,36 @@ function differences(recorded, fetched, at = "body") {
 }
 
 let mismatched = 0;
-for (const name of readdirSync(RECORDINGS).filter((n) => n.endsWith(".http"))) {
-  const recorded = parse(readFileSync(new URL(name, RECORDINGS), "utf8"), name);
-  const { path } = JSON.parse(readFileSync(new URL(`${name}.source.json`, RECORDINGS), "utf8"));
-  const fetched = fetch(path, recorded.status !== 200);
-  const found = [
-    ...(recorded.status === fetched.status
-      ? []
-      : [`status ${recorded.status} is now ${fetched.status}`]),
-    ...Object.keys(recorded.headers)
-      .filter((header) => !IGNORED_HEADERS.test(header))
-      .filter((header) => recorded.headers[header] !== fetched.headers[header])
-      .map((header) => `header ${header}`),
-    ...differences(recorded.body, fetched.body),
-  ];
-  if (found.length) {
-    mismatched++;
-    console.log(
-      `${name}: GitHub now answers otherwise at ${found.slice(0, 20).join(", ")}${found.length > 20 ? ", …" : ""}`,
-    );
+try {
+  for (const name of readdirSync(RECORDINGS).filter((n) => n.endsWith(".http"))) {
+    const recorded = parse(readFileSync(new URL(name, RECORDINGS), "utf8"), name);
+    const { path } = JSON.parse(readFileSync(new URL(`${name}.source.json`, RECORDINGS), "utf8"));
+    const fetched = fetch(path, recorded.status !== 200);
+    const found = [
+      ...(recorded.status === fetched.status
+        ? []
+        : [`status ${recorded.status} is now ${fetched.status}`]),
+      ...Object.keys(recorded.headers)
+        .filter((header) => !IGNORED_HEADERS.test(header))
+        .filter((header) => recorded.headers[header] !== fetched.headers[header])
+        .map((header) => `header ${header}`),
+      ...differences(recorded.body, fetched.body),
+    ];
+    if (found.length) {
+      mismatched++;
+      console.error(
+        `${name}: GitHub now answers otherwise at ${found.slice(0, 20).join(", ")}${found.length > 20 ? ", …" : ""}`,
+      );
+    }
   }
+} catch (error) {
+  console.error(
+    `reconcile: ${error.message}; next: sign gh in with read access to this repository (gh auth status) and re-run`,
+  );
+  process.exit(2);
 }
 if (mismatched) {
-  console.log(
+  console.error(
     `${mismatched} recording(s) no longer match GitHub. Re-record them read-only with \`gh api --include --method GET <path> > <name>.http\` and re-run .github/tests/release-tail.test.mjs.`,
   );
   process.exitCode = 1;

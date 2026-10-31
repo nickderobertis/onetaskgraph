@@ -22,8 +22,8 @@ budgets:
   - id: onetaskgraph-ci-check-time
     description: >-
       The longest counted job of each pull request's last-commit CI runs, over the pull requests
-      one release carries, from GitHub's job timestamps. It protects the 30-minute line each check
-      is held to, because one slow check holds every change behind it.
+      one release carries, from GitHub's job timestamps. It protects every contributor's
+      turnaround, because one slow check holds every change behind it.
     labels: [release-tail]
     measure: reported
     command: [bash, scripts/actions-budget-figures.sh, longest-job, --stage, pr]
@@ -37,8 +37,8 @@ budgets:
   - id: onetaskgraph-cd-job-time
     description: >-
       The longest counted job of one release's CD runs — release-plz's run at the release commit
-      and the Release run, publish included up to the tail's moment. It protects the 30-minute
-      line each CD job is held to, a slow job being the actionable unit inside the release cycle.
+      and the Release run, publish included up to the tail's moment. It protects the time a
+      release takes, a slow job being the actionable unit inside the release cycle.
     labels: [release-tail]
     measure: reported
     command: [bash, scripts/actions-budget-figures.sh, longest-job, --stage, cd]
@@ -52,8 +52,8 @@ budgets:
   - id: onetaskgraph-release-cycle-time
     description: >-
       Per pull request one release carries, its last commit's checks plus its merge to the end of
-      publish; the maximum over the release's pull requests. It protects the 90-minute line from
-      final checks to a published release.
+      publish; the maximum over the release's pull requests. It protects how soon a merged change
+      reaches the people who install it.
     labels: [release-tail]
     measure: reported
     command: [bash, scripts/actions-budget-figures.sh, release-cycle-time]
@@ -129,8 +129,8 @@ budgets:
   - id: onetaskgraph-gate-time
     description: >-
       The wall clock of one `just gate` run on a development machine, from the start and end the
-      recipe records on that run. It holds the local gate to the same 30-minute line as each CI
-      job, as a warning, since a development machine's timing varies too much to refuse on.
+      recipe records on that run. It holds the local gate to the line each CI job is held to, as a
+      warning, since a development machine's timing varies too much to refuse on.
     labels: [host-variable]
     measure: reported
     command: [node, scripts/gate-time-budget.mjs]

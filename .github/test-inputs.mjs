@@ -75,16 +75,14 @@ export const policyJourneyFiles = [
 ];
 
 // Repository files the budget journeys read, beyond the workflow graph: the root budgets file,
-// the copied figures script, the gate's recipe, wrapper and reporter, and the onebudgetspec pin
-// they run (package.json and its lockfile; onevcs's pin is release.yml's install step, which
-// the graph already reads). ci-events also reads this repository's own git history, which no
-// Nx input can name: the release commit and the push it pins are immutable.
+// the gate's recipe, wrapper and reporter, and the onebudgetspec pin they run (package.json and
+// its lockfile). ci-events also reads this repository's own git history, which no Nx input can
+// name: the release commit and the push it pins are immutable.
 export const budgetJourneyReadSet = [
   "budgets.yaml",
   "justfile",
   "package.json",
   "bun.lock",
-  "scripts/actions-budget-figures.sh",
   "scripts/gate-time.sh",
   "scripts/gate-time-budget.mjs",
 ];
@@ -92,8 +90,19 @@ export const budgetJourneyReadSet = [
 export const budgetJourneyFiles = [
   ".github/tests/ci-events.test.mjs",
   ".github/tests/gate-time.test.mjs",
-  ".github/tests/release-tail.test.mjs",
 ];
+
+// The release tail's reads beyond the workflow graph: the root budgets file, the copied
+// figures script and onebudgetspec's pin, which publish's install step must match (onevcs's
+// pin is that step itself, which the graph already reads). A target of its own, because it
+// installs both from npm: a change to the gate's wrapper does not re-run it.
+export const releaseTailReadSet = [
+  "budgets.yaml",
+  "package.json",
+  "scripts/actions-budget-figures.sh",
+];
+
+export const releaseTailFiles = [".github/tests/release-tail.test.mjs"];
 
 // The one policy journey run on every platform, because the real action it runs does.
 export const rustCacheJourneyFiles = [".github/policy/tests/rust-cache.test.mjs"];
@@ -129,7 +138,9 @@ export function inputProblems(project, target) {
           ? policyJourneyReadSet
           : target === "budget-journeys"
             ? budgetJourneyReadSet
-            : []),
+            : target === "release-tail"
+              ? releaseTailReadSet
+              : []),
     ]),
   ];
   const inputs = expand(project.targets[target].inputs ?? ["default"]);

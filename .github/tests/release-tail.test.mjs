@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -147,8 +148,6 @@ test("a tail that moves, is read, may fail quietly or installs another onevcs is
   }
 });
 
-// ---- The recordings, and the double that serves them ------------------------------------------
-
 // A recording is exactly what `gh api --include` printed: the status line, the headers, each
 // ending in CRLF, a blank line and the body.
 function response(text) {
@@ -250,8 +249,6 @@ function replay(serve) {
   };
 }
 
-// ---- publish's own steps, run as written -------------------------------------------------------
-
 const toolPath = [];
 before(() => {
   const steps = releaseWorkflow().jobs.publish.steps;
@@ -330,8 +327,6 @@ function tail({ double, dir = checkout(), runnerTemp }) {
   );
   return { status: ran.status, output, results, started, ended, runnerTemp };
 }
-
-// ---- The figures, computed from the recordings -------------------------------------------------
 
 const ts = (stamp) => Date.parse(stamp.replace(/\.\d+Z$/, "Z")) / 1000;
 // A counted job is completed, not skipped and taken by a runner — GitHub records a job no runner
@@ -436,8 +431,6 @@ function assertFigures(run, served) {
   }
   return low;
 }
-
-// ---- The journeys ------------------------------------------------------------------------------
 
 let recorded;
 test("over a recorded release the tail reports all seven budgets with their breakdowns", () => {
@@ -575,4 +568,85 @@ test("every recording names its API path and where it was fetched from", () => {
     [publishRecord.name],
     "one recording carries the one change",
   );
+});
+
+// The copy is dero-skills' create-repo source, edited only there. create-repo's
+// check_repo_baseline.py compares it with the source as it then stands; this refuses the one
+// drift a copy can make on its own — an edit in place — by its own header, whose `sha256` line
+// is the digest of every byte after it.
+test("the figures script is the unedited create-repo copy its header names", () => {
+  const text = readFileSync(join(root, "scripts/actions-budget-figures.sh"), "utf8");
+  const lines = text.split("\n");
+  assert.equal(
+    lines[2],
+    "# source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/budgets/actions-budget-figures.sh",
+  );
+  assert.equal(lines[3], "# version: 5");
+  const digest = lines[4].match(/^# sha256: ([0-9a-f]{64})$/)?.[1];
+  const body = lines.slice(5).join("\n");
+  assert.equal(
+    createHash("sha256").update(body).digest("hex"),
+    digest,
+    "the copy was edited in place",
+  );
+  assert.equal(digest, "cf0842bd1ab3c01b7e72e4a18de962499a7e5de030f8175cb8e804f5f58108cd");
+});
+
+// The reconciliation script, against a stand-in for gh that answers each path with its
+// recording, or with what GitHub would answer later: rewritten headers and timestamps alone,
+// a changed body, or no answer at all.
+test("the reconciliation names a recording GitHub no longer answers, and ignores what GitHub rewrites", () => {
+  const dir = join(scratch, `reconcile-${cases++}`);
+  mkdirSync(dir);
+  const answer = join(dir, "answer.mjs");
+  writeFileSync(
+    answer,
+    `import { readdirSync, readFileSync } from "node:fs";
+const dir = ${JSON.stringify(fileURLToPath(FIXTURES))};
+const path = process.argv.at(-1);
+// GitHub answers the releases path 401 under an invalid token, as the reconciliation asks it.
+const invalid = (process.env.GH_TOKEN ?? "").startsWith("ghp_invalid");
+const name = readdirSync(dir).find((n) => {
+  if (!n.endsWith(".http.source.json")) return false;
+  const sidecar = JSON.parse(readFileSync(dir + "/" + n, "utf8"));
+  return sidecar.path === path && sidecar.recorded.with.endsWith("under an invalid token") === invalid;
+});
+if (!name || process.env.ANSWER === "none") process.exit(1);
+let text = readFileSync(dir + "/" + name.replace(/\\.source\\.json$/, ""), "utf8");
+if (process.env.ANSWER === "rewritten")
+  text = text
+    .replace(/^Date: .*$/m, "Date: Sun, 01 Nov 2026 00:00:00 GMT")
+    .replace(/^X-Ratelimit-Remaining: .*$/im, "X-Ratelimit-Remaining: 1")
+    .replace(/"updated_at":"[^"]*"/g, '"updated_at":"2026-11-01T00:00:00Z"');
+if (process.env.ANSWER === "changed" && name.startsWith("runs-at-pr-3824-head"))
+  text = text.replace('"total_count":', '"total_count":1');
+process.stdout.write(text);
+`,
+  );
+  mkdirSync(join(dir, "bin"));
+  writeFileSync(join(dir, "bin", "gh"), `#!/bin/sh\nexec "${process.execPath}" "${answer}" "$@"\n`);
+  chmodSync(join(dir, "bin", "gh"), 0o755);
+  const reconcile = (ANSWER) =>
+    spawnSync(
+      process.execPath,
+      [fileURLToPath(new URL("./fixtures/release-tail/reconcile.mjs", import.meta.url))],
+      {
+        env: { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}`, ANSWER },
+        encoding: "utf8",
+      },
+    );
+  const same = reconcile("same");
+  assert.equal(same.status, 0, same.stderr);
+  const rewritten = reconcile("rewritten");
+  assert.equal(rewritten.status, 0, rewritten.stderr);
+  const changed = reconcile("changed");
+  assert.equal(changed.status, 1, changed.stderr);
+  assert.match(
+    changed.stderr,
+    /^runs-at-pr-3824-head\.http: GitHub now answers otherwise at body\.total_count$/m,
+  );
+  assert.match(changed.stderr, /1 recording\(s\) no longer match GitHub/);
+  const none = reconcile("none");
+  assert.equal(none.status, 2, none.stderr);
+  assert.match(none.stderr, /next: sign gh in/);
 });

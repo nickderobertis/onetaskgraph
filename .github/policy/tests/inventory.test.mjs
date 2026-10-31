@@ -12,6 +12,7 @@ import {
   inputProblems,
   policyJourneyFiles,
   policyJourneyReadSet,
+  releaseTailFiles,
   rustCacheJourneyFiles,
 } from "../../test-inputs.mjs";
 import { parse } from "yaml";
@@ -49,6 +50,7 @@ test("the two projects run every journey exactly once through its owning target"
     [policy, "rust-cache-action", rustCacheJourneyFiles],
     [workflows, "cd-journeys", cdJourneyFiles],
     [workflows, "budget-journeys", budgetJourneyFiles],
+    [workflows, "release-tail", releaseTailFiles],
   ]) {
     assert.equal(project.targets.test.executor, "nx:noop");
     assert.ok(project.targets.test.dependsOn.includes(target));
@@ -71,6 +73,7 @@ test("the two projects run every journey exactly once through its owning target"
       ...rustCacheJourneyFiles,
       ...cdJourneyFiles,
       ...budgetJourneyFiles,
+      ...releaseTailFiles,
     ].sort(),
     actual.sort(),
   );

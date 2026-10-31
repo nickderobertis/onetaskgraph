@@ -130,7 +130,30 @@ test("a recorded failed gate is no figure, and fails the check", () => {
   seed(dir, 100, 1);
   const ran = gate(dir, "--check");
   assert.equal(ran.status, 3, ran.out);
-  assert.match(ran.out, /the recorded gate exited 1/);
+  assert.match(ran.out, /the recorded gate exited 1, .*run `just gate` again/);
+});
+
+test("a malformed record is no figure, and fails the check naming how to recover", () => {
+  const good = {
+    schema_version: 1,
+    invocation: "seeded",
+    started_at: "2026-10-01T12:00:00Z",
+    ended_at: "2026-10-01T12:10:00Z",
+    exit: 0,
+  };
+  for (const [what, text] of [
+    ["not JSON", "{"],
+    ["another schema", JSON.stringify({ ...good, schema_version: 2 })],
+    ["an unreadable start", JSON.stringify({ ...good, started_at: "yesterday" })],
+    ["an end before its start", JSON.stringify({ ...good, ended_at: "2026-10-01T11:00:00Z" })],
+    ["an exit that is no integer", JSON.stringify({ ...good, exit: "0" })],
+  ]) {
+    const dir = tree();
+    writeFileSync(recordPath(dir), text);
+    const ran = gate(dir, "--check");
+    assert.equal(ran.status, 3, `${what}: ${ran.out}`);
+    assert.match(ran.out, /delete it and run `just gate`/, what);
+  }
 });
 
 test("an invalid budgets.yaml fails the gate", () => {
