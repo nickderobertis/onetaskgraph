@@ -243,3 +243,55 @@ fn a_hold_on_a_record_deleted_while_held_is_still_released() {
         "the lock goes with the release, wherever the record went"
     );
 }
+
+#[test]
+fn a_snapshot_that_is_not_text_is_refused_leaving_the_file_and_no_lock() {
+    let root = folder();
+    let source = instance(root.path());
+    let id = NativeId("T-1".to_owned());
+    let refused = source
+        .restore_item(MetadataRecord::Task, &id, &[0xff, 0xfe, 0x00])
+        .expect_err("not UTF-8");
+    assert!(
+        matches!(&refused, onetaskgraph_plugin_api::SourceError::Malformed { message }
+            if message.contains("not UTF-8")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("tasks/T-1.md")).unwrap(),
+        TASK
+    );
+    assert!(
+        !root.path().join("tasks/T-1.md.lock").exists(),
+        "the hold is released"
+    );
+}
+
+#[tokio::test]
+async fn a_removal_that_would_read_back_as_more_than_that_key_gone_writes_nothing() {
+    // Another entry aliases the one removed, so taking it off would change that entry too.
+    let root = tempfile::tempdir().expect("a folder");
+    fs::create_dir_all(root.path().join("projects")).expect("projects");
+    let text = "---\ntitle: P\nstatus: todo\nmetadata:\n  \"onetaskgraph.creating\": &a {\"x\": 1}\n  \
+                keep.me: *a\n---\nThe plan.\n";
+    let path = root.path().join("projects/P.md");
+    fs::write(&path, text).expect("a project");
+    let refused = instance(root.path())
+        .remove_record_metadata(
+            MetadataRecord::Project,
+            &NativeId("P".to_owned()),
+            &onetaskgraph_plugin_api::MetadataKey::creating(),
+        )
+        .await
+        .expect_err("it would read back otherwise");
+    assert!(
+        matches!(&refused, onetaskgraph_plugin_api::SourceError::Refused { message }
+            if message.contains("cannot remove") && message.contains("more than that one key")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        text,
+        "nothing was written"
+    );
+}
