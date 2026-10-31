@@ -2487,19 +2487,25 @@ impl Engine {
         {
             return Ok(false);
         }
+        // Held to the boundary as the link written at the end is: an intent is a write to the
+        // item copied, and one its source may not take refuses the copy before anything else.
+        self.at_write(
+            source,
+            &item.source.to_string(),
+            &WriteTarget::Existing(&item.source.native),
+        )
+        .await?;
         let earlier = intent::held(&task.metadata, &item.to);
         let replaces = link_of(&task.metadata, &item.to);
         let key = intent::key(&item.source, &item.to, replaces.as_ref());
         let local = Self::is_local(task);
-        // A source that will not hold the key — a file it cannot edit narrowly — copies as it
-        // always did, with no intent, as it records no link either.
+        // A source that will not hold the key — a file it cannot edit narrowly, an item it no
+        // longer answers for, a write it drops — copies as it always did, with no intent, as it
+        // then records no link either. Only another attempt's live lease refuses.
         let taken = match self.take_intent(&item.source, &item.to, &key, None).await {
             Ok(taken) => taken,
-            Err(EngineError::SourceRefused {
-                error: SourceError::Refused { .. } | SourceError::Malformed { .. },
-                name,
-            }) if name == item.source.source.as_str() => return Ok(false),
-            Err(error) => return Err(error),
+            Err(error @ EngineError::CreateInProgress { .. }) => return Err(error),
+            Err(_) => return Ok(false),
         };
         let destination = self.writable(&item.to)?;
         item.relist = destination.source().create_key_lags() && (!local || earlier.is_some());

@@ -181,6 +181,8 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         (
             "IssueCreateInput",
             &[
+                // The caller-chosen id a create safe to retry sends its key as.
+                "id",
                 "teamId",
                 "title",
                 "description",

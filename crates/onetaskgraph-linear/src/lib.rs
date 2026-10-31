@@ -3577,9 +3577,10 @@ impl TaskSource for LinearSource {
         // keys: a key of either name travelling beside the field would be a second answer to
         // the same question, and the field is the one the contract names.
         let mut metadata = write.item.metadata.clone();
-        // A create's key is the issue's own id here, never a member of its slot.
+        // A create's key is the issue's own id here, and stays in its slot as every source keeps
+        // it, so a later copy reads the issue as the one it wrote.
         let create_key = metadata
-            .remove(MetadataKey::CREATE_KEY)
+            .get(MetadataKey::CREATE_KEY)
             .and_then(|key| key.as_str().map(str::to_owned))
             .filter(|_| write.target.is_none());
         set_task_list(&mut metadata, TaskRef::DELIVERS_KEY, &write.item.delivers);
@@ -3629,8 +3630,7 @@ impl TaskSource for LinearSource {
                 if let Some(key) = &create_key
                     && let Some(held) = self.get_task(&NativeId(key.clone())).await?
                 {
-                    let mut item = write.item.clone();
-                    item.metadata.remove(MetadataKey::CREATE_KEY);
+                    let item = write.item.clone();
                     return self
                         .write_task(&ItemWrite {
                             target: Some(held.id),

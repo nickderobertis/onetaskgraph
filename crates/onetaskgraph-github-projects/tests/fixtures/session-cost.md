@@ -201,6 +201,14 @@ before/after actual entry-point loopback pairs produced identical request sequen
 The final entry-point test also reconciles every emitted model with that constant. The measurement above remains explicitly about `ca86536a`; no live measurement
 of those later edits is claimed.
 
+## A create safe to retry, 2026-10-30
+
+`ISSUES_BY_CREATION` joined the source's documents: a repository's issues newest first,
+which a retried copy lists to find the issue its earlier attempt created by its create
+key. The session's reconciliation of every document's node count and point cost now
+covers it too, so the record moved by that one reconciliation call — 217 requests and
+100 more nodes — and by nothing a credentialed session sends.
+
 ## Verification and scoped suppressions
 
 Focused checks passed on the measured code: all nine actual-entry-point loopback

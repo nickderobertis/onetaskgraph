@@ -367,7 +367,7 @@ fn run_pair(scenario: &str) {
         // Every read document of `graphql::DOCUMENTS` is reconciled, the closed-items read of
         // `task status reconcile` and the read by issue reference of `task status complete` among
         // them.
-        assert!(said.contains("26 documents agreed"), "{said}");
+        assert!(said.contains("27 documents agreed"), "{said}");
         assert!(!outputs[1].status.success());
         assert!(
             String::from_utf8_lossy(&outputs[1].stderr)
