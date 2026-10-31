@@ -75,8 +75,21 @@ impl Holds {
                         .and_then(|modified| modified.elapsed().ok())
                         .is_some_and(|age| age > STALE);
                     if stale {
-                        let _ = std::fs::remove_file(&lock);
-                        continue;
+                        // Taken over by removing it; one this process may not remove is refused
+                        // rather than tried again for ever.
+                        match std::fs::remove_file(&lock) {
+                            Ok(()) => continue,
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                            Err(error) => {
+                                return Err(SourceError::Unavailable {
+                                    message: format!(
+                                        "{} is a dead process's lock that could not be removed: \
+                                         {error}; next: remove it once no copy is running",
+                                        lock.display()
+                                    ),
+                                });
+                            }
+                        }
                     }
                     if started.elapsed() > STALE * 2 {
                         return Err(SourceError::Unavailable {

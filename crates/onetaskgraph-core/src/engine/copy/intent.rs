@@ -153,6 +153,14 @@ impl Intent {
     }
 }
 
+/// What a write of a lease is for: renewing it before a destination write, which an intent no
+/// longer this attempt's or an item gone refuses, or giving it up, which they leave alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeaseChange {
+    Renew,
+    Release,
+}
+
 /// What resolving an earlier attempt's intent may do beyond reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::engine) enum Resolving {
@@ -566,7 +574,8 @@ impl Engine {
     /// Renew this attempt's intent to create `id`'s counterpart in `destination`, before a
     /// destination write it sends after its create — refusing as `create-in-progress`, and
     /// writing nothing more, once the intent no longer names this attempt: another attempt holds
-    /// it, or took it over and has since settled or released it.
+    /// it, or took it over and has since settled or released it; and refusing as the item's
+    /// absence once its source no longer holds it. `Ok` is a lease the source has written.
     pub(in crate::engine) async fn renew_intent(
         &self,
         level: Level,
@@ -574,7 +583,8 @@ impl Engine {
         destination: &SourceName,
     ) -> Result<(), EngineError> {
         let until = now() + self.create_settings(&id.source).lease();
-        self.lease_until(level, id, destination, until, true).await
+        self.lease_until(level, id, destination, until, LeaseChange::Renew)
+            .await
     }
 
     /// Give up this attempt's lease on its intent to create `id`'s counterpart in `destination`,
@@ -586,24 +596,25 @@ impl Engine {
         id: &GlobalId,
         destination: &SourceName,
     ) -> Result<(), EngineError> {
-        self.lease_until(level, id, destination, now(), false).await
+        self.lease_until(level, id, destination, now(), LeaseChange::Release)
+            .await
     }
 
-    /// Set this attempt's lease on its intent for `destination` to end at `until`; when it is
-    /// not this attempt's, refuse as `create-in-progress` if `refuses`, else leave it.
+    /// Set this attempt's lease on its intent for `destination` to end at `until`, as `change`
+    /// says what an intent no longer this attempt's, or an item gone, comes to.
     async fn lease_until(
         &self,
         level: Level,
         id: &GlobalId,
         destination: &SourceName,
         until: DateTime<Utc>,
-        refuses: bool,
+        change: LeaseChange,
     ) -> Result<(), EngineError> {
         let source = self.writable(&id.source)?;
         let (metadata, _lock) = self.locked_read(source, level, id).await?;
         let mut held = match self.held_or_refused(source, id, &metadata, destination)? {
             Some(held) if held.attempt == self.attempt => held,
-            _ if !refuses => return Ok(()),
+            _ if change == LeaseChange::Release => return Ok(()),
             Some(held) => {
                 return Err(EngineError::CreateInProgress {
                     item: id.clone(),
@@ -629,9 +640,14 @@ impl Engine {
             Some(&held),
         )
         .unwrap_or(Value::Null);
-        set_link_versioned(source, level, &id.native, &MetadataKey::creating(), &value)
-            .await
-            .map_err(|error| refused(source, error))?;
+        let written =
+            set_link_versioned(source, level, &id.native, &MetadataKey::creating(), &value)
+                .await
+                .map_err(|error| refused(source, error))?;
+        // A source answering that it holds no such item wrote no lease: a renewal stops there.
+        if written.is_none() && change == LeaseChange::Renew {
+            return Err(missing(level, id));
+        }
         Ok(())
     }
 

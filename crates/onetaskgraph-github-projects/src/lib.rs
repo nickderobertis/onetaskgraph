@@ -13452,6 +13452,7 @@ impl TaskSource for GitHubProjectsSource {
         let wanted = Value::String(key.to_owned());
         let mut found = Vec::new();
         let mut after: Option<String> = None;
+        let mut followed = std::collections::HashSet::new();
         loop {
             let data = self
                 .graphql(
@@ -13507,13 +13508,16 @@ impl TaskSource for GitHubProjectsSource {
             if older || !next {
                 return Ok(found);
             }
-            // A page that says another follows names where it starts, and never the page just
-            // read: anything else would ask for the same page again for ever.
+            // A page that says another follows names where it starts, and never a page already
+            // read: anything else would ask for the same pages again for ever.
             let cursor = issues
                 .pointer("/pageInfo/endCursor")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
-            if cursor.is_none() || cursor == after {
+            if cursor
+                .as_ref()
+                .is_none_or(|cursor| !followed.insert(cursor.clone()))
+            {
                 return Err(SourceError::Malformed {
                     message: format!(
                         "GitHub answered a page of repository {}'s issues that says another \
