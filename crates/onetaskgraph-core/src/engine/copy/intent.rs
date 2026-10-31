@@ -154,10 +154,16 @@ pub(crate) fn held(
     metadata: &BTreeMap<String, Value>,
     destination: &SourceName,
 ) -> Result<Option<Intent>, String> {
-    let Some(entry) = metadata
-        .get(MetadataKey::CREATING_KEY)
-        .and_then(|creating| creating.get(destination.as_str()))
-    else {
+    let Some(creating) = metadata.get(MetadataKey::CREATING_KEY) else {
+        return Ok(None);
+    };
+    let Some(entries) = creating.as_object() else {
+        return Err(format!(
+            "its {} is not an object of intents by destination",
+            MetadataKey::CREATING_KEY
+        ));
+    };
+    let Some(entry) = entries.get(destination.as_str()) else {
         return Ok(None);
     };
     serde_json::from_value(entry.clone())

@@ -496,3 +496,101 @@ fn a_lock_a_dead_copy_left_beside_the_file_is_taken_over_and_released() {
             .is_none()
     );
 }
+
+#[test]
+fn a_retry_pages_back_through_the_repository_to_the_issue_its_key_names_and_no_further() {
+    let stores = Stores::new();
+    stores.board.drop_response_once("createIssue");
+    let failed = stores.run(&["task", "copy", NOTE, "--to", "board"], None);
+    assert_ne!(failed.status.code(), Some(0), "{}", stderr(&failed));
+    // A newer issue of the same repository, so the earlier attempt's is on a later page.
+    std::fs::write(
+        stores.notes.join("tasks/B.md"),
+        "---\ntitle: Task B\nstatus: todo\n---\nAnother.\n",
+    )
+    .expect("another task");
+    stores.json(&["task", "copy", "notes:B", "--to", "board"]);
+    stores.board.answer_issue_listings_in_pages_of(1);
+    let before = stores.board.served().len();
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "board"]);
+    assert_eq!(copied["items"][0]["via"], "intent", "{copied:#}");
+    assert_eq!(stores.board.items_titled("Task A").len(), 1);
+    let cursors: Vec<Value> = stores.board.served()[before..]
+        .iter()
+        .filter(|(document, variables)| lists_by_key(document, variables))
+        .map(|(_, variables)| variables["after"].clone())
+        .collect();
+    // Task B's page, Task A's, and the first issue created before the intent's window, where
+    // the listing stops: each page from the cursor the one before it answered.
+    assert_eq!(
+        cursors,
+        vec![Value::Null, json!("1"), json!("2")],
+        "{cursors:?}"
+    );
+}
+
+#[test]
+fn an_intent_entry_that_is_not_one_is_refused_and_nothing_is_created() {
+    let stores = Stores::new();
+    std::fs::write(
+        stores.notes.join("tasks/A.md"),
+        "---\ntitle: Task A\nstatus: todo\nmetadata:\n  onetaskgraph.creating:\n    board: 5\n\
+         ---\nThe body.\n",
+    )
+    .expect("a malformed intent");
+    let output = stores.run(&["--json", "task", "copy", NOTE, "--to", "board"], None);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("onetaskgraph.creating"),
+        "names the entry: {}",
+        stderr(&output)
+    );
+    assert!(stores.board.items_titled("Task A").is_empty());
+}
+
+#[test]
+fn a_linear_create_answered_as_an_id_already_held_is_read_by_that_id_and_written_whole() {
+    let stores = Stores::new();
+    let stopped = stores.run(
+        &["task", "copy", NOTE, "--to", "linear"],
+        Some("after-intent"),
+    );
+    assert_ne!(stopped.status.code(), Some(0));
+    let key = stores.source_metadata()["onetaskgraph.creating"]["linear"]["key"]
+        .as_str()
+        .expect("the intent's key")
+        .to_owned();
+    // The earlier attempt's `issueCreate` lands only once the retry has looked for it and not
+    // found it: the retry's own create, sent with the same id, is answered as an id taken.
+    let landed = key.clone();
+    stores.linear.after_request(
+        move |document, variables| {
+            document == onetaskgraph_linear::graphql::ISSUE && variables["id"] == json!(landed)
+        },
+        0,
+        move |workspace| {
+            workspace.add_issue(json!({
+                "id": key, "title": "Task A, as first sent", "content": "The body.",
+                "status": {"name": "Todo", "category": "todo"},
+                "_linear_state": {"name": "Todo", "type": "unstarted"},
+                "labels": [], "priority": "none",
+                "metadata": {"onetaskgraph.origin": NOTE},
+            }));
+        },
+    );
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "linear"]);
+    let destination = copied["items"][0]["destination"].as_str().expect("an id");
+    let landed = stores.carrying_origin("linear");
+    assert_eq!(landed.len(), 1, "one issue: {landed:#?}");
+    let shown = stores.json(&["task", "show", destination]);
+    assert_eq!(
+        shown["items"][0]["item"]["title"], "Task A",
+        "written whole: {shown:#}"
+    );
+    assert!(
+        stores
+            .source_metadata()
+            .get("onetaskgraph.creating")
+            .is_none()
+    );
+}

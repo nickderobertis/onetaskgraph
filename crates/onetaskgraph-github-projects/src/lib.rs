@@ -13468,31 +13468,42 @@ impl TaskSource for GitHubProjectsSource {
                             repository.slug()
                         ),
                     })?;
-            let mut older = false;
-            for node in issues
+            let malformed = |what: &str| SourceError::Malformed {
+                message: format!(
+                    "GitHub answered a page of repository {}'s issues {what}",
+                    repository.slug()
+                ),
+            };
+            let nodes = issues
                 .get("nodes")
                 .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
-                if let (Some(since), Some(created)) = (since, optional_time(node, "createdAt")?)
-                    && created < since
-                {
+                .ok_or_else(|| malformed("with no list of issues"))?;
+            let mut older = false;
+            for node in nodes {
+                let id = node
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| malformed("holding an issue with no id"))?;
+                let created = optional_time(node, "createdAt")?
+                    .ok_or_else(|| malformed("holding an issue with no creation time"))?;
+                if since.is_some_and(|since| created < since) {
                     older = true;
                     break;
                 }
-                let body = node.get("body").and_then(Value::as_str).map(str::to_owned);
+                let body = match node.get("body") {
+                    Some(Value::String(body)) => Some(body.clone()),
+                    Some(Value::Null) => None,
+                    _ => return Err(malformed("holding an issue with no body member")),
+                };
                 let (_, metadata) = metadata_body(body)?;
-                if metadata.get(MetadataKey::CREATE_KEY) == Some(&wanted)
-                    && let Some(id) = node.get("id").and_then(Value::as_str)
-                {
+                if metadata.get(MetadataKey::CREATE_KEY) == Some(&wanted) {
                     found.push(NativeId(id.to_owned()));
                 }
             }
             let next = issues
                 .pointer("/pageInfo/hasNextPage")
                 .and_then(Value::as_bool)
-                .unwrap_or(false);
+                .ok_or_else(|| malformed("that does not say whether another follows"))?;
             if older || !next {
                 return Ok(found);
             }

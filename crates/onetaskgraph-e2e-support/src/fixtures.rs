@@ -1121,6 +1121,8 @@ struct GitHubBoard {
     unlisted: Vec<Value>,
     /// Whether every issue created from here on starts unlisted.
     unlist_new: bool,
+    /// The most issues one page of `Repository.issues` answers, when fewer than asked for.
+    issue_page_rows: Option<usize>,
     canonical_issue_urls: bool,
     /// Whether `createIssue` answers without the issue's URL, so a writer learns it only by
     /// reading the issue.
@@ -1876,6 +1878,12 @@ impl GitHubBoardFields {
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `drop_response_once`.
     pub fn unlist_new_issues(&self, unlisted: bool) {
         self.board.lock().unwrap().unlist_new = unlisted;
+    }
+
+    /// Answer every page of `Repository.issues` with at most `rows` issues.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `answer_search_pages_of`.
+    pub fn answer_issue_listings_in_pages_of(&self, rows: usize) {
+        self.board.lock().unwrap().issue_page_rows = Some(rows);
     }
 
     /// List one issue [`Self::unlist_new_issues`] left out of `Repository.issues`.
@@ -3701,6 +3709,7 @@ fn github_projects_board_at(
         owed_error_objects: Vec::new(),
         unlisted: Vec::new(),
         unlist_new: false,
+        issue_page_rows: None,
         closed_filter_leaks: false,
         closed_cursor_stalls: false,
         erring_beside: Vec::new(),
@@ -5003,13 +5012,31 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         listed.sort_by_key(|item| {
             std::cmp::Reverse(github_number(item["id"].as_str().unwrap_or_default()))
         });
-        let nodes: Vec<Value> = listed
+        // One page of them, from the cursor given, at most as many as were asked for — fewer
+        // when this board answers listings in pages of its own.
+        let start = variables["after"]
+            .as_str()
+            .and_then(|cursor| cursor.parse::<usize>().ok())
+            .unwrap_or(0);
+        let asked = variables["first"]
+            .as_u64()
+            .map_or(100, |first| usize::try_from(first).unwrap_or(100));
+        let rows = board.issue_page_rows.map_or(asked, |rows| rows.min(asked));
+        let end = (start + rows).min(listed.len());
+        let more = end < listed.len();
+        let nodes: Vec<Value> = listed[start.min(end)..end]
             .iter()
-            .map(|item| json!({"id":item["id"],"createdAt":item.get("createdAt").cloned().unwrap_or(Value::Null),
-                               "body":item["body"]}))
+            .map(|item| {
+                json!({"id":item["id"],
+                               // When GitHub created it: what a create here recorded, and for an
+                               // issue the dataset seeded, a time long before any test ran.
+                               "createdAt":item.get("listedCreatedAt").cloned()
+                                   .unwrap_or_else(|| json!("2026-01-01T00:00:00Z")),
+                               "body":item["body"]})
+            })
             .collect();
         return json!({"repository":{"issues":{"nodes":nodes,
-            "pageInfo":{"hasNextPage":false,"endCursor":null}}}});
+            "pageInfo":{"hasNextPage":more,"endCursor":more.then(|| end.to_string())}}}});
     }
     if query.contains("repository(owner:$owner,name:$name)") {
         assert_eq!(variables["owner"], board.repository_owner());
@@ -5040,11 +5067,16 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         if board.unlist_new {
             board.unlisted.push(json!(id));
         }
+        // `Repository.issues` reports when GitHub created the issue, on the wall clock a
+        // retried copy's lookup by create key compares with.
+        let listed_created_at =
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let at = board.tick();
         let mut created = json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue",
             "title":input["title"],"body":input["body"],"state":"OPEN","reason":null,
             "parent":Value::Null,"repo":repo,"status":"Todo",
-            "origin":"","labels":[],"updatedAt":at});
+            "origin":"","labels":[],"updatedAt":at,
+            "listedCreatedAt": listed_created_at});
         if board.files_without_status {
             created["status"] = Value::Null;
         }

@@ -124,6 +124,7 @@ pub struct CopyConditions {
     pub status: Vec<StatusCategory>,
     /// What happens to a counterpart at another category; `None` is [`Otherwise::Refuse`].
     /// Refused, as [`EngineError::OtherwiseWithoutStatus`], beside an empty `status`.
+    // llmlint: ignore[invalid_states_unrepresentable] The contract this lands names `--otherwise` as a flag of its own, taken only beside `--when-destination-status` and refused before any request without it; both SDKs map one keyword to each flag, so this request mirrors them field for field as `create` beside `match_by` does. The one combination that means nothing, `otherwise` with no category, is refused by `Engine::copy` as `EngineError::OtherwiseWithoutStatus` before anything is read, and `a_status_guard_beside_preserve_destination_and_otherwise_alone_are_refused_before_any_request` drives it.
     pub otherwise: Option<Otherwise>,
     /// The priorities a counterpart's priority has to be at for the copy to write the source's
     /// priority over it; at any other the counterpart keeps its own, and every other field is

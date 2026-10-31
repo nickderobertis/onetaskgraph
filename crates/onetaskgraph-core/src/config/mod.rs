@@ -102,10 +102,12 @@ pub struct SourceConfig {
 pub struct CreateSettings {
     /// Seconds an intent to create stays the holder's own; 120 when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    // llmlint: ignore[invalid_states_unrepresentable] Schema DTO, as every plugin configuration here is: the configuration schema both SDKs are generated from describes these as whole numbers, and `CreateSettings::checked` refuses zero and anything past `MAX_SECONDS` when the configuration loads, naming the key, before any engine is built — `the_create_settings_are_shown_by_their_layer_and_refused_out_of_range` drives it.
     pub create_lease_seconds: Option<u64>,
     /// Seconds after an intent was first taken that a retry waits for the earlier create to be
     /// listed; 120 when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    // llmlint: ignore[invalid_states_unrepresentable] As `create_lease_seconds` above.
     pub create_quiescence_seconds: Option<u64>,
 }
 
