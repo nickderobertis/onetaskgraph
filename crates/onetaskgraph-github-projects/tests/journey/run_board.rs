@@ -396,6 +396,7 @@ pub async fn setup_template(
     let id = found
         .pointer("/data/repositoryOwner/projectV2/id")
         .and_then(Value::as_str)
+        .filter(|id| usable_id(id))
         .ok_or_else(|| format!("{owner} has no board #{template} this credential can see"))?
         .to_owned();
     const LISTING_PAGES: usize = 1_000;

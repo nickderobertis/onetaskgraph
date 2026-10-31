@@ -273,7 +273,8 @@ pub const TEMPLATE_DRAFTS: u64 = 60;
 
 const _: () = assert!(TEMPLATE_DRAFTS >= quota::MINIMUM_INITIAL_ITEMS);
 
-/// The title every template draft item carries, so the fill recipe counts only its own.
+/// The title the fill recipe gives each draft item it adds to the template. It counts every
+/// draft item the template holds, whoever added it, because a copy carries them all.
 pub const TEMPLATE_DRAFT_TITLE: &str = "onetaskgraph live template draft";
 
 /// The nominated template's id and its owner's, which a copy needs both of.
