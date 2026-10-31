@@ -8,11 +8,7 @@
 // request line `{"query", "operationName", "variables", "coerce"}` with `{"errors":[…]}`, empty
 // when the request is valid. A failure that is not a refusal answers `{"internal": "<what>"}`.
 //
-// graphql-js is not a dependency of the workspace's `package.json`: that file is an input of
-// every project in the graph, so naming it there would select every crate's tests — the live
-// lanes included — for a change to this one crate's test double. It is npm's own published
-// tarball, committed beside this file and held to the integrity npm records for it, and is
-// unpacked once into the ignored `node_modules/graphql` here, where nothing else resolves it.
+// graphql-js is imported from the pinned tarball beside this file (see `mod.rs` for why).
 
 import { createHash } from "node:crypto";
 import {

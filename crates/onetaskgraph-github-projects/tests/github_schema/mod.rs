@@ -14,9 +14,7 @@
 //! its variables (`CoerceVariableValues`, §6.1.2). It is not a Rust crate because none fits this
 //! workspace's dependency policy unchanged: `apollo-compiler` brings second versions of
 //! `bitflags`, `windows-sys` and `hashbrown`, `bluejay-validator` a second `unicode-width`, and
-//! `graphql-tools` a licence the policy does not admit. A hand-written validator over
-//! `graphql-parser` came before all of them, and kept missing rules: nested selection merging,
-//! a fragment cycle that overflowed the stack, duplicate input fields a parser collapsed.
+//! `graphql-tools` a licence the policy does not admit.
 //!
 //! It is not in the workspace's `package.json` either, because that file is an input of every
 //! project in the graph: naming it there selects every crate's tests, the live lanes included,
