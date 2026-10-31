@@ -20,9 +20,20 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def target_directory() -> Path:
+    """The target directory a build here writes: CARGO_TARGET_DIR's, else this checkout's.
+
+    maturin stages each artifact under <target directory>/maturin while it builds, so the
+    lock is the target directory's: builds into one directory wait on each other, and a
+    build given a directory of its own (the release-cd journeys') waits on nothing else.
+    """
+    configured = os.environ.get('CARGO_TARGET_DIR')
+    return Path(configured).resolve() if configured else ROOT / 'target'
+
+
 @contextmanager
 def cli_wheel_lock() -> Iterator[None]:
-    path = ROOT / 'target' / '.cli-wheel-build.lock'
+    path = target_directory() / '.cli-wheel-build.lock'
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a+b') as handle:
         if os.name == 'nt':

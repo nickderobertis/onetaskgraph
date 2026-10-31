@@ -4,6 +4,54 @@ use std::sync::{Arc, Mutex};
 /// The journey every create made while a lane prepares its standing set is filed under:
 /// in an ordinary journal it is a cold rebuild, reported beside that pass and never in it.
 pub const COLD_REBUILD: &str = "cold-rebuild";
+/// The variable `scripts/ci-job.sh` sets to `1` on test-linux, where an instrumented run may
+/// stand in for a live crate's `test`. A journal an instrumented build under `llvm-cov-target`
+/// wrote is then filed beside the plain build; one a plain build wrote stays where it is.
+pub const TESTS_UNDER_COVERAGE: &str = "ONETASKGRAPH_TESTS_UNDER_COVERAGE";
+
+/// The build directory a journal belongs under: the test executable's own, or, under
+/// [`TESTS_UNDER_COVERAGE`], the plain build of the same profile, which is where the budgets'
+/// report runs read it. The same rule as `onetaskgraph_e2e_support::telemetry::build_directory`,
+/// restated because a plugin's tests may not depend on the engine's harness;
+/// `onetaskgraph-linear-e2e`'s `journal_build_directory_agrees_with_the_harness` holds it, and
+/// [`under_coverage`] beside it, to the harness's answers.
+pub fn build_directory(
+    executable: &std::path::Path,
+    under_coverage: bool,
+) -> Option<std::path::PathBuf> {
+    let mut directory = executable.parent()?.to_path_buf();
+    if directory.file_name().is_some_and(|leaf| leaf == "deps") {
+        directory.pop();
+    }
+    if under_coverage
+        && let (Some(profile), Some(instrumented)) = (directory.file_name(), directory.parent())
+        && instrumented
+            .file_name()
+            .is_some_and(|leaf| leaf == "llvm-cov-target")
+        && let Some(target) = instrumented.parent()
+    {
+        return Some(target.join(profile));
+    }
+    Some(directory)
+}
+
+/// Whether [`TESTS_UNDER_COVERAGE`] is set: `1`, or unset or empty, exactly as
+/// `scripts/live-crate-test.sh` and `onetaskgraph_e2e_support::telemetry::under_coverage` read it.
+///
+/// # Errors
+///
+/// Any other value, named, because it is neither of the two modes.
+pub fn under_coverage(value: Option<&std::ffi::OsStr>) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some(value) if value.is_empty() => Ok(false),
+        Some(value) if value == "1" => Ok(true),
+        Some(value) => Err(format!(
+            "{TESTS_UNDER_COVERAGE} is {value:?}; it is 1 or unset (scripts/live-crate-test.sh)"
+        )),
+    }
+}
+
 #[derive(Clone)]
 pub struct Journal {
     lane: &'static str,
@@ -106,10 +154,11 @@ impl Journal {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| {
                 let exe = std::env::current_exe().expect("test executable");
-                exe.parent()
-                    .expect("deps")
-                    .parent()
-                    .expect("profile")
+                let under_coverage =
+                    under_coverage(std::env::var_os(TESTS_UNDER_COVERAGE).as_deref())
+                        .unwrap_or_else(|problem| panic!("{problem}"));
+                build_directory(&exe, under_coverage)
+                    .expect("a test executable sits inside a build directory")
                     .join("telemetry")
                     .join(if self.lane == "plugin" {
                         "onetaskgraph-linear"

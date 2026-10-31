@@ -10,8 +10,19 @@
 # for the host, which is the variable under test. Case 1 refuses to let the rest pass
 # vacuously, because a simulation that did not take would look exactly like a pass.
 #
-# The cost is stated rather than discovered: about five minutes, half of it
-# scripts/test-distribution.sh, paid only when scripts/ changes.
+# The distribution journey is not re-run whole here. Where it runs plainly — test-macos,
+# test-windows and `just check` — this runs scripts/test-python-call-sites.sh in its place:
+# every call site that journey reaches which starts Python, through the real scripts, in
+# about a minute rather than its five. Where the journey runs under this check — test-linux,
+# or `check-relative-interpreter.sh scripts/test-distribution.sh` — that targeted pass runs
+# after it, and the two are compared: a script the journey started Python from through the
+# relative interpreter that the targeted pass did not fails this check, naming it.
+# scripts/check-python-call-sites-enforced.sh watches that comparison refuse a missed site.
+#
+# A call site is compared by the script that started the interpreter: its interpreter is
+# what that script resolved — through one variable, or bash's per-process hash of python3 —
+# so the script is where the defect lives. The program each started is recorded beside it
+# (scripts/python-call-site.sh) and named when one is missed.
 set -euo pipefail
 
 fatal() {
@@ -49,7 +60,9 @@ readonly real_python3
 # root — the shape the defect needs — on all three platforms and without a path this script
 # has to compute. A scratch directory elsewhere would need a relative spelling of $TMPDIR,
 # which on Windows may be on another drive and have none at all.
-readonly probe="target/relative-interpreter-probe"
+# One per process: scripts:distribution-test runs this check too, beside scripts:test, where
+# scripts/ci-job.sh has the distribution journey run under it (see the list below).
+readonly probe="target/relative-interpreter-probe-$$"
 cleanup() {
   rm -rf "$ROOT/$probe" || {
     echo "check-relative-interpreter: could not remove the probe interpreter at $probe" >&2
@@ -65,7 +78,10 @@ rm -rf "$ROOT/$probe" || fatal \
 mkdir -p "$ROOT/$probe/bin" || fatal \
   "could not create the probe interpreter directory at $probe" \
   "check the permissions of $ROOT/target and 'df -h' for free space, then rerun"
-printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$real_python3" > "$ROOT/$probe/bin/python3" || fatal \
+# The shim also records each call site that reached it, for the comparison at the end: the
+# script that started it, and the program it was given (scripts/python-call-site.sh).
+printf '#!/usr/bin/env bash\n. "%s" "%s" "$@"\nexec "%s" "$@"\n' \
+  "$ROOT/scripts/python-call-site.sh" "$ROOT/$probe" "$real_python3" > "$ROOT/$probe/bin/python3" || fatal \
   "could not write the probe interpreter at $probe/bin/python3" \
   "check the permissions of $ROOT/$probe and 'df -h' for free space, then rerun"
 chmod +x "$ROOT/$probe/bin/python3" || fatal \
@@ -119,11 +135,42 @@ esac
 # a PATH of this check's making, which is neither an input of the recipes that own them nor
 # something Nx can key a cache on — so a cached hit from `just distribution-test` or `just
 # script-check` would be a claim about a run made under some other PATH entirely.
+#
+# The scripts are the arguments, or all three. Where scripts/ci-job.sh sets
+# ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1, scripts:distribution-test runs the
+# distribution journey under this check itself (scripts/test-distribution.sh hands itself
+# here), so it is not run a second time from the list; the variable is cleared before any
+# script runs, so the journey run here runs itself.
+readonly journey=scripts/test-distribution.sh targeted=scripts/test-python-call-sites.sh
+if [ "$#" -gt 0 ]; then
+  scripts=("$@")
+elif [ "${ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER:-}" = 1 ]; then
+  scripts=(scripts/check-guard-path-spelling.sh scripts/check-live-lane-selection.sh)
+else
+  scripts=("$targeted" scripts/check-guard-path-spelling.sh scripts/check-live-lane-selection.sh)
+fi
+unset ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER
+# The journey whole is always followed by the targeted pass, which the comparison needs.
+compare=false
+for script in "${scripts[@]}"; do
+  [ "$script" != "$journey" ] || compare=true
+done
+if "$compare"; then
+  listed=false
+  for script in "${scripts[@]}"; do
+    [ "$script" != "$targeted" ] || listed=true
+  done
+  "$listed" || scripts+=("$targeted")
+fi
+export ONETASKGRAPH_RELATIVE_INTERPRETER_PROBE="$probe"
+for script in "${scripts[@]}"; do
+  [ -f "$script" ] || fatal \
+    "$script is not a script of this repository" \
+    "name scripts by their path from the repository root, e.g. scripts/test-distribution.sh"
+done
 failures=0
-for script in \
-  scripts/test-distribution.sh \
-  scripts/check-guard-path-spelling.sh \
-  scripts/check-live-lane-selection.sh; do
+for script in "${scripts[@]}"; do
+  basename "$script" .sh >"$ROOT/$probe/current"
   if output="$(bash "$script" 2>&1)"; then
     continue
   fi
@@ -140,4 +187,24 @@ if [ "$failures" -ne 0 ]; then
   echo "check-relative-interpreter: directory and runs it from another. Resolve it once and" >&2
   echo "check-relative-interpreter: absolutely where the script resolves it, as its siblings do." >&2
   exit 1
+fi
+
+# The comparison: every script the journey started Python from must have started it in the
+# targeted pass too. Both records are this run's, read only once both passed.
+if "$compare"; then
+  record() {
+    if [ -f "$ROOT/$probe/call-sites.$1" ]; then cut -f1 "$ROOT/$probe/call-sites.$1" | sort -u; fi
+  }
+  missed="$(comm -23 <(record "$(basename "$journey" .sh)") <(record "$(basename "$targeted" .sh)"))"
+  if [ -n "$missed" ]; then
+    echo "check-relative-interpreter: $journey started Python from call sites $targeted did not reach:" >&2
+    while IFS= read -r caller; do
+      programs="$(awk -F'\t' -v caller="$caller" '$1 == caller { print $2 }' \
+        "$ROOT/$probe/call-sites.$(basename "$journey" .sh)" | sort -u | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
+      echo "    $caller (running $programs)" >&2
+    done <<<"$missed"
+    echo "check-relative-interpreter: next: add each to $targeted, run as the journey runs it," >&2
+    echo "check-relative-interpreter: so test-macos and test-windows still put it to a relative interpreter." >&2
+    exit 1
+  fi
 fi

@@ -121,12 +121,16 @@ fn real_nx_orders_both_contributions_and_keeps_one_main_task() {
             .count(),
         1
     );
+    // The suite's loopback binaries run beside the plugin's main session: its test target does
+    // not wait on the plugin's, and the asset journey itself waits for the main record before it
+    // makes a request. Budgets, which report the session, still wait on both.
     let dependencies = &graph["tasks"]["dependencies"];
     assert!(
-        dependencies["onetaskgraph-github-projects-e2e:test"]
+        !dependencies["onetaskgraph-github-projects-e2e:test"]
             .as_array()
             .unwrap()
-            .contains(&json!("onetaskgraph-github-projects:test"))
+            .contains(&json!("onetaskgraph-github-projects:test")),
+        "the suite's loopback binaries must not wait behind the plugin's main session"
     );
     let project: Value = serde_json::from_slice(
         &std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("project.json"))

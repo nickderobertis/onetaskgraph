@@ -83,6 +83,11 @@ CLEARERS = {
         "It drives scripts/check-warm-rust-cache-reuse.sh behind a stand-in cargo, and one edit "
         "dropping the stand-in from PATH would make that check's builds for real, from scripts:test"
     ),
+    Path("scripts/pr-build-commands.sh"): (
+        "It prints every build test-linux makes, a live crate's whole package among them, for "
+        "scripts/check-warm-rust-cache-reuse.sh to run, and one edit dropping `--no-run` would "
+        "make those lines run the live journeys"
+    ),
     Path("scripts/check-warm-rust-cache-reuse-real.sh"): (
         "It drives the real scripts/warm-rust-cache.sh and scripts/check-warm-rust-cache-reuse.sh "
         "with the real cargo over a scratch workspace, and one edit pointing them at this one "
@@ -344,19 +349,25 @@ NOT_DEMANDED = declared_value("NOT_DEMANDED")
 workflow = read(WORKFLOW, "the workflow that runs the required check")
 code = without_comments(workflow)
 # Steps, so a credential can be attributed to the lane that carries it. A step begins at
-# the one indentation `- name:` uses inside a job's `steps:` list.
-steps = re.split(r"(?m)^      - (?=name:|uses:)", code)
+# the one indentation `- name:` uses inside a job's `steps:` list, and each is read with the
+# `runs-on` of the job it is in: a job that is not a matrix is one lane by itself.
+lanes = []
+for job in re.split(r"(?m)^  (?=[a-z][a-z0-9-]*:[ \t]*$)", code):
+    runner = re.search(r"(?m)^    runs-on:[ \t]*(\S+)[ \t]*$", job)
+    for step in re.split(r"(?m)^      - (?=name:|uses:)", job):
+        lanes.append((runner.group(1) if runner else "", step))
 # The one credentialed step that opens no session: the janitor's cleanup of a cancelled run,
 # which reads no ONETASKGRAPH_LIVE_REQUIRED and no nomination it could skip for. Exactly a step
 # running this command is left out, and scripts/check-live-janitor.sh holds it to its whole
 # shape — its condition, its leg and the four variables it is given — so this cannot shelter
 # a session step, which runs a `just` recipe.
 CANCELLATION_CLEANUP = "cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run"
-steps = [
-    step
-    for step in steps
+lanes = [
+    (runner, step)
+    for runner, step in lanes
     if not re.search(rf"(?m)^\s*run:\s*{re.escape(CANCELLATION_CLEANUP)}\s*$", step)
 ]
+steps = [step for _, step in lanes]
 
 
 def demanded(step):
@@ -401,19 +412,20 @@ def demands_a_credential(value):
 
 for relative, session in SESSIONS.items():
     credential = session["credential"]
-    carrying = [step for step in steps if f"secrets.{credential}" in step]
+    carrying = [(runner, step) for runner, step in lanes if f"secrets.{credential}" in step]
     if not carrying:
         problems.append(
             f"{WORKFLOW.as_posix()}: never passes {credential}, so {relative} skips everywhere and "
             "proves nothing. There is one name per credential and nothing translates "
             "between spellings"
         )
-    for step in carrying:
-        if "matrix.os == 'ubuntu-latest'" not in step:
+    for runner, step in carrying:
+        if "matrix.os == 'ubuntu-latest'" not in step and runner != "ubuntu-latest":
             problems.append(
-                f"{WORKFLOW.as_posix()}: hands {credential} to a step that is not scoped to one lane "
-                "of the platform matrix. Every lane carrying it opens a session of its own "
-                "against the same shared fixture"
+                f"{WORKFLOW.as_posix()}: hands {credential} to a step that is not scoped to one Linux "
+                "lane — the Linux leg of the platform matrix, or a job of its own that runs on "
+                "ubuntu-latest. Every lane carrying it opens a session of its own against the "
+                "same shared fixture"
             )
         assigned = demanded(step)
         if assigned is None:
@@ -469,8 +481,24 @@ RUNS_A_WHOLE_PACKAGE = re.compile(r"\bcargo\b[^\n]*\b(?:test|nextest)\b")
 NAMES_A_PACKAGE = re.compile(r"(?<!\S)(?:-p|--package)(?!\S)")
 NAMES_A_TEST_TARGET = re.compile(r"(?<!\S)--test(?!\S)")
 
+# A script a crate's `test` target runs as its command IS that target — the place the live
+# journeys belong — rather than a step re-running a package from outside it, so it is not held
+# to clearing the credentials it exists to hand the journey.
+test_target_scripts = set()
+for project_file in sorted(Path("crates").glob("*/project.json")):
+    options = json.loads(read(project_file, "that crate's project configuration")).get(
+        "targets", {}
+    ).get("test", {}).get("options", {})
+    for command in [options.get("command", "")] + list(options.get("commands", [])):
+        if isinstance(command, str):
+            test_target_scripts.update(
+                Path(found) for found in re.findall(r"(?<!\S)bash (scripts/[\w.-]+\.sh)", command)
+            )
+
 runners = set()
 for script in sorted(Path("scripts").glob("*.sh")):
+    if script in test_target_scripts:
+        continue
     joined = re.sub(
         r"\\\n", " ", without_comments(read(script, "a script of this repository"))
     )

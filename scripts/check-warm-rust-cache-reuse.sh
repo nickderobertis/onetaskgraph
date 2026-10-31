@@ -104,6 +104,9 @@ replay() {
   done <"$1"
 }
 
+# Without --warmed the warm goes to a scratch target directory, set first: a build that names
+# its target directory (the crate publication's) is listed under the one cargo resolves.
+"$warmed" || export CARGO_TARGET_DIR="$scratch/target"
 bash scripts/pr-build-commands.sh >"$scratch/builds"
 [ -s "$scratch/builds" ] || fail "found no pull-request build to make" "keep the crates' test targets' cargo commands in crates/*/project.json"
 
@@ -119,7 +122,6 @@ CARGO_TARGET_DIR="$scratch/empty" replay "$scratch/control.builds" "$scratch/con
 rm -rf "$scratch/empty"
 
 if ! "$warmed"; then
-  export CARGO_TARGET_DIR="$scratch/target"
   bash scripts/warm-rust-cache.sh --instrumented >"$scratch/warm.log" 2>&1 || {
     cat "$scratch/warm.log" >&2
     fail "scripts/warm-rust-cache.sh --instrumented failed" "fix what it reports above"

@@ -13,13 +13,16 @@ test("ordinary, daily and explicit initialization retain three pending CI writer
   const ci = definitions["ci.yml"];
   const creation = definitions["linear-documents.yml"];
   assert.equal(ci.concurrency, undefined, "outer cancellation must not cancel pending checks");
+  // A push's credentials are on check's Linux leg; a pull request's on test-linux.
   const ordinary = ci.jobs.check.concurrency;
   assert.match(ordinary.group, /'linear-live-documents'/);
+  const pullRequest = ci.jobs["test-linux"].concurrency;
+  assert.equal(pullRequest.group, "linear-live-documents");
   const daily = creation.jobs.documents.concurrency;
   assert.equal(daily.group, "linear-live-documents");
   // Three simultaneous pending writers must all reach the service's 100-waiter queue;
   // the default single pending setting would silently replace two required checks.
-  for (const declaration of [ordinary, daily, daily]) {
+  for (const declaration of [ordinary, pullRequest, daily, daily]) {
     assert.equal(declaration["cancel-in-progress"], false);
     assert.equal(declaration.queue, "max");
   }
@@ -66,15 +69,20 @@ test("only the daily schedule creates fresh documents and manual dispatch initia
     assert.ok(!project.targets.check.dependsOn.includes("live-documents"));
     if (lane.endsWith("-e2e")) assert.deepEqual(target.dependsOn, ["onetaskgraph:build"]);
   }
-  for (const step of definitions["ci.yml"].jobs.check.steps.filter(
-    (step) => step.env?.LINEAR_API_KEY,
-  )) {
+  const credentialed = (job) =>
+    definitions["ci.yml"].jobs[job].steps.filter((step) => step.env?.LINEAR_API_KEY);
+  const ordinarySteps = [...credentialed("check"), ...credentialed("test-linux")];
+  assert.ok(credentialed("test-linux").length > 0, "test-linux carries a pull request's session");
+  for (const step of ordinarySteps) {
     assert.equal(step.env.ONETASKGRAPH_LINEAR_DOCUMENT_MODE, "ordinary");
-    assert.match(step.run, /^just (check|gate)-generated$/);
+    assert.match(step.run, /^just ((check|gate)-generated|ci-test-linux)$/);
   }
 });
 
-test("surface edits select document policy without publication journeys", () => {
+// These surfaces select the policy. Whether they also select github-workflows is that
+// project's own read set to say: its CD journeys build and package every crate and run the
+// justfile's release recipes, so .github/test-inputs.mjs names both, reconciled by ci-contexts.
+test("surface edits select document policy", () => {
   const require = createRequire(import.meta.url);
   const manifest = require.resolve("nx/package.json");
   const nx = resolve(dirname(manifest), require("nx/package.json").bin.nx);
@@ -92,9 +100,25 @@ test("surface edits select document policy without publication journeys", () => 
       ),
     );
     assert.ok(projects.includes("linear-documents-policy"), `${file} must select its policy`);
-    assert.ok(
-      !projects.includes("github-workflows"),
-      `${file} must not select publication journeys`,
-    );
   }
+  const policyOnly = JSON.parse(
+    execFileSync(
+      process.execPath,
+      [
+        nx,
+        "show",
+        "projects",
+        "--affected",
+        "--files",
+        ".github/linear-documents-policy/policy.test.mjs",
+        "--json",
+      ],
+      { cwd, encoding: "utf8" },
+    ),
+  );
+  assert.ok(policyOnly.includes("linear-documents-policy"));
+  assert.ok(
+    !policyOnly.includes("github-workflows"),
+    "the policy alone must not select publication journeys",
+  );
 });

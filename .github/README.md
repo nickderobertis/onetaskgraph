@@ -1,8 +1,11 @@
-The private `github-workflows` project owns macOS routing, offline workflow graph proofs,
-and telemetry budgets. Run `just github-workflows-check` from the repository root;
-its uncached Nx target records `.github/.telemetry/macos-policy.json`. The budgets target
-reads that recording without running scenarios again. Registration commands are relative
-to `.github`, because onebudgetspec runs commands beside their budgets file; standalone
+The private `github-workflows` project owns the workflow graph, the four pull-request jobs'
+contract and the CD journeys; `github-workflow-policy` (`policy/`) owns macOS routing, the
+offline workflow policy proofs and the telemetry budgets, so a crate edit that selects the CD
+journeys does not run the policy proofs. Run `just github-workflows-check` from the repository
+root for both; `github-workflow-policy`'s uncached test target records
+`.github/.telemetry/macos-policy.json`, and its budgets target reads that recording without
+running scenarios again. Registration commands in `policy/budgets.yaml` are relative to
+`.github/policy`, because onebudgetspec runs commands beside their budgets file; standalone
 reporter commands retain the repository-root paths.
 
 The classifier's interface is `node .github/macos-policy.mjs classify --event PATH --base
@@ -19,7 +22,7 @@ classification authorizing skipped work; explicit manual diagnostics require suc
 work. It exits 1 for malformed inputs or failed/cancelled/missing prerequisites, prints
 errors to stderr, and distinguishes omission from executed proof in stdout.
 
-`macos-budget.mjs --metric jobs-per-run|runs-per-change --telemetry PATH` exits 0 after
+`policy/macos-budget.mjs --metric jobs-per-run|runs-per-change --telemetry PATH` exits 0 after
 validating and reporting current telemetry, and 1 for invalid invocation, missing/stale
 recordings or report IO failure. Numeric limits live solely in budgets.yaml. The internal
 Python semantic comparator exits 0 with a boolean result and 1 for unreadable refs,

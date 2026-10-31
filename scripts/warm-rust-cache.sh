@@ -1,18 +1,26 @@
 #!/usr/bin/env bash
-# Build what test-linux and test-windows build, and run nothing.
+# Build what test-linux, test-windows and test-macos build, and run nothing.
 #
 #   scripts/warm-rust-cache.sh [--instrumented]
 #
 # Exits 0 once everything is built, 1 when a build fails, 2 on any other argument.
 #
-# .github/workflows/rust-cache-warm.yml runs this on every push to main. The cache keeps
-# dependency units only, so what matters is that these are the very units the jobs compile —
+# .github/workflows/rust-cache-warm.yml runs this on every push to main and saves the Rust
+# cache under the key each of those pull-request jobs restores, because a pull request may
+# restore only a cache saved on its own ref or on main, and they run on pull requests alone:
+# without it every pull request compiled every dependency, and the distribution journey's
+# release build — eight to fifteen minutes — on every run. The cache keeps dependency units
+# only, so what matters is that these are the very units the jobs compile —
 # scripts/check-warm-rust-cache.sh holds them to the shapes scripts/pr-build-commands.sh reads:
 #
 #   every workspace crate's test units, with every feature and with its defaults, as the
 #   crates' `test` targets build them;
 #   with --instrumented (Linux), the same under cargo-llvm-cov, exactly as
 #   scripts/rust-coverage.sh builds them, with a filter that selects no test;
+#   with --instrumented (Linux), the crate publication's packaging verification: every
+#   publishable crate packaged and built from its packaged sources, under the RUSTFLAGS and in
+#   the target directory scripts/release_cd.py gives `cargo publish`, as release-cd's test 23
+#   on test-linux makes it;
 #   the distribution journey's release build, by its own --release-build-only.
 set -euo pipefail
 
@@ -67,6 +75,20 @@ for crate in $crates; do
       || fatal "building $crate's instrumented test units failed" "$next"
   fi
 done
+
+if "$instrumented"; then
+  published="$(cargo metadata --no-deps --format-version 1 --locked \
+    | python3 -c 'import json, sys
+print("\n".join(package["name"] for package in json.load(sys.stdin)["packages"] if package.get("publish") != []))' \
+    | tr -d '\r')" || fatal "could not list the workspace's publishable crates" "run 'cargo metadata --no-deps' and fix what it reports"
+  if [ -n "$published" ]; then
+    selection=()
+    for crate in $published; do selection+=(-p "$crate"); done
+    RUSTFLAGS="-D warnings" cargo package "${selection[@]}" --locked --allow-dirty \
+      --target-dir "${CARGO_TARGET_DIR:-$ROOT/target}/crate-publication" \
+      || fatal "the crate publication's packaging verification failed" "$next"
+  fi
+fi
 
 bash scripts/test-distribution.sh --release-build-only \
   || fatal "the distribution journey's release build failed" "$next"

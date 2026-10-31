@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { read, root, workflows } from "../workflow-graph.mjs";
+import { read, root, workflows } from "../../workflow-graph.mjs";
 
 function fixture() {
   const directory = mkdtempSync(

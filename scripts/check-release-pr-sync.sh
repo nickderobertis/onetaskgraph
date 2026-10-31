@@ -14,6 +14,15 @@
 # — a scratch tree it could not build, a toolchain it could not find — which is a different
 # thing from a finding and reads differently in a gate log.
 set -euo pipefail
+# What this drives runs on Linux alone in production, so on Windows it proves nothing a release
+# relies on; test-linux and test-macos still run it, and test-windows spends its time on what
+# Windows runs.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-release-pr-sync: skipped on Windows (release-pull-request preparation runs only in release-plz.yml on ubuntu-latest); the Linux and macOS lanes run it" >&2
+    exit 0
+    ;;
+esac
 
 # The release-plz the stand-in below was recorded from. scripts/scoped-release-plz.sh
 # provisions exactly this version — for the workflow, for bootstrap and for the scoped

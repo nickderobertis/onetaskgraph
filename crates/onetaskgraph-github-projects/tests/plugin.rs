@@ -14581,6 +14581,12 @@ async fn a_request_that_never_answered_is_recorded_as_refused_with_no_rate_limit
             .expect_err("nothing is listening there"),
     );
     assert!(failure.contains("request failed"), "{failure}");
+    // And it says what the connection met, which reqwest keeps beneath its own message: a
+    // loopback fixture a busy runner could not reach has to name why.
+    assert!(
+        failure.contains("(os error"),
+        "the operating system's cause is named: {failure}"
+    );
     let session = ledger.snapshot();
     assert_eq!(session.total_requests(), 1);
     let record = &session.requests()[0];

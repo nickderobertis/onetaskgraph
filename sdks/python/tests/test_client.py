@@ -1908,21 +1908,9 @@ def test_generator_reports_what_a_failing_binary_said() -> None:
 # llmlint: ignore-end[async_typed_clients_at_boundaries]
 
 
-def test_generator_write_mode_uses_real_binary(tmp_path: Path) -> None:
+def test_generator_write_mode_uses_real_binary(regenerated_package: Path) -> None:
     """Regenerate into a fresh destination from the real schema and command surface."""
-    destination = tmp_path / "generated"
-    subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import json; from pathlib import Path; import generate; "
-            "bundle=generate.validate_schema_bundle("
-            "json.loads(generate.run_workspace_binary('schema'))); "
-            f"generate.generate(bundle, check=False, destination=Path({str(destination)!r}))",
-        ],
-        cwd=WORKSPACE / "sdks" / "python",
-        check=True,
-    )
+    destination = regenerated_package / "_generated"
     generated_client = (destination / "client.py").read_text(encoding="utf-8")
     generated_report = (destination / "status_options_report.py").read_text(encoding="utf-8")
     assert "async def sources_status_options(" in generated_client

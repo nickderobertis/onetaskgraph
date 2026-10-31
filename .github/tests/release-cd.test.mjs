@@ -79,7 +79,7 @@ function shims(directory, extra = {}) {
     const path = join(directory, name);
     writeFileSync(
       path,
-      `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*" >> "${log}"\n${extra[name] || ""}\n${name === "cargo" ? cargoPublication : ""}\nexec "${real}" "$@"\n`,
+      `#!/bin/sh\nprintf '%s %s\\n' ${name} "$*" >> "${log}"\n${typeof extra[name] === "function" ? extra[name](real) : extra[name] || ""}\n${name === "cargo" ? cargoPublication : ""}\nexec "${real}" "$@"\n`,
     );
     chmodSync(path, 0o755);
   }
@@ -88,17 +88,85 @@ function shims(directory, extra = {}) {
 function invocations() {
   return existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : [];
 }
+// The release builds here write a target directory of their own, sharing the checkout's as
+// cargo's build directory: maturin stages under <target directory>/maturin, and the CLI-wheel
+// lock is that directory's, so these journeys neither share staging with nor wait on a
+// distribution journey building into the checkout's target beside them.
+const ownTarget = {
+  CARGO_TARGET_DIR: join(checkout, "target", "release-cd"),
+  CARGO_BUILD_BUILD_DIR: join(checkout, "target"),
+};
+// With ONETASKGRAPH_CD_TIMINGS=1, which test-linux sets (scripts/ci-job.sh), each recipe call
+// names its seconds on standard error, so the job's log says which phase of a journey is slow.
 function recipe(job, args, env = {}) {
+  const started = Date.now();
   const result = spawnSync("just", [`release-${job}`, ...args], {
     cwd: checkout,
     encoding: "utf8",
-    env: { ...process.env, PATH: `${shims(join(scratch, "shims"))}:${process.env.PATH}`, ...env },
+    env: {
+      ...process.env,
+      ...ownTarget,
+      PATH: `${shims(join(scratch, "shims"))}:${process.env.PATH}`,
+      ...env,
+    },
     maxBuffer: 1 << 26,
   });
+  if (process.env.ONETASKGRAPH_CD_TIMINGS === "1")
+    process.stderr.write(
+      `release-cd timing: ${((Date.now() - started) / 1000).toFixed(1)}s release-${job} ${args.join(" ")}\n`,
+    );
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
+// A run still going after `bound` is stopped and fails with what it wrote and the build
+// processes alive then, so a release build that hangs on the hosted runner says what it
+// waited on before the job's own timeout.
+function runAsync(command, args, env, bound = 15 * 60 * 1000) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: checkout,
+      env: { ...process.env, ...ownTarget, ...env },
+      detached: true,
+    });
+    let output = "";
+    child.stdout.on("data", (data) => {
+      output += data;
+    });
+    child.stderr.on("data", (data) => {
+      output += data;
+    });
+    const timer = setTimeout(() => {
+      const alive = spawnSync("ps", ["-eo", "pid,ppid,etime,args"], { encoding: "utf8" })
+        .stdout.split("\n")
+        .filter((line) => /cargo|rustc|maturin|\buv\b/.test(line))
+        .join("\n");
+      output += `\nbuild processes alive then:\n${alive}\n${command} ${args.join(" ")} was still running after ${bound / 1000} s`;
+      // The process group this spawn started, and nothing else.
+      process.kill(-child.pid, "SIGKILL");
+    }, bound);
+    child.on("error", reject);
+    child.on("close", (status) => {
+      clearTimeout(timer);
+      resolve({ status, output });
+    });
+  });
+}
+
+function wheelBuildProbe(real) {
+  return `case "$*" in
+  *"maturin build"*)
+    mkdir "${scratch}/wheel-active" || { echo 'CLI wheel builds overlapped' >&2; exit 97; }
+    trap 'rmdir "${scratch}/wheel-active"' EXIT
+    printf '%s\\n' "$WHEEL_BUILD_CALLER" >> "${scratch}/wheel-builds.log"
+    [ "\${FAIL_CLI_WHEEL_BUILD:-}" != 1 ] || exit 37
+    sleep 1
+    "${real}" "$@"
+    exit $?
+    ;;
+esac`;
+}
+
 function expectStatus(result, status, what) {
-  assert.equal(result.status, status, `${what}:\n${result.output.slice(-4000)}`);
+  assert.equal(result.status, status, `${what}:\n${result.output.slice(-12000)}`);
 }
 
 function control(value) {
@@ -159,12 +227,40 @@ after(() => {
 
 test("the Linux recipe builds once, packages every artifact from that binary, installs them and publishes nothing in its dry run", {
   skip,
-}, () => {
-  const result = recipe("linux", ["run", "--tag", tag, "--dry-run", "--dist", dist]);
-  expectStatus(result, 0, "the Linux recipe's dry run");
-  const commands = invocations();
+}, async () => {
+  const probePath = `${shims(join(scratch, "wheel-probe"), { uv: wheelBuildProbe })}:${process.env.PATH}`;
+  const refused = recipe("linux", ["build", "--tag", tag, "--dist", dist], {
+    PATH: probePath,
+    WHEEL_BUILD_CALLER: "failed",
+    FAIL_CLI_WHEEL_BUILD: "1",
+  });
+  expectStatus(refused, 1, "a failed CLI-wheel build");
+  assert.match(refused.output, /maturin.*exit 37/);
+  // A failed build names what else held maturin's staging then, so a second build over the
+  // same target directory outside the CLI-wheel lock says so rather than a missing file.
+  assert.match(refused.output, /release-cd: target\/maturin holds: /);
+  const commandOffset = invocations().length;
+  const [result, distribution] = await Promise.all([
+    runAsync("just", ["release-linux", "run", "--tag", tag, "--dry-run", "--dist", dist], {
+      PATH: probePath,
+      WHEEL_BUILD_CALLER: "release",
+    }),
+    runAsync("bash", ["scripts/test-distribution.sh", "--release-build-only"], {
+      PATH: probePath,
+      WHEEL_BUILD_CALLER: "distribution",
+      ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER: "",
+      ONETASKGRAPH_DISTRIBUTION_JOURNEY_LOCKED: "",
+    }),
+  ]);
+  expectStatus(result, 0, "the Linux recipe's dry run beside the distribution build");
+  expectStatus(distribution, 0, "the concurrent distribution build after a failure");
+  assert.deepEqual(
+    readFileSync(join(scratch, "wheel-builds.log"), "utf8").trim().split("\n").sort(),
+    ["distribution", "failed", "release"],
+  );
+  const commands = invocations().slice(commandOffset);
   const builds = commands.filter((line) => /^uv tool run .* maturin build /.test(line));
-  assert.equal(builds.length, 1, "one target, built once");
+  assert.equal(builds.length, 2, "one build per consumer, without overlap");
   assert.match(builds[0], /--target x86_64-unknown-linux-gnu/);
   assert.ok(
     !commands.some((line) => /^(uv publish|npm publish|cargo publish|gh |curl )/.test(line)),
@@ -244,17 +340,27 @@ test("a test-install that fails stops the Linux recipe before any publication", 
   const failing = shims(join(scratch, "failing-shims"), {
     npm: 'case "$1" in install) echo "simulated test-install failure" >&2; exit 1;; esac',
   });
+  // The wheel the Linux recipe built above, so this run starts where the build hands over: the
+  // recipe's own packaging, test-install and publication, in its own order, without a second
+  // release build of the same tree.
+  const failingDist = join(scratch, "dist-failing");
+  mkdirSync(failingDist, { recursive: true });
+  execFileSync("cp", ["-R", join(dist, "wheels"), join(failingDist, "wheels")]);
   const result = spawnSync(
     "just",
-    ["release-linux", "run", "--tag", tag, "--dry-run", "--dist", join(scratch, "dist-failing")],
+    ["release-linux", "run", "--tag", tag, "--dry-run", "--prebuilt", "--dist", failingDist],
     {
       cwd: checkout,
       encoding: "utf8",
-      env: { ...process.env, PATH: `${failing}:${process.env.PATH}` },
+      env: { ...process.env, ...ownTarget, PATH: `${failing}:${process.env.PATH}` },
     },
   );
   const output = `${result.stdout}${result.stderr}`;
   assert.notEqual(result.status, 0, output);
+  assert.ok(
+    !invocations().some((line) => /maturin build/.test(line)),
+    "a prebuilt run built nothing",
+  );
   assert.match(output, /simulated test-install failure/);
   assert.match(output, /did not install and run/);
   assert.match(output, /nothing was published/);
@@ -267,6 +373,22 @@ test("a test-install that fails stops the Linux recipe before any publication", 
   assert.ok(
     !commands.some((line) => /^(uv publish|npm publish|cargo publish|gh |curl )/.test(line)),
   );
+  // A prebuilt run over a dist holding no wheel refuses at its packaging, installing nothing.
+  writeFileSync(log, "");
+  const empty = join(scratch, "dist-prebuilt-empty");
+  mkdirSync(join(empty, "wheels", "x86_64-unknown-linux-gnu"), { recursive: true });
+  const refused = recipe("linux", [
+    "run",
+    "--tag",
+    tag,
+    "--dry-run",
+    "--prebuilt",
+    "--dist",
+    empty,
+  ]);
+  assert.notEqual(refused.status, 0, refused.output);
+  assert.match(refused.output, /no wheel for x86_64-unknown-linux-gnu/);
+  assert.ok(!invocations().some((line) => line.startsWith("npm install")), refused.output);
 });
 
 test("the Linux job publishes exactly what it built, re-runs only what is missing, and installs it back", {
@@ -801,11 +923,12 @@ for name, members in [
   // the rest.
   control({ releases: [tag], refuse: [{ registry: "crates", package: "onetaskgraph-core" }] });
   let mark = requests().length;
-  expectStatus(
-    recipe("publish", ["publish", "--to", "crates", "--tag", tag, "--dist", independent], env),
-    1,
-    "a refused crate",
+  const refusedCrate = recipe(
+    "publish",
+    ["publish", "--to", "crates", "--tag", tag, "--dist", independent],
+    env,
   );
+  expectStatus(refusedCrate, 1, "a refused crate");
   const order = plan("independent")
     .filter((a) => a.registry === "crates")
     .map((a) => a.package);
@@ -819,6 +942,7 @@ for name, members in [
       ...order.slice(0, 6).map((name) => [name, version, false]),
       ["onetaskgraph-core", version, true],
     ],
+    refusedCrate.output,
   );
   control({ releases: [tag] });
   mark = requests().length;

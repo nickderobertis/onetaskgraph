@@ -4,6 +4,15 @@
 # Exit status: 0 when every case passes; 1 for a behavior finding; 2 when the check itself
 # cannot construct or drive its scratch fixture.
 set -euo pipefail
+# What this drives runs on Linux alone in production, so on Windows it proves nothing a release
+# relies on; test-linux and test-macos still run it, and test-windows spends its time on what
+# Windows runs.
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT* | *msys* | *cygwin* | *win32*)
+    echo "check-release-tooling-selection: skipped on Windows (release-version selection runs only in release-plz.yml on ubuntu-latest); the Linux and macOS lanes run it" >&2
+    exit 0
+    ;;
+esac
 
 # The selector's fallback is reconciled against behavior observed from this release-plz.
 # The workflow pin check below makes moving the real tool require re-observing the matrix.

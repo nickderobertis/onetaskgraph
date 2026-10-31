@@ -1,5 +1,5 @@
-requests 216
-node count 266309
+requests 232
+node count 275837
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -10,16 +10,16 @@ requests per call
     1       0  account allowance after the reconciliation
     1       0  account allowance before the reconciliation
     3       0  adding a comment
-    7       0  adding an issue to the board
+    9       0  adding an issue to the board
     2     100  board page size probe
    10       0  contract schema introspection
     1       0  creating a board single-select field with its options
-    7       0  creating an issue
+    9       0  creating an issue
     1       0  deleting a comment
-    7       0  deleting an issue
+    9       0  deleting an issue
     2       0  editing a comment
     5       0  filing an issue under its project
-    6       0  live artifact cleanup
+    8       0  live artifact cleanup
     3     300  live artifact lookup
     2      40  live board item lookup
     1       0  live board text field write
@@ -60,19 +60,19 @@ requests per call
     3     300  reading a task's comments
     3     600  reading an issue's dependencies
     4   21404  reading one document with its project and the project's members
-   33   15048  reading one issue
+   36   16416  reading one issue
     3   20451  reading the board
     2     100  reading the board's fields and the destination repository
     2     106  reading what an item depends on
     2     100  reading what depends on an issue
     3       0  reading which issue a comment is on
-    4       0  recording a dependency
+    5       0  recording a dependency
     2       0  removing a dependency
     1       0  safely replacing the board Status option list
-   12   81600  searching this board's issues
+   14   89760  searching this board's issues
     1       0  taking an issue out of its project
     2   20200  terminal status read-back
     9       0  the GraphQL rateLimit object
     6       0  updating an issue
     4     400  writable field discovery
-    8       0  writing a board field
+   10       0  writing a board field

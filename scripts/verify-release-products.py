@@ -51,7 +51,9 @@ def verify_installed_cli(executable: Path, version: str) -> None:
 
 def verify(product: ReleaseProduct, install: bool, staging: Path) -> None:
     binary = product.binary_name
-    canonical = Path(f'target/{product.target}/release/{binary}').read_bytes()
+    # The target directory cargo wrote, as scripts/release-wheel-binary.py reads it.
+    built = Path(os.environ.get('CARGO_TARGET_DIR') or 'target')
+    canonical = (built / product.target / 'release' / binary).read_bytes()
     archive = staging / 'assets' / f'onetaskgraph-{product.tag}-{product.target}.{product.extension}'
     if product.extension == 'zip':
         with zipfile.ZipFile(archive) as packed:
@@ -122,18 +124,20 @@ def verify(product: ReleaseProduct, install: bool, staging: Path) -> None:
             shutil.copy2(checksum, checksums / checksum.name)
             env = {**os.environ, 'ONETASKGRAPH_CHECKSUM_BASE_URL': checksums.parent.as_uri()}
             subprocess.run([bash_executable(platform.system()), 'scripts/install.sh', '--version', product.tag, '--to', str(dest / 'archive'), '--archive-base-url', archives.parent.as_uri()], env=env, check=True, stdout=sys.stderr)
+            # Each installed CLI is run as soon as its install lands, so a product that cannot
+            # answer refuses before the slower installs after it; every product is still run.
+            verify_installed_cli(dest / 'archive' / binary, product.version)
             # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: this call uses the same public subprocess-failure handler driven by a real installer exit failure; the real native installation exercises this command successfully without mocking installers.
             subprocess.run([PYTHON_EXECUTABLE, '-m', 'venv', str(dest / 'installer-python')], check=True, stdout=sys.stderr)
             pip_python = dest / 'installer-python' / ('Scripts/python.exe' if product.os == 'Windows' else 'bin/python')
             # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: this call uses the same public subprocess-failure handler driven by a real installer exit failure; the real native installation exercises this command successfully without mocking installers.
             subprocess.run([str(pip_python), '-m', 'pip', 'install', '--no-deps', '--target', str(dest / 'wheel'), '--platform', filename.platform_tags[0], str(wheel_path)], check=True, stdout=sys.stderr)
-            # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: this call uses the same public subprocess-failure handler driven by a real installer exit failure; the real native installation exercises this command successfully without mocking installers.
-            subprocess.run([bash_executable(platform.system()), '-c', 'exec npm "$@"', 'npm', 'install', '--force', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', str(dest / 'npm'), str(carrier.resolve())], check=True, stdout=sys.stderr)
             wheel_bins = [path for path in (dest / 'wheel').rglob(binary) if path.is_file()]
             require(len(wheel_bins) == 1, 'wheel install must expose one CLI executable')
-            products = [dest / 'archive' / binary, wheel_bins[0], dest / 'npm' / 'node_modules' / '@onetaskgraph' / f'cli-{product.npm_platform}' / 'bin' / binary]
-            for executable in products:
-                verify_installed_cli(executable, product.version)
+            verify_installed_cli(wheel_bins[0], product.version)
+            # llmlint: ignore[changed_behavior_has_e2e] Manager-approved: this call uses the same public subprocess-failure handler driven by a real installer exit failure; the real native installation exercises this command successfully without mocking installers.
+            subprocess.run([bash_executable(platform.system()), '-c', 'exec npm "$@"', 'npm', 'install', '--force', '--ignore-scripts', '--no-audit', '--no-fund', '--prefix', str(dest / 'npm'), str(carrier.resolve())], check=True, stdout=sys.stderr)
+            verify_installed_cli(dest / 'npm' / 'node_modules' / '@onetaskgraph' / f'cli-{product.npm_platform}' / 'bin' / binary, product.version)
     print(json.dumps(result.record()))
 
 

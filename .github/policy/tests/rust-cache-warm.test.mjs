@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
-import { HASHED_ENV_PREFIXES } from "../rust-cache-key.mjs";
-import { read, root } from "../workflow-graph.mjs";
+import { HASHED_ENV_PREFIXES } from "../../rust-cache-key.mjs";
+import { read } from "../../workflow-graph.mjs";
 
 // Each leg of rust-cache-warm.yml must save exactly the cache its pull-request job restores:
 // the same shared key, the same toolchain and rust-cache inputs on the same runner, and the
@@ -12,8 +11,8 @@ import { read, root } from "../workflow-graph.mjs";
 // that need none: this parity of every input rust-cache keys on, beside rust-cache.test.mjs
 // running the real action's key computation, and scripts/check-warm-rust-cache-reuse.sh,
 // which builds the job's units over what the warmer built and fails on any recompiled.
+// The pull-request jobs are ci.yml's own; no stand-in of them is read.
 
-const FIXTURE = ".github/tests/fixtures/ci-speedup-test-jobs.yml";
 const SETUP = "actions-rust-lang/setup-rust-toolchain@";
 const UNINSTALL = "rustup toolchain uninstall stable";
 const WARM = /^bash scripts\/warm-rust-cache\.sh(?: (--instrumented))?$/;
@@ -52,13 +51,11 @@ function shaped(file, document) {
 }
 
 function sources() {
-  const ciJob = new URL("scripts/ci-job.sh", root);
   const load = (file) => shaped(file, parse(read(file)));
   return {
     warmer: load(".github/workflows/rust-cache-warm.yml"),
     ci: load(".github/workflows/ci.yml"),
-    fixture: existsSync(new URL(FIXTURE, root)) ? load(FIXTURE) : { jobs: {} },
-    ciJob: existsSync(ciJob) ? read("scripts/ci-job.sh") : undefined,
+    ciJob: read("scripts/ci-job.sh"),
   };
 }
 
@@ -120,14 +117,10 @@ function installs(job) {
     .filter(Boolean);
 }
 
-// The phases a pull-request job runs: its arm of scripts/ci-job.sh once that exists, else the
-// fixture's copy of it.
-function phases(id, fixtureJob, ciJob) {
-  if (ciJob !== undefined) {
-    const arm = ciJob.match(new RegExp(`\\n  ${id}\\)\\n[\\s\\S]*?phases="([\\s\\S]*?)"\\n`));
-    if (arm) return arm[1];
-  }
-  return fixtureJob?.phases;
+// The phases a pull-request job runs: its arm of scripts/ci-job.sh.
+function phases(id, ciJob) {
+  const arm = ciJob.match(new RegExp(`\\n  ${id}\\)\\n[\\s\\S]*?phases="([\\s\\S]*?)"\\n`));
+  return arm?.[1];
 }
 
 function targets(text) {
@@ -140,22 +133,19 @@ function targets(text) {
     );
 }
 
-function problems({ warmer, ci, fixture, ciJob }) {
+function problems({ warmer, ci, ciJob }) {
   const found = [];
   const all = legs(warmer);
   if (!all.length) found.push("rust-cache-warm.yml has no leg running setup-rust-toolchain");
-  for (const id of Object.keys(fixture.jobs ?? {}))
-    if (ci.jobs?.[id])
-      found.push(`${id} is in ci.yml and in ${FIXTURE}; delete the fixture now ci.yml has the job`);
   for (const leg of all) {
     const name = `${leg.id} (${leg.job["runs-on"]})`;
     if (!leg.key) {
       found.push(`${name} saves under no cache-shared-key`);
       continue;
     }
-    const pr = ci.jobs?.[leg.key] ?? fixture.jobs?.[leg.key];
+    const pr = ci.jobs?.[leg.key];
     if (!pr) {
-      found.push(`${name} saves key ${leg.key}, which no job in ci.yml or ${FIXTURE} restores`);
+      found.push(`${name} saves key ${leg.key}, which no job in ci.yml restores`);
       continue;
     }
     const mine = toolchain(leg.job);
@@ -194,9 +184,9 @@ function problems({ warmer, ci, fixture, ciJob }) {
       continue;
     }
     const instrumented = builds[0][1] === "--instrumented";
-    const prPhases = phases(leg.key, fixture.jobs?.[leg.key], ciJob);
+    const prPhases = phases(leg.key, ciJob);
     if (prPhases === undefined) {
-      found.push(`${leg.key}'s phases are in neither scripts/ci-job.sh nor ${FIXTURE}`);
+      found.push(`${leg.key}'s phases are not in scripts/ci-job.sh`);
       continue;
     }
     const run = targets(prPhases);
@@ -219,12 +209,20 @@ test("every warmer leg saves what its pull-request job restores", () => {
   assert.deepEqual(problems(all), []);
   assert.deepEqual(
     legs(all.warmer).map((leg) => `${leg.key}:${leg.job["runs-on"]}`),
-    ["test-linux:ubuntu-latest", "test-windows:windows-latest"],
+    ["test-linux:ubuntu-latest", "test-windows:windows-latest", "test-macos:macos-latest"],
   );
-  // A push to main schedules no Mac job: the macOS cache is warmed by its own pull requests.
-  for (const [id, job] of Object.entries(all.warmer.jobs))
-    for (const matrix of job.strategy?.matrix?.include ?? [{}])
-      assert.doesNotMatch(String(resolve(job["runs-on"], matrix)), /mac/i, id);
+  // The one Mac job a push to main schedules (AGENTS.md), skipped on a release merge.
+  const macs = Object.entries(all.warmer.jobs).filter(([, job]) =>
+    (job.strategy?.matrix?.include ?? [{}]).some((matrix) =>
+      /mac/i.test(String(resolve(job["runs-on"], matrix))),
+    ),
+  );
+  assert.deepEqual(
+    macs.map(([id]) => id),
+    ["warm-macos"],
+  );
+  assert.deepEqual(macs[0][1].needs, ["release-merge"]);
+  assert.match(macs[0][1].if, /needs\.release-merge\.outputs\.version-only != 'true'/);
 });
 
 test("a leg differing from its job in key, toolchain or build is refused", () => {
@@ -237,7 +235,7 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
   const warm = (all) => all.warmer.jobs.warm;
   const leg = (all, id) => warm(all).strategy.matrix.include.find((entry) => entry.job === id);
   const linux = (all) => leg(all, "test-linux");
-  const job = (all, id) => all.ci.jobs[id] ?? all.fixture.jobs[id];
+  const job = (all, id) => all.ci.jobs[id];
   const setup = (steps) => steps.find((step) => step.uses?.startsWith(SETUP));
   const cases = {
     "another key": [
@@ -301,9 +299,10 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
     "the job no longer runs coverage": [
       /builds instrumented, but test-linux does not run coverage/,
       (all) => {
-        all.ciJob = undefined;
-        all.fixture.jobs["test-linux"].phases =
-          "1 affected test -\n1 run scripts:distribution-test -";
+        all.ciJob = all.ciJob.replace(
+          /(\n {2}test-linux\)\n[\s\S]*?phases=")[\s\S]*?"\n/,
+          (_, arm) => `${arm}1 affected test -\n1 run scripts:distribution-test -"\n`,
+        );
       },
     ],
     "no build": [
@@ -316,17 +315,16 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
         );
       },
     ],
-    "the job in both files": [
-      /test-windows is in ci\.yml and in/,
-      (all) => {
-        all.ci.jobs["test-windows"] = structuredClone(all.fixture.jobs["test-windows"]);
-      },
-    ],
-    "the job in neither file": [
+    "the job missing from ci.yml": [
       /saves key test-windows, which no job/,
       (all) => {
-        delete all.fixture.jobs["test-windows"];
         delete all.ci.jobs["test-windows"];
+      },
+    ],
+    "the job's phases missing": [
+      /test-macos's phases are not in scripts\/ci-job\.sh/,
+      (all) => {
+        all.ciJob = all.ciJob.replace("\n  test-macos)\n", "\n  test-macos-gone)\n");
       },
     ],
   };

@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
-import shutil
 import subprocess
-import sys
 import zipfile
 from pathlib import Path
 
@@ -40,25 +37,18 @@ def test_the_wheel_carries_the_typed_marker_and_the_typed_classifier(tmp_path: P
     )
 
 
-def test_regeneration_keeps_the_typed_marker(tmp_path: Path) -> None:
+def test_regeneration_keeps_the_typed_marker(regenerated_package: Path) -> None:
     """The marker sits outside `_generated`, so the generator neither writes nor removes it.
 
-    The real generator runs against the bundle the built binary emits, into a copy of the
-    package rather than the tree, so a generator that ever reached past `_generated` would
-    fail here without dirtying the checkout. What it wrote *inside* `_generated` is not
-    compared with the committed package: that is `generate-check`'s claim, and the justfile
-    runs it on Linux alone because the regenerate step is not byte-stable on the Windows
-    runner, where this test does run.
+    The real generator ran against the bundle the built binary emits, into a copy of the
+    package rather than the tree (the `regenerated_package` fixture), so a generator that ever
+    reached past `_generated` would fail here without dirtying the checkout. What it wrote
+    *inside* `_generated` is not compared with the committed package: that is
+    `generate-check`'s claim, and the justfile runs it on Linux alone because the regenerate
+    step is not byte-stable on the Windows runner, where this test does run.
     """
-    sys.path.insert(0, str(PACKAGE))
-    import generate
-
-    package_copy = tmp_path / "onetaskgraph_sdk"
-    shutil.copytree(SOURCE, package_copy)
-    assert (package_copy / MARKER).is_file()
-
-    bundle = generate.validate_schema_bundle(json.loads(generate.run_workspace_binary("schema")))
-    generate.generate(bundle, check=False, destination=package_copy / "_generated")
+    assert (SOURCE / MARKER).is_file(), f"the package has no {MARKER} for the copy to carry"
+    package_copy = regenerated_package
 
     assert (package_copy / MARKER).is_file(), f"regeneration removed {MARKER}"
     assert (package_copy / MARKER).read_bytes() == b"", f"regeneration wrote into {MARKER}"

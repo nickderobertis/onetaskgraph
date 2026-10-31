@@ -53,6 +53,7 @@
           "bash scripts/check-workspace-config-enforced.sh",
           "bash scripts/check-guard-path-spelling.sh",
           "bash scripts/check-relative-interpreter.sh",
+          "bash scripts/check-python-call-sites-enforced.sh",
           "bash scripts/check-line-reads.sh",
           "bash scripts/check-loopback-registries.sh",
           "bash scripts/check-live-decline-reading.sh",
@@ -64,7 +65,10 @@
           "bash scripts/check-selection-line-endings.sh",
           "bash scripts/check-selection-code-page.sh",
           "bash scripts/check-scoped-release-plz.sh",
+          "bash scripts/check-file-lock.sh",
           "python3 scripts/test_cli_wheel_lock.py",
+          "python3 scripts/test_ci_timings.py",
+          "bash scripts/check-ci-recipes.sh",
           "bash scripts/check-warm-rust-cache.sh",
           "bash scripts/check-warm-rust-cache-reuse-enforced.sh",
           "bash scripts/check-warm-rust-cache-reuse-real.sh"
