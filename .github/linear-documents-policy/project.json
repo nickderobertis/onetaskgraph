@@ -7,6 +7,7 @@
     "default": [
       "{projectRoot}/**/*",
       "{workspaceRoot}/justfile",
+      "{workspaceRoot}/scripts/nx.sh",
       "{workspaceRoot}/crates/onetaskgraph-linear/project.json",
       "{workspaceRoot}/crates/onetaskgraph-linear-e2e/project.json",
       "{workspaceRoot}/crates/onetaskgraph-linear/tests/document_lifecycle/mod.rs",

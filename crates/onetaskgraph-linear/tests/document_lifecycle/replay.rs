@@ -64,6 +64,8 @@ pub struct State {
     /// Take a create under an id already held as an overwrite, as a Linear whose ids were not
     /// exclusive would.
     pub accept_duplicate_ids: bool,
+    /// Refuse a create under a held id with an error that is not Linear's recorded refusal.
+    pub duplicate_refusal_worded_otherwise: bool,
     /// Refuse every `issueUpdate` while set.
     pub refuse_issue_updates: bool,
     pub rate_limited: usize,
@@ -387,7 +389,15 @@ fn respond(state: &mut State, request: &Value) -> Value {
                     || state.trashed.contains(id))
             {
                 // Linear refuses a create under an id it already holds, trashed or not.
-                return json!({"errors":[{"message":"Entity already exists","extensions":{"code":"INVALID_INPUT"}}]});
+                if state.duplicate_refusal_worded_otherwise {
+                    return json!({"data":null,"errors":[{"message":"Entity already exists"}]});
+                }
+                // As Linear answered it to the pool's initialization, 2026-10-31.
+                return json!({"data":null,"errors":[{"extensions":{"code":"INPUT_ERROR","statusCode":400,
+                    "type":"invalid input","userError":true,
+                    "userPresentableMessage":format!("Entity Issue with id {id} already exists.")},
+                    "locations":[{"column":36,"line":1}],"message":"conflict on insert of Issue",
+                    "path":["issueCreate"]}]});
             }
             if root == "documentCreate"
                 && let Some(limit) = state.document_limit

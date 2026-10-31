@@ -161,6 +161,13 @@ test("the pool and template recipes set the variables their lanes read", () => {
     poolRecipe.includes("-t live-documents --projects onetaskgraph-linear,onetaskgraph-linear-e2e"),
     poolRecipe,
   );
+  // scripts/nx.sh keeps a successful run's output to itself unless it is handed an
+  // --outputStyle, and the operator reads the setup's report off that output.
+  assert.ok(poolRecipe.includes(" --outputStyle=stream"), poolRecipe);
+  assert.match(
+    read("scripts/nx.sh"),
+    /\*" --outputStyle"\*\) exec node_modules\/\.bin\/nx "\$@" ;;/,
+  );
   const templateRecipe = recipe("github-live-template");
   assert.ok(
     templateRecipe.includes(

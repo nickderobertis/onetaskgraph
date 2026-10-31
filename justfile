@@ -321,4 +321,4 @@ github-live-template action:
 # every member no live run holds, and a second run creates nothing. Needs LINEAR_API_KEY and
 # LINEAR_WRITE_TEAM; it writes to that team.
 linear-document-pool action:
-    @ONETASKGRAPH_LINEAR_POOL={{ if action =~ '^(dry-run|initialize)$' { action } else { error("linear-document-pool takes dry-run or initialize") } }} ONETASKGRAPH_LIVE_REQUIRED=1 {{nx}} run-many -t live-documents --projects onetaskgraph-linear,onetaskgraph-linear-e2e --parallel=1 --skip-nx-cache
+    @ONETASKGRAPH_LINEAR_POOL={{ if action =~ '^(dry-run|initialize)$' { action } else { error("linear-document-pool takes dry-run or initialize") } }} ONETASKGRAPH_LIVE_REQUIRED=1 {{nx}} run-many -t live-documents --projects onetaskgraph-linear,onetaskgraph-linear-e2e --parallel=1 --skip-nx-cache --outputStyle=stream

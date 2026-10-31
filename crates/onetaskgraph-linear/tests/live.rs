@@ -4012,10 +4012,23 @@ mod pool {
             .await
             .unwrap_err();
         assert!(
-            unproven.contains("something other than its id"),
+            unproven.contains("not answered with Linear's duplicate-id refusal"),
             "{unproven}"
         );
         replay.state.lock().unwrap().request_limit = None;
+        // So does a refusal worded otherwise than Linear's recorded one, whatever it says.
+        replay
+            .state
+            .lock()
+            .unwrap()
+            .duplicate_refusal_worded_otherwise = true;
+        let unproven = lease::verify_exclusive(&replay.endpoint, "synthetic", "team", &held)
+            .await
+            .unwrap_err();
+        assert!(
+            unproven.contains("not answered with Linear's duplicate-id refusal"),
+            "{unproven}"
+        );
         // A lease that reads back as another holder's, or not at all, is not this run's to use.
         let replay = self::replay();
         let held = claim(&replay, LeaseLane::Plugin, &holder(run(2)))

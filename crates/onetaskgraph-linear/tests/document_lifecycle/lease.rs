@@ -318,9 +318,9 @@ pub async fn claim(
     ))
 }
 
-/// Asks Linear to create `held`'s issue a second time, under the same id, and requires Linear
-/// to refuse it — not for a rate limit, a credential or a failure of its own, which say
-/// nothing about the id — which is what every claim's exclusivity rests on: a Linear that took the second create would
+/// Asks Linear to create `held`'s issue a second time, under the same id, and requires Linear's
+/// own duplicate-id refusal ([`duplicate_id_refusal`]) — any other answer fails closed — which
+/// is what every claim's exclusivity rests on: a Linear that took the second create would
 /// let two claimants hold one member, so the lane fails here, naming that, rather than run.
 /// The issue is read back afterwards to show it still names this holder.
 pub async fn verify_exclusive(
@@ -348,40 +348,27 @@ pub async fn verify_exclusive(
         .json()
         .await
         .map_err(|error| format!("the lease exclusivity probe got no readable answer: {error}"))?;
-    // A refusal for the request itself — a rate limit, a credential, Linear failing — says
-    // nothing about the id, so it proves nothing either way.
-    const NOT_ABOUT_THE_ID: [&str; 5] = [
-        "RATELIMITED",
-        "AUTHENTICATION_ERROR",
-        "FORBIDDEN",
-        "INTERNAL_SERVER_ERROR",
-        "GRAPHQL_VALIDATION_FAILED",
-    ];
+    // Only Linear's recorded refusal of a duplicate id is proof; any other answer — a rate
+    // limit, a credential, Linear failing, an error worded otherwise — proves nothing, and the
+    // member is not used.
+    let refusal = duplicate_id_refusal(&held.id);
     let errors = answered
         .get("errors")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if let Some(unrelated) = errors.iter().find(|error| {
-        error
-            .pointer("/extensions/code")
-            .and_then(Value::as_str)
-            .is_some_and(|code| NOT_ABOUT_THE_ID.contains(&code))
-    }) {
+    let accepted = answered.pointer("/data/issueCreate/success") == Some(&json!(true));
+    if !accepted
+        && !errors
+            .iter()
+            .any(|error| refuses_the_duplicate(error, &refusal))
+    {
         return Err(format!(
-            "the lease exclusivity probe was refused for something other than its id, so it \
-             proves nothing: {unrelated}"
+            "the lease exclusivity probe was not answered with Linear's duplicate-id refusal, so \
+             it proves nothing and the member is not used: {answered}"
         ));
     }
-    let refused =
-        !errors.is_empty() || answered.pointer("/data/issueCreate/success") == Some(&json!(false));
-    if refused {
-        // Linear's own wording, on every credentialed claim, so it can be pinned once seen.
-        println!(
-            "Linear refused a second create under lease id {}: {answered}",
-            held.id
-        );
-    }
+    let refused = !accepted;
     let still = send(endpoint, key, LEASE, json!({"id":held.id})).await?;
     let title = still.pointer("/issue/title").and_then(Value::as_str);
     if !refused || title == Some(decoy.as_str()) {
@@ -402,6 +389,35 @@ pub async fn verify_exclusive(
         ));
     }
     Ok(())
+}
+
+/// Linear's refusal of a create under an id it already holds, as Linear answered it to every
+/// one of the 32 probes the pool's initialization sent to team TES2 on 2026-10-31: its code,
+/// its message, and the message it presents naming the id.
+pub struct DuplicateIdRefusal {
+    pub code: &'static str,
+    pub message: &'static str,
+    pub presented: String,
+}
+
+/// [`DuplicateIdRefusal`] for `id`.
+#[must_use]
+pub fn duplicate_id_refusal(id: &str) -> DuplicateIdRefusal {
+    DuplicateIdRefusal {
+        code: "INPUT_ERROR",
+        message: "conflict on insert of Issue",
+        presented: format!("Entity Issue with id {id} already exists."),
+    }
+}
+
+/// Whether `error` is exactly `refusal`, every one of its three parts.
+fn refuses_the_duplicate(error: &Value, refusal: &DuplicateIdRefusal) -> bool {
+    error.pointer("/extensions/code").and_then(Value::as_str) == Some(refusal.code)
+        && error.get("message").and_then(Value::as_str) == Some(refusal.message)
+        && error
+            .pointer("/extensions/userPresentableMessage")
+            .and_then(Value::as_str)
+            == Some(refusal.presented.as_str())
 }
 
 /// Claims member `index` alone, once: `None` when a run still going holds it.
