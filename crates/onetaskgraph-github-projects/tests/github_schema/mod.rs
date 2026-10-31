@@ -14,8 +14,11 @@
 //! required one given and every literal one of its type; two selections answering under one
 //! name, through any fragment and at any depth, answer with one shape and — unless they sit on
 //! two different object types — select the same field with the same arguments, their
-//! sub-selections merging the same way; a leaf has no selection and a composite one; every fragment is used, its name unique, its type existing and able to
-//! apply where it is spread, and none spreads itself; every directive is defined, allowed where
+//! sub-selections merging the same way; a leaf has no selection and a composite one; every
+//! fragment is used, its name unique, its type existing and able to apply where it is spread,
+//! and none spreads itself — checked before anything else expands a spread, so a document whose
+//! fragments cycle is refused for the cycle and its selections are not merged, since merging
+//! them would never end; every directive is defined, allowed where
 //! it stands, not repeated unless repeatable, and given its required arguments; every variable
 //! used is declared, every declared one used and declared once, each at an input type, its
 //! default a constant of that type, and each use at a position its type and nullability fit;
@@ -338,6 +341,10 @@ struct Walk<'q> {
     entered: Vec<String>,
     /// Every fragment some operation spreads.
     spread: HashSet<String>,
+    /// Whether some fragment spreads itself. Merging selections expands every spread, which
+    /// such a fragment makes endless, so a document holding one is refused for the cycle and
+    /// its selections are not merged.
+    cyclic: bool,
 }
 
 /// Whether GitHub's static validation accepts `document` sent with `variables`; `Err` carries
@@ -362,6 +369,7 @@ fn check(document: &str, variables: Option<&Value>) -> Result<(), Vec<String>> {
         errors: Vec::new(),
         entered: Vec::new(),
         spread: HashSet::new(),
+        cyclic: false,
     };
     let variables = match variables {
         Some(Value::Object(_)) | None => variables,
@@ -384,6 +392,7 @@ fn check(document: &str, variables: Option<&Value>) -> Result<(), Vec<String>> {
             ));
         }
     }
+    walk.refuse_cycles();
     let operations = parsed
         .definitions
         .iter()
@@ -510,7 +519,9 @@ impl<'q> Walk<'q> {
         self.used.clear();
         self.entered.clear();
         self.directives(directives, location);
-        self.mergeable(root, selection);
+        if !self.cyclic {
+            self.mergeable(root, selection);
+        }
         self.selection(root, selection);
         for definition in declared {
             if !self.used.contains(definition.name.as_str()) {
@@ -751,6 +762,52 @@ impl<'q> Walk<'q> {
         }
     }
 
+    /// Every fragment that spreads itself, directly or through others, reported once by the
+    /// first fragment of its cycle a depth-first walk of the spreads meets again — before
+    /// anything expands a spread, so nothing after this can follow a cycle round.
+    fn refuse_cycles(&mut self) {
+        fn visit<'q>(
+            walk: &Walk<'q>,
+            name: &'q str,
+            path: &mut Vec<&'q str>,
+            done: &mut HashSet<&'q str>,
+            cycles: &mut Vec<String>,
+        ) {
+            if let Some(at) = path.iter().position(|entered| *entered == name) {
+                let first = path[at].to_owned();
+                if !cycles.contains(&first) {
+                    cycles.push(first);
+                }
+                return;
+            }
+            if !done.insert(name) {
+                return;
+            }
+            let Some(fragment) = walk.fragments.get(name) else {
+                return;
+            };
+            path.push(name);
+            let mut spreads = Vec::new();
+            spreads_in(&fragment.selection_set, &mut spreads);
+            for spread in spreads {
+                visit(walk, spread, path, done, cycles);
+            }
+            path.pop();
+        }
+        let mut names = self.fragments.keys().copied().collect::<Vec<_>>();
+        names.sort_unstable();
+        let mut done = HashSet::new();
+        let mut cycles = Vec::new();
+        for name in names {
+            visit(self, name, &mut Vec::new(), &mut done, &mut cycles);
+        }
+        self.cyclic = !cycles.is_empty();
+        for name in cycles {
+            self.errors
+                .push(format!("Fragment {name} contains an infinite loop"));
+        }
+    }
+
     fn spread(&mut self, parent: &str, name: &str) {
         self.spread.insert(name.to_owned());
         let Some(fragment) = self.fragments.get(name).copied() else {
@@ -759,8 +816,7 @@ impl<'q> Walk<'q> {
             return;
         };
         if self.entered.iter().any(|entered| entered == name) {
-            self.errors
-                .push(format!("Fragment {name} contains an infinite loop"));
+            // Already reported by `refuse_cycles`, before any operation was walked.
             return;
         }
         let query::TypeCondition::On(condition) = &fragment.type_condition;
@@ -921,7 +977,9 @@ impl<'q> Walk<'q> {
                      selections. Did you mean '{name} {{ ... }}'?)"
                 ));
             } else {
-                self.mergeable(returns, &field.selection_set);
+                if !self.cyclic {
+                    self.mergeable(returns, &field.selection_set);
+                }
                 self.selection(returns, &field.selection_set);
             }
         } else if !field.selection_set.items.is_empty() {
@@ -929,6 +987,19 @@ impl<'q> Walk<'q> {
                 "Selections can't be made on scalars (field '{name}' returns {returns} but has \
                  selections)"
             ));
+        }
+    }
+}
+
+/// Every fragment a selection set spreads, inline fragments' included, in document order.
+fn spreads_in<'q>(selection: &'q query::SelectionSet<'q, String>, spreads: &mut Vec<&'q str>) {
+    for item in &selection.items {
+        match item {
+            query::Selection::Field(field) => spreads_in(&field.selection_set, spreads),
+            query::Selection::InlineFragment(fragment) => {
+                spreads_in(&fragment.selection_set, spreads);
+            }
+            query::Selection::FragmentSpread(spread) => spreads.push(&spread.fragment_name),
         }
     }
 }

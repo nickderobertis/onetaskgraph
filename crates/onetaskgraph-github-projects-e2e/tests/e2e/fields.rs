@@ -821,4 +821,64 @@ fn a_request_the_board_refuses_changes_nothing_on_it() {
         "a refused request removed the item it named"
     );
 }
+
+/// Set in the child process [`a_fragment_cycle_inside_repeated_selections_is_refused`] runs
+/// itself in.
+const CYCLE_CHILD: &str = "ONETASKGRAPH_FRAGMENT_CYCLE_CHILD";
+
+/// A fragment that spreads itself, inside two selections the board must merge, is refused as
+/// GitHub refuses it — an HTTP answer with `errors`, no `data`, nothing on the board changed —
+/// rather than recursing until the stack overflows.
+///
+/// The request is sent from a child process running this same test, because a validator that
+/// recurses without end aborts its whole process on the overflow: run in this one, it would
+/// take the test runner and every other journey with it instead of failing this test.
+#[test]
+fn a_fragment_cycle_inside_repeated_selections_is_refused() {
+    if std::env::var_os(CYCLE_CHILD).is_some() {
+        let (sandbox, board) = configured();
+        let status = board.status_options();
+        let priority = board.priority_options();
+        let values_before = values(&sandbox);
+        let answered = board.graphql_response(
+            "query { viewer { ...F } viewer { ...F } } \
+             fragment F on User { followers(first: 1) { nodes { ...F } } }",
+            &json!({}),
+        );
+        assert_eq!(
+            answered,
+            json!({"errors": [{"message": "Fragment F contains an infinite loop"}]})
+        );
+        assert_eq!(board.status_options(), status);
+        assert_eq!(board.priority_options(), priority);
+        assert_eq!(
+            values(&sandbox),
+            values_before,
+            "a refused request changed the board"
+        );
+        return;
+    }
+    let child = std::process::Command::new(std::env::current_exe().expect("this test binary"))
+        .args([
+            "--exact",
+            "fields::a_fragment_cycle_inside_repeated_selections_is_refused",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CYCLE_CHILD, "1")
+        .output()
+        .expect("the child test runs");
+    assert!(
+        child.status.success(),
+        "the child exited {}:\n{}\n{}",
+        child.status,
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&child.stdout).contains("1 passed"),
+        "the child ran no test: {}",
+        String::from_utf8_lossy(&child.stdout)
+    );
+}
 // llmlint: ignore-end[tests_mirror_real_usage]
