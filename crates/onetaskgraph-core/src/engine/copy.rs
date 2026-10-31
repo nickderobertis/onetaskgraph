@@ -2550,8 +2550,9 @@ impl Engine {
         // longer answers for, a write it drops — copies as it always did, with no intent, as it
         // then records no link either. Anything else refuses the copy before a destination
         // request: another attempt's live lease, a hold the source could not give — another
-        // process's, or one it cannot judge — and a read of the item that failed, since copying
-        // on without the intent would leave the create unprotected while another may be running.
+        // process's, or one it cannot judge — a read of the item that failed, and an intent there
+        // that is not one, since copying on without the intent would leave the create
+        // unprotected while another may be running.
         let (taken, local) = match self
             .take_intent(
                 level,
@@ -2561,19 +2562,10 @@ impl Engine {
                 None,
                 Some(replaces.as_ref()),
             )
-            .await
+            .await?
         {
-            Ok(taken) => taken,
-            Err(
-                EngineError::NoSuchTask { .. }
-                | EngineError::NoSuchProject { .. }
-                | EngineError::NoSuchDocument { .. }
-                | EngineError::SourceRefused {
-                    error: SourceError::Refused { .. } | SourceError::Malformed { .. },
-                    ..
-                },
-            ) => return Ok(false),
-            Err(error) => return Err(error),
+            intent::Taken::Held { intent, exclusive } => (intent, exclusive),
+            intent::Taken::Unkept => return Ok(false),
         };
         let destination = self.writable(&item.to)?;
         item.relist =

@@ -153,6 +153,20 @@ impl Intent {
     }
 }
 
+/// What taking an intent came to.
+pub(in crate::engine) enum Taken {
+    /// The intent is recorded, and `exclusive` when the source's hold made it this host's alone.
+    Held {
+        /// The intent as recorded.
+        intent: Intent,
+        /// Whether the source gave a hold on the item, so the decision under it was exclusive.
+        exclusive: bool,
+    },
+    /// The source will not keep the key, or no longer holds the record: the copy goes on as it
+    /// always did, with no intent.
+    Unkept,
+}
+
 /// A fresh version-4 UUID naming one engine's copy attempts.
 ///
 /// Its random bits come from the standard library's per-process randomly keyed hasher, mixed
@@ -387,7 +401,7 @@ pub(crate) fn stop_at(point: &str) {
 
 /// The test-only points a copy waits at for a journey to let it go on, so two processes can be
 /// interleaved exactly as a race would interleave them: `OTG_TEST_PAUSE_AT` naming
-/// `<point>=<directory>` pairs, comma-separated — `intent-read`, `after-create`, and
+/// `<point>=<directory>` pairs, comma-separated — `before-intent`, `intent-read`, `after-create`, and
 /// `before-comment-<n>` before the comment write numbered `n` from 0. At a named point the copy creates
 /// `<directory>/<point>.paused` and waits until `<directory>/<point>.go` exists, a minute at most.
 /// Unset, as everywhere but those journeys, it does nothing.
@@ -467,9 +481,17 @@ impl Engine {
         key: CreateKey,
         lease_until: Option<DateTime<Utc>>,
         planned_link: Option<Option<&GlobalId>>,
-    ) -> Result<(Intent, bool), EngineError> {
+    ) -> Result<Taken, EngineError> {
         let source = self.writable(&id.source)?;
-        let (metadata, hold) = self.locked_read(source, level, id).await?;
+        pause_at("before-intent");
+        let (metadata, hold) = match self.locked_read(source, level, id).await {
+            Err(
+                EngineError::NoSuchTask { .. }
+                | EngineError::NoSuchProject { .. }
+                | EngineError::NoSuchDocument { .. },
+            ) => return Ok(Taken::Unkept),
+            read => read?,
+        };
         pause_at("intent-read");
         let now = now();
         // Another copy that created and linked the counterpart since this one planned to create
@@ -514,11 +536,19 @@ impl Engine {
             Some(&intent),
         )
         .unwrap_or(Value::Null);
-        set_link_versioned(source, level, &id.native, &MetadataKey::creating(), &value)
-            .await
-            .map_err(|error| refused(source, error))?
-            .ok_or_else(|| missing(level, id))?;
-        Ok((intent, hold.held()))
+        // A source that will not keep the key — a narrow write it refuses, or answers as one it
+        // cannot take — or no longer holds the record, is the one answer that is not a refusal.
+        match set_link_versioned(source, level, &id.native, &MetadataKey::creating(), &value).await
+        {
+            Ok(Some(_)) => Ok(Taken::Held {
+                intent,
+                exclusive: hold.held(),
+            }),
+            Ok(None) | Err(SourceError::Refused { .. } | SourceError::Malformed { .. }) => {
+                Ok(Taken::Unkept)
+            }
+            Err(error) => Err(refused(source, error)),
+        }
     }
 
     /// Renew this attempt's intent to create `id`'s counterpart in `destination`, before a
@@ -769,6 +799,8 @@ impl Engine {
             }
             // Taken over by this attempt — refused while another's lease is live — and leased
             // once, to outlast the whole wait, so no renewal falls during it.
+            // A source that will not keep the key waits all the same, unleased, as it creates
+            // without one.
             self.take_intent(
                 level,
                 id,
