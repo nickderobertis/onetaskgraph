@@ -31,6 +31,9 @@ trap 'rm -rf "$scratch"' EXIT
 tree="$scratch/tree"
 { mkdir -p "$tree/scripts" "$scratch/bin" && cp "$root/scripts/warm-rust-cache.sh" "$tree/scripts/"; } \
   || fail "could not plant the warmer in $scratch" "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
+# Spelled as the warmer resolves its own root, `cd` and `pwd`: macOS's TMPDIR ends in a slash,
+# and the doubled one it leaves in $scratch is not in the target directory the warmer names.
+tree="$(cd "$tree" && pwd)"
 cat >"$tree/scripts/test-distribution.sh" <<'STUB'
 echo "distribution $*" >>"$WARM_RECORD"
 STUB
