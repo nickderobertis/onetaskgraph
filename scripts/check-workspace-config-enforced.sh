@@ -229,6 +229,17 @@ if ! output="$(cd "$scratch" && bash scripts/check-workspace-config.sh 2>&1)"; t
   failures=$((failures + 1))
 fi
 rm -rf "$scratch/.git" "$scratch/node_modules" "$scratch/target" "$scratch/.venv"
+# A directory the inventory cannot read is refused rather than skipped, or a version file in it
+# would escape reconciliation. Where permissions do not stop this user (root, or Windows), the
+# directory stays readable and there is nothing to watch.
+mkdir -p "$scratch/sdks/unreadable" && chmod 000 "$scratch/sdks/unreadable"
+if ls "$scratch/sdks/unreadable" >/dev/null 2>&1; then
+  echo "check-workspace-config-enforced: the unreadable-directory case is skipped here: this user can read a directory with no permissions" >&2
+else
+  expect check-workspace-config.sh "a directory the version inventory cannot read" \
+    "the product version files could not be read"
+fi
+chmod 755 "$scratch/sdks/unreadable" && rmdir "$scratch/sdks/unreadable"
 
 # Every spelling in the file, the docstring's included: the scan reads the whole file.
 mutate "$CONFTEST" 'text = text.replace("debug", "built")'

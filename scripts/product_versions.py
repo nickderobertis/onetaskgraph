@@ -158,7 +158,12 @@ UNOWNED_DIRECTORIES = frozenset({".git", "node_modules", "target", ".venv"})
 
 def _tree_files() -> Iterator[Path]:
     """Every file under the working directory, outside the directories nothing here owns."""
-    for directory, children, files in os.walk("."):
+    # An unreadable directory is raised, never skipped: a release-owned file inside it would
+    # otherwise escape the inventory, and every caller reports an OSError with its repair.
+    def refuse(error: OSError) -> None:
+        raise error
+
+    for directory, children, files in os.walk(".", onerror=refuse):
         children[:] = sorted(child for child in children if child not in UNOWNED_DIRECTORIES)
         base = Path(directory)
         for name in sorted(files):
