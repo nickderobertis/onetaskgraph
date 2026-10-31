@@ -45,9 +45,7 @@
     }
   },
   "conflict": {
-    "wordings": [
-      "created a temporary conflict"
-    ],
+    "wordings": ["created a temporary conflict"],
     "observed": {
       "created a temporary conflict": {
         "read": "2026-10-31",
