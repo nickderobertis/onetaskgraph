@@ -60,7 +60,10 @@ fn a_hold_excludes_another_instance_until_it_is_released() {
             let taken = second
                 .hold_item(MetadataRecord::Task, &NativeId("T-1".to_owned()))
                 .expect("held once released");
-            (taken, std::time::Instant::now())
+            // The instance is handed back still holding: a source that goes away releases its
+            // hold — on Windows its lock file is deleted as the handle closes — so dropping it
+            // here would leave nothing for the test to find held.
+            (second, taken, std::time::Instant::now())
         }
     });
     asked.recv().expect("the second instance is asking");
@@ -68,13 +71,15 @@ fn a_hold_excludes_another_instance_until_it_is_released() {
     std::thread::sleep(Duration::from_millis(200));
     let released = std::time::Instant::now();
     first.release_item(MetadataRecord::Task, &id);
-    let (taken, held_at) = waiter.join().expect("the second hold");
+    let (second, taken, held_at) = waiter.join().expect("the second hold");
     assert!(taken, "the second instance holds it");
     assert!(
         held_at >= released,
         "the second instance held it only once the first let go"
     );
     assert!(lock.exists(), "the second instance holds it now");
+    second.release_item(MetadataRecord::Task, &id);
+    assert!(!lock.exists(), "released, the lock file goes");
 }
 
 #[test]
