@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,6 +27,35 @@ def binary() -> Path:
     Nothing here builds it: scripts/check-workspace-config.sh says why a spawner never does.
     """
     return workspace_binary()
+
+
+@pytest.fixture(scope="session")
+def regenerated_package(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Return a copy of the package whose `_generated` the real generator wrote from nothing.
+
+    The generator runs once against the bundle the built binary emits, in a process of its own
+    from the package directory, into a copy of the package whose `_generated` was removed first.
+    So everything in `_generated` is what it wrote, and everything outside it is what the copy
+    brought. Each regeneration takes about a minute, so the tests that read one share this one.
+    """
+    package = WORKSPACE / "sdks" / "python"
+    copy = tmp_path_factory.mktemp("regenerated") / "onetaskgraph_sdk"
+    shutil.copytree(package / "src" / "onetaskgraph_sdk", copy)
+    shutil.rmtree(copy / "_generated")
+    destination = copy / "_generated"
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import json; from pathlib import Path; import generate; "
+            "bundle=generate.validate_schema_bundle("
+            "json.loads(generate.run_workspace_binary('schema'))); "
+            f"generate.generate(bundle, check=False, destination=Path({str(destination)!r}))",
+        ],
+        cwd=package,
+        check=True,
+    )
+    return copy
 
 
 def workspace_binary() -> Path:
