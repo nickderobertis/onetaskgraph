@@ -1934,7 +1934,7 @@ impl Engine {
             projections: BTreeMap::new(),
             clock: clock.clone(),
             creates: BTreeMap::new(),
-            attempt: uuid::Uuid::new_v4(),
+            attempt: copy::intent::attempt(),
         }
     }
 

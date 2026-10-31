@@ -91,6 +91,29 @@ impl Intent {
     }
 }
 
+/// A fresh version-4 UUID naming one engine's copy attempts.
+///
+/// Its random bits come from the standard library's per-process randomly keyed hasher, mixed
+/// with this process's id and the time, rather than from a random-number crate this workspace
+/// would otherwise carry twice: an attempt only has to differ from every other process's.
+#[must_use]
+pub fn attempt() -> uuid::Uuid {
+    use std::hash::{BuildHasher, Hasher};
+    let mut bytes = [0u8; 16];
+    for (index, chunk) in bytes.chunks_mut(8).enumerate() {
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_usize(index);
+        hasher.write_u32(std::process::id());
+        hasher.write_u128(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_nanos()),
+        );
+        chunk.copy_from_slice(&hasher.finish().to_le_bytes());
+    }
+    uuid::Builder::from_random_bytes(bytes).into_uuid()
+}
+
 /// An intent's times as RFC 3339 UTC to the second, and read back only as that.
 mod seconds {
     use chrono::{DateTime, SecondsFormat, Utc};
