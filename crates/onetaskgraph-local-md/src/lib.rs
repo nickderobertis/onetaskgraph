@@ -1435,19 +1435,21 @@ impl TaskSource for LocalMdSource {
         if before.contains_key(key.as_str()) {
             let text = Self::read_text(&path)?;
             let edited = with_metadata_entry(&text, key.as_str(), None)
-                .map_err(|unnarrow| unnarrow.refusal(&path, key))?;
-            replace_atomically(&path, &edited)?;
+                .map_err(|unnarrow| unnarrow.refusal_to("remove", &path, key.as_str()))?;
+            // Held to reading back as the record less that one key before anything is written,
+            // so a removal that would read back otherwise — or not at all — leaves the file as
+            // it was.
             let mut wanted = before;
             wanted.remove(key.as_str());
-            if self.record_metadata(record, id).await?.as_ref() != Some(&wanted) {
-                replace_atomically(&path, &text)?;
+            if self.metadata_in(record, &path, &edited).ok().as_ref() != Some(&wanted) {
                 return Err(Unnarrow {
                     reason: "the edited file would read back as more than that one key removed"
                         .to_owned(),
                     next: TIDY_BLOCK,
                 }
-                .refusal(&path, key));
+                .refusal_to("remove", &path, key.as_str()));
             }
+            replace_atomically(&path, &edited)?;
         }
         Ok(Some(self.written_version(record, id).await))
     }
@@ -4536,6 +4538,26 @@ const TIDY_BLOCK: &str = "write the file's `metadata:` as a block mapping indent
                           one `key: value` entry to a line, and set the key again";
 
 impl LocalMdSource {
+    /// The metadata a `record`'s file at `path` would read as, were it `text`.
+    fn metadata_in(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        path: &Path,
+        text: &str,
+    ) -> Result<BTreeMap<String, serde_json::Value>, SourceError> {
+        Ok(match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => {
+                task(self.parse_text(WorkKind::Task, path, text)?).metadata
+            }
+            onetaskgraph_plugin_api::MetadataRecord::Project => {
+                project(self.parse_text(WorkKind::Project, path, text)?).metadata
+            }
+            onetaskgraph_plugin_api::MetadataRecord::Document => {
+                self.parse_document_text(path, text)?.metadata
+            }
+        })
+    }
+
     /// The metadata of the `record` `id` as its file now reads, or `None` when there is none.
     async fn record_metadata(
         &self,
