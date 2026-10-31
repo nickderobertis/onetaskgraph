@@ -3302,7 +3302,7 @@ impl TaskSource for LinearSource {
             return Ok(Vec::new());
         }
         Ok(self
-            .get_task(&NativeId(key.to_owned()))
+            .get_task(&NativeId(linear_id_of_key(key)?))
             .await?
             .map(|task| vec![task.id])
             .unwrap_or_default())
@@ -3614,7 +3614,7 @@ impl TaskSource for LinearSource {
                     let mut input = input;
                     input["teamId"] = Value::String(team.0);
                     if let Some(key) = &create_key {
-                        input["id"] = Value::String(key.clone());
+                        input["id"] = Value::String(linear_id_of_key(key)?);
                     }
                     json!({"input":input})
                 },
@@ -3628,7 +3628,7 @@ impl TaskSource for LinearSource {
             Err(error) => {
                 self.forget_vocabulary();
                 if let Some(key) = &create_key
-                    && let Some(held) = self.get_task(&NativeId(key.clone())).await?
+                    && let Some(held) = self.get_task(&NativeId(linear_id_of_key(key)?)).await?
                 {
                     let item = write.item.clone();
                     return self
@@ -5738,6 +5738,32 @@ fn classification_of(
         .map_err(|message| SourceError::Malformed { message })?;
     metadata.remove(Classification::METADATA_KEY);
     Ok(classification)
+}
+
+/// The id a create carrying `key` is sent to Linear under: the key — a version-5 UUID — with its
+/// version nibble set to 4 and its RFC 4122 variant kept, because Linear's published schema
+/// (`IssueCreateInput.id`, `ProjectCreateInput.id` and `DocumentCreateInput.id` in
+/// linear/linear's `packages/sdk/src/schema.graphql`) documents the id as "in UUID v4 format".
+/// Deterministic, so every attempt at one create sends, and looks up, the same id; the key itself
+/// stays verbatim in the item's slot at `onetaskgraph.create_key`.
+///
+/// # Errors
+///
+/// [`SourceError::Malformed`] for a key that is not a hyphenated UUID.
+pub fn linear_id_of_key(key: &str) -> Result<String, SourceError> {
+    let shaped = key.len() == 36
+        && key.char_indices().all(|(at, character)| match at {
+            8 | 13 | 18 | 23 => character == '-',
+            _ => character.is_ascii_hexdigit(),
+        });
+    if !shaped {
+        return Err(SourceError::Malformed {
+            message: format!("create key {key:?} is not a hyphenated UUID"),
+        });
+    }
+    let mut id = key.to_ascii_lowercase();
+    id.replace_range(14..15, "4");
+    Ok(id)
 }
 
 fn map_document(v: &Value) -> Result<Document, SourceError> {

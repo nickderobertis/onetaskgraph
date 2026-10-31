@@ -1115,6 +1115,9 @@ struct BoardPlacement {
 
 /// The board this fixture keeps, and everything a request may change on it.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
+/// How a loopback board rewrites its answers to `Repository.issues`.
+type IssueListingBend = Box<dyn Fn(&mut Value) + Send + Sync>;
+
 struct GitHubBoard {
     /// Issues `Repository.issues` does not list yet, by id: one GitHub committed and its
     /// listing has not caught up with.
@@ -1123,6 +1126,8 @@ struct GitHubBoard {
     unlist_new: bool,
     /// The most issues one page of `Repository.issues` answers, when fewer than asked for.
     issue_page_rows: Option<usize>,
+    /// How every answer to `Repository.issues` is rewritten before it is sent, when it is.
+    issue_listing_bend: Option<IssueListingBend>,
     canonical_issue_urls: bool,
     /// Whether `createIssue` answers without the issue's URL, so a writer learns it only by
     /// reading the issue.
@@ -1878,6 +1883,13 @@ impl GitHubBoardFields {
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `drop_response_once`.
     pub fn unlist_new_issues(&self, unlisted: bool) {
         self.board.lock().unwrap().unlist_new = unlisted;
+    }
+
+    /// Rewrite every answer to `Repository.issues` through `bend`, handed the `issues`
+    /// connection: a listing answered as no correct one is.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `answer_search_pages_of`.
+    pub fn bend_issue_listings(&self, bend: impl Fn(&mut Value) + Send + Sync + 'static) {
+        self.board.lock().unwrap().issue_listing_bend = Some(Box::new(bend));
     }
 
     /// Answer every page of `Repository.issues` with at most `rows` issues.
@@ -3710,6 +3722,7 @@ fn github_projects_board_at(
         unlisted: Vec::new(),
         unlist_new: false,
         issue_page_rows: None,
+        issue_listing_bend: None,
         closed_filter_leaks: false,
         closed_cursor_stalls: false,
         erring_beside: Vec::new(),
@@ -5035,8 +5048,12 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                                "body":item["body"]})
             })
             .collect();
-        return json!({"repository":{"issues":{"nodes":nodes,
+        let mut answer = json!({"repository":{"issues":{"nodes":nodes,
             "pageInfo":{"hasNextPage":more,"endCursor":more.then(|| end.to_string())}}}});
+        if let Some(bend) = &board.issue_listing_bend {
+            bend(&mut answer["repository"]["issues"]);
+        }
+        return answer;
     }
     if query.contains("repository(owner:$owner,name:$name)") {
         assert_eq!(variables["owner"], board.repository_owner());

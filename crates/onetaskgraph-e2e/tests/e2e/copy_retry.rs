@@ -151,15 +151,19 @@ fn an_uninterrupted_create_records_its_intent_first_and_leaves_none_behind() {
         assert_eq!(landed.len(), 1, "{destination}: {landed:#?}");
         let created = &stores.json(&["task", "show", outcome["destination"].as_str().unwrap()])["items"]
             [0]["item"];
-        let carried = created["metadata"]["onetaskgraph.create_key"]
-            .as_str()
-            .map(str::to_owned)
-            .or_else(|| created["id"].as_str().map(str::to_owned));
         assert_eq!(
-            carried.as_deref(),
-            Some(key.as_str()),
-            "{destination}: {created:#}"
+            created["metadata"]["onetaskgraph.create_key"],
+            json!(key),
+            "{destination}: the key is kept verbatim: {created:#}"
         );
+        if destination == "linear" {
+            // Linear holds the issue under the key's v4-shaped id, the format its schema takes.
+            assert_eq!(
+                created["id"],
+                json!(onetaskgraph_linear::linear_id_of_key(&key).expect("a key")),
+                "{created:#}"
+            );
+        }
         // A second copy is an update of that item, and writes no intent.
         let again = stores.json(&["task", "copy", NOTE, "--to", destination]);
         assert_ne!(again["items"][0]["action"], "created", "{again:#}");
@@ -562,6 +566,8 @@ fn a_linear_create_answered_as_an_id_already_held_is_read_by_that_id_and_written
         .to_owned();
     // The earlier attempt's `issueCreate` lands only once the retry has looked for it and not
     // found it: the retry's own create, sent with the same id, is answered as an id taken.
+    // Linear holds it under the v4-shaped id the key is sent as.
+    let key = onetaskgraph_linear::linear_id_of_key(&key).expect("a key");
     let landed = key.clone();
     stores.linear.after_request(
         move |document, variables| {
@@ -782,4 +788,59 @@ fn a_holder_that_finds_another_attempt_holding_its_intent_writes_nothing_more() 
     assert_eq!(stores.board.items_titled("Task A").len(), 1);
     let (attempt, _) = board_intent(&stores.notes).expect("the new holder's intent");
     assert_eq!(attempt, "00000000-0000-4000-8000-000000000001");
+}
+
+#[test]
+fn a_listing_by_key_the_board_answers_malformed_is_refused_and_nothing_is_created_again() {
+    type Bend = fn(&mut Value);
+    let cases: [(&str, Bend); 4] = [
+        ("no creation time", |issues| {
+            issues["nodes"][0]
+                .as_object_mut()
+                .map(|node| node.remove("createdAt"));
+        }),
+        ("no id", |issues| {
+            issues["nodes"][0]
+                .as_object_mut()
+                .map(|node| node.remove("id"));
+        }),
+        ("no word on another page", |issues| {
+            issues["pageInfo"]
+                .as_object_mut()
+                .map(|page| page.remove("hasNextPage"));
+        }),
+        ("another page with no cursor to it", |issues| {
+            issues["pageInfo"] = json!({"hasNextPage": true, "endCursor": null});
+        }),
+    ];
+    for (what, bend) in cases {
+        let stores = Stores::new();
+        stores.board.drop_response_once("createIssue");
+        let failed = stores.run(&["task", "copy", NOTE, "--to", "board"], None);
+        assert_ne!(failed.status.code(), Some(0), "{what}: {}", stderr(&failed));
+        stores.board.bend_issue_listings(bend);
+        // One issue a page, so a page stops short of the issues older than the intent and says
+        // whether another follows.
+        stores.board.answer_issue_listings_in_pages_of(1);
+        let creates = count(&stores.board, creates_issue);
+        let output = stores.run(&["--json", "task", "copy", NOTE, "--to", "board"], None);
+        assert_eq!(output.status.code(), Some(1), "{what}: {}", stderr(&output));
+        let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+        assert_eq!(
+            failure["failure"]["kind"], "malformed",
+            "{what}: {failure:#}"
+        );
+        assert!(
+            failure["failure"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("issues")),
+            "{what}: {failure:#}"
+        );
+        assert_eq!(
+            count(&stores.board, creates_issue),
+            creates,
+            "{what}: nothing created"
+        );
+        assert_eq!(stores.board.items_titled("Task A").len(), 1, "{what}");
+    }
 }
