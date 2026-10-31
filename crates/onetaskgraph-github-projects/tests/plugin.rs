@@ -14911,12 +14911,12 @@ fn the_pinned_delete_mutations_are_the_ones_the_live_lane_introspects() {
     }
 }
 
-/// The vendored copy of GitHub's published schema is GitHub's file byte for byte: its
-/// SHA-256 is the one `fixtures/README.md` records beside its source and retrieval date, so
-/// neither can move without the other — a hand edit of the copy fails here, and a refresh
-/// records its new digest in the same change.
+/// The vendored copy of GitHub's published schema hashes to the SHA-256 `fixtures/README.md`
+/// records beside its source and retrieval date, so neither can move without the other — a
+/// hand edit of the copy fails here, and a refresh records its new digest in the same change.
+/// It says nothing of whether GitHub has published a newer file since.
 #[test]
-fn the_vendored_github_schema_is_the_published_file_its_provenance_records() {
+fn the_vendored_github_schema_hashes_to_the_digest_its_readme_records() {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(github_schema::SCHEMA.as_bytes())
         .iter()

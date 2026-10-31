@@ -33,6 +33,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+// llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Both constants are dated snapshots of external contracts by design. SCHEMA is GitHub's published file, pinned to the digest fixtures/README.md records beside its source and retrieval date (tests/plugin.rs), and reconciled there with every contract the credentialed lane introspects from GitHub each run; a freshness gate against docs.github.com itself would turn the required check red on GitHub's publication cadence rather than on a change here, and the field-setup contract's live reconciliation is the manager's live field setup, which the dispatch that added this file names as outside its bar. INTROSPECTION is the GraphQL specification's normative text for its October 2021 edition, a fixed published version that does not drift.
 /// GitHub's published GraphQL schema, whole.
 pub const SCHEMA: &str = include_str!("../fixtures/github-schema.docs.graphql");
 
@@ -64,6 +65,7 @@ type __IntrospectionRoot { __schema: __Schema! __type(name: String!): __Type }
 directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 "#;
+// llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 type Definition = schema::TypeDefinition<'static, String>;
 type Field = schema::Field<'static, String>;

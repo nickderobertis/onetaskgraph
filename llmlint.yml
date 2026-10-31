@@ -27,6 +27,11 @@ files:
     # them, which every figure is read from, stay judged.
     - "docs/measurements/**/*.json"
     - "docs/measurements/**/*.jsonl"
+    # GitHub's published GraphQL schema, vendored byte for byte and pinned by digest to the
+    # provenance in that directory's README.md (tests/plugin.rs); 1.5 MB that cannot carry a
+    # comment without ceasing to be GitHub's file. Its consumer, tests/github_schema/mod.rs,
+    # stays judged.
+    - "crates/onetaskgraph-github-projects/tests/fixtures/github-schema.docs.graphql"
 rationales: true
 # No `agents` block: the harness/model are NOT pinned here. `oneharness.toml`
 # (composed alongside this file) selects them in fallback mode — codex + gpt-6.1-sol
