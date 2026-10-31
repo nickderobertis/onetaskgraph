@@ -1325,11 +1325,11 @@ them do; this is the inventory of what is owed, not a status board.
      its create's answer dropped, before its link — and run again leaves exactly one destination
      item carrying the source's origin on a folder, a board and Linear, reported `via: "intent"`
      where the item existed, with the link recorded and no `onetaskgraph.creating` left; an
-     uninterrupted create writes its intent before its first destination request and none after,
+     uninterrupted create writes its intent before its first destination write and none after,
      the created item carries `onetaskgraph.create_key` (Linear: its v4-shaped transform as its
      id), a dry run writes neither, `metadata set` refuses the key, `task locate` answers the
      counterpart `via: "intent"` writing nothing, another attempt's live lease refuses
-     `create-in-progress` before any destination request, and a copy whose every write is taken
+     `create-in-progress` before any destination write, and a copy whose every write is taken
      back leaves the copied file byte for byte.
 128. `task copy --when-destination-status … --otherwise refuse|preserve-destination` writes over a
      counterpart only at the named categories, answers any other `failed` as `destination-status`

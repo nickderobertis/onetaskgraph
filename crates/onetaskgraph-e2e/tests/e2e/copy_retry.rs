@@ -1534,7 +1534,7 @@ fn lock_ahead(notes: &std::path::Path) -> PathBuf {
 }
 
 #[test]
-fn a_copy_whose_source_cannot_give_its_hold_is_refused_before_any_destination_request() {
+fn a_copy_whose_source_cannot_give_its_hold_is_refused_before_any_destination_write() {
     let stores = Stores::new();
     let lock = lock_ahead(&stores.notes);
     let before = std::fs::read(stores.notes.join("tasks/A.md")).expect("the note");

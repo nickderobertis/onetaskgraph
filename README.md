@@ -708,15 +708,15 @@ of which `metadata set` accepts:
 - **`onetaskgraph.creating`**, on the item being copied, is an object keyed by destination
   source name, each `{"key": <UUID v5>, "at": <RFC 3339 UTC, when the key was first taken>,
   "attempt": <UUID v4 of the copy holding it>, "lease_until": <RFC 3339 UTC>}`. It is written
-  before the copy's first destination request for that item — before any create of the same
-  command is sent — and removed for that destination with the write that records the item's
+  after the copy has planned — read what it needs of the destination — and before its first
+  destination write, before any create of the same command is sent — and removed for that destination with the write that records the item's
   `onetaskgraph.copies` link: in that one write for a task, and in one more narrow write of that
   key alone for a project or a document; the key goes when its object empties. A dry run, `--no-link`, an
   update and a copy into a destination a link may not name write none, so an item with no create
   in flight reads exactly as it did before this existed. A source that will not keep the key — a
   narrow write it refuses, a record it no longer holds — is copied as it always was, with no
   intent; one whose hold or read of the item fails refuses the copy before any destination
-  request. A copy that cannot finish and takes back everything it wrote puts the item back byte
+  write. A copy that cannot finish and takes back everything it wrote puts the item back byte
   for byte, or, where it cannot, takes the intent alone off — an item that takes neither keeps it
   for its retry to resolve once the lease runs out; one whose create may have landed unseen — an
   answer that never arrived — keeps the intent and gives up its lease, so its retry takes over at
@@ -772,7 +772,7 @@ and releases it under an exclusive lock file beside the item (`<file>.lock`, cre
 one older than thirty seconds is a dead process's and is taken over, and one dated ahead of
 this host's clock, whose age cannot be told, is refused at once): under the lock the copy
 reads the intent, refuses with the failure kind `create-in-progress` — naming the lease's end,
-having written nothing and sent the destination nothing — while another attempt's lease is live,
+having written nothing anywhere — while another attempt's lease is live,
 and otherwise records its own `attempt` and a `lease_until` of now plus the source's
 `create_lease_seconds`; a copy that finds, under the lock, that another copy created and
 linked the counterpart since it planned the create refuses the same way, naming that
@@ -812,7 +812,7 @@ from a folder of Markdown sends the destination exactly what it always did and n
 anything for its intent, whose take and release are lock-guarded file writes; and one from a
 hosted source sends Linear or a folder exactly what it always did, and a board that plus one
 repository listing after `createIssue`. The rare paths are bounded rather than counted. A hosted
-source is sent at most one intent write before the first destination request plus one renewal
+source is sent at most one intent write before the first destination write plus one renewal
 per destination write after its create, each its existing narrow metadata write, and the intent
 is removed in the link write it already sends. Resolving an intent adds, on a board, one listing
 — two when it waits, and one more after a create made because nothing was listed — a page each

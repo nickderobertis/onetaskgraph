@@ -2549,7 +2549,7 @@ impl Engine {
         // A source that will not keep the key — a file it cannot edit narrowly, an item it no
         // longer answers for, a write it drops — copies as it always did, with no intent, as it
         // then records no link either. Anything else refuses the copy before a destination
-        // request: another attempt's live lease, a hold the source could not give — another
+        // write: another attempt's live lease, a hold the source could not give — another
         // process's, or one it cannot judge — a read of the item that failed, and an intent there
         // that is not one, since copying on without the intent would leave the create
         // unprotected while another may be running.
@@ -4889,7 +4889,7 @@ impl Engine {
         }
 
         // Every create this call makes is recorded as an intent on the item it copies before
-        // the first destination request any of them sends, so a retry finds what it made.
+        // the first destination write any of them sends, so a retry finds what it made.
         if !request.dry_run && !request.no_link {
             for item in &mut planned {
                 // A file on this machine is kept as it was, byte for byte, so a copy that takes
