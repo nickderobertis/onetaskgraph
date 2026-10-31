@@ -7281,9 +7281,7 @@ impl Engine {
             }
         }
         if let Some(plan) = &item.comment_plan {
-            self.renew_owned(&item.source, destination.name(), journal)
-                .await?;
-            self.write_comments(destination, &written.native, plan, journal)
+            self.write_comments(destination, &item.source, &written.native, plan, journal)
                 .await?;
         }
         let mut landed = outcome(reached(Some(written), changed));
@@ -7292,10 +7290,12 @@ impl Engine {
     }
 
     /// Make one destination task's comments what `plan` decided, recording how to take each
-    /// write back.
+    /// write back — renewing the lease on `source`'s intent before each, while this copy owns
+    /// its create.
     async fn write_comments(
         &self,
         destination: &ResolvedSource,
+        source: &GlobalId,
         task: &NativeId,
         plan: &comments::CommentPlan,
         journal: &mut Journal,
@@ -7304,7 +7304,10 @@ impl Engine {
         let gone = || EngineError::NoSuchTask {
             id: GlobalId::new(at.clone(), task.clone()).to_string(),
         };
-        for step in &plan.steps {
+        for (index, step) in plan.steps.iter().enumerate() {
+            intent::pause_at(&format!("before-comment-{index}"));
+            self.renew_owned(source, destination.name(), journal)
+                .await?;
             match step {
                 comments::Step::Delete(before) => {
                     let removed = destination
