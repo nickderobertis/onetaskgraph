@@ -3515,6 +3515,8 @@ fn the_binarys_relay_refuses_its_copy_onto_another_runs_pool_member() {
         namespace.refusals()
     );
     assert!(written("D-mine"), "the run's own member was not written");
+}
+
 /// The note's intent for `dest`, read off the file of the task `id` names: its attempt.
 fn intent_attempt(journey: &Journey, id: &str) -> Option<String> {
     let native = id.split_once(':').map_or(id, |(_, native)| native);
