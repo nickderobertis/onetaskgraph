@@ -231,9 +231,9 @@ jobs:
           NX_HEAD: HEAD
         run: just gate-generated
 
-      # A cancelled run's live journey dies before its own cleanup, and what it wrote would
-      # make the next session refuse the shared board. On cancellation, on the credentialed
-      # leg alone, this removes exactly this run attempt's stamped artifacts and opens no
+      # A cancelled run's live journey dies before its own cleanup, leaving its board copy and
+      # its scratch issues behind. On cancellation, on the credentialed leg alone, this removes
+      # exactly this run attempt's stamped artifacts, its board copies among them, and opens no
       # session; the hourly janitor takes anything left once the run reads completed.
       # scripts/check-live-janitor.sh holds this step to that shape.
       - name: Remove this run's live artifacts after a cancellation
