@@ -8,17 +8,22 @@
 # enough for every machine.
 name: Visual docs
 
+# A pull request's capture, classify gate, gallery preview and comment are steps of ci.yml's
+# `lint` job, so no pull-request event but `closed` starts this workflow: it is what deletes the
+# pull request's gh-pages preview. A push to main (and a dispatch) publishes the canonical
+# gallery, and the schedule prunes its history.
 on:
   pull_request:
     # `closed` lets screencomp delete this pull request's gh-pages preview once it closes,
     # so stale /pr-<n>/ galleries do not accumulate on that branch.
-    types: [opened, synchronize, reopened, closed]
+    types: [closed]
   push:
     branches: [main]
   schedule:
     # Monthly: prune the gh-pages gallery history so the images it accretes do not grow
     # that branch without bound (keeps the 20 most recent versions; see below).
     - cron: "41 4 1 * *"
+  workflow_dispatch:
 
 # The default for everything this workflow does not grant.
 permissions: {}
@@ -27,18 +32,22 @@ jobs:
   visual-docs:
     # Least privilege, one line per grant, and on the job rather than the workflow so a
     # second job added here inherits none of it.
-    # llmlint: ignore-block[least_privilege_grants] The comment grant reaches the push and
-    # the monthly schedule too and cannot be conditioned: GitHub takes no expression in
-    # `permissions`, and splitting the job under an `if:` would rename the check context
-    # branch protection names (`visual-docs / report (<arch>)`) and duplicate the capture
-    # command this repository holds as one statement. The grant is bounded by what the
-    # called workflow DOES with it — screencomp upserts one sticky comment on a pull
-    # request and writes none on either other event.
+    # llmlint: ignore-block[least_privilege_grants] The comment grant reaches the push, the
+    # dispatch and the monthly schedule too and cannot be conditioned: GitHub takes no
+    # expression in `permissions`, and splitting the job under an `if:` would duplicate the
+    # capture command this repository holds as one statement. The grant is bounded by what the
+    # called workflow DOES with it — screencomp touches a pull request's sticky comment only on
+    # a pull request event and writes none on any other.
     permissions:
       contents: write # push the gh-pages gallery
       pull-requests: write # upsert the sticky before/after comment on a pull request
       pages: read # gate the run on the Pages build the deploy triggers
     # llmlint: ignore-end[least_privilege_grants]
+    # Not on the release commit: release-plz's `chore: release v<version>` squash changes
+    # versions and changelogs alone, so its gallery would be the one the push before it
+    # published, and skipping it spends no job beside the release (GitHub still records the
+    # skipped run, whose job listing the release tail reads once).
+    if: "${{ !(github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore: release v')) }}"
     uses: nickderobertis/screencomp/.github/workflows/visual-docs-reusable.yml@v0.4.8
     with:
       # The version installed on the host runner. It is the same version the `uses:` ref

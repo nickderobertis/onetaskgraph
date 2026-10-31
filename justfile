@@ -60,11 +60,18 @@ pool-maintenance-budget:
 # Everyday gate: format, lint, types, tests and coverage over the affected projects.
 check: format-check lint typecheck test coverage distribution-check distribution-test
 
-# CI runs this on the default branch; contributors can also run it manually.
-# CI derives NX_BASE explicitly. Supply-chain and distribution stages remain unconditional.
+# No CI job runs this: a pull request's four jobs are the gate there. Contributors run it by
+# hand. Supply-chain and distribution stages remain unconditional.
+# Its whole body runs inside scripts/gate-time.sh, which records the run's start and end to
+# .gate-time.json and checks onetaskgraph-gate-time (budgets.yaml, `host-variable`) against
+# it: over its 30 minutes warns, and a failed measurement or an invalid budgets file fails.
 
 # Full quality gate over the affected projects, plus the supply chain. Fails on any issue.
-gate: deny check
+gate:
+    @bash scripts/gate-time.sh just gate-body
+
+# What `just gate` times: the supply chain and the everyday gate.
+gate-body: deny check
 
 # scripts/ is a project, so the phases above already reach these: `lint` runs the bash 3.2
 # scan and `test` runs the checks that watch it refuse, over the affected projects. This is
@@ -213,7 +220,7 @@ generate-check:
 # Linux CI aggregate: generated-code drift plus the affected-project gate.
 check-generated: generate-check check
 
-# Linux CI aggregate: generated-code drift plus the affected-project gate and the supply chain.
+# Generated-code drift plus the affected-project gate and the supply chain, by hand.
 gate-generated: generate-check gate
 
 # Upgrade every ecosystem's dependencies, then re-run the complete bar on the result.
@@ -294,7 +301,7 @@ lint-llm-diff base="origin/main" *args:
 
 # Private workflow tooling stays isolated from the product SDK workspace.
 github-workflows-bootstrap:
-    @bun install --cwd .github --frozen-lockfile
+    @bash scripts/github-workflows-bootstrap.sh
 
 # Focused workflow graph, required-context and budget proofs.
 github-workflows-check:

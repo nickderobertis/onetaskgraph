@@ -280,7 +280,7 @@ test("the real cache action ignores floating stable but tracks the pin and lockf
       const at = line.indexOf("=");
       env[line.slice(0, at)] = line.slice(at + 1);
     }
-    const cleanup = all()["ci.yml"].jobs.check.steps.find(
+    const cleanup = all()["ci.yml"].jobs["test-linux"].steps.find(
       (step) => step.run === "rustup toolchain uninstall stable",
     );
     async function key(floating, pinned, clean) {

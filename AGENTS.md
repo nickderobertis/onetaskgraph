@@ -221,8 +221,8 @@ naming the destination and the plugin method whose answer was malformed and sayi
 that destination before copying again; a malformed answer to any other call keeps its own
 failure. Taking an item back stays the source's duty (§4.9), so the plugin contract is unchanged.
 
-1. `deny.toml` refuses every embedded store, index and cache crate, and `deny` is a
-   required check — so reaching for one cannot merge.
+1. `deny.toml` refuses every embedded store, index and cache crate, and `deny` runs in the
+   required `lint` job — so reaching for one cannot merge.
 2. `crates/onetaskgraph-e2e/tests/e2e/no_persistence.rs` sandboxes `HOME`, every `XDG_*` and
    `TMPDIR` into one tree, plants sentinels in a source's work, drives every verb, and
    compares the tree with itself: it fails, naming the path, if any file was created or
@@ -238,8 +238,8 @@ failure. Taking an item back stays the source's duty (§4.9), so the plugin cont
 Not as a dependency, not as a dev-dependency, at no depth — and the same for
 `onetaskgraph-plugin-api` depending on anything of this workspace. Prose does not hold
 this; the first worker who wants one helper out of the engine will reach for it. So
-`deny.toml` permits the engine exactly one wrapper (the binary, failing the required
-`deny` job) and `scripts/check-plugin-isolation.sh` reads the real `cargo metadata` graph
+`deny.toml` permits the engine exactly one wrapper (the binary, failing `deny`, which the
+required `lint` job runs) and `scripts/check-plugin-isolation.sh` reads the real `cargo metadata` graph
 inside `just check`, failing in seconds instead of minutes.
 
 Both are watched failing rather than trusted: `scripts/check-isolation-enforced.sh`
@@ -445,18 +445,19 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   lane whose credential is missing. `ONETASKGRAPH_LIVE_REQUIRED` keeps exactly the meaning
   it has, so a defect in this decision cannot make an absent credential read as an
   unselected lane.
-  **Every path that can open a session reaches it through `just test`**, which is why there
-  is one consultation point: the change-request path runs `just check`,
-  and the default branch runs `just gate`, which is `deny` plus that same `check`.
-  CI derives its base explicitly from the merge base or `github.event.before`, because
+  **Every path that can open a session consults the one decision**: CI's one path is
+  `test-linux`'s `just ci-test-linux`, which reads it before it runs the tests, and a
+  contributor's `just check` and `just gate` reach it through `just test`.
+  CI derives its base explicitly from the merge base (`scripts/ci-pr-base.sh`), because
   an implicit base can select the wrong changes. Pushes run no repository checks;
   contributors can run `NX_BASE=<ref> just check` or `just gate` manually. A push to main
   does build, testing nothing, the Rust cache `test-linux`, `test-windows` and `test-macos`
   restore (`.github/workflows/rust-cache-warm.yml`): a pull request restores only a cache
   saved on its own ref or on main, so nothing else could give a new one a warm build.
   `scripts/check-live-lane-selection.sh`, a command in `scripts:test`, holds all of that:
-  it puts the five diffs to the real decision over real git states, drives the real recipes
-  for both CI paths, puts three diffs to real Nx, and ENUMERATES the paths from
+  it puts the five diffs to the real decision over real git states, drives a contributor's
+  two gates through the real recipes, holds every credentialed CI step's base to
+  `scripts/ci-pr-base.sh`, puts three diffs to real Nx, and ENUMERATES the paths from
   the workflow rather than listing them — so a path added or rewired later
   cannot silently bypass the decision. Nothing it runs has a credential and nothing it runs
   reaches an API.
@@ -605,8 +606,8 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   credentials, because `just check` performs the affected `test` target **and** the affected
   `coverage` target, and coverage is `cargo llvm-cov --no-report nextest --package <crate>`,
   which re-runs the very same integration tests — so a fold that stops at `test` opens a second session per
-  lane; `.github/workflows/ci.yml` handing the credentials to exactly one leg of its
-  three-platform matrix, so the count is one session per run rather than six; and
+  lane; `.github/workflows/ci.yml` handing the credentials to exactly one of its three test
+  jobs, `test-linux`, so the count is one session per run rather than three; and
   `scripts/check-fixture-discrimination.sh` clearing them too, because it runs the WHOLE
   `onetaskgraph-github-projects` package — twice, in a scratch copy — and that package's
   `tests/live.rs` is an ordinary test of it. **That step is outside the affected-selection
@@ -633,7 +634,7 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   three seeded present, behind a stand-in `cargo` that records the environment of every
   invocation, and refuses any that carries one of the three. A sentinel seeded beside them
   has to arrive in each recording, because a recording that captured nothing would report
-  every credential absent and read exactly like a pass. If you are changing the matrix, the
+  every credential absent and read exactly like a pass. If you are changing which job carries them, the
   coverage target or that step, those three are what have to stay true, and the note in each
   script says it where you will meet it.
   **A seat is no longer part of that, and the GitHub Projects lane takes none** — it opens
@@ -1503,13 +1504,16 @@ all.
 
 Every image in the README is a rendering of this CLI's real output, produced by
 `scripts/screenshots.sh` against the curated fixture in `screenshots/`, hashed, and refused
-by `.github/workflows/visual-docs.yml` the moment its bytes stop matching the committed
-baseline at `shots/baseline/<arch>.json`. So a hand-written transcript is a second
+by the visual docs steps of `ci.yml`'s `lint` job the moment its bytes stop matching the
+committed baseline at `shots/baseline/<arch>.json`; `.github/workflows/visual-docs.yml`
+publishes the canonical gallery on a push to main, deletes a closed pull request's preview and
+prunes the gallery's history. So a hand-written transcript is a second
 statement of the surface and a hash-gated capture is not: the binary stays the one source
 and the baseline is the drift gate.
 
-**It is informational and outside every gate.** No Nx target captures, `just check` and
-`just gate` cannot reach the capture, and the visual workflow is its own. Contributors capture and review changes manually with `just screenshots` and
+**It is informational and outside every Nx gate.** No Nx target captures, and `just check`
+and `just gate` cannot reach the capture; in CI it is steps of `lint` beside the gate rather
+than part of it. Contributors capture and review changes manually with `just screenshots` and
 `just screenshots-bless`. Pushes neither capture nor refresh baselines or galleries.
 The capture drives `local-md` and `in-memory` only: no credential or socket.
 
@@ -1548,19 +1552,30 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   does why an advisory check cannot substitute for a required one: a query GitHub refuses
   outright reached the default branch because auto-merge waited only on the required set
   while the advisory lane that caught it sat red.
-- **Six required checks — `check` on all three platforms, `deny`, `llmlint`, `pr-title` —
-  and they are the only thing that can refuse a merge here.** Re-apply or verify the whole
-  arrangement with the create-repo skill's `setup_github_governance.py`, which is its
-  source of truth. Two values in it are load-bearing rather than conventional: **zero
-  required approvals**, because nobody reviews these pull requests and any other value
-  makes auto-merge wait forever; and **`strict`**, so a branch is up to date before it
-  merges. Adding a required check costs a change in the orchestration repository too,
-  which checks its inventory of this merge path against GitHub on every gate run.
+- **Four required checks — `lint`, `test-linux`, `test-windows` and `test-macos`, the four
+  jobs of `.github/workflows/ci.yml` — and they are the only thing that can refuse a merge
+  here.** A pull request's last commit runs exactly those four and nothing else (`lint`
+  carries the PR title, llmlint, notignored's comment, the supply chain and the visual docs
+  capture as steps), each held to `timeout-minutes: 30`. Re-apply or verify the whole
+  arrangement with the create-repo skill's `setup_github_governance.py`, which is its source
+  of truth. Two values in it are load-bearing rather than conventional: **zero required
+  approvals**, because nobody reviews these pull requests and any other value makes
+  auto-merge wait forever; and **`strict: false`** — branches need not be up to date with main
+  before they merge, by the user's decision of 2026-10-18. **That is a trade, accepted:**
+  two pull requests each green against an older main can merge into a main neither was tested
+  as, and no workflow re-runs the tests on a push to main. What catches a merge that breaks
+  the build is the Rust cache warmer (`.github/workflows/rust-cache-warm.yml`), whose job
+  builds main on every push and fails when it does not build; a test that only fails on the
+  combination is caught by the next pull request's own checks. Adding a required check costs a
+  change in the orchestration repository too, which checks its inventory of this merge path
+  against GitHub on every gate run. `.github/tests/ci-events.test.mjs` holds which jobs run:
+  a pull request's four, and on a push to main release-plz, the warmer and the canonical
+  gallery, which skips the release commit.
 - **Bump policy (pre-1.0):** `feat` → minor; `feat!` / `BREAKING CHANGE` → minor (a
   breaking change before 1.0 is *not* a major); `fix` / `perf` / `refactor` / `build` →
   patch; `chore` / `docs` / `ci` / `test` / `style` → no release. Post-1.0 a breaking
-  change becomes a major. The PR title is what the release tool parses, which is why
-  `pr-title` is required.
+  change becomes a major. The PR title is what the release tool parses, which is why the
+  required `lint` job checks it.
 - **Release driver: `release-plz`,** in its release-PR shape: the bot accumulates
   unreleased commits into a PR, merging it cuts the release, and the tag fires build and
   publish. It must authenticate with `RELEASE_PLZ_TOKEN` — a tag pushed by the default
@@ -1582,10 +1597,11 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   runs `build-linux` (x86_64 Linux), `build-linux-arm64` (arm64 Linux, native on GitHub's
   hosted `ubuntu-24.04-arm` runner), `build-macos` (Apple Silicon) and `build-windows`
   (x86_64 Windows) side by side, and `publish` after all four, each inside 30 minutes.
-  Every step of them is one phase of one justfile recipe — `release-linux`,
-  `release-linux-arm64`, `release-macos`, `release-windows`, `release-publish`, all
-  `scripts/release_cd.py` — so
-  nothing a release does is YAML only a release could run. A build job builds each of its
+  Every step of them but `publish`'s release tail is one phase of one justfile recipe —
+  `release-linux`, `release-linux-arm64`, `release-macos`, `release-windows`,
+  `release-publish`, all `scripts/release_cd.py` — so nothing a release does is YAML only a
+  release could run; the tail's two steps are run as written by
+  `.github/policy/tests/release-tail.test.mjs`. A build job builds each of its
   targets once with maturin, packages the archive, the wheel and the npm platform package
   from that one binary, installs and runs those exact files, publishes them (the archive
   to the GitHub Release, the wheel to PyPI, the package to npm), and installs each back out
@@ -1635,18 +1651,18 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   workflows that goes around the resolver.
   The independently usable `scripts/provision-gate.sh` reports a missing or wrong
   scoped binary with the host-prerequisite marker. Pushes do not invoke provisioning.
-- **One Mac job per run, and two Mac-spending runs per single-push lifecycle.** CI
-  combines the former Mac check and install assertions sequentially. Linux carriers keep
-  `check (macos-latest)` and `install path (macos-latest)` required on every PR, using
-  `always()` and `.github/macos-result.mjs` to refuse failed, cancelled or missing proofs.
-  Main pushes never schedule Mac, with one exception the user approved on 2026-10-17: the
+- **One Mac job per run, and two Mac-spending runs per single-push lifecycle.** A pull
+  request's one Mac job is the required `test-macos`, skipped at the job level on this
+  repository's own `release-plz-` branch alone; `lint` runs `.github/macos-policy.mjs` there
+  and goes red unless the branch carries release versions and changelogs alone, so a skip is
+  never a release branch merging untested source. Main pushes never schedule Mac, with one exception the user approved on 2026-10-17: the
   build-only `warm-macos` job of `.github/workflows/rust-cache-warm.yml`, because a pull
   request waits on its slowest job and `test-macos` restores no other cache. It skips a
   release merge — a push `.github/semantic-release.py` reads as versions and changelogs alone,
   which rust-cache does not store — so `onetaskgraph-macos-runs-per-change` is 3, not 2.
   `.github/macos-policy.mjs` admits a release-only PR only from a same-repository
   `release-plz-` branch with a semantic version/changelog-only diff; an unreadable PR requires coverage. The author is not authority: release-plz
-  uses the owner's PAT. An explicit manual diagnostic is default off.
+  uses the owner's PAT.
   A release's one Mac job is `build-macos`, which builds the Apple Silicon wheel once and
   uses its binary for the archive and npm carrier; Intel macOS is no longer released, and
   the installer and npm launcher refuse it by name. Its native install/run proof precedes
@@ -1656,6 +1672,34 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   the two limits in `.github/policy/budgets.yaml` — a project of its own, so a crate edit that
   selects `github-workflows`' CD journeys does not also run the policy proofs. No Mac work runs on schedules or downstream
   automatic triggers.
+- **Eight budgets in the root `budgets.yaml` hold CI, CD and the local gate**, each
+  `measure: reported` and read from telemetry, never measured fresh. Seven are labelled
+  `release-tail` and run `scripts/actions-budget-figures.sh` — a byte-identical copy of
+  dero-skills' create-repo source, edited only there — over onevcs's read-only host answers:
+  `onetaskgraph-ci-check-time` (longest CI job of a release's pull requests, 1800 s),
+  `onetaskgraph-cd-job-time` (longest CD job, 1800 s), `onetaskgraph-release-cycle-time`
+  (a pull request's checks plus its merge to the release tail, 5400 s),
+  `onetaskgraph-ci-job-count` (4) and `onetaskgraph-cd-job-count` (6), and
+  `onetaskgraph-release-read-requests` (6) and `onetaskgraph-pr-read-requests` (2). They are
+  checked once, after the release, by the last step of `release.yml`'s `publish` —
+  `onebudgetspec check budgets.yaml --label release-tail`, after a step installing the pinned
+  onevcs and onebudgetspec, under a token granted `actions`, `contents` and `pull-requests`
+  read — and are **reporting only**: over turns that step red with each figure's breakdown in
+  its log, and nothing reads its result, so it never blocks, demotes or reverts a release. At
+  pull-request time each job's `timeout-minutes: 30` is what fails a check that runs over.
+  The eighth, `onetaskgraph-gate-time` (1800 s), is `host-variable`: `just gate` runs its whole
+  body inside `scripts/gate-time.sh`, which records its start and end to the gitignored
+  `.gate-time.json` and checks it, **warning** when over and failing only when the
+  measurement errs or the file is invalid, because a development machine's timing varies too
+  much to refuse on. No pre-push hook runs it — CI owns the gate. Every other check of the
+  root file excludes both labels. **The three CD figures leave the Rust cache warmer out:**
+  `onetaskgraph-cd-job-time`, `onetaskgraph-cd-job-count` and
+  `onetaskgraph-release-read-requests` pass `--exclude-workflow "rust cache warm"` — that
+  workflow's `name:`, and no other — because the warmer builds and delivers nothing, and its
+  run at the release commit would otherwise count as CD and read its jobs.
+  `.github/policy/tests/release-tail.test.mjs` runs `publish`'s two tail steps as written over
+  GitHub answers recorded from this repository's own v0.12.13
+  (`.github/policy/tests/fixtures/release-tail/`), GitHub the one boundary doubled.
 - **Registry lag alone never proposes a release.** `scripts/select-release-version.sh`
   recovers a partly failed publish only when `release-plz.toml`'s own `release_commits`
   policy — the single declared one, read rather than restated — accepts a commit since the

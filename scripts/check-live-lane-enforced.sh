@@ -259,7 +259,7 @@ reset_fixture
 
 # 5. The demand set to the value that turns it off. This is the hole: the name is there,
 #    spelled correctly, on the step that carries the credential — and the lane skips.
-substitute "$WORKFLOW" 'ONETASKGRAPH_LIVE_REQUIRED: "1"' 'ONETASKGRAPH_LIVE_REQUIRED: "0"'
+substitute "$WORKFLOW" "ONETASKGRAPH_LIVE_REQUIRED: \${{ github.event.pull_request.head.repo.fork && '0' || '1' }}" 'ONETASKGRAPH_LIVE_REQUIRED: "0"'
 run_guard
 expect_refused "the demand set to 0 on a credentialed step" \
   "$WORKFLOW" "GH_PROJECTS_TOKEN" "which is not the demand"
@@ -313,8 +313,8 @@ reset_fixture
 
 # 9. The demand dropped from a credentialed step entirely, which is the older half of the
 #    same assertion and has never been watched fail either.
-substitute "$WORKFLOW" '          ONETASKGRAPH_LIVE_REQUIRED: "1"
-' ''
+substitute "$WORKFLOW" "          ONETASKGRAPH_LIVE_REQUIRED: \${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
+" ''
 run_guard
 expect_refused "the demand dropped from a credentialed step" \
   "$WORKFLOW" "does not set ONETASKGRAPH_LIVE_REQUIRED"
@@ -372,12 +372,16 @@ reset_fixture
 # 14. The fork exception itself, which the guard must ACCEPT. GitHub hands a fork pull
 #     request no secrets at all, so demanding a credential there would fail every outside
 #     contribution for something its author cannot supply — and without this case, a guard
-#     that refused every arrangement would have satisfied all thirteen cases above.
-substitute "$WORKFLOW" 'ONETASKGRAPH_LIVE_REQUIRED: "1"' \
-  "ONETASKGRAPH_LIVE_REQUIRED: \${{ github.event.pull_request.head.repo.fork && '0' || '1' }}"
+#     that refused every arrangement would have satisfied all thirteen cases above. It is the
+#     credentialed step as test-linux writes it, untouched; and the demand made on every run,
+#     forks included, is accepted too, because it is stricter rather than a hole.
 run_guard
-# llmlint: ignore[live_tier_compiles_and_requires_credential] The one case here that asserts a PASS, for the exemption the repository decided on; the thirteen above are what hold every other run to the demand and to one session per lane per run.
+# llmlint: ignore[live_tier_compiles_and_requires_credential] The cases here that assert a PASS, for the exemption the repository decided on and for the stricter unconditional demand; the thirteen above are what hold every other run to the demand and to one session per lane per run.
 expect_passed "the fork exception, spelled whole"
+reset_fixture
+substitute "$WORKFLOW" "ONETASKGRAPH_LIVE_REQUIRED: \${{ github.event.pull_request.head.repo.fork && '0' || '1' }}" 'ONETASKGRAPH_LIVE_REQUIRED: "1"'
+run_guard
+expect_passed "the demand made on every run"
 reset_fixture
 
 # The janitor must agree with BOTH credentialed CI nominations, and never touch board 2.

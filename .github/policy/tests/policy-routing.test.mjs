@@ -98,6 +98,42 @@ test("member changelog additions are releases; deleted changelogs and malformed 
   assert.equal(classify(malformed).macosRequired, true);
 });
 
+// lint's guard on a release branch that skips macOS: the classifier, run as the step runs it.
+const guard = () =>
+  workflows()["ci.yml"].jobs.lint.steps.find((step) =>
+    /macos-policy\.mjs classify/.test(step.run ?? ""),
+  );
+function runGuard(payload, head) {
+  const step = guard();
+  if (typeof payload !== "string") {
+    payload.pull_request.base.sha = base;
+    payload.pull_request.head.sha = head;
+  }
+  const input = resolve(history, "event.json");
+  writeFileSync(input, typeof payload === "string" ? payload : JSON.stringify(payload));
+  const output = resolve(history, "github-output");
+  rmSync(output, { force: true });
+  const env = resolveValue(step.env, {
+    github: {
+      event: typeof payload === "string" ? { pull_request: { base: {}, head: {} } } : payload,
+    },
+  });
+  const result = spawnSync("bash", ["-c", step.run], {
+    cwd: history,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...env,
+      BASE: base,
+      HEAD: head,
+      GITHUB_EVENT_NAME: "pull_request",
+      GITHUB_EVENT_PATH: input,
+      GITHUB_OUTPUT: output,
+    },
+  });
+  return { result, output: readFileSync(output, "utf8") };
+}
+
 test("real classification composes with actual workflow routing for forged, mixed, fork and unreadable PRs", () => {
   for (const [payload, head] of [
     [event("feature"), heads.source],
@@ -118,66 +154,53 @@ test("real classification composes with actual workflow routing for forged, mixe
     };
     const ci = graph(scenario, decision).find((run) => run.workflow === "ci.yml");
     // test-macos is skipped on this repository's release-plz branch alone, and never on a
-    // pull request the classifier has not authorized to omit macOS without it saying so:
-    // a forged release branch carrying source runs no Mac job, and its carrier goes red.
+    // pull request the classifier has not authorized to omit macOS without lint saying so:
+    // a forged release branch carrying source runs no Mac job, and lint's guard goes red.
     const releaseBranch = !pr.head.repo.fork && pr.head.ref.startsWith("release-plz-");
     const tested = ci.rows.some((row) => row.job === "test-macos");
     assert.equal(tested, !releaseBranch);
-    assert.equal(
-      ci.rows.some((row) => row.job === "macos"),
-      false,
+    assert.deepEqual(
+      ci.rows.map((row) => row.job).filter((job) => job !== "test-macos"),
+      ["lint", "test-linux", "test-windows"],
     );
     if (tested) assert.ok(decision.macosRequired);
-    for (const name of ["check (macos-latest)", "install path (macos-latest)"])
-      assert.ok(ci.rows.some((row) => row.name === name));
-    if (!tested && decision.macosRequired) {
-      const needs = {
-        "macos-lanes": { result: "success", outputs: { macosRequired: "true", reason: "x" } },
-        macos: { result: "skipped" },
-        "test-macos": { result: "skipped" },
-      };
-      writeFileSync(resolve(history, "needs.json"), JSON.stringify(needs));
-      assert.notEqual(
-        spawnSync(process.execPath, [resolve(history, ".github/macos-result.mjs"), "needs.json"], {
-          cwd: history,
-          encoding: "utf8",
-        }).status,
-        0,
-      );
-    }
+    // The guard runs on exactly the pull requests test-macos skips.
+    assert.equal(
+      Boolean(
+        evaluate(guard().if, {
+          github: {
+            event: {
+              pull_request: {
+                head: {
+                  repo: {
+                    full_name: pr.head.repo.fork ? "outside/repo" : "nickderobertis/onetaskgraph",
+                  },
+                },
+              },
+            },
+            repository: "nickderobertis/onetaskgraph",
+            head_ref: pr.head.ref,
+          },
+        }),
+      ),
+      !tested,
+    );
+    if (!tested) assert.equal(runGuard(payload, head).result.status === 0, !decision.macosRequired);
   }
 });
 
 test("production classifier step uses its declared event and exact base/head environment", () => {
-  const step = workflows()["ci.yml"].jobs["macos-lanes"].steps.find((step) => step.id === "select");
   for (const [payload, head] of [
     [event("feature"), heads.source],
     [event("release-plz-123"), heads.version],
     [event("release-plz-123"), heads.dependency],
     [event("release-plz-123", true), heads.version],
   ]) {
-    payload.pull_request.base.sha = base;
-    payload.pull_request.head.sha = head;
-    const input = resolve(history, "event.json");
-    writeFileSync(input, JSON.stringify(payload));
-    const output = resolve(history, "github-output");
-    rmSync(output, { force: true });
-    const env = resolveValue(step.env, { github: { event: payload } });
-    const result = spawnSync("bash", ["-c", step.run], {
-      cwd: history,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        ...env,
-        GITHUB_EVENT_NAME: "pull_request",
-        GITHUB_EVENT_PATH: input,
-        GITHUB_OUTPUT: output,
-      },
-    });
-    assert.equal(result.status, 0, result.stderr);
-    const actual = readFileSync(output, "utf8");
+    const { result, output } = runGuard(payload, head);
     const expected = classify(payload, head);
-    assert.equal(actual, `macosRequired=${expected.macosRequired}\nreason=${expected.reason}\n`);
+    assert.equal(result.status === 0, !expected.macosRequired, result.stderr);
+    if (expected.macosRequired) assert.match(result.stderr, /test-macos must run/);
+    assert.equal(output, `macosRequired=${expected.macosRequired}\nreason=${expected.reason}\n`);
   }
 });
 
@@ -234,18 +257,8 @@ test("publication workload reconciles actual workflow condition variables", () =
 });
 
 const fixtureClasses = JSON.parse(read(".github/event-classes.json"));
-const requiredNames = [
-  "check (macos-latest)",
-  "check (ubuntu-latest)",
-  "check (windows-latest)",
-  "deny",
-  "install path (macos-latest)",
-  "install path (ubuntu-latest)",
-  "install path (windows-latest)",
-  "llmlint",
-  "pr-title",
-  "visual-docs / report (x86_64, shots/current, shots/verify, Visual docs)",
-];
+// The four jobs branch protection requires; test-macos is skipped on a release branch.
+const requiredNames = ["lint", "test-linux", "test-windows", "test-macos"];
 
 test("workflow matrices, event fan-out and exact release head model record scheduling telemetry", () => {
   validatePublishControls();
@@ -272,7 +285,12 @@ test("workflow matrices, event fan-out and exact release head model record sched
             // A push to main is decided over real revisions: rust-cache-warm.yml runs its own
             // release-merge step against this history.
             ...(entry.event === "push"
-              ? { revisions: { cwd: history, before: base, after: heads[diff] } }
+              ? {
+                  revisions: { cwd: history, before: base, after: heads[diff] },
+                  // release-plz's squash is what a version-only push to main is.
+                  headCommitMessage:
+                    diff === "version" ? "chore: release v1.2.4 (#2)" : "fix: x (#1)",
+                }
               : {}),
           };
           const runs = graph(scenario, policyResult);
@@ -281,14 +299,13 @@ test("workflow matrices, event fan-out and exact release head model record sched
             if (entry.event === "pull_request") {
               const names = run.rows.map((r) => r.name);
               if (run.workflow === "ci.yml")
-                for (const name of requiredNames.slice(0, -1))
-                  assert.equal(names.filter((n) => n === name).length, 1, name);
-              if (run.workflow === "visual-docs.yml")
-                assert.ok(
-                  names.includes(
-                    "visual-docs / report (x86_64, shots/current, shots/verify, Visual docs)",
+                assert.deepEqual(
+                  names,
+                  requiredNames.filter(
+                    (name) => name !== "test-macos" || policyResult.macosRequired,
                   ),
                 );
+              else assert.deepEqual(names, [], `${run.workflow} runs on a pull request`);
             }
             for (const row of macs)
               assert.ok(
@@ -296,8 +313,6 @@ test("workflow matrices, event fan-out and exact release head model record sched
                   policyResult.macosRequired &&
                   run.workflow === "ci.yml") ||
                   (entry.event === "release" && run.workflow === "release.yml") ||
-                  (["manual-opt-in", "manual-distribution"].includes(entry.id) &&
-                    run.workflow === "ci.yml") ||
                   // The one Mac job a push to main schedules, by the user's decision: the
                   // build-only Rust cache warmer test-macos restores (AGENTS.md).
                   (entry.event === "push" &&
@@ -323,16 +338,6 @@ test("workflow matrices, event fan-out and exact release head model record sched
                 macs.some((r) => r.job === "test-macos"),
                 policyResult.macosRequired,
               );
-            if (run.workflow === "ci.yml" && entry.event === "workflow_dispatch") {
-              assert.equal(
-                macs.some((row) => row.job === "macos"),
-                entry.id === "manual-opt-in",
-              );
-              assert.equal(
-                macs.some((row) => row.job === "distribution-diagnostic"),
-                entry.id === "manual-distribution",
-              );
-            }
             if (entry.event === "release" && run.workflow === "release.yml")
               assert.ok(macs.some((r) => r.job === "build-macos"));
             run.macJobs = macs.length;

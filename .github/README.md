@@ -15,12 +15,17 @@ requiring Mac. Non-PR automatic events never require Mac. A same-repository `rel
 branch and semantic version/changelog-only diff authorize omission; an author's identity
 or a title does not. The classifier prints JSON and writes the corresponding fields to
 `GITHUB_OUTPUT` when supplied. Its exit codes are 0 for a decision and 1 for invalid
-invocation or failed output IO; a failed classifier cannot satisfy either required carrier.
+invocation or failed output IO. `lint` runs it on this repository's `release-plz-` branch,
+where `test-macos` is skipped, and fails unless it authorizes the omission.
 
-`macos-result.mjs NEEDS_JSON` exits 0 only for successful required work or a successful
-classification authorizing skipped work; explicit manual diagnostics require successful
-work. It exits 1 for malformed inputs or failed/cancelled/missing prerequisites, prints
-errors to stderr, and distinguishes omission from executed proof in stdout.
+The root `budgets.yaml`'s seven `release-tail` budgets are checked by `publish`'s last step;
+`policy/tests/release-tail.test.mjs` runs that step and the install step before it as
+release.yml writes them, over GitHub responses recorded from this repository under
+`policy/tests/fixtures/release-tail/` (its README says how they were taken and how to reconcile
+them). It is `github-workflow-policy:release-tail`, a target of its own in the project no crate
+edit selects, because it installs from npm. `tests/ci-events.test.mjs` holds which workflows
+and jobs run on a pull request and on the release commit, and `tests/gate-time.test.mjs` the
+timing wrapper `just gate` runs inside; those two are `github-workflows:budget-journeys`.
 
 `policy/macos-budget.mjs --metric jobs-per-run|runs-per-change --telemetry PATH` exits 0 after
 validating and reporting current telemetry, and 1 for invalid invocation, missing/stale

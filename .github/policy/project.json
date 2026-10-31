@@ -34,6 +34,17 @@
       "{workspaceRoot}/scripts/check-real-release-preparation.sh",
       "{workspaceRoot}/scripts/check-npm-publish.sh",
       "{workspaceRoot}/scripts/check-fixture-discrimination.sh"
+    ],
+    "releaseTail": [
+      "{workspaceRoot}/.github/workflows/release.yml",
+      "{workspaceRoot}/.github/workflows/rust-cache-warm.yml",
+      "{projectRoot}/tests/release-tail.test.mjs",
+      "{projectRoot}/tests/fixtures/release-tail/**/*",
+      "{workspaceRoot}/.github/package.json",
+      "{workspaceRoot}/.github/bun.lock",
+      "{workspaceRoot}/budgets.yaml",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/scripts/actions-budget-figures.sh"
     ]
   },
   "targets": {
@@ -61,14 +72,14 @@
       "executor": "nx:run-commands",
       "dependsOn": ["bootstrap"],
       "options": {
-        "command": "node --test .github/policy/tests/boundaries.test.mjs .github/policy/tests/inventory.test.mjs .github/policy/tests/policy-carriers.test.mjs .github/policy/tests/policy-routing.test.mjs .github/policy/tests/policy.test.mjs .github/policy/tests/release-shortcut.test.mjs .github/policy/tests/reusable.test.mjs .github/policy/tests/rust-cache-warm.test.mjs"
+        "command": "node --test .github/policy/tests/boundaries.test.mjs .github/policy/tests/inventory.test.mjs .github/policy/tests/policy-routing.test.mjs .github/policy/tests/policy.test.mjs .github/policy/tests/release-shortcut.test.mjs .github/policy/tests/reusable.test.mjs .github/policy/tests/rust-cache-warm.test.mjs"
       },
       "cache": false,
       "outputs": ["{workspaceRoot}/.github/.telemetry/macos-policy.json"]
     },
     "test": {
       "executor": "nx:noop",
-      "dependsOn": ["policy-tests", "rust-cache-action"],
+      "dependsOn": ["policy-tests", "rust-cache-action", "release-tail"],
       "cache": false
     },
     "budgets": {
@@ -91,6 +102,16 @@
       },
       "cache": false,
       "//": "The one policy journey that runs the real rust-cache action, which also runs on the Windows and macOS runners; test-windows and test-macos run this target alone, and test-linux runs it with the rest of `test`."
+    },
+    "release-tail": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/policy/tests/release-tail.test.mjs"
+      },
+      "inputs": ["releaseTail"],
+      "cache": true,
+      "//": "publish's release tail: its install step and its last step run as release.yml writes them over GitHub answers recorded from this repository (tests/fixtures/release-tail/). Here, in the project no crate or SDK edit selects, and a target of its own keyed on its reads alone, because it installs onevcs and onebudgetspec from npm."
     }
   }
 }

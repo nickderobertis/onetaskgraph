@@ -1,36 +1,26 @@
-# Prove the workspace from a clean checkout, on the real platform matrix.
+# Prove each pull request from a clean checkout, on the real platform matrix, in four jobs:
+# `lint` once, on Linux, for everything platform-independent, and one test job per platform.
+# Branch protection requires exactly these four; branches need not be up to date with main
+# before they merge (`strict: false`, the user's decision of 2026-10-18), and nothing re-runs
+# the tests on a push to main — .github/workflows/rust-cache-warm.yml builds there instead, and
+# its job fails when main does not build. AGENTS.md records that trade.
 #
-# Every lane runs the same `just` recipes a contributor runs locally, over the projects its
-# diff can reach, and derives its base explicitly below rather than letting Nx guess one —
-# the default branch included, where a sweep once ran every plugin's live tests for a
-# release commit and exhausted the account's GraphQL budget. AGENTS.md records that.
+# Every job runs the same `just` recipes a contributor runs locally, over the projects its diff
+# can reach, and derives its base explicitly rather than letting Nx guess one.
 #
 # Two things about the tests that reach a real API are this file's alone. One live session
-# per run: only one Linux lane carries the credentials — `test-linux` on a pull request, the
-# `ubuntu-latest` leg of `check` on a push — and scripts/rust-coverage.sh
-# clears them before coverage re-runs the same tests — read the note there before changing
-# either. And `ONETASKGRAPH_LIVE_REQUIRED` travels with them rather than with the matrix: `1`
-# on that leg, `0` there on a fork pull request alone, so the leg that was handed a credential
-# never passes green for one that went missing. The other two legs run the same tests with
-# neither and skip them, which is what one session per run costs; the leg that does run them
-# is required for the merge exactly as they are.
+# per run: only `test-linux` carries the credentials, and scripts/rust-coverage.sh clears them
+# before coverage re-runs the same tests — read the note there before changing either. And
+# `ONETASKGRAPH_LIVE_REQUIRED` travels with them rather than with the platform: `1` there, `0`
+# on a fork pull request alone, so the job that was handed a credential never passes green for
+# one that went missing. The other two test jobs run the same tests with neither and skip them,
+# which is what one session per run costs; the job that does run them is required for the merge
+# exactly as they are.
 
 name: ci
 
 on:
-  push:
-    branches: [main]
   pull_request:
-  workflow_dispatch:
-    inputs:
-      macos:
-        description: Run the combined macOS diagnostic proofs
-        type: boolean
-        default: false
-      distribution:
-        description: Time the distribution journey alone on Linux and macOS
-        type: boolean
-        default: false
 
 # Least privilege: the token is read-only by default and widened per job only where a job
 # genuinely needs more.
@@ -38,426 +28,8 @@ permissions:
   contents: read
 
 jobs:
-  macos-lanes:
-    name: macOS lanes
-    runs-on: ubuntu-latest
-    outputs:
-      macosRequired: ${{ steps.select.outputs.macosRequired }}
-      reason: ${{ steps.select.outputs.reason }}
-      diagnostic: ${{ github.event_name == 'workflow_dispatch' && inputs.macos }}
-    steps:
-      - uses: actions/checkout@v7
-        with: { fetch-depth: 0 }
-      - uses: oven-sh/setup-bun@v2
-        with: { bun-version-file: package.json }
-      - uses: extractions/setup-just@v4
-      - run: just github-workflows-bootstrap
-      - name: Classify the semantic release diff
-        id: select
-        shell: bash
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
-        run: node .github/macos-policy.mjs classify --event "$GITHUB_EVENT_PATH" --base "$BASE" --head "$HEAD"
-
-  install-path:
-    name: install path (${{ matrix.os }})
-    needs: [macos-lanes]
-    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v7
-      - uses: extractions/setup-just@v4
-      # `just distribution-test` now delegates to the scripts project's Nx target of that
-      # name, and scripts/nx.sh runs the locked install when a checkout has never had one —
-      # which needs bun. Without this step the recipe stops at "bun is not installed"
-      # before the journey it drives.
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - uses: astral-sh/setup-uv@v7
-      - name: Prove the recommended installer and launcher
-        shell: bash
-        run: just distribution-test
-
-  # The Linux and Windows required lanes; macOS runs in the one combined job below and
-  # reaches `check (macos-latest)` through its carrier. All three are required because this
-  # ships a cross-platform command-line tool whose install path CI has to prove on the real
-  # matrix; affected selection is what keeps that affordable.
-  check:
-    name: check (${{ matrix.os }})
-    # No concurrency group: each live session works only on its own board copy and its own
-    # leased Linear slot set, so runs need no serialising (.github/linear-documents-policy).
-    needs: [macos-lanes]
-    if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # The merge base is derived explicitly below; a shallow checkout cannot resolve it.
-          fetch-depth: 0
-
-      - uses: extractions/setup-just@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      # v7 is the newest floating major tag this action publishes: its releases run on to
-      # v10.0.1, but it stopped moving a major tag after v7, so v8, v9 and v10 resolve to
-      # nothing.
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      # Reads rust-toolchain.toml, so CI and local compile with byte-identical rustc,
-      # clippy and rustfmt, and the version is pinned in exactly one place.
-      # rust-cache hashes every installed compiler; exclude the unused floating one.
-      - name: Exclude the unused floating compiler from the build cache
-        shell: bash
-        run: rustup toolchain uninstall stable
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      # cargo-deny is not only the `deny` job's tool: `just check` runs
-      # check-isolation-enforced.sh, whose fifth case asserts cargo-deny refuses a
-      # dev-dependency edge to the engine, so without it here that guard cannot run.
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny
-
-      - name: Bootstrap
-        run: just bootstrap
-
-      # Derive the base explicitly rather than letting Nx guess: an implicit base is how
-      # affected selection quietly starts comparing against the wrong commit. On the
-      # default branch that is not a stylistic preference — `defaultBase` is origin/main,
-      # which on a push to main IS this commit, so an implicit base would select nothing at
-      # all. `github.event.before` is the commit this push replaced, and it is all-zeros on
-      # a branch the remote has never seen, so HEAD~1 is the fallback.
-      - name: Derive the comparison base
-        id: base
-        shell: bash
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BEFORE_SHA: ${{ github.event.before }}
-        run: |
-          zero=0000000000000000000000000000000000000000
-          if [ -n "${BASE_SHA:-}" ]; then
-            git fetch --no-tags origin "$BASE_REF"
-            merge_base="$(git merge-base "$BASE_SHA" HEAD)"
-            echo "base=$merge_base" >> "$GITHUB_OUTPUT"
-            echo "Affected against the merge base with $BASE_REF: $merge_base"
-          elif [ -n "${BEFORE_SHA:-}" ] && [ "${BEFORE_SHA}" != "$zero" ] \
-            && git rev-parse --verify --quiet "${BEFORE_SHA}^{commit}" >/dev/null; then
-            echo "base=$BEFORE_SHA" >> "$GITHUB_OUTPUT"
-            echo "Affected against the commit this push replaced: $BEFORE_SHA"
-          elif git rev-parse --verify --quiet 'HEAD~1^{commit}' >/dev/null; then
-            fallback="$(git rev-parse HEAD~1)"
-            echo "base=$fallback" >> "$GITHUB_OUTPUT"
-            echo "Affected against HEAD~1, this push having no readable predecessor: $fallback"
-          else
-            echo "No base could be derived; Nx will fall back to its own defaultBase."
-          fi
-
-      # llmlint: ignore[live_tier_compiles_and_requires_credential] This leg is given no credential, for the reason the file header states, so it cannot demand one.
-      - name: Check the affected projects
-        if: github.event_name == 'pull_request' && matrix.os != 'ubuntu-latest'
-        env:
-          # Nx's own mechanism for "compare against this commit". Setting it here rather
-          # than threading an argument through every recipe keeps one source of truth for
-          # the base across all five phases of the gate.
-          NX_BASE: ${{ steps.base.outputs.base }}
-          NX_HEAD: HEAD
-        run: just check
-
-      # Generated-code drift is platform-independent. The Linux aggregate adds its
-      # uniform Nx target without paying for the generator in the other required lanes.
-      # One live session per run: on a pull request `test-linux` carries the credentials,
-      # so this leg runs uncredentialed and its live journeys skip. The default-branch step
-      # below keeps them, because `test-linux` never runs on a push.
-      # llmlint: ignore[live_tier_compiles_and_requires_credential] This step is given no credential, because test-linux carries this run's one live session, so it cannot demand one.
-      - name: Check the affected projects and generated Python SDK
-        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
-        env:
-          NX_BASE: ${{ steps.base.outputs.base }}
-          NX_HEAD: HEAD
-        # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] These targets run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
-        run: just check-generated
-
-      # The release pull request alone, after the gate above passed: the pass-time budget of
-      # the pool maintenance onevcs.toml declares. Its measurement builds the workspace twice,
-      # so no per-change path runs it (pool-maintenance/project.json). The pinned pruner it
-      # runs is already installed by the Bootstrap step above, as on every leg.
-      - name: Pool-maintenance pass-time budget on the release pull request
-        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && startsWith(github.head_ref, 'release-plz-')
-        run: just pool-maintenance-budget
-
-      # On the default branch, the same gate against the commit this push replaced. A cache
-      # is for speed and must never be what makes a broken clean build look green, which is
-      # why `just gate` keeps the supply-chain and distribution stages outside selection.
-      # llmlint: ignore[live_tier_compiles_and_requires_credential] This leg is given no credential, for the reason the file header states, so it cannot demand one.
-      - name: Check the affected projects on the default branch
-        if: github.event_name != 'pull_request' && matrix.os != 'ubuntu-latest'
-        env:
-          NX_BASE: ${{ steps.base.outputs.base }}
-          NX_HEAD: HEAD
-        run: just gate
-
-      - name: Check the affected projects and generated Python SDK on the default branch
-        if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
-        env:
-          # The default-branch half of the pull-request step above; why is written there.
-          GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
-          GITHUB_LIVE_SESSION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          GITHUB_LIVE_SESSION_DIR: ${{ github.workspace }}/target/debug/telemetry/github-live-session/${{ github.run_id }}-${{ github.run_attempt }}
-          GITHUB_LIVE_SOURCE_REVISION: ${{ github.sha }}
-          ONETASKGRAPH_LINEAR_DOCUMENT_MODE: ordinary
-          # Where the Linear lanes record the pool leases they hold, for the cancellation step.
-          ONETASKGRAPH_LINEAR_LEASE_DIR: ${{ github.workspace }}/target/linear-leases
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As on that step: the lane's own refusal is the drift gate, because ONETASKGRAPH_LIVE_REQUIRED is 1 here too, so a name spelled differently on either side fails this run naming the variable rather than skipping green.
-          GH_PROJECTS_OWNER: nickderobertis
-          GH_PROJECTS_NUMBER: "1"
-          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
-          LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
-          # Demanded unconditionally, which the step above cannot be: this one runs on a
-          # push to the default branch, and a push is never a fork pull request, so there is
-          # no run here where a credential was not expected.
-          ONETASKGRAPH_LIVE_REQUIRED: "1"
-          NX_BASE: ${{ steps.base.outputs.base }}
-          NX_HEAD: HEAD
-        run: just gate-generated
-
-      # A cancelled run's live journey dies before its own cleanup, leaving its board copy and
-      # its scratch issues behind. On cancellation, on the credentialed leg alone, this removes
-      # exactly this run attempt's stamped artifacts, its board copies among them, and opens no
-      # session; the hourly janitor takes anything left once the run reads completed.
-      # scripts/check-live-janitor.sh holds this step to that shape.
-      - name: Remove this run's live artifacts after a cancellation
-        if: cancelled() && matrix.os == 'ubuntu-latest' && !github.event.pull_request.head.repo.fork
-        timeout-minutes: 15
-        env:
-          GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
-          GH_PROJECTS_OWNER: nickderobertis
-          GH_PROJECTS_NUMBER: "1"
-          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
-        run: cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run
-
-      # And the pool leases its Linear lanes held, which would otherwise keep their members for
-      # six and a half hours: exactly the leases this job recorded, each only while it still
-      # reads back as recorded. scripts/check-live-janitor.sh holds this step to that shape.
-      - name: Release this run's Linear leases after a cancellation
-        if: cancelled() && matrix.os == 'ubuntu-latest' && !github.event.pull_request.head.repo.fork
-        timeout-minutes: 15
-        env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
-        run: cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases
-
-  # The explicit manual diagnostic alone. On a pull request the one Mac job is `test-macos`,
-  # which the two carriers below read in this job's place.
-  macos:
-    name: macOS check and install proofs
-    needs: [macos-lanes]
-    if: github.event_name == 'workflow_dispatch' && inputs.macos
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # The merge base is derived explicitly below; a shallow checkout cannot resolve it.
-          fetch-depth: 0
-
-      - uses: extractions/setup-just@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      # v7 is the newest floating major tag this action publishes: its releases run on to
-      # v10.0.1, but it stopped moving a major tag after v7, so v8, v9 and v10 resolve to
-      # nothing.
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      # Reads rust-toolchain.toml, so CI and local compile with byte-identical rustc,
-      # clippy and rustfmt, and the version is pinned in exactly one place.
-      # rust-cache hashes every installed compiler; exclude the unused floating one.
-      - name: Exclude the unused floating compiler from the build cache
-        shell: bash
-        run: rustup toolchain uninstall stable
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      # cargo-deny is not only the `deny` job's tool: `just check` runs
-      # check-isolation-enforced.sh, whose fifth case asserts cargo-deny refuses a
-      # dev-dependency edge to the engine, so without it here that guard cannot run.
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny
-
-      - name: Bootstrap
-        run: just bootstrap
-
-      # Use the PR merge base for the same affected selection as the Linux/Windows lanes.
-      - name: Derive the comparison base
-        id: macos-base
-        shell: bash
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BEFORE_SHA: ${{ github.event.before }}
-        run: |
-          zero=0000000000000000000000000000000000000000
-          if [ -n "${BASE_SHA:-}" ]; then
-            git fetch --no-tags origin "$BASE_REF"
-            merge_base="$(git merge-base "$BASE_SHA" HEAD)"
-            echo "base=$merge_base" >> "$GITHUB_OUTPUT"
-            echo "Affected against the merge base with $BASE_REF: $merge_base"
-          elif [ -n "${BEFORE_SHA:-}" ] && [ "${BEFORE_SHA}" != "$zero" ] \
-            && git rev-parse --verify --quiet "${BEFORE_SHA}^{commit}" >/dev/null; then
-            echo "base=$BEFORE_SHA" >> "$GITHUB_OUTPUT"
-            echo "Affected against the commit this push replaced: $BEFORE_SHA"
-          elif git rev-parse --verify --quiet 'HEAD~1^{commit}' >/dev/null; then
-            fallback="$(git rev-parse HEAD~1)"
-            echo "base=$fallback" >> "$GITHUB_OUTPUT"
-            echo "Affected against HEAD~1, this push having no readable predecessor: $fallback"
-          else
-            echo "No base could be derived; Nx will fall back to its own defaultBase."
-          fi
-
-      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit] The Linux lane alone carries live credentials; this Mac proof runs without them exactly as before. The task explicitly permits an opted-in manual diagnostic rerun outside the automatic lifecycle.
-      - name: Check the affected projects
-        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
-        env:
-          # Nx's own mechanism for "compare against this commit". Setting it here rather
-          # than threading an argument through every recipe keeps one source of truth for
-          # the base across all five phases of the gate.
-          NX_BASE: ${{ steps.macos-base.outputs.base }}
-          NX_HEAD: HEAD
-        # just check includes distribution-test, preserving the former install-path proof once.
-        run: just check
-      # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit]
-
-  macos-check:
-    name: check (macos-latest)
-    needs: [macos-lanes, macos, test-macos]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Report the required macOS proof outcome
-        env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
-        run: |
-          printf '%s' "$NEEDS_JSON" > needs.json
-          node .github/macos-result.mjs needs.json
-
-  macos-install:
-    name: install path (macos-latest)
-    needs: [macos-lanes, macos, test-macos]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Report the required macOS proof outcome
-        env:
-          NEEDS_JSON: ${{ toJSON(needs) }}
-        run: |
-          printf '%s' "$NEEDS_JSON" > needs.json
-          node .github/macos-result.mjs needs.json
-
-  # Supply chain, Linux-only: the graph is the same on every platform, so running it three
-  # times would buy nothing. This is where the two mechanically-enforced invariants fail —
-  # the banned-store list and the onetaskgraph-core wrapper restriction. See deny.toml.
-  deny:
-    if: github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: extractions/setup-just@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      # rust-cache hashes every installed compiler; exclude the unused floating one.
-      - name: Exclude the unused floating compiler from the build cache
-        shell: bash
-        run: rustup toolchain uninstall stable
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny,cargo-machete
-      - name: Supply-chain gate
-        run: just deny
-
-  # The PR title becomes the one squash commit that lands and that release-plz reads, so a
-  # malformed title must not merge.
-  pr-title:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read
-    steps:
-      - uses: amannn/action-semantic-pull-request@v6
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # The LLM-judge tier, separate from `check` because it is non-deterministic, needs an
-  # authenticated harness and makes network calls. Scoped to the files this PR changed, so
-  # a PR pays for its own changes rather than a full-repo sweep.
-  llmlint:
-    if: github.event_name == 'pull_request' && github.event.action != 'edited'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-      - name: Fetch main (diff base)
-        run: git fetch --no-tags --depth=2147483647 origin main
-      - uses: extractions/setup-just@v4
-      # setup-llmlint.sh installs llmlint with `uv tool install` and tolerates every
-      # failure, so with no uv on PATH it logs "uv not found", exits 0, and the job only
-      # discovers llmlint is missing at the validate step below.
-      - uses: astral-sh/setup-uv@v7
-
-      - name: Install oneharness + llmlint
-        run: |
-          just setup-llmlint
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      # setup-llmlint.sh installs llmlint and oneharness but NOT a harness, so without
-      # this the lint step would skip every file and still pass.
-      - name: Install the coding harness (claude-code)
-        run: npm i -g @anthropic-ai/claude-code
-
-      # Deterministic and model-free, so it runs first and fails a config, suppression or
-      # version-bump slip in milliseconds rather than after a paid harness call.
-      - name: Validate the llmlint config (no model)
-        run: just lint-llm-validate --diff-base origin/main
-
-      - name: Lint the changed files
-        env:
-          # `claude` reads only CLAUDE_CODE_OAUTH_TOKEN, so the same secret exported
-          # under any other name leaves it unauthenticated and surfaces as a misleading
-          # oneharness parse error rather than a missing credential.
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: |
-          # Fail with an actionable message rather than an opaque harness error — and
-          # never no-op to green, which would report unlinted files as clean.
-          if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-            echo "::error::llmlint needs a harness credential. Add the" \
-                 "CLAUDE_CODE_OAUTH_TOKEN repository secret (it is declared in" \
-                 "gh-secrets.json). Fork pull requests are gated by the" \
-                 "require-approval-for-fork-workflows setting." >&2
-            exit 1
-          fi
-          just lint-llm-diff origin/main
-
-  # The four pull-request jobs: `lint` once, on Linux, for everything platform-independent,
-  # and one test job per platform. None needs another, so all four start at once, and each
-  # runs its checks through one `just ci-<job>` recipe (scripts/ci-job.sh) over the projects
-  # the diff reaches. The jobs above stay until branch protection names these four.
+  # The four jobs. None needs another, so all four start at once, and each runs its checks
+  # through one `just ci-<job>` recipe (scripts/ci-job.sh) over the projects the diff reaches.
 
   lint:
     if: github.event_name == 'pull_request'
@@ -601,6 +173,24 @@ jobs:
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
+      # test-macos is skipped on this repository's own release-plz branch, so the release pull
+      # request spends no Mac runner (`onetaskgraph-macos-runs-per-change`). That is sound only
+      # while the branch carries release-plz's version and changelog edits alone, so the
+      # classifier reads the diff here, and a release branch carrying anything else fails lint
+      # rather than merging with no macOS run.
+      - name: Hold a release branch that skips macOS to its version and changelog edits
+        if: github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-')
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          decision="$(node .github/macos-policy.mjs classify --event "$GITHUB_EVENT_PATH" --base "$BASE" --head "$HEAD")"
+          echo "$decision"
+          if [ "$(jq -r .macosRequired <<<"$decision")" != false ]; then
+            echo "::error::this release-plz branch carries more than release versions and changelogs, so test-macos must run: $(jq -r .reason <<<"$decision"). Land the change through an ordinary branch." >&2
+            exit 1
+          fi
       - name: Derive the comparison base
         id: pr-base
         shell: bash
@@ -608,19 +198,17 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
       - name: Format, lint and type-check the affected projects, generated code and the supply chain
         env:
           NX_BASE: ${{ steps.pr-base.outputs.base }}
           NX_HEAD: HEAD
         run: just ci-lint
       # The release pull request alone: the pass-time budget of the pool maintenance
-      # onevcs.toml declares, which `check`'s Linux leg runs after its gate. lint is the one of the
-      # four that runs in full there, on Linux, already bootstrapped with the pinned pruner.
+      # onevcs.toml declares. lint is the one of the four that runs in full there, on Linux,
+      # already bootstrapped with the pinned pruner.
       - name: Pool-maintenance pass-time budget on the release pull request
         if: startsWith(github.head_ref, 'release-plz-')
         run: just pool-maintenance-budget
-      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
       - name: Install oneharness and llmlint
         run: |
           just setup-llmlint
@@ -628,14 +216,12 @@ jobs:
       # setup-llmlint.sh installs no harness, so without this the lint would skip every file.
       - name: Install the coding harness (claude-code)
         run: npm i -g @anthropic-ai/claude-code
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
       - name: Validate the llmlint config (no model)
         run: just lint-llm-validate --diff-base origin/main
-      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
       - name: Lint the changed files with llmlint
         env:
-          # `claude` reads only CLAUDE_CODE_OAUTH_TOKEN; see the llmlint job above.
+          # `claude` reads only CLAUDE_CODE_OAUTH_TOKEN, so the same secret exported under any other
+          # name leaves it unauthenticated and surfaces as a misleading oneharness parse error.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
@@ -646,7 +232,6 @@ jobs:
             exit 1
           fi
           just lint-llm-diff origin/main
-      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
       - name: Wait for the visual docs capture
         shell: bash
         run: |
@@ -657,7 +242,6 @@ jobs:
             echo "::error::the visual docs capture exited $status; its log is above. Reproduce it with 'just screenshots'." >&2
             exit 1
           fi
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] visual-docs.yml's capture and report stay until branch protection names these four.
       # screencomp's own composite actions, as steps of this job rather than its reusable
       # workflow, which would add five jobs: the CLI pin, the inputs and the strict drift gate
       # visual-docs.yml passes, for the one lane screencomp.toml declares.
@@ -685,7 +269,6 @@ jobs:
           matrix: ${{ steps.lane.outputs.matrix }}
           publish: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           github-token: ${{ github.token }}
-      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
 
   test-linux:
     if: github.event_name == 'pull_request'
@@ -807,7 +390,6 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] The jobs behind today's required contexts stay until branch protection names these four.
       - name: Test the affected projects
         if: steps.release.outputs.tests == 'run'
         env:
@@ -827,20 +409,19 @@ jobs:
           GH_PROJECTS_NUMBER: "1"
           GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
           LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
-          # llmlint: ignore[live_tier_compiles_and_requires_credential] `0` on a fork pull request alone, which GitHub hands no secrets; every other run demands the credential, as on `check`'s Linux leg.
+          # llmlint: ignore[live_tier_compiles_and_requires_credential] `0` on a fork pull request alone, which GitHub hands no secrets; every other run demands the credential.
           ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
           NX_BASE: ${{ steps.pr-base.outputs.base }}
           NX_HEAD: HEAD
-        # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] As on check's Linux leg: these suites run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
+        # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] These suites run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just ci-test-linux
-      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
-
-      # A cancelled pull request's live journeys die before their own cleanup, leaving their
-      # board copies, scratch issues and pool leases behind; these two steps remove exactly this
-      # run attempt's and open no session, as on check's Linux leg.
-      # scripts/check-live-janitor.sh holds both to that shape.
+      # A cancelled run's live journeys die before their own cleanup, leaving their board
+      # copies, scratch issues and pool leases behind. On cancellation this job, the one that
+      # carries the credentials, removes exactly this run attempt's and opens no session; the
+      # hourly janitor takes anything left once the run reads completed.
+      # scripts/check-live-janitor.sh holds both steps to that shape.
       - name: Remove this run's live artifacts after a cancellation
-        if: cancelled() && !github.event.pull_request.head.repo.fork
+        if: cancelled() && steps.release.outputs.tests == 'run' && !github.event.pull_request.head.repo.fork
         timeout-minutes: 15
         env:
           GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
@@ -853,7 +434,7 @@ jobs:
       # six and a half hours: exactly the leases this job recorded, each only while it still
       # reads back as recorded. scripts/check-live-janitor.sh holds this step to that shape.
       - name: Release this run's Linear leases after a cancellation
-        if: cancelled() && !github.event.pull_request.head.repo.fork
+        if: cancelled() && steps.release.outputs.tests == 'run' && !github.event.pull_request.head.repo.fork
         timeout-minutes: 15
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
@@ -982,77 +563,19 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
-      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials; the uncredentialed service suites run behind affected selection, as on check's legs; and the jobs behind today's required contexts stay until branch protection names these four.
+      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials, so this job cannot demand one; and the uncredentialed service suites run behind affected selection, as in test-linux, only when their own plugin changed.
       - name: Test the affected projects
         if: steps.release.outputs.tests == 'run'
         env:
           NX_BASE: ${{ steps.pr-base.outputs.base }}
           NX_HEAD: HEAD
         run: just ci-test-windows
-      # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier]
-
-  # A manual diagnostic, default off: scripts:distribution-test with nothing beside it, on the
-  # two platforms whose test jobs run it beside their other suites, so its own duration there
-  # is read off the step rather than inferred from a contended run.
-  distribution-diagnostic:
-    if: github.event_name == 'workflow_dispatch' && inputs.distribution
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: extractions/setup-just@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      # rust-cache hashes every installed compiler; exclude the unused floating one.
-      - name: Exclude the unused floating compiler from the build cache
-        shell: bash
-        run: rustup toolchain uninstall stable
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
-      - name: Read the pinned bootstrap tool versions
-        id: pins
-        shell: bash
-        run: bash scripts/ci-tool-pins.sh
-      - uses: actions/cache/restore@v6
-        with:
-          path: ~/.cache/onetaskgraph/tools/release-plz
-          key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
-      - uses: actions/cache/restore@v6
-        with:
-          path: |
-            ~/.cargo/bin/cargo-prune-superseded
-            ~/.cargo/bin/cargo-prune-superseded.exe
-          key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      - name: Bootstrap
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          MATURIN_PEP517_ARGS: --profile dev
-        run: just bootstrap --outputStyle=static
-      - name: Build the binary the distribution journey packages
-        run: bash scripts/nx.sh run onetaskgraph:build --outputStyle=static
-      # llmlint: ignore-block[no_second_broader_sweep_over_an_already_gated_commit] This default-off workflow_dispatch diagnostic deliberately measures the distribution journey without contending suites as an experimental control; it never runs on pull requests and does not add a gate. The existing check contexts remain required by this migration's contract.
-      - name: The distribution journey, alone
-        run: just distribution-test
-      # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
+      # llmlint: ignore-end[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier]
 
   # Skipped at the job level on release-plz's own release branch, so the release pull request
   # spends no Mac runner (`onetaskgraph-macos-runs-per-change`); a skipped job satisfies a
-  # required context. The carrier `check (macos-latest)` still goes red when that branch
-  # carries more than the version and changelog edits, because macos-lanes classifies the
-  # diff itself.
+  # required check. lint goes red when that branch carries more than the version and changelog
+  # edits, because it classifies the diff itself.
   test-macos:
     if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-'))
     runs-on: macos-latest
@@ -1157,11 +680,11 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
-      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials; the uncredentialed service suites run behind affected selection, as on check's legs; and the jobs behind today's required contexts stay until branch protection names these four.
+      # llmlint: ignore-block[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials, so this job cannot demand one; and the uncredentialed service suites run behind affected selection, as in test-linux, only when their own plugin changed.
       - name: Test the affected projects
         if: steps.release.outputs.tests == 'run'
         env:
           NX_BASE: ${{ steps.pr-base.outputs.base }}
           NX_HEAD: HEAD
         run: just ci-test-macos
-      # llmlint: ignore-end[live_tier_compiles_and_requires_credential,no_second_broader_sweep_over_an_already_gated_commit,external_service_suite_stays_out_of_the_affected_tier]
+      # llmlint: ignore-end[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier]

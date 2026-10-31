@@ -1,0 +1,18 @@
+{
+  "path": "repos/nickderobertis/onetaskgraph/actions/runs/41010573098/jobs?per_page=100&filter=latest",
+  "fetched_from": {
+    "release": "v0.12.13",
+    "pull_request": 3826,
+    "run": 41010573098,
+    "workflow": "Visual docs",
+    "event": "pull_request",
+    "read": "the jobs of a pull_request run at the pull request's head"
+  },
+  "repository": "nickderobertis/onetaskgraph",
+  "recorded": {
+    "at": "Sat, 31 Oct 2026 15:52:50 GMT",
+    "with": "gh api --include --method GET 'repos/nickderobertis/onetaskgraph/actions/runs/41010573098/jobs?per_page=100&filter=latest'",
+    "read_only": true,
+    "as": "exactly what gh printed: the status line, every response header and the body, unedited"
+  }
+}

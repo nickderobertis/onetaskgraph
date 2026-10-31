@@ -80,7 +80,7 @@ test("no workflow serialises a live suite", () => {
   const definitions = workflows();
   const jobs = liveSuiteJobs(definitions).map(({ file, name }) => `${file}:${name}`);
   // The scan has to see every lane that opens a live session, or a pass proves nothing.
-  for (const expected of ["ci.yml:check", "ci.yml:test-linux", "linear-documents.yml:documents"]) {
+  for (const expected of ["ci.yml:test-linux", "linear-documents.yml:documents"]) {
     assert.ok(jobs.includes(expected), `${expected} runs a live suite and was not found`);
   }
   assert.deepEqual(liveSerialisations(definitions, workflowSources()), []);
@@ -208,11 +208,14 @@ test("only the daily schedule creates fresh documents and manual dispatch initia
     definitions["ci.yml"].jobs[job].steps.filter(
       (step) => step.env?.LINEAR_API_KEY && !releasesLeases(step),
     );
-  const ordinarySteps = [...credentialed("check"), ...credentialed("test-linux")];
-  assert.ok(credentialed("test-linux").length > 0, "test-linux carries a pull request's session");
+  // test-linux is the one job any credential reaches.
+  for (const job of Object.keys(definitions["ci.yml"].jobs).filter((id) => id !== "test-linux"))
+    assert.deepEqual(credentialed(job), [], `${job} is handed LINEAR_API_KEY`);
+  const ordinarySteps = credentialed("test-linux");
+  assert.ok(ordinarySteps.length > 0, "test-linux carries a pull request's session");
   for (const step of ordinarySteps) {
     assert.equal(step.env.ONETASKGRAPH_LINEAR_DOCUMENT_MODE, "ordinary");
-    assert.match(step.run, /^just ((check|gate)-generated|ci-test-linux)$/);
+    assert.equal(step.run, "just ci-test-linux");
   }
 });
 
@@ -297,12 +300,14 @@ test("each credentialed job records its leases where its cancellation step relea
   const directory = "target/linear-leases";
   const release = `cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases ${directory}`;
   const jobs = workflows()["ci.yml"].jobs;
-  for (const name of ["check", "test-linux"]) {
+  const opensSession = (step) => step.env?.LINEAR_API_KEY && /^just /.test(step.run ?? "");
+  const credentialed = Object.keys(jobs).filter((name) =>
+    (jobs[name].steps ?? []).some(opensSession),
+  );
+  assert.ok(credentialed.includes("test-linux"), "test-linux opens no Linear session");
+  for (const name of credentialed) {
     const steps = jobs[name].steps;
-    const sessions = steps.filter(
-      (step) => step.env?.LINEAR_API_KEY && /^just /.test(step.run ?? ""),
-    );
-    assert.ok(sessions.length > 0, `${name} opens no Linear session`);
+    const sessions = steps.filter(opensSession);
     for (const step of sessions) {
       assert.equal(step.env[variable], `\${{ github.workspace }}/${directory}`, name);
     }

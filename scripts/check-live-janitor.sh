@@ -47,47 +47,53 @@ def constant(name, spelled=r'&str = "([^"]+)"'):
     found = re.search(rf'pub const {name}: {spelled};', declarations)
     return found.group(1) if found else None
 
-# The ci.yml steps that run the janitor: each credentialed job's cancellation cleanup, one for
-# its GitHub artifacts and one for its Linear pool leases. They are credentialed and open no
-# live session, so scripts/check-live-lane.sh and scripts/check-live-lane-selection.sh exempt
-# exactly a step running one of these two commands, and this holds every such step to its
-# whole shape: its command, its condition, and exactly the credentials it is given.
+# The ci.yml steps that run the janitor: test-linux's cancellation cleanup, one for its GitHub
+# artifacts and one for its Linear pool leases — test-linux being the one job that carries the
+# credentials. They are credentialed and open no live session, so scripts/check-live-lane.sh and
+# scripts/check-live-lane-selection.sh exempt exactly a step running one of these two commands,
+# and this holds each to its whole shape: its job, its command, its condition, and exactly the
+# credentials it is given.
 CANCELLED_RUN = 'cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run'
 RELEASE_LEASES = 'cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases'
-# check's Linux leg on a push, and test-linux on a pull request: the two jobs holding credentials.
-CANCELLED_IFS = ["cancelled() && matrix.os == 'ubuntu-latest' && !github.event.pull_request.head.repo.fork",
-                 "cancelled() && !github.event.pull_request.head.repo.fork"]
+CANCELLED_IF = "cancelled() && steps.release.outputs.tests == 'run' && !github.event.pull_request.head.repo.fork"
 CANCELLED_ENV = {'GH_PROJECTS_TOKEN', 'GH_PROJECTS_OWNER', 'GH_PROJECTS_NUMBER', 'GH_PROJECTS_REPOSITORY'}
 RELEASE_ENV = {'LINEAR_API_KEY', 'LINEAR_WRITE_TEAM'}
 ci_steps = re.split(r'(?m)^      - (?=name:|uses:)', ci)
 # A job's last step runs on to the next job's header; cut it there.
 ci_steps = [re.split(r'(?m)^  (?=[a-z])', step, maxsplit=1)[0] for step in ci_steps]
 cleanups = [step for step in ci_steps if re.search(r'onetaskgraph-live-janitor', step)]
+test_linux = section(ci, '\n  test-linux:\n', '\n  test-windows:\n', 'test-linux job')
 for command, expected_env, credential in [
     (CANCELLED_RUN, CANCELLED_ENV, ('GH_PROJECTS_TOKEN', '${{ secrets.GH_PROJECTS_TOKEN }}')),
     (RELEASE_LEASES, RELEASE_ENV, ('LINEAR_API_KEY', '${{ secrets.LINEAR_API_KEY }}')),
 ]:
     steps = [step for step in cleanups if values(step, 'run') == [command]]
-    if sorted(values(step, 'if')[0] if values(step, 'if') else '' for step in steps) != sorted(CANCELLED_IFS):
-        refuse(f'ci.yml must run {command!r} in exactly one cancellation step of each credentialed job, '
-               f'under {CANCELLED_IFS}', '.github/workflows/ci.yml',
-               'restore the cancellation cleanup steps, then rerun')
-    for step in steps:
-        environment = section(step, '\n        env:\n', '\n        run:', 'cancellation cleanup env')
-        if set(re.findall(r'^          ([A-Z_]+):', environment, re.M)) != expected_env:
-            refuse(f'a cancellation step running {command!r} must be given exactly {sorted(expected_env)}',
-                   '.github/workflows/ci.yml',
-                   'it reads no run, so it takes no GITHUB_TOKEN and no other credential; restore its env, then rerun')
-        if values(step, credential[0]) != [credential[1]]:
-            refuse(f'a cancellation step must use {credential[1]}', '.github/workflows/ci.yml',
-                   'restore its credential, then rerun')
-if len(cleanups) != 4 or any(values(step, 'run')[:1] not in ([CANCELLED_RUN], [RELEASE_LEASES]) for step in cleanups):
-    refuse('ci.yml runs the janitor only in the four cancellation steps', '.github/workflows/ci.yml',
+    if len(steps) != 1:
+        refuse(f'ci.yml must run {command!r} in exactly one cancellation step', '.github/workflows/ci.yml',
+               'restore the cancellation cleanup step, then rerun')
+        continue
+    step = steps[0]
+    if command not in test_linux:
+        refuse(f'the cancellation step running {command!r} must be a step of test-linux, the job that '
+               'carries the credentials', '.github/workflows/ci.yml', 'move it back into test-linux, then rerun')
+    if values(step, 'if') != [CANCELLED_IF]:
+        refuse(f'the cancellation step running {command!r} must run only when {CANCELLED_IF}',
+               '.github/workflows/ci.yml', 'restore its if: condition, then rerun')
+    environment = section(step, '\n        env:\n', '\n        run:', 'cancellation cleanup env')
+    if set(re.findall(r'^          ([A-Z_]+):', environment, re.M)) != expected_env:
+        refuse(f'a cancellation step running {command!r} must be given exactly {sorted(expected_env)}',
+               '.github/workflows/ci.yml',
+               'it reads no run, so it takes no GITHUB_TOKEN and no other credential; restore its env, then rerun')
+    if values(step, credential[0]) != [credential[1]]:
+        refuse(f'a cancellation step must use {credential[1]}', '.github/workflows/ci.yml',
+               'restore its credential, then rerun')
+if len(cleanups) != 2 or any(values(step, 'run')[:1] not in ([CANCELLED_RUN], [RELEASE_LEASES]) for step in cleanups):
+    refuse('ci.yml runs the janitor only in the two cancellation steps', '.github/workflows/ci.yml',
            'remove the other janitor step, then rerun')
 for key in ('GH_PROJECTS_OWNER', 'GH_PROJECTS_NUMBER', 'GH_PROJECTS_REPOSITORY'):
     nominated = values(source, key)
-    if len(nominated) != 1 or values(ci, key) != nominated * 4:
-        refuse(f'{key} differs from the two credentialed ci.yml steps and their cancellation cleanups')
+    if len(nominated) != 1 or values(ci, key) != nominated * 2:
+        refuse(f'{key} differs from the credentialed ci.yml step and its cancellation cleanup')
 if values(source, 'GH_PROJECTS_NUMBER') != ['1']:
     refuse('GH_PROJECTS_NUMBER must name board 1 only')
 if values(source, 'GH_PROJECTS_REPOSITORY') != [constant('SCRATCH_REPOSITORY')]:

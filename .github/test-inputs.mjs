@@ -67,13 +67,48 @@ export const policyJourneyReadSet = [
 export const policyJourneyFiles = [
   ".github/policy/tests/boundaries.test.mjs",
   ".github/policy/tests/inventory.test.mjs",
-  ".github/policy/tests/policy-carriers.test.mjs",
   ".github/policy/tests/policy-routing.test.mjs",
   ".github/policy/tests/policy.test.mjs",
   ".github/policy/tests/release-shortcut.test.mjs",
   ".github/policy/tests/reusable.test.mjs",
   ".github/policy/tests/rust-cache-warm.test.mjs",
 ];
+
+// Repository files the budget journeys read, beyond the workflow graph: the root budgets file,
+// the gate's recipe, wrapper and reporter, and the onebudgetspec pin they run (package.json and
+// its lockfile). ci-events also reads this repository's own git history, which no Nx input can
+// name: the release commit and the push it pins are immutable.
+export const budgetJourneyReadSet = [
+  "budgets.yaml",
+  "justfile",
+  "package.json",
+  "bun.lock",
+  "scripts/gate-time.sh",
+  "scripts/gate-time-budget.mjs",
+];
+
+export const budgetJourneyFiles = [
+  ".github/tests/ci-events.test.mjs",
+  ".github/tests/gate-time.test.mjs",
+];
+
+// Every file the release tail reads outside its own tests and fixtures: release.yml, whose
+// install step is also onevcs's pin, rust-cache-warm.yml, whose workflow name the CD budgets
+// exclude, the YAML parser's lock, the root budgets file, the copied figures script and
+// onebudgetspec's pin, which that step must match. It imports nothing of the
+// run graph. A target of github-workflow-policy's, which no crate edit selects, because it
+// installs both tools from npm.
+export const releaseTailReadSet = [
+  ".github/workflows/release.yml",
+  ".github/workflows/rust-cache-warm.yml",
+  ".github/package.json",
+  ".github/bun.lock",
+  "budgets.yaml",
+  "package.json",
+  "scripts/actions-budget-figures.sh",
+];
+
+export const releaseTailFiles = [".github/policy/tests/release-tail.test.mjs"];
 
 // The one policy journey run on every platform, because the real action it runs does.
 export const rustCacheJourneyFiles = [".github/policy/tests/rust-cache.test.mjs"];
@@ -98,8 +133,11 @@ export function inputProblems(project, target) {
         ? expand(project.namedInputs[input])
         : [input],
     );
-  const graph = graphReadSet().filter((path) => !path.startsWith(".github/"));
-  if (!graph.length) throw Error("the graph reads no outside file, so this proves nothing");
+  // The release tail imports nothing of the run graph, so it is keyed on its own reads alone.
+  const graph =
+    target === "release-tail" ? [] : graphReadSet().filter((path) => !path.startsWith(".github/"));
+  if (!graph.length && target !== "release-tail")
+    throw Error("the graph reads no outside file, so this proves nothing");
   const outside = [
     ...new Set([
       ...graph,
@@ -107,7 +145,11 @@ export function inputProblems(project, target) {
         ? cdJourneyReadSet
         : target === "policy-tests"
           ? policyJourneyReadSet
-          : []),
+          : target === "budget-journeys"
+            ? budgetJourneyReadSet
+            : target === "release-tail"
+              ? releaseTailReadSet
+              : []),
     ]),
   ];
   const inputs = expand(project.targets[target].inputs ?? ["default"]);

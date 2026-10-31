@@ -66,6 +66,7 @@
           "bash scripts/check-selection-code-page.sh",
           "bash scripts/check-scoped-release-plz.sh",
           "bash scripts/check-file-lock.sh",
+          "bash scripts/check-github-workflows-bootstrap-serialised.sh",
           "python3 scripts/test_cli_wheel_lock.py",
           "python3 scripts/test_ci_timings.py",
           "bash scripts/check-ci-recipes.sh",

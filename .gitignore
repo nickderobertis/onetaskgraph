@@ -37,3 +37,6 @@ lcov.info
 /shots/current/
 /shots/verify/
 /shots/review/
+
+# `just gate`'s wall-clock record (scripts/gate-time.sh), read back by onetaskgraph-gate-time.
+/.gate-time.json
