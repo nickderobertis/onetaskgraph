@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -105,6 +107,35 @@ test("a record the wrapper cannot write fails the gate, and no earlier record st
   assert.match(ran.out, /cannot remove the earlier record/);
   assert.doesNotMatch(ran.out, /the gate body ran/);
   assert.doesNotMatch(ran.out, /budget onetaskgraph-gate-time/);
+});
+
+// The body runs as the wrapper's child, so `$PPID` there is the wrapper's own pid, which names
+// the temporary record it writes beside .gate-time.json.
+test("a record the wrapper cannot write after the body fails the gate, checking no budget", () => {
+  const dir = tree();
+  const ran = gate(dir, "bash", "-c", 'mkdir ".gate-time.json.$PPID"');
+  assert.equal(ran.status, 2, ran.out);
+  assert.match(ran.out, /cannot write the record beside/);
+  assert.doesNotMatch(ran.out, /budget onetaskgraph-gate-time/);
+  assert.equal(existsSync(recordPath(dir)), false);
+});
+
+test("a record the wrapper cannot put in place fails the gate and leaves no temporary file", () => {
+  const dir = tree();
+  // A directory nobody may write into, where the record goes, made by the body after the
+  // wrapper removed the earlier record: the record cannot be moved into place.
+  const ran = gate(dir, "bash", "-c", "mkdir .gate-time.json && chmod 555 .gate-time.json");
+  try {
+    assert.equal(ran.status, 2, ran.out);
+    assert.match(ran.out, /cannot replace/);
+    assert.doesNotMatch(ran.out, /budget onetaskgraph-gate-time/);
+    assert.deepEqual(
+      readdirSync(dir).filter((name) => name.startsWith(".gate-time.json.")),
+      [],
+    );
+  } finally {
+    chmodSync(recordPath(dir), 0o755);
+  }
 });
 
 test("a recorded gate within the threshold passes", () => {

@@ -32,7 +32,6 @@ function reportedOnPullRequest(all) {
   }
 }
 
-// Every required check keeps a job behind it.
 export function problems(all) {
   const reported = reportedOnPullRequest(all);
   return REQUIRED_CONTEXTS.filter((context) => !reported.includes(context)).map(
