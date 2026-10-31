@@ -3462,25 +3462,9 @@ mod pool {
 
     /// Every record id a request names, by the guard's own reading of a request.
     fn named(request: &Value) -> BTreeSet<String> {
-        fn walk(value: &Value, found: &mut BTreeSet<String>) {
-            match value {
-                Value::Object(object) => {
-                    for (key, child) in object {
-                        if let (true, Some(id)) =
-                            (key == "id" || key.ends_with("Id"), child.as_str())
-                        {
-                            found.insert(id.to_owned());
-                        }
-                        walk(child, found);
-                    }
-                }
-                Value::Array(items) => items.iter().for_each(|item| walk(item, found)),
-                _ => {}
-            }
-        }
-        let mut found = BTreeSet::new();
-        walk(&request["variables"], &mut found);
-        found
+        let mut found = Vec::new();
+        document_lifecycle::namespace::ids_named(&request["variables"], &mut found);
+        found.into_iter().collect()
     }
 
     fn assert_isolated(replay: &document_replay::Replay, sessions: &[Session]) {
@@ -4016,6 +4000,18 @@ mod pool {
         assert!(refused.contains("rejected"), "{refused}");
         assert_eq!(namespace.refusals().len(), 1, "{:?}", namespace.refusals());
         assert!(namespace.refusals()[0].contains(target.as_str()));
+        // So is naming it inside a filter's comparator rather than as a write's target.
+        assert!(
+            document_lifecycle::send(
+                &endpoint,
+                "mine",
+                document_lifecycle::DOCUMENTS,
+                json!({"after":null,"filter":{"id":{"in":[target]}}}),
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(namespace.refusals().len(), 2, "{:?}", namespace.refusals());
         // And so is writing another run's identity into a title.
         let title =
             onetaskgraph_linear::live_artifact::retained_title(theirs.lease.scope(), Slot::Assets)
@@ -4028,8 +4024,8 @@ mod pool {
         )
         .await
         .is_err());
-        assert_eq!(namespace.refusals().len(), 2);
-        // Neither request reached the double; their destination is as they left it.
+        assert_eq!(namespace.refusals().len(), 3);
+        // No refused write reached the double; their destination is as they left it.
         let state = replay.state.lock().unwrap();
         assert!(!state.keyed.iter().any(|(key, request)| key == "mine"
             && request["query"].as_str().unwrap().contains("mutation")));

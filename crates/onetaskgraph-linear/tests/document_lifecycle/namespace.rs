@@ -139,19 +139,17 @@ fn collect_foreign(namespace: &Namespace, value: &Value, found: &mut Vec<String>
     }
 }
 
-/// Every string a request's variables carry under a key that names a record: `id`, and every
-/// `…Id` or `…Ids`, nested inputs and filters included.
-fn ids_named(value: &Value, named: &mut Vec<String>) {
+/// Every string a request's variables carry under a key that names a record — `id`, and
+/// every `…Id` or `…Ids` — nested inputs and filters included, and whatever a comparator under
+/// such a key holds (`id: {eq: …}`, `{in: […]}`).
+pub fn ids_named(value: &Value, named: &mut Vec<String>) {
     match value {
         Value::Object(object) => {
             for (key, child) in object {
-                let names_record = key == "id" || key.ends_with("Id") || key.ends_with("Ids");
-                match child {
-                    Value::String(id) if names_record => named.push(id.clone()),
-                    Value::Array(items) if names_record => {
-                        named.extend(items.iter().filter_map(Value::as_str).map(str::to_owned))
-                    }
-                    _ => ids_named(child, named),
+                if key == "id" || key.ends_with("Id") || key.ends_with("Ids") {
+                    strings_in(child, named);
+                } else {
+                    ids_named(child, named);
                 }
             }
         }
@@ -160,6 +158,15 @@ fn ids_named(value: &Value, named: &mut Vec<String>) {
                 ids_named(item, named);
             }
         }
+        _ => {}
+    }
+}
+
+fn strings_in(value: &Value, found: &mut Vec<String>) {
+    match value {
+        Value::String(text) => found.push(text.clone()),
+        Value::Object(object) => object.values().for_each(|child| strings_in(child, found)),
+        Value::Array(items) => items.iter().for_each(|item| strings_in(item, found)),
         _ => {}
     }
 }

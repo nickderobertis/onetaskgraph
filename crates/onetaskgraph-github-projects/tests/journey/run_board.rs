@@ -53,6 +53,29 @@ pub fn admit(document: &str, variables: &Value) -> Result<(), String> {
         return Ok(());
     };
     let own_number = |number: u32| namespace.own.iter().any(|board| board.number == number);
+    // Once this process has a board of its own, a board it names by number or as `projectId`
+    // is one of its own or it is refused, whether or not it was ever seen answered.
+    if !namespace.own.is_empty() {
+        if let Some(number) = variables.get("number").and_then(Value::as_u64)
+            && !u32::try_from(number).is_ok_and(own_number)
+        {
+            return Err(format!(
+                "refused before sending: this live session named board #{number}, which is not \
+                 one this run copied for itself"
+            ));
+        }
+        let mut projects = Vec::new();
+        project_ids(variables, &mut projects);
+        if let Some(project) = projects
+            .iter()
+            .find(|project| !namespace.own.iter().any(|board| board.id == **project))
+        {
+            return Err(format!(
+                "refused before sending: this live session named board {project}, which is not \
+                 one this run copied for itself"
+            ));
+        }
+    }
     for (id, number) in namespace.templates.iter().chain(&namespace.foreign) {
         if !own_number(*number)
             && variables.get("number").and_then(Value::as_u64) == Some(u64::from(*number))
@@ -105,6 +128,22 @@ fn boards_in(value: &Value, found: &mut Vec<(String, u32)>) {
             object.values().for_each(|child| boards_in(child, found));
         }
         Value::Array(items) => items.iter().for_each(|item| boards_in(item, found)),
+        _ => {}
+    }
+}
+
+/// Every `projectId` a request's variables carry, nested inputs included.
+fn project_ids(value: &Value, found: &mut Vec<String>) {
+    match value {
+        Value::Object(object) => {
+            for (key, child) in object {
+                match (key.as_str(), child) {
+                    ("projectId", Value::String(id)) => found.push(id.clone()),
+                    _ => project_ids(child, found),
+                }
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| project_ids(item, found)),
         _ => {}
     }
 }

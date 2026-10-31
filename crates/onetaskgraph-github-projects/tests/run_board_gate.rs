@@ -598,6 +598,8 @@ async fn session_child() {
         if std::env::var_os("RUN_BOARD_GATE_TRESPASS").is_some() {
             for (what, variables) in [
                 ("the template", json!({"owner":OWNER,"number":TEMPLATE})),
+                // A board nothing has answered about: not this run's, so not to be named.
+                ("an unseen board", json!({"owner":OWNER,"number":999})),
                 ("another run's board", {
                     let listed = send(
                         RUN_BOARDS_DOCUMENT,
@@ -844,6 +846,10 @@ fn a_session_naming_a_board_outside_its_run_is_refused_before_sending() {
     );
     assert!(
         stdout.contains("run-board-gate refused: another run's board"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("run-board-gate refused: an unseen board"),
         "{stdout}"
     );
     // Neither request reached the account, and the other run's board is as it stood.

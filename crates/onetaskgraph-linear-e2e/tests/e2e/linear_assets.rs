@@ -1623,8 +1623,9 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
                 .join(&owner_stamp),
         )
         .unwrap();
-    // The lane's own Linear requests pass this run's namespace guard: one naming another
-    // run's record is refused before it reaches Linear.
+    // The lane's own lifecycle requests — preparing and retiring its slot — pass this run's
+    // namespace guard, which refuses one naming another run's record before it reaches
+    // Linear. The binary under test and the slot's reset reach Linear directly.
     let namespace = std::sync::Arc::new(document_lifecycle::namespace::Namespace::new(
         onetaskgraph_live::artifact::Run::current(),
         &team_key,
