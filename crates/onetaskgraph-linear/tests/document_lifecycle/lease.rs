@@ -53,14 +53,31 @@ const LEASE_DELETE: &str = "mutation($id:String!){issueDelete(id:$id){success}}"
 /// The id generation `generation` of `team`'s `lane` lease over member `index` is created
 /// under: deterministic, so every claimant of that generation asks for the same one, and
 /// shaped as the version-4 UUID Linear's `IssueCreateInput.id` documents.
+/// The member, from 1, a claim by `holder` tries first: spread by the holder's stamp, so runs
+/// starting together try different members rather than all racing for the first.
+#[must_use]
+pub fn first_member(holder: &str) -> u8 {
+    digest(holder)[0] % POOL_SIZE + 1
+}
+
+/// The SHA-256 of `text`, through the one implementation this workspace already links.
+fn digest(text: &str) -> [u8; 32] {
+    let hex = onetaskgraph_plugin_api::asset_sha256(text.as_bytes());
+    let mut bytes = [0u8; 32];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16)
+            .expect("asset_sha256 answers 64 hexadecimal digits");
+    }
+    bytes
+}
+
 #[must_use]
 pub fn lease_id(team: &str, lane: LeaseLane, index: u8, generation: u32) -> String {
-    use sha2::{Digest, Sha256};
     let lane = match lane {
         LeaseLane::Plugin => "plugin",
         LeaseLane::Assets => "assets",
     };
-    let digest = Sha256::digest(format!(
+    let digest = digest(&format!(
         "onetaskgraph-live-lease-v1\0{team}\0{lane}\0{index}\0{generation}"
     ));
     let mut bytes = [0u8; 16];
@@ -177,9 +194,8 @@ fn created_micros(node: &Value) -> Result<u64, String> {
     let created = node["createdAt"]
         .as_str()
         .ok_or("a lease issue answered no createdAt")?;
-    let at = chrono::DateTime::parse_from_rfc3339(created)
-        .map_err(|_| format!("a lease issue answered an unreadable createdAt {created:?}"))?;
-    u64::try_from(at.timestamp_micros()).map_err(|_| "a lease issue predates the epoch".into())
+    onetaskgraph_linear::live_artifact::lease_created_micros(created)
+        .ok_or_else(|| format!("a lease issue answered an unreadable createdAt {created:?}"))
 }
 
 fn state_of(lease: &Lease<'_>, created: u64, now: u64) -> LeaseState {
@@ -295,8 +311,7 @@ pub async fn claim(
     holder: &str,
     now: impl Fn() -> u64,
 ) -> Result<Held, String> {
-    use sha2::{Digest, Sha256};
-    let start = Sha256::digest(holder.as_bytes())[0] % POOL_SIZE;
+    let start = first_member(holder) - 1;
     let order: Vec<u8> = (0..POOL_SIZE)
         .map(|offset| (start + offset) % POOL_SIZE + 1)
         .collect();

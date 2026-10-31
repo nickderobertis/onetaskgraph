@@ -208,3 +208,27 @@ fn lease_titles_round_trip_and_malformed_ones_confer_no_lease() {
         .is_err()
     );
 }
+
+#[test]
+fn a_lease_creation_time_is_read_to_the_microsecond_and_an_unreadable_one_is_not_read() {
+    use onetaskgraph_linear::live_artifact::lease_created_micros;
+    assert_eq!(
+        lease_created_micros("2026-10-31T18:28:02.123456Z"),
+        Some(1_793_471_282_123_456)
+    );
+    assert_eq!(
+        lease_created_micros("2026-10-31T20:28:02.123456+02:00"),
+        Some(1_793_471_282_123_456)
+    );
+    for unreadable in ["", "yesterday", "2026-10-31", "1969-12-31T23:59:59Z"] {
+        assert_eq!(lease_created_micros(unreadable), None, "{unreadable}");
+    }
+    // What the replay doubles stamp reads back as a time no earlier than this test started.
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros();
+    let stamped = lease_created_micros(&onetaskgraph_linear::live_artifact::now_rfc3339())
+        .expect("its own stamp reads back");
+    assert!(u128::from(stamped) >= started / 1_000_000 * 1_000_000);
+}

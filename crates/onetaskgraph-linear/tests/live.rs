@@ -3253,8 +3253,22 @@ mod pool {
     }
     /// The member a holder's claim tries first, as `lease::claim` derives it.
     fn first_member(holder: &str) -> u8 {
-        use sha2::{Digest, Sha256};
-        Sha256::digest(holder.as_bytes())[0] % POOL_SIZE + 1
+        lease::first_member(holder)
+    }
+
+    #[test]
+    fn lease_ids_and_first_members_are_the_ones_the_standing_pool_was_filled_under() {
+        // The pool's standing issues exist under these ids: a change to the derivation would
+        // strand every member it filled, so the derivation is pinned by its outputs.
+        assert_eq!(
+            lease::lease_id("TES2", LeaseLane::Plugin, 1, 1),
+            "f064e9d8-01f5-4f77-b19e-d25c82a04462"
+        );
+        assert_eq!(
+            lease::lease_id("TES2", LeaseLane::Assets, 16, 42),
+            "6cc370b1-021c-4280-aa3f-e18a5568aabe"
+        );
+        assert_eq!(first_member("ci-41229550836-1-1793471795575259"), 1);
     }
     async fn claim(
         replay: &document_replay::Replay,

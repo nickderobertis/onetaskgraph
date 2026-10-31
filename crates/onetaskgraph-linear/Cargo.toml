@@ -23,6 +23,4 @@ graphql-parser.workspace = true
 # The gate this crate's live session opens; see crates/onetaskgraph-live.
 onetaskgraph-live.workspace = true
 serde_json.workspace = true
-# A standing pool member's lease id: `tests/document_lifecycle/lease.rs`.
-sha2.workspace = true
 tokio.workspace = true

@@ -370,6 +370,22 @@ fn lease_stamp_valid(stamp: &str) -> bool {
             .is_some_and(|rest| stamp_valid(&format!("1-{rest}")))
 }
 
+/// When a lease issue was created, in microseconds since the epoch, read from the RFC 3339
+/// `createdAt` Linear answers with; `None` for one that does not parse or predates the epoch.
+/// A claimant decides a lease is stale by it, so an unreadable time is never read as old.
+#[must_use]
+pub fn lease_created_micros(created_at: &str) -> Option<u64> {
+    let at = chrono::DateTime::parse_from_rfc3339(created_at).ok()?;
+    u64::try_from(at.timestamp_micros()).ok()
+}
+
+/// The current time as Linear spells a `createdAt`, for the replay doubles both Linear lanes
+/// share: they stamp what they create the way Linear does, and `lease_created_micros` reads it.
+#[must_use]
+pub fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
 /// Whether `title` is any live-test identity that only its own lifecycle may remove: a
 /// standing slot, a lease, or a malformed or future version of either, which confers no
 /// authority to anyone.

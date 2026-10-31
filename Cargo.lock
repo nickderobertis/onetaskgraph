@@ -1385,7 +1385,6 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
- "sha2",
  "tokio",
 ]
 
@@ -1393,7 +1392,6 @@ dependencies = [
 name = "onetaskgraph-linear-e2e"
 version = "0.12.14"
 dependencies = [
- "chrono",
  "graphql-parser",
  "onebudgetspec-core",
  "onetaskgraph-core",

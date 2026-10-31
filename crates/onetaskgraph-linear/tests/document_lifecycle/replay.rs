@@ -444,7 +444,7 @@ fn respond(state: &mut State, request: &Value) -> Value {
             row["team"] = json!({"key":"ENG"});
             row["teams"] = json!({"nodes":[{"key":"ENG"}],"pageInfo":{"hasNextPage":false}});
             if create {
-                row["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
+                row["createdAt"] = json!(onetaskgraph_linear::live_artifact::now_rfc3339());
                 row["project"] = Value::Null;
                 row["labels"] = page(vec![]);
                 row["relations"] = page(vec![]);
@@ -515,7 +515,7 @@ fn respond(state: &mut State, request: &Value) -> Value {
             serde_json::from_str(include_str!("../fixtures/comments.json")).unwrap();
         comment = comment["data"]["issue"]["comments"]["nodes"][0].clone();
         comment["body"] = v["input"]["body"].clone();
-        comment["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
+        comment["createdAt"] = json!(onetaskgraph_linear::live_artifact::now_rfc3339());
         comment["updatedAt"] = comment["createdAt"].clone();
         state.issues.get_mut(id).unwrap()["comments"]
             .as_array_mut()
