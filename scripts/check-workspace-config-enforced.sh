@@ -41,9 +41,9 @@ trap 'rm -rf "$scratch"' EXIT
 # The working tree's tracked files, as they are right now: what is under test is the guard
 # as an author has it, and the guard reads the whole tree — every project file, every SDK
 # source, the version inventory's manifests.
-if ! (cd "$ROOT" && git ls-files -z | while IFS= read -r -d '' tracked; do
-  mkdir -p "$scratch/$(dirname "$tracked")" && cp "$ROOT/$tracked" "$scratch/$tracked"
-done); then
+# One tar stream, not a process per file: on the Windows runner the per-file copy was most of
+# this check's time.
+if ! copy_tracked_files "$ROOT" "$scratch"; then
   fatal "could not copy the tracked files of $ROOT into $scratch" \
     "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 fi
@@ -207,6 +207,28 @@ printf 'const binary = resolve(root, "target/debug/onetaskgraph");\n' > "$scratc
 expect check-workspace-config.sh "a new source reaching the binary without being registered" \
   "sdks/typescript/tests/unregistered.test.ts: reaches into target/debug"
 rm -f "$scratch/sdks/typescript/tests/unregistered.test.ts"
+
+# A public version constant the release inventory does not own is refused by its path, and
+# one inside version-control metadata, build output or a dependency store is no release's.
+printf '__version__ = "1.0.0"\n' > "$scratch/scripts/planted_version.py" \
+  || fatal "could not plant the unregistered version constant in $scratch" \
+    "check the permissions of \$TMPDIR, then rerun"
+expect check-workspace-config.sh "a version constant the release inventory does not own" \
+  "scripts/planted_version.py: carries a product version but is absent from RECONCILED_VERSION_FILES"
+rm -f "$scratch/scripts/planted_version.py"
+for unowned in .git node_modules/planted target/release .venv/lib; do
+  mkdir -p "$scratch/$unowned" && printf '__version__ = "1.0.0"\n' > "$scratch/$unowned/planted_version.py" \
+    && printf '[project]\nname = "onetaskgraph-cli"\nversion = "1.0.0"\n' > "$scratch/$unowned/pyproject.toml" \
+    || fatal "could not plant the version files under $unowned in $scratch" \
+      "check the permissions of \$TMPDIR, then rerun"
+done
+# llmlint: ignore[work_goes_through_command_surface] The guard runs over the scratch copy these cases plant files in, as every case above does.
+if ! output="$(cd "$scratch" && bash scripts/check-workspace-config.sh 2>&1)"; then
+  printf '%s\n' "$output" >&2
+  echo "check-workspace-config-enforced: check-workspace-config.sh refused version files under .git, node_modules, target or .venv, which no release owns" >&2
+  failures=$((failures + 1))
+fi
+rm -rf "$scratch/.git" "$scratch/node_modules" "$scratch/target" "$scratch/.venv"
 
 # Every spelling in the file, the docstring's included: the scan reads the whole file.
 mutate "$CONFTEST" 'text = text.replace("debug", "built")'

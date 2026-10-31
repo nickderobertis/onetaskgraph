@@ -2,11 +2,12 @@
 """Read and update the cross-ecosystem product versions reconciled by workspace checks."""
 
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, NewType, Optional, Tuple, Union
+from typing import Dict, Iterator, NewType, Optional, Tuple, Union
 
 
 SEMANTIC_VERSION_RE = re.compile(
@@ -149,47 +150,55 @@ def _json_field(package: Dict[str, object], field: Tuple[str, ...]) -> object:
     return value
 
 
-# llmlint: ignore[async_typed_clients_at_boundaries] This short-lived gate inventory performs an ordered local tree scan and has no concurrent work.
+# Directories that hold version-control metadata, build output or a dependency store, never a
+# file this release owns. A walk into them visited every unit cargo built and every package bun
+# and uv installed, which was most of every guard's time that reads this inventory.
+UNOWNED_DIRECTORIES = frozenset({".git", "node_modules", "target", ".venv"})
+
+
+def _tree_files() -> Iterator[Path]:
+    """Every file under the working directory, outside the directories nothing here owns."""
+    for directory, children, files in os.walk("."):
+        children[:] = sorted(child for child in children if child not in UNOWNED_DIRECTORIES)
+        base = Path(directory)
+        for name in sorted(files):
+            yield base / name
+
+
+# llmlint: ignore[async_typed_clients_at_boundaries, structural_pattern_matching] This short-lived gate inventory performs an ordered local tree scan and has no concurrent work, and Python 3.8 support, as _read_version_values states, rules out `match`.
 def discover_product_version_files() -> Tuple[Path, ...]:
     """Discover release-owned manifests and public product-version constants."""
     discovered = []
-    for path in Path(".").glob("**/Cargo.toml"):
-        if path == Path("Cargo.toml"):
-            discovered.append(path)
-        elif path.parent.parent == Path("crates") and not INHERITED_VERSION_RE.search(
-            # llmlint: ignore[async_typed_clients_at_boundaries] This local manifest read is part of the ordered release inventory, which is synchronous and has no concurrent work.
-            path.read_text(encoding="utf-8")
+    for path in _tree_files():
+        if path.name == "Cargo.toml":
+            if path == Path("Cargo.toml"):
+                discovered.append(path)
+            elif path.parent.parent == Path("crates") and not INHERITED_VERSION_RE.search(
+                # llmlint: ignore[async_typed_clients_at_boundaries] This local manifest read is part of the ordered release inventory, which is synchronous and has no concurrent work.
+                path.read_text(encoding="utf-8")
+            ):
+                # A crate that inherits `[workspace.package] version` holds no number of its own
+                # to drift: the root manifest, registered above, is the one it reads.
+                discovered.append(path)
+        elif path.name == "pyproject.toml":
+            text = path.read_text(encoding="utf-8")
+            if re.search(r'(?m)^name\s*=\s*"onetaskgraph(?:-sdk|-cli)?"$', text):
+                discovered.append(path)
+        elif path.name == "package.json":
+            name = read_json_manifest(path).get("name")
+            if isinstance(name, str) and name.startswith("@onetaskgraph/"):
+                discovered.append(path)
+        elif path.name == "bun.lock":
+            if '"name": "@onetaskgraph/' in path.read_text(encoding="utf-8"):
+                discovered.append(path)
+        elif (
+            path.suffix in {".py", ".ts"}
+            and "generated" not in path.parts
+            and not any(part.startswith(".") for part in path.parts)
         ):
-            # A crate that inherits `[workspace.package] version` holds no number of its own
-            # to drift: the root manifest, registered above, is the one it reads.
-            discovered.append(path)
-    for path in Path(".").glob("**/pyproject.toml"):
-        text = path.read_text(encoding="utf-8")
-        if re.search(r'(?m)^name\s*=\s*"onetaskgraph(?:-sdk|-cli)?"$', text):
-            discovered.append(path)
-    for path in Path(".").glob("**/package.json"):
-        if "node_modules" in path.parts:
-            continue
-        package = read_json_manifest(path)
-        name = package.get("name")
-        if isinstance(name, str) and name.startswith("@onetaskgraph/"):
-            discovered.append(path)
-    for path in Path(".").glob("**/bun.lock"):
-        text = path.read_text(encoding="utf-8")
-        if '"name": "@onetaskgraph/' in text:
-            discovered.append(path)
-    for path in Path(".").glob("**/*"):
-        if (
-            not path.is_file()
-            or path.suffix not in {".py", ".ts"}
-            or "node_modules" in path.parts
-            or "generated" in path.parts
-            or any(part.startswith(".") for part in path.parts)
-        ):
-            continue
-        text = path.read_text(encoding="utf-8")
-        if re.search(r"(?m)^(?:__version__|export const VERSION)\s*=", text):
-            discovered.append(path)
+            text = path.read_text(encoding="utf-8")
+            if re.search(r"(?m)^(?:__version__|export const VERSION)\s*=", text):
+                discovered.append(path)
     return tuple(sorted(set(discovered)))
 
 
