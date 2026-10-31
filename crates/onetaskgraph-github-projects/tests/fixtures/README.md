@@ -247,6 +247,16 @@ retrieved 2026-10-31 (served `last-modified: Mon, 26 Oct 2026 10:30:11 GMT`), 1,
 SHA-256 `ee690896ae7d9126765c6a660174b40c9d1974b70db36af8559117b9c4a7b7a6`. To refresh it,
 download that URL over the file and record the new date, size and digest here.
 
+Two gates hold the copy, both in `tests/plugin.rs`. One pins it to that digest, so it cannot be
+edited by hand or refreshed without its provenance moving in the same change. The other
+reconciles it with every contract the credentialed lane introspects from GitHub on every run —
+each mutation's input and payload, each contract type's fields and types, each contract enum's
+members (`journey::MUTATION_CONTRACT`, `CONTRACT_TYPES`, `contract_field_types`,
+`CONTRACT_ENUMS`) — so where GitHub changes one of those contracts, either the live lane fails
+against GitHub or this reconciliation fails against the copy, and the copy is refreshed. A
+change GitHub makes elsewhere in its schema is caught only when the copy is next refreshed;
+`updateProjectV2Field`, which the field setup sends, is not among those live contracts.
+
 It is not a reduction, and that is its purpose. `schema.graphql` above is a subset written by
 the same hand as the documents it checks, and in 0.12.13 it defined `projectId` on
 `UpdateProjectV2FieldInput` — which GitHub does not — so the field setup's Status-option

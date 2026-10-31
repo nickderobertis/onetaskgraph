@@ -1104,9 +1104,10 @@ fn the_field_setup_requests_validate_and_the_input_0_12_13_sent_is_refused() {
 }
 
 /// The doubles refuse a selection GitHub's schema rejects as well as a variable it rejects:
-/// each request below is one GitHub answers with `errors` and runs none of.
+/// one request per validation rule the check holds a document to, each one GitHub answers
+/// with `errors` and runs none of.
 #[test]
-fn the_schema_check_refuses_each_kind_of_request_github_rejects() {
+fn the_schema_check_refuses_one_request_breaking_each_rule_it_holds_documents_to() {
     use serde_json::json;
 
     let refused = |document: &str, variables: serde_json::Value| {
@@ -1162,4 +1163,61 @@ fn the_schema_check_refuses_each_kind_of_request_github_rejects() {
         "Variable $input of type CreateProjectV2FieldInput! was provided invalid value for \
          singleSelectOptions.description (Expected value to not be null)"
     );
+
+    // Directives: defined, allowed where they stand, given their required arguments.
+    assert_eq!(
+        refused("query{viewer{login @deprecated}}", json!({})),
+        "Directive @deprecated is not defined"
+    );
+    assert_eq!(
+        refused("query @include(if:true){viewer{login}}", json!({})),
+        "'@include' can't be applied to querys (allowed: fields, fragment spreads, inline \
+         fragments)"
+    );
+    assert_eq!(
+        refused("query{viewer{login @skip}}", json!({})),
+        "Directive '@skip' is missing required arguments: if"
+    );
+    // A fragment that spreads itself, through another.
+    assert_eq!(
+        refused(
+            "query{viewer{...a}} fragment a on User{login ...b} fragment b on User{...a}",
+            json!({})
+        ),
+        "Fragment a contains an infinite loop"
+    );
+    // Introspection is held to the specification's own types.
+    assert_eq!(
+        refused("query{__type{name}}", json!({})),
+        "Field '__type' is missing required arguments: name"
+    );
+    assert_eq!(
+        refused("query{__schema{queryType{nom}}}", json!({})),
+        "Field 'nom' doesn't exist on type '__Type'"
+    );
+    // A variable used where its type or nullability does not fit.
+    assert_eq!(
+        refused("query($id:ID){node(id:$id){id}}", json!({"id": "I_1"})),
+        "Argument 'id' on Field 'node' has an invalid value (Nullability mismatch on variable \
+         $id and argument id (ID / ID!))"
+    );
+    assert_eq!(
+        refused(
+            "query($ids:[ID!]!){node(id:$ids){id}}",
+            json!({"ids": ["I_1"]})
+        ),
+        "Argument 'id' on Field 'node' has an invalid value (Type mismatch on variable $ids \
+         and argument id ([ID!]! / ID!))"
+    );
+    // A default that is not of its variable's type.
+    assert_eq!(
+        refused(
+            "query($first:Int = \"ten\"){viewer{repositories(first:$first){totalCount}}}",
+            json!({})
+        ),
+        "Default value for $first doesn't match type Int (Expected \"ten\" to be a Int)"
+    );
+    // And a nullable variable with a default is allowed where a non-null one is expected.
+    github_schema::validate("query($id:ID = \"I_1\"){node(id:$id){id}}", &json!({}))
+        .expect("a default makes a nullable variable usable in a non-null position");
 }

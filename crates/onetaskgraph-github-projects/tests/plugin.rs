@@ -14911,6 +14911,119 @@ fn the_pinned_delete_mutations_are_the_ones_the_live_lane_introspects() {
     }
 }
 
+/// The vendored copy of GitHub's published schema is GitHub's file byte for byte: its
+/// SHA-256 is the one `fixtures/README.md` records beside its source and retrieval date, so
+/// neither can move without the other — a hand edit of the copy fails here, and a refresh
+/// records its new digest in the same change.
+#[test]
+fn the_vendored_github_schema_is_the_published_file_its_provenance_records() {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(github_schema::SCHEMA.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let readme = include_str!("fixtures/README.md");
+    assert!(
+        readme.contains(&format!("SHA-256 `{digest}`")),
+        "fixtures/github-schema.docs.graphql hashes to {digest}, which fixtures/README.md does \
+         not record; refresh the file from https://docs.github.com/public/fpt/schema.docs.graphql \
+         and record its date, size and digest there"
+    );
+}
+
+/// The vendored schema agrees with every contract the credentialed lane re-reads from GitHub
+/// on every run — each mutation's input and payload, each contract type's fields and their
+/// types, each contract enum's members — so the snapshot the doubles validate against cannot
+/// drift from GitHub there without either this or the live introspection failing.
+#[test]
+fn the_vendored_github_schema_agrees_with_every_contract_the_live_lane_introspects() {
+    use graphql_parser::schema::{Definition, TypeDefinition, parse_schema};
+    let vendored = parse_schema::<String>(github_schema::SCHEMA).unwrap();
+    let definition = |name: &str| {
+        vendored
+            .definitions
+            .iter()
+            .find_map(|definition| match definition {
+                Definition::TypeDefinition(kind) => {
+                    let named = match kind {
+                        TypeDefinition::Object(value) => &value.name,
+                        TypeDefinition::InputObject(value) => &value.name,
+                        TypeDefinition::Enum(value) => &value.name,
+                        TypeDefinition::Interface(value) => &value.name,
+                        TypeDefinition::Scalar(value) => &value.name,
+                        TypeDefinition::Union(value) => &value.name,
+                    };
+                    (named == name).then_some(kind)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("GitHub's published schema has no {name}"))
+    };
+    let members = |name: &str| -> Vec<(String, String)> {
+        match definition(name) {
+            TypeDefinition::Object(object) => object
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), f.field_type.to_string()))
+                .collect(),
+            TypeDefinition::InputObject(input) => input
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), f.value_type.to_string()))
+                .collect(),
+            _ => panic!("{name} is neither an object nor an input"),
+        }
+    };
+    let mutation = members("Mutation");
+    let TypeDefinition::Object(mutation_type) = definition("Mutation") else {
+        panic!("Mutation is an object");
+    };
+    for (name, input, payload) in journey::MUTATION_CONTRACT {
+        assert!(
+            mutation.contains(&(name.to_owned(), payload.to_owned())),
+            "GitHub's published schema has no {name}: {payload}"
+        );
+        let field = mutation_type
+            .fields
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap();
+        assert!(
+            field
+                .arguments
+                .iter()
+                .any(|a| a.name == "input" && a.value_type.to_string() == format!("{input}!")),
+            "GitHub's published {name} takes no input: {input}!"
+        );
+    }
+    for (type_name, _, expected) in journey::CONTRACT_TYPES {
+        let held = members(type_name);
+        for field in expected {
+            assert!(
+                held.iter().any(|(name, _)| name == field),
+                "GitHub's published {type_name} has no {field}"
+            );
+        }
+        for (field, kind) in journey::contract_field_types(type_name) {
+            assert!(
+                held.contains(&((*field).to_owned(), (*kind).to_owned())),
+                "GitHub's published {type_name}.{field} is not {kind}: {held:?}"
+            );
+        }
+    }
+    for (enum_name, expected) in journey::CONTRACT_ENUMS {
+        let TypeDefinition::Enum(values) = definition(enum_name) else {
+            panic!("{enum_name} is an enum");
+        };
+        for member in expected {
+            assert!(
+                values.values.iter().any(|value| value.name == *member),
+                "GitHub's published {enum_name} has no {member}"
+            );
+        }
+    }
+}
+
 /// The record beside it is a golden: a change to the journey or to what the source asks for
 /// moves these numbers, and this fails naming both so the move is a decision rather than a
 /// drift. `crates/onetaskgraph-github-projects/session-cost.md` is where the before and after
