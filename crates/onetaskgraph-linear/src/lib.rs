@@ -5851,7 +5851,7 @@ fn create_key_of(
 ///
 /// # Errors
 ///
-/// [`SourceError::Malformed`] for a key that is not a hyphenated UUID.
+/// [`SourceError::Malformed`] for a key that is not a hyphenated RFC 4122 UUID.
 pub fn linear_id_of_key(key: &str) -> Result<String, SourceError> {
     let shaped = key.len() == 36
         && key.char_indices().all(|(at, character)| match at {
@@ -5863,7 +5863,13 @@ pub fn linear_id_of_key(key: &str) -> Result<String, SourceError> {
             message: format!("create key {key:?} is not a hyphenated UUID"),
         });
     }
+    // The variant is kept, so it has to be RFC 4122's already for the id to be a v4 UUID.
     let mut id = key.to_ascii_lowercase();
+    if !matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b') {
+        return Err(SourceError::Malformed {
+            message: format!("create key {key:?} is not an RFC 4122 UUID"),
+        });
+    }
     id.replace_range(14..15, "4");
     Ok(id)
 }

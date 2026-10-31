@@ -340,6 +340,57 @@ pub struct DependencyRequest {
     pub paging: Paging,
 }
 
+/// What a copy found another attempt doing with the intent to create an item's counterpart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CreateHolder {
+    /// Holding it under a live lease, which ends at this instant.
+    Lease {
+        /// When the other attempt's lease ends.
+        until: chrono::DateTime<chrono::Utc>,
+    },
+    /// Having created the counterpart and linked it, since this copy planned to create one.
+    Linked {
+        /// The counterpart the other attempt linked.
+        counterpart: GlobalId,
+    },
+    /// Having taken it over and then settled or released it, so it no longer names this copy.
+    Released,
+}
+
+impl std::fmt::Display for CreateHolder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lease { until } => {
+                let until = until.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                write!(
+                    formatter,
+                    "is being created at its destination by another copy, whose lease runs \
+                     until {until}\nnext: let that copy finish, or copy it again once {until} \
+                     has passed."
+                )
+            }
+            Self::Linked { counterpart } => write!(
+                formatter,
+                "was created at its destination by another copy, which linked {counterpart}\n\
+                 next: copy it again, which updates {counterpart}."
+            ),
+            Self::Released => write!(
+                formatter,
+                "is no longer being created by this copy: another copy took its create over\n\
+                 next: copy it again, which finds whatever that copy made."
+            ),
+        }
+    }
+}
+
+/// `ids` joined for a message, in their order.
+fn joined(ids: &[GlobalId]) -> String {
+    ids.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// What the engine refuses before it asks any source.
 ///
 /// Distinct from a [`SourceFailure`], which is one source failing while the others
@@ -1322,35 +1373,32 @@ pub enum EngineError {
     )]
     ConditionsNotTasks,
 
-    /// Another copy attempt holds a live lease on the intent to create this item's counterpart,
-    /// so this copy wrote nothing and sent nothing to the destination.
-    #[error(
-        "{item} is being created at its destination by another copy, whose lease runs until \
-         {until}\n\
-         next: let that copy finish, or copy {item} again once {until} has passed."
-    )]
+    /// Another copy attempt holds, or has settled, the intent to create this item's
+    /// counterpart, so this copy wrote nothing more and sent nothing more to the destination.
+    #[error("{item} {by}")]
     CreateInProgress {
         /// The source item being copied, qualified.
         item: String,
-        /// When the other attempt's lease ends, RFC 3339 UTC.
-        until: String,
+        /// What the other attempt was found doing.
+        by: CreateHolder,
     },
 
     /// More than one item at the destination carries the key of the create copying this item,
     /// so none of them was linked: a duplicate, reported rather than adopted.
     #[error(
         "{item} has more than one counterpart at {destination} carrying its create key: \
-         {found}\n\
+         {}\n\
          next: delete all but one of them at {destination}, then copy {item} again to link \
-         the one left."
+         the one left.",
+        joined(.found)
     )]
     CreateDuplicated {
         /// The source item being copied, qualified.
         item: String,
         /// The destination source.
         destination: String,
-        /// Every item carrying the key, qualified and joined by `, `.
-        found: String,
+        /// Every item carrying the key, qualified, in the order the destination listed them.
+        found: Vec<GlobalId>,
     },
 
     /// A create would file its issue somewhere the destination's own policy on where it

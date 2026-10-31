@@ -32,7 +32,7 @@ use serde_json::Value;
 use crate::GlobalId;
 use crate::resolve::ResolvedSource;
 
-use super::super::{Engine, EngineError};
+use super::super::{CreateHolder, Engine, EngineError};
 use super::{Level, refused, set_link_versioned};
 
 /// The namespace every create key is a version-5 UUID under: the UUID this store names its
@@ -83,8 +83,13 @@ pub(crate) struct Intent {
 }
 
 impl Intent {
-    fn at(&self) -> Option<DateTime<Utc>> {
-        Some(self.at)
+    fn at(&self) -> DateTime<Utc> {
+        self.at
+    }
+
+    /// How far back a lookup by key reaches: `CLOCK_SKEW` before the intent was first taken.
+    fn since(&self) -> Option<DateTime<Utc>> {
+        self.at.checked_sub_signed(CLOCK_SKEW)
     }
 
     /// The key as the created item carries it.
@@ -137,15 +142,18 @@ mod seconds {
         deserializer: D,
     ) -> Result<DateTime<Utc>, D::Error> {
         let spelled = String::deserialize(deserializer)?;
-        DateTime::parse_from_rfc3339(&spelled)
+        let when = DateTime::parse_from_rfc3339(&spelled)
             .map(|when| when.with_timezone(&Utc))
-            .map_err(serde::de::Error::custom)
+            .map_err(serde::de::Error::custom)?;
+        // A time no copy could have written: refused, so no lease or window is reckoned from
+        // the edge of what a time can hold.
+        if !(1970..=9999).contains(&chrono::Datelike::year(&when)) {
+            return Err(serde::de::Error::custom(format!(
+                "{spelled} is outside the years 1970 to 9999"
+            )));
+        }
+        Ok(when)
     }
-}
-
-/// `when`, as an intent spells a time.
-pub(crate) fn seconds_of(when: DateTime<Utc>) -> String {
-    when.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 /// Now, to the second, as an intent records a time.
@@ -422,10 +430,9 @@ impl Engine {
             {
                 return Err(EngineError::CreateInProgress {
                     item: id.to_string(),
-                    until: format!(
-                        "{} (another copy created and linked {linked})",
-                        seconds_of(now)
-                    ),
+                    by: CreateHolder::Linked {
+                        counterpart: linked,
+                    },
                 });
             }
         }
@@ -435,7 +442,9 @@ impl Engine {
         {
             return Err(EngineError::CreateInProgress {
                 item: id.to_string(),
-                until: seconds_of(held.lease_until),
+                by: CreateHolder::Lease {
+                    until: held.lease_until,
+                },
             });
         }
         let at = held
@@ -463,26 +472,64 @@ impl Engine {
 
     /// Renew this attempt's intent to create `id`'s counterpart in `destination`, before a
     /// destination write it sends after its create — refusing as `create-in-progress`, and
-    /// writing nothing more, once the intent no longer names this attempt.
+    /// writing nothing more, once the intent no longer names this attempt: another attempt holds
+    /// it, or took it over and has since settled or released it.
     pub(in crate::engine) async fn renew_intent(
         &self,
         level: Level,
         id: &GlobalId,
         destination: &SourceName,
-        until: Option<DateTime<Utc>>,
+    ) -> Result<(), EngineError> {
+        let until = now() + self.create_settings(&id.source).lease();
+        self.lease_until(level, id, destination, until, true).await
+    }
+
+    /// Give up this attempt's lease on its intent to create `id`'s counterpart in `destination`,
+    /// keeping the key, so a retry takes over at once: what a copy that could not finish leaves
+    /// of a create that may have landed. An intent no longer this attempt's is left as it is.
+    pub(in crate::engine) async fn release_lease(
+        &self,
+        level: Level,
+        id: &GlobalId,
+        destination: &SourceName,
+    ) -> Result<(), EngineError> {
+        self.lease_until(level, id, destination, now(), false).await
+    }
+
+    /// Set this attempt's lease on its intent for `destination` to end at `until`; when it is
+    /// not this attempt's, refuse as `create-in-progress` if `refuses`, else leave it.
+    async fn lease_until(
+        &self,
+        level: Level,
+        id: &GlobalId,
+        destination: &SourceName,
+        until: DateTime<Utc>,
+        refuses: bool,
     ) -> Result<(), EngineError> {
         let source = self.writable(&id.source)?;
         let (metadata, _lock) = self.locked_read(source, level, id).await?;
-        let Some(mut held) = self.held_or_refused(source, id, &metadata, destination)? else {
-            return Ok(());
+        let mut held = match self.held_or_refused(source, id, &metadata, destination)? {
+            Some(held) if held.attempt == self.attempt => held,
+            _ if !refuses => return Ok(()),
+            Some(held) => {
+                return Err(EngineError::CreateInProgress {
+                    item: id.to_string(),
+                    by: CreateHolder::Lease {
+                        until: held.lease_until,
+                    },
+                });
+            }
+            None => {
+                return Err(EngineError::CreateInProgress {
+                    item: id.to_string(),
+                    by: super::link_of(&metadata, destination)
+                        .map_or(CreateHolder::Released, |counterpart| CreateHolder::Linked {
+                            counterpart,
+                        }),
+                });
+            }
         };
-        if held.attempt != self.attempt {
-            return Err(EngineError::CreateInProgress {
-                item: id.to_string(),
-                until: seconds_of(held.lease_until),
-            });
-        }
-        held.lease_until = until.unwrap_or(now() + self.create_settings(&id.source).lease());
+        held.lease_until = until;
         let value = replaced(
             metadata.get(MetadataKey::CREATING_KEY),
             destination,
@@ -617,7 +664,7 @@ impl Engine {
         repositories: &[onetaskgraph_plugin_api::Repository],
         waits: bool,
     ) -> Result<Option<NativeId>, EngineError> {
-        let since = intent.at().map(|at| at - CLOCK_SKEW);
+        let since = intent.since();
         let mut waited = false;
         loop {
             let found = destination
@@ -642,22 +689,20 @@ impl Engine {
                         destination: destination.name().to_string(),
                         found: several
                             .iter()
-                            .map(|native| {
-                                GlobalId::new(destination.name().clone(), native.clone())
-                                    .to_string()
-                            })
-                            .collect::<Vec<_>>()
-                            .join(", "),
+                            .map(|native| GlobalId::new(destination.name().clone(), native.clone()))
+                            .collect(),
                     });
                 }
             }
             if waited || !waits || !destination.source().create_key_lags() {
                 return Ok(None);
             }
-            let Some(at) = intent.at() else {
+            let Some(window_end) = intent
+                .at()
+                .checked_add_signed(self.create_settings(destination.name()).quiescence())
+            else {
                 return Ok(None);
             };
-            let window_end = at + self.create_settings(destination.name()).quiescence();
             let now = Utc::now();
             if now >= window_end {
                 return Ok(None);
@@ -669,7 +714,7 @@ impl Engine {
                 id,
                 destination.name(),
                 intent.key,
-                Some(window_end + self.create_settings(&id.source).lease()),
+                window_end.checked_add_signed(self.create_settings(&id.source).lease()),
                 None,
             )
             .await?;
@@ -694,7 +739,7 @@ impl Engine {
             .created_with_key(
                 level.record(),
                 &intent.key(),
-                intent.at().map(|at| at - CLOCK_SKEW),
+                intent.since(),
                 &onetaskgraph_plugin_api::WriteTarget::New {
                     repositories,
                     project: None,

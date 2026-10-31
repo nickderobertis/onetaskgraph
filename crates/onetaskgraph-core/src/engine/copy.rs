@@ -2495,7 +2495,7 @@ impl Engine {
         else {
             return Ok(());
         };
-        let renewed = self.renew_intent(level, source, destination, None).await;
+        let renewed = self.renew_intent(level, source, destination).await;
         if matches!(renewed, Err(EngineError::CreateInProgress { .. })) {
             journal.ownership_lost = true;
         }
@@ -2660,8 +2660,7 @@ impl Engine {
                         .may_have_landed(level, &destination, intent.as_ref())
                         .await);
             let _ = if keep {
-                self.renew_intent(level, &item, &destination, Some(chrono::Utc::now()))
-                    .await
+                self.release_lease(level, &item, &destination).await
             } else if let Some(bytes) = snapshot {
                 self.restore_snapshot(level, &item, &bytes);
                 Ok(())
@@ -2977,13 +2976,6 @@ impl Engine {
         Ok(recorded)
     }
 
-    /// Put one copied item's `onetaskgraph.copies`, or its `onetaskgraph.copy_locations`, back
-    /// to what it held before this copy.
-    ///
-    /// A key it held is written back through the same narrow write. A key it did not hold
-    /// cannot be removed through that write, so the item is read as it now is and written
-    /// back whole, without the key, through the source's own write interface — the same
-    /// way an overwritten destination item is restored.
     /// The `level` record `id` written back whole without `key`, for a source that cannot take
     /// one key off on its own — answered with its version token after the write, or `None` when
     /// the source holds no such record.
@@ -3014,6 +3006,13 @@ impl Engine {
         ))
     }
 
+    /// Put one copied item's `onetaskgraph.copies`, or its `onetaskgraph.copy_locations`, back
+    /// to what it held before this copy.
+    ///
+    /// A key it held is written back through the same narrow write. A key it did not hold
+    /// cannot be removed through that write, so the item is read as it now is and written
+    /// back whole, without the key, through the source's own write interface — the same
+    /// way an overwritten destination item is restored.
     async fn unlink(&self, entry: &Unlink) -> Result<(), SourceError> {
         let as_source_error = |error: EngineError| match error {
             EngineError::SourceRefused { error, .. } => error,
@@ -7260,9 +7259,8 @@ impl Engine {
                     destination: destination.name().to_string(),
                     found: listed
                         .iter()
-                        .map(|native| qualified(native.clone()).to_string())
-                        .collect::<Vec<_>>()
-                        .join(", "),
+                        .map(|native| qualified(native.clone()))
+                        .collect(),
                 };
                 return Ok((query::failed(item.source.clone(), &error), prior));
             }

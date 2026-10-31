@@ -21,6 +21,9 @@ fn a_create_key_is_sent_as_its_v4_shaped_id_and_a_malformed_one_is_refused() {
         "not-a-uuid",
         "017656ef4f6253d5ba4bae0bc4c07fa5",
         "017656ef-4f62-53d5-ba4b-ae0bc4c07fz5",
+        // Not RFC 4122's variant, so no version nibble would make it a v4 UUID.
+        "017656ef-4f62-53d5-7a4b-ae0bc4c07fa5",
+        "017656ef-4f62-53d5-ca4b-ae0bc4c07fa5",
     ] {
         assert!(linear_id_of_key(malformed).is_err(), "{malformed:?}");
     }

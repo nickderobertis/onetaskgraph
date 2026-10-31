@@ -4534,11 +4534,6 @@ const TIDY_BLOCK: &str = "write the file's `metadata:` as a block mapping indent
                           one `key: value` entry to a line, and set the key again";
 
 impl LocalMdSource {
-    /// Set `key` to `value` in the metadata of the record `id` names under `kind`, by the rules
-    /// [`STAGING_SUFFIX`] states.
-    ///
-    /// `read` is the reader a query uses for that kind — which is what makes the verification
-    /// a read of the right front matter — and `metadata` reaches the map a record holds.
     /// The metadata of the `record` `id` as its file now reads, or `None` when there is none.
     async fn record_metadata(
         &self,
@@ -4559,6 +4554,11 @@ impl LocalMdSource {
         })
     }
 
+    /// Set `key` to `value` in the metadata of the record `id` names under `kind`, by the rules
+    /// [`STAGING_SUFFIX`] states.
+    ///
+    /// `read` is the reader a query uses for that kind — which is what makes the verification
+    /// a read of the right front matter — and `metadata` reaches the map a record holds.
     fn set_metadata<R: PartialEq>(
         &self,
         kind: Kind,
