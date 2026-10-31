@@ -122,6 +122,8 @@ async fn asset_graphql(
     variables: &Value,
     ledger: &Accounting,
 ) -> Result<Value, String> {
+    // Held to this session's own board before anything is sent: see `journey::run_board`.
+    journey::run_board::admit(query, variables)?;
     let document = ledger.priced_document(query);
     let sending = reqwest::Client::new()
         .post(endpoint)
@@ -174,6 +176,7 @@ async fn asset_graphql(
         return Err(format!("nominated board read returned HTTP {status}"));
     }
     let answer = parsed.map_err(|error| error.to_string())?;
+    journey::run_board::learn(&answer);
     if graphql_error {
         return Err("asset query refused by GraphQL".into());
     }
@@ -332,6 +335,16 @@ async fn disposable_task_and_document_asset_copies() {
     .await
     .unwrap_or_else(|declined| declined.refuse());
     journey::quota::phase(onetaskgraph_github_live::quota::Phase::AssetSetup).unwrap();
+    // This session's own board, copied from the nominated template and deleted at its end.
+    let send = async |document, _what, variables| {
+        asset_graphql(&graphql_endpoint, token, document, &variables, &ledger).await
+    };
+    let board_stamp = writer.stamp(onetaskgraph_live::artifact::now_micros());
+    let board = journey::run_board::copy(&send, &owner, number, &board_stamp)
+        .await
+        .unwrap_or_else(|error| panic!("the live asset journey cannot copy its board: {error}"));
+    let board_guard = journey::run_board::Guard::new(token, &board);
+    let number = board.number;
     let option = nominated_status_option(&graphql_endpoint, token, &owner, number, &ledger)
         .await
         .unwrap();
@@ -555,6 +568,10 @@ async fn disposable_task_and_document_asset_copies() {
             failures.push(error.to_string());
         }
     }
+    if let Err(error) = journey::run_board::delete(&send, &board).await {
+        failures.push(error);
+    }
+    board_guard.disarm();
     assert!(
         failures.is_empty(),
         "live cleanup failures: {failures:?}; outcome {outcome:?}"
@@ -734,6 +751,18 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
     journey::budget::precondition_reconcile(token, &rest_host, &ledger)
         .await
         .unwrap_or_else(|declined| declined.refuse());
+    // This session's own board, copied from the nominated template and deleted at its end.
+    let send = async |document, _what, variables| {
+        asset_graphql(&graphql_endpoint, token, document, &variables, &ledger).await
+    };
+    let board_stamp = writer.stamp(onetaskgraph_live::artifact::now_micros());
+    let run_board = journey::run_board::copy(&send, &owner, number, &board_stamp)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("the live reconcile journey cannot copy its board: {error}")
+        });
+    let board_guard = journey::run_board::Guard::new(token, &run_board);
+    let number = run_board.number;
     let options = status_option_names(&graphql_endpoint, token, &owner, number, &ledger)
         .await
         .unwrap();
@@ -901,6 +930,10 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
             failures.push(error.to_string());
         }
     }
+    if let Err(error) = journey::run_board::delete(&send, &run_board).await {
+        failures.push(error);
+    }
+    board_guard.disarm();
     assert!(
         failures.is_empty(),
         "live cleanup failures: {failures:?}; outcome {outcome:?}"

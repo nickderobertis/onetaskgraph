@@ -12,10 +12,6 @@ permissions:
 jobs:
   documents:
     runs-on: ubuntu-latest
-    concurrency:
-      group: linear-live-documents
-      cancel-in-progress: false
-      queue: max
     env:
       LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
       LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}

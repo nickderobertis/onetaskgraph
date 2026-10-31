@@ -1,7 +1,7 @@
 //! Synthetic HTTP replay of the recorded Linear wire shapes, never a source double.
 use super::document_lifecycle::journal::Journal;
 #[path = "replay_schema.rs"]
-mod schema;
+pub(crate) mod schema;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -35,6 +35,40 @@ pub struct State {
     /// Discovery-only page size and deliberate pagination fault, applied over stored rows.
     pub discovery_pagination: Option<&'static str>,
     pub schema_errors: Vec<String>,
+    /// Every request as `(Authorization header, body)`, so concurrent sessions sending
+    /// different keys can each be told apart in one log.
+    pub keyed: Vec<(String, Value)>,
+    /// Linear's team document limit, which counts trashed documents as well as live ones:
+    /// a `documentCreate` once `documents_ever` has reached it is refused, as Linear refuses it.
+    pub document_limit: Option<usize>,
+    /// Every document the team has ever held, deleted ones included, seeded with the
+    /// documents a real team already holds before a test begins.
+    pub documents_ever: usize,
+    /// Ids Linear still holds in its trash: a create naming one is refused like a live one.
+    pub trashed: std::collections::BTreeSet<String>,
+    /// Linear's hourly request quota for one key, which every session of every run shares: a
+    /// request past it is refused `RATELIMITED`, as Linear refuses it, and counted here.
+    pub request_limit: Option<usize>,
+    /// Linear's hourly complexity quota for one key, which every session shares too: a request
+    /// whose score — as Linear scores it — would carry the hour past it is refused the same way.
+    pub complexity_limit: Option<f64>,
+    pub complexity_spent: f64,
+    /// Store the next `issueCreate` and then answer it with a gateway error, as a create
+    /// whose acknowledgement was lost on the way back.
+    pub lose_next_issue_create_ack: bool,
+    /// Refuse every `issueDelete` while set.
+    pub refuse_issue_deletes: bool,
+    /// How the pool's lease listing is misanswered: `"no-page-info"`, `"repeated-cursor"`,
+    /// `"untitled"`, or `"unreadable-created-at"`.
+    pub lease_listing_fault: Option<&'static str>,
+    /// Take a create under an id already held as an overwrite, as a Linear whose ids were not
+    /// exclusive would.
+    pub accept_duplicate_ids: bool,
+    /// Refuse a create under a held id with an error that is not Linear's recorded refusal.
+    pub duplicate_refusal_worded_otherwise: bool,
+    /// Refuse every `issueUpdate` while set.
+    pub refuse_issue_updates: bool,
+    pub rate_limited: usize,
     serial: usize,
     rewrites: BTreeMap<String, String>,
 }
@@ -122,8 +156,35 @@ impl Replay {
         let serving = state.clone();
         std::thread::spawn(move || {
             for mut stream in listener.incoming().flatten() {
-                let request = read(&mut stream);
+                let (key, request) = read(&mut stream);
                 let mut state = serving.lock().unwrap();
+                state.keyed.push((key, request.clone()));
+                let scored = schema::complexity::score(
+                    request["query"].as_str().unwrap_or_default(),
+                    &request["variables"],
+                )
+                .map_or(0.0, |points| {
+                    points + schema::complexity::LINEAR_ABOVE_MODEL
+                });
+                state.complexity_spent += scored;
+                let over_complexity = state
+                    .complexity_limit
+                    .is_some_and(|limit| state.complexity_spent > limit);
+                if over_complexity
+                    || state
+                        .request_limit
+                        .is_some_and(|limit| state.keyed.len() > limit)
+                {
+                    state.rate_limited += 1;
+                    drop(state);
+                    let body = json!({"errors":[{"message":"Rate limit exceeded","extensions":{"code":"RATELIMITED"}}]}).to_string();
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    continue;
+                }
                 // Linear scores a document before it reads a row and refuses one over its
                 // cap with HTTP 400, so this replay does too, rather than answering it.
                 // A request with no query string fails to parse and is refused the same way.
@@ -144,6 +205,7 @@ impl Replay {
                 }
                 let mut body = respond(&mut state, &request);
                 if body.get("errors").is_none()
+                    && body.get("__http_status").is_none()
                     && body
                         .pointer("/data/documentCreate/document")
                         .is_none_or(|v| !v.is_null())
@@ -151,6 +213,37 @@ impl Replay {
                 {
                     state.schema_errors.push(error.clone());
                     body = json!({"errors":[{"message":error}]});
+                }
+                // The pool's lease listing, misanswered after it validated.
+                let lease_listing = request["query"].as_str().unwrap().contains("issues(")
+                    && request
+                        .pointer("/variables/filter/title/startsWith")
+                        .and_then(Value::as_str)
+                        .is_some_and(|prefix| prefix.contains("lease-v1"));
+                if let (Some(fault), true, Some(connection)) = (
+                    state.lease_listing_fault,
+                    lease_listing,
+                    body.pointer_mut("/data/issues"),
+                ) {
+                    match fault {
+                        "no-page-info" => {
+                            connection.as_object_mut().unwrap().remove("pageInfo");
+                        }
+                        "untitled" => {
+                            for node in connection["nodes"].as_array_mut().unwrap() {
+                                node.as_object_mut().unwrap().remove("title");
+                            }
+                        }
+                        "repeated-cursor" => {
+                            let after = request["variables"]["after"].as_str().unwrap_or("0");
+                            connection["pageInfo"] = json!({"hasNextPage":true,"endCursor":after});
+                        }
+                        _ => {
+                            for node in connection["nodes"].as_array_mut().unwrap() {
+                                node["createdAt"] = json!("yesterday");
+                            }
+                        }
+                    }
                 }
                 // Negative wire journeys corrupt an otherwise schema-validated response.
                 // Missing pagination must reach discovery's guard, rather than becoming a
@@ -192,6 +285,13 @@ impl Replay {
                         std::thread::sleep(std::time::Duration::from_millis(5));
                     }
                 }
+                if body.get("__http_status").is_some() {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    continue;
+                }
                 let body = body.to_string();
                 let _ = write!(
                     stream,
@@ -211,7 +311,7 @@ impl Replay {
         }
     }
 }
-fn read(stream: &mut TcpStream) -> Value {
+fn read(stream: &mut TcpStream) -> (String, Value) {
     let mut bytes = Vec::new();
     let mut buf = [0; 8192];
     loop {
@@ -228,7 +328,18 @@ fn read(stream: &mut TcpStream) -> Value {
                 .parse()
                 .unwrap();
             if bytes.len() >= p + 4 + len {
-                return serde_json::from_slice(&bytes[p + 4..p + 4 + len]).unwrap();
+                let key = String::from_utf8_lossy(&bytes[..p])
+                    .lines()
+                    .find_map(|line| {
+                        line.split_once(':')
+                            .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                            .map(|(_, value)| value.trim().to_owned())
+                    })
+                    .unwrap_or_default();
+                return (
+                    key,
+                    serde_json::from_slice(&bytes[p + 4..p + 4 + len]).unwrap(),
+                );
             }
         }
     }
@@ -237,6 +348,11 @@ fn respond(state: &mut State, request: &Value) -> Value {
     let q = request["query"].as_str().unwrap();
     let v = &request["variables"];
     graphql_parser::parse_query::<String>(q).expect("replay requests are GraphQL documents");
+    if (state.refuse_issue_deletes && q.contains("issueDelete("))
+        || (state.refuse_issue_updates && q.contains("issueUpdate("))
+    {
+        return json!({"errors":[{"message":"Something went wrong","extensions":{"code":"INTERNAL_SERVER_ERROR"}}]});
+    }
     let teams = json!({"nodes":[{"id":"team","key":"ENG","states":{"nodes":[{"id":"open","name":"Todo","type":"unstarted","position":0},{"id":"done","name":"Done","type":"completed","position":1}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}]});
     if q.contains("issueLabels(") {
         let name = v["name"].as_str().unwrap().to_lowercase();
@@ -263,12 +379,43 @@ fn respond(state: &mut State, request: &Value) -> Value {
     ] {
         if q.contains(&format!("{root}(")) {
             let create = root.ends_with("Create");
-            let id = if create {
+            let keyed = v["input"]["id"].as_str().map(str::to_owned);
+            if create
+                && !state.accept_duplicate_ids
+                && let Some(id) = &keyed
+                && (state.documents.contains_key(id)
+                    || state.projects.contains_key(id)
+                    || state.issues.contains_key(id)
+                    || state.trashed.contains(id))
+            {
+                // Linear refuses a create under an id it already holds, trashed or not.
+                if state.duplicate_refusal_worded_otherwise {
+                    return json!({"data":null,"errors":[{"message":"Entity already exists"}]});
+                }
+                // As Linear answered it to the pool's initialization, 2026-10-31.
+                return json!({"data":null,"errors":[{"extensions":{"code":"INPUT_ERROR","statusCode":400,
+                    "type":"invalid input","userError":true,
+                    "userPresentableMessage":format!("Entity Issue with id {id} already exists.")},
+                    "locations":[{"column":36,"line":1}],"message":"conflict on insert of Issue",
+                    "path":["issueCreate"]}]});
+            }
+            if root == "documentCreate"
+                && let Some(limit) = state.document_limit
+                && state.documents_ever >= limit
+            {
+                return json!({"errors":[{"message":"Usage limit exceeded: the team has reached its document limit","extensions":{"code":"USAGE_LIMIT_EXCEEDED"}}]});
+            }
+            let id = if let (true, Some(id)) = (create, &keyed) {
+                id.clone()
+            } else if create {
                 state.serial += 1;
                 format!("{field}-{}", state.serial)
             } else {
                 v["id"].as_str().unwrap().to_owned()
             };
+            if root == "documentCreate" {
+                state.documents_ever += 1;
+            }
             let table = match field {
                 "document" => &mut state.documents,
                 "project" => &mut state.projects,
@@ -297,6 +444,7 @@ fn respond(state: &mut State, request: &Value) -> Value {
             row["team"] = json!({"key":"ENG"});
             row["teams"] = json!({"nodes":[{"key":"ENG"}],"pageInfo":{"hasNextPage":false}});
             if create {
+                row["createdAt"] = json!(chrono::Utc::now().to_rfc3339());
                 row["project"] = Value::Null;
                 row["labels"] = page(vec![]);
                 row["relations"] = page(vec![]);
@@ -304,7 +452,7 @@ fn respond(state: &mut State, request: &Value) -> Value {
             }
             for (key, value) in v["input"].as_object().unwrap() {
                 match key.as_str() {
-                    "teamId" | "teamIds" => {}
+                    "teamId" | "teamIds" | "id" => {}
                     "projectId" => {
                         row["project"] = if value.is_null() {
                             Value::Null
@@ -332,6 +480,10 @@ fn respond(state: &mut State, request: &Value) -> Value {
                 }
             }
             table.insert(id, row.clone());
+            if root == "issueCreate" && state.lose_next_issue_create_ack {
+                state.lose_next_issue_create_ack = false;
+                return json!({"__http_status": 502});
+            }
             if root == "documentCreate" && state.uncertain {
                 state.uncertain = false;
                 return json!({"data":{root:{"success":true,"document":null}}});
@@ -343,13 +495,17 @@ fn respond(state: &mut State, request: &Value) -> Value {
             return json!({"data":{root:{"success":true,field:row}}});
         }
     }
-    for (root, table) in [
-        ("documentDelete", &mut state.documents),
-        ("projectDelete", &mut state.projects),
-        ("issueDelete", &mut state.issues),
-    ] {
+    for root in ["documentDelete", "projectDelete", "issueDelete"] {
         if q.contains(&format!("{root}(")) {
-            table.remove(v["id"].as_str().unwrap());
+            let id = v["id"].as_str().unwrap();
+            let table = match root {
+                "documentDelete" => &mut state.documents,
+                "projectDelete" => &mut state.projects,
+                _ => &mut state.issues,
+            };
+            if table.remove(id).is_some() {
+                state.trashed.insert(id.to_owned());
+            }
             return json!({"data":{root:{"success":true}}});
         }
     }

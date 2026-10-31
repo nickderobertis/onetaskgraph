@@ -21,10 +21,16 @@ const REQUEST_WINDOW: Duration = Duration::from_secs(3_600);
 use crate::fixtures::{LinearMarkdown, LinearWorkspace, document, linear_workspace};
 #[path = "../../../onetaskgraph-linear/tests/document_lifecycle/mod.rs"]
 pub(crate) mod document_lifecycle;
-#[path = "../../../onetaskgraph-linear/tests/document_lifecycle/replay_schema.rs"]
-mod document_replay_schema;
+// The plugin lane's replay of Linear, which this lane's pool setup is driven against.
+#[path = "../../../onetaskgraph-linear/tests/document_lifecycle/replay.rs"]
+#[allow(
+    dead_code,
+    reason = "the replay's fault switches serve the plugin lane's journeys; this lane drives its pool setup alone"
+)]
+mod document_replay;
 use document_lifecycle::Mode;
-use onetaskgraph_linear::live_artifact::{Scope, Slot};
+use document_replay::schema as document_replay_schema;
+use onetaskgraph_linear::live_artifact::{LeaseLane, Scope, Slot};
 
 #[derive(Default)]
 struct Upload {
@@ -62,11 +68,12 @@ pub(crate) struct Workspace {
 }
 
 impl Workspace {
-    fn new(sandbox: &Sandbox, clients: usize) -> (Value, Self) {
+    /// The storage, over a team already holding `documents`.
+    fn holding(sandbox: &Sandbox, clients: usize, documents: Value) -> (Value, Self) {
         let (mut config, held) = linear_workspace(
             sandbox,
             json!({
-                "tasks": [], "projects": [], "documents": [], "labels": [],
+                "tasks": [], "projects": [], "documents": documents, "labels": [],
                 "task_dependencies": [], "project_dependencies": []
             }),
         );
@@ -605,6 +612,11 @@ impl Journey {
     }
 
     fn with_clients(clients: usize) -> Self {
+        Self::holding(clients, json!([]))
+    }
+
+    /// A journey over a team already holding `documents`.
+    fn holding(clients: usize, documents: Value) -> Self {
         let sandbox = Sandbox::new();
         let root = sandbox.subdirectory("notes");
         std::fs::create_dir_all(root.join("projects")).unwrap();
@@ -613,7 +625,7 @@ impl Journey {
             "---\ntitle: Launch\nstatus: todo\n---\nLaunch.\n",
         )
         .unwrap();
-        let (config, workspace) = Workspace::new(&sandbox, clients);
+        let (config, workspace) = Workspace::holding(&sandbox, clients, documents);
         let mut sources = json!({
             "notes":{"plugin":"local-md","config":{"root":root}},
             "dest":{"plugin":"linear","config":config}
@@ -1165,6 +1177,7 @@ fn live_observer(
     key: String,
     journal: document_lifecycle::journal::Journal,
     upstream: String,
+    namespace: Arc<document_lifecycle::namespace::Namespace>,
 ) -> (String, Arc<Mutex<LiveUploads>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -1221,6 +1234,17 @@ fn live_observer(
                 answer(&mut stream, status, &[]);
             } else {
                 let request: Value = serde_json::from_slice(&bytes[split..]).unwrap();
+                // Every request the binary under test sends passes this run's namespace guard.
+                if let Err(refusal) = namespace.admit(&request) {
+                    answer(
+                        &mut stream,
+                        200,
+                        json!({"errors":[{"message":refusal}]})
+                            .to_string()
+                            .as_bytes(),
+                    );
+                    continue;
+                }
                 let response = runtime
                     .block_on(
                         client
@@ -1233,6 +1257,7 @@ fn live_observer(
                 let status = response.status().as_u16();
                 let mut body: Value = runtime.block_on(response.json()).unwrap();
                 journal.observe(&request, &body);
+                namespace.learn(&body);
                 let mut state = recording.lock().unwrap();
                 if request["query"].as_str().unwrap().contains("fileUpload(") {
                     let id = state.signed.len();
@@ -1518,9 +1543,11 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
     let key = session.credential().expose().to_owned();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let client = reqwest::Client::new();
+    // Linear, unless a credential-free drive points the pool setup at a loopback stand-in.
+    let linear = document_lifecycle::linear_endpoint();
     let response: Value = runtime.block_on(async {
         client
-            .post("https://api.linear.app/graphql")
+            .post(&linear)
             .header("Authorization", &key)
             .json(
                 &json!({"query":onetaskgraph_linear::graphql::RESOLUTION,"variables":{"key":team}}),
@@ -1549,14 +1576,54 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
     )
     .to_string();
     let team_key = team.to_ascii_uppercase();
-    let scope = if ci {
-        Scope::ci(&team_key).unwrap()
-    } else {
-        Scope::local(&team_key, &owner_stamp).unwrap()
-    };
     let team_id = response["data"]["teams"]["nodes"][0]["id"]
         .as_str()
         .unwrap();
+    // The operator's one-time pool setup, asked for by `just linear-document-pool`, in place
+    // of the journey: every member's asset slot, reported or created under its lease.
+    if let Some(setup) = document_lifecycle::PoolSetup::read().unwrap() {
+        let report = runtime
+            .block_on(document_lifecycle::setup_pool(
+                &linear,
+                &key,
+                &team_key,
+                team_id,
+                LeaseLane::Assets,
+                &[Slot::Assets],
+                &owner_stamp,
+                setup,
+            ))
+            .unwrap_or_else(|error| panic!("the Linear asset pool setup failed: {error}"));
+        for line in report {
+            println!("{line}");
+        }
+        return;
+    }
+    // Only the pool setup is redirected; the journey drives the binary against Linear itself.
+    assert!(
+        document_lifecycle::loopback_endpoint().is_none(),
+        "{} drives the asset lane's pool setup alone",
+        document_lifecycle::LOOPBACK_VARIABLE
+    );
+    // A CI run works over the one standing pool member it leases, and no other run's: see
+    // `document_lifecycle::lease`. A local run's destination is its own by its stamp already.
+    let lease = ci.then(|| {
+        runtime
+            .block_on(document_lifecycle::lease::claim(
+                "https://api.linear.app/graphql",
+                &key,
+                &team_key,
+                team_id,
+                LeaseLane::Assets,
+                &owner_stamp,
+                onetaskgraph_live::artifact::now_micros,
+            ))
+            .unwrap_or_else(|error| panic!("the Linear asset lane cannot lease its slot: {error}"))
+    });
+    let scope = match &lease {
+        Some(lease) => lease.scope(),
+        None => Scope::local(&team_key, &owner_stamp).unwrap(),
+    };
     let effective_mode = mode;
     if !ci && mode == Mode::Initialize {
         eprintln!(
@@ -1575,42 +1642,82 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
                 .join(&owner_stamp),
         )
         .unwrap();
-    let lifecycle_endpoint = document_lifecycle::observer::start(
+    // The lane's own lifecycle requests — preparing and retiring its slot — pass this run's
+    // namespace guard, which refuses one naming another run's record before it reaches
+    // Linear, and so do the binary's, through the relay it is pointed at (`live_observer`).
+    // The slot's reset is a write to the leased slot by its own id.
+    let namespace = std::sync::Arc::new(document_lifecycle::namespace::Namespace::new(
+        onetaskgraph_live::artifact::Run::current(),
+        &team_key,
+    ));
+    if let Some(lease) = &lease {
+        namespace.leased(lease.index);
+    }
+    let lifecycle_endpoint = document_lifecycle::observer::guarded(
         "https://api.linear.app/graphql",
         &key,
         journal.clone(),
+        std::sync::Arc::clone(&namespace),
     );
     let created = document_lifecycle::Created::default();
-    guard_asset_invocation(
+    // Released on every way out, a failed or panicking journey included.
+    let lifecycle_key = key.clone();
+    document_lifecycle::lease::holding_blocking(
         &runtime,
-        &lifecycle_endpoint,
-        &key,
-        &team_key,
-        team_id,
-        scope,
-        effective_mode,
-        &journal,
-        &created,
-        |standing| {
-            if ci && mode == Mode::Initialize {
-                journal.finish().unwrap();
-                return;
+        lease.as_ref(),
+        "https://api.linear.app/graphql",
+        &lifecycle_key,
+        || {
+            // Exclusivity is Linear's refusal of a second create under a held id: proven
+            // against Linear on every claim, before anything is done over the member.
+            if let Some(lease) = &lease {
+                runtime
+                    .block_on(document_lifecycle::lease::verify_exclusive(
+                        "https://api.linear.app/graphql",
+                        &lifecycle_key,
+                        team_id,
+                        lease,
+                    ))
+                    .unwrap_or_else(|error| panic!("{error}"));
             }
-            drive_live_assets(
+            guard_asset_invocation(
                 &runtime,
-                &client,
-                &key,
-                &team,
-                &state_name,
-                standing,
-                scope,
-                mode,
-                &owner_stamp,
-                &journal,
                 &lifecycle_endpoint,
+                &key,
+                &team_key,
+                team_id,
+                scope,
+                effective_mode,
+                &journal,
                 &created,
-            );
+                |standing| {
+                    if ci && mode == Mode::Initialize {
+                        journal.finish().unwrap();
+                        return;
+                    }
+                    drive_live_assets(
+                        &runtime,
+                        &client,
+                        &key,
+                        &team,
+                        &state_name,
+                        standing,
+                        scope,
+                        mode,
+                        &owner_stamp,
+                        &journal,
+                        &lifecycle_endpoint,
+                        &created,
+                        &namespace,
+                    );
+                },
+            )
         },
+    );
+    let refused = namespace.refusals();
+    assert!(
+        refused.is_empty(),
+        "the Linear asset lane named records outside its run's namespace: {refused:?}"
     );
 }
 
@@ -1685,6 +1792,7 @@ fn drive_live_assets(
     journal: &document_lifecycle::journal::Journal,
     lifecycle_endpoint: &str,
     created: &document_lifecycle::Created,
+    namespace: &Arc<document_lifecycle::namespace::Namespace>,
 ) {
     let key = key.to_owned();
     reset_asset_slot(
@@ -1718,6 +1826,7 @@ fn drive_live_assets(
         key.clone(),
         journal.clone(),
         "https://api.linear.app/graphql".into(),
+        Arc::clone(namespace),
     );
     journey
         .sandbox
@@ -3218,7 +3327,16 @@ fn live_asset_forwarding_transport_counts_created_then_deleted_documents() {
         Some(document_lifecycle::journal::Journal::new("assets", "fresh"));
     let journal = document_lifecycle::journal::Journal::new("assets", "fresh");
     journal.journey("live-asset-forwarding-transport");
-    let (endpoint, observed) = live_observer("fixture-key".into(), journal.clone(), upstream);
+    let namespace = Arc::new(document_lifecycle::namespace::Namespace::new(
+        onetaskgraph_live::artifact::Run::current(),
+        "ENG",
+    ));
+    let (endpoint, observed) = live_observer(
+        "fixture-key".into(),
+        journal.clone(),
+        upstream.clone(),
+        Arc::clone(&namespace),
+    );
     let created=runtime.block_on(document_lifecycle::send(&endpoint,"fixture-key",onetaskgraph_linear::graphql::DOCUMENT_CREATE,json!({"input":{"title":"Synthetic forwarded document","content":"Synthetic body","teamId":"team"}}))).unwrap();
     let id = created["documentCreate"]["document"]["id"]
         .as_str()
@@ -3258,6 +3376,145 @@ fn live_asset_forwarding_transport_counts_created_then_deleted_documents() {
     .unwrap();
     assert_eq!(recorded["operations"].as_array().unwrap().len(), 1);
     assert_eq!(recorded["completed"], true);
+}
+
+#[test]
+fn the_pool_variable_turns_the_asset_entry_point_into_the_setup_and_skips_the_journey() {
+    use onetaskgraph_linear::live_artifact::POOL_SIZE;
+    let replay = document_replay::Replay::start(
+        document_lifecycle::journal::Journal::new("assets", "initialize"),
+        BTreeMap::new(),
+    );
+    let sandbox = Sandbox::new();
+    let seats = sandbox.subdirectory("seats");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy",
+            "--exact",
+            "--nocapture",
+        ])
+        .env(document_lifecycle::POOL_VARIABLE, "dry-run")
+        // llmlint: ignore[e2e_not_mocked] The real entry point runs as a subprocess, unmocked; what stands in for Linear is the repository's own recorded replay, because this proves which branch the entry takes without a credential. The credentialed lane is what reaches Linear.
+        .env(document_lifecycle::LOOPBACK_VARIABLE, &replay.endpoint)
+        .env("LINEAR_API_KEY", "synthetic")
+        .env("LINEAR_WRITE_TEAM", "ENG")
+        .env(onetaskgraph_live::SEAT_DIRECTORY_VARIABLE, &seats)
+        .env_remove("GITHUB_ACTIONS")
+        .env_remove(onetaskgraph_live::REQUIRED_VARIABLE)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let planned: Vec<_> = said
+        .lines()
+        .filter(|line| line.contains("would create "))
+        .collect();
+    assert_eq!(planned.len(), usize::from(POOL_SIZE), "{said}");
+    assert!(
+        planned.iter().all(|line| line.contains(" assets pool-")),
+        "{planned:?}"
+    );
+    // A dry run in place of the journey: nothing written, no upload asked for.
+    let state = replay.state.lock().unwrap();
+    assert!(
+        !state
+            .keyed
+            .iter()
+            .any(|(_, request)| request["query"].as_str().unwrap().contains("mutation"))
+    );
+}
+
+/// The relay the asset lane points its binary at holds the binary to the run's namespace: a
+/// `document copy --match-by title` onto another run's pool member is refused before anything
+/// reaches Linear and the copy fails, while the same copy onto the run's own member goes through.
+#[test]
+fn the_binarys_relay_refuses_its_copy_onto_another_runs_pool_member() {
+    let title = |index| {
+        onetaskgraph_linear::live_artifact::retained_title(
+            Scope::pooled("ENG", index).unwrap(),
+            Slot::Assets,
+        )
+        .unwrap()
+    };
+    // Two members held in the team: this run's own (1), and another run's (2).
+    let journey = Journey::holding(
+        1,
+        json!([
+            {"id":"D-mine","title":title(1),"content":"member 1","project":null,"labels":[]},
+            {"id":"D-theirs","title":title(2),"content":"member 2","project":null,"labels":[]}
+        ]),
+    );
+    let upstream = format!("{}/0/graphql", journey.workspace.endpoint);
+    let namespace = Arc::new(document_lifecycle::namespace::Namespace::new(
+        onetaskgraph_live::artifact::Run::current(),
+        "ENG",
+    ));
+    namespace.leased(1);
+    let (relay, _) = live_observer(
+        "fixture-key".into(),
+        document_lifecycle::journal::Journal::new("assets", "ordinary"),
+        upstream,
+        Arc::clone(&namespace),
+    );
+    // The binary is pointed at the relay, as the live lane points it.
+    let mut config = journey.config.clone();
+    config["endpoint"] = json!(relay);
+    let root = journey.sandbox.subdirectory("notes");
+    journey.sandbox.project_document(&document(&json!({
+        "notes":{"plugin":"local-md","config":{"root":root}},
+        "dest":{"plugin":"linear","config":config}
+    })));
+    let copy = |index| {
+        // No asset: what the relay holds to the namespace is the document write itself.
+        let (id, _) = journey.create_named("document", 0, &title(index), false);
+        journey
+            .sandbox
+            .command()
+            .envs(journey.workspace.clock.client_env(0))
+            .args([
+                "--json",
+                "document",
+                "copy",
+                &id,
+                "--to",
+                "dest",
+                "--match-by",
+                "title",
+            ])
+            .output()
+            .unwrap()
+    };
+    let written = |id: &str| {
+        journey
+            .workspace
+            .held
+            .served()
+            .iter()
+            .any(|(query, variables)| {
+                query.contains("documentUpdate(") && variables["id"] == json!(id)
+            })
+    };
+    let theirs = copy(2);
+    assert!(
+        !theirs.status.success(),
+        "the copy onto another run's member succeeded"
+    );
+    assert!(!namespace.refusals().is_empty());
+    assert!(!written("D-theirs"), "another run's member was written");
+    let refused = namespace.refusals().len();
+    let mine = copy(1);
+    assert!(mine.status.success(), "{}", stderr(&mine));
+    assert_eq!(
+        namespace.refusals().len(),
+        refused,
+        "{:?}",
+        namespace.refusals()
+    );
+    assert!(written("D-mine"), "the run's own member was not written");
 }
 
 /// The note's intent for `dest`, read off the file of the task `id` names: its attempt.

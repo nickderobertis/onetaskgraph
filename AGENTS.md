@@ -541,7 +541,8 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   **The scheduled janitor is cleanup, not a test lane.**
   `.github/workflows/live-janitor.yml` runs hourly or by human dispatch, never from a
   project's `test` or `coverage` target. It enumerates issues, their board #1 items,
-  labels in the scratch repository and board #1's fields, and removes only exact CI-stamped
+  labels in the scratch repository, board #1's fields and the owner's run boards — a
+  session's own copy of board #1, never board #1 itself — and removes only exact CI-stamped
   artifacts whose run in this repository reads back as `completed` — a cancelled run
   included — immediately before each delete batch.
   A re-run in progress protects every attempt; failed, missing or undecodable reads
@@ -562,9 +563,13 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   journey's own cleanup. The 24-hour expiry is a document-specific recovery policy; the
   existing local lock sweep and GitHub run-status ownership rules do not change.
   **A cancelled run cleans up after itself, and a pre-flight never refuses a finished run's
-  residue.** `ci.yml`'s step on cancellation runs the janitor with `--cancelled-run`, which
-  removes exactly that run attempt's stamps and reads no run (`scripts/check-live-janitor.sh`
-  holds the step's shape; the two lane guards exempt that one step). The lane's board
+  residue.** Each credentialed `ci.yml` job — `check`'s Linux leg and `test-linux` — runs
+  the janitor on cancellation: `--cancelled-run`, which removes exactly that run attempt's
+  stamps, board copies included, and reads no run; and `--linear --release-leases
+  target/linear-leases`, which releases exactly the pool leases the job recorded there
+  (`ONETASKGRAPH_LINEAR_LEASE_DIR`) while each still reads back as recorded
+  (`scripts/check-live-janitor.sh` holds all four steps' shape; the two lane guards exempt
+  exactly those commands). The lane's board
   pre-flight (`journey::preflight_board`) removes a stamped field whose run reads
   `completed` before it counts the board — and, when the board holds more items than the
   registered workload, such a run's issues in the lane's repository and their items — says so, and keeps and counts
@@ -645,14 +650,27 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   `Shared` unless another `check-*-decline.sh` in that crate's own `test` target drives its
   decline** — for GitHub Projects that is `scripts/check-budget-decline.sh` — so a lane
   cannot lose its proven decline by quietly giving up its seat.
-  **One bound is left standing rather than fixed, and it is stated here so it is known.**
-  The GitHub board's own `onetaskgraph.origin` field is board-scoped, not run-scoped: a
-  session that finds it absent creates it and removes it again, and one that found it there
-  reuses it and leaves it. Two sessions on one board can therefore have the first delete the
-  field the second still depends on. A seat never covered that between two runners either;
-  the fix belongs to that field's own lifecycle.
-- **A live lane that writes names what it writes to.** The GitHub Projects lane takes its
-  board from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` and the repository it creates its
+- **No lock serialises the live lanes: every run works in a namespace of its own.** No
+  workflow holds a concurrency group over a job that runs a live suite, and
+  `.github/linear-documents-policy/policy.test.mjs` fails if one is reintroduced, at job or
+  workflow level. **Each GitHub session copies the nominated board** with `copyProjectV2` —
+  fields, `Status` options and draft items — under `onetaskgraph live board <stamp>`, runs on
+  the copy, and deletes it however it ends (`journey::run_board`), so a session's items,
+  fields, origin field and counts are its own; board #1 is a template no session writes to,
+  filled once by `just github-live-template`. **Each Linear session leases one member of a
+  16-set standing slot pool** (`tests/document_lifecycle/lease.rs`): the team's document
+  limit counts trash, so documents are reused rather than made per run, and a lease is the
+  atomic create of an issue under an id derived from the member and its generation, released
+  on every way out and reclaimable six and a half hours after it was claimed, when no hosted
+  job can still hold it; `just linear-document-pool` fills the pool once. Each lane's own
+  requests pass a namespace guard that refuses, before sending, one naming another run's
+  board or record. `crates/onetaskgraph-github-projects/tests/run_board_gate.rs` and the
+  `pool` module of `crates/onetaskgraph-linear/tests/live.rs` drive sessions side by side —
+  two of each entry point, and eight runs against every limit — on loopback doubles that
+  enforce the account's and the team's limits. Issues and labels in the scratch repository
+  stay run-stamped, as above.
+- **A live lane that writes names what it writes to.** The GitHub Projects lane takes the
+  board it copies from `GH_PROJECTS_OWNER` and `GH_PROJECTS_NUMBER` and the repository it creates its
   issues in from `GH_PROJECTS_REPOSITORY`, nominated as
   `nickderobertis/onetaskgraph-live-scratch` in both credentialed CI steps. The scratch
   and refused core repositories, the board the janitor reads and the lane's two artifact

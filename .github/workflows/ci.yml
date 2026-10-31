@@ -90,15 +90,8 @@ jobs:
   # matrix; affected selection is what keeps that affordable.
   check:
     name: check (${{ matrix.os }})
-    # The live journeys remain inside the affected gate. Serialize only this job's
-    # credentialed leg — the Linux one on a push; on a pull request `test-linux` carries the
-    # credentials and joins the group instead — and retain every waiting check rather than
-    # replacing a pending writer.
-    # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] This block moves no suite into the gate: the live journeys were already ordinary affected tests, run only when their own plugin changed, which AGENTS.md records as reversing the separate live tier. It only serializes the one credentialed leg so two writers cannot interleave updates to the standing Linear set.
-    concurrency:
-      group: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' && 'linear-live-documents' || format('check-{0}-{1}', matrix.os, github.run_id) }}
-      cancel-in-progress: false
-      queue: max
+    # No concurrency group: each live session works only on its own board copy and its own
+    # leased Linear slot set, so runs need no serialising (.github/linear-documents-policy).
     needs: [macos-lanes]
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
     runs-on: ${{ matrix.os }}
@@ -224,6 +217,8 @@ jobs:
           GITHUB_LIVE_SESSION_DIR: ${{ github.workspace }}/target/debug/telemetry/github-live-session/${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SOURCE_REVISION: ${{ github.sha }}
           ONETASKGRAPH_LINEAR_DOCUMENT_MODE: ordinary
+          # Where the Linear lanes record the pool leases they hold, for the cancellation step.
+          ONETASKGRAPH_LINEAR_LEASE_DIR: ${{ github.workspace }}/target/linear-leases
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As on that step: the lane's own refusal is the drift gate, because ONETASKGRAPH_LIVE_REQUIRED is 1 here too, so a name spelled differently on either side fails this run naming the variable rather than skipping green.
           GH_PROJECTS_OWNER: nickderobertis
@@ -238,9 +233,9 @@ jobs:
           NX_HEAD: HEAD
         run: just gate-generated
 
-      # A cancelled run's live journey dies before its own cleanup, and what it wrote would
-      # make the next session refuse the shared board. On cancellation, on the credentialed
-      # leg alone, this removes exactly this run attempt's stamped artifacts and opens no
+      # A cancelled run's live journey dies before its own cleanup, leaving its board copy and
+      # its scratch issues behind. On cancellation, on the credentialed leg alone, this removes
+      # exactly this run attempt's stamped artifacts, its board copies among them, and opens no
       # session; the hourly janitor takes anything left once the run reads completed.
       # scripts/check-live-janitor.sh holds this step to that shape.
       - name: Remove this run's live artifacts after a cancellation
@@ -252,6 +247,17 @@ jobs:
           GH_PROJECTS_NUMBER: "1"
           GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
         run: cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run
+
+      # And the pool leases its Linear lanes held, which would otherwise keep their members for
+      # six and a half hours: exactly the leases this job recorded, each only while it still
+      # reads back as recorded. scripts/check-live-janitor.sh holds this step to that shape.
+      - name: Release this run's Linear leases after a cancellation
+        if: cancelled() && matrix.os == 'ubuntu-latest' && !github.event.pull_request.head.repo.fork
+        timeout-minutes: 15
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
+        run: cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases
 
   # The explicit manual diagnostic alone. On a pull request the one Mac job is `test-macos`,
   # which the two carriers below read in this job's place.
@@ -685,13 +691,8 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # This run's one live session, serialized with every other writer to the standing Linear
-    # set (linear-documents.yml, and `check`'s Linux leg on a push), every waiting writer kept.
-    # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] This block moves no suite into the job: the live journeys are ordinary affected tests here as on `check`, run only when their own plugin changed. It only serializes the credentialed job so two writers cannot interleave updates to the standing Linear set.
-    concurrency:
-      group: linear-live-documents
-      cancel-in-progress: false
-      queue: max
+    # No concurrency group: this run's live sessions touch only resources of its own
+    # namespace, so any number of runs may execute them at once.
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"
@@ -818,6 +819,8 @@ jobs:
           GITHUB_LIVE_SESSION_DIR: ${{ github.workspace }}/target/debug/telemetry/github-live-session/${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SOURCE_REVISION: ${{ github.sha }}
           ONETASKGRAPH_LINEAR_DOCUMENT_MODE: ordinary
+          # Where the Linear lanes record the pool leases they hold, for the cancellation step.
+          ONETASKGRAPH_LINEAR_LEASE_DIR: ${{ github.workspace }}/target/linear-leases
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The lane's own refusal is the drift gate: ONETASKGRAPH_LIVE_REQUIRED below is 1 on this lane, so a name spelled differently on either side fails this job naming the variable rather than skipping green.
           GH_PROJECTS_OWNER: nickderobertis
@@ -831,6 +834,31 @@ jobs:
         # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] As on check's Linux leg: these suites run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just ci-test-linux
       # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
+
+      # A cancelled pull request's live journeys die before their own cleanup, leaving their
+      # board copies, scratch issues and pool leases behind; these two steps remove exactly this
+      # run attempt's and open no session, as on check's Linux leg.
+      # scripts/check-live-janitor.sh holds both to that shape.
+      - name: Remove this run's live artifacts after a cancellation
+        if: cancelled() && !github.event.pull_request.head.repo.fork
+        timeout-minutes: 15
+        env:
+          GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
+          GH_PROJECTS_OWNER: nickderobertis
+          GH_PROJECTS_NUMBER: "1"
+          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
+        run: cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run
+
+      # And its Linear pool leases, which would otherwise keep their members for
+      # six and a half hours: exactly the leases this job recorded, each only while it still
+      # reads back as recorded. scripts/check-live-janitor.sh holds this step to that shape.
+      - name: Release this run's Linear leases after a cancellation
+        if: cancelled() && !github.event.pull_request.head.repo.fork
+        timeout-minutes: 15
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
+        run: cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases
 
   test-windows:
     if: github.event_name == 'pull_request'

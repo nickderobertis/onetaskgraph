@@ -667,7 +667,7 @@ async fn the_combined_design_admits_both_roles_and_keeps_the_whole_retained_buff
     let retained = RETAINED_BUFFER.of(LIMIT);
     // The design total, a reservation that may exceed the measured ceiling
     // (`tests/fixtures/session-cost.md`).
-    for (role, estimate) in [(EntryPoint::Main, 327), (EntryPoint::Assets, 106)] {
+    for (role, estimate) in [(EntryPoint::Main, 343), (EntryPoint::Assets, 112)] {
         for (remaining, succeeds) in [
             (retained + estimate, true),
             (retained + estimate - 1, false),
