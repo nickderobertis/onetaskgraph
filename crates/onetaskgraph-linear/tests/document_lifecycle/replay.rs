@@ -49,6 +49,9 @@ pub struct State {
     /// Linear's hourly request quota for one key, which every session of every run shares: a
     /// request past it is refused `RATELIMITED`, as Linear refuses it, and counted here.
     pub request_limit: Option<usize>,
+    /// Store the next `issueCreate` and then answer it with a gateway error, as a create
+    /// whose acknowledgement was lost on the way back.
+    pub lose_next_issue_create_ack: bool,
     pub rate_limited: usize,
     serial: usize,
     rewrites: BTreeMap<String, String>,
@@ -174,6 +177,7 @@ impl Replay {
                 }
                 let mut body = respond(&mut state, &request);
                 if body.get("errors").is_none()
+                    && body.get("__http_status").is_none()
                     && body
                         .pointer("/data/documentCreate/document")
                         .is_none_or(|v| !v.is_null())
@@ -221,6 +225,13 @@ impl Replay {
                     while !serving_release.load(Ordering::Acquire) {
                         std::thread::sleep(std::time::Duration::from_millis(5));
                     }
+                }
+                if body.get("__http_status").is_some() {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    continue;
                 }
                 let body = body.to_string();
                 let _ = write!(
@@ -396,6 +407,10 @@ fn respond(state: &mut State, request: &Value) -> Value {
                 }
             }
             table.insert(id, row.clone());
+            if root == "issueCreate" && state.lose_next_issue_create_ack {
+                state.lose_next_issue_create_ack = false;
+                return json!({"__http_status": 502});
+            }
             if root == "documentCreate" && state.uncertain {
                 state.uncertain = false;
                 return json!({"data":{root:{"success":true,"document":null}}});

@@ -1625,48 +1625,47 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
         std::sync::Arc::clone(&namespace),
     );
     let created = document_lifecycle::Created::default();
-    let leased = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        guard_asset_invocation(
-            &runtime,
-            &lifecycle_endpoint,
-            &key,
-            &team_key,
-            team_id,
-            scope,
-            effective_mode,
-            &journal,
-            &created,
-            |standing| {
-                if ci && mode == Mode::Initialize {
-                    journal.finish().unwrap();
-                    return;
-                }
-                drive_live_assets(
-                    &runtime,
-                    &client,
-                    &key,
-                    &team,
-                    &state_name,
-                    standing,
-                    scope,
-                    mode,
-                    &owner_stamp,
-                    &journal,
-                    &lifecycle_endpoint,
-                    &created,
-                );
-            },
-        )
-    }));
     // Released on every way out, a failed or panicking journey included.
-    if let Some(lease) = &lease
-        && let Err(error) = runtime.block_on(lease.release("https://api.linear.app/graphql", &key))
-    {
-        eprintln!("{error}");
-    }
-    if let Err(panic) = leased {
-        std::panic::resume_unwind(panic);
-    }
+    let lifecycle_key = key.clone();
+    document_lifecycle::lease::holding_blocking(
+        &runtime,
+        lease.as_ref(),
+        "https://api.linear.app/graphql",
+        &lifecycle_key,
+        || {
+            guard_asset_invocation(
+                &runtime,
+                &lifecycle_endpoint,
+                &key,
+                &team_key,
+                team_id,
+                scope,
+                effective_mode,
+                &journal,
+                &created,
+                |standing| {
+                    if ci && mode == Mode::Initialize {
+                        journal.finish().unwrap();
+                        return;
+                    }
+                    drive_live_assets(
+                        &runtime,
+                        &client,
+                        &key,
+                        &team,
+                        &state_name,
+                        standing,
+                        scope,
+                        mode,
+                        &owner_stamp,
+                        &journal,
+                        &lifecycle_endpoint,
+                        &created,
+                    );
+                },
+            )
+        },
+    );
     let refused = namespace.refusals();
     assert!(
         refused.is_empty(),

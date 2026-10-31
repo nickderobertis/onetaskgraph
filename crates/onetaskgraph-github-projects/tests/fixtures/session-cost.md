@@ -67,10 +67,10 @@ already in force, and ISSUE already costs one point. Fresh token queries reduce
 hydration payload, not that call's point price. The main fixture, source and board
 metadata are reused only where freshness does not matter. There is no board/schema cache.
 
-Design allocations are admission 3, schema 10, reconciliation 20, setup 22,
+Design allocations are admission 3, schema 12, reconciliation 20, setup 22,
 capabilities 42, comments 12, remaining token cases 60, the six `gh3` facet legs 46, cleanup
-15, orphan recovery 2, assets 91, observations/retries 18: 341 total (327 before each entry
-point copied a board of its own; see the last two paragraphs). The facet legs measure 27
+15, orphan recovery 2, assets 91, observations/retries 18: 343 total (327 before each entry
+point copied a board of its own; see the last paragraphs). The facet legs measure 27
 requests and about 26 points on the loopback; their 46 is the higher figure because, against
 GitHub, every token read waits out the settling margin and may be asked again. So the admission
 estimate sits above the 299 budget by design: it is a reservation against the shared allowance,
@@ -268,8 +268,12 @@ and fields. That adds the template lookup, the copy, the copy's item-count reads
 settles (five here, because this fixture board holds no items and so settles only on agreeing
 reads; two on a template holding the journey's minimum) and the copy's deletion, and removes
 the origin field's teardown — its removal and the two field walks around it — because the
-field goes with the copy: 237 requests and 275,642 worst-case nodes.
-The design allocations move with it — `setup` from 14 to 22 points and `assets` from 85 to 91,
-for each entry point's copy, its settling reads and its deletion — while the 299 that
+field goes with the copy: 237 requests and 275,642 worst-case nodes. The schema freshness
+check then held GitHub to that surface too — `copyProjectV2`, `deleteProjectV2`,
+`addProjectV2DraftIssue`, their inputs and payloads, and `User.id` and `User.projectsV2` — in
+two more introspection documents: 239 requests, and the `schema` allocation from 10 to 12.
+The design allocations move with it — `setup` from 14 to 22 points, `assets` from 85 to 91,
+and `schema` from 10 to 12 —
+for each entry point's copy, its settling reads, its deletion and their freshness check; the 299 that
 `github-live-session-points` holds a session's actual spend to is unchanged: the last measured
 session spent 212, and a copy adds a handful of one-point requests to that.

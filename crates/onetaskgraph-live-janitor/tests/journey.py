@@ -88,8 +88,16 @@ class LabelDelete(NamedTuple):
 class FieldDelete(NamedTuple):
     id: FieldId
 
+RunBoardId = NewType('RunBoardId', str)
+
+class RunBoard(TypedDict):
+    """One of the owner's boards, as the run-board listing answers it."""
+    id: RunBoardId
+    number: int
+    title: str
+
 class BoardDelete(NamedTuple):
-    id: str
+    id: RunBoardId
 
 class Write(NamedTuple):
     method: str
@@ -227,7 +235,7 @@ class Github:
         self.fields_next_page = False
         # The owner's other boards: each `{'id', 'number', 'title'}`. A live session copies the
         # nominated board into one titled with its stamp.
-        self.run_boards: list[dict] = []
+        self.run_boards: list[RunBoard] = []
         self.run_board_queries: list[str] = []
         self.field_delete_answer = None
         self.field_delete_status = 200
@@ -258,9 +266,9 @@ class Github:
         self.fields.append({'id': identity, 'name': LABEL + stamp})
         return identity
 
-    def run_board(self, stamp: str | None, number: int, title: str | None = None) -> str:
-        identity = f'board:{number}'
-        self.run_boards.append({'id': identity, 'number': number, 'title': title if title is not None else RUN_BOARD + stamp})
+    def run_board(self, stamp: str | None, number: int, title: str | None = None) -> RunBoardId:
+        identity = RunBoardId(f'board:{number}')
+        self.run_boards.append(RunBoard(id=identity, number=number, title=title if title is not None else RUN_BOARD + (stamp or '')))
         return identity
 
     def board_fields(self) -> list:
@@ -372,7 +380,7 @@ class Github:
                         self.reply({'data': {'repositoryOwner': {'projectsV2': {'nodes': nodes, 'pageInfo': {'hasNextPage': page + 100 < len(state.run_boards), 'endCursor': str(page + 100)}}}}})
                         return
                     case str() if 'deleteProjectV2(' in query:
-                        identity = variables['input']['projectId']
+                        identity = RunBoardId(variables['input']['projectId'])
                         state.writes.append(Write('POST', BoardDelete(identity)))
                         state.run_boards = [v for v in state.run_boards if v['id'] != identity]
                         self.reply({'data': {'deleteProjectV2': {'projectV2': {'id': identity}}}})

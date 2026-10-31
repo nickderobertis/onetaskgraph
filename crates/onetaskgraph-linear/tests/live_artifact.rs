@@ -151,37 +151,38 @@ fn pool_members_round_trip_and_stay_distinct_from_each_other_and_the_pre_pool_se
 #[test]
 fn lease_titles_round_trip_and_malformed_ones_confer_no_lease() {
     use onetaskgraph_linear::live_artifact::{
-        Lease, LeaseHolder, LeaseLane, classify_lease, is_reserved_title, lease_title,
+        HolderStamp, Lease, LeaseHolder, LeaseLane, classify_lease, is_reserved_title, lease_title,
         lease_title_prefix,
     };
+    use std::num::NonZeroU32;
+    let member = Scope::pooled("TEST", 16).unwrap();
     for holder in [
-        LeaseHolder::Held("1-2-3"),
-        LeaseHolder::Held("0-2-3"),
+        LeaseHolder::Held(HolderStamp::new("1-2-3").unwrap()),
+        LeaseHolder::Held(HolderStamp::new("0-2-3").unwrap()),
         LeaseHolder::Released,
     ] {
         for lane in [LeaseLane::Plugin, LeaseLane::Assets] {
-            let lease = Lease {
-                team: "TEST",
-                lane,
-                index: 16,
-                generation: 41,
-                holder,
-            };
-            let title = lease_title(lease).unwrap();
+            let lease = Lease::new(member, lane, NonZeroU32::new(41).unwrap(), holder).unwrap();
+            let title = lease_title(lease);
             assert!(title.starts_with(&lease_title_prefix("TEST", lane)));
             assert_eq!(classify_lease(&title), Some(lease));
+            assert_eq!(
+                (lease.team(), lease.index(), lease.generation()),
+                ("TEST", 16, 41)
+            );
             assert!(is_reserved_title(&title));
             assert!(classify_retained(&title).is_none());
         }
     }
-    let good = lease_title(Lease {
-        team: "TEST",
-        lane: LeaseLane::Plugin,
-        index: 3,
-        generation: 1,
-        holder: LeaseHolder::Held("1-2-3"),
-    })
-    .unwrap();
+    let good = lease_title(
+        Lease::new(
+            Scope::pooled("TEST", 3).unwrap(),
+            LeaseLane::Plugin,
+            NonZeroU32::MIN,
+            LeaseHolder::Held(HolderStamp::new("1-2-3").unwrap()),
+        )
+        .unwrap(),
+    );
     for bad in [
         format!("{good} "),
         good.replace("gen-1", "gen-0"),
@@ -193,11 +194,17 @@ fn lease_titles_round_trip_and_malformed_ones_confer_no_lease() {
     ] {
         assert!(classify_lease(&bad).is_none(), "{bad}");
     }
+    // Nothing but a pool member's scope and a canonical stamp makes a lease at all.
+    for stamp in ["ci-1-2-3", "1-2", "01-2-3", ""] {
+        assert!(HolderStamp::new(stamp).is_err(), "{stamp}");
+    }
     assert!(
-        lease_title(Lease {
-            generation: 0,
-            ..classify_lease(&good).unwrap()
-        })
+        Lease::new(
+            Scope::ci("TEST").unwrap(),
+            LeaseLane::Plugin,
+            NonZeroU32::MIN,
+            LeaseHolder::Released
+        )
         .is_err()
     );
 }

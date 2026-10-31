@@ -208,7 +208,7 @@ fn the_actual_main_entry_point_reaches_only_its_loopback_allowance_boundary() {
     let said = String::from_utf8_lossy(&output.stderr);
     assert!(said.contains("DID NOT RUN"), "{said}");
     // The design total (`tests/fixtures/session-cost.md`).
-    assert!(said.contains("estimated to spend 341"), "{said}");
+    assert!(said.contains("estimated to spend 343"), "{said}");
 }
 
 #[test]

@@ -243,10 +243,19 @@ pub const BOARD_WORKLOAD_DOCUMENT: &str = "query LiveBoardWorkload($owner:String
 /// rule as an issue's.
 pub const RUN_BOARD_PREFIX: &str = "onetaskgraph live board ";
 
-/// The title of the board a session stamped `stamp` copies for itself.
-#[must_use]
-pub fn run_board_title(stamp: &str) -> String {
-    format!("{RUN_BOARD_PREFIX}{stamp}")
+/// The title of the board a session stamped `stamp` copies for itself; `stamp` must be one
+/// of the two stamps a lane writes, because a board titled with anything else is residue no
+/// sweep could ever recognise.
+///
+/// # Errors
+///
+/// When `stamp` is neither a machine stamp nor a CI stamp.
+pub fn run_board_title(stamp: &str) -> Result<String, String> {
+    use onetaskgraph_live::artifact::{CiStamp, Stamp};
+    if Stamp::read(stamp).is_none() && CiStamp::read(stamp).is_none() {
+        return Err(format!("{stamp:?} is not a stamp a live session writes"));
+    }
+    Ok(format!("{RUN_BOARD_PREFIX}{stamp}"))
 }
 
 /// The stamp half of a run board's title, unread; `None` for any other board, the

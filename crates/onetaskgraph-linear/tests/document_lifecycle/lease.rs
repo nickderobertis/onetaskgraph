@@ -23,9 +23,13 @@
 //! again, because generations only rise.
 use super::send;
 use onetaskgraph_linear::live_artifact::{
-    Lease, LeaseHolder, LeaseLane, POOL_SIZE, Scope, classify_lease, lease_title,
+    HolderStamp, Lease, LeaseHolder, LeaseLane, POOL_SIZE, Scope, classify_lease, lease_title,
     lease_title_prefix,
 };
+
+fn generation(value: u32) -> Result<std::num::NonZeroU32, String> {
+    std::num::NonZeroU32::new(value).ok_or_else(|| "a Linear lease generation starts at 1".into())
+}
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -92,13 +96,12 @@ impl Held {
     /// way out of a lane, its failures included; what a lost release costs is that member
     /// for [`STALE_AFTER`], never another run's isolation.
     pub async fn release(&self, endpoint: &str, key: &str) -> Result<(), String> {
-        let title = lease_title(Lease {
-            team: &self.team,
-            lane: self.lane,
-            index: self.index,
-            generation: self.generation,
-            holder: LeaseHolder::Released,
-        })?;
+        let title = lease_title(Lease::new(
+            self.scope(),
+            self.lane,
+            generation(self.generation)?,
+            LeaseHolder::Released,
+        )?);
         let data = send(
             endpoint,
             key,
@@ -139,7 +142,7 @@ fn created_micros(node: &Value) -> Result<u64, String> {
 }
 
 fn state_of(lease: &Lease<'_>, created: u64, now: u64) -> LeaseState {
-    match lease.holder {
+    match lease.holder() {
         LeaseHolder::Released => LeaseState::Free,
         LeaseHolder::Held(_) if now.saturating_sub(created) > STALE_AFTER.as_micros() as u64 => {
             LeaseState::Free
@@ -180,24 +183,24 @@ async fn read_leases(
                 .ok_or("a lease issue answered no id")?;
             // A title under the prefix this lane does not recognize confers nothing, and is
             // not this lane's to remove either.
-            let Some(lease) = classify_lease(title).filter(|lease| lease.lane == lane) else {
+            let Some(lease) = classify_lease(title).filter(|lease| lease.lane() == lane) else {
                 continue;
             };
-            if !lease.team.eq_ignore_ascii_case(team)
-                || id != lease_id(team, lane, lease.index, lease.generation)
+            if !lease.team().eq_ignore_ascii_case(team)
+                || id != lease_id(team, lane, lease.index(), lease.generation())
             {
                 continue;
             }
             let state = state_of(&lease, created_micros(node)?, now);
-            match newest.get(&lease.index) {
-                Some((generation, _, _)) if *generation >= lease.generation => {
-                    superseded.push((lease.index, id.to_owned()));
+            match newest.get(&lease.index()) {
+                Some((generation, _, _)) if *generation >= lease.generation() => {
+                    superseded.push((lease.index(), id.to_owned()));
                 }
                 _ => {
                     if let Some((_, older, _)) =
-                        newest.insert(lease.index, (lease.generation, id.to_owned(), state))
+                        newest.insert(lease.index(), (lease.generation(), id.to_owned(), state))
                     {
-                        superseded.push((lease.index, older));
+                        superseded.push((lease.index(), older));
                     }
                 }
             }
@@ -308,14 +311,13 @@ async fn claim_among(
                 Some((generation, _, LeaseState::Free)) => generation + 1,
                 None => 1,
             };
-            let lease = Lease {
-                team,
+            let lease = Lease::new(
+                Scope::pooled(team, index)?,
                 lane,
-                index,
-                generation,
-                holder: LeaseHolder::Held(holder),
-            };
-            let title = lease_title(lease)?;
+                self::generation(generation)?,
+                LeaseHolder::Held(HolderStamp::new(holder)?),
+            )?;
+            let title = lease_title(lease);
             let id = lease_id(team, lane, index, generation);
             // Refused when the id is already held: that is another claimant's win, and the
             // read below says so. A lost acknowledgement is decided by the same read.
@@ -355,4 +357,47 @@ async fn claim_among(
         }
     }
     Ok(None)
+}
+
+/// Runs `body` holding `lease` — `None` for a local run, which leases nothing — and releases
+/// the lease on every way out, a panic included, before the outcome or the panic leaves.
+/// A release that fails is printed, never raised over the body's own outcome.
+#[allow(
+    dead_code,
+    reason = "this module is compiled into both lanes' test binaries, and the asset lane blocks on its runtime by hand instead"
+)]
+pub async fn holding<F: std::future::Future>(
+    lease: Option<&Held>,
+    endpoint: &str,
+    key: &str,
+    body: F,
+) -> F::Output {
+    let outcome = super::unwinding(body).await;
+    if let Some(lease) = lease
+        && let Err(error) = lease.release(endpoint, key).await
+    {
+        eprintln!("{error}");
+    }
+    outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+/// [`holding`] for a lane that drives its runtime by hand.
+#[allow(
+    dead_code,
+    reason = "this module is compiled into both lanes' test binaries, and only the asset lane blocks on its runtime by hand"
+)]
+pub fn holding_blocking<T>(
+    runtime: &tokio::runtime::Runtime,
+    lease: Option<&Held>,
+    endpoint: &str,
+    key: &str,
+    body: impl FnOnce() -> T,
+) -> T {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+    if let Some(lease) = lease
+        && let Err(error) = runtime.block_on(lease.release(endpoint, key))
+    {
+        eprintln!("{error}");
+    }
+    outcome.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }

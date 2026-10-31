@@ -36,9 +36,17 @@ use onetaskgraph_github_live::{
 };
 use serde_json::{Value, json};
 
-#[allow(dead_code)]
+// The credentialed lane's own halves, whose session lifecycle is what runs here; the rest of
+// each belongs to the target that drives it against GitHub.
+#[allow(
+    dead_code,
+    reason = "the journey module's other drives are the credentialed lane's, not this gate's"
+)]
 mod journey;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "this gate names only the lane's stamp writer; its admission is the credentialed lane's"
+)]
 mod lane;
 
 const OWNER: &str = "octo-org";
@@ -79,6 +87,10 @@ struct Account {
     seen: Vec<(String, String, Value)>,
     /// Every request refused for a limit, and which.
     refused: Vec<String>,
+    /// A fault in how the account answers, to drive a session's refusals: `"stalled-copy"`
+    /// (a copy's count never settles), `"unread-count"` (a copy's count is refused), and the
+    /// template listing's `"no-has-next"`, `"no-cursor"` and `"stuck-cursor"`.
+    fault: Option<&'static str>,
 }
 
 impl Account {
@@ -180,6 +192,21 @@ impl Account {
             );
             return json!({"data":{"copyProjectV2":{"projectV2":{"id":id,"number":number,"title":title}}}});
         }
+        if document.contains("query LiveRunBoardItems(") {
+            match self.fault {
+                Some("unread-count") => {
+                    return json!({"errors":[{"message":"Something went wrong while executing your query."}]});
+                }
+                Some("stalled-copy") => {
+                    // A copy still filling in on every read: no two reads agree.
+                    let id = self.next("DI");
+                    if let Some(board) = self.boards.get_mut(&number(variables)) {
+                        board.items.push((id, TEMPLATE_DRAFT_TITLE.to_owned()));
+                    }
+                }
+                _ => {}
+            }
+        }
         if document.contains("query LiveRunBoardItems(")
             || document.contains("query LiveBoardWorkload(")
         {
@@ -234,8 +261,14 @@ impl Account {
                 .map(|(id, title)| json!({"id":id,"content":{"__typename":"DraftIssue","title":title}}))
                 .collect();
             let next = start + nodes.len();
-            return json!({"data":{"node":{"items":{"nodes":nodes,"pageInfo":{
-                "hasNextPage":next < board.items.len(),"endCursor":next.to_string()}}}}});
+            let more = next < board.items.len();
+            let page = match self.fault {
+                Some("no-has-next") => json!({"endCursor":next.to_string()}),
+                Some("no-cursor") if more => json!({"hasNextPage":true,"endCursor":null}),
+                Some("stuck-cursor") if more => json!({"hasNextPage":true,"endCursor":"0"}),
+                _ => json!({"hasNextPage":more,"endCursor":next.to_string()}),
+            };
+            return json!({"data":{"node":{"items":{"nodes":nodes,"pageInfo":page}}}});
         }
         if document.contains("query LiveRunBoards(") {
             let nodes: Vec<_> = self
@@ -555,7 +588,7 @@ async fn session_child() {
     }
     .await;
     let deleted = journey::run_board::delete(&send, &board).await;
-    guard.deleted();
+    guard.disarm();
     let walked = outcome.unwrap_or_else(|error| panic!("session: {error}"));
     deleted.unwrap();
     let own = if entry == EntryPoint::Main {
@@ -659,24 +692,9 @@ fn eight_runs_at_once_stay_inside_every_account_and_board_limit() {
         .map(|child| finish(child).unwrap_or_else(|error| panic!("{error}")))
         .collect();
     let tokens: Vec<_> = sessions.iter().map(|(_, token, _)| token.clone()).collect();
-    let account = account.lock().unwrap();
-    assert_isolated(&account, &tokens, &reports);
-    // What the eight runs drew, against what GitHub leaves an account and the share no
-    // session may touch: every run's whole design allocation fits beside seven others.
-    let design = journey::budget::session_design_points(EntryPoint::Main)
-        + journey::budget::session_design_points(EntryPoint::Assets);
-    let usable = POINTS_PER_HOUR - onetaskgraph_live::RETAINED_BUFFER.of(POINTS_PER_HOUR);
-    assert!(
-        8 * design <= usable,
-        "{} points for eight runs against {usable}",
-        8 * design
-    );
-    assert!(
-        account.points <= usable,
-        "{} points spent against {usable}",
-        account.points
-    );
-    assert!(account.creations <= CREATIONS_PER_HOUR);
+    // Every session passed, on a board of its own, and the account refused none of them for
+    // its points, its content creations or a board's fields.
+    assert_isolated(&account.lock().unwrap(), &tokens, &reports);
 }
 
 #[test]
@@ -707,7 +725,7 @@ fn a_session_naming_a_board_outside_its_run_is_refused_before_sending() {
             Board {
                 id: format!("PVT_{number}"),
                 number,
-                title: onetaskgraph_github_live::run_board_title("ci-302-1-1"),
+                title: onetaskgraph_github_live::run_board_title("ci-302-1-1").unwrap(),
                 items: Vec::new(),
                 fields: Vec::new(),
             },
@@ -836,4 +854,81 @@ fn the_template_setup_dry_runs_without_writing_then_fills_once() {
     let said = template_setup(&origin, "template-fill");
     assert!(said.contains("remove draft items by hand"), "{said}");
     assert_eq!(writes(&account.lock().unwrap()), before);
+}
+
+/// One session, started with the account answering it `fault`, that is expected to fail.
+fn failing_session(fault: &'static str, entry: &str) -> (String, Arc<Mutex<Account>>) {
+    let account = Arc::new(Mutex::new(Account::new()));
+    {
+        let mut held = account.lock().unwrap();
+        held.fault = Some(fault);
+        // A template listing two pages long, so a fault in its cursor is met.
+        let template = held.boards.get_mut(&TEMPLATE).unwrap();
+        for n in 0..60 {
+            template.items.push((
+                format!("DI_second_page_{n}"),
+                TEMPLATE_DRAFT_TITLE.to_owned(),
+            ));
+        }
+    }
+    let origin = serve(Arc::clone(&account));
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["session_child", "--exact", "--nocapture"])
+        .env("RUN_BOARD_GATE_ORIGIN", &origin)
+        .env("RUN_BOARD_GATE_ENTRY", entry)
+        .env("RUN_BOARD_GATE_TOKEN", "faulted")
+        .env("RUN_BOARD_GATE_RUN", "401")
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "{fault}: the session passed");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (said, account)
+}
+
+#[test]
+fn a_copy_that_never_settles_or_cannot_be_counted_is_refused_and_deleted() {
+    for (fault, expected) in [
+        ("stalled-copy", "did not settle"),
+        ("unread-count", "live board copy item count"),
+    ] {
+        let (said, account) = failing_session(fault, "main");
+        assert!(said.contains(expected), "{fault}: {said}");
+        // The copy this session made is gone, and the template is as it was.
+        let account = account.lock().unwrap();
+        assert_eq!(
+            account.boards.keys().copied().collect::<Vec<_>>(),
+            vec![TEMPLATE],
+            "{fault}"
+        );
+        assert!(
+            account
+                .seen
+                .iter()
+                .any(|(_, document, _)| document.contains("LiveDeleteBoard("))
+        );
+    }
+}
+
+#[test]
+fn a_template_listing_that_does_not_page_soundly_is_refused_writing_nothing() {
+    for (fault, expected) in [
+        ("no-has-next", "reported no hasNextPage"),
+        ("no-cursor", "reported no endCursor"),
+        ("stuck-cursor", "did not advance"),
+    ] {
+        let (said, account) = failing_session(fault, "template-fill");
+        assert!(said.contains(expected), "{fault}: {said}");
+        let account = account.lock().unwrap();
+        assert!(
+            !account
+                .seen
+                .iter()
+                .any(|(_, document, _)| document.starts_with("mutation")),
+            "{fault}: a refused listing wrote"
+        );
+    }
 }

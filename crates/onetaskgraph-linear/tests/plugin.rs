@@ -181,6 +181,7 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         (
             "IssueCreateInput",
             &[
+                "id",
                 "teamId",
                 "title",
                 "description",

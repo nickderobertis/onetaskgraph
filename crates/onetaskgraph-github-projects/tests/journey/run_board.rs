@@ -1,15 +1,9 @@
-//! This session's own board, and the namespace that holds the lane to it.
-//!
-//! The nominated board is a template no session writes to: a session copies it with
-//! `copyProjectV2` — fields, `Status` options and draft items in one mutation — runs every
-//! journey on the copy, and deletes the copy when it ends, however it ends. So a session's
-//! items, fields, origin field and counts are its own, and two sessions on one account
-//! cannot read, change, count or remove each other's. See
-//! [`onetaskgraph_github_live::RUN_BOARD_PREFIX`].
+//! This session's own board, and the namespace that holds the lane to it; why each session
+//! has one is [`onetaskgraph_github_live::RUN_BOARD_PREFIX`]'s to say.
 use super::{github_pause, graphql_variables};
 use onetaskgraph_github_live::{
-    COPY_BOARD_DOCUMENT, DELETE_BOARD_DOCUMENT, RUN_BOARD_PREFIX, TEMPLATE_DOCUMENT,
-    quota::MINIMUM_INITIAL_ITEMS, run_board_stamp,
+    COPY_BOARD_DOCUMENT, DELETE_BOARD_DOCUMENT, TEMPLATE_DOCUMENT, quota::MINIMUM_INITIAL_ITEMS,
+    run_board_stamp,
 };
 use serde_json::{Value, json};
 use std::sync::Mutex;
@@ -143,8 +137,7 @@ pub async fn copy(
     template: u32,
     stamp: &str,
 ) -> Result<RunBoard, String> {
-    let title = onetaskgraph_github_live::run_board_title(stamp);
-    debug_assert!(title.starts_with(RUN_BOARD_PREFIX));
+    let title = onetaskgraph_github_live::run_board_title(stamp)?;
     let found = send(
         TEMPLATE_DOCUMENT,
         "live template lookup",
@@ -209,6 +202,19 @@ pub async fn copy(
         }
     }
     // GitHub copies the draft items after it answers; the session starts once they are there.
+    // A copy that never settles, or whose count cannot be read, is this session's board all
+    // the same, and is deleted before the refusal is reported.
+    match settle(send, owner, &board).await {
+        Ok(()) => Ok(board),
+        Err(error) => Err(match delete(send, &board).await {
+            Ok(()) => error,
+            Err(deleted) => format!("{error}; additionally, the copy was not deleted: {deleted}"),
+        }),
+    }
+}
+
+async fn settle(send: &impl Sender, owner: &str, board: &RunBoard) -> Result<(), String> {
+    let number = board.number;
     let mut last = None;
     let mut agreeing = 0;
     for read in 0..COPY_READS {
@@ -235,7 +241,7 @@ pub async fn copy(
         if (agreeing >= 1 && items.is_some_and(|items| items >= MINIMUM_INITIAL_ITEMS))
             || agreeing >= SETTLED_READS
         {
-            return Ok(board);
+            return Ok(());
         }
         last = items;
     }
@@ -267,7 +273,7 @@ pub async fn delete(send: &impl Sender, board: &RunBoard) -> Result<(), String> 
     Ok(())
 }
 
-/// Deletes the board when dropped unless [`Guard::deleted`] was called: the way out of a
+/// Deletes the board when dropped unless [`Guard::disarm`] was called: the way out of a
 /// session that panicked anywhere between the copy and its own cleanup.
 pub struct Guard {
     token: String,
@@ -282,8 +288,9 @@ impl Guard {
         }
     }
 
-    /// The session's own cleanup deleted the board, or tried to: nothing is left to do.
-    pub fn deleted(&self) {
+    /// Disarms the guard: the session's own cleanup has asked for the board's deletion, and
+    /// reports what came of it itself.
+    pub fn disarm(&self) {
         *self.board.lock().unwrap() = None;
     }
 }
@@ -365,9 +372,10 @@ pub async fn setup_template(
         .and_then(Value::as_str)
         .ok_or_else(|| format!("{owner} has no board #{template} this credential can see"))?
         .to_owned();
+    const LISTING_PAGES: usize = 1_000;
     let mut drafts = 0u64;
     let mut after = Value::Null;
-    for _ in 0..1_000 {
+    for listed in 1..=LISTING_PAGES {
         let page = send(
             TEMPLATE_ITEMS_DOCUMENT,
             "live template items",
@@ -383,14 +391,28 @@ pub async fn setup_template(
             .iter()
             .filter(|node| node.pointer("/content/__typename") == Some(&json!("DraftIssue")))
             .count() as u64;
-        if items.pointer("/pageInfo/hasNextPage") != Some(&json!(true)) {
-            break;
+        match items
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+        {
+            Some(false) => break,
+            Some(true) => {}
+            None => return Err("the template's item listing reported no hasNextPage".into()),
         }
         let next = items
             .pointer("/pageInfo/endCursor")
-            .filter(|next| **next != after)
-            .ok_or("the template's item listing did not advance")?;
-        after = next.clone();
+            .and_then(Value::as_str)
+            .filter(|next| !next.is_empty())
+            .ok_or("the template's item listing reported no endCursor")?;
+        if after.as_str() == Some(next) {
+            return Err("the template's item listing did not advance".into());
+        }
+        after = json!(next);
+        if listed == LISTING_PAGES {
+            return Err(format!(
+                "the template's item listing ran past {LISTING_PAGES} pages"
+            ));
+        }
     }
     let ceiling = reference_workload().initial_items;
     let mut report = vec![format!("template #{template} holds {drafts} draft items")];

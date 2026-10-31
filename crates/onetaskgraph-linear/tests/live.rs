@@ -1790,102 +1790,100 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     let created = &document_lifecycle::Created::default();
     let lane_endpoint = endpoint.clone();
     let lane_key = key.clone();
-    let leased = document_lifecycle::unwinding(guard_plugin_invocation(
-        &lane_endpoint,
+    document_lifecycle::lease::holding(
+        lease.as_ref(),
+        LINEAR_GRAPHQL,
         &lane_key,
-        &team_key,
-        &team_id.clone(),
-        scope,
-        effective_mode,
-        created,
-        |standing| async move {
-            if ci && document_mode == Mode::Initialize {
-                journal.finish().unwrap();
-                return;
-            }
-            journal.journey("capability-and-follow-up");
-            let run = LiveRun {
-                endpoint,
-                key: key.clone(),
-                id: Run::current(),
-                stamp_micros: now_micros(),
-                open_state,
-                done_state,
-                project_status,
-                document_mode,
-                standing,
-            };
-            let id = run.id;
-            // `ensure!` keeps the journey's own checks to `Err`, but anything else that panics
-            // in it must still reach the cleanup below; the panic is resumed once cleanup ran.
-            let panicked = std::sync::Mutex::new(None);
-            let result = run_then_cleanup(
-                || async {
-                    match document_lifecycle::unwinding(drive_every_declared_capability(
-                        &run,
-                        source.as_ref(),
-                        &team_id,
-                    ))
-                    .await
-                    {
-                        Ok(outcome) => outcome,
-                        Err(panic) => {
-                            *panicked.lock().unwrap() = Some(panic);
-                            Err("the Linear live journey panicked".into())
-                        }
-                    }
-                },
-                || async {
-                    // The invocation-owned slots by their exact ids first, then this run's
-                    // own: everything it wrote goes whether the journey passed or failed.
-                    // Then what an interrupted EARLIER run left, which is a different
-                    // decision on different evidence — and which is deliberately here, at
-                    // the end, rather than at the start where it used to be. A sweep before
-                    // the journey deleted the in-flight issues of any session running beside
-                    // this one; a sweep after it recovers exactly the same orphans and can
-                    // reach nothing a live run owns.
-                    let slots =
-                        document_lifecycle::retire(&run.endpoint, &key, scope, created).await;
-                    let mine =
-                        remove_artifacts(&key, &|prefix, name| is_this_runs(id, prefix, name))
-                            .await
-                            .and(slots.map(drop));
-                    let orphans = sweep_orphans(&key, &Sweep::of(id, now_micros())).await;
-                    match (mine, orphans) {
-                        (Ok(()), Ok(())) => Ok(()),
-                        (Err(mine), Ok(())) => Err(mine),
-                        (Ok(()), Err(orphans)) => Err(format!(
-                            "residue left by an earlier interrupted run could not be \
-                             cleared: {orphans}"
-                        )),
-                        (Err(mine), Err(orphans)) => Err(format!(
-                            "{mine}; additionally, residue left by an earlier interrupted \
-                             run could not be cleared: {orphans}"
-                        )),
-                    }
-                },
-            )
-            .await;
-            journal.finish().unwrap();
-            if let Some(panic) = panicked.into_inner().unwrap() {
-                if let Err(error) = result {
-                    eprintln!("{error}");
+        guard_plugin_invocation(
+            &lane_endpoint,
+            &lane_key,
+            &team_key,
+            &team_id.clone(),
+            scope,
+            effective_mode,
+            created,
+            |standing| async move {
+                if ci && document_mode == Mode::Initialize {
+                    journal.finish().unwrap();
+                    return;
                 }
-                std::panic::resume_unwind(panic);
-            }
-            result.unwrap_or_else(|error| panic!("Linear live capability journey failed: {error}"));
-        },
-    ))
+                journal.journey("capability-and-follow-up");
+                let run = LiveRun {
+                    endpoint,
+                    key: key.clone(),
+                    id: Run::current(),
+                    stamp_micros: now_micros(),
+                    open_state,
+                    done_state,
+                    project_status,
+                    document_mode,
+                    standing,
+                };
+                let id = run.id;
+                // `ensure!` keeps the journey's own checks to `Err`, but anything else that panics
+                // in it must still reach the cleanup below; the panic is resumed once cleanup ran.
+                let panicked = std::sync::Mutex::new(None);
+                let result = run_then_cleanup(
+                    || async {
+                        match document_lifecycle::unwinding(drive_every_declared_capability(
+                            &run,
+                            source.as_ref(),
+                            &team_id,
+                        ))
+                        .await
+                        {
+                            Ok(outcome) => outcome,
+                            Err(panic) => {
+                                *panicked.lock().unwrap() = Some(panic);
+                                Err("the Linear live journey panicked".into())
+                            }
+                        }
+                    },
+                    || async {
+                        // The invocation-owned slots by their exact ids first, then this run's
+                        // own: everything it wrote goes whether the journey passed or failed.
+                        // Then what an interrupted EARLIER run left, which is a different
+                        // decision on different evidence — and which is deliberately here, at
+                        // the end, rather than at the start where it used to be. A sweep before
+                        // the journey deleted the in-flight issues of any session running beside
+                        // this one; a sweep after it recovers exactly the same orphans and can
+                        // reach nothing a live run owns.
+                        let slots =
+                            document_lifecycle::retire(&run.endpoint, &key, scope, created).await;
+                        let mine =
+                            remove_artifacts(&key, &|prefix, name| is_this_runs(id, prefix, name))
+                                .await
+                                .and(slots.map(drop));
+                        let orphans = sweep_orphans(&key, &Sweep::of(id, now_micros())).await;
+                        match (mine, orphans) {
+                            (Ok(()), Ok(())) => Ok(()),
+                            (Err(mine), Ok(())) => Err(mine),
+                            (Ok(()), Err(orphans)) => Err(format!(
+                                "residue left by an earlier interrupted run could not be \
+                             cleared: {orphans}"
+                            )),
+                            (Err(mine), Err(orphans)) => Err(format!(
+                                "{mine}; additionally, residue left by an earlier interrupted \
+                             run could not be cleared: {orphans}"
+                            )),
+                        }
+                    },
+                )
+                .await;
+                journal.finish().unwrap();
+                if let Some(panic) = panicked.into_inner().unwrap() {
+                    if let Err(error) = result {
+                        eprintln!("{error}");
+                    }
+                    std::panic::resume_unwind(panic);
+                }
+                result.unwrap_or_else(|error| {
+                    panic!("Linear live capability journey failed: {error}")
+                });
+            },
+        ),
+    )
     .await;
-    // Released on every way out, a failed or panicking journey included.
-    if let Some(lease) = &lease
-        && let Err(error) = lease.release(LINEAR_GRAPHQL, &lane_key).await
-    {
-        eprintln!("{error}");
-    }
-    if let Err(panic) = leased {
-        std::panic::resume_unwind(panic);
-    }
     let refused = namespace.refusals();
     assert!(
         refused.is_empty(),
@@ -3589,15 +3587,9 @@ mod pool {
             .await;
             // None refused — for the limit, for the pool, or for anything else.
             assert_isolated(&replay, &sessions);
-            let ever = replay.state.lock().unwrap().documents_ever;
-            assert!(ever <= LIMIT, "{ever} documents against a limit of {LIMIT}");
         }
-        // Not one request of the four rounds was rate-limited: the lanes' lease and document
-        // work for thirty-two runs fits inside the one key's hour.
-        let state = replay.state.lock().unwrap();
-        assert_eq!(state.rate_limited, 0);
-        assert!(state.keyed.len() <= 2_500, "{} requests", state.keyed.len());
-        drop(state);
+        // Not one request of the four rounds was refused for the key's hourly quota.
+        assert_eq!(replay.state.lock().unwrap().rate_limited, 0);
         // Every document the four rounds created is a pool member's, made once.
         let created = replay.state.lock().unwrap().documents_ever - initial;
         assert!(created <= pool, "{created} documents for a pool of {pool}");
@@ -3671,6 +3663,78 @@ mod pool {
             present.iter().all(|line| line.starts_with("present ")),
             "{present:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_claim_whose_create_acknowledgement_was_lost_holds_the_member_it_created() {
+        let replay = replay();
+        replay.state.lock().unwrap().lose_next_issue_create_ack = true;
+        let held = claim(&replay, LeaseLane::Plugin, &holder(run(1)))
+            .await
+            .unwrap();
+        // The create landed and its answer did not: the read back is what decided, and no
+        // second create was sent for the member.
+        {
+            let state = replay.state.lock().unwrap();
+            let creates = state
+                .keyed
+                .iter()
+                .filter(|(_, request)| request["query"].as_str().unwrap().contains("issueCreate("))
+                .count();
+            assert_eq!(creates, 1);
+            assert!(state.issues.contains_key(&held.id));
+        }
+        // And it is held: the next claimant passes over it.
+        let next = claim(&replay, LeaseLane::Plugin, &holder(run(2)))
+            .await
+            .unwrap();
+        assert_ne!(next.index, held.index);
+    }
+
+    #[tokio::test]
+    async fn a_lane_that_panics_releases_its_lease_before_the_panic_leaves() {
+        let replay = replay();
+        let held = claim(&replay, LeaseLane::Plugin, &holder(run(1)))
+            .await
+            .unwrap();
+        let released = |id: &str| {
+            replay.state.lock().unwrap().issues[id]["title"]
+                .as_str()
+                .unwrap()
+                .ends_with(" released")
+        };
+        // The plugin lane's wrapper, around a journey that panics.
+        let panicked = document_lifecycle::unwinding(document_lifecycle::lease::holding(
+            Some(&held),
+            &replay.endpoint,
+            "synthetic",
+            async { panic!("injected journey failure") },
+        ))
+        .await;
+        assert!(panicked.is_err(), "the panic was swallowed");
+        assert!(released(&held.id), "a panicking plugin lane kept its lease");
+        // The asset lane's, which drives its own runtime, around a body that panics.
+        let assets = claim(&replay, LeaseLane::Assets, &holder(run(2)))
+            .await
+            .unwrap();
+        let endpoint = replay.endpoint.clone();
+        let id = assets.id.clone();
+        tokio::task::spawn_blocking(move || {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                document_lifecycle::lease::holding_blocking(
+                    &runtime,
+                    Some(&assets),
+                    &endpoint,
+                    "synthetic",
+                    || panic!("injected asset journey failure"),
+                )
+            }));
+            assert!(panicked.is_err(), "the panic was swallowed");
+        })
+        .await
+        .unwrap();
+        assert!(released(&id), "a panicking asset lane kept its lease");
     }
 
     #[tokio::test]

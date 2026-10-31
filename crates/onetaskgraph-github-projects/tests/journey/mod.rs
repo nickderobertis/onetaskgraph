@@ -2064,7 +2064,7 @@ fn type_signature(value: &Value) -> Option<String> {
 /// journey believes GitHub's mutation surface to be: the credentialed drive holds GitHub to
 /// it, and the fixture drive answers introspection *from* it, so the stand-in cannot answer
 /// a contract the real check is not making.
-pub const MUTATION_CONTRACT: [(&str, &str, &str); 16] = [
+pub const MUTATION_CONTRACT: [(&str, &str, &str); 19] = [
     ("createIssue", "CreateIssueInput", "CreateIssuePayload"),
     (
         "addProjectV2ItemById",
@@ -2121,6 +2121,22 @@ pub const MUTATION_CONTRACT: [(&str, &str, &str); 16] = [
         "DeleteIssueCommentInput",
         "DeleteIssueCommentPayload",
     ),
+    // A session's own board: the copy it works on, its deletion, and the template's drafts.
+    (
+        "copyProjectV2",
+        "CopyProjectV2Input",
+        "CopyProjectV2Payload",
+    ),
+    (
+        "deleteProjectV2",
+        "DeleteProjectV2Input",
+        "DeleteProjectV2Payload",
+    ),
+    (
+        "addProjectV2DraftIssue",
+        "AddProjectV2DraftIssueInput",
+        "AddProjectV2DraftIssuePayload",
+    ),
 ];
 
 /// Every input and payload type those mutations reach, and the one board type a write reads
@@ -2129,7 +2145,7 @@ pub const MUTATION_CONTRACT: [(&str, &str, &str); 16] = [
 ///
 /// The `bool` is whether the type is an input — GitHub spells an input type's members
 /// `inputFields` and an output type's `fields`, and asking for the wrong one answers null.
-pub const CONTRACT_TYPES: [(&str, bool, &[&str]); 35] = [
+pub const CONTRACT_TYPES: [(&str, bool, &[&str]); 42] = [
     ("CreateIssueInput", true, &["repositoryId", "title", "body"]),
     (
         "AddProjectV2ItemByIdInput",
@@ -2200,6 +2216,18 @@ pub const CONTRACT_TYPES: [(&str, bool, &[&str]); 35] = [
     // value can be written to from a number or date field of the same GraphQL type, and what
     // `sources fields` reads to report a conflict — so GitHub is held to it here too.
     ("ProjectV2Field", false, &["id", "name", "dataType"]),
+    (
+        "CopyProjectV2Input",
+        true,
+        &["projectId", "ownerId", "title", "includeDraftIssues"],
+    ),
+    ("DeleteProjectV2Input", true, &["projectId"]),
+    ("AddProjectV2DraftIssueInput", true, &["projectId", "title"]),
+    ("CopyProjectV2Payload", false, &["projectV2"]),
+    ("DeleteProjectV2Payload", false, &["projectV2"]),
+    ("AddProjectV2DraftIssuePayload", false, &["projectItem"]),
+    // What the janitor lists a session's leftover board copies by, and the copy's owner id.
+    ("User", false, &["id", "projectsV2"]),
 ];
 
 /// Every enum a read or a write names a member of, with the members it names.
@@ -2508,6 +2536,17 @@ pub fn contract_field_types(type_name: &str) -> &'static [(&'static str, &'stati
             &[("projectV2Field", "ProjectV2FieldConfiguration")]
         }
         "ProjectV2Field" => &[("dataType", "ProjectV2FieldType!")],
+        "CopyProjectV2Input" => &[
+            ("projectId", "ID!"),
+            ("ownerId", "ID!"),
+            ("title", "String!"),
+            ("includeDraftIssues", "Boolean"),
+        ],
+        "DeleteProjectV2Input" => &[("projectId", "ID!")],
+        "AddProjectV2DraftIssueInput" => &[("projectId", "ID!"), ("title", "String!")],
+        "CopyProjectV2Payload" | "DeleteProjectV2Payload" => &[("projectV2", "ProjectV2")],
+        "AddProjectV2DraftIssuePayload" => &[("projectItem", "ProjectV2Item")],
+        "User" => &[("id", "ID!"), ("projectsV2", "ProjectV2Connection!")],
         _ => &[],
     }
 }
@@ -5125,7 +5164,7 @@ pub async fn run(nomination: Nomination) {
             )
             .await;
             let deleted = run_board::delete(&run_board::main_sender(&token), &board).await;
-            board_guard.deleted();
+            board_guard.disarm();
             let mine = mine
                 .and(deleted)
                 .and(cleanup_telemetry)

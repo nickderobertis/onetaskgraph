@@ -100,3 +100,23 @@ fn a_lane_in_github_actions_names_its_run_or_refuses_naming_the_variable() {
         );
     }
 }
+
+#[test]
+fn a_run_board_is_titled_only_with_a_stamp_and_read_back_by_its_prefix() {
+    use onetaskgraph_github_live::{RUN_BOARD_PREFIX, run_board_stamp, run_board_title};
+    for stamp in ["7-42-1700000000000000", "ci-37616803489-2-1700000000000000"] {
+        let title = run_board_title(stamp).unwrap();
+        assert_eq!(run_board_stamp(&title), Some(stamp));
+    }
+    for stamp in ["", "ci-", "not a stamp", "7-42"] {
+        assert!(run_board_title(stamp).is_err(), "{stamp:?}");
+    }
+    // The nominated template and every other board read as no run's board.
+    for title in [
+        "Plans",
+        RUN_BOARD_PREFIX.trim(),
+        "onetaskgraph live cleanup 7-42-1",
+    ] {
+        assert_eq!(run_board_stamp(title), None, "{title}");
+    }
+}

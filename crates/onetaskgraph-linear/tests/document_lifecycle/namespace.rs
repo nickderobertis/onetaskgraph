@@ -60,9 +60,9 @@ impl Namespace {
             };
         }
         if let Some(lease) = classify_lease(title) {
-            return match lease.holder {
-                LeaseHolder::Held(stamp) => !self.owns_stamp(stamp),
-                LeaseHolder::Released => member != Some(lease.index),
+            return match lease.holder() {
+                LeaseHolder::Held(stamp) => !self.owns_stamp(stamp.as_str()),
+                LeaseHolder::Released => member != Some(lease.index()),
             };
         }
         // A disposable artifact: its stamp is the token right after the prefix.

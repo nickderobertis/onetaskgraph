@@ -564,7 +564,8 @@ struct Design {
 }
 const DESIGN: Design = Design {
     admission: 3,
-    schema: 10,
+    // Ten introspection documents, and two more for the board-copy surface they hold GitHub to.
+    schema: 12,
     reconciliation: 20,
     // 14 for the fixture, plus 8 for the session's own board: the template lookup, the copy,
     // and up to six item-count reads while GitHub copies the template's draft items.

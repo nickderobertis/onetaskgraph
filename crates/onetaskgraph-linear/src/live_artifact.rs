@@ -208,56 +208,124 @@ impl LeaseLane {
     }
 }
 
-/// Who a lease names: a live holder's ownership stamp, or nobody once it was released.
+/// A lease holder's canonical machine stamp, validated where it is made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HolderStamp<'a>(&'a str);
+impl<'a> HolderStamp<'a> {
+    /// Validate `stamp` as a holder's machine stamp (see [`lease_stamp_valid`]).
+    pub fn new(stamp: &'a str) -> Result<Self, String> {
+        if lease_stamp_valid(stamp) {
+            Ok(Self(stamp))
+        } else {
+            Err(format!(
+                "{stamp:?} is not a Linear lease holder's machine stamp"
+            ))
+        }
+    }
+
+    /// The stamp as written.
+    #[must_use]
+    pub fn as_str(self) -> &'a str {
+        self.0
+    }
+}
+
+/// Who a lease names: a live holder, or nobody once it was released.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeaseHolder<'a> {
-    /// Held by the invocation carrying this canonical stamp.
-    Held(&'a str),
+    /// Held by the invocation carrying this stamp.
+    Held(HolderStamp<'a>),
     /// Released by its holder; the next generation may be claimed.
     Released,
 }
 
 /// One generation of the lease over one pool member, read off a lease issue's title.
 ///
-/// A generation is claimed by creating the issue whose id [`lease_id`] derives from it,
-/// which Linear refuses when that id already exists, so at most one invocation ever holds a
-/// generation; the newest generation of a member is its current lease.
+/// A generation is claimed by creating the issue whose id a lane derives from it, which
+/// Linear refuses when that id already exists, so at most one invocation ever holds a
+/// generation; the newest generation of a member is its current lease. Every part is
+/// validated where the lease is made: a pool member's scope, a generation from 1, a holder's
+/// canonical stamp.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Lease<'a> {
-    /// The nominated team the pool belongs to.
-    pub team: &'a str,
-    /// The lane whose slots this member's lease covers.
-    pub lane: LeaseLane,
-    /// The pool member, `1..=POOL_SIZE`.
-    pub index: u8,
-    /// The generation, from 1, rising by one at every claim.
-    pub generation: u32,
-    /// Who holds it.
-    pub holder: LeaseHolder<'a>,
+    scope: Scope<'a>,
+    lane: LeaseLane,
+    generation: std::num::NonZeroU32,
+    holder: LeaseHolder<'a>,
 }
 
-/// The title of a lease issue; `team` and a held stamp are validated as a scope's are.
-pub fn lease_title(lease: Lease<'_>) -> Result<String, String> {
-    let scope = Scope::pooled(lease.team, lease.index)?;
-    let holder = match lease.holder {
-        LeaseHolder::Held(stamp) => {
-            if !lease_stamp_valid(stamp) {
-                return Err("invalid Linear lease holder stamp".into());
-            }
-            stamp
+impl<'a> Lease<'a> {
+    /// A lease of the pool member `scope` names, which must be one.
+    pub fn new(
+        scope: Scope<'a>,
+        lane: LeaseLane,
+        generation: std::num::NonZeroU32,
+        holder: LeaseHolder<'a>,
+    ) -> Result<Self, String> {
+        if scope.pool_index().is_none() {
+            return Err("a Linear lease names a pool member's scope".into());
         }
+        Ok(Self {
+            scope,
+            lane,
+            generation,
+            holder,
+        })
+    }
+
+    /// The nominated team the pool belongs to.
+    #[must_use]
+    pub fn team(self) -> &'a str {
+        self.scope.team()
+    }
+
+    /// The lane whose slots this member's lease covers.
+    #[must_use]
+    pub fn lane(self) -> LeaseLane {
+        self.lane
+    }
+
+    /// The pool member, `1..=POOL_SIZE`.
+    #[must_use]
+    pub fn index(self) -> u8 {
+        self.scope
+            .pool_index()
+            .expect("a lease is made of a pooled scope")
+    }
+
+    /// The generation, from 1.
+    #[must_use]
+    pub fn generation(self) -> u32 {
+        self.generation.get()
+    }
+
+    /// Who holds it.
+    #[must_use]
+    pub fn holder(self) -> LeaseHolder<'a> {
+        self.holder
+    }
+
+    /// The pool member's standing scope.
+    #[must_use]
+    pub fn scope(self) -> Scope<'a> {
+        self.scope
+    }
+}
+
+/// The title of a lease issue.
+#[must_use]
+pub fn lease_title(lease: Lease<'_>) -> String {
+    let holder = match lease.holder {
+        LeaseHolder::Held(stamp) => stamp.as_str(),
         LeaseHolder::Released => "released",
     };
-    if lease.generation == 0 {
-        return Err("a Linear lease generation starts at 1".into());
-    }
-    Ok(format!(
+    format!(
         "{LIVE_ARTIFACT_TITLE_PREFIX}lease-v1 {} {} pool-{} gen-{} {holder}",
-        scope.team(),
+        lease.team(),
         lease.lane.name(),
-        lease.index,
+        lease.index(),
         lease.generation
-    ))
+    )
 }
 
 /// The title prefix every lease of `team`'s `lane` begins with, for a listing filter.
@@ -279,24 +347,16 @@ pub fn classify_lease(title: &str) -> Option<Lease<'_>> {
     let [team, lane, pool, generation, holder] = parts.as_slice() else {
         return None;
     };
-    let index = pool_index_read(pool)?;
-    Scope::pooled(team, index).ok()?;
+    let scope = Scope::pooled(team, pool_index_read(pool)?).ok()?;
     let digits = generation.strip_prefix("gen-")?;
     if digits.starts_with('0') || !digits.bytes().all(|c| c.is_ascii_digit()) {
         return None;
     }
     let holder = match *holder {
         "released" => LeaseHolder::Released,
-        stamp if lease_stamp_valid(stamp) => LeaseHolder::Held(stamp),
-        _ => return None,
+        stamp => LeaseHolder::Held(HolderStamp::new(stamp).ok()?),
     };
-    Some(Lease {
-        team,
-        lane: LeaseLane::read(lane)?,
-        index,
-        generation: digits.parse().ok()?,
-        holder,
-    })
+    Lease::new(scope, LeaseLane::read(lane)?, digits.parse().ok()?, holder).ok()
 }
 
 /// A lease is held under the holder's machine stamp, `<host>-<process>-<micros>`: a local
