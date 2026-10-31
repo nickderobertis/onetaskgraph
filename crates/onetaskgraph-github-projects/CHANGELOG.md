@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.14](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.12.13...onetaskgraph-github-projects-v0.12.14) - 2026-10-31
+
+### Added
+
+- *(copy)* make a create safe to retry and guard a copy's status and priority writes ([#3838](https://github.com/nickderobertis/onetaskgraph/pull/3838))
+
 ## [0.12.13](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.12.12...onetaskgraph-github-projects-v0.12.13) - 2026-10-30
 
 ### Added
