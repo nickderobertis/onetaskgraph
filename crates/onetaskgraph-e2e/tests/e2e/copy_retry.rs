@@ -594,3 +594,62 @@ fn a_linear_create_answered_as_an_id_already_held_is_read_by_that_id_and_written
             .is_none()
     );
 }
+
+#[test]
+fn two_copies_of_one_never_copied_task_started_at_once_make_one_issue_and_one_link() {
+    // A lease long enough that the loser cannot outlast it within the test.
+    let stores = Stores::leased(600);
+    let spawn = || {
+        stores
+            .sandbox
+            .subprocess(onetaskgraph_e2e_support::binary())
+            .args(["--json", "task", "copy", NOTE, "--to", "board"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("a copy starts")
+    };
+    let (first, second) = (spawn(), spawn());
+    let outputs = [
+        first.wait_with_output().expect("the first copy ends"),
+        second.wait_with_output().expect("the second copy ends"),
+    ];
+    let mut linked = 0;
+    for output in &outputs {
+        let answer: Value = serde_json::from_slice(&output.stdout).expect("JSON");
+        match output.status.code() {
+            // It linked the one issue — the one it created, or the one the other created.
+            Some(0) => {
+                linked += 1;
+                assert!(answer["items"][0]["destination"].is_string(), "{answer:#}");
+            }
+            // Or it found the other's live lease and wrote nothing, naming the lease's end.
+            Some(1) => {
+                assert_eq!(
+                    answer["failure"]["kind"], "create-in-progress",
+                    "{answer:#}"
+                );
+            }
+            code => panic!("{code:?}: {answer:#}"),
+        }
+    }
+    assert!(linked >= 1, "one of them links the issue");
+    assert_eq!(
+        stores.board.items_titled("Task A").len(),
+        1,
+        "exactly one issue: {}\n---\n{}\n---\n{}\n---\n{}",
+        String::from_utf8_lossy(&outputs[0].stdout),
+        String::from_utf8_lossy(&outputs[0].stderr),
+        String::from_utf8_lossy(&outputs[1].stdout),
+        String::from_utf8_lossy(&outputs[1].stderr)
+    );
+    let metadata = stores.source_metadata();
+    assert!(
+        metadata["onetaskgraph.copies"]["board"].is_string(),
+        "{metadata:#}"
+    );
+    assert!(
+        metadata.get("onetaskgraph.creating").is_none(),
+        "{metadata:#}"
+    );
+}

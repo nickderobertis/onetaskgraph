@@ -337,10 +337,27 @@ impl Engine {
         destination: &SourceName,
         key: uuid::Uuid,
         lease_until: Option<DateTime<Utc>>,
+        planned_link: Option<Option<&GlobalId>>,
     ) -> Result<Intent, EngineError> {
         let source = self.writable(&id.source)?;
         let (task, _lock) = self.locked_read(source, id).await?;
         let now = now();
+        // Another copy that created and linked the counterpart since this one planned to create
+        // it has finished what this one would start: it is refused rather than made twice.
+        if let Some(planned) = planned_link {
+            let linked = super::link_of(&task.metadata, destination);
+            if linked.as_ref() != planned
+                && let Some(linked) = linked
+            {
+                return Err(EngineError::CreateInProgress {
+                    item: id.to_string(),
+                    until: format!(
+                        "{} (another copy created and linked {linked})",
+                        seconds_of(now)
+                    ),
+                });
+            }
+        }
         let held = self.held_or_refused(source, id, &task, destination)?;
         if let Some(held) = &held
             && held.held_by_another(self.attempt, now)
@@ -586,6 +603,7 @@ impl Engine {
                 destination.name(),
                 intent.key,
                 Some(window_end + self.create_settings(&id.source).lease()),
+                None,
             )
             .await?;
             let wait = (window_end - now).to_std().unwrap_or_default();

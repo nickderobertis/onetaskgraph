@@ -2503,7 +2503,10 @@ impl Engine {
         // A source that will not hold the key — a file it cannot edit narrowly, an item it no
         // longer answers for, a write it drops — copies as it always did, with no intent, as it
         // then records no link either. Only another attempt's live lease refuses.
-        let taken = match self.take_intent(&item.source, &item.to, key, None).await {
+        let taken = match self
+            .take_intent(&item.source, &item.to, key, None, Some(replaces.as_ref()))
+            .await
+        {
             Ok(taken) => taken,
             Err(error @ EngineError::CreateInProgress { .. }) => return Err(error),
             Err(_) => return Ok(false),
