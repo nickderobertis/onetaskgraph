@@ -336,8 +336,7 @@ pub async fn verify_exclusive(
         LeaseHolder::Released,
     )?);
     let decoy = format!("{held_title} duplicate-probe");
-    // Only Linear's own answer refusing the create is proof: a GraphQL error, or a create it
-    // says did not succeed. A request that never got an answer proves nothing either way.
+    // A request that never got an answer proves nothing either way.
     let answered: Value = reqwest::Client::new()
         .post(endpoint)
         .header("Authorization", key)

@@ -12,7 +12,6 @@ import { read, workflows } from "../workflow-graph.mjs";
 // queue a pull request once waited hours in, so this refuses one wherever it appears.
 const LIVE_CREDENTIALS = ["LINEAR_API_KEY", "GH_PROJECTS_TOKEN"];
 
-/** Whether `env` names a live credential. */
 const holdsCredential = (env) => LIVE_CREDENTIALS.some((key) => env?.[key] !== undefined);
 
 /** One line that is a `cargo run` of the live janitor and nothing else: no shell operator. */
