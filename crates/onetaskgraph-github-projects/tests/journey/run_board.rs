@@ -137,7 +137,10 @@ pub async fn copy(
     template: u32,
     stamp: &str,
 ) -> Result<RunBoard, String> {
-    let title = onetaskgraph_github_live::run_board_title(stamp)?;
+    let title = onetaskgraph_github_live::run_board_title(
+        onetaskgraph_github_live::RunStamp::read(stamp)
+            .ok_or_else(|| format!("{stamp:?} is not a stamp a live session writes"))?,
+    );
     let found = send(
         TEMPLATE_DOCUMENT,
         "live template lookup",
@@ -183,6 +186,8 @@ pub async fn copy(
         board
             .and_then(|board| board.get("number"))
             .and_then(Value::as_u64)
+            // A board's number is a GraphQL `Int`, and every later request sends it as one.
+            .and_then(|number| i32::try_from(number).ok())
             .and_then(|number| u32::try_from(number).ok()),
     ) else {
         return Err("GitHub did not answer the live board copy with its id and number".into());

@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 
 use onetaskgraph_github_live::{
     BOARD_NUMBER, BOARD_OWNER, DELETE_BOARD_DOCUMENT, DELETE_FIELD_DOCUMENT, RUN_BOARD_PREFIX,
-    RUN_BOARDS_DOCUMENT, RunStatus, SCRATCH_REPOSITORY, fielded_stamp, labelled_stamp,
+    RUN_BOARDS_DOCUMENT, RunStamp, RunStatus, SCRATCH_REPOSITORY, fielded_stamp, labelled_stamp,
     run_board_stamp, run_path, titled_stamp,
 };
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
@@ -635,8 +635,12 @@ impl Janitor {
                     continue;
                 }
                 let id = BoardId(identifier(node, "id")?);
-                if let Some(stamp) = run_board_stamp(text(node, "title")?) {
-                    self.list(stamp, Delete::Board(id), listed);
+                // A machine-stamped copy is its own machine's to sweep, never this pass's.
+                if let Some(RunStamp::Ci(owner)) = run_board_stamp(text(node, "title")?) {
+                    listed.push(Artifact {
+                        owner,
+                        delete: Delete::Board(id),
+                    });
                 }
             }
             match boards

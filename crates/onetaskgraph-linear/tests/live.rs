@@ -3559,6 +3559,7 @@ mod pool {
         // 1000 documents, trash included, as Linear counts them. Each plugin member is three
         // documents and each asset member one, so the pool's documents are bounded by its
         // size and not by how many runs ever use it.
+        // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Linear publishes this limit nowhere machine-readable; it is the refusal the required asset journey met in run 40741930571 (#3811), and a changed limit is met by the credentialed lanes, whose document creates Linear itself refuses past it.
         const LIMIT: usize = 1000;
         let pool = usize::from(POOL_SIZE) * (3 + 1);
         let initial = LIMIT - pool;
@@ -3567,6 +3568,7 @@ mod pool {
             state.document_limit = Some(LIMIT);
             state.documents_ever = initial;
             // And the key's hourly request quota, which every run shares.
+            // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Linear's documented hourly request quota for one API key, the figure `crates/onetaskgraph-linear-e2e/budgets.yaml` already shares against; Linear publishes it in prose alone, and the plugin backs off on the `RATELIMITED` refusal it answers past it with.
             state.request_limit = Some(2_500);
         }
         // Rounds of eight runs at once, each run both lanes, until every member is warm:

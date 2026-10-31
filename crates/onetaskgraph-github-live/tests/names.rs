@@ -103,19 +103,31 @@ fn a_lane_in_github_actions_names_its_run_or_refuses_naming_the_variable() {
 
 #[test]
 fn a_run_board_is_titled_only_with_a_stamp_and_read_back_by_its_prefix() {
-    use onetaskgraph_github_live::{RUN_BOARD_PREFIX, run_board_stamp, run_board_title};
-    for stamp in ["7-42-1700000000000000", "ci-37616803489-2-1700000000000000"] {
-        let title = run_board_title(stamp).unwrap();
+    use onetaskgraph_github_live::{RUN_BOARD_PREFIX, RunStamp, run_board_stamp, run_board_title};
+    for spelled in ["7-42-1700000000000000", "ci-37616803489-2-1700000000000000"] {
+        let stamp = RunStamp::read(spelled).unwrap();
+        assert_eq!(stamp.to_string(), spelled);
+        let title = run_board_title(stamp);
         assert_eq!(run_board_stamp(&title), Some(stamp));
     }
-    for stamp in ["", "ci-", "not a stamp", "7-42"] {
-        assert!(run_board_title(stamp).is_err(), "{stamp:?}");
+    assert!(matches!(
+        RunStamp::read("ci-37616803489-2-1"),
+        Some(RunStamp::Ci(_))
+    ));
+    assert!(matches!(
+        RunStamp::read("7-42-1"),
+        Some(RunStamp::Machine(_))
+    ));
+    for spelled in ["", "ci-", "not a stamp", "7-42", "07-42-1"] {
+        assert_eq!(RunStamp::read(spelled), None, "{spelled:?}");
     }
-    // The nominated template and every other board read as no run's board.
+    // The nominated template and every other board read as no run's board, and so does a
+    // title under the prefix carrying no stamp.
     for title in [
         "Plans",
         RUN_BOARD_PREFIX.trim(),
         "onetaskgraph live cleanup 7-42-1",
+        &format!("{RUN_BOARD_PREFIX}not-a-stamp"),
     ] {
         assert_eq!(run_board_stamp(title), None, "{title}");
     }

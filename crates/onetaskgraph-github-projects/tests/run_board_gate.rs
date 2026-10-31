@@ -53,10 +53,15 @@ const OWNER: &str = "octo-org";
 const TEMPLATE: u32 = 1;
 const REPOSITORY: &str = "acme/work";
 /// GitHub's hourly GraphQL allowance for one account.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] GitHub states this allowance in prose alone, and its drift gate is the one a credentialed session already is: `journey::budget` reads the account's real limit off `GET /rate_limit` before it spends anything, so a changed allowance is met there; this stand-in answers that read with this figure.
 const POINTS_PER_HOUR: u64 = 5_000;
-/// GitHub's hourly cap on content-creating requests.
-const CREATIONS_PER_HOUR: u64 = 500;
+/// GitHub's hourly cap on content-creating requests, from the pinned `fixtures/rate-limits.json`.
+fn creations_per_hour() -> u64 {
+    let pinned: Value = serde_json::from_str(include_str!("fixtures/rate-limits.json")).unwrap();
+    pinned["content_creation"]["per_hour"].as_u64().unwrap()
+}
 /// GitHub's cap on a board's fields.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] GitHub states this cap in prose alone and answers past it with a refusal; a session's own board starts from the template's fields and adds two, so the credentialed lane meets the real cap only if the template is near it, and then by GitHub's own refusal.
 const FIELDS_PER_BOARD: usize = 50;
 /// The template's fields: as many as the registered workload measured.
 fn template_fields() -> usize {
@@ -191,7 +196,7 @@ impl Account {
         ];
         if creates.iter().any(|name| document.contains(name)) {
             self.creations += 1;
-            if self.creations > CREATIONS_PER_HOUR {
+            if self.creations > creations_per_hour() {
                 self.refused.push(format!("creations: {document}"));
                 return json!({"errors":[{"message":"You have exceeded a secondary rate limit and have been temporarily blocked from content creation."}]});
             }
@@ -810,7 +815,9 @@ fn a_session_naming_a_board_outside_its_run_is_refused_before_sending() {
             Board {
                 id: format!("PVT_{number}"),
                 number,
-                title: onetaskgraph_github_live::run_board_title("ci-302-1-1").unwrap(),
+                title: onetaskgraph_github_live::run_board_title(
+                    onetaskgraph_github_live::RunStamp::read("ci-302-1-1").unwrap(),
+                ),
                 items: Vec::new(),
                 fields: Vec::new(),
             },
@@ -955,7 +962,11 @@ fn failing_session_with(faults: &[&'static str], entry: &str) -> (String, Arc<Mu
         held.faults = faults.to_vec();
         // A template listing two pages long, so a fault in its cursor is met.
         let template = held.boards.get_mut(&TEMPLATE).unwrap();
-        let pages = if entry.starts_with("template-") { 60 } else { 0 };
+        let pages = if entry.starts_with("template-") {
+            60
+        } else {
+            0
+        };
         for n in 0..pages {
             template.items.push((
                 format!("DI_second_page_{n}"),

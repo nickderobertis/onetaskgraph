@@ -243,26 +243,48 @@ pub const BOARD_WORKLOAD_DOCUMENT: &str = "query LiveBoardWorkload($owner:String
 /// rule as an issue's.
 pub const RUN_BOARD_PREFIX: &str = "onetaskgraph live board ";
 
-/// The title of the board a session stamped `stamp` copies for itself; `stamp` must be one
-/// of the two stamps a lane writes, because a board titled with anything else is residue no
-/// sweep could ever recognise.
-///
-/// # Errors
-///
-/// When `stamp` is neither a machine stamp nor a CI stamp.
-pub fn run_board_title(stamp: &str) -> Result<String, String> {
-    use onetaskgraph_live::artifact::{CiStamp, Stamp};
-    if Stamp::read(stamp).is_none() && CiStamp::read(stamp).is_none() {
-        return Err(format!("{stamp:?} is not a stamp a live session writes"));
-    }
-    Ok(format!("{RUN_BOARD_PREFIX}{stamp}"))
+/// The stamp a session's board copy is titled with: either of the two stamps a lane writes,
+/// read and validated where it is made, so a board can carry no other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunStamp {
+    /// A session outside GitHub Actions.
+    Machine(onetaskgraph_live::artifact::Stamp),
+    /// A session inside GitHub Actions, naming its run.
+    Ci(onetaskgraph_live::artifact::CiStamp),
 }
 
-/// The stamp half of a run board's title, unread; `None` for any other board, the
-/// nominated template among them.
+impl RunStamp {
+    /// The stamp `spelled` is, or `None` when it is neither form.
+    #[must_use]
+    pub fn read(spelled: &str) -> Option<Self> {
+        use onetaskgraph_live::artifact::{CiStamp, Stamp};
+        Stamp::read(spelled)
+            .filter(|stamp| stamp.to_string() == spelled)
+            .map(Self::Machine)
+            .or_else(|| CiStamp::read(spelled).map(Self::Ci))
+    }
+}
+
+impl std::fmt::Display for RunStamp {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Machine(stamp) => stamp.fmt(formatter),
+            Self::Ci(stamp) => stamp.fmt(formatter),
+        }
+    }
+}
+
+/// The title of the board a session stamped `stamp` copies for itself.
 #[must_use]
-pub fn run_board_stamp(title: &str) -> Option<&str> {
-    title.strip_prefix(RUN_BOARD_PREFIX)
+pub fn run_board_title(stamp: RunStamp) -> String {
+    format!("{RUN_BOARD_PREFIX}{stamp}")
+}
+
+/// The stamp a run board's title carries; `None` for any other board, the nominated
+/// template among them, and for a title under the prefix that carries no stamp.
+#[must_use]
+pub fn run_board_stamp(title: &str) -> Option<RunStamp> {
+    RunStamp::read(title.strip_prefix(RUN_BOARD_PREFIX)?)
 }
 
 /// How many draft items the nominated template holds for each copy to start with:
