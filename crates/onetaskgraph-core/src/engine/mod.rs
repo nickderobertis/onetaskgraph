@@ -1265,6 +1265,8 @@ pub enum EngineError {
         target: GlobalId,
         /// The source task being copied.
         item: GlobalId,
+        /// What the named task held, as the copy's read of it before writing found it.
+        held: Option<Box<crate::cache::WriteResult>>,
     },
 
     /// `--create` was given beside a flag that says how to look for a counterpart, when
@@ -1637,6 +1639,18 @@ pub enum EngineError {
         operation: String,
         // llmlint: ignore-end[invalid_states_unrepresentable]
     },
+}
+
+impl EngineError {
+    /// What the destination item a copy refused to write held, as the copy's read of it before
+    /// writing found it — for a refusal made after that read, and `None` for every other.
+    #[must_use]
+    pub fn held(&self) -> Option<&crate::cache::WriteResult> {
+        match self {
+            Self::TargetTaskOrigin { held, .. } => held.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 /// One side's `line` of a [`EngineError::StoredContentDiverged`] as its message shows it: the

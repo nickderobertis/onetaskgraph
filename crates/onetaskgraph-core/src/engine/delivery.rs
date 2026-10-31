@@ -166,6 +166,7 @@ impl Engine {
         // Taken before the delivered tasks are kept in step, which reads and writes other
         // tasks and none of them this write's own.
         let (result, fallback, spent) = self.expected_parts(id);
+        let result = self.verb_result(source, id, Some(&task), result).await;
         let delivers = targets(&task.delivers, &id.source);
         let delivered = self
             .deliver(

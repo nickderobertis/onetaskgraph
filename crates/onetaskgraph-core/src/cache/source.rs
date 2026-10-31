@@ -584,14 +584,18 @@ impl CachedSource {
         ExpectedWrite {
             result: Some(WriteResult {
                 version: landed_last.and_then(|entry| entry.shown.version().map(str::to_owned)),
-                parts: journal
-                    .mutations()
-                    .map(|entry| WritePart {
-                        part: entry.part.clone(),
-                        outcome: entry.outcome.clone(),
-                        fields: entry.fields.clone(),
-                    })
-                    .collect(),
+                parts: Some(
+                    journal
+                        .mutations()
+                        .map(|entry| WritePart {
+                            part: entry.part.clone(),
+                            outcome: entry.outcome.clone(),
+                            fields: entry.fields.clone(),
+                        })
+                        .collect(),
+                ),
+                status: None,
+                priority: None,
             }),
             fallback: journal
                 .read()
@@ -1139,6 +1143,14 @@ impl TaskSource for CachedSource {
         // edges of the tasks they name, exactly as a write landing them whole would.
         self.relating(EdgeKind::TaskReverse, self.inner.finish_writes())
             .await
+    }
+
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        self.inner.written_task(id).await
+    }
+
+    async fn written_version(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        self.inner.written_version(record, id).await
     }
 
     fn written_location(&self, record: MetadataRecord, id: &NativeId) -> Option<Location> {
@@ -2498,7 +2510,13 @@ mod tests {
             cache.read(&id("T-2")).is_none(),
             "nothing is written for the other task"
         );
-        assert_eq!(written.result.map(|result| result.parts.len()), Some(1));
+        assert_eq!(
+            written
+                .result
+                .and_then(|result| result.parts)
+                .map(|parts| parts.len()),
+            Some(1)
+        );
     }
 
     #[test]

@@ -67,6 +67,11 @@ pub struct FailureDocument {
     /// its `fallback` and what it `spent` — absent for every other failure.
     #[serde(flatten)]
     pub expected: crate::cache::ExpectedWrite,
+    /// What the destination item a copy refused to write held, as the copy's read of it
+    /// before writing found it — present only for a refusal made after that read, such as
+    /// `target-task-origin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<crate::cache::WriteResult>,
 }
 
 /// Why one command failed.

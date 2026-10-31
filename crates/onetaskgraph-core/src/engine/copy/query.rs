@@ -40,6 +40,7 @@ pub(super) fn failed(source: GlobalId, error: &EngineError) -> CopyOutcome {
     CopyOutcome {
         status_condition: None,
         priority_condition: None,
+        held: None,
         expected: crate::cache::ExpectedWrite::default(),
         source,
         action: CopyAction::Failed {
@@ -91,6 +92,7 @@ impl Engine {
                 expected: crate::cache::ExpectedWrite::default(),
                 status_condition: None,
                 priority_condition: None,
+                held: None,
                 source: id.clone(),
                 action: CopyAction::Skipped {
                     reason: format!(
@@ -241,6 +243,7 @@ impl Engine {
             expected: crate::cache::ExpectedWrite::default(),
             status_condition: None,
             priority_condition: None,
+            held: None,
             source: listed.id.clone(),
             action: CopyAction::Unchanged {
                 destination: landed,

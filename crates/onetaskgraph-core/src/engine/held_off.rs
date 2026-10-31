@@ -287,6 +287,14 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.finish_writes().await)
     }
 
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        self.inner.written_task(id).await
+    }
+
+    async fn written_version(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        self.inner.written_version(record, id).await
+    }
+
     fn written_location(&self, record: MetadataRecord, id: &NativeId) -> Option<Location> {
         self.inner.written_location(record, id)
     }

@@ -1359,6 +1359,29 @@ impl TaskSource for LocalMdSource {
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.write_task_with(write, None)
     }
+    /// The task as its file now holds it: what this source's latest write of it wrote, read off
+    /// this machine — no remote party is asked anything.
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        self.get_task(id).await.ok().flatten()
+    }
+    /// The token of the record's file as this source's latest write of it left it.
+    async fn written_version(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+    ) -> Option<String> {
+        match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => {
+                self.get_task(id).await.ok().flatten()?.version
+            }
+            onetaskgraph_plugin_api::MetadataRecord::Project => {
+                self.get_project(id).await.ok().flatten()?.version
+            }
+            onetaskgraph_plugin_api::MetadataRecord::Document => {
+                self.get_document(id).await.ok().flatten()?.version
+            }
+        }
+    }
     /// The file the record is, as a read reports it: its canonical absolute path, found without
     /// reading it.
     fn written_location(

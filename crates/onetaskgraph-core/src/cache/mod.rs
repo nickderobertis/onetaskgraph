@@ -274,13 +274,55 @@ pub struct ExpectedWrite {
     pub spent: Option<Spent>,
 }
 
-/// What each mutation of an expected write came to, built from the mutations' own responses.
+/// What an item holds once a write is done, read off the write's own responses — and, for an
+/// expected write, what each mutation it sent came to.
+///
+/// Every write verb and every item a copy lands answers one, with no request added for it: a
+/// field the write kept is what the read before it held. `version` is `null` where the source
+/// cannot vouch for a token from its write's responses — a GitHub board for an item it has just
+/// written, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would
+/// then give.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WriteResult {
-    /// The task's version after the write, where the last response determines it.
+    /// The item's version after the write, where the write's responses determine it.
     pub version: Option<String>,
-    /// One per mutation sent, in the order sent.
-    pub parts: Vec<WritePart>,
+    /// One per mutation an expected write sent, in the order sent — absent for a write made
+    /// without `--expect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parts: Option<Vec<WritePart>>,
+    /// The item's status after the write, exactly as `task show` spells it — `null` for a
+    /// document, which has none, and where an expected write that failed cannot say.
+    #[serde(default)]
+    pub status: Option<onetaskgraph_plugin_api::Status>,
+    /// A task's priority after the write — `null` for a project or a document, which carry
+    /// none, and where an expected write that failed cannot say.
+    #[serde(default)]
+    pub priority: Option<onetaskgraph_plugin_api::Priority>,
+}
+
+impl WriteResult {
+    /// What `task` holds, at the version given.
+    #[must_use]
+    pub fn of_task(task: &onetaskgraph_plugin_api::Task, version: Option<String>) -> Self {
+        Self {
+            version,
+            parts: None,
+            status: Some(task.status.clone()),
+            priority: Some(task.priority),
+        }
+    }
+
+    /// This result with `later`'s item fields, keeping the parts an expected write recorded and
+    /// the version it read off its last response when `later` has none.
+    #[must_use]
+    pub fn merged(self, later: Self) -> Self {
+        Self {
+            version: later.version.or(self.version),
+            parts: self.parts.or(later.parts),
+            status: later.status.or(self.status),
+            priority: later.priority.or(self.priority),
+        }
+    }
 }
 
 /// One mutation of an expected write.

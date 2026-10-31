@@ -693,13 +693,14 @@ pub mod graphql {
     /// status, and the `delivers` the engine keeps in step with it — is what Linear holds after
     /// the write, with no read before it and none after.
     pub const ISSUE_UPDATE_READ: &str = ISSUE_UPDATE;
-    /// Set an issue's priority on its own, and read back the priority Linear now holds.
+    /// Set an issue's priority on its own, and read back the issue as Linear now holds it.
     ///
-    /// The same `issueUpdate` as [`ISSUE_UPDATE`], selecting `priority` in the payload
-    /// because a narrow priority write answers with what the source reads back rather than
-    /// an echo of what it sent. A document of its own rather than a wider [`ISSUE_UPDATE`],
-    /// so every other issue write keeps asking for exactly what it reads.
-    pub const ISSUE_PRIORITY_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id priority}} }";
+    /// The same `issueUpdate` as [`ISSUE_UPDATE`], selecting what a read of the issue selects
+    /// and `priority` once more, as 0.6.0's priority write did, because a narrow priority write answers with what the source reads back rather
+    /// than an echo of what it sent — and with the issue's token, so the write answers what the
+    /// task holds after it without a read. A document of its own, spelled apart from
+    /// [`ISSUE_UPDATE`], so a request log tells a priority write from every other update.
+    pub const ISSUE_PRIORITY_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} priority}} }";
     /// Rewrite an issue whole, and read back in the same request the first page of the
     /// relations it holds — the ones a whole write reconciles.
     ///
@@ -1564,6 +1565,9 @@ struct LinearSource {
     /// [`TaskSource::written_location`] answers, so a copy records where it landed an item it
     /// created without reading it.
     locations: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), String>>,
+    /// What each item this instance wrote holds, as its latest write's own answer said — what
+    /// [`TaskSource::written_task`] and [`TaskSource::written_version`] answer.
+    answered: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Answered>>,
     /// What [`TaskSource::read_ahead_origins_for_copy`] read, until the next write or
     /// [`TaskSource::end_command`]; see [`origins::OriginsAhead`].
     origins_ahead: std::sync::Mutex<origins::OriginsAhead>,
@@ -1609,6 +1613,7 @@ impl LinearSource {
             stored: std::sync::Mutex::new(std::collections::HashMap::new()),
             written: std::sync::Mutex::new(std::collections::HashMap::new()),
             locations: std::sync::Mutex::new(std::collections::HashMap::new()),
+            answered: std::sync::Mutex::new(std::collections::HashMap::new()),
             origins_ahead: std::sync::Mutex::new(origins::OriginsAhead::default()),
         })
     }
@@ -2760,9 +2765,19 @@ impl LinearSource {
         if optional_str(issue, "identifier")? != Some(asked.0.as_str()) {
             written_is(issue, asked)?;
         }
-        optional(&json!({ "issue": issue }), "issue", |v| {
+        let task = optional(&json!({ "issue": issue }), "issue", |v| {
             map_task(v, &self.name, &self.statuses, self.spelling())
-        })
+        })?;
+        if let Some(task) = &task {
+            self.answered().insert(
+                (MetadataRecord::Task, asked.clone()),
+                Answered {
+                    version: task.version.clone(),
+                    task: Some(task.clone()),
+                },
+            );
+        }
+        Ok(task)
     }
 
     /// The one long-form field a Linear item has, with this source's own slot at the end.
@@ -2926,6 +2941,7 @@ impl LinearSource {
                 };
                 let deleted = self.send(query, json!({"id":id})).await?;
                 mutation_payload(&deleted, mutation)?;
+                self.unknown_version(near);
             }
             if let Some(next) = page_next(&relations)? {
                 cursor = Some(next);
@@ -3017,6 +3033,7 @@ impl LinearSource {
                 )
             };
             let data = self.send(query, json!({"input":input})).await?;
+            self.unknown_version(near);
             let mutation = if matches!(kind, WriteKind::Project) {
                 MutationRoot::ProjectRelationCreate
             } else {
@@ -3271,6 +3288,19 @@ impl TaskSource for LinearSource {
             .get(&(record, id.clone()))
             .cloned();
         web_address(held.as_deref())
+    }
+    /// The task as this instance's latest write of it was answered with — never a request.
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        self.answered()
+            .get(&(MetadataRecord::Task, id.clone()))
+            .and_then(|answered| answered.task.clone())
+    }
+    /// The token the answer to this instance's latest write of the item spelled, when it
+    /// carried every part a read spells one from.
+    async fn written_version(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        self.answered()
+            .get(&(record, id.clone()))
+            .and_then(|answered| answered.version.clone())
     }
     /// The content the latest write of the item selected in its own answer, the metadata slot
     /// and its separator removed; see the ruling on what Linear stores.
@@ -4082,7 +4112,29 @@ impl TaskSource for LinearSource {
                 message: "missing issueUpdate.issue".into(),
             })?;
         written_is(issue, &task.id)?;
-        issue_priority(issue).map(Some)
+        let priority = issue_priority(issue)?;
+        // The issue as the answer selects it, token and all — or, from an answer carrying less,
+        // the issue as read before with the priority it answered, at no token.
+        let answered = map_task(issue, &self.name, &self.statuses, self.spelling())
+            .map(|written| Answered {
+                version: written.version.clone(),
+                task: Some(written),
+            })
+            .unwrap_or(Answered {
+                version: None,
+                task: Some(Task {
+                    priority,
+                    version: None,
+                    ..task.clone()
+                }),
+            });
+        self.answered()
+            .insert((MetadataRecord::Task, task.id.clone()), answered.clone());
+        if task.id != *id {
+            self.answered()
+                .insert((MetadataRecord::Task, id.clone()), answered);
+        }
+        Ok(Some(priority))
     }
     async fn set_task_content(
         &self,
@@ -4389,6 +4441,7 @@ impl TaskSource for LinearSource {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+        self.answered().clear();
         Ok(())
     }
 }
@@ -4629,6 +4682,7 @@ impl LinearSource {
             MetadataRecord::Task | MetadataRecord::Document => payload.get("title").is_some(),
             MetadataRecord::Project => payload.get("name").is_some(),
         };
+        self.note_answered(record, id, whole.then_some(payload));
         let mut written = self
             .written
             .lock()
@@ -4639,6 +4693,67 @@ impl LinearSource {
             written.remove(&(record, id.clone()));
         }
         Ok(())
+    }
+
+    fn answered(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<(MetadataRecord, NativeId), Answered>>
+    {
+        // A memo of what responses said: one a panic left behind is read as it stands.
+        self.answered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Note what a long-form write of the `record` `id` was answered with — the whole item
+    /// when its selection carried one, and nothing it can vouch for otherwise.
+    fn note_answered(&self, record: MetadataRecord, id: &NativeId, payload: Option<&Value>) {
+        let answered = payload.map(|payload| match record {
+            MetadataRecord::Task => {
+                let task = map_task(payload, &self.name, &self.statuses, self.spelling()).ok();
+                Answered {
+                    version: task.as_ref().and_then(|task| task.version.clone()),
+                    task,
+                }
+            }
+            MetadataRecord::Project => Answered {
+                version: map_project(payload, &self.statuses, self.spelling())
+                    .ok()
+                    .and_then(|project| project.version),
+                task: None,
+            },
+            MetadataRecord::Document => Answered {
+                version: map_document(payload)
+                    .ok()
+                    .and_then(|document| document.version),
+                task: None,
+            },
+        });
+        let mut held = self.answered();
+        match answered {
+            Some(answered) => {
+                held.insert((record, id.clone()), answered);
+            }
+            None => {
+                held.remove(&(record, id.clone()));
+            }
+        }
+    }
+
+    /// Forget the token an earlier answer gave `id`: a later write of its relations moves what
+    /// a read would spell, and Linear's answer to that write does not say what.
+    fn unknown_version(&self, id: &NativeId) {
+        for answered in self
+            .answered()
+            .iter_mut()
+            .filter(|((_, held), _)| held == id)
+            .map(|(_, answered)| answered)
+        {
+            answered.version = None;
+            if let Some(task) = answered.task.as_mut() {
+                task.version = None;
+            }
+        }
     }
 
     /// The whole item the latest long-form write of the `record` `id` was answered with,
@@ -4711,6 +4826,16 @@ impl LinearSource {
             }
         }
     }
+}
+
+/// What a write's own answer said one item holds, for [`TaskSource::written_task`] and
+/// [`TaskSource::written_version`].
+#[derive(Clone)]
+struct Answered {
+    /// The item's token after the write, when the answer vouched for one.
+    version: Option<String>,
+    /// The task, for a task whose answer carried it whole.
+    task: Option<Task>,
 }
 
 /// What one read of an item by id is for, which decides whether an attached cache widens it.

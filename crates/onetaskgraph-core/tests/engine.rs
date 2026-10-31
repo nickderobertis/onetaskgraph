@@ -5241,6 +5241,7 @@ fn a_failure_document_names_what_failed_where_and_takes_a_wrapped_failures_class
         serde_json::to_value(FailureDocument {
             failure,
             expected: onetaskgraph_core::ExpectedWrite::default(),
+            held: None,
         })
         .expect("a failure document renders")
     };

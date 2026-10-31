@@ -182,6 +182,9 @@ impl Engine {
         };
         let spent = spent_between(&before, &readings(&[source]).await);
         let (result, fallback, _) = self.expected_parts(id);
+        let result = self
+            .verb_result(source, id, Some(&outcome.task), result)
+            .await;
         let projection = if outcome.written.contains(&UpdatedField::Status) {
             self.mirror_status(id, &outcome.task, outcome.task.status.category)
                 .await?

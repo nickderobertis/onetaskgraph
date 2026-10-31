@@ -8758,18 +8758,17 @@ fn linear_narrow_issue_update(
         linear_put_state(row, held);
     }
     row["_updated"] = json!(stamp);
-    Ok(
-        if operation == onetaskgraph_linear::graphql::ISSUE_PRIORITY_UPDATE {
-            json!({"issueUpdate":{"success":true,
-                   "issue":{"id":id,"priority":linear_priority(&row["priority"])}}})
-        } else {
-            let mut issue = json!({"id":id});
-            if let Some(description) = stored {
-                issue["description"] = description;
-            }
-            json!({"issueUpdate":{"success":true,"issue":issue}})
-        },
-    )
+    // Linear answers every member a mutation selects, so a narrow write is answered with the
+    // whole issue as it now stands — what a read of it would answer — and its description as it
+    // stored it.
+    let row = row.clone();
+    let mut issue = linear_task(&row, data);
+    issue["id"] = json!(id);
+    if let Some(description) = stored {
+        issue["description"] = description;
+    }
+    let _ = operation;
+    Ok(json!({"issueUpdate":{"success":true,"issue":issue}}))
 }
 
 fn linear_task(v: &Value, data: &Value) -> Value {

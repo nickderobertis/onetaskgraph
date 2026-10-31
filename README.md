@@ -1318,6 +1318,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         no_link: false,
         expect: None,
         statuses: Vec::new(),
+        conditions: Default::default(),
     }).await?;
 
     let outcome = &report.items[0];

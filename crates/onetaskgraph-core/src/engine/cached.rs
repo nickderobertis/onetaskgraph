@@ -149,6 +149,33 @@ impl Engine {
         }
     }
 
+    /// What the task `id` holds after a write verb wrote it, read off the write's own
+    /// responses with no request added: the source's own answer of what it holds after its
+    /// write where it gives one, else `known` — the task the verb's write answered with — at no
+    /// version, beside what an expected write recorded of its parts.
+    pub(crate) async fn verb_result(
+        &self,
+        source: &crate::resolve::ResolvedSource,
+        id: &GlobalId,
+        known: Option<&onetaskgraph_plugin_api::Task>,
+        expected: Option<WriteResult>,
+    ) -> Option<WriteResult> {
+        let result = match (source.source().written_task(&id.native).await, known) {
+            (Some(task), _) => WriteResult::of_task(&task, task.version.clone()),
+            (None, Some(task)) => WriteResult::of_task(task, None),
+            (None, None) => WriteResult {
+                version: None,
+                parts: None,
+                status: None,
+                priority: None,
+            },
+        };
+        Some(match expected {
+            Some(expected) => expected.merged(result),
+            None => result,
+        })
+    }
+
     /// What the write [`Engine::expect`] expected of `id` came to, ending the expectation.
     #[must_use]
     pub fn take_expected(&self, id: &GlobalId) -> Option<ExpectedWrite> {

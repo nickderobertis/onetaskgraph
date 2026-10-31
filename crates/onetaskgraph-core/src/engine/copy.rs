@@ -69,7 +69,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::cache::ExpectedWrite;
+use crate::cache::{ExpectedWrite, WriteResult};
 use crate::config::Placement;
 use crate::resolve::ResolvedSource;
 use crate::template::TemplateProvenance;
@@ -560,6 +560,10 @@ pub struct CopyOutcome {
     /// update of a task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority_condition: Option<PriorityCondition>,
+    /// What the counterpart held, as the copy's read of it before writing found it — present
+    /// only on an item the copy refused after that read, such as `destination-status`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<WriteResult>,
 }
 
 /// What a `--comments` copy did to one task's comments at the destination.
@@ -2336,6 +2340,11 @@ impl Engine {
             })
             .collect();
         let linking = std::mem::take(&mut running.linking);
+        // Which interface each landed item is read through, for what it holds once written.
+        let levels: HashMap<String, Level> = linking
+            .iter()
+            .map(|entry| (entry.destination.to_string(), entry.level))
+            .collect();
         let homes = std::mem::take(&mut running.homes);
         let recordings = self.recordings(&running);
         // The repair writes an item's content again, so what the destination stores after it is
@@ -2355,6 +2364,7 @@ impl Engine {
         // more, now that its source's link is written and so its change token is final; one the
         // destination then stores otherwise again is reported `failed` with why.
         let diverged = self.follow_up(journal).await?;
+        self.written_results(&mut items, &levels).await;
         for (source, error) in &diverged {
             for outcome in items.iter_mut().filter(|outcome| &outcome.source == source) {
                 outcome.action = CopyAction::Failed {
@@ -2376,6 +2386,50 @@ impl Engine {
             },
             deliverers,
         ))
+    }
+
+    /// Bring each written item's `result` to what its destination's own answers say it holds
+    /// now that every write of the copy is done — its token above all, which a later write of
+    /// the same item (its edges, its comments, a follow-up) moves. A destination that cannot say
+    /// keeps what the copy sent, and no version.
+    async fn written_results(&self, items: &mut [CopyOutcome], levels: &HashMap<String, Level>) {
+        for outcome in items.iter_mut() {
+            if !matches!(
+                outcome.action,
+                CopyAction::Created { .. } | CopyAction::Updated { .. }
+            ) {
+                continue;
+            }
+            let Some(landed) = outcome.destination().cloned() else {
+                continue;
+            };
+            let (Some(level), Ok(destination)) = (
+                levels.get(&landed.to_string()),
+                self.writable(&landed.source),
+            ) else {
+                continue;
+            };
+            let answered = match level {
+                Level::Task => destination.source().written_task(&landed.native).await,
+                Level::Project | Level::Document => None,
+            };
+            let version = match &answered {
+                Some(task) => task.version.clone(),
+                None => {
+                    destination
+                        .source()
+                        .written_version(level.record(), &landed.native)
+                        .await
+                }
+            };
+            if let Some(result) = outcome.expected.result.as_mut() {
+                if let Some(task) = answered {
+                    result.status = Some(task.status);
+                    result.priority = Some(task.priority);
+                }
+                result.version = version.or_else(|| result.version.take());
+            }
+        }
     }
 
     /// Write every deferred item again, now that every destination id is known.
@@ -4378,6 +4432,7 @@ impl Engine {
                 orphans.push(CopyOutcome {
                     status_condition: None,
                     priority_condition: None,
+                    held: None,
                     expected: ExpectedWrite::default(),
                     source: origin,
                     action: CopyAction::Orphaned {
@@ -4481,6 +4536,7 @@ impl Engine {
                         let mut outcome = failed(item.source.clone(), &error);
                         outcome.status_condition = item.status_condition;
                         outcome.priority_condition = item.priority_condition;
+                        outcome.held = item.held.as_ref().map(|held| item_result(&held.item));
                         left_out.push((index, outcome));
                     }
                 }
@@ -6438,6 +6494,7 @@ impl Engine {
                 return Err(EngineError::TargetTaskOrigin {
                     target: target.clone(),
                     item: id.clone(),
+                    held: Some(Box::new(item_result(&held.item))),
                 });
             }
             return Ok((
@@ -6760,16 +6817,26 @@ impl Engine {
             expected: ExpectedWrite::default(),
             status_condition: item.status_condition,
             priority_condition: item.priority_condition,
+            held: None,
         };
         // The one read of the destination item, made where its target was found, used to
         // decide whether the write changes anything and — if the copy cannot finish — to
         // put that item back.
         let prior = item.held.clone();
         let qualified = |native: NativeId| GlobalId::new(destination.name().clone(), native);
+        // What an item the copy found already reading as it does holds: what the read before
+        // the copy held, since nothing was written to it.
+        let as_held = |outcome: CopyOutcome| match &prior {
+            Some(held) if !request.dry_run => with_result(outcome, item_result(&held.item)),
+            _ => outcome,
+        };
         if item.skipped
             && let Some(id) = &target
         {
-            return Ok((outcome(reached(Some(qualified(id.clone())), false)), prior));
+            return Ok((
+                as_held(outcome(reached(Some(qualified(id.clone())), false))),
+                prior,
+            ));
         }
         let edges = resolved(edges);
         let comments_move = item
@@ -6812,7 +6879,10 @@ impl Engine {
             && !changed
             && !rerecord
         {
-            return Ok((outcome(reached(Some(qualified(id.clone())), false)), prior));
+            return Ok((
+                as_held(outcome(reached(Some(qualified(id.clone())), false))),
+                prior,
+            ));
         }
         if request.dry_run {
             // Null only for a create here: nothing was created, so there is no id to report.
@@ -6824,6 +6894,22 @@ impl Engine {
             Some(_) => Stamping::Never,
             None => Stamping::of(request, rerecord),
         };
+        // What the item holds once written, as the copy sent it and the destination reads a
+        // status back: refined from the destination's own answers once the whole copy is done.
+        let mut sent = item_result(&as_written(
+            destination,
+            item,
+            outgoing(
+                item,
+                target.clone().unwrap_or_else(|| item.item.id().clone()),
+                project.clone(),
+                &recorded(item, prior.as_ref()),
+                delivers,
+                prior.as_ref(),
+            ),
+        ));
+        // The token `outgoing` carries is the source's; the destination's is not known yet.
+        sent.version = None;
         let written = self
             .write(
                 destination,
@@ -6845,7 +6931,7 @@ impl Engine {
         }
         let mut landed = outcome(reached(Some(written), changed));
         landed.expected = expected;
-        Ok((landed, prior))
+        Ok((with_result(landed, sent), prior))
     }
 
     /// Make one destination task's comments what `plan` decided, recording how to take each
@@ -9254,6 +9340,36 @@ fn described(item: &Item) -> (&str, &BTreeMap<String, Value>) {
 /// item this copy creates: that list is the store's to keep, at the destination. The
 /// `onetaskgraph.copies` link is kept on the same terms: it says where the *destination*
 /// item was copied to, which is the destination's to hold, never the source's to send.
+/// What `item` holds, at the version it carries: a task's status and priority, a project's
+/// status, and a document's neither.
+fn item_result(item: &Item) -> WriteResult {
+    match item {
+        Item::Task(task) => WriteResult::of_task(task, task.version.clone()),
+        Item::Project(project) => WriteResult {
+            version: project.version.clone(),
+            parts: None,
+            status: Some(project.status.clone()),
+            priority: None,
+        },
+        Item::Document(document) => WriteResult {
+            version: document.version.clone(),
+            parts: None,
+            status: None,
+            priority: None,
+        },
+    }
+}
+
+/// `outcome` reporting `result` as what its item holds, beside what an expected write's own
+/// result already says of its parts.
+fn with_result(mut outcome: CopyOutcome, result: WriteResult) -> CopyOutcome {
+    outcome.expected.result = Some(match outcome.expected.result.take() {
+        Some(expected) => expected.merged(result),
+        None => result,
+    });
+    outcome
+}
+
 /// Decide each task's conditions on the counterpart it updates from the copy's own read of
 /// that counterpart, before anything is written: record what each found, turn an item whose
 /// status is unmet under `--otherwise preserve-destination` into one that keeps its status, and

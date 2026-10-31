@@ -13420,6 +13420,29 @@ impl TaskSource for GitHubProjectsSource {
             .map(Some)
             .map_err(|message| SourceError::Malformed { message })
     }
+    /// The task as this process's own latest write of it left it, from the item it recorded
+    /// that write as — never a request. Its `version` is always `None`: a board's change token
+    /// is given only once an item has gone unchanged for [`change_token::SETTLED`], which an
+    /// item this command has just written has not, so no write's own answer can vouch for one.
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        let held = self
+            .created()
+            .ok()?
+            .iter()
+            .find(|held| held.id == *id)
+            .cloned()
+            .or_else(|| {
+                self.updated()
+                    .ok()?
+                    .iter()
+                    .find(|held| held.id == *id)
+                    .cloned()
+            })?;
+        let mut task = held.task().ok()?;
+        task.version = None;
+        Some(task)
+    }
+
     /// Why `creation_owners` refuses a create of `target`, by [`Self::creation_rule`] — read
     /// only when the list is not empty, so a source restricting nothing reads nothing.
     async fn creation_refusal(

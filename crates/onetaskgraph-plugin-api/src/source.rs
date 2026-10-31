@@ -1399,6 +1399,27 @@ pub trait TaskSource: Send + Sync {
         None
     }
 
+    /// The task `id` as this source holds it after its latest write of it in the current
+    /// command, when what that write sent and was answered with says so — its status, its
+    /// priority and its change token among the rest.
+    ///
+    /// Answered without a request to a remote party: a hosted source answers from the
+    /// responses its own write already received, and a source on this machine from what it
+    /// wrote. Its `version` is `None` where those responses cannot vouch for a token the next
+    /// read would give. A caller treats `None` as not knowing. Defaulted to `None`.
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        let _ = id;
+        None
+    }
+
+    /// The change token the `record` `id` holds after this source's latest write of it in the
+    /// current command, on the terms [`Self::written_task`] answers a task's — `None` where the
+    /// write's own responses cannot vouch for one. Defaulted to `None`.
+    async fn written_version(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        let _ = (record, id);
+        None
+    }
+
     /// Add one comment to `task`, answering with the comment as the source now holds it, or
     /// `None` when this source holds no such task.
     ///
