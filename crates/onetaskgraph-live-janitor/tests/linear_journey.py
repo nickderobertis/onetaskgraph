@@ -495,12 +495,14 @@ class LeaseTeam:
             case LeaseRead():
                 self.reads.append(request.id)
                 title = self.issues.get(request.id)
-                if self.fault is LeaseFault.UNIDENTIFIED_READ:
-                    return {'data': {'issue': {'title': title}}}
-                if self.fault is LeaseFault.NO_ISSUE:
-                    return {'data': {}}
-                issue: LeaseIssue | None = None if title is None else LeaseIssue(id=request.id, title=title)
-                return {'data': {'issue': issue}}
+                match self.fault:
+                    case LeaseFault.UNIDENTIFIED_READ:
+                        return {'data': {'issue': {'title': title}}}
+                    case LeaseFault.NO_ISSUE:
+                        return {'data': {}}
+                    case _:
+                        issue: LeaseIssue | None = None if title is None else LeaseIssue(id=request.id, title=title)
+                        return {'data': {'issue': issue}}
 
 
 class LeaseJourneys(unittest.TestCase):
