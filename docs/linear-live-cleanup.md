@@ -21,7 +21,10 @@ A lease is a Linear issue in the nominated team
 from the member and its generation (`tests/document_lifecycle/lease.rs`). Linear refuses
 a create under an id it already holds, trashed or not, so of every claimant of one
 generation exactly one wins, and which one did is read back off the issue, never inferred
-from the create's answer. The next generation may be claimed once the newest is released
+from the create's answer. Every claim in CI then asks Linear to create that id once more and
+requires the refusal, and the lease to read back exactly as claimed, before anything is done
+over the member, so a Linear that stopped refusing would fail the lane rather than let two
+runs share a member. The next generation may be claimed once the newest is released
 — every lane releases on its way out, failures included — or was claimed more than six
 and a half hours ago: no GitHub-hosted job runs longer than six hours, so such a lease
 belongs to a run that has ended. A claim that finds every member held is refused, naming
