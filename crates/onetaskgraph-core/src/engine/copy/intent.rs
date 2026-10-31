@@ -423,7 +423,7 @@ pub(crate) fn stop_at(point: &str) {
 /// interleaved exactly as a race would interleave them: `OTG_TEST_PAUSE_AT` naming
 /// `<point>=<directory>` pairs, comma-separated. The points are `before-intent`, `intent-read`,
 /// `after-create`, `guarded-write` — before the renewal a write request asks for inside a plugin
-/// call that owns a create — and `before-comment-<n>`, before the comment write numbered `n`
+/// call that owns a create, and `guarded-write-<n>` before the one numbered `n` from 0 — and `before-comment-<n>`, before the comment write numbered `n`
 /// from 0. At a named point the copy creates `<directory>/<point>.paused` and waits until
 /// `<directory>/<point>.go` exists, a minute at most.
 /// Unset, as everywhere but those journeys, it does nothing.

@@ -2516,8 +2516,11 @@ impl Engine {
         let (asks, mut asked) = tokio::sync::mpsc::unbounded_channel::<Ask>();
         let mut refusal: Option<EngineError> = None;
         let serve = async {
+            let mut asks = 0_usize;
             while let Some(answer) = asked.recv().await {
                 intent::pause_at("guarded-write");
+                intent::pause_at(&format!("guarded-write-{asks}"));
+                asks += 1;
                 if refusal.is_none() {
                     for (level, item, to) in &owned {
                         if let Err(error) = self.renew_intent(*level, item, to).await {

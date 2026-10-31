@@ -3244,3 +3244,114 @@ fn live_asset_forwarding_transport_counts_created_then_deleted_documents() {
     assert_eq!(recorded["operations"].as_array().unwrap().len(), 1);
     assert_eq!(recorded["completed"], true);
 }
+
+/// The note's intent for `dest`, read off the file of the task `id` names: its attempt.
+fn intent_attempt(journey: &Journey, id: &str) -> Option<String> {
+    let native = id.split_once(':').map_or(id, |(_, native)| native);
+    let text = std::fs::read_to_string(
+        journey
+            .sandbox
+            .subdirectory("notes")
+            .join(format!("tasks/{native}.md")),
+    )
+    .ok()?;
+    let line = text
+        .lines()
+        .find(|line| line.contains("onetaskgraph.creating"))?;
+    let value: Value = serde_json::from_str(line.split_once(':')?.1.trim()).ok()?;
+    value["dest"]["attempt"].as_str().map(str::to_owned)
+}
+
+#[test]
+fn a_copy_that_loses_its_create_before_an_upload_or_its_retry_sends_no_further_upload() {
+    // Before the first upload's `fileUpload` (the first write the call asks for), and before the
+    // retry of a `PUT` Linear's storage refused once (the third).
+    for (point, refused_put, uploaded) in [
+        ("guarded-write-0", false, (0, 0, 0)),
+        ("guarded-write-2", true, (1, 0, 0)),
+    ] {
+        let journey = Journey::new();
+        let notes = journey.sandbox.subdirectory("notes");
+        // The folder leases its intents for a second, so another copy may take one over.
+        journey.sandbox.project_document(&document(&json!({
+            "notes": {"plugin": "local-md", "config": {"root": notes}, "create_lease_seconds": 1},
+            "dest": {"plugin": "linear", "config": journey.config},
+        })));
+        let (id, _) = journey.create("task", 1);
+        if refused_put {
+            journey.workspace.state.lock().unwrap().fail = Some(("PUT", 1, 429));
+        }
+        let paused = journey.sandbox.subdirectory("paused");
+        let first = journey
+            .sandbox
+            .subprocess(onetaskgraph_e2e_support::binary())
+            .envs(journey.workspace.clock.client_env(0))
+            .env("OTG_TEST_PAUSE_AT", format!("{point}={}", paused.display()))
+            .args(["--json", "task", "copy", &id, "--to", "dest"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("a copy starts");
+        let started = std::time::Instant::now();
+        while !paused.join(format!("{point}.paused")).exists() {
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "{point}: the copy paused"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(
+            journey.workspace.counts(),
+            uploaded,
+            "{point}: before the loss"
+        );
+        let holder = intent_attempt(&journey, &id).expect("the first copy's intent");
+        std::thread::sleep(Duration::from_millis(1500));
+        // A second copy takes the create over, then dies.
+        let second = journey
+            .sandbox
+            .command()
+            .env("OTG_TEST_STOP_AT", "after-intent")
+            .args(["task", "copy", &id, "--to", "dest"])
+            .output()
+            .expect("a second copy");
+        assert_eq!(
+            second.status.code(),
+            Some(86),
+            "{point}: {}",
+            stderr(&second)
+        );
+        let taker = intent_attempt(&journey, &id).expect("the second copy's intent");
+        assert_ne!(taker, holder, "{point}");
+
+        std::fs::write(paused.join(format!("{point}.go")), b"").expect("released");
+        let output = first.wait_with_output().expect("the copy ends");
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "{point}: {}",
+            stdout(&output)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("create-in-progress"),
+            "{point}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        // No `fileUpload`, no `PUT` — first or retried — and no create after the loss.
+        assert_eq!(
+            journey.workspace.counts(),
+            uploaded,
+            "{point}: after the loss"
+        );
+        assert!(
+            !journey
+                .workspace
+                .held
+                .served()
+                .iter()
+                .any(|(query, _)| query.contains("issueCreate(")),
+            "{point}: no create"
+        );
+        assert_eq!(intent_attempt(&journey, &id), Some(taker), "{point}");
+    }
+}
