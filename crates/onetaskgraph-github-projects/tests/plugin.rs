@@ -579,6 +579,9 @@ impl HeldComment {
 
 /// Everything the fixture remembers between requests.
 struct State {
+    /// Every run board a live session copied from the template, by title, and whether that
+    /// session has since deleted it. This double holds one board, so one is live at a time.
+    run_boards: Vec<(String, bool)>,
     items: Vec<Item>,
     /// Every comment on every issue this board holds, oldest first.
     comments: Vec<HeldComment>,
@@ -1340,6 +1343,7 @@ fn board(items: Vec<Item>) -> Fixture {
 
 fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixture {
     let state = Arc::new(Mutex::new(State {
+        run_boards: Vec::new(),
         items,
         comments: Vec::new(),
         comment_ticks: 0,
@@ -2935,6 +2939,46 @@ fn answer_a_session_call(
         board::answer_a_stateless_session_call(query, variables, Pricing::AsComputed)
     {
         return Some(answered);
+    }
+    // The live session's own board: the template (#6) it copies, the copy (#7) it then
+    // works on — the board this double holds — and the copy's deletion at its end.
+    if query.contains("query LiveTemplate(") {
+        assert_eq!(variables["owner"], json!("octo-org"));
+        assert_eq!(variables["number"], json!(6));
+        return Some(json!({"repositoryOwner":{"id":"U_octo","projectV2":{"id":"PVT_template"}}}));
+    }
+    if query.contains("mutation LiveCopyBoard(") {
+        assert_eq!(input["projectId"], json!("PVT_template"));
+        assert_eq!(input["ownerId"], json!("U_octo"));
+        assert_eq!(input["includeDraftIssues"], json!(true));
+        let title = input["title"].as_str().unwrap().to_owned();
+        assert!(
+            onetaskgraph_github_live::run_board_stamp(&title).is_some(),
+            "{title}"
+        );
+        assert!(
+            state.run_boards.iter().all(|(_, deleted)| *deleted),
+            "a session copied a board while another session's copy was live"
+        );
+        state.run_boards.push((title.clone(), false));
+        return Some(
+            json!({"copyProjectV2":{"projectV2":{"id":"PVT_board","number":7,"title":title}}}),
+        );
+    }
+    if query.contains("query LiveRunBoardItems(") {
+        assert_eq!(variables["number"], json!(7));
+        return Some(json!({"repositoryOwner":{"projectV2":{"id":"PVT_board",
+            "items":{"totalCount":state.items.len()}}}}));
+    }
+    if query.contains("mutation LiveDeleteBoard(") {
+        assert_eq!(input["projectId"], json!("PVT_board"));
+        let board = state
+            .run_boards
+            .last_mut()
+            .expect("a board deleted after it was copied");
+        assert!(!board.1, "a run board is deleted once");
+        board.1 = true;
+        return Some(json!({"deleteProjectV2":{"projectV2":{"id":"PVT_board"}}}));
     }
     // The lane's own board metadata lookup, distinct from the production item walk:
     // `graphql::BOARD` reaches `repositoryOwner` too, and answering it here would hand the
@@ -14911,15 +14955,17 @@ async fn a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_say
         settle: std::time::Duration::ZERO,
         fixture_wait: journey::STAND_IN_FIXTURE_WAIT,
     });
+    // Board #6 is the template the session copies; the copy it works on is #7, which is the
+    // board this double holds.
     journey::run(journey::Nomination {
         token: "test-token".to_owned(),
         owner: "octo-org".to_owned(),
-        project_number: 7,
+        project_number: 6,
         repository: "acme/work".to_owned(),
         writer: match lane::admit(&|name| match name {
             "GH_PROJECTS_TOKEN" => Some("test-token".to_owned()),
             "GH_PROJECTS_OWNER" => Some("octo-org".to_owned()),
-            "GH_PROJECTS_NUMBER" => Some("7".to_owned()),
+            "GH_PROJECTS_NUMBER" => Some("6".to_owned()),
             "GH_PROJECTS_REPOSITORY" => Some("acme/work".to_owned()),
             "GITHUB_ACTIONS" => Some("true".to_owned()),
             "GITHUB_RUN_ID" => Some("37616803489".to_owned()),
@@ -22018,6 +22064,13 @@ fn live_pair_fixture_child() {
     std::fs::rename(&staged, &ready).unwrap();
     let mut done = String::new();
     std::io::stdin().read_to_string(&mut done).unwrap();
+    // Every board a session copied for itself is gone by the time the pair is done with it,
+    // whichever way that session ended.
+    let boards = fixture.state.lock().unwrap().run_boards.clone();
+    assert!(
+        boards.iter().all(|(_, deleted)| *deleted),
+        "a live session left its board copy behind: {boards:?}"
+    );
     // Measured here, by the board, from when its search first left the task out: the journey's
     // own account of how long it waited is what is being checked, so it is not the evidence.
     if fixture.state.lock().unwrap().search_withheld.is_some() {

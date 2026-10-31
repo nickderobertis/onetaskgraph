@@ -304,6 +304,15 @@ github-workflows-check:
 linear-document-creation:
     @{{nx}} run-many -t live-documents --projects onetaskgraph-linear,onetaskgraph-linear-e2e --parallel=1
 
+# The operator's one-time setup of the GitHub board every live session copies:
+# `just github-live-template dry-run` reports how many draft items the nominated board holds
+# and what filling would add, writing nothing; `just github-live-template fill` adds draft
+# items until it holds the sessions' minimum, and a second run adds nothing. Needs
+# GH_PROJECTS_TOKEN, GH_PROJECTS_OWNER, GH_PROJECTS_NUMBER and GH_PROJECTS_REPOSITORY; it
+# writes to that board.
+github-live-template action:
+    @ONETASKGRAPH_GITHUB_TEMPLATE={{action}} GITHUB_LIVE_SELECTION=run cargo test --quiet -p onetaskgraph-github-projects --all-features --locked --test live -- real_projects_v2_contract_writes_and_leaves_no_residue --exact --nocapture
+
 # The operator's one-time setup of the standing Linear slot pool both live lanes lease from:
 # `just linear-document-pool dry-run` prints, member by member, what it would create and
 # sends no mutation; `just linear-document-pool initialize` creates every missing slot of

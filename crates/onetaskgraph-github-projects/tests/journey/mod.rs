@@ -19,6 +19,7 @@
 
 pub mod budget;
 pub mod quota;
+pub mod run_board;
 
 use std::{
     collections::BTreeMap,
@@ -314,6 +315,10 @@ async fn graphql_answer_at(
     variables: Value,
     attempt: u32,
 ) -> Result<Value, Refusal> {
+    // Held to this session's own board before anything is sent: see `run_board`.
+    if let Err(refusal) = run_board::admit(query, &variables) {
+        return Err(Refusal::Answered(refusal, None));
+    }
     let priced = SESSION.priced_document(query);
     let query = priced.as_ref();
     let sending =
@@ -370,6 +375,9 @@ async fn graphql_answer_at(
         }
     };
     let parsed = serde_json::from_str::<Value>(&body);
+    if let Ok(answer) = &parsed {
+        run_board::learn(answer);
+    }
     // An actual alias is selected separately from the hypothetical reconciliation price.
     let reported_cost = parsed.as_ref().ok().and_then(|response| {
         if query.contains("actualCost:rateLimit(dryRun:false)") {
@@ -816,7 +824,7 @@ pub fn dry_run_variables(document: &str) -> Value {
 /// The one board text field this source keeps a copy's origin in.
 const ORIGIN_FIELD: &str = "onetaskgraph.origin";
 
-async fn writable_fields(token: &str, project_id: &str) -> Result<Vec<Value>, String> {
+pub async fn writable_fields(token: &str, project_id: &str) -> Result<Vec<Value>, String> {
     let mut after = Value::Null;
     let mut fields = Vec::new();
     loop {
@@ -863,7 +871,7 @@ async fn writable_fields(token: &str, project_id: &str) -> Result<Vec<Value>, St
 /// `Status` option is called — were two separate walks of the same connection and one
 /// answers both. Nothing this creates can change what the other reads: the `Status` field
 /// was on the board before this ran.
-async fn ensure_origin_field(
+pub async fn ensure_origin_field(
     token: &str,
     project_id: &str,
     fields: &[Value],
@@ -4779,6 +4787,43 @@ pub async fn enter(
     Ok(())
 }
 
+/// The operator's template setup in place of the journey (`just github-live-template`): the
+/// lane's own admission and credential gate, then [`run_board::setup_template`], printed.
+pub async fn enter_template(
+    read: &dyn Fn(&str) -> Option<String>,
+    setup: run_board::TemplateSetup,
+) -> Result<(), String> {
+    let (token, owner, project_number) = match admit(read)? {
+        Admission::Run {
+            token,
+            owner,
+            project_number,
+            ..
+        } => (token, owner, project_number),
+        Admission::Skip(reason) => {
+            return Err(format!("the template setup cannot run: {reason}"));
+        }
+    };
+    let session = onetaskgraph_live::Session::open(
+        crate::lane::SESSION_NAME,
+        token,
+        onetaskgraph_live::Exclusivity::Shared,
+    )
+    .unwrap_or_else(|declined| declined.refuse());
+    let token = session.credential().expose().to_owned();
+    for line in run_board::setup_template(
+        &run_board::main_sender(&token),
+        &owner,
+        project_number,
+        setup,
+    )
+    .await?
+    {
+        say(&line);
+    }
+    Ok(())
+}
+
 /// Drives the whole session — schema verification, board and field lookups, every declared
 /// capability, this run's own cleanup and the orphan sweep — against whatever [`Endpoints`]
 /// names.
@@ -4857,6 +4902,19 @@ pub async fn run(nomination: Nomination) {
     )
     .await
     .unwrap_or_else(|declined| declined.refuse());
+    // The nominated board is the template; this session works on a copy of its own, which
+    // every request below is held to and which is deleted however the session ends.
+    let template = project_number;
+    let board = run_board::copy(
+        &run_board::main_sender(&token),
+        &owner,
+        template,
+        &writer.stamp(stamp_micros),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("the GitHub Projects live lane cannot copy its board: {error}"));
+    let board_guard = run_board::Guard::new(&token, &board);
+    let project_number = board.number;
     let source = onetaskgraph_github_projects::Plugin
         .build_recording_into(
             &SourceName::new("github-live").unwrap(),
@@ -5041,14 +5099,10 @@ pub async fn run(nomination: Nomination) {
             )
             .await
             .map_err(|declined| declined.to_string());
-            let mine = remove_live_state(
-                &token,
-                &project_id,
-                &repository,
-                &run.own,
-                origin_field_created,
-            )
-            .await;
+            // The board's own items and fields go with the board; its issues and labels live
+            // in the scratch repository and go by this run's stamp.
+            let _ = origin_field_created;
+            let mine = remove_live_state(&token, &project_id, &repository, &run.own, false).await;
             // Made as this process's machine run whichever stamp it wrote: what it can
             // recover is a machine-stamped orphan of THIS machine, and on a fresh hosted
             // runner that is none.
@@ -5070,7 +5124,10 @@ pub async fn run(nomination: Nomination) {
                 &Sweep::of(Run::current(), now_micros()),
             )
             .await;
+            let deleted = run_board::delete(&run_board::main_sender(&token), &board).await;
+            board_guard.deleted();
             let mine = mine
+                .and(deleted)
                 .and(cleanup_telemetry)
                 .and(orphan_telemetry)
                 .and(cleanup_budget)

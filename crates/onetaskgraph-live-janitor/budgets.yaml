@@ -10,7 +10,9 @@ budgets:
     command: [cargo, test, --quiet, -p, onetaskgraph-live-janitor, --all-features, --locked, --test, journeys, --, budget_runner::report, --exact, --nocapture]
     unit: requests
     direction: max
-    # Basis: 1 allowance + 2 scratch listings + 1 board page + 2 status reads
-    # + 13 writes (6 items, 6 issues, 1 label) = 19 requests, with one headroom.
-    threshold: 20
+    # Basis: 1 allowance + 2 scratch listings + 1 board page + 1 run-board page + 2 status
+    # reads + 13 writes (6 items, 6 issues, 1 label) = 20 requests, with one headroom. The
+    # run-board page is the listing of sessions' own board copies, added when each live
+    # session began working on a copy of board #1 rather than on board #1 itself.
+    threshold: 21
     timeout_seconds: 1800

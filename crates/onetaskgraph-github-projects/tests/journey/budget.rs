@@ -566,14 +566,18 @@ const DESIGN: Design = Design {
     admission: 3,
     schema: 10,
     reconciliation: 20,
-    setup: 14,
+    // 14 for the fixture, plus 8 for the session's own board: the template lookup, the copy,
+    // and up to six item-count reads while GitHub copies the template's draft items.
+    setup: 22,
     capabilities: 42,
     comments: 12,
     tokens: 60,
     facets: 46,
     cleanup: 15,
     orphans: 2,
-    assets: 85,
+    // 85 for the copies, plus 6 for the asset session's own board: the template lookup, the
+    // copy, up to three item-count reads and the deletion.
+    assets: 91,
     observations: 18,
 };
 

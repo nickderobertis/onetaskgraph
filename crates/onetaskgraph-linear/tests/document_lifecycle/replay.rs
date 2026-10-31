@@ -46,6 +46,10 @@ pub struct State {
     pub documents_ever: usize,
     /// Ids Linear still holds in its trash: a create naming one is refused like a live one.
     pub trashed: std::collections::BTreeSet<String>,
+    /// Linear's hourly request quota for one key, which every session of every run shares: a
+    /// request past it is refused `RATELIMITED`, as Linear refuses it, and counted here.
+    pub request_limit: Option<usize>,
+    pub rate_limited: usize,
     serial: usize,
     rewrites: BTreeMap<String, String>,
 }
@@ -136,6 +140,20 @@ impl Replay {
                 let (key, request) = read(&mut stream);
                 let mut state = serving.lock().unwrap();
                 state.keyed.push((key, request.clone()));
+                if state
+                    .request_limit
+                    .is_some_and(|limit| state.keyed.len() > limit)
+                {
+                    state.rate_limited += 1;
+                    drop(state);
+                    let body = json!({"errors":[{"message":"Rate limit exceeded","extensions":{"code":"RATELIMITED"}}]}).to_string();
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    continue;
+                }
                 // Linear scores a document before it reads a row and refuses one over its
                 // cap with HTTP 400, so this replay does too, rather than answering it.
                 // A request with no query string fails to parse and is refused the same way.

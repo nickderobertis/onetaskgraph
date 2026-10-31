@@ -3558,6 +3558,8 @@ mod pool {
             let mut state = replay.state.lock().unwrap();
             state.document_limit = Some(LIMIT);
             state.documents_ever = initial;
+            // And the key's hourly request quota, which every run shares.
+            state.request_limit = Some(2_500);
         }
         // Rounds of eight runs at once, each run both lanes, until every member is warm:
         // claims start at a member their holder derives, so rounds spread over the pool.
@@ -3590,6 +3592,12 @@ mod pool {
             let ever = replay.state.lock().unwrap().documents_ever;
             assert!(ever <= LIMIT, "{ever} documents against a limit of {LIMIT}");
         }
+        // Not one request of the four rounds was rate-limited: the lanes' lease and document
+        // work for thirty-two runs fits inside the one key's hour.
+        let state = replay.state.lock().unwrap();
+        assert_eq!(state.rate_limited, 0);
+        assert!(state.keyed.len() <= 2_500, "{} requests", state.keyed.len());
+        drop(state);
         // Every document the four rounds created is a pool member's, made once.
         let created = replay.state.lock().unwrap().documents_ever - initial;
         assert!(created <= pool, "{created} documents for a pool of {pool}");
