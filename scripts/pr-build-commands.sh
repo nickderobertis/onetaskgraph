@@ -4,7 +4,10 @@
 # commands from its project.json, with --no-run, and what a scripts/live-crate-test.sh command
 # there builds under ONETASKGRAPH_TESTS_UNDER_COVERAGE=1; the instrumented run scripts/rust-coverage.sh
 # makes of each crate, with a filter selecting no test (cargo-llvm-cov refuses --no-report
-# beside --no-run); and the distribution journey's release build.
+# beside --no-run); the crate publication's packaging verification, which release-cd's test 23
+# makes through `cargo publish` in the target directory scripts/release_cd.py names (that
+# directory resolved as cargo resolves it here, and RUSTFLAGS the same -D warnings either way);
+# and the distribution journey's release build.
 #
 #   scripts/pr-build-commands.sh
 #
@@ -30,7 +33,7 @@ case $python_bin in
 esac
 
 "$python_bin" - <<'PY' | tr -d '\r'
-import json, pathlib, re, shlex, sys
+import json, os, pathlib, re, shlex, subprocess, sys
 
 def refuse(path, why):
     sys.exit(f"pr-build-commands: {path}: {why}; next: give its `test` target a `cargo test` command, or teach scripts/pr-build-commands.sh the new shape")
@@ -108,6 +111,17 @@ if not crates:
     sys.exit("pr-build-commands: no crate's test target runs `cargo test`; next: restore the crates' test targets")
 for crate in crates:
     out.append(instrumented.replace('"$CRATE"', crate) + " -E none() --no-tests=pass")
+try:
+    metadata = json.loads(subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
+        check=True, capture_output=True, text=True, encoding="utf-8").stdout)
+except (OSError, subprocess.CalledProcessError, ValueError) as error:
+    sys.exit(f"pr-build-commands: cargo metadata failed ({error}); next: run 'cargo metadata --no-deps' and fix what it reports")
+published = [package["name"] for package in metadata["packages"] if package.get("publish") != []]
+if published:
+    target = os.environ.get("CARGO_TARGET_DIR") or str(pathlib.Path.cwd() / "target")
+    selection = " ".join(f"-p {crate}" for crate in published)
+    out.append(f"cargo package {selection} --locked --allow-dirty --target-dir {target}/crate-publication")
 out.append("bash scripts/test-distribution.sh --release-build-only")
 # llmlint: ignore[tool_output_is_signal] Standard output is this script's machine-read interface: the two checks that call it read one build command per line.
 print("\n".join(out))

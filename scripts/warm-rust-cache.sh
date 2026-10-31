@@ -17,6 +17,10 @@
 #   crates' `test` targets build them;
 #   with --instrumented (Linux), the same under cargo-llvm-cov, exactly as
 #   scripts/rust-coverage.sh builds them, with a filter that selects no test;
+#   with --instrumented (Linux), the crate publication's packaging verification: every
+#   publishable crate packaged and built from its packaged sources, under the RUSTFLAGS and in
+#   the target directory scripts/release_cd.py gives `cargo publish`, as release-cd's test 23
+#   on test-linux makes it;
 #   the distribution journey's release build, by its own --release-build-only.
 set -euo pipefail
 
@@ -71,6 +75,20 @@ for crate in $crates; do
       || fatal "building $crate's instrumented test units failed" "$next"
   fi
 done
+
+if "$instrumented"; then
+  published="$(cargo metadata --no-deps --format-version 1 --locked \
+    | python3 -c 'import json, sys
+print("\n".join(package["name"] for package in json.load(sys.stdin)["packages"] if package.get("publish") != []))' \
+    | tr -d '\r')" || fatal "could not list the workspace's publishable crates" "run 'cargo metadata --no-deps' and fix what it reports"
+  if [ -n "$published" ]; then
+    selection=()
+    for crate in $published; do selection+=(-p "$crate"); done
+    RUSTFLAGS="-D warnings" cargo package "${selection[@]}" --locked --allow-dirty \
+      --target-dir "${CARGO_TARGET_DIR:-$ROOT/target}/crate-publication" \
+      || fatal "the crate publication's packaging verification failed" "$next"
+  fi
+fi
 
 bash scripts/test-distribution.sh --release-build-only \
   || fatal "the distribution journey's release build failed" "$next"
