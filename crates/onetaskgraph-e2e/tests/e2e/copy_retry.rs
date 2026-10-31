@@ -43,7 +43,7 @@ impl Stores {
         std::fs::create_dir_all(folder.join("tasks")).expect("the task folder");
         sandbox.project_document(&document(&json!({
             "board": {"plugin": "github-projects", "config": board_config,
-                      "create_quiescence_seconds": 1},
+                      "create_quiescence_seconds": 2},
             "linear": {"plugin": "linear", "config": linear_config},
             // A lease of a second, so a retry of a killed copy takes over after a short wait.
             "notes": {"plugin": "local-md", "config": {"root": notes},
@@ -279,4 +279,165 @@ fn the_intent_key_is_refused_to_a_metadata_set() {
     assert_ne!(output.status.code(), Some(0));
     let _ = &stores.folder;
     let _ = &stores.linear;
+}
+
+/// Whether a request is the board's create of an issue.
+fn creates_issue(document: &str, _: &Value) -> bool {
+    document.contains("createIssue(input:$input)")
+}
+
+/// Whether a request lists a repository's issues by creation, as a lookup by create key does.
+fn lists_by_key(document: &str, _: &Value) -> bool {
+    document == onetaskgraph_github_projects::graphql::ISSUES_BY_CREATION
+}
+
+/// How many requests of the board's log `matches` holds of.
+fn count(board: &GitHubBoardFields, matches: fn(&str, &Value) -> bool) -> usize {
+    board
+        .served()
+        .iter()
+        .filter(|(document, variables)| matches(document, variables))
+        .count()
+}
+
+/// The board's first copy of the note, its `createIssue` answer dropped and the issue it made
+/// left out of `Repository.issues`: an earlier attempt whose create ran and is not listed yet.
+fn unlisted_first_attempt(stores: &Stores) -> String {
+    stores.board.unlist_new_issues(true);
+    stores.board.drop_response_once("createIssue");
+    let failed = stores.run(&["task", "copy", NOTE, "--to", "board"], None);
+    assert_ne!(failed.status.code(), Some(0), "{}", stderr(&failed));
+    stores.board.unlist_new_issues(false);
+    let made = stores.board.items_titled("Task A");
+    assert_eq!(made.len(), 1, "the first attempt's issue: {made:?}");
+    made[0].clone()
+}
+
+#[test]
+fn a_retry_waits_for_an_earlier_issue_listed_within_the_window_and_creates_nothing() {
+    let stores = Stores::new();
+    let first = unlisted_first_attempt(&stores);
+    // Listed once the retry's first lookup has answered without it, within the window.
+    let board = stores.board.clone();
+    let listed = first.clone();
+    stores
+        .board
+        .after_request(lists_by_key, 0, move |_| board.list_issue(&listed));
+    let creates = count(&stores.board, creates_issue);
+    let lookups = count(&stores.board, lists_by_key);
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "board"]);
+    assert_eq!(copied["items"][0]["via"], "intent", "{copied:#}");
+    assert_eq!(
+        count(&stores.board, creates_issue),
+        creates,
+        "nothing created"
+    );
+    assert_eq!(
+        count(&stores.board, lists_by_key) - lookups,
+        2,
+        "one lookup, then one after the wait"
+    );
+    assert_eq!(stores.board.items_titled("Task A"), vec![first]);
+    let metadata = stores.source_metadata();
+    assert!(
+        metadata.get("onetaskgraph.creating").is_none(),
+        "{metadata:#}"
+    );
+    assert!(metadata["onetaskgraph.copies"]["board"].is_string());
+}
+
+#[test]
+fn an_earlier_issue_listed_after_the_window_and_before_the_relist_is_refused_as_a_duplicate() {
+    let stores = Stores::new();
+    let first = unlisted_first_attempt(&stores);
+    // Listed only once the retry has created again: its relist by key sees both.
+    let board = stores.board.clone();
+    let listed = first.clone();
+    stores
+        .board
+        .after_request(creates_issue, 0, move |_| board.list_issue(&listed));
+    let output = stores.run(&["--json", "task", "copy", NOTE, "--to", "board"], None);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let report: Value = serde_json::from_str(&stdout(&output)).expect("a report");
+    let outcome = &report["items"][0];
+    assert_eq!(outcome["error"]["kind"], "create-duplicated", "{report:#}");
+    let message = outcome["error"]["message"].as_str().unwrap();
+    let issues = stores.board.items_titled("Task A");
+    assert_eq!(issues.len(), 2, "{issues:?}");
+    for issue in &issues {
+        assert!(message.contains(issue.as_str()), "names {issue}: {message}");
+    }
+    let metadata = stores.source_metadata();
+    assert!(
+        metadata.get("onetaskgraph.copies").is_none(),
+        "no link: {metadata:#}"
+    );
+    assert!(
+        metadata["onetaskgraph.creating"]["board"].is_object(),
+        "the intent is left"
+    );
+}
+
+#[test]
+fn an_earlier_issue_listed_only_after_the_relist_is_the_documented_unreported_residual() {
+    let stores = Stores::new();
+    let first = unlisted_first_attempt(&stores);
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "board"]);
+    let outcome = &copied["items"][0];
+    assert_eq!(outcome["action"], "created", "{copied:#}");
+    // The first attempt's issue is listed only now, after every lookup the retry made: two
+    // issues carry the key, the first unannounced. This is the residual the README states;
+    // a change in the boundary turns this red.
+    stores.board.list_issue(&first);
+    assert_eq!(stores.board.items_titled("Task A").len(), 2);
+    let metadata = stores.source_metadata();
+    assert_eq!(
+        metadata["onetaskgraph.copies"]["board"],
+        outcome["destination"]
+    );
+    assert!(metadata.get("onetaskgraph.creating").is_none());
+}
+
+#[test]
+fn a_copy_killed_after_its_create_answered_and_before_its_board_writes_is_finished_by_its_retry() {
+    let stores = Stores::new();
+    // The board holds every request after the create answered until the process is gone.
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let (blocked, waiting) = std::sync::mpsc::channel::<()>();
+    stores.board.after_request(creates_issue, 0, move |_| {
+        let _ = blocked.send(());
+        let _ = held.recv_timeout(std::time::Duration::from_secs(20));
+    });
+    let mut child = stores
+        .sandbox
+        .subprocess(onetaskgraph_e2e_support::binary())
+        .args(["task", "copy", NOTE, "--to", "board"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the copy starts");
+    waiting
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("the create was answered");
+    child.kill().expect("the copy is killed");
+    let _ = child.wait();
+    drop(release);
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert_eq!(stores.board.items_titled("Task A").len(), 1);
+
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "board"]);
+    let outcome = &copied["items"][0];
+    assert_eq!(outcome["via"], "intent", "{copied:#}");
+    assert_eq!(stores.board.items_titled("Task A").len(), 1, "exactly one");
+    let shown = stores.json(&["task", "show", outcome["destination"].as_str().unwrap()]);
+    assert_eq!(
+        shown["items"][0]["item"]["status"]["category"], "todo",
+        "{shown:#}"
+    );
+    let metadata = stores.source_metadata();
+    assert!(metadata.get("onetaskgraph.creating").is_none());
+    assert_eq!(
+        metadata["onetaskgraph.copies"]["board"],
+        outcome["destination"]
+    );
 }

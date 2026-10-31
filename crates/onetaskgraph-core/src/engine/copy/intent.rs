@@ -493,10 +493,12 @@ impl Engine {
             if now >= window_end {
                 return Ok(None);
             }
-            // Renewed once, to outlast the whole wait, so no renewal falls during it.
-            self.renew_intent(
+            // Taken over by this attempt — refused while another's lease is live — and leased
+            // once, to outlast the whole wait, so no renewal falls during it.
+            self.take_intent(
                 id,
                 destination.name(),
+                &intent.key,
                 Some(window_end + self.create_settings(&id.source).lease()),
             )
             .await?;
