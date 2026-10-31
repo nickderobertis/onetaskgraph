@@ -718,7 +718,9 @@ reserved keys carry it, neither of which `metadata set` accepts:
   intent. An answer to that write the copy cannot read — a plugin refusing the key as malformed
   parameters, a backend whose answer was garbled — says nothing of whether it wrote, so the item
   is read once more, still under its hold: an intent naming this attempt there is held and settled
-  as any other, and anything else copies with no intent. One whose hold or read of the item fails refuses the copy before any destination
+  as any other, an item holding none there or no longer held copies with no intent, and a read
+  that fails, an entry that is not an intent and another attempt's intent each refuse before any
+  destination write. One whose hold or read of the item fails refuses the copy before any destination
   write. A copy that cannot finish and takes back everything it wrote puts the item back byte
   for byte, or, where it cannot, takes the intent alone off — an item that takes neither keeps it
   for its retry to resolve once the lease runs out; one whose create may have landed unseen — an

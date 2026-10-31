@@ -495,6 +495,39 @@ impl Engine {
         Ok((metadata, hold))
     }
 
+    /// Whether `intent`, written to `id` under an answer the copy could not read, is what `id`
+    /// now records for `destination` — read once, and refused as the read before the write is:
+    /// a read that fails, an entry that is not an intent, and another attempt's intent each
+    /// refuse, since none of them says the create is this copy's to make unprotected. Only an
+    /// item holding no intent there, or no longer held, is one the copy goes on without.
+    async fn intent_landed(
+        &self,
+        source: &ResolvedSource,
+        level: Level,
+        id: &GlobalId,
+        destination: &SourceName,
+        intent: &Intent,
+    ) -> Result<bool, EngineError> {
+        let Some(metadata) = metadata_of(source, level, &id.native)
+            .await
+            .map_err(|error| refused(source, error))?
+        else {
+            return Ok(false);
+        };
+        match self.held_or_refused(source, id, &metadata, destination)? {
+            None => Ok(false),
+            Some(landed) if landed.attempt == intent.attempt && landed.key == intent.key => {
+                Ok(true)
+            }
+            Some(landed) => Err(EngineError::CreateInProgress {
+                item: id.clone(),
+                by: CreateHolder::Lease {
+                    until: landed.lease_until,
+                },
+            }),
+        }
+    }
+
     /// The intent `metadata` records for `destination`, or the refusal of an entry that is not
     /// one.
     pub(crate) fn held_or_refused(
@@ -594,14 +627,10 @@ impl Engine {
                 // namespace wrote nothing, while a backend whose answer was garbled stored the
                 // intent. The item, still under the hold, is read once to say which, so an intent it
                 // holds is settled by the link write rather than left to refuse the next copy.
-                Err(SourceError::Malformed { .. }) => metadata_of(source, level, &id.native)
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|metadata| self::held(&metadata, destination).ok().flatten())
-                    .is_some_and(|landed| {
-                        landed.attempt == intent.attempt && landed.key == intent.key
-                    }),
+                Err(SourceError::Malformed { .. }) => {
+                    self.intent_landed(source, level, id, destination, &intent)
+                        .await?
+                }
                 Err(error) => return Err(refused(source, error)),
             };
         Ok(if kept {

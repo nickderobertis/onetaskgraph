@@ -2510,3 +2510,70 @@ fn a_linear_source_answering_its_intent_write_malformed_has_the_intent_it_stored
     );
     assert_eq!(board_issues_of(&stores, &issue).len(), 1, "still one issue");
 }
+
+/// Have Linear store the intent write and answer it unreadably, then answer the one read the
+/// copy makes to learn whether it landed through `then`, installed once that write is answered.
+fn garble_the_intent_write_then(
+    stores: &Stores,
+    then: impl FnOnce(&LinearWorkspace) + Send + 'static,
+) {
+    stores.linear.bend_answers(
+        |document, _| document == onetaskgraph_linear::graphql::ISSUE_UPDATE,
+        1,
+        |_, data| *data = json!({"issueUpdate": {"success": true, "issue": null}}),
+    );
+    stores.linear.after_request(
+        |document, _| document == onetaskgraph_linear::graphql::ISSUE_UPDATE,
+        0,
+        then,
+    );
+}
+
+/// Assert `output` refused the copy before any board write, leaving the board without the item.
+fn refused_unprotected(stores: &Stores, issue: &str, output: &Output, kind: &str) {
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(output));
+    let answer: Value = serde_json::from_str(&stdout(output)).expect("a failure document");
+    assert_eq!(answer["failure"]["kind"], kind, "{answer:#}");
+    assert!(
+        board_issues_of(stores, issue).is_empty(),
+        "nothing created unprotected"
+    );
+}
+
+#[test]
+fn an_unreadable_intent_write_whose_read_back_fails_refuses_the_copy_before_any_create() {
+    let stores = Stores::new();
+    let issue = a_linear_issue(&stores);
+    garble_the_intent_write_then(&stores, |workspace| {
+        workspace.lose_answer_once(onetaskgraph_linear::graphql::ISSUE);
+    });
+    let output = stores.run(&["--json", "task", "copy", &issue, "--to", "board"], None);
+    refused_unprotected(&stores, &issue, &output, "unavailable");
+}
+
+#[test]
+fn an_unreadable_intent_write_read_back_as_a_malformed_intent_refuses_the_copy_before_any_create() {
+    let stores = Stores::new();
+    let issue = a_linear_issue(&stores);
+    garble_the_intent_write_then(&stores, |workspace| {
+        workspace.bend_answers(
+            |document, _| document == onetaskgraph_linear::graphql::ISSUE,
+            1,
+            |_, data| {
+                let description = data["issue"]["description"].as_str().unwrap_or_default();
+                let bent = description.replacen(
+                    "\"onetaskgraph.creating\":{\"board\":{",
+                    "\"onetaskgraph.creating\":{\"board\":\"not an intent\",\"other\":{",
+                    1,
+                );
+                assert_ne!(
+                    bent, description,
+                    "the slot holds the intent: {description}"
+                );
+                data["issue"]["description"] = json!(bent);
+            },
+        );
+    });
+    let output = stores.run(&["--json", "task", "copy", &issue, "--to", "board"], None);
+    refused_unprotected(&stores, &issue, &output, "malformed");
+}
