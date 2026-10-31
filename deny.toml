@@ -64,6 +64,15 @@ skip = [
   # thiserror 2.
   { crate = "thiserror:1", reason = "reached only through graphql-parser 0.4.1, which was already in this lockfile as a dev-dependency; removable the day graphql-parser moves to thiserror 2, and not before" },
   { crate = "thiserror-impl:1", reason = "the derive half of thiserror 1, reached only through the crate skipped above; removable on the same day and for the same reason" },
+  # Three more, all reached only through `apollo-compiler`, which only the GitHub test doubles
+  # use (`crates/onetaskgraph-github-projects/tests/github_schema`) — never a shipped binary.
+  # It is the maintained, specification-complete GraphQL validator those doubles hold every
+  # request to; a hand-written one kept missing rules. Its diagnostic renderer `ariadne` pins
+  # `concolor`, which is on bitflags 1 and windows-sys 0.45, and its syntax tree `rowan` is on
+  # hashbrown 0.14. Each goes when that crate moves.
+  { crate = "bitflags:1", reason = "reached only through apollo-compiler -> ariadne -> concolor, test-only; removable when concolor moves to bitflags 2" },
+  { crate = "windows-sys:0.45", reason = "reached only through apollo-compiler -> ariadne -> concolor -> concolor-query, test-only; removable when concolor-query moves" },
+  { crate = "hashbrown:0.14", reason = "reached only through apollo-compiler -> rowan, test-only; removable when rowan moves to the hashbrown indexmap uses" },
 ]
 
 # The engine compensates for a missing capability transiently: it holds at most one source

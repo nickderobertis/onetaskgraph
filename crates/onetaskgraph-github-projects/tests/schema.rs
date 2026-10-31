@@ -1096,259 +1096,502 @@ fn the_field_setup_requests_validate_and_the_input_0_12_13_sent_is_refused() {
                 "singleSelectOptions": options}}),
         ),
         Err(vec![
-            "Variable $input of type UpdateProjectV2FieldInput! was provided invalid value for \
-             projectId (Field is not defined on UpdateProjectV2FieldInput)"
-                .to_owned()
+            "Input object has key projectId not in type UpdateProjectV2FieldInput".to_owned()
         ])
     );
 }
 
-/// The doubles refuse a selection GitHub's schema rejects as well as a variable it rejects:
-/// for each rule `github_schema`'s module documentation lists, a request breaking it, each
-/// one GitHub answers with `errors` and runs none of.
+/// Every validation rule of the GraphQL specification's §5, and the coercion of variables in
+/// §6.1.2, each broken by one request that the doubles refuse, as GitHub refuses it: a body of
+/// `errors` alone — no `data` — each error a `message` and, where the document has one, the
+/// `locations` it stands at.
 #[test]
-fn the_schema_check_refuses_a_request_breaking_each_rule_its_documentation_lists() {
+fn the_schema_check_refuses_a_request_breaking_each_validation_rule() {
+    use serde_json::{Value, json};
+
+    // (the rule, the specification's section, the document, its variables, what is answered)
+    let cases: &[(&str, &str, &str, Value, &[&str])] = &[
+        (
+            "document parses",
+            "2",
+            "query{viewer{login}",
+            json!({}),
+            &["syntax error: expected R_CURLY, got EOF"],
+        ),
+        (
+            "executable definitions",
+            "5.1.1",
+            "query{viewer{login}} type Extra{id:ID}",
+            json!({}),
+            &["an executable document must not contain an object type definition"],
+        ),
+        (
+            "operation name uniqueness",
+            "5.2.1.1",
+            "query a{viewer{login}} query a{viewer{name}}",
+            json!({}),
+            &["the operation `a` is defined multiple times in the document"],
+        ),
+        (
+            "lone anonymous operation",
+            "5.2.2.1",
+            "{viewer{login}} query b{viewer{name}}",
+            json!({}),
+            &["anonymous operation cannot be selected when the document contains other operations"],
+        ),
+        // GitHub's schema defines no subscription root, so §5.2.3.1's single root field is
+        // reached only as the operation type it cannot answer.
+        (
+            "operation type is defined",
+            "5.2.3.1",
+            "subscription{a:__typename b:__typename}",
+            json!({}),
+            &["`subscription` root operation type is not defined"],
+        ),
+        (
+            "field selections",
+            "5.3.1",
+            "query{viewer{loginName}}",
+            json!({}),
+            &["type `User` does not have a field `loginName`"],
+        ),
+        (
+            "field selections, introspection",
+            "5.3.1",
+            "query{__schema{queryType{nom}}}",
+            json!({}),
+            &["type `__Type` does not have a field `nom`"],
+        ),
+        (
+            "field selection merging, aliases",
+            "5.3.2",
+            "query{viewer{x:login x:name}}",
+            json!({}),
+            &[
+                "operation must not select different types using the same name `x`",
+                "cannot select different fields into the same alias `x`",
+            ],
+        ),
+        (
+            "field selection merging, arguments",
+            "5.3.2",
+            "query{viewer{repositories(first:1){totalCount} repositories(first:2){totalCount}}}",
+            json!({}),
+            &[
+                "operation must not provide conflicting field arguments for the same name `repositories`",
+            ],
+        ),
+        (
+            "field selection merging, nested",
+            "5.3.2",
+            "query{viewer{r:repositories(first:1){nodes{a:name}} r:repositories(first:1){nodes{a:id}}}}",
+            json!({}),
+            &[
+                "operation must not select different types using the same name `a`",
+                "cannot select different fields into the same alias `a`",
+            ],
+        ),
+        (
+            "field selection merging, exclusive fragments",
+            "5.3.2",
+            "query($id:ID!){node(id:$id){... on Issue{x:title} ... on PullRequest{x:number}}}",
+            json!({"id": "I_1"}),
+            &["operation must not select different types using the same name `x`"],
+        ),
+        (
+            "leaf field selections, scalar",
+            "5.3.3",
+            "query{viewer{login{name}}}",
+            json!({}),
+            &["field selection of scalar type `String` must not have subselections"],
+        ),
+        (
+            "leaf field selections, composite",
+            "5.3.3",
+            "query{viewer}",
+            json!({}),
+            &["interface, union and object types must have a subselection set"],
+        ),
+        (
+            "argument names",
+            "5.4.1",
+            "query{viewer{login(first:1)}}",
+            json!({}),
+            &["the argument `first` is not supported by `User.login`"],
+        ),
+        (
+            "argument uniqueness",
+            "5.4.2",
+            "query{node(id:\"A\",id:\"B\"){id}}",
+            json!({}),
+            &["the argument `id` is provided multiple times"],
+        ),
+        (
+            "required arguments",
+            "5.4.2.1",
+            "query{node{id}}",
+            json!({}),
+            &["the required argument `Query.node(id:)` is not provided"],
+        ),
+        (
+            "fragment name uniqueness",
+            "5.5.1.1",
+            "query{viewer{...f}} fragment f on User{name} fragment f on User{login}",
+            json!({}),
+            &["the fragment `f` is defined multiple times in the document"],
+        ),
+        (
+            "fragment spread type existence",
+            "5.5.1.2",
+            "query($id:ID!){node(id:$id){... on Labelled{id}}}",
+            json!({"id": "I_1"}),
+            &["type condition `Labelled` of inline fragment is not a type defined in the schema"],
+        ),
+        (
+            "fragments on composite types",
+            "5.5.1.3",
+            "query{viewer{...f}} fragment f on String{__typename}",
+            json!({}),
+            &["type `String` does not have a field `__typename`"],
+        ),
+        (
+            "fragments must be used",
+            "5.5.1.4",
+            "query{viewer{login}} fragment f on User{name}",
+            json!({}),
+            &["fragment `f` must be used in an operation"],
+        ),
+        (
+            "fragment spread target defined",
+            "5.5.2.1",
+            "query{viewer{...g}}",
+            json!({}),
+            &["cannot find fragment `g` in this document"],
+        ),
+        (
+            "fragment spreads must not form cycles",
+            "5.5.2.2",
+            "query{viewer{...a}} fragment a on User{login ...b} fragment b on User{...a}",
+            json!({}),
+            &["`a` fragment cannot reference itself"],
+        ),
+        (
+            "fragment spread is possible",
+            "5.5.2.3",
+            "query{viewer{... on Issue{title}}}",
+            json!({}),
+            &["inline fragment with type condition `Issue` cannot be applied to `User`"],
+        ),
+        (
+            "values of correct type",
+            "5.6.1",
+            "query{viewer{repositories(first:3000000000){totalCount}}}",
+            json!({}),
+            &["int cannot represent non 32-bit signed integer value"],
+        ),
+        (
+            "input object field names",
+            "5.6.2",
+            "mutation{updateProjectV2Field(input:{fieldId:\"F\",projectId:\"P\"}){clientMutationId}}",
+            json!({}),
+            &["field `projectId` does not exist on `UpdateProjectV2FieldInput`"],
+        ),
+        (
+            "input object field uniqueness",
+            "5.6.3",
+            "mutation{updateProjectV2Field(input:{fieldId:\"F\",fieldId:\"G\"}){clientMutationId}}",
+            json!({}),
+            &["there can be only one input field named `fieldId`"],
+        ),
+        (
+            "input object required fields",
+            "5.6.4",
+            "mutation{updateProjectV2Field(input:{}){clientMutationId}}",
+            json!({}),
+            &["the required field `UpdateProjectV2FieldInput.fieldId` is not provided"],
+        ),
+        (
+            "directives are defined",
+            "5.7.1",
+            "query{viewer{login @nowhere}}",
+            json!({}),
+            &["cannot find directive `@nowhere` in this document"],
+        ),
+        (
+            "directives are in valid locations",
+            "5.7.2",
+            "query @include(if:true){viewer{login}}",
+            json!({}),
+            &["include directive is not supported for QUERY location"],
+        ),
+        (
+            "directives are unique per location",
+            "5.7.3",
+            "query{viewer{login @skip(if:false) @skip(if:false)}}",
+            json!({}),
+            &["non-repeatable directive skip can only be used once per location"],
+        ),
+        (
+            "directive required arguments",
+            "5.4.2.1",
+            "query{viewer{login @skip}}",
+            json!({}),
+            &["the required argument `@skip(if:)` is not provided"],
+        ),
+        (
+            "variable uniqueness",
+            "5.8.1",
+            "query($id:ID!,$id:ID!){node(id:$id){id}}",
+            json!({"id": "I_1"}),
+            &["the variable `$id` is declared multiple times"],
+        ),
+        (
+            "variables are input types",
+            "5.8.2",
+            "query($u:User){viewer{login}}",
+            json!({}),
+            &[
+                "`$u` variable must be of an input type",
+                "unused variable: `$u`",
+            ],
+        ),
+        (
+            "all variable uses defined",
+            "5.8.3",
+            "query{node(id:$id){id}}",
+            json!({}),
+            &["variable `$id` is not defined"],
+        ),
+        (
+            "all variable uses defined, through a fragment",
+            "5.8.3",
+            "query{viewer{...f}} fragment f on User{repositories(first:$n){totalCount}}",
+            json!({}),
+            &["variable `$n` is not defined"],
+        ),
+        (
+            "all variables used",
+            "5.8.4",
+            "query($id:ID!,$unused:Int){node(id:$id){id}}",
+            json!({"id": "I_1"}),
+            &["unused variable: `$unused`"],
+        ),
+        (
+            "all variable usages are allowed, nullability",
+            "5.8.5",
+            "query($id:ID){node(id:$id){id}}",
+            json!({"id": "I_1"}),
+            &["variable `$id` of type `ID` cannot be used for argument `id` of type `ID!`"],
+        ),
+        (
+            "all variable usages are allowed, a null default is no licence",
+            "5.8.5",
+            "query($id:ID = null){node(id:$id){id}}",
+            json!({}),
+            &["variable `$id` of type `ID` cannot be used for argument `id` of type `ID!`"],
+        ),
+        (
+            "all variable usages are allowed, list",
+            "5.8.5",
+            "query($ids:[ID!]!){node(id:$ids){id}}",
+            json!({"ids": ["I_1"]}),
+            &["variable `$ids` of type `[ID!]!` cannot be used for argument `id` of type `ID!`"],
+        ),
+        (
+            "a default is a value of its type",
+            "5.6.1",
+            "query($first:Int = \"ten\"){viewer{repositories(first:$first){totalCount}}}",
+            json!({}),
+            &["expected value of type Int, found a string"],
+        ),
+        (
+            "a default is a constant",
+            "2.10",
+            "query($a:Int,$b:Int=$a){viewer{repositories(first:$b){totalCount}}}",
+            json!({}),
+            &["syntax error: unexpected variable value in a Const context"],
+        ),
+        // §6.1.2, CoerceVariableValues, over each variable's JSON value.
+        (
+            "variables are an object",
+            "7.1.1",
+            "query{viewer{login}}",
+            json!(["not", "an", "object"]),
+            &["Variables must be a JSON object, not [\"not\",\"an\",\"object\"]"],
+        ),
+        (
+            "a required variable is given",
+            "6.1.2",
+            "mutation($input:UpdateProjectV2FieldInput!){updateProjectV2Field(input:$input){clientMutationId}}",
+            json!({}),
+            &["missing value for non-null variable 'input'"],
+        ),
+        (
+            "a variable coerces to its scalar",
+            "6.1.2",
+            "query($first:Int){viewer{repositories(first:$first){totalCount}}}",
+            json!({"first": "ten"}),
+            &["could not coerce variable first: \"ten\" to type Int"],
+        ),
+        (
+            "a variable coerces to its enum",
+            "6.1.2",
+            "mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){clientMutationId}}",
+            json!({"input": {"projectId": "PVT_1", "dataType": "PRIORITY", "name": "Priority"}}),
+            &[
+                "could not coerce input field CreateProjectV2FieldInput.dataType: \"PRIORITY\" to type ProjectV2CustomFieldType",
+            ],
+        ),
+        (
+            "a variable names no input field its type lacks",
+            "6.1.2",
+            "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){clientMutationId}}",
+            json!({"input": {"issueId": "I_1", "projectId": "PVT_1"}}),
+            &["Input object has key projectId not in type DeleteIssueInput"],
+        ),
+        (
+            "a variable gives every required input field",
+            "6.1.2",
+            "mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){clientMutationId}}",
+            json!({"input": {"projectId": "PVT_1", "dataType": "SINGLE_SELECT",
+                "name": "Priority", "singleSelectOptions": [{"name": "High", "color": "GRAY"}]}}),
+            &[
+                "Missing value for non-null input object field ProjectV2SingleSelectFieldOptionInput.description",
+            ],
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (rule, section, document, variables, expected) in cases {
+        let answered = github_schema::refuse(&json!({"query": document, "variables": variables}));
+        let Some(answered) = answered else {
+            wrong.push(format!("§{section} {rule}: {document} was not refused"));
+            continue;
+        };
+        let errors = answered["errors"].as_array().cloned().unwrap_or_default();
+        let messages = errors
+            .iter()
+            .map(|error| error["message"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        if messages != *expected {
+            wrong.push(format!(
+                "§{section} {rule}: {document} answered {messages:?}"
+            ));
+        }
+        let shaped = answered.as_object().is_some_and(|body| body.len() == 1)
+            && errors.iter().all(|error| {
+                error["message"].is_string()
+                    && error.as_object().is_some_and(|fields| {
+                        fields
+                            .keys()
+                            .all(|key| key == "message" || key == "locations")
+                    })
+                    && error.get("locations").is_none_or(|locations| {
+                        locations.as_array().is_some_and(|all| {
+                            all.iter()
+                                .all(|at| at["line"].is_u64() && at["column"].is_u64())
+                        })
+                    })
+            });
+        if !shaped {
+            wrong.push(format!(
+                "§{section} {rule}: {answered} is not GraphQL's error shape"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+
+    // A refusal of a rule broken at a place in the document says where.
+    assert_eq!(
+        github_schema::refuse(&json!({"query": "query{\n  viewer{loginName}}"})),
+        Some(
+            json!({"errors": [{"message": "type `User` does not have a field `loginName`",
+            "locations": [{"line": 2, "column": 10}]}]})
+        )
+    );
+    // And what breaks none of them runs: a nullable variable with a non-null default is allowed
+    // where a non-null one is expected, a list position takes a single value, and a named
+    // operation is chosen by `operationName`.
+    for (document, variables, operation) in [
+        ("query($id:ID = \"I_1\"){node(id:$id){id}}", json!({}), None),
+        (
+            "query($ids:[ID!]!){nodes(ids:$ids){id}}",
+            json!({"ids": "I_1"}),
+            None,
+        ),
+        (
+            "query a{viewer{login}} query b{viewer{name}}",
+            json!({}),
+            Some("b"),
+        ),
+    ] {
+        assert_eq!(
+            github_schema::refuse(
+                &json!({"query": document, "variables": variables, "operationName": operation})
+            ),
+            None,
+            "{document}"
+        );
+    }
+    assert_eq!(
+        github_schema::refuse(&json!({"query": "query a{viewer{login}}", "operationName": "c"})),
+        Some(json!({"errors": [{"message": "Unknown operation named \"c\"."}]}))
+    );
+}
+
+/// A malformed or adversarial request is refused, never answered by a crash or an exhausted
+/// stack: bytes that are not GraphQL, nesting far past any real document's, a fragment cycle
+/// two thousand spreads long, a wide selection and deeply nested variables.
+#[test]
+fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
     use serde_json::json;
 
     let refused = |document: &str, variables: serde_json::Value| {
-        github_schema::validate(document, &variables)
-            .expect_err(document)
-            .join("; ")
+        github_schema::refuse(&json!({"query": document, "variables": variables}))
+            .unwrap_or_else(|| panic!("{} was not refused", &document[..document.len().min(80)]))
     };
-    assert_eq!(
-        refused("query{viewer{loginName}}", json!({})),
-        "Field 'loginName' doesn't exist on type 'User'"
+    refused("", json!({}));
+    refused("\u{0}\u{1}garbage{{{", json!({}));
+    refused("query{viewer{login}} }}}}", json!({}));
+    let deep = |open: &str, close: &str, depth: usize| (open.repeat(depth), close.repeat(depth));
+    let (open, close) = deep("viewer{", "}", 50_000);
+    refused(&format!("query{{{open}login{close}}}"), json!({}));
+    let (open, close) = deep("ofType{", "}", 190);
+    refused(
+        &format!("query{{__schema{{types{{{open}name{close}}}}}}}"),
+        json!({}),
     );
-    assert_eq!(
-        refused("query{viewer{login(first:1)}}", json!({})),
-        "Field 'login' doesn't accept argument 'first'"
+    let (open, close) = deep("[", "]", 50_000);
+    refused(
+        &format!("query{{node(id:{open}1{close}){{id}}}}"),
+        json!({}),
     );
-    assert_eq!(
-        refused("query{viewer}", json!({})),
-        "Field must have selections (field 'viewer' returns User but has no selections. Did you \
-         mean 'viewer { ... }'?)"
+    let (open, close) = deep("{a:", "}", 50_000);
+    refused(
+        &format!("mutation{{updateProjectV2Field(input:{open}1{close}){{clientMutationId}}}}"),
+        json!({}),
     );
-    assert_eq!(
-        refused("query{node{id}}", json!({})),
-        "Field 'node' is missing required arguments: id"
+    let chain = (0..2_000)
+        .map(|at| format!("fragment f{at} on User{{...f{}}} ", at + 1))
+        .collect::<String>();
+    refused(
+        &format!("query{{viewer{{...f0}}}} {chain} fragment f2000 on User{{...f0}}"),
+        json!({}),
     );
+    let mut nested = json!("I_1");
+    for _ in 0..300 {
+        nested = json!([nested]);
+    }
+    let answered = refused("query($id:ID!){node(id:$id){id}}", json!({"id": nested}));
     assert_eq!(
-        refused(
-            "query($id:ID!){node(id:$id){... on Labelled{id}}}",
-            json!({"id": "I_1"})
-        ),
-        "No such type Labelled, so it can't be a fragment condition"
+        answered,
+        json!({"errors": [{"message": "Variables nest deeper than 200 levels"}]})
     );
+    // A wide document that breaks nothing is not refused for its width.
+    let wide = (0..3_000)
+        .map(|at| format!("a{at}:login "))
+        .collect::<String>();
     assert_eq!(
-        refused(
-            "query($id:ID!,$unused:Int){node(id:$id){id}}",
-            json!({"id": "I_1"})
-        ),
-        "Variable $unused is declared by anonymous query but not used"
-    );
-    assert_eq!(
-        refused(
-            "mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){clientMutationId}}",
-            json!({"input": {"projectId": "PVT_1", "dataType": "PRIORITY", "name": "Priority"}})
-        ),
-        "Variable $input of type CreateProjectV2FieldInput! was provided invalid value for \
-         dataType (Expected \"PRIORITY\" to be one of: DATE, ITERATION, MULTI_SELECT, NUMBER, SINGLE_SELECT, TEXT)"
-    );
-    assert_eq!(
-        refused(
-            "mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){clientMutationId}}",
-            json!({"input": {"projectId": "PVT_1", "dataType": "SINGLE_SELECT",
-                "name": "Priority", "singleSelectOptions": [{"name": "High", "color": "GRAY"}]}})
-        ),
-        "Variable $input of type CreateProjectV2FieldInput! was provided invalid value for \
-         singleSelectOptions.description (Expected value to not be null)"
-    );
-
-    // Directives: defined, allowed where they stand, given their required arguments.
-    assert_eq!(
-        refused("query{viewer{login @deprecated}}", json!({})),
-        "Directive @deprecated is not defined"
-    );
-    assert_eq!(
-        refused("query @include(if:true){viewer{login}}", json!({})),
-        "'@include' can't be applied to querys (allowed: fields, fragment spreads, inline \
-         fragments)"
-    );
-    assert_eq!(
-        refused("query{viewer{login @skip}}", json!({})),
-        "Directive '@skip' is missing required arguments: if"
-    );
-    // A fragment that spreads itself, through another.
-    assert_eq!(
-        refused(
-            "query{viewer{...a}} fragment a on User{login ...b} fragment b on User{...a}",
-            json!({})
-        ),
-        "Fragment a contains an infinite loop"
-    );
-    // Introspection is held to the specification's own types.
-    assert_eq!(
-        refused("query{__type{name}}", json!({})),
-        "Field '__type' is missing required arguments: name"
-    );
-    assert_eq!(
-        refused("query{__schema{queryType{nom}}}", json!({})),
-        "Field 'nom' doesn't exist on type '__Type'"
-    );
-    // A variable used where its type or nullability does not fit.
-    assert_eq!(
-        refused("query($id:ID){node(id:$id){id}}", json!({"id": "I_1"})),
-        "Argument 'id' on Field 'node' has an invalid value (Nullability mismatch on variable \
-         $id and argument id (ID / ID!))"
-    );
-    assert_eq!(
-        refused(
-            "query($ids:[ID!]!){node(id:$ids){id}}",
-            json!({"ids": ["I_1"]})
-        ),
-        "Argument 'id' on Field 'node' has an invalid value (Type mismatch on variable $ids \
-         and argument id ([ID!]! / ID!))"
-    );
-    // A default that is not of its variable's type.
-    assert_eq!(
-        refused(
-            "query($first:Int = \"ten\"){viewer{repositories(first:$first){totalCount}}}",
-            json!({})
-        ),
-        "Default value for $first doesn't match type Int (Expected \"ten\" to be a Int)"
-    );
-    // And a nullable variable with a default is allowed where a non-null one is expected.
-    github_schema::validate("query($id:ID = \"I_1\"){node(id:$id){id}}", &json!({}))
-        .expect("a default makes a nullable variable usable in a non-null position");
-
-    // The document's own shape.
-    assert_eq!(
-        refused("query{viewer{login}} query{viewer{name}}", json!({})),
-        "This anonymous operation must be the only defined operation.; This anonymous \
-         operation must be the only defined operation."
-    );
-    assert_eq!(
-        refused("query a{viewer{login}} query a{viewer{name}}", json!({})),
-        "Operation name \"a\" must be unique"
-    );
-    assert_eq!(
-        refused("query{viewer{login}} fragment f on User{name}", json!({})),
-        "Fragment f was defined, but not used"
-    );
-    assert_eq!(
-        refused(
-            "query{viewer{...f}} fragment f on User{name} fragment f on User{login}",
-            json!({})
-        ),
-        "Fragment name \"f\" must be unique"
-    );
-    assert_eq!(
-        refused("query{viewer{...g}}", json!({})),
-        "Fragment g was used, but not defined"
-    );
-    assert_eq!(
-        refused("query{viewer{... on Issue{title}}}", json!({})),
-        "Fragment on Issue can't be spread inside User"
-    );
-    assert_eq!(
-        refused("query{viewer{login{name}}}", json!({})),
-        "Selections can't be made on scalars (field 'login' returns String but has selections)"
-    );
-    // Two selections under one name, and an argument given twice.
-    assert_eq!(
-        refused("query{viewer{x:login x:name}}", json!({})),
-        "Field 'x' has a field conflict: login or name?"
-    );
-    assert_eq!(
-        refused(
-            "query{viewer{repositories(first:1){totalCount} repositories(first:2){totalCount}}}",
-            json!({})
-        ),
-        "Field 'repositories' has an argument conflict: {first: 1} or {first: 2}?"
-    );
-    assert_eq!(
-        refused("query { viewer { a: login } viewer { a: id } }", json!({})),
-        "Field 'a' has a field conflict: login or id?"
-    );
-    assert_eq!(
-        refused(
-            "query($id:ID!){node(id:$id){... on Issue{x:title} ... on PullRequest{x:number}}}",
-            json!({"id": "I_1"})
-        ),
-        "Field 'x' has a return_type conflict: `String!` or `Int!`?"
-    );
-    assert_eq!(
-        refused("query{node(id:\"A\",id:\"B\"){id}}", json!({})),
-        "There can be only one argument named \"id\""
-    );
-    assert_eq!(
-        refused(
-            "query{viewer{login @skip(if:false) @skip(if:false)}}",
-            json!({})
-        ),
-        "The directive \"skip\" can only be used once at this location."
-    );
-    assert_eq!(
-        refused(
-            "query{viewer{repositories(first:3000000000){totalCount}}}",
-            json!({})
-        ),
-        "Argument 'first' on Field 'repositories' has an invalid value (Expected 3000000000 to \
-         be a Int)"
-    );
-    // Variables: declared once, declared where used, a null default no licence, an object.
-    assert_eq!(
-        refused(
-            "query($id:ID!,$id:ID!){node(id:$id){id}}",
-            json!({"id": "I_1"})
-        ),
-        "There can only be one variable named \"id\""
-    );
-    assert_eq!(
-        refused("query{node(id:$id){id}}", json!({})),
-        "Variable $id is used by anonymous query but not declared"
-    );
-    assert_eq!(
-        refused("query($id:ID = null){node(id:$id){id}}", json!({})),
-        "Argument 'id' on Field 'node' has an invalid value (Nullability mismatch on variable \
-         $id and argument id (ID / ID!))"
-    );
-    assert_eq!(
-        refused("query{viewer{login}}", json!(["not", "an", "object"])),
-        "Variables must be a JSON object, not [\"not\",\"an\",\"object\"]"
-    );
-
-    // A document that does not parse, a variable of an output type, a default naming a
-    // variable, and values that do not coerce: of the wrong scalar, or with an input field the
-    // type does not define.
-    assert!(refused("query{viewer{login}", json!({})).starts_with("Parse error on document: "));
-    assert_eq!(
-        refused("query($u:User){viewer{login}}", json!({})),
-        "User isn't a defined input type (on $u); Variable $u is declared by anonymous query \
-         but not used"
-    );
-    // A default naming a variable is not a constant, and does not parse.
-    assert!(
-        refused(
-            "query($a:Int,$b:Int=$a){viewer{repositories(first:$b){totalCount}}}",
-            json!({})
-        )
-        .starts_with("Parse error on document: ")
-    );
-    assert_eq!(
-        refused(
-            "query($first:Int){viewer{repositories(first:$first){totalCount}}}",
-            json!({"first": "ten"})
-        ),
-        "Variable $first of type Int was provided invalid value (Could not coerce value \"ten\" \
-         to Int)"
-    );
-    assert_eq!(
-        refused(
-            "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){clientMutationId}}",
-            json!({"input": {"issueId": "I_1", "projectId": "PVT_1"}})
-        ),
-        "Variable $input of type DeleteIssueInput! was provided invalid value for projectId \
-         (Field is not defined on DeleteIssueInput)"
+        github_schema::refuse(&json!({"query": format!("query{{viewer{{{wide}}}}}")})),
+        None
     );
 }

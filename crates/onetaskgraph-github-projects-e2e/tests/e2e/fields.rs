@@ -702,9 +702,10 @@ fn the_board_refuses_the_status_option_update_0_12_13_sent_as_github_does() {
     );
     assert_eq!(
         answered,
-        json!({"errors": [{"message": "Variable $input of type UpdateProjectV2FieldInput! was \
-            provided invalid value for projectId (Field is not defined on \
-            UpdateProjectV2FieldInput)"}]})
+        json!({"errors": [{"message": "Input object has key projectId not in type \
+            UpdateProjectV2FieldInput"}]}),
+        "GitHub answers it HTTP 200, with `errors` naming the field it does not define and no \
+         `data`"
     );
     assert_eq!(
         board.status_options(),
@@ -744,7 +745,10 @@ fn the_board_refuses_selections_whose_merged_response_conflicts() {
     };
     assert_eq!(
         refused("query { viewer { a: login } viewer { a: id } }", json!({})),
-        ["Field 'a' has a field conflict: login or id?"]
+        [
+            "operation must not select different types using the same name `a`",
+            "cannot select different fields into the same alias `a`"
+        ]
     );
     // Two fragments that can never both apply may select different fields under one name,
     // but never ones whose answers have different shapes.
@@ -753,7 +757,7 @@ fn the_board_refuses_selections_whose_merged_response_conflicts() {
             "query($id:ID!){node(id:$id){... on Issue{x:title} ... on PullRequest{x:number}}}",
             json!({"id": "I_1"})
         ),
-        ["Field 'x' has a return_type conflict: `String!` or `Int!`?"]
+        ["operation must not select different types using the same name `x`"]
     );
     assert_eq!(
         refused(
@@ -761,7 +765,10 @@ fn the_board_refuses_selections_whose_merged_response_conflicts() {
              ... on PullRequest{x:author{y:login}} ... on PullRequest{x:author{y:url}}}}",
             json!({"id": "I_1"})
         ),
-        ["Field 'y' has a field conflict: login or url?"]
+        [
+            "operation must not select different types using the same name `y`",
+            "cannot select different fields into the same alias `y`"
+        ]
     );
 }
 
@@ -814,7 +821,8 @@ fn a_request_the_board_refuses_changes_nothing_on_it() {
     );
     assert_eq!(
         answered,
-        json!({"errors": [{"message": "Field 'x' has a field conflict: title or body?"}]})
+        json!({"errors": [{"message": "cannot select different fields into the same alias `x`",
+            "locations": [{"line": 1, "column": 50}]}]})
     );
     assert!(
         listed(&sandbox),
@@ -847,7 +855,8 @@ fn a_fragment_cycle_inside_repeated_selections_is_refused() {
         );
         assert_eq!(
             answered,
-            json!({"errors": [{"message": "Fragment F contains an infinite loop"}]})
+            json!({"errors": [{"message": "`F` fragment cannot reference itself",
+                "locations": [{"line": 1, "column": 43}]}]})
         );
         assert_eq!(board.status_options(), status);
         assert_eq!(board.priority_options(), priority);

@@ -25,6 +25,8 @@ tokio.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 graphql-parser.workspace = true
+# What `tests/github_schema/mod.rs` validates a request against GitHub's published schema with.
+apollo-compiler.workspace = true
 # The gate this crate's live session opens; see crates/onetaskgraph-live.
 onetaskgraph-live.workspace = true
 # The lane's artifact names and repositories, which the janitor reads too.

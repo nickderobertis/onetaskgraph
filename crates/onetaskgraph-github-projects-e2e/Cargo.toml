@@ -20,9 +20,9 @@ onetaskgraph-e2e-support.workspace = true
 # the plugin's own constants rather than from a copy a journey could drift from.
 onetaskgraph-github-projects.workspace = true
 serde_json.workspace = true
-# What `tests/github_schema/mod.rs`, included from the plugin's tests, parses GitHub's schema
-# and a request with.
-graphql-parser.workspace = true
+# What `tests/github_schema/mod.rs`, included from the plugin's tests, validates a request
+# against GitHub's published schema with.
+apollo-compiler.workspace = true
 onetaskgraph-plugin-api.workspace = true
 onebudgetspec-core.workspace = true
 regex.workspace = true

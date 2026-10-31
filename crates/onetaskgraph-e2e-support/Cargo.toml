@@ -17,6 +17,9 @@ authors.workspace = true
 assert_cmd.workspace = true
 chrono.workspace = true
 graphql-parser.workspace = true
+# What `github_schema`, included from the GitHub Projects plugin's tests, validates each
+# loopback board request with.
+apollo-compiler.workspace = true
 # The loopback board and workspace answer the documents each hosted plugin declares, read
 # from the plugin's own constants rather than from a copy of them a fixture could drift from.
 onetaskgraph-github-projects.workspace = true

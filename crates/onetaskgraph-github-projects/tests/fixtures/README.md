@@ -264,10 +264,12 @@ update passed both that check and the loopback board and was refused by the live
 `Variable $input of type UpdateProjectV2FieldInput! was provided invalid value for projectId
 (Field is not defined on UpdateProjectV2FieldInput)`. Against this file:
 
-- `tests/github_schema/mod.rs` validates a request — its selections, their merging, arguments,
-  fragments, directives and each variable's value — by the GraphQL specification's static
-  validation rules, which GitHub applies before running anything; its module documentation
-  lists them and what it leaves to GitHub's executor;
+- `tests/github_schema/mod.rs` validates a request by every rule of the GraphQL
+  specification's Validation section and coerces its variables (`CoerceVariableValues`), as
+  GitHub does before running anything, through `apollo-compiler` — a maintained validator,
+  since the hand-written one before it kept missing rules — plus the two rules its module
+  documentation names that `apollo-compiler` 1.33 does not apply as the specification states;
+  `tests/schema.rs` breaks each rule once and shows it refused;
 - `tests/schema.rs` holds every document in `graphql::DOCUMENTS` to it, and the field setup's
   requests with the variables they are sent with;
 - this crate's board (`tests/plugin.rs`) and the shared loopback board every binary journey
