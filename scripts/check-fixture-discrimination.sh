@@ -92,8 +92,8 @@ readonly CRATE=onetaskgraph-github-projects
 # sources by their path relative to the workspace, and the last of them is the mutated suite.
 # A test that finds a sibling crate's test executable by the source its dep-info names —
 # live_pair.rs finds the plugin's `plugin` and `live` that way — would otherwise take the
-# copy's newest one, mutated, whenever this ran beside or before it, as test-macos and
-# test-windows run it. Under another directory no copy's dep-info names this crate's sources.
+# copy's newest one, mutated, whenever this ran beside or before it in one build directory.
+# Under another directory no copy's dep-info names this crate's sources.
 readonly COPY_DIR="crates/$CRATE-fixture-discrimination"
 mv "$scratch/repo/crates/$CRATE" "$scratch/repo/$COPY_DIR" || fatal \
   "could not move the copy's crate to $COPY_DIR" \

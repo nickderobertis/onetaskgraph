@@ -150,6 +150,19 @@ while read -r platform target wheel; do
   (cd "$TREE" && "$python_bin" scripts/verify-release-products.py --target "$target" --npm "$npm_platform" --tag "$tag" --ext "$ext" --dist "$TREE/dist" > /dev/null) || report "the production verifier refused the $target artifact contract"
 done <<< "$rows"
 
+# A target directory outside the checkout, which cargo takes from CARGO_TARGET_DIR: the binary
+# is taken out of the wheel into it, and the archive and carrier are packed from there.
+linux_target="$(awk '$1 == "linux" {print $2}' <<<"$rows")"
+mkdir -p "$scratch/outside-dist/wheels"
+cp -R "$TREE/dist/wheels/$linux_target" "$scratch/outside-dist/wheels/"
+# llmlint: ignore[work_goes_through_command_surface] The scratch tree holds only scripts/ and the carrier manifests, no justfile, and release-linux's recipe runs a bare python3 where this check runs its absolute interpreter, exactly as the platform loop above does.
+if ! (cd "$TREE" && CARGO_TARGET_DIR="$scratch/outside-target" "$python_bin" scripts/release_cd.py --platform linux package --tag "$tag" --dist "$scratch/outside-dist") > "$scratch/package.log" 2>&1; then
+  sed 's/^/    /' "$scratch/package.log" >&2
+  report "packaging with CARGO_TARGET_DIR outside the checkout failed (its output is above)"
+elif [ ! -f "$scratch/outside-target/$linux_target/release/onetaskgraph" ]; then
+  report "packaging with CARGO_TARGET_DIR outside the checkout left no binary at $linux_target/release/onetaskgraph under it"
+fi
+
 # The verifier's trust boundary is portable: no foreign executable runs in these cases.
 if ! "$python_bin" - "$ROOT" "$TREE" "$tag" <<'PYREFUSALS'
 from pathlib import Path

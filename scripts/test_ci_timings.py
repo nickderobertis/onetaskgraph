@@ -68,7 +68,26 @@ class CiTimingsTest(unittest.TestCase):
         result = summarise('trace', str(trace), str(malformed))
         self.assertEqual(result.returncode, 1)
         self.assertIn('ValueError', result.stderr)
+        for figure in ('nan', 'inf', '-1.0'):
+            malformed.write_text(f'{figure}\tfirst install\n', encoding='utf-8')
+            result = summarise('trace', str(trace), str(malformed))
+            self.assertEqual(result.returncode, 1, figure)
+            self.assertIn('is not a duration in seconds', result.stderr)
         self.assertEqual(summarise('guards').returncode, 2)
+
+    def test_a_trace_with_no_lines_or_out_of_order_times_is_refused(self):
+        trace = self.scratch / 'journey.trace'
+        absent = str(self.scratch / 'absent')
+        for content, reason in [
+            ('+ cd /work\nnot traced\n', 'holds no traced line'),
+            ('+5.0 test-distribution.sh:1: a\n+4.0 test-distribution.sh:2: b\n',
+             'test-distribution.sh:2 is traced at 4.0, before test-distribution.sh:1 at 5.0'),
+            ('+1' + '0' * 400 + '.0 test-distribution.sh:1: a\n', 'which is not a time'),
+        ]:
+            trace.write_text(content, encoding='utf-8')
+            result = summarise('trace', str(trace), absent)
+            self.assertEqual(result.returncode, 1, content)
+            self.assertIn(reason, result.stderr)
 
     def test_guards_are_timed_start_to_start_and_the_last_to_the_end(self):
         starts = self.scratch / 'script-timings'
@@ -84,8 +103,15 @@ class CiTimingsTest(unittest.TestCase):
             '30s check-a.sh; 1s check-b.sh; 69s check-c.sh\n',
         )
         self.assertEqual(summarise('guards', str(starts), 'later').returncode, 1)
+        result = summarise('guards', str(starts), '120')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('check-c.sh started at 131, after what follows it at 120', result.stderr)
+        starts.write_text('100 scripts/check-a.sh\n90 scripts/check-b.sh\n', encoding='utf-8')
+        result = summarise('guards', str(starts), '200')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('check-a.sh started at 100, after what follows it at 90', result.stderr)
 
-    def test_the_start_log_records_only_the_guards_scripts_test_starts(self):
+    def start_log_work(self):
         bash = shutil.which('bash')
         if bash is None:
             self.skipTest('no bash on PATH')
@@ -94,9 +120,8 @@ class CiTimingsTest(unittest.TestCase):
         (work / 'scripts' / 'check-outer.sh').write_text('bash scripts/check-inner.sh\n', encoding='utf-8')
         (work / 'scripts' / 'check-inner.sh').write_text('echo inner\n', encoding='utf-8')
         (work / 'scripts' / 'other.sh').write_text('echo other\n', encoding='utf-8')
-        log = self.scratch / 'starts'
 
-        def run(script, project, target='test'):
+        def run(script, log, project='scripts', target='test'):
             environment = dict(os.environ)
             environment.pop('ONETASKGRAPH_SCRIPT_TIMINGS_INSIDE', None)
             environment.update({
@@ -105,18 +130,36 @@ class CiTimingsTest(unittest.TestCase):
                 'NX_TASK_TARGET_PROJECT': project,
                 'NX_TASK_TARGET_TARGET': target,
             })
-            subprocess.run([bash, script], cwd=work, env=environment, check=True, capture_output=True)
+            return subprocess.run([bash, script], cwd=work, env=environment, capture_output=True,
+                                  text=True, encoding='utf-8', check=False)
+        return run
 
+    def test_the_start_log_records_only_the_guards_scripts_test_starts(self):
+        run = self.start_log_work()
+        log = self.scratch / 'starts'
         before = int(time.time())
-        run('scripts/check-outer.sh', 'scripts')
-        run('scripts/check-inner.sh', 'onetaskgraph-github-projects')
-        run('scripts/check-inner.sh', 'scripts', target='lint')
-        run('scripts/other.sh', 'scripts')
+        for script, project, target in [
+            ('scripts/check-outer.sh', 'scripts', 'test'),
+            ('scripts/check-inner.sh', 'onetaskgraph-github-projects', 'test'),
+            ('scripts/check-inner.sh', 'scripts', 'lint'),
+            ('scripts/other.sh', 'scripts', 'test'),
+        ]:
+            self.assertEqual(run(script, log, project, target).returncode, 0)
         lines = log.read_text(encoding='utf-8').splitlines()
         self.assertEqual(len(lines), 1, lines)
         moment, path = lines[0].split(' ', 1)
         self.assertEqual(path, 'scripts/check-outer.sh')
         self.assertGreaterEqual(int(moment), before)
+
+    def test_a_start_the_log_cannot_take_is_named_and_the_guard_still_runs(self):
+        run = self.start_log_work()
+        log = self.scratch / 'no-such-directory' / 'starts'
+        result = run('scripts/check-outer.sh', log)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, 'inner\n')
+        self.assertIn(f"could not record scripts/check-outer.sh's start in {log.as_posix()}", result.stderr)
+        self.assertIn('next:', result.stderr)
+        self.assertEqual(result.stderr.count('could not record'), 1, result.stderr)
 
     def test_the_packaging_recorder_writes_a_label_and_its_seconds(self):
         records = self.scratch / 'products.timings'

@@ -389,7 +389,7 @@ def package_target(row: PlatformTarget, tag: ReleaseTag, dist: Path) -> None:
     (dist / "assets").mkdir(parents=True, exist_ok=True)
     binary = "onetaskgraph.exe" if row.extension == "zip" else "onetaskgraph"
     canonical = target_directory() / row.target / "release" / binary
-    run([PYTHON_EXECUTABLE, "scripts/release-wheel-binary.py", "--wheels", str(wheels), "--binary", str(canonical.relative_to(ROOT))], f"could not take the {row.target} binary out of its wheel", "rebuild the wheel and rerun")
+    run([PYTHON_EXECUTABLE, "scripts/release-wheel-binary.py", "--wheels", str(wheels), "--binary", str(canonical)], f"could not take the {row.target} binary out of its wheel", "rebuild the wheel and rerun")
     archive = dist / "assets" / expected["archive"].file
     if row.extension == "zip":
         with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as packed:

@@ -12,26 +12,57 @@ the file; anything else misused exits 2.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+import math
 import re
 import sys
 
 TRACE_LINE = re.compile(r"^\++(\d+\.\d+) (\S+:\d+): (.*)")
 
 
-def trace_summary(trace: str, packaging: str) -> str:
-    """The slowest journey lines, packaging cases and hundred-line ranges, as one line."""
-    spent: dict[str, float] = {}
-    text: dict[str, str] = {}
-    previous: tuple[str, float] | None = None
+@dataclass(frozen=True)
+class TraceStep:
+    """One traced line of the journey: where it is, when it began, and what it ran."""
+
+    site: str
+    moment: float
+    text: str
+
+
+@dataclass(frozen=True)
+class GuardStart:
+    """One guard scripts:test started, and when."""
+
+    moment: int
+    path: str
+
+
+def trace_steps(trace: str) -> list[TraceStep]:
+    steps = []
     for line in trace.splitlines():
         match = TRACE_LINE.match(line)
-        if not match:
-            continue
-        moment, site = float(match.group(1)), match.group(2)
-        if previous is not None:
-            spent[previous[0]] = spent.get(previous[0], 0.0) + moment - previous[1]
-        previous = (site, moment)
-        text.setdefault(site, match.group(3))
+        if match:
+            steps.append(TraceStep(match.group(2), float(match.group(1)), match.group(3)))
+    return steps
+
+
+def trace_summary(trace: str, packaging: str) -> str:
+    """The slowest journey lines, packaging cases and hundred-line ranges, as one line."""
+    steps = trace_steps(trace)
+    if not steps:
+        raise ValueError("the trace holds no traced line, so the journey ran without its timestamps")
+    for step in steps:
+        if not math.isfinite(step.moment):
+            raise ValueError(f"{step.site} is traced at {step.moment}, which is not a time")
+    for step, following in zip(steps, steps[1:]):
+        if following.moment < step.moment:
+            raise ValueError(f"{following.site} is traced at {following.moment}, before {step.site} at {step.moment}")
+    spent: dict[str, float] = {}
+    text: dict[str, str] = {}
+    for step, following in zip(steps, steps[1:]):
+        spent[step.site] = spent.get(step.site, 0.0) + following.moment - step.moment
+    for step in steps:
+        text.setdefault(step.site, step.text)
     lines = [
         f"{seconds:.0f}s {site} {text[site][:60]}"
         for site, seconds in sorted(spent.items(), key=lambda item: -item[1])[:8]
@@ -39,7 +70,10 @@ def trace_summary(trace: str, packaging: str) -> str:
     cases: dict[str, float] = {}
     for row in packaging.splitlines():
         seconds, label = row.split("\t", 1)
-        cases[label] = cases.get(label, 0.0) + float(seconds)
+        figure = float(seconds)
+        if not math.isfinite(figure) or figure < 0:
+            raise ValueError(f"packaging record {row!r} is not a duration in seconds")
+        cases[label] = cases.get(label, 0.0) + figure
     slowest = [
         f"{seconds:.0f}s {label[:50]}"
         for label, seconds in sorted(cases.items(), key=lambda item: -item[1])[:8]
@@ -58,13 +92,25 @@ def trace_summary(trace: str, packaging: str) -> str:
     )
 
 
+def guard_starts(starts: str) -> list[GuardStart]:
+    recorded = []
+    for line in starts.splitlines():
+        if line:
+            moment, path = line.split(" ", 1)
+            recorded.append(GuardStart(int(moment), path))
+    return recorded
+
+
 def guard_summary(starts: str, end: int) -> str:
     """Each guard's start to the next one's, the last one's to `end`, in the order they ran."""
-    recorded = [line.split(" ", 1) for line in starts.splitlines() if line]
-    finishes = [int(moment) for moment, _ in recorded[1:]] + [end]
+    recorded = guard_starts(starts)
+    finishes = [start.moment for start in recorded[1:]] + [end]
+    for start, finish in zip(recorded, finishes):
+        if finish < start.moment:
+            raise ValueError(f"{start.path} started at {start.moment}, after what follows it at {finish}")
     figures = [
-        f"{finish - int(moment)}s {path.rsplit('/', 1)[-1]}"
-        for (moment, path), finish in zip(recorded, finishes)
+        f"{finish - start.moment}s {start.path.rsplit('/', 1)[-1]}"
+        for start, finish in zip(recorded, finishes)
     ]
     return "scripts:test guards, each to the next one's start: " + "; ".join(figures)
 

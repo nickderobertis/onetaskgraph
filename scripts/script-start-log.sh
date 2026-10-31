@@ -9,7 +9,9 @@ if [ -n "${ONETASKGRAPH_SCRIPT_TIMINGS_LOG:-}" ] && [ -z "${ONETASKGRAPH_SCRIPT_
   && [ "${NX_TASK_TARGET_PROJECT:-}:${NX_TASK_TARGET_TARGET:-}" = scripts:test ]; then
   case "$0" in
     scripts/check-*.sh | */scripts/check-*.sh)
-      printf '%s %s\n' "$(date +%s)" "$0" >>"$ONETASKGRAPH_SCRIPT_TIMINGS_LOG"
+      if ! printf '%s %s\n' "$(date +%s)" "$0" >>"$ONETASKGRAPH_SCRIPT_TIMINGS_LOG"; then
+        echo "script-start-log: could not record $0's start in $ONETASKGRAPH_SCRIPT_TIMINGS_LOG, so the guard timings will leave it out; next: check that its directory exists and is writable. The guard itself still runs." >&2
+      fi
       export ONETASKGRAPH_SCRIPT_TIMINGS_INSIDE=1
       ;;
   esac
