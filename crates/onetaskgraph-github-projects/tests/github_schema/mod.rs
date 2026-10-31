@@ -180,14 +180,11 @@ const ANSWERS_KEPT: usize = 16_384;
 /// This test process's validator, and the answers it has given.
 ///
 /// Every test thread's requests go to the one validator in turn, so a test timing a double's
-/// answers on the real clock counts the other threads' requests against its own: on the Windows
-/// lane, tests giving a read 0.3s, or a retry less than twice its backoff, missed by whole
-/// seconds when every request was sent. So a request already answered is answered again from
-/// [`Validators::answers`] without being sent — the validation is a function of the request and
-/// the schema alone, both fixed for the life of the process — and `validate.mjs` keeps each
-/// document's validation, so one sent again with new variables costs only their coercion. A
-/// pool of validators was tried and had the slower tail: each process validates every document
-/// afresh, and they contend for the same cores as the tests.
+/// answers on the real clock counts the other threads' requests against its own. A request
+/// already answered is therefore answered from [`Validators::answers`] without being sent — the
+/// validation is a function of the request and the schema alone, both fixed for the life of the
+/// process — and `validate.mjs` keeps each document's validation, so one sent again with new
+/// variables costs only their coercion.
 struct Validators {
     validator: Mutex<Validator>,
     answers: Mutex<HashMap<String, Vec<Value>>>,
