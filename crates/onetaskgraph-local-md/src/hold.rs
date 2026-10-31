@@ -6,8 +6,9 @@
 //! The hold is a lock file beside the record, `<file>.lock`, created exclusively — which every
 //! platform's filesystem refuses a second process — and removed on release. One older than
 //! [`STALE`] is a dead process's and is taken over; a live holder is waited for, up to twice
-//! that. It excludes nothing across hosts, or on a network filesystem that does not honour an
-//! exclusive create.
+//! that; and one written at a time ahead of this host's clock, whose age cannot be told, is
+//! refused at once. It excludes nothing across hosts, or on a network filesystem that does not
+//! honour an exclusive create.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -50,8 +51,26 @@ impl Holds {
                     return Ok(());
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let stale = std::fs::metadata(&lock)
-                        .and_then(|held| held.modified())
+                    let modified = std::fs::metadata(&lock).and_then(|held| held.modified());
+                    // A lock written at a time ahead of this host's clock — another host's, on a
+                    // shared folder — can never be judged stale here, so it is refused at once
+                    // rather than waited on.
+                    if let Ok(modified) = &modified
+                        && modified.elapsed().is_err()
+                        && modified
+                            .duration_since(std::time::SystemTime::now())
+                            .is_ok_and(|ahead| ahead > Duration::from_secs(1))
+                    {
+                        return Err(SourceError::Unavailable {
+                            message: format!(
+                                "{} was written at a time ahead of this host's clock, so whether \
+                                 its holder is still running cannot be told; next: remove it \
+                                 once no copy is running",
+                                lock.display()
+                            ),
+                        });
+                    }
+                    let stale = modified
                         .ok()
                         .and_then(|modified| modified.elapsed().ok())
                         .is_some_and(|age| age > STALE);

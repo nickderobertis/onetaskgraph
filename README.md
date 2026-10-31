@@ -764,7 +764,8 @@ intent is decided under the hold `TaskSource::hold_item` gives, and a copy that 
 back puts the item back through `item_snapshot` and `restore_item` — defaulted, additive methods
 a source with no hold or no byte-exact snapshot leaves alone. A folder of Markdown takes, renews
 and releases it under an exclusive lock file beside the item (`<file>.lock`, created exclusively;
-one older than thirty seconds is a dead process's and is taken over): under the lock the copy
+one older than thirty seconds is a dead process's and is taken over, and one dated ahead of
+this host's clock, whose age cannot be told, is refused at once): under the lock the copy
 reads the intent, refuses with the failure kind `create-in-progress` — naming the lease's end,
 having written nothing and sent the destination nothing — while another attempt's lease is live,
 and otherwise records its own `attempt` and a `lease_until` of now plus the source's

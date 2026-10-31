@@ -53,7 +53,7 @@ pub(in crate::engine) fn key(
     source: &GlobalId,
     destination: &SourceName,
     replaces: Option<&GlobalId>,
-) -> uuid::Uuid {
+) -> CreateKey {
     let mut name = format!(
         "{source}|{destination}|{}",
         replaces.map(ToString::to_string).unwrap_or_default()
@@ -63,7 +63,56 @@ pub(in crate::engine) fn key(
         Level::Project => name.push_str("|project"),
         Level::Document => name.push_str("|document"),
     }
-    uuid::Uuid::new_v5(&NAMESPACE, name.as_bytes())
+    CreateKey(uuid::Uuid::new_v5(&NAMESPACE, name.as_bytes()))
+}
+
+/// A create's key: a version-5 UUID of RFC 4122's variant, as [`key`] computes one, and read
+/// back from an intent only as one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "uuid::Uuid", into = "uuid::Uuid")]
+pub(crate) struct CreateKey(uuid::Uuid);
+
+impl TryFrom<uuid::Uuid> for CreateKey {
+    type Error = String;
+
+    fn try_from(uuid: uuid::Uuid) -> Result<Self, Self::Error> {
+        of_version(uuid, 5).map(Self)
+    }
+}
+
+impl From<CreateKey> for uuid::Uuid {
+    fn from(key: CreateKey) -> Self {
+        key.0
+    }
+}
+
+/// One engine's name for the copy attempts it makes: a version-4 UUID of RFC 4122's variant,
+/// and read back from an intent only as one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "uuid::Uuid", into = "uuid::Uuid")]
+pub struct Attempt(uuid::Uuid);
+
+impl TryFrom<uuid::Uuid> for Attempt {
+    type Error = String;
+
+    fn try_from(uuid: uuid::Uuid) -> Result<Self, Self::Error> {
+        of_version(uuid, 4).map(Self)
+    }
+}
+
+impl From<Attempt> for uuid::Uuid {
+    fn from(attempt: Attempt) -> Self {
+        attempt.0
+    }
+}
+
+/// `uuid`, when it is of RFC 4122's variant and of `version`.
+fn of_version(uuid: uuid::Uuid, version: usize) -> Result<uuid::Uuid, String> {
+    if uuid.get_variant() == uuid::Variant::RFC4122 && uuid.get_version_num() == version {
+        Ok(uuid)
+    } else {
+        Err(format!("{uuid} is not a version-{version} RFC 4122 UUID"))
+    }
 }
 
 /// One destination's entry of an item's `onetaskgraph.creating`, each member read as what it
@@ -71,12 +120,12 @@ pub(in crate::engine) fn key(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Intent {
     /// The create's key.
-    pub(crate) key: uuid::Uuid,
+    pub(crate) key: CreateKey,
     /// When the key was first taken, to the second.
     #[serde(with = "seconds")]
     pub(crate) at: DateTime<Utc>,
     /// The copy attempt holding it.
-    pub(crate) attempt: uuid::Uuid,
+    pub(crate) attempt: Attempt,
     /// Until when it holds it, to the second.
     #[serde(with = "seconds")]
     pub(crate) lease_until: DateTime<Utc>,
@@ -94,11 +143,11 @@ impl Intent {
 
     /// The key as the created item carries it.
     pub(crate) fn key(&self) -> String {
-        self.key.hyphenated().to_string()
+        self.key.0.hyphenated().to_string()
     }
 
     /// Whether another attempt than `attempt` holds this intent's lease at `now`.
-    fn held_by_another(&self, attempt: uuid::Uuid, now: DateTime<Utc>) -> bool {
+    fn held_by_another(&self, attempt: Attempt, now: DateTime<Utc>) -> bool {
         self.attempt != attempt && self.lease_until > now
     }
 }
@@ -109,7 +158,7 @@ impl Intent {
 /// with this process's id and the time, rather than from a random-number crate this workspace
 /// would otherwise carry twice: an attempt only has to differ from every other process's.
 #[must_use]
-pub fn attempt() -> uuid::Uuid {
+pub fn attempt() -> Attempt {
     use std::hash::{BuildHasher, Hasher};
     let mut bytes = [0u8; 16];
     for (index, chunk) in bytes.chunks_mut(8).enumerate() {
@@ -123,7 +172,7 @@ pub fn attempt() -> uuid::Uuid {
         );
         chunk.copy_from_slice(&hasher.finish().to_le_bytes());
     }
-    uuid::Builder::from_random_bytes(bytes).into_uuid()
+    Attempt(uuid::Builder::from_random_bytes(bytes).into_uuid())
 }
 
 /// An intent's times as RFC 3339 UTC to the second, and read back only as that.
@@ -413,7 +462,7 @@ impl Engine {
         level: Level,
         id: &GlobalId,
         destination: &SourceName,
-        key: uuid::Uuid,
+        key: CreateKey,
         lease_until: Option<DateTime<Utc>>,
         planned_link: Option<Option<&GlobalId>>,
     ) -> Result<(Intent, bool), EngineError> {

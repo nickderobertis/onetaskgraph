@@ -4198,21 +4198,25 @@ impl TaskSource for LinearSource {
             })?;
         written_is(issue, &task.id)?;
         let priority = issue_priority(issue)?;
-        // The issue as the answer selects it, token and all — or, from an answer carrying less,
+        // The issue as the answer selects it, token and all — a whole issue whose fields do not
+        // read refused as any read's would be — or, from an answer selecting only the priority,
         // the issue as read before with the priority it answered, at no token.
-        let answered = map_task(issue, &self.name, &self.statuses, self.spelling())
-            .map(|written| Answered {
+        let answered = if issue.get("title").is_some() {
+            let written = map_task(issue, &self.name, &self.statuses, self.spelling())?;
+            Answered {
                 version: written.version.clone(),
                 task: Some(written),
-            })
-            .unwrap_or(Answered {
+            }
+        } else {
+            Answered {
                 version: None,
                 task: Some(Task {
                     priority,
                     version: None,
                     ..task.clone()
                 }),
-            });
+            }
+        };
         self.answered()
             .insert((MetadataRecord::Task, task.id.clone()), answered.clone());
         if task.id != *id {
