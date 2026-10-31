@@ -6016,6 +6016,7 @@ pub fn linear_workspace_failing(
         hooks: Arc::new(Mutex::new(Vec::new())),
         bends: Arc::new(Mutex::new(Vec::new())),
         limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+        lost: Arc::new(Mutex::new(Vec::new())),
     };
     let config = linear_serve(sandbox, workspace.clone(), None, failing);
     (config, workspace)
@@ -6113,9 +6114,18 @@ pub struct LinearWorkspace {
     /// How each of the next requests is answered, in order: `Some(wait)` refused `429` naming
     /// a reset `wait` seconds ahead, `None` answered as usual.
     limits: Arc<Mutex<std::collections::VecDeque<Option<u64>>>>,
+    /// The operations whose next request is applied and then answered `502`, once each.
+    lost: Arc<Mutex<Vec<&'static str>>>,
 }
 
 impl LinearWorkspace {
+    /// Apply the next request of `operation` — a GraphQL document, as the plugin sends it — and
+    /// answer it `502 Bad Gateway`, once: an answer lost after Linear acted on the request.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its server loop here answers: like `rate_limit` below it can only be a method of this handle, and a suite of one plugin could not add it from outside.
+    pub fn lose_answer_once(&self, operation: &'static str) {
+        self.lost.lock().unwrap().push(operation);
+    }
+
     /// Answer each of the next requests by `script`, in order: `Some(wait)` is refused
     /// `429 Too Many Requests` with `retry-after: wait`, as Linear's limiter answers, and `None`
     /// is answered as it would have been. Every request after the script is answered as usual.
@@ -6639,6 +6649,7 @@ fn linear_server_over(
         hooks: Arc::new(Mutex::new(Vec::new())),
         bends: Arc::new(Mutex::new(Vec::new())),
         limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+        lost: Arc::new(Mutex::new(Vec::new())),
     };
     linear_serve(sandbox, workspace, recorded, failing)
 }
@@ -6810,7 +6821,16 @@ fn linear_serve(
                             bend.times -= 1;
                             (bend.bend)(&variables, &mut body);
                         }
-                        ("200 OK", json!({"data":body}))
+                        let mut lost = workspace.lost.lock().unwrap();
+                        if let Some(at) = lost.iter().position(|lost| *lost == operation) {
+                            lost.remove(at);
+                            (
+                                "502 Bad Gateway",
+                                json!({"errors":[{"message":"the answer was lost"}]}),
+                            )
+                        } else {
+                            ("200 OK", json!({"data":body}))
+                        }
                     }
                     Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
                 };

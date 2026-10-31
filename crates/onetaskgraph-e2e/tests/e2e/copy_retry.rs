@@ -1784,3 +1784,40 @@ fn a_dry_run_reads_an_earlier_intent_and_neither_waits_writes_nor_creates() {
         before
     );
 }
+
+#[test]
+fn a_linear_project_or_document_create_whose_answer_was_lost_is_read_by_its_id_and_finished() {
+    for kind in ["project", "document"] {
+        let stores = Stores::new();
+        with_a_project_and_a_document(&stores);
+        let (arguments, id) = record_copy(kind, "linear");
+        let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        let create = if kind == "project" {
+            onetaskgraph_linear::graphql::PROJECT_CREATE
+        } else {
+            onetaskgraph_linear::graphql::DOCUMENT_CREATE
+        };
+        // Linear makes the item and its answer never arrives: the plugin reads the item by the id
+        // it sent and finishes it, in the same copy, rather than leaving it for a retry.
+        stores.linear.lose_answer_once(create);
+        let copied = stores.json(&arguments);
+        let landed = copied["items"][0]["destination"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        let title = if kind == "project" {
+            "Project P"
+        } else {
+            "Document D"
+        };
+        let made = records_titled(&stores, kind, "linear", title);
+        assert_eq!(made.len(), 1, "{kind}: one item: {made:#?}");
+        assert_eq!(made[0]["id"], json!(landed.trim_start_matches("linear:")));
+        let metadata = record_metadata(&stores, kind, id);
+        assert!(
+            metadata.get("onetaskgraph.creating").is_none(),
+            "{kind}: {metadata:#}"
+        );
+        assert_eq!(metadata["onetaskgraph.copies"]["linear"], json!(landed));
+    }
+}
