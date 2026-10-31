@@ -305,6 +305,96 @@ async fn settle(send: &impl Sender, owner: &str, board: &RunBoard) -> Result<(),
     ))
 }
 
+/// How long GitHub's item listing has been seen to lag a draft's create: about twenty
+/// seconds after a fill, its listing still left the newest out. A count is decided on only
+/// once two reads this far apart agree.
+const LISTING_LAG: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The template's draft items, counted until two counts `LISTING_LAG` apart agree, so a count
+/// read while GitHub's listing still lags a write is never what a fill is decided on.
+async fn settled_drafts(send: &impl Sender, id: &str) -> Result<u64, String> {
+    const READS: usize = 6;
+    let mut last = count_drafts(send, id).await?;
+    for _ in 1..READS {
+        github_pause(LISTING_LAG).await;
+        let now = count_drafts(send, id).await?;
+        if now == last {
+            return Ok(now);
+        }
+        last = now;
+    }
+    Err(format!(
+        "the template's draft count did not settle across {READS} reads {}s apart (last {last})",
+        LISTING_LAG.as_secs()
+    ))
+}
+
+/// One count of the template's draft items, every page of its listing read.
+async fn count_drafts(send: &impl Sender, id: &str) -> Result<u64, String> {
+    use onetaskgraph_github_live::TEMPLATE_ITEMS_DOCUMENT;
+    const LISTING_PAGES: usize = 1_000;
+    let mut drafts = 0u64;
+    let mut after = Value::Null;
+    for listed in 1..=LISTING_PAGES {
+        let page = send(
+            TEMPLATE_ITEMS_DOCUMENT,
+            "live template items",
+            json!({"id":id,"after":after}),
+        )
+        .await?;
+        let items = page
+            .pointer("/data/node/items")
+            .ok_or("the template's items were not reported")?;
+        for node in items["nodes"]
+            .as_array()
+            .ok_or("the template's item nodes were not reported")?
+        {
+            // `null` content is an item this credential cannot see, which is no draft; any
+            // other content has to say what it is, or the count could not be trusted.
+            match node.get("content") {
+                Some(Value::Null) => {}
+                Some(content) => match content.get("__typename").and_then(Value::as_str) {
+                    Some("DraftIssue") => drafts += 1,
+                    Some(_) => {}
+                    None => {
+                        return Err(format!(
+                            "the template's item listing answered an item without its type: {node}"
+                        ));
+                    }
+                },
+                None => {
+                    return Err(format!(
+                        "the template's item listing answered an item without its content: {node}"
+                    ));
+                }
+            }
+        }
+        match items
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+        {
+            Some(false) => break,
+            Some(true) => {}
+            None => return Err("the template's item listing reported no hasNextPage".into()),
+        }
+        let next = items
+            .pointer("/pageInfo/endCursor")
+            .and_then(Value::as_str)
+            .filter(|next| !next.is_empty())
+            .ok_or("the template's item listing reported no endCursor")?;
+        if after.as_str() == Some(next) {
+            return Err("the template's item listing did not advance".into());
+        }
+        after = json!(next);
+        if listed == LISTING_PAGES {
+            return Err(format!(
+                "the template's item listing ran past {LISTING_PAGES} pages"
+            ));
+        }
+    }
+    Ok(drafts)
+}
+
 /// Whether GitHub answered an id this lane may put into a later request.
 fn usable_id(id: &str) -> bool {
     !id.is_empty() && !id.chars().any(char::is_control)
@@ -428,8 +518,7 @@ pub async fn setup_template(
     setup: TemplateSetup,
 ) -> Result<Vec<String>, String> {
     use onetaskgraph_github_live::{
-        ADD_DRAFT_DOCUMENT, TEMPLATE_DRAFT_TITLE, TEMPLATE_DRAFTS, TEMPLATE_ITEMS_DOCUMENT,
-        quota::reference_workload,
+        ADD_DRAFT_DOCUMENT, TEMPLATE_DRAFT_TITLE, TEMPLATE_DRAFTS, quota::reference_workload,
     };
     let found = send(
         TEMPLATE_DOCUMENT,
@@ -443,66 +532,7 @@ pub async fn setup_template(
         .filter(|id| usable_id(id))
         .ok_or_else(|| format!("{owner} has no board #{template} this credential can see"))?
         .to_owned();
-    const LISTING_PAGES: usize = 1_000;
-    let mut drafts = 0u64;
-    let mut after = Value::Null;
-    for listed in 1..=LISTING_PAGES {
-        let page = send(
-            TEMPLATE_ITEMS_DOCUMENT,
-            "live template items",
-            json!({"id":id,"after":after}),
-        )
-        .await?;
-        let items = page
-            .pointer("/data/node/items")
-            .ok_or("the template's items were not reported")?;
-        for node in items["nodes"]
-            .as_array()
-            .ok_or("the template's item nodes were not reported")?
-        {
-            // `null` content is an item this credential cannot see, which is no draft; any
-            // other content has to say what it is, or the count could not be trusted.
-            match node.get("content") {
-                Some(Value::Null) => {}
-                Some(content) => match content.get("__typename").and_then(Value::as_str) {
-                    Some("DraftIssue") => drafts += 1,
-                    Some(_) => {}
-                    None => {
-                        return Err(format!(
-                            "the template's item listing answered an item without its type: {node}"
-                        ));
-                    }
-                },
-                None => {
-                    return Err(format!(
-                        "the template's item listing answered an item without its content: {node}"
-                    ));
-                }
-            }
-        }
-        match items
-            .pointer("/pageInfo/hasNextPage")
-            .and_then(Value::as_bool)
-        {
-            Some(false) => break,
-            Some(true) => {}
-            None => return Err("the template's item listing reported no hasNextPage".into()),
-        }
-        let next = items
-            .pointer("/pageInfo/endCursor")
-            .and_then(Value::as_str)
-            .filter(|next| !next.is_empty())
-            .ok_or("the template's item listing reported no endCursor")?;
-        if after.as_str() == Some(next) {
-            return Err("the template's item listing did not advance".into());
-        }
-        after = json!(next);
-        if listed == LISTING_PAGES {
-            return Err(format!(
-                "the template's item listing ran past {LISTING_PAGES} pages"
-            ));
-        }
-    }
+    let drafts = settled_drafts(send, &id).await?;
     let ceiling = reference_workload().initial_items;
     let mut report = vec![format!("template #{template} holds {drafts} draft items")];
     if drafts > ceiling {
@@ -542,6 +572,10 @@ pub async fn setup_template(
                 }
             }
             report.push(format!("added {missing} draft items, reaching {TEMPLATE_DRAFTS}"));
+            // GitHub lists a draft some seconds after it answers its create: say what the
+            // template settles at, so a re-run is read against the settled count.
+            let settled = settled_drafts(send, &id).await?;
+            report.push(format!("template #{template} now lists {settled} draft items"));
         }
     }
     Ok(report)

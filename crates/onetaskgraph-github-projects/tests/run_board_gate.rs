@@ -136,6 +136,9 @@ struct Account {
     /// answered without its id (`"copy-without-id"`) or as the template itself
     /// (`"copy-as-template"`), and a deletion refused (`"refused-delete"`).
     faults: Vec<&'static str>,
+    /// Under `"lagging-listing"`, how many listings of the template still leave its newest
+    /// draft out: GitHub's listing lags a draft's create by some seconds.
+    lagging: usize,
 }
 
 impl Account {
@@ -300,6 +303,9 @@ impl Account {
             return json!({"data":{"createProjectV2Field":{"projectV2Field":{"id":id,"name":name}}}});
         }
         if document.contains("mutation LiveTemplateDraft(") {
+            if self.has("lagging-listing") {
+                self.lagging = 1;
+            }
             let id = self.next("DI");
             let board = self.by_id(input["projectId"].as_str().unwrap()).unwrap();
             board
@@ -315,9 +321,13 @@ impl Account {
                 .as_str()
                 .map_or(0, |after| after.parse().unwrap());
             let untyped = self.has("untyped-item");
+            let lagging = start == 0 && self.lagging > 0;
+            if lagging {
+                self.lagging -= 1;
+            }
             let board = self.by_id(variables["id"].as_str().unwrap()).unwrap();
-            let nodes: Vec<_> = board
-                .items
+            let listed = board.items.len() - usize::from(lagging);
+            let nodes: Vec<_> = board.items[..listed]
                 .iter()
                 .skip(start)
                 .take(100)
@@ -330,7 +340,7 @@ impl Account {
                 })
                 .collect();
             let next = start + nodes.len();
-            let more = next < board.items.len();
+            let more = next < listed;
             let page = if self.has("no-has-next") {
                 json!({"endCursor":next.to_string()})
             } else if self.has("no-cursor") && more {
@@ -1268,5 +1278,37 @@ fn a_template_item_answered_without_its_type_is_refused_writing_nothing() {
             .seen
             .iter()
             .any(|(_, document, _)| document.starts_with("mutation"))
+    );
+}
+
+#[test]
+fn a_template_listing_that_lags_its_writes_is_waited_out_and_never_overfilled() {
+    let account = Arc::new(Mutex::new(Account::new()));
+    {
+        let mut held = account.lock().unwrap();
+        held.boards.get_mut(&TEMPLATE).unwrap().items.truncate(3);
+        held.faults = vec!["lagging-listing"];
+        // The first listing still leaves the newest of the three out.
+        held.lagging = 1;
+    }
+    let origin = serve(Arc::clone(&account));
+    let said = template_setup(&origin, "template-fill");
+    // Counted at three once two reads agreed, not at the lagging two, so 57 were added...
+    assert!(said.contains("template #1 holds 3 draft items"), "{said}");
+    assert!(said.contains("added 57 draft items, reaching 60"), "{said}");
+    // ...and the count the fill reports is the settled one, past the lag its own writes left.
+    assert!(
+        said.contains("template #1 now lists 60 draft items"),
+        "{said}"
+    );
+    // A run straight after, while the listing still lags, adds nothing.
+    account.lock().unwrap().lagging = 1;
+    let said = template_setup(&origin, "template-fill");
+    assert!(said.contains("nothing to add"), "{said}");
+    let drafts = account.lock().unwrap().boards[&TEMPLATE].items.len();
+    assert_eq!(
+        drafts,
+        usize::try_from(TEMPLATE_DRAFTS).unwrap(),
+        "the template was overfilled"
     );
 }

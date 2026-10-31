@@ -307,7 +307,9 @@ linear-document-creation:
 # The operator's one-time setup of the GitHub board every live session copies:
 # `just github-live-template dry-run` reports how many draft items the nominated board holds
 # and what filling would add, writing nothing; `just github-live-template fill` adds draft
-# items until it holds the sessions' minimum, and a second run adds nothing. Needs
+# items until it holds the sessions' minimum, and a second run adds nothing. GitHub lists a
+# new draft some seconds after creating it, so each count is taken twice, 30 s apart, and
+# decided on only when the two agree: a run can take a minute or more. Needs
 # GH_PROJECTS_TOKEN, GH_PROJECTS_OWNER, GH_PROJECTS_NUMBER and GH_PROJECTS_REPOSITORY; it
 # writes to that board.
 github-live-template action:
