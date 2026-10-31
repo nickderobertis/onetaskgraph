@@ -9690,12 +9690,12 @@ fn landed_location(
     destination.source().written_location(record, id)
 }
 
-/// The title and metadata of either kind of item.
 /// A status category as the command line spells it, for a refusal's message.
 pub(super) fn spelled_category(category: StatusCategory) -> String {
     query::spelled(category)
 }
 
+/// The title and metadata of either kind of item.
 fn described(item: &Item) -> (&str, &BTreeMap<String, Value>) {
     match item {
         Item::Task(task) => (&task.title, &task.metadata),

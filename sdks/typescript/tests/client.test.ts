@@ -2509,6 +2509,8 @@ test("taskCopy guards its writes, reports what each held and left, and retries a
     expect(outcome.held?.priority).toBe("high");
     expect(outcome.status_condition).toEqual({ held: "todo", met: false });
     expect(outcome.priority_condition).toEqual({ held: "high", met: true });
+    // A caller in plain JavaScript can pass any string: the cast stands in for one, getting a
+    // value the types refuse past them so the runtime check that refuses it is what is proven.
     expect(() => taskCopyFlags({ otherwise: "maybe" as "refuse" })).toThrow("otherwise must be");
   } finally {
     rmSync(store, { recursive: true, force: true });

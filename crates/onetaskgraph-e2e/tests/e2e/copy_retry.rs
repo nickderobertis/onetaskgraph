@@ -469,21 +469,32 @@ fn the_create_settings_are_shown_by_their_layer_and_refused_out_of_range() {
         text.contains("create_lease_seconds") && text.contains("create_quiescence_seconds"),
         "{shown:#}"
     );
-    for value in ["0", "86401"] {
-        let output = stores
-            .sandbox
-            .command()
-            .env("ONETASKGRAPH_SOURCES__NOTES__CREATE_LEASE_SECONDS", value)
-            .args(["config", "show"])
-            .assert()
-            .get_output()
-            .clone();
-        assert_ne!(output.status.code(), Some(0), "{value}");
-        assert!(
-            stderr(&output).contains("sources.notes.create_lease_seconds"),
-            "{value}: {}",
-            stderr(&output)
-        );
+    for (variable, key) in [
+        (
+            "ONETASKGRAPH_SOURCES__NOTES__CREATE_LEASE_SECONDS",
+            "sources.notes.create_lease_seconds",
+        ),
+        (
+            "ONETASKGRAPH_SOURCES__BOARD__CREATE_QUIESCENCE_SECONDS",
+            "sources.board.create_quiescence_seconds",
+        ),
+    ] {
+        for value in ["0", "86401"] {
+            let output = stores
+                .sandbox
+                .command()
+                .env(variable, value)
+                .args(["config", "show"])
+                .assert()
+                .get_output()
+                .clone();
+            assert_ne!(output.status.code(), Some(0), "{key} {value}");
+            assert!(
+                stderr(&output).contains(key),
+                "{key} {value}: {}",
+                stderr(&output)
+            );
+        }
     }
 }
 
@@ -1224,9 +1235,14 @@ fn a_linear_create_whose_answer_never_arrived_whole_is_found_by_its_retry_under_
 /// namespace, of `<source>|<destination>|<replaced link>`, with the kind appended for a project
 /// or a document — computed here from that statement, independently of the engine.
 fn documented_key(source: &str, destination: &str, kind: Option<&str>) -> String {
+    replacing_key(source, destination, "", kind)
+}
+
+/// [`documented_key`] of a create that replaces the link naming `replaces`.
+fn replacing_key(source: &str, destination: &str, replaces: &str, kind: Option<&str>) -> String {
     let namespace =
         uuid::Uuid::parse_str("7a1c3f0e-5b2d-4c8a-9e61-0f4d2b7c5a39").expect("the namespace");
-    let mut name = format!("{source}|{destination}|");
+    let mut name = format!("{source}|{destination}|{replaces}");
     if let Some(kind) = kind {
         name.push_str(&format!("|{kind}"));
     }
@@ -1580,5 +1596,41 @@ fn a_copy_that_cannot_put_its_source_back_leaves_the_intent_for_its_retry_to_res
             .source_metadata()
             .get("onetaskgraph.creating")
             .is_none()
+    );
+}
+
+#[test]
+fn a_recreate_after_a_stale_link_takes_a_key_of_its_own_and_its_retry_keeps_it() {
+    let stores = Stores::new();
+    let first = stores.json(&["task", "copy", NOTE, "--to", "folder"]);
+    let stale = first["items"][0]["destination"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    // The copy is deleted at the destination, so the note's link names nothing there.
+    let file = stale.trim_start_matches("folder:");
+    std::fs::remove_file(stores.folder.join("tasks").join(format!("{file}.md")))
+        .expect("deleted at the destination");
+    let recreate = ["task", "copy", NOTE, "--to", "folder", "--recreate"];
+    let stopped = stores.run(&recreate, Some("after-intent"));
+    assert_eq!(stopped.status.code(), Some(86), "{}", stderr(&stopped));
+    let key = stores.source_metadata()["onetaskgraph.creating"]["folder"]["key"]
+        .as_str()
+        .expect("the intent's key")
+        .to_owned();
+    assert_eq!(
+        key,
+        replacing_key(NOTE, "folder", &stale, None),
+        "the key names the link it replaces"
+    );
+    assert_ne!(key, documented_key(NOTE, "folder", None));
+    let copied = stores.json(&recreate);
+    let landed = copied["items"][0]["destination"].as_str().expect("an id");
+    assert_eq!(copied["items"][0]["action"], "created", "{copied:#}");
+    let created = &stores.json(&["task", "show", landed])["items"][0]["item"];
+    assert_eq!(
+        created["metadata"]["onetaskgraph.create_key"],
+        json!(key),
+        "the retry kept the key its first attempt took"
     );
 }
