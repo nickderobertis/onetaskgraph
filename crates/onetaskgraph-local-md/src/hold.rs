@@ -12,8 +12,9 @@
 //! - **Windows**: the file opened with no sharing at all and deleted when its handle closes, which
 //!   the kernel does for a killed process too; a second opener is refused with a sharing violation
 //!   until then.
-//! - **Neither** — a filesystem that refuses `flock`: the file created exclusively (`O_EXCL`),
-//!   removed on release, and one older than [`STALE`] taken to be a dead process's and taken over.
+//! - **Neither** — a filesystem that answers `flock` as unsupported: the file created exclusively
+//!   (`O_EXCL`), removed on release, and one older than [`STALE`] taken to be a dead process's and
+//!   taken over. Any other failure of `flock` is refused, the lock file left as it is.
 //!   That fallback is weaker: a holder that outlives [`STALE`] can be taken over, and a lock dated
 //!   ahead of this host's clock, whose age cannot be told, is refused at once.
 //!
@@ -137,10 +138,8 @@ fn attempt(lock: &Path) -> Result<Attempt, SourceError> {
         }
         Err(error) => return Err(could_not_lock(lock, &error)),
     };
-    match file.try_lock() {
-        Ok(()) => {}
-        Err(std::fs::TryLockError::WouldBlock) => return Ok(Attempt::Busy),
-        Err(std::fs::TryLockError::Error(_)) => return Ok(Attempt::Unsupported { created }),
+    if let Err(refused) = file.try_lock() {
+        return refused_lock(lock, refused, created);
     }
     // The file locked is the lock only while the path still names it: a holder unlinks it before
     // it lets go, so one opened just before that is a file nobody else will ever ask for.
@@ -154,6 +153,25 @@ fn attempt(lock: &Path) -> Result<Attempt, SourceError> {
         Ok(_) => Ok(Attempt::Busy),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Attempt::Busy),
         Err(error) => Err(could_not_lock(lock, &error)),
+    }
+}
+
+/// What a refused `flock` means, before the file it was asked of is touched again: another
+/// holder, a filesystem that says it offers no such lock — the one case the age-based fallback
+/// decides — or a failure of the lock itself, which is refused, leaving the file as it is rather
+/// than judging it by its age on a filesystem that does lock.
+#[cfg(not(windows))]
+fn refused_lock(
+    lock: &Path,
+    refused: std::fs::TryLockError,
+    created: bool,
+) -> Result<Attempt, SourceError> {
+    match refused {
+        std::fs::TryLockError::WouldBlock => Ok(Attempt::Busy),
+        std::fs::TryLockError::Error(error) if error.kind() == std::io::ErrorKind::Unsupported => {
+            Ok(Attempt::Unsupported { created })
+        }
+        std::fs::TryLockError::Error(error) => Err(could_not_lock(lock, &error)),
     }
 }
 
@@ -370,6 +388,41 @@ mod tests {
                 if message.contains("has not let go")),
             "{refused:?}"
         );
+    }
+
+    /// Only a lock the filesystem says it does not support selects the age-based fallback; any
+    /// other failure of the lock refuses, so a filesystem that has `flock` never takes a lock
+    /// over by its age.
+    #[cfg(not(windows))]
+    #[test]
+    fn only_an_unsupported_lock_selects_the_age_based_fallback() {
+        let lock = Path::new("/folder/T-1.md.lock");
+        let unsupported = std::io::Error::from(std::io::ErrorKind::Unsupported);
+        assert!(matches!(
+            refused_lock(lock, std::fs::TryLockError::Error(unsupported), false),
+            Ok(Attempt::Unsupported { created: false })
+        ));
+        assert!(matches!(
+            refused_lock(lock, std::fs::TryLockError::WouldBlock, false),
+            Ok(Attempt::Busy)
+        ));
+        for kind in [
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::Other,
+        ] {
+            let failed = refused_lock(
+                lock,
+                std::fs::TryLockError::Error(std::io::Error::from(kind)),
+                true,
+            );
+            assert!(
+                matches!(&failed, Err(SourceError::Unavailable { message })
+                    if message.contains("could not lock") && message.contains("T-1.md.lock")),
+                "{kind:?}: {:?}",
+                failed.as_ref().map(|_| "an attempt")
+            );
+        }
     }
 
     #[cfg(unix)]

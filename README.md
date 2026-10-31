@@ -787,8 +787,9 @@ and releases it under an exclusive lock on a file beside the item, `<file>.lock`
 kernel holds: an `flock` on Unix, and on Windows the file opened shared with nobody and deleted
 as it closes. Two live processes on one host never hold it at once, and a holder that exits or
 is killed releases it with no wait — its file is taken at once, whatever it is dated, and
-nothing is judged by its age. Only where the filesystem refuses `flock` does the lock fall back
-to creating the file exclusively (`O_EXCL`), and that fallback is weaker: one older than thirty
+nothing is judged by its age. Only where the filesystem answers `flock` as unsupported does the
+lock fall back to creating the file exclusively (`O_EXCL`) — any other failure of `flock` refuses
+the copy, the lock file left as it is — and that fallback is weaker: one older than thirty
 seconds is taken to be a dead process's and taken over — so a holder slower than that can lose
 it — and one dated ahead of this host's clock, whose age cannot be told, is refused at once.
 Under the lock the copy
