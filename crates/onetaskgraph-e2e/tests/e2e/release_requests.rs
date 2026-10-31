@@ -289,6 +289,7 @@ fn every_task_copy_and_task_write_sends_what_v0_12_13_sent_but_the_one_relist_ow
                         )),
                     );
                 }
+                // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The task's acceptance criteria ask for exactly this: the requests each copy and task write sends held to what the v0.12.13 release sent, as README's "What it costs" states them. What is compared is which operations are sent and the fields each selects — the wire behaviour a backend sees — recorded from that release's binary, not a count or a time judged against a limit.
                 assert_eq!(
                     now[scenario][step][store],
                     Value::Array(expected),

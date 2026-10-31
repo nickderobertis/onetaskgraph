@@ -312,6 +312,7 @@ fn a_guarded_copy_sends_exactly_the_requests_of_the_same_copy_without_the_guard(
             stores.json(&arguments);
             counts.push(stores.served(destination) - before);
         }
+        // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] Not a budget but the guards' stated behaviour: the task's contract and README's "costs no request" say a guard is decided on the read the copy already makes, so a guard that sent anything of its own would be a different feature, not a slower one. The comparison is between the same copy with and without the guard, never against a figure.
         assert_eq!(counts[0], counts[1], "{destination}: {counts:?}");
     }
 }

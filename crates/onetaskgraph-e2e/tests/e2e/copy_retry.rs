@@ -877,6 +877,52 @@ fn a_holder_whose_create_another_copy_has_since_finished_and_linked_writes_nothi
 }
 
 #[test]
+fn a_holder_renews_before_each_comment_write_and_stops_between_them_once_taken_over() {
+    let stores = Stores::new();
+    for word in ["A first word.\n", "A second word.\n"] {
+        let body = stores.sandbox.project().join("comment.md");
+        std::fs::write(&body, word).expect("a comment body");
+        stores.json(&[
+            "task",
+            "comment",
+            "add",
+            NOTE,
+            "--body-file",
+            body.to_str().expect("a path"),
+        ]);
+    }
+    // The first copy creates the issue, writes its first comment, and is held before its
+    // second until its one-second lease has run out.
+    let first = Paused::copying(&stores, &[NOTE], "first", &["before-comment-1"]);
+    first.reached("before-comment-1");
+    assert_eq!(
+        count(&stores.board, adds_comment),
+        1,
+        "the first comment landed"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    // A second copy takes the create over, then dies.
+    let second = stores.run(
+        &["task", "copy", NOTE, "--to", "board", "--comments"],
+        Some("after-intent"),
+    );
+    assert_eq!(second.status.code(), Some(86), "{}", stderr(&second));
+
+    first.release("before-comment-1");
+    let (code, failure) = first.finish();
+    assert_eq!(code, Some(1), "{failure:#}");
+    assert_eq!(
+        failure["failure"]["kind"], "create-in-progress",
+        "{failure:#}"
+    );
+    assert_eq!(
+        count(&stores.board, adds_comment),
+        1,
+        "no comment written after the loss"
+    );
+}
+
+#[test]
 fn a_listing_by_key_the_board_answers_malformed_is_refused_and_nothing_is_created_again() {
     type Bend = fn(&mut Value);
     let cases: [(&str, Bend); 7] = [
