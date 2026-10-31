@@ -2577,3 +2577,43 @@ fn an_unreadable_intent_write_read_back_as_a_malformed_intent_refuses_the_copy_b
     let output = stores.run(&["--json", "task", "copy", &issue, "--to", "board"], None);
     refused_unprotected(&stores, &issue, &output, "malformed");
 }
+
+#[test]
+fn an_unreadable_intent_write_read_back_as_another_attempts_refuses_the_copy_before_any_create() {
+    let stores = Stores::new();
+    let issue = a_linear_issue(&stores);
+    garble_the_intent_write_then(&stores, |workspace| {
+        workspace.bend_answers(
+            |document, _| document == onetaskgraph_linear::graphql::ISSUE,
+            1,
+            |_, data| {
+                let description = data["issue"]["description"].as_str().unwrap_or_default();
+                let at = description
+                    .find("\"attempt\":\"")
+                    .expect("the slot names an attempt")
+                    + "\"attempt\":\"".len();
+                let mut bent = description.to_owned();
+                bent.replace_range(at..at + 36, "00000000-0000-4000-8000-000000000000");
+                data["issue"]["description"] = json!(bent);
+            },
+        );
+    });
+    let output = stores.run(&["--json", "task", "copy", &issue, "--to", "board"], None);
+    refused_unprotected(&stores, &issue, &output, "create-in-progress");
+}
+
+#[test]
+fn an_unreadable_intent_write_read_back_as_a_record_gone_copies_as_it_always_was_with_no_intent() {
+    let stores = Stores::new();
+    let issue = a_linear_issue(&stores);
+    // The issue is trashed as the intent write is answered: no intent is left anywhere to
+    // protect, so the copy goes on exactly as a source no longer holding the record does.
+    let trashed = issue.trim_start_matches("linear:").to_owned();
+    garble_the_intent_write_then(&stores, move |workspace| workspace.trash_issue(&trashed));
+    let output = stores.run(&["--json", "task", "copy", &issue, "--to", "board"], None);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let copied: Value = serde_json::from_str(&stdout(&output)).expect("a report");
+    assert_eq!(copied["items"][0]["action"], "created", "{copied:#}");
+    assert_eq!(copied["items"][0]["link"], "unrecorded", "{copied:#}");
+    assert_eq!(board_issues_of(&stores, &issue).len(), 1, "one issue");
+}
