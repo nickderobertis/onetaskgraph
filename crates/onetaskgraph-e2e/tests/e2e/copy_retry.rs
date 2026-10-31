@@ -1454,3 +1454,85 @@ fn a_linear_project_or_document_create_answered_as_an_id_held_is_read_by_that_id
         );
     }
 }
+
+/// Plant a lock beside the note's file dated an hour ahead of this host's clock: another host's,
+/// whose age this one cannot tell.
+fn lock_ahead(notes: &std::path::Path) -> PathBuf {
+    let lock = notes.join("tasks/A.md.lock");
+    let file = std::fs::File::create(&lock).expect("another host's lock");
+    file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
+        .expect("an hour ahead");
+    lock
+}
+
+#[test]
+fn a_copy_whose_source_cannot_give_its_hold_is_refused_before_any_destination_request() {
+    let stores = Stores::new();
+    let lock = lock_ahead(&stores.notes);
+    let before = std::fs::read(stores.notes.join("tasks/A.md")).expect("the note");
+    let creates = count(&stores.board, creates_issue);
+    let output = stores.run(&["--json", "task", "copy", NOTE, "--to", "board"], None);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("ahead of this host's clock"),
+        "names the lock: {}",
+        stderr(&output)
+    );
+    assert_eq!(
+        count(&stores.board, creates_issue),
+        creates,
+        "nothing created"
+    );
+    assert_eq!(
+        std::fs::read(stores.notes.join("tasks/A.md")).expect("the note"),
+        before,
+        "nothing written to the note"
+    );
+    // Once the lock is gone, the copy goes through as it always did.
+    std::fs::remove_file(lock).expect("removed");
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "board"]);
+    assert_eq!(copied["items"][0]["action"], "created", "{copied:#}");
+}
+
+#[test]
+fn a_copy_that_cannot_put_its_source_back_leaves_the_intent_for_its_retry_to_resolve() {
+    let stores = Stores::new();
+    // Linear refuses the create, and the note's file can no longer be held when the copy comes to
+    // put it back: neither the byte-for-byte restore nor taking the intent off can be made.
+    let notes = stores.notes.clone();
+    stores.linear.bend_answers(
+        |document, _| document == onetaskgraph_linear::graphql::ISSUE_CREATE,
+        1,
+        move |_, data| {
+            lock_ahead(&notes);
+            *data = json!({"issueCreate": {"success": false, "issue": null}});
+        },
+    );
+    let failed = stores.run(&["--json", "task", "copy", NOTE, "--to", "linear"], None);
+    assert_ne!(failed.status.code(), Some(0), "{}", stdout(&failed));
+    let failure: Value = serde_json::from_str(&stdout(&failed)).expect("a failure document");
+    assert!(
+        !failure["failure"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("ahead of this host's clock"),
+        "the copy reports why it failed, not why it could not tidy up: {failure:#}"
+    );
+    let lock = stores.notes.join("tasks/A.md.lock");
+    let text = std::fs::read_to_string(stores.notes.join("tasks/A.md")).expect("the note");
+    assert!(
+        text.contains("onetaskgraph.creating"),
+        "the intent stands: {text}"
+    );
+    // The lock gone and the lease run out, the retry resolves the intent and lands one issue.
+    std::fs::remove_file(lock).expect("removed");
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    stores.json(&["task", "copy", NOTE, "--to", "linear"]);
+    assert_eq!(stores.carrying_origin("linear").len(), 1, "one issue");
+    assert!(
+        stores
+            .source_metadata()
+            .get("onetaskgraph.creating")
+            .is_none()
+    );
+}
