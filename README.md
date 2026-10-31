@@ -696,18 +696,22 @@ land a second one beside it.
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
      `crates/onetaskgraph-e2e/tests/e2e/copy_retry.rs`, which stop a copy at each point named
      here and run it again against a second folder, the loopback board and the loopback Linear
-     workspace, and by `crates/onetaskgraph-core/src/engine/copy/intent.rs`, the one place the
-     key, the lease and the lock are spelled. -->
-**Every create a copy makes is safe to retry**, with no flag: a copy that dies or times out
-after the destination created its item, run again, finds and finishes that item rather than
-creating a second. Two reserved keys carry it, neither of which `metadata set` accepts:
+     workspace, by `crates/onetaskgraph-e2e/tests/e2e/release_requests.rs`, which holds the
+     request figures to the v0.12.13 binary's, and by
+     `crates/onetaskgraph-core/src/engine/copy/intent.rs`, the one place the key, the lease and
+     the lock are spelled. -->
+**Every create a copy makes is safe to retry** — of a task, a project and a document alike —
+with no flag: a copy that dies or times out after the destination created its item, run again,
+finds and finishes that item rather than creating a second. Two reserved keys carry it, neither
+of which `metadata set` accepts:
 
 - **`onetaskgraph.creating`**, on the item being copied, is an object keyed by destination
   source name, each `{"key": <UUID v5>, "at": <RFC 3339 UTC, when the key was first taken>,
   "attempt": <UUID v4 of the copy holding it>, "lease_until": <RFC 3339 UTC>}`. It is written
   before the copy's first destination request for that item — before any create of the same
-  command is sent — and removed for that destination in the write that records the item's
-  `onetaskgraph.copies` link; the key goes when its object empties. A dry run, `--no-link`, an
+  command is sent — and removed for that destination with the write that records the item's
+  `onetaskgraph.copies` link: in that one write for a task, and in one more narrow write of that
+  key alone for a project or a document; the key goes when its object empties. A dry run, `--no-link`, an
   update and a copy into a destination a link may not name write none, so an item with no create
   in flight reads exactly as it did before this existed. A copy that cannot finish and takes back
   everything it wrote puts the item back byte for byte; one whose create may have landed unseen —
@@ -715,22 +719,39 @@ creating a second. Two reserved keys carry it, neither of which `metadata set` a
   over at once.
 - **`onetaskgraph.create_key`**, on the created item, is the key as a string, written with the
   create itself: in a GitHub issue body's metadata slot, in a folder of Markdown's file, and on
-  Linear as the issue's own `id` — sent as `IssueCreateInput.id` — as well as in its slot.
+  Linear in its slot and, transformed, as the item's own `id` — sent as `IssueCreateInput.id`,
+  `ProjectCreateInput.id` or `DocumentCreateInput.id`.
+
+**Linear is sent a v4-shaped id, not the key.** Linear's published schema
+([`packages/sdk/src/schema.graphql`](https://github.com/linear/linear/blob/8397645/packages/sdk/src/schema.graphql)
+at commit `8397645`) documents each of those three `id` inputs as "The identifier in UUID v4
+format. If none is provided, the backend will generate one." The key is a version-5 UUID, so
+the id sent is the key with its version nibble — the first digit of its third group — set to
+`4`, every other digit, the RFC 4122 variant included, as it was:
+`8213b96a-ad84-54be-990c-798d8c12c97b` is sent as `8213b96a-ad84-44be-990c-798d8c12c97b`. The
+transform is deterministic, so every attempt sends and looks up one id; the slot keeps the key
+verbatim. What Linear answers a create naming an id it already holds is not documented, so the
+store reads the item by that id after *any* failed create carrying a key, and writes it whole
+when it is there.
 
 **The key is deterministic**: the version-5 UUID, under the namespace
 `7a1c3f0e-5b2d-4c8a-9e61-0f4d2b7c5a39`, of `<source qualified id>|<destination source
-name>|<the qualified id of the link this create replaces, or nothing>`. Two attempts at one
-create compute one key without having seen each other, and `--recreate` after a stale link
-gets a new one.
+name>|<the qualified id of the link this create replaces, or nothing>` for a task, with
+`|project` or `|document` appended for a project or a document, so a task and a project one
+folder spells with one id never share a key. Two attempts at one create compute one key without
+having seen each other, and `--recreate` after a stale link gets a new one.
 
 **An intent is resolved before every other rule**, and before `--create` is believed. The copy
 asks the destination for the item carrying the key: a folder of Markdown reads its own files, and
-Linear reads the issue whose id is the key — Linear lets one issue hold an id, so a create
-re-sent with it while the first is still in flight lands once, and one answered as a duplicate id
-is read by that id and written whole. A GitHub board offers no idempotency key, so the store
+Linear reads the item whose id is the key's v4 transform — Linear lets one item hold an id, so a
+create re-sent with it while the first is still in flight lands once, and one refused is read by
+that id and written whole. A GitHub board offers no idempotency key, so the store
 lists the repository the creation rule files in through `Repository.issues`, newest first, back
 to five minutes before the intent's `at`, and matches the key in each body's slot — never through
-search. Found, that item is the counterpart, reported `via: "intent"`: the copy writes only what
+search. A listing page the board answers malformed — `nodes` not a list, an issue with no `id` or
+`createdAt`, a body neither text nor `null`, no `hasNextPage`, or a next page whose cursor is
+missing or does not move — refuses the copy before anything is created again, since an issue it
+could not read might be the one carrying the key. Found, that item is the counterpart, reported `via: "intent"`: the copy writes only what
 the earlier attempt left unwritten — nothing, for an item it finished — records the link and
 removes the intent. On a board, an item not listed before `create_quiescence_seconds` have
 passed since `at` is waited for: the copy renews its lease once, to the window's end plus
@@ -738,8 +759,11 @@ passed since `at` is waited for: the copy renews its lease once, to the window's
 with the same key. `task locate` resolves an intent the same way but never waits, creates or
 writes: it answers the item the key names as `"via": "intent"`, or no counterpart.
 
-**Who owns an intent depends on the copy's source.** A folder of Markdown takes, renews and
-releases it under an exclusive lock file beside the item (`<file>.lock`, created exclusively;
+**Who owns an intent depends on the copy's source**, through that source's own plugin: an
+intent is decided under the hold `TaskSource::hold_item` gives, and a copy that takes everything
+back puts the item back through `item_snapshot` and `restore_item` — defaulted, additive methods
+a source with no hold or no byte-exact snapshot leaves alone. A folder of Markdown takes, renews
+and releases it under an exclusive lock file beside the item (`<file>.lock`, created exclusively;
 one older than thirty seconds is a dead process's and is taken over): under the lock the copy
 reads the intent, refuses with the failure kind `create-in-progress` — naming the lease's end,
 having written nothing and sent the destination nothing — while another attempt's lease is live,
@@ -766,9 +790,16 @@ listed by the time of the listing that follows a create. An issue that becomes l
 whose create is listed late — leaves a second issue that no process reports.
 
 **What it costs.** The renewal rule is one statement: a holder renews its lease before each
-destination write it sends after its create request — never before a read or a listing — and once
-before waiting out the quiescence window, to the window's end plus `create_lease_seconds`, so no
-renewal falls during the wait. On the normal path the cost is exact: an update and an `unchanged`
+destination write it sends after its create request — a write that finishes the item, a comment
+it carries, and a write that finishes an earlier attempt's create alike — never before a read or a
+listing, and once before waiting out the quiescence window, to the window's end plus
+`create_lease_seconds`, so no renewal falls during the wait. A renewal is one write the engine
+makes before one call to the destination's plugin: a plugin that answers that call with several
+requests — a board's `createIssue` followed by the card's field writes — is renewed for once
+before them, not between them. A renewal that finds the intent naming another attempt — one that
+took it over after this copy's lease ran out — stops the copy with `create-in-progress` before
+that write, sending nothing more and taking nothing back, since what it wrote is now the other
+attempt's to finish. On the normal path the cost is exact: an update and an `unchanged`
 copy send what they always sent, to the destination and to the source; an uninterrupted create
 from a folder of Markdown sends the destination exactly what it always did and no remote party
 anything for its intent, whose take and release are lock-guarded file writes; and one from a
@@ -782,6 +813,13 @@ for every hundred issues created since five minutes before `at`, plus the reads 
 own copy makes; on Linear, one read by id, and a re-sent `issueCreate` answered as a duplicate
 adds one read; on a folder, a read of its files. A re-create adds nothing to a create but the
 listing after it on a board.
+
+Those exact figures are held, not asserted: `crates/onetaskgraph-e2e/tests/e2e/release_requests.rs`
+runs a create, an update, an `unchanged` copy and every task write verb against the loopback board
+and Linear and holds the requests each sends to the ones the v0.12.13 binary sent for the same
+commands — recorded with that binary in `release_requests.v0.12.13.json` — allowing only the one
+listing above. A project's or a document's create from a hosted source adds the one narrow write
+that takes its intent off beside its link.
 
 **Settings**, in each source's own block beside `cache` and `routes`, in whole seconds, each 120
 when absent and left out of `config show` when unset: `create_lease_seconds`, read off the copy's
