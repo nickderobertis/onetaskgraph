@@ -759,8 +759,9 @@ could not read might be the one carrying the key. Found, that item is the counte
 the earlier attempt left unwritten — nothing, for an item it finished — records the link and
 removes the intent. On a board, an item not listed before `create_quiescence_seconds` have
 passed since `at` is waited for: the copy renews its lease once, to the window's end plus
-`create_lease_seconds`, waits out the window, and lists once more. Still not listed, it creates
-with the same key. `task locate` resolves an intent the same way but never waits, creates or
+`create_lease_seconds`, waits out the window, and lists once more — a `--no-link` copy waits
+without that renewal, writing nothing to its source. Still not listed, it creates with the same
+key. `task locate` resolves an intent the same way but never waits, creates or
 writes: it answers the item the key names as `"via": "intent"`, or no counterpart.
 
 **Who owns an intent depends on the copy's source**, through that source's own plugin: an

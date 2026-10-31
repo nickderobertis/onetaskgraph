@@ -153,6 +153,15 @@ impl Intent {
     }
 }
 
+/// What resolving an earlier attempt's intent may do beyond reading.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::engine) struct Resolving {
+    /// Whether it may wait out the destination's quiescence window.
+    pub(in crate::engine) waits: bool,
+    /// Whether it may write the lease that outlasts that wait to the copied item.
+    pub(in crate::engine) writes: bool,
+}
+
 /// What taking an intent came to.
 pub(in crate::engine) enum Taken {
     /// The intent is recorded, and `exclusive` when the source's hold made it this host's alone.
@@ -744,7 +753,9 @@ impl Engine {
     /// when several do; and `None` when none does — once a destination whose lookup lags has
     /// had until the quiescence window after the intent was first taken to list it.
     ///
-    /// `waits` is false for a dry run and for `task locate`, which never wait, renew or write.
+    /// `resolving` says whether it may wait and whether it may write the lease that outlasts the
+    /// wait: a dry run and `task locate` do neither, and a `--no-link` copy waits unleased, since
+    /// it writes nothing to its source.
     pub(in crate::engine) async fn resolve_intent(
         &self,
         level: Level,
@@ -752,7 +763,7 @@ impl Engine {
         id: &GlobalId,
         intent: &Intent,
         repositories: &[onetaskgraph_plugin_api::Repository],
-        waits: bool,
+        resolving: Resolving,
     ) -> Result<Option<NativeId>, EngineError> {
         let since = intent.since();
         let mut waited = false;
@@ -784,7 +795,7 @@ impl Engine {
                     });
                 }
             }
-            if waited || !waits || !destination.source().create_key_lags() {
+            if waited || !resolving.waits || !destination.source().create_key_lags() {
                 return Ok(None);
             }
             let Some(window_end) = intent
@@ -798,18 +809,19 @@ impl Engine {
                 return Ok(None);
             }
             // Taken over by this attempt — refused while another's lease is live — and leased
-            // once, to outlast the whole wait, so no renewal falls during it.
-            // A source that will not keep the key waits all the same, unleased, as it creates
-            // without one.
-            self.take_intent(
-                level,
-                id,
-                destination.name(),
-                intent.key,
-                window_end.checked_add_signed(self.create_settings(&id.source).lease()),
-                None,
-            )
-            .await?;
+            // once, to outlast the whole wait, so no renewal falls during it. A source that will
+            // not keep the key, or a copy that may not write to it, waits all the same, unleased.
+            if resolving.writes {
+                self.take_intent(
+                    level,
+                    id,
+                    destination.name(),
+                    intent.key,
+                    window_end.checked_add_signed(self.create_settings(&id.source).lease()),
+                    None,
+                )
+                .await?;
+            }
             let wait = (window_end - now).to_std().unwrap_or_default();
             self.clock.sleep(wait).await;
             waited = true;

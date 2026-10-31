@@ -6765,7 +6765,10 @@ impl Engine {
                 id,
                 &intent,
                 repositories_of(item),
-                !request.dry_run,
+                intent::Resolving {
+                    waits: !request.dry_run,
+                    writes: !request.dry_run && !request.no_link,
+                },
             )
             .await?
             && let Some(held) = self
