@@ -2199,7 +2199,11 @@ impl Engine {
 
     /// Have every destination `request` can write send what it held back, before anything is
     /// linked to or reported as landing there.
-    async fn finished_writes(&self, request: &CopyRequest) -> Result<(), EngineError> {
+    async fn finished_writes(
+        &self,
+        request: &CopyRequest,
+        journal: &mut Journal,
+    ) -> Result<(), EngineError> {
         if request.dry_run || self.expects_copy() {
             return Ok(());
         }
@@ -2211,10 +2215,10 @@ impl Engine {
                 continue;
             }
             if let Ok(destination) = self.writable(&name) {
-                destination
-                    .source()
-                    .finish_writes()
-                    .await
+                // What was held back includes the writes of creates this copy owns.
+                let owned = Self::owned_at(journal, None, &name);
+                self.guarded(owned, journal, destination.source().finish_writes())
+                    .await?
                     .map_err(|error| refused(destination, error))?;
             }
             finished.push(name);
@@ -2399,7 +2403,7 @@ impl Engine {
         }
         // Everything held back lands before anything is linked to it: a copy that cannot finish
         // is undone with nothing recorded at its sources.
-        self.finished_writes(request).await?;
+        self.finished_writes(request, journal).await?;
         let mut items = items;
         if !request.dry_run {
             intent::stop_at("before-link");
@@ -2476,6 +2480,89 @@ impl Engine {
                 result.version = version.or_else(|| result.version.take());
             }
         }
+    }
+
+    /// Run `call` — one call to a destination plugin — answering, before each write request the
+    /// plugin sends inside it, whether it may send it: every create `owned` names has its lease
+    /// renewed first, and once one cannot be, the answer is a refusal to that request and to
+    /// every later one, a write taking back what the call made included. Answered `Err` with
+    /// the renewal's own refusal, the journal marked when it is another attempt's hold, once
+    /// the call has stopped; `Ok` with the call's own answer otherwise. With nothing owned the
+    /// call runs as it is.
+    ///
+    /// The guard is served on this task beside the call, so a renewal is a write to the copy's
+    /// source made between two of the destination's requests — and through no guard of its own.
+    async fn guarded<T>(
+        &self,
+        owned: Vec<(Level, GlobalId, SourceName)>,
+        journal: &mut Journal,
+        call: impl std::future::Future<Output = T>,
+    ) -> Result<T, EngineError> {
+        if owned.is_empty() {
+            return Ok(call.await);
+        }
+        type Ask = tokio::sync::oneshot::Sender<Result<(), SourceError>>;
+        struct Asking(tokio::sync::mpsc::UnboundedSender<Ask>);
+        #[async_trait::async_trait]
+        impl onetaskgraph_plugin_api::WriteGuard for Asking {
+            async fn before_write(&self) -> Result<(), SourceError> {
+                let (answer, answered) = tokio::sync::oneshot::channel();
+                if self.0.send(answer).is_err() {
+                    return Ok(());
+                }
+                answered.await.unwrap_or(Ok(()))
+            }
+        }
+        let (asks, mut asked) = tokio::sync::mpsc::unbounded_channel::<Ask>();
+        let mut refusal: Option<EngineError> = None;
+        let serve = async {
+            while let Some(answer) = asked.recv().await {
+                intent::pause_at("guarded-write");
+                if refusal.is_none() {
+                    for (level, item, to) in &owned {
+                        if let Err(error) = self.renew_intent(*level, item, to).await {
+                            refusal = Some(error);
+                            break;
+                        }
+                    }
+                }
+                let _ = answer.send(match &refusal {
+                    None => Ok(()),
+                    Some(error) => Err(SourceError::Refused {
+                        message: error.to_string(),
+                    }),
+                });
+            }
+        };
+        let guard: std::sync::Arc<dyn onetaskgraph_plugin_api::WriteGuard> =
+            std::sync::Arc::new(Asking(asks));
+        let (answer, ()) = tokio::join!(
+            <dyn onetaskgraph_plugin_api::WriteGuard>::scope(guard, call),
+            serve
+        );
+        match refusal {
+            None => Ok(answer),
+            Some(error) => {
+                if matches!(error, EngineError::CreateInProgress { .. }) {
+                    journal.ownership_lost = true;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Every create this copy owns, of `item` when it names one, at `destination`.
+    fn owned_at(
+        journal: &Journal,
+        item: Option<&GlobalId>,
+        destination: &SourceName,
+    ) -> Vec<(Level, GlobalId, SourceName)> {
+        journal
+            .owned
+            .iter()
+            .filter(|(_, owner, to)| to == destination && item.is_none_or(|item| owner == item))
+            .cloned()
+            .collect()
     }
 
     /// Renew the lease of the intent `source` holds for `destination`, when this copy owns that
@@ -5259,10 +5346,15 @@ impl Engine {
                         ));
                     }
                 }
-                let ids = destination
-                    .source()
-                    .write_tasks(&writes)
-                    .await
+                let owned = Self::owned_at(journal, None, destination.name())
+                    .into_iter()
+                    .filter(|(_, owner, _)| {
+                        chunk.iter().any(|index| &planned[*index].source == owner)
+                    })
+                    .collect();
+                let ids = self
+                    .guarded(owned, journal, destination.source().write_tasks(&writes))
+                    .await?
                     .map_err(|error| create_refused(destination, Creating::Tasks, error))?;
                 journal
                     .sending
@@ -8534,71 +8626,76 @@ impl Engine {
         // What a follow-up write starts from, should this write's answer say the destination
         // stores other content than it was sent.
         let composed = landing.clone();
-        let landed = match landing {
-            Item::Task(task) if carrying => destination
-                .source()
-                .write_task_with_assets(
-                    &ItemWrite {
-                        target: target.clone(),
-                        item: *task,
-                        depends_on: edges.to_vec(),
-                    },
-                    None,
-                    &assets::write_of(item.assets.clone(), recorded.clone()),
-                )
-                .await
-                .map(|written| {
-                    sent = written.content;
-                    written.id
+        let owned = Self::owned_at(journal, Some(&item.source), destination.name());
+        let landed = self
+            .guarded(owned, journal, async {
+                Ok::<NativeId, EngineError>(match landing {
+                    Item::Task(task) if carrying => destination
+                        .source()
+                        .write_task_with_assets(
+                            &ItemWrite {
+                                target: target.clone(),
+                                item: *task,
+                                depends_on: edges.to_vec(),
+                            },
+                            None,
+                            &assets::write_of(item.assets.clone(), recorded.clone()),
+                        )
+                        .await
+                        .map(|written| {
+                            sent = written.content;
+                            written.id
+                        })
+                        .map_err(|error| failed(Creating::Task, error))?,
+                    Item::Document(document) if carrying => destination
+                        .source()
+                        .write_document_with_assets(
+                            &ItemWrite {
+                                target: target.clone(),
+                                item: *document,
+                                depends_on: Vec::new(),
+                            },
+                            None,
+                            &assets::write_of(item.assets.clone(), recorded.clone()),
+                        )
+                        .await
+                        .map(|written| {
+                            sent = written.content;
+                            written.id
+                        })
+                        .map_err(|error| failed(Creating::Document, error))?,
+                    Item::Task(task) => destination
+                        .source()
+                        .write_task(&ItemWrite {
+                            target: target.clone(),
+                            item: *task,
+                            depends_on: edges.to_vec(),
+                        })
+                        .await
+                        .map_err(|error| failed(Creating::Task, error))?,
+                    Item::Project(project) => destination
+                        .source()
+                        .write_project(&ItemWrite {
+                            target: target.clone(),
+                            item: *project,
+                            depends_on: edges.to_vec(),
+                        })
+                        .await
+                        .map_err(|error| failed(Creating::Project, error))?,
+                    // No edges, and that is the contract: a document takes part in no dependency
+                    // graph, so there is nothing here for `depends_on` to carry.
+                    Item::Document(document) => destination
+                        .source()
+                        .write_document(&ItemWrite {
+                            target: target.clone(),
+                            item: *document,
+                            depends_on: Vec::new(),
+                        })
+                        .await
+                        .map_err(|error| failed(Creating::Document, error))?,
                 })
-                .map_err(|error| failed(Creating::Task, error))?,
-            Item::Document(document) if carrying => destination
-                .source()
-                .write_document_with_assets(
-                    &ItemWrite {
-                        target: target.clone(),
-                        item: *document,
-                        depends_on: Vec::new(),
-                    },
-                    None,
-                    &assets::write_of(item.assets.clone(), recorded.clone()),
-                )
-                .await
-                .map(|written| {
-                    sent = written.content;
-                    written.id
-                })
-                .map_err(|error| failed(Creating::Document, error))?,
-            Item::Task(task) => destination
-                .source()
-                .write_task(&ItemWrite {
-                    target: target.clone(),
-                    item: *task,
-                    depends_on: edges.to_vec(),
-                })
-                .await
-                .map_err(|error| failed(Creating::Task, error))?,
-            Item::Project(project) => destination
-                .source()
-                .write_project(&ItemWrite {
-                    target: target.clone(),
-                    item: *project,
-                    depends_on: edges.to_vec(),
-                })
-                .await
-                .map_err(|error| failed(Creating::Project, error))?,
-            // No edges, and that is the contract: a document takes part in no dependency
-            // graph, so there is nothing here for `depends_on` to carry.
-            Item::Document(document) => destination
-                .source()
-                .write_document(&ItemWrite {
-                    target: target.clone(),
-                    item: *document,
-                    depends_on: Vec::new(),
-                })
-                .await
-                .map_err(|error| failed(Creating::Document, error))?,
-        };
+            })
+            .await??;
         // A created item can only be journalled here: its id is what the write answers
         // with. A create that fails leaves nothing behind — §4.9 makes taking the item
         // back the source's own duty, because a write that refused must not leave an item

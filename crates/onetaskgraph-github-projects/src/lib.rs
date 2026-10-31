@@ -5255,6 +5255,17 @@ impl GitHubProjectsSource {
         let mut backoff = self.pacing.retry_backoff;
         loop {
             let ticket = self.pace(charge, mutation).await;
+            // Every write but a create is asked for immediately before it is sent — a create's
+            // fields, its relationships, its content and the delete that takes it back included
+            // — so a copy that owns the create renews its hold first, and one that has lost it
+            // sends nothing more. Asked again before a retry, which is sent later.
+            if mutation
+                && !query.contains("createIssue(")
+                && let Err(refused) = <dyn onetaskgraph_plugin_api::WriteGuard>::check().await
+            {
+                self.paced(ticket, mutation);
+                return Err(refused);
+            }
             let attempt = self.send_once(query, &variables, waits + 1).await;
             self.paced(ticket, mutation);
             let limited = match attempt {

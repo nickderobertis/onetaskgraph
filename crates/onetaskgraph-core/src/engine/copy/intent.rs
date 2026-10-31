@@ -421,9 +421,11 @@ pub(crate) fn stop_at(point: &str) {
 
 /// The test-only points a copy waits at for a journey to let it go on, so two processes can be
 /// interleaved exactly as a race would interleave them: `OTG_TEST_PAUSE_AT` naming
-/// `<point>=<directory>` pairs, comma-separated — `before-intent`, `intent-read`, `after-create`, and
-/// `before-comment-<n>` before the comment write numbered `n` from 0. At a named point the copy creates
-/// `<directory>/<point>.paused` and waits until `<directory>/<point>.go` exists, a minute at most.
+/// `<point>=<directory>` pairs, comma-separated. The points are `before-intent`, `intent-read`,
+/// `after-create`, `guarded-write` — before the renewal a write request asks for inside a plugin
+/// call that owns a create — and `before-comment-<n>`, before the comment write numbered `n`
+/// from 0. At a named point the copy creates `<directory>/<point>.paused` and waits until
+/// `<directory>/<point>.go` exists, a minute at most.
 /// Unset, as everywhere but those journeys, it does nothing.
 pub(crate) fn pause_at(point: &str) {
     let Ok(spec) = std::env::var("OTG_TEST_PAUSE_AT") else {
