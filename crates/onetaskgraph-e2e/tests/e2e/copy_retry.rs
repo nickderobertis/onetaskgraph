@@ -1684,3 +1684,33 @@ fn a_source_record_gone_before_its_intent_is_copied_as_it_always_was_with_no_int
     assert_eq!(copied["items"][0]["link"], "unrecorded", "{copied:#}");
     assert_eq!(board_issues_of(&stores, &issue).len(), 1, "{sent:#?}");
 }
+
+#[test]
+fn an_intent_found_malformed_when_the_copy_comes_to_take_it_refuses_the_copy() {
+    let stores = Stores::new();
+    let creates = count(&stores.board, creates_issue);
+    // Planned on a note with no intent; held just before the intent is read under the hold.
+    let copy = Paused::copying(&stores, &[NOTE], "copy", &["before-intent"]);
+    copy.reached("before-intent");
+    std::fs::write(
+        stores.notes.join("tasks/A.md"),
+        "---\ntitle: Task A\nstatus: todo\nmetadata:\n  onetaskgraph.creating:\n    board: 5\n\
+         ---\nThe body.\n",
+    )
+    .expect("an entry that is not an intent");
+    copy.release("before-intent");
+    let (code, failure) = copy.finish();
+    assert_eq!(code, Some(1), "{failure:#}");
+    assert_eq!(failure["failure"]["kind"], "malformed", "{failure:#}");
+    assert!(
+        failure["failure"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("onetaskgraph.creating")),
+        "{failure:#}"
+    );
+    assert_eq!(
+        count(&stores.board, creates_issue),
+        creates,
+        "nothing created"
+    );
+}

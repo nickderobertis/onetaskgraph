@@ -48,30 +48,32 @@ fn a_hold_excludes_another_instance_until_it_is_released() {
     assert!(first.hold_item(MetadataRecord::Task, &id).expect("held"));
     let lock = root.path().join("tasks/T-1.md.lock");
     assert!(lock.exists(), "the hold is a lock file beside the record");
-    // The second instance says when it holds the record; until the first lets go it has not.
-    let (held, holding) = std::sync::mpsc::channel();
+    // The second instance says when it starts asking for the record and the moment it holds it;
+    // the first lets go only once the second is asking, and notes the moment it did. Exclusion is
+    // that the second's hold came after the first's release — an order, whatever the timing.
+    let (asking, asked) = std::sync::mpsc::channel();
     let waiter = std::thread::spawn({
         let root = root.path().to_owned();
         move || {
             let second = instance(&root);
+            asking.send(()).expect("the test is listening");
             let taken = second
                 .hold_item(MetadataRecord::Task, &NativeId("T-1".to_owned()))
                 .expect("held once released");
-            held.send(taken).expect("the test is listening");
+            (taken, std::time::Instant::now())
         }
     });
-    assert_eq!(
-        holding.recv_timeout(Duration::from_millis(300)),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout),
-        "the second instance holds nothing while the first does"
-    );
+    asked.recv().expect("the second instance is asking");
+    // Room for a hold that excluded nothing to be taken before the release below.
+    std::thread::sleep(Duration::from_millis(200));
+    let released = std::time::Instant::now();
     first.release_item(MetadataRecord::Task, &id);
-    assert_eq!(
-        holding.recv_timeout(Duration::from_secs(30)),
-        Ok(true),
-        "the second instance holds it once the first lets go"
+    let (taken, held_at) = waiter.join().expect("the second hold");
+    assert!(taken, "the second instance holds it");
+    assert!(
+        held_at >= released,
+        "the second instance held it only once the first let go"
     );
-    waiter.join().expect("the second hold");
     assert!(lock.exists(), "the second instance holds it now");
 }
 
