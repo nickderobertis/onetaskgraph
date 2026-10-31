@@ -2226,8 +2226,12 @@ pub const CONTRACT_TYPES: [(&str, bool, &[&str]); 42] = [
     ("CopyProjectV2Payload", false, &["projectV2"]),
     ("DeleteProjectV2Payload", false, &["projectV2"]),
     ("AddProjectV2DraftIssuePayload", false, &["projectItem"]),
-    // What the janitor lists a session's leftover board copies by, and the copy's owner id.
-    ("User", false, &["id", "projectsV2"]),
+    // What the janitor's listing of a session's leftover board copies answers in.
+    (
+        "ProjectV2Connection",
+        false,
+        &["nodes", "pageInfo", "totalCount"],
+    ),
 ];
 
 /// Every enum a read or a write names a member of, with the members it names.
@@ -2292,6 +2296,13 @@ pub fn contract_schema_documents() -> Vec<String> {
         ),
         String::from(
             "DraftIssue:__type(name:\"DraftIssue\"){fields{name type{kind name \
+         ofType{kind name ofType{kind name}}}args{name type{kind name \
+         ofType{kind name ofType{kind name}}}}}}",
+        ),
+        // A copy's owner id, and the listing — with its arguments — the janitor finds a
+        // session's leftover board copies by.
+        String::from(
+            "User:__type(name:\"User\"){fields{name type{kind name \
          ofType{kind name ofType{kind name}}}args{name type{kind name \
          ofType{kind name ofType{kind name}}}}}}",
         ),
@@ -2392,6 +2403,44 @@ async fn verify_contract_schema<Recheck: std::future::Future<Output = ()>>(
         if actual.as_deref() != Some(expected) {
             return Err(format!(
                 "GitHub DraftIssue.projectV2Items({name}:) changed: expected {expected}, got {actual:?}"
+            ));
+        }
+    }
+    let user_fields = response
+        .pointer("/data/User/fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "GitHub schema has no User fields".to_owned())?;
+    let user_field = |name: &str| {
+        user_fields
+            .iter()
+            .find(|field| field.get("name").and_then(Value::as_str) == Some(name))
+            .ok_or_else(|| format!("GitHub User has no {name} field"))
+    };
+    if user_field("id")?
+        .get("type")
+        .and_then(type_signature)
+        .as_deref()
+        != Some("ID!")
+    {
+        return Err("GitHub User.id changed its type".to_owned());
+    }
+    let boards = user_field("projectsV2")?;
+    if boards.get("type").and_then(type_signature).as_deref() != Some("ProjectV2Connection!") {
+        return Err("GitHub User.projectsV2 changed its return type".to_owned());
+    }
+    for (name, expected) in [("after", "String"), ("first", "Int"), ("query", "String")] {
+        let actual = boards
+            .get("args")
+            .and_then(Value::as_array)
+            .and_then(|args| {
+                args.iter()
+                    .find(|arg| arg.get("name").and_then(Value::as_str) == Some(name))
+            })
+            .and_then(|arg| arg.get("type"))
+            .and_then(type_signature);
+        if actual.as_deref() != Some(expected) {
+            return Err(format!(
+                "GitHub User.projectsV2({name}:) changed: expected {expected}, got {actual:?}"
             ));
         }
     }
@@ -2546,7 +2595,7 @@ pub fn contract_field_types(type_name: &str) -> &'static [(&'static str, &'stati
         "AddProjectV2DraftIssueInput" => &[("projectId", "ID!"), ("title", "String!")],
         "CopyProjectV2Payload" | "DeleteProjectV2Payload" => &[("projectV2", "ProjectV2")],
         "AddProjectV2DraftIssuePayload" => &[("projectItem", "ProjectV2Item")],
-        "User" => &[("id", "ID!"), ("projectsV2", "ProjectV2Connection!")],
+        "ProjectV2Connection" => &[("pageInfo", "PageInfo!"), ("totalCount", "Int!")],
         _ => &[],
     }
 }

@@ -86,6 +86,8 @@ pub struct Held {
     pub index: u8,
     pub generation: u32,
     pub id: String,
+    /// The title the lease issue carries while this invocation holds it.
+    pub title: String,
 }
 impl Held {
     /// The standing scope the leased member names.
@@ -313,6 +315,16 @@ pub async fn verify_exclusive(
             held.index, held.id
         ));
     }
+    // And the lease is still this invocation's, exactly as it was claimed.
+    if still.pointer("/issue/id").and_then(Value::as_str) != Some(held.id.as_str())
+        || title != Some(held.title.as_str())
+    {
+        return Err(format!(
+            "pool member {}'s lease {} no longer reads as this run's ({title:?}); nothing is done \
+             over a member whose lease cannot be read back",
+            held.index, held.id
+        ));
+    }
     Ok(())
 }
 
@@ -400,6 +412,7 @@ async fn claim_among(
                 index,
                 generation,
                 id,
+                title,
             }));
         }
     }

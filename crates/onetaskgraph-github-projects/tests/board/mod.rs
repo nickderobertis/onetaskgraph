@@ -223,6 +223,14 @@ fn introspected_type_members(name: &str) -> Value {
             "args":[{"name":"first","type":introspected_type("Int")},
                     {"name":"after","type":introspected_type("String")}] }]});
     }
+    if name == "User" {
+        return json!({"fields":[
+            {"name":"id","type":introspected_type("ID!"),"args":[]},
+            {"name":"projectsV2","type":introspected_type("ProjectV2Connection!"),
+             "args":[{"name":"after","type":introspected_type("String")},
+                     {"name":"first","type":introspected_type("Int")},
+                     {"name":"query","type":introspected_type("String")}]}]});
+    }
     if name == "Mutation" {
         let fields = crate::journey::MUTATION_CONTRACT
             .iter()

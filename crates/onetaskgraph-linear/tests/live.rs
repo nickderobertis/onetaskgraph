@@ -4002,6 +4002,34 @@ mod pool {
             .await
             .unwrap_err();
         assert!(refused.contains("not exclusive"), "{refused}");
+        // A lease that reads back as another holder's, or not at all, is not this run's to use.
+        let replay = self::replay();
+        let held = claim(&replay, LeaseLane::Plugin, &holder(run(2)))
+            .await
+            .unwrap();
+        // The same lease, held under another run's stamp.
+        let (generation, _) = held.title.rsplit_once(' ').unwrap();
+        let other = format!("{generation} {}", holder(run(3)));
+        replay
+            .state
+            .lock()
+            .unwrap()
+            .issues
+            .get_mut(&held.id)
+            .unwrap()["title"] = json!(other);
+        let refused = lease::verify_exclusive(&replay.endpoint, "synthetic", "team", &held)
+            .await
+            .unwrap_err();
+        assert!(
+            refused.contains("no longer reads as this run's"),
+            "{refused}"
+        );
+        replay.state.lock().unwrap().issues.remove(&held.id);
+        assert!(
+            lease::verify_exclusive(&replay.endpoint, "synthetic", "team", &held)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
