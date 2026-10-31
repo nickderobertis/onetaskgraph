@@ -12,17 +12,33 @@ import { read, workflows } from "../workflow-graph.mjs";
 // queue a pull request once waited hours in, so this refuses one wherever it appears.
 const LIVE_CREDENTIALS = ["LINEAR_API_KEY", "GH_PROJECTS_TOKEN"];
 
-/** The jobs of `definitions` that run a live suite: a credentialed step that runs `just`. */
+/** Whether `env` names a live credential. */
+const holdsCredential = (env) => LIVE_CREDENTIALS.some((key) => env?.[key] !== undefined);
+
+/** Whether `run` invokes only the live janitor, which removes artifacts and opens no session. */
+const onlyJanitor = (run) =>
+  run
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"))
+    .every((line) => /\bonetaskgraph-live-janitor\b/.test(line));
+
+/**
+ * The jobs of `definitions` that run a live suite: a job with a step that runs any command —
+ * `just`, `cargo`, a script or anything else — while a live credential reaches it through the
+ * workflow's `env`, the job's or the step's own. A step that invokes only the live janitor is
+ * not one: it removes artifacts and opens no session, so its own group serialises no suite.
+ */
 export function liveSuiteJobs(definitions) {
   const found = [];
   for (const [file, workflow] of Object.entries(definitions)) {
     for (const [name, job] of Object.entries(workflow.jobs ?? {})) {
-      const jobCredentialed = LIVE_CREDENTIALS.some((key) => job.env?.[key] !== undefined);
+      const inherited = holdsCredential(workflow.env) || holdsCredential(job.env);
       const runsSuite = (job.steps ?? []).some(
         (step) =>
           typeof step.run === "string" &&
-          /(^|\s)just\s/.test(step.run) &&
-          (jobCredentialed || LIVE_CREDENTIALS.some((key) => step.env?.[key] !== undefined)),
+          !onlyJanitor(step.run) &&
+          (inherited || holdsCredential(step.env)),
       );
       if (runsSuite) found.push({ file, name, workflow, job });
     }
@@ -62,6 +78,52 @@ test("no workflow serialises a live suite", () => {
     assert.ok(jobs.includes(expected), `${expected} runs a live suite and was not found`);
   }
   assert.deepEqual(liveSerialisations(definitions, workflowSources()), []);
+});
+
+test("a live suite is found however its credential and its command reach it", () => {
+  const definitions = {
+    "direct.yml": {
+      env: { GH_PROJECTS_TOKEN: "x" },
+      concurrency: { group: "shared" },
+      jobs: {
+        suite: { steps: [{ run: "cargo test -p onetaskgraph-github-projects --test live" }] },
+      },
+    },
+    "script.yml": {
+      jobs: {
+        suite: {
+          env: { LINEAR_API_KEY: "x" },
+          concurrency: { group: "shared" },
+          steps: [{ run: "bash scripts/some-live-entry.sh" }],
+        },
+      },
+    },
+    "janitor.yml": {
+      concurrency: { group: "janitor" },
+      jobs: {
+        clean: {
+          steps: [
+            {
+              env: { GH_PROJECTS_TOKEN: "x" },
+              run: "cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run",
+            },
+          ],
+        },
+      },
+    },
+    "uncredentialed.yml": {
+      concurrency: { group: "shared" },
+      jobs: { suite: { steps: [{ run: "just check" }] } },
+    },
+  };
+  assert.deepEqual(
+    liveSuiteJobs(definitions).map(({ file, name }) => `${file}:${name}`),
+    ["direct.yml:suite", "script.yml:suite"],
+  );
+  assert.deepEqual(liveSerialisations(definitions, {}), [
+    "direct.yml runs a live suite (job suite) under a workflow concurrency group",
+    "script.yml job suite runs a live suite under a concurrency group",
+  ]);
 });
 
 test("a reintroduced live lock is refused, at job and at workflow level", () => {

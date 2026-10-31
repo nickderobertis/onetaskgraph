@@ -174,8 +174,16 @@ board answered it once another consumer had spent the token's budget, and in 20 
 refusals the orchestration host recorded that day, every one carrying that sentence. No
 identifier is kept: the user id in the sentence is not part of the wording.
 
+**The `conflict` wording is observed too, and says so under `conflict.observed`.** It is not
+a rate limit: "Your attempt to move this item created a temporary conflict. Please try
+again." is what GitHub answered, in the `errors` of an HTTP 200, to the credentialed lane's
+document write filed under its project in run 41229550836 on 2026-10-31, while run
+41229663880 wrote to the same scratch repository. The write had not taken effect, so this
+source retries every request answered that way but a `createIssue` on its backoff schedule.
+No identifier is kept.
+
 `the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact` in
-`../schema.rs` reconciles it against `SECONDARY_WORDINGS`, `PRIMARY_WORDINGS`,
+`../schema.rs` reconciles it against `SECONDARY_WORDINGS`, `PRIMARY_WORDINGS`, `CONFLICT_WORDINGS`,
 `CONTENT_CREATION_PER_MINUTE`, `CONTENT_CREATION_PER_HOUR`, `SECONDARY_POINTS_PER_MINUTE`,
 `SECONDARY_POINTS_PER_MUTATION` and `SECONDARY_POINTS_PER_QUERY` **both ways**, so neither a
 wording this source quietly starts matching on nor one it quietly stops matching on can

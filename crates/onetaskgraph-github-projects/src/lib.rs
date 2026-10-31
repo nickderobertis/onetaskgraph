@@ -2352,15 +2352,17 @@ pub const PRIMARY_WORDINGS: [&str; 4] = [
     "rate_limited",
 ];
 
-/// What GitHub answers a write that collided with another change to the same ordering, in
-/// the `errors` of an HTTP 200: "Your attempt to move this item created a temporary conflict.
-/// Please try again." Read on 2026-10-31 from the credentialed lane's document write filed
-/// under its project (run 41229550836), while another run wrote to the same scratch
-/// repository. The write did not take effect and GitHub asks for it again, so it is retried on
-/// the same growing schedule a rate limit without a hint is, within the same retry budget —
-/// except a `createIssue`, whose answer cannot say the issue was not made, and which is
-/// therefore reported rather than replayed into a duplicate.
-pub const CONFLICT_WORDING: &str = "created a temporary conflict";
+/// The wordings GitHub answers a write that collided with another change to the same
+/// ordering with, in the `errors` of an HTTP 200: "Your attempt to move this item created a
+/// temporary conflict. Please try again." The write did not take effect and GitHub asks for it
+/// again, so it is retried on the same growing schedule a rate limit without a hint is, within
+/// the same retry budget — except a `createIssue`, whose answer cannot say the issue was not
+/// made, and which is therefore reported rather than replayed into a duplicate.
+///
+/// Observed rather than documented, so it is pinned exactly as [`SECONDARY_WORDINGS`] is:
+/// `tests/fixtures/rate-limits.json` records where it was read under `conflict.observed`, and
+/// the same drift gate reconciles the two both ways. Public for that gate alone.
+pub const CONFLICT_WORDINGS: [&str; 1] = ["created a temporary conflict"];
 
 /// What a response *says about itself*, which is the only place a refusal can be read.
 ///
@@ -2567,7 +2569,7 @@ enum Attempt {
     Failed(SourceError),
     Limited(Limited),
     /// GitHub refused a write as a temporary conflict and asked for it again — see
-    /// [`CONFLICT_WORDING`]. Carries what GitHub said, for the diagnostic once retrying ends.
+    /// [`CONFLICT_WORDINGS`]. Carries what GitHub said, for the diagnostic once retrying ends.
     Conflicted(String),
 }
 
@@ -5286,7 +5288,7 @@ impl GitHubProjectsSource {
                 Ok(data) => return Ok(data),
                 Err(Attempt::Failed(error)) => return Err(error),
                 Err(Attempt::Conflicted(said)) => {
-                    // A create is never replayed: see `CONFLICT_WORDING`.
+                    // A create is never replayed: see `CONFLICT_WORDINGS`.
                     if query.contains("createIssue(") || backoff.is_zero() || backoff > remaining {
                         return Err(SourceError::Unavailable {
                             message: format!(
@@ -5574,7 +5576,11 @@ impl GitHubProjectsSource {
             }));
         }
         let said = refusal_wording(status, &body);
-        if said.to_ascii_lowercase().contains(CONFLICT_WORDING) {
+        let normalized = said.to_ascii_lowercase();
+        if CONFLICT_WORDINGS
+            .iter()
+            .any(|wording| normalized.contains(wording))
+        {
             return Err(Attempt::Conflicted(said));
         }
         let answered = if query == graphql::ISSUES_BY_REFERENCE {

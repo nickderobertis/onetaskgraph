@@ -642,6 +642,10 @@ fn the_rate_limit_vocabulary_and_published_limits_match_their_pinned_artifact() 
             "primary",
             onetaskgraph_github_projects::PRIMARY_WORDINGS.as_slice(),
         ),
+        (
+            "conflict",
+            onetaskgraph_github_projects::CONFLICT_WORDINGS.as_slice(),
+        ),
     ] {
         let pinned_wordings: HashSet<&str> = pinned[side]["wordings"]
             .as_array()
