@@ -7087,7 +7087,7 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                 && valid_linear_write_input(
                     variables.get("input"),
                     &["teamIds", "name", "statusId", "labelIds"],
-                    &["content"],
+                    &["content", "id"],
                 )
         }
         graphql::ISSUE_RELATION_CREATE => {
@@ -7117,7 +7117,7 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                 && valid_linear_write_input(
                     variables.get("input"),
                     &["title"],
-                    &["content", "projectId", "teamId"],
+                    &["content", "projectId", "teamId", "id"],
                 )
                 // Exactly one home, counted by the key being *present*. Linear refuses this
                 // input with `Exactly one of initiativeId, teamId, issueId, releaseId,
@@ -8046,7 +8046,7 @@ fn linear_write_item(
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
     let id = if create {
-        // A caller-chosen `id` is the issue's own, and Linear lets only one issue hold an id.
+        // A caller-chosen `id` is the item's own, and Linear lets only one item hold an id.
         match input.get("id").and_then(Value::as_str) {
             Some(chosen) if rows.iter().any(|row| row["id"] == chosen) => {
                 return Err("Entity with this id already exists");
@@ -8174,7 +8174,15 @@ fn linear_write_document(
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
     let id = if create {
-        format!("D-W{}", rows.len() + 1)
+        // A caller-chosen `id` is the document's own, held by one document at most, as an
+        // issue's is.
+        match input.get("id").and_then(Value::as_str) {
+            Some(chosen) if rows.iter().any(|row| row["id"] == chosen) => {
+                return Err("Entity with this id already exists");
+            }
+            Some(chosen) => chosen.to_owned(),
+            None => format!("D-W{}", rows.len() + 1),
+        }
     } else {
         vars["id"]
             .as_str()

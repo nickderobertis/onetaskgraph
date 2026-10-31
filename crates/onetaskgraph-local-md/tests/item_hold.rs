@@ -107,3 +107,56 @@ fn a_snapshot_is_restored_byte_for_byte_and_a_missing_record_offers_none() {
             .expect("nothing to hold")
     );
 }
+
+#[tokio::test]
+async fn one_metadata_key_comes_off_a_project_and_a_document_and_nothing_else_moves() {
+    let root = tempfile::tempdir().expect("a folder");
+    for (directory, text) in [
+        (
+            "projects/P.md",
+            "---\ntitle: P\nstatus: todo\nmetadata:\n  \"onetaskgraph.creating\": {\"x\": 1}\n  \
+             keep.me: true\n---\nThe plan.\n",
+        ),
+        (
+            "documents/D.md",
+            "---\ntitle: D\nmetadata:\n  \"onetaskgraph.creating\": {\"x\": 1}\n  keep.me: true\n\
+             ---\nThe design.\n",
+        ),
+    ] {
+        let path = root.path().join(directory);
+        fs::create_dir_all(path.parent().expect("a parent")).expect("a folder");
+        fs::write(path, text).expect("a record");
+    }
+    let source = instance(root.path());
+    let key = onetaskgraph_plugin_api::MetadataKey::creating();
+    for (record, id, file) in [
+        (MetadataRecord::Project, "P", "projects/P.md"),
+        (MetadataRecord::Document, "D", "documents/D.md"),
+    ] {
+        let before = fs::read_to_string(root.path().join(file)).expect("the file");
+        let removed = source
+            .remove_record_metadata(record, &NativeId(id.to_owned()), &key)
+            .await
+            .expect("removed");
+        assert!(removed.is_some(), "{file}: the record is held");
+        let after = fs::read_to_string(root.path().join(file)).expect("the file");
+        assert_eq!(
+            after,
+            before.replace("  \"onetaskgraph.creating\": {\"x\": 1}\n", ""),
+            "{file}: only that one entry left the file"
+        );
+        // Taking off a key the record does not hold writes nothing.
+        source
+            .remove_record_metadata(record, &NativeId(id.to_owned()), &key)
+            .await
+            .expect("nothing to remove");
+        assert_eq!(fs::read_to_string(root.path().join(file)).unwrap(), after);
+    }
+    assert!(
+        source
+            .remove_record_metadata(MetadataRecord::Project, &NativeId("none".to_owned()), &key)
+            .await
+            .expect("an absent record")
+            .is_none()
+    );
+}

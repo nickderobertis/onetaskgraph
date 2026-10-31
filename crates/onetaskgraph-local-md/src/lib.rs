@@ -1416,6 +1416,39 @@ impl TaskSource for LocalMdSource {
         self.holds.release(&file);
         written
     }
+    /// Take one key out of a record's front matter, every other byte of the file as it was —
+    /// held to reading back as that record less that one key, as a metadata write is.
+    async fn remove_record_metadata(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        let Some(before) = self.record_metadata(record, id).await? else {
+            return Ok(None);
+        };
+        let Some(path) = self.locate(kind_of(record), id)? else {
+            return Ok(None);
+        };
+        if before.contains_key(key.as_str()) {
+            let text = Self::read_text(&path)?;
+            let edited = with_metadata_entry(&text, key.as_str(), None)
+                .map_err(|unnarrow| unnarrow.refusal(&path, key))?;
+            replace_atomically(&path, &edited)?;
+            let mut wanted = before;
+            wanted.remove(key.as_str());
+            if self.record_metadata(record, id).await?.as_ref() != Some(&wanted) {
+                replace_atomically(&path, &text)?;
+                return Err(Unnarrow {
+                    reason: "the edited file would read back as more than that one key removed"
+                        .to_owned(),
+                    next: TIDY_BLOCK,
+                }
+                .refusal(&path, key));
+            }
+        }
+        Ok(Some(self.written_version(record, id).await))
+    }
     /// Every record whose file carries `key` at the create key — read off this
     /// machine, where a create lands at once, so it never lags.
     async fn created_with_key(
@@ -4506,6 +4539,26 @@ impl LocalMdSource {
     ///
     /// `read` is the reader a query uses for that kind — which is what makes the verification
     /// a read of the right front matter — and `metadata` reaches the map a record holds.
+    /// The metadata of the `record` `id` as its file now reads, or `None` when there is none.
+    async fn record_metadata(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+    ) -> Result<Option<BTreeMap<String, serde_json::Value>>, SourceError> {
+        Ok(match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => {
+                self.get_task(id).await?.map(|task| task.metadata)
+            }
+            onetaskgraph_plugin_api::MetadataRecord::Project => {
+                self.get_project(id).await?.map(|project| project.metadata)
+            }
+            onetaskgraph_plugin_api::MetadataRecord::Document => self
+                .get_document(id)
+                .await?
+                .map(|document| document.metadata),
+        })
+    }
+
     fn set_metadata<R: PartialEq>(
         &self,
         kind: Kind,

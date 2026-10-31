@@ -1033,6 +1033,9 @@ fn a_copy_killed_after_it_made_a_view_and_before_it_recorded_it_resumes_without_
         let site = sandbox.subdirectory("site");
         std::fs::create_dir_all(&site).expect("the site folder");
         json!({
+            // A killed copy's intent to create outlives it for its lease; a second, so the
+            // resumed copy below waits it out rather than being refused `create-in-progress`.
+            "plan": {"create_lease_seconds": 1},
             "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "site"}]},
             "site": {"plugin": "subprocess", "visibility": "public", "config": {
                 "command": crate::document_store::interpreter().to_string_lossy(),
@@ -1055,6 +1058,7 @@ fn a_copy_killed_after_it_made_a_view_and_before_it_recorded_it_resumes_without_
         "the engine was ended part way"
     );
     assert!(marker.exists(), "the relay ended it");
+    std::thread::sleep(std::time::Duration::from_millis(1500));
     let views_written = files_under(&store, "site")
         .into_iter()
         .filter(|path| path.contains("pt-"))
@@ -2561,6 +2565,9 @@ fn a_copy_killed_after_its_public_project_and_before_recording_it_resumes_into_i
         let site = sandbox.subdirectory("site");
         std::fs::create_dir_all(&site).expect("the site folder");
         json!({
+            // A killed copy's intent to create outlives it for its lease; a second, so the
+            // resumed copy below waits it out rather than being refused `create-in-progress`.
+            "plan": {"create_lease_seconds": 1},
             "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "site"}]},
             "site": {"plugin": "subprocess", "visibility": "public", "config": {
                 "command": crate::document_store::interpreter().to_string_lossy(),
@@ -2606,6 +2613,7 @@ fn a_copy_killed_after_its_public_project_and_before_recording_it_resumes_into_i
         store.sandbox.project().join("interrupted").exists(),
         "the relay ended it"
     );
+    std::thread::sleep(std::time::Duration::from_millis(1500));
     let left: Vec<String> = public_work_projects(&store, "site")
         .into_iter()
         .filter(|id| !id.starts_with("site:a"))

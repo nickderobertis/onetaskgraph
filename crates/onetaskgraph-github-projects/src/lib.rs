@@ -14355,6 +14355,35 @@ impl TaskSource for GitHubProjectsSource {
             .map(|item| item.document()))
     }
 
+    /// Take one key out of one issue's metadata slot with a single body update that changes the
+    /// slot and nothing outside it, sending nothing when the slot does not hold the key.
+    async fn remove_record_metadata(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        let kind = match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => BoardKind::Work(ItemKind::Task),
+            onetaskgraph_plugin_api::MetadataRecord::Project => BoardKind::Work(ItemKind::Project),
+            onetaskgraph_plugin_api::MetadataRecord::Document => BoardKind::Document,
+        };
+        let Some(mut item) = self.bound_item(id).await?.filter(|item| item.kind == kind) else {
+            return Ok(None);
+        };
+        if item.slot.contains_key(key.as_str()) {
+            let mut slot = item.slot.clone();
+            slot.remove(key.as_str());
+            self.write_slot(&mut item, &slot).await?;
+            self.remember_written(item.clone(), false)?;
+        }
+        Ok(Some(match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => item.task()?.version,
+            onetaskgraph_plugin_api::MetadataRecord::Project => item.project().version,
+            onetaskgraph_plugin_api::MetadataRecord::Document => item.document().version,
+        }))
+    }
+
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         self.delete_item(id).await
     }

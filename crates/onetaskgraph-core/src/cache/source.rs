@@ -1511,6 +1511,16 @@ impl TaskSource for CachedSource {
             .await
     }
 
+    async fn remove_record_metadata(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        self.retiring(Some(id), self.inner.remove_record_metadata(record, id, key))
+            .await
+    }
+
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         self.relating(
             EdgeKind::TaskReverse,

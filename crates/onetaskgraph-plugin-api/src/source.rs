@@ -1997,6 +1997,39 @@ pub trait TaskSource: Send + Sync {
         Ok(())
     }
 
+    /// Remove one key of the metadata of the `record` `id` and change nothing else, answering
+    /// the record's version token once it is gone — `Some(None)` when this source spells none —
+    /// or `None` when this source holds no such record. Removing a key the record does not hold
+    /// writes nothing.
+    ///
+    /// What a copy asks to take its intent to create — [`MetadataKey::CREATING_KEY`] — off a
+    /// project or a document once the counterpart is linked. Defaulted for a task to
+    /// [`Self::update_task`] removing the key, and for a project or a document to the refusal
+    /// a source writing no metadata answers, which the engine meets by writing the record
+    /// back whole without the key. A source that can take one key off narrowly owes an
+    /// override.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceError::Refused`] when this source cannot remove the key on its own, and
+    /// whatever else the source could not do the write for.
+    async fn remove_record_metadata(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        if record != MetadataRecord::Task {
+            return Err(crate::metadata::unwritable_metadata(self.kind(), record));
+        }
+        let mut update = TaskUpdate::default();
+        update.metadata_remove.insert(key.clone());
+        Ok(self
+            .update_task(id, &update)
+            .await?
+            .map(|outcome| outcome.task.version))
+    }
+
     /// Every `record` this source holds whose create carried the create key `key` — see
     /// [`MetadataKey::CREATE_KEY`] — created at or after `since` when that is given: what a
     /// retried copy asks to find the item its earlier attempt created. `target` is the create

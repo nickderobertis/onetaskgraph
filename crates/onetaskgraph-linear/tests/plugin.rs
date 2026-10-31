@@ -206,6 +206,7 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         (
             "ProjectCreateInput",
             &[
+                "id",
                 "teamIds",
                 "name",
                 "description",
@@ -234,7 +235,7 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         ),
         (
             "DocumentCreateInput",
-            &["title", "content", "projectId", "teamId"][..],
+            &["id", "title", "content", "projectId", "teamId"][..],
         ),
         (
             "DocumentUpdateInput",

@@ -1070,3 +1070,149 @@ fn a_linear_create_whose_answer_never_arrived_whole_is_found_by_its_retry_under_
         copied["items"][0]["destination"]
     );
 }
+
+/// A project and a document of the notes, each copied on its own.
+fn with_a_project_and_a_document(stores: &Stores) {
+    std::fs::create_dir_all(stores.notes.join("projects")).expect("the project folder");
+    std::fs::create_dir_all(stores.notes.join("documents")).expect("the document folder");
+    std::fs::create_dir_all(stores.folder.join("projects")).expect("the project folder");
+    std::fs::create_dir_all(stores.folder.join("documents")).expect("the document folder");
+    std::fs::write(
+        stores.notes.join("projects/P.md"),
+        "---\ntitle: Project P\nstatus: todo\n---\nThe plan.\n",
+    )
+    .expect("the project file");
+    std::fs::write(
+        stores.notes.join("documents/D.md"),
+        "---\ntitle: Document D\n---\nThe design.\n",
+    )
+    .expect("the document file");
+}
+
+/// The command copying one `kind` of record, and the id it copies.
+fn record_copy(kind: &str, destination: &str) -> (Vec<String>, &'static str) {
+    let id = if kind == "project" {
+        "notes:P"
+    } else {
+        "notes:D"
+    };
+    let mut arguments = vec![kind, "copy", id, "--to", destination];
+    if kind == "project" {
+        arguments.push("--no-tasks");
+    }
+    (arguments.into_iter().map(str::to_owned).collect(), id)
+}
+
+/// The metadata of the `kind` record `id`, as `<kind> show` reads it.
+fn record_metadata(stores: &Stores, kind: &str, id: &str) -> Value {
+    stores.json(&[kind, "show", id])["items"][0]["item"]["metadata"].clone()
+}
+
+/// Every `kind` record of `destination` titled `title`.
+fn records_titled(stores: &Stores, kind: &str, destination: &str, title: &str) -> Vec<Value> {
+    stores.json(&[kind, "list", "--source", destination])["items"]
+        .as_array()
+        .expect("a page")
+        .iter()
+        .filter(|item| item["item"]["title"] == title)
+        .map(|item| item["item"].clone())
+        .collect()
+}
+
+#[test]
+fn a_project_or_document_copy_stopped_at_either_point_of_its_create_is_finished_by_its_retry() {
+    for kind in ["project", "document"] {
+        let title = if kind == "project" {
+            "Project P"
+        } else {
+            "Document D"
+        };
+        for destination in ["folder", "board", "linear"] {
+            for point in ["after-intent", "before-link"] {
+                let stores = Stores::new();
+                with_a_project_and_a_document(&stores);
+                let (arguments, id) = record_copy(kind, destination);
+                let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+                let stopped = stores.run(&arguments, Some(point));
+                assert_eq!(
+                    stopped.status.code(),
+                    Some(86),
+                    "{kind} {destination} {point}: stopped there: {}",
+                    stderr(&stopped)
+                );
+                let intent =
+                    &record_metadata(&stores, kind, id)["onetaskgraph.creating"][destination];
+                assert!(
+                    intent["key"].is_string(),
+                    "{kind} {destination} {point}: the intent is recorded: {intent:#}"
+                );
+                let key = intent["key"].as_str().expect("a key").to_owned();
+
+                let mut full = vec!["--json"];
+                full.extend(&arguments);
+                let copied = stores.json(&arguments);
+                let outcome = &copied["items"][0];
+                if point == "before-link" {
+                    assert_eq!(
+                        outcome["via"], "intent",
+                        "{kind} {destination} {point}: {copied:#}"
+                    );
+                } else {
+                    assert_eq!(
+                        outcome["action"], "created",
+                        "{kind} {destination} {point}: {copied:#}"
+                    );
+                }
+                let landed = records_titled(&stores, kind, destination, title);
+                assert_eq!(
+                    landed.len(),
+                    1,
+                    "{kind} {destination} {point}: exactly one: {landed:#?}"
+                );
+                assert_eq!(
+                    landed[0]["metadata"]["onetaskgraph.create_key"],
+                    json!(key),
+                    "{kind} {destination} {point}: the key is kept verbatim"
+                );
+                if destination == "linear" {
+                    assert_eq!(
+                        landed[0]["id"],
+                        json!(onetaskgraph_linear::linear_id_of_key(&key).expect("a key")),
+                    );
+                }
+                let metadata = record_metadata(&stores, kind, id);
+                assert!(
+                    metadata.get("onetaskgraph.creating").is_none(),
+                    "{kind} {destination} {point}: no intent is left: {metadata:#}"
+                );
+                assert_eq!(
+                    metadata["onetaskgraph.copies"][destination],
+                    outcome["destination"]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_project_copy_whose_create_is_taken_back_leaves_its_file_byte_for_byte() {
+    let stores = Stores::new();
+    with_a_project_and_a_document(&stores);
+    let before = std::fs::read(stores.notes.join("projects/P.md")).expect("the file");
+    // A refused create — a source that answers it — leaves nothing at the destination, so the
+    // copy takes every write back, its intent included.
+    stores.linear.bend_answers(
+        |document, _| document == onetaskgraph_linear::graphql::PROJECT_CREATE,
+        1,
+        |_, data| *data = json!({"projectCreate": {"success": false, "project": null}}),
+    );
+    let (arguments, _) = record_copy("project", "linear");
+    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    let failed = stores.run(&arguments, None);
+    assert_ne!(failed.status.code(), Some(0), "{}", stderr(&failed));
+    assert_eq!(
+        std::fs::read(stores.notes.join("projects/P.md")).expect("the file"),
+        before,
+        "the project file is as it was"
+    );
+}

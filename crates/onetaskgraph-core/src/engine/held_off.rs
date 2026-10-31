@@ -541,6 +541,16 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.set_document_metadata(id, key, value).await)
     }
 
+    async fn remove_record_metadata(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        self.refused()?;
+        self.noted(self.inner.remove_record_metadata(record, id, key).await)
+    }
+
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         self.refused()?;
         self.noted(self.inner.delete_task(id).await)

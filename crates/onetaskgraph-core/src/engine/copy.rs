@@ -1193,9 +1193,10 @@ async fn check_status(
         .map_err(|error| refused(destination, error))
 }
 
-/// One intent to create a copy took: the item it is on, the destination, the item's file as it
-/// was before when the item is a file on this machine, and the intent itself.
+/// One intent to create a copy took: the kind and id of the item it is on, the destination, the
+/// item's file as it was before when the item is a file on this machine, and the intent itself.
 type Intended = (
+    Level,
     GlobalId,
     SourceName,
     Option<Vec<u8>>,
@@ -1244,7 +1245,7 @@ struct Journal {
     /// Every item, by its source id and the destination, whose create this copy has sent — or
     /// whose earlier attempt's create it took over — while it holds the intent: each further
     /// destination write for it renews the lease first.
-    owned: Vec<(GlobalId, SourceName)>,
+    owned: Vec<(Level, GlobalId, SourceName)>,
     /// Whether a renewal found another attempt holding an intent this copy had held: the copy
     /// then stops, writing nothing more — not even to take its own writes back, which are the
     /// new holder's to resolve.
@@ -2486,14 +2487,15 @@ impl Engine {
         destination: &SourceName,
         journal: &mut Journal,
     ) -> Result<(), EngineError> {
-        if !journal
+        let Some(level) = journal
             .owned
             .iter()
-            .any(|(item, to)| item == source && to == destination)
-        {
+            .find(|(_, item, to)| item == source && to == destination)
+            .map(|(level, ..)| *level)
+        else {
             return Ok(());
-        }
-        let renewed = self.renew_intent(source, destination, None).await;
+        };
+        let renewed = self.renew_intent(level, source, destination, None).await;
         if matches!(renewed, Err(EngineError::CreateInProgress { .. })) {
             journal.ownership_lost = true;
         }
@@ -2513,11 +2515,7 @@ impl Engine {
                 ..
             }
         );
-        let (Target::Create | Target::Update { .. }, Item::Task(task)) = (&item.target, &item.item)
-        else {
-            return Ok(false);
-        };
-        if matches!(item.target, Target::Update { .. }) && !found_by_intent {
+        if !matches!(item.target, Target::Create) && !found_by_intent {
             return Ok(false);
         }
         if item.skipped || item.withheld {
@@ -2540,17 +2538,26 @@ impl Engine {
             &WriteTarget::Existing(&item.source.native),
         )
         .await?;
-        let earlier = intent::held(&task.metadata, &item.to);
-        let replaces = link_of(&task.metadata, &item.to);
+        let level = item.item.level();
+        let (_, metadata) = described(&item.item);
+        let earlier = intent::held(metadata, &item.to);
+        let replaces = link_of(metadata, &item.to);
         let key = match &earlier {
             Ok(Some(earlier)) if found_by_intent => earlier.key,
-            _ => intent::key(&item.source, &item.to, replaces.as_ref()),
+            _ => intent::key(level, &item.source, &item.to, replaces.as_ref()),
         };
         // A source that will not hold the key — a file it cannot edit narrowly, an item it no
         // longer answers for, a write it drops — copies as it always did, with no intent, as it
         // then records no link either. Only another attempt's live lease refuses.
         let (taken, local) = match self
-            .take_intent(&item.source, &item.to, key, None, Some(replaces.as_ref()))
+            .take_intent(
+                level,
+                &item.source,
+                &item.to,
+                key,
+                None,
+                Some(replaces.as_ref()),
+            )
             .await
         {
             Ok(taken) => taken,
@@ -2644,20 +2651,22 @@ impl Engine {
         let error = self.undo_writes(journal, error).await;
         let uncertain = matches!(error, EngineError::CopyDestinationUncertain { .. });
         let not_undone = matches!(error, EngineError::CopyNotUndone { .. });
-        for (item, destination, snapshot, intent) in intents {
+        for (level, item, destination, snapshot, intent) in intents {
             // Kept, its lease given up, wherever its create may still stand: a create whose
             // answer never arrived, or one a copy could not take back.
             let keep = uncertain
                 || ((not_undone || (unanswered && sending.contains(&item)))
-                    && self.may_have_landed(&destination, intent.as_ref()).await);
+                    && self
+                        .may_have_landed(level, &destination, intent.as_ref())
+                        .await);
             let _ = if keep {
-                self.renew_intent(&item, &destination, Some(chrono::Utc::now()))
+                self.renew_intent(level, &item, &destination, Some(chrono::Utc::now()))
                     .await
             } else if let Some(bytes) = snapshot {
-                self.restore_snapshot(&item, &bytes);
+                self.restore_snapshot(level, &item, &bytes);
                 Ok(())
             } else {
-                self.drop_intent(&item, &destination).await
+                self.drop_intent(level, &item, &destination).await
             };
         }
         error
@@ -2889,9 +2898,14 @@ impl Engine {
                 before: entry.held,
             });
             // An item recording an intent to create here has it removed in the same write.
-            let written = if entry.intent && entry.level == Level::Task {
-                self.link_settling_intent(&entry.item, &landed_in, Value::Object(links))
-                    .await
+            let written = if entry.intent {
+                self.link_settling_intent(
+                    entry.level,
+                    &entry.item,
+                    &landed_in,
+                    Value::Object(links),
+                )
+                .await
             } else {
                 set_link_versioned(
                     source,
@@ -2970,6 +2984,36 @@ impl Engine {
     /// cannot be removed through that write, so the item is read as it now is and written
     /// back whole, without the key, through the source's own write interface — the same
     /// way an overwritten destination item is restored.
+    /// The `level` record `id` written back whole without `key`, for a source that cannot take
+    /// one key off on its own — answered with its version token after the write, or `None` when
+    /// the source holds no such record.
+    async fn without_key(
+        &self,
+        source: &ResolvedSource,
+        level: Level,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        let Some(mut held) = self
+            .prior(source, level, id)
+            .await
+            .map_err(|error| match error {
+                EngineError::SourceRefused { error, .. } => error,
+                other => SourceError::Refused {
+                    message: other.to_string(),
+                },
+            })?
+        else {
+            return Ok(None);
+        };
+        if metadata_of(&mut held.item).remove(key.as_str()).is_some() {
+            restore(source, id, &held).await?;
+        }
+        Ok(Some(
+            source.source().written_version(level.record(), id).await,
+        ))
+    }
+
     async fn unlink(&self, entry: &Unlink) -> Result<(), SourceError> {
         let as_source_error = |error: EngineError| match error {
             EngineError::SourceRefused { error, .. } => error,
@@ -4844,14 +4888,11 @@ impl Engine {
             for item in &mut planned {
                 // A file on this machine is kept as it was, byte for byte, so a copy that takes
                 // everything back leaves it exactly so.
-                let snapshot = match &item.item {
-                    Item::Task(_) => self.readable(&item.source.source).ok().and_then(|source| {
-                        source
-                            .source()
-                            .item_snapshot(MetadataRecord::Task, &item.source.native)
-                    }),
-                    _ => None,
-                };
+                let snapshot = self.readable(&item.source.source).ok().and_then(|source| {
+                    source
+                        .source()
+                        .item_snapshot(item.item.level().record(), &item.source.native)
+                });
                 if self.intend(item).await? {
                     if matches!(
                         item.target,
@@ -4860,9 +4901,14 @@ impl Engine {
                             ..
                         }
                     ) {
-                        journal.owned.push((item.source.clone(), item.to.clone()));
+                        journal.owned.push((
+                            item.item.level(),
+                            item.source.clone(),
+                            item.to.clone(),
+                        ));
                     }
                     journal.intents.push((
+                        item.item.level(),
                         item.source.clone(),
                         item.to.clone(),
                         snapshot,
@@ -5200,9 +5246,11 @@ impl Engine {
                     let item = &planned[*index];
                     journal.sending.push(item.source.clone());
                     if item.intent.is_some() {
-                        journal
-                            .owned
-                            .push((item.source.clone(), destination.name().clone()));
+                        journal.owned.push((
+                            item.item.level(),
+                            item.source.clone(),
+                            destination.name().clone(),
+                        ));
                     }
                 }
                 let ids = destination
@@ -6694,27 +6742,26 @@ impl Engine {
         // An intent an earlier attempt recorded is resolved before every other rule, and before
         // `--create` is believed: the item its create made, when the destination holds it,
         // is this item's counterpart rather than a reason to create a second.
-        if item.level() == Level::Task
-            && let Some(intent) = intent::held(metadata, destination.name()).map_err(|problem| {
-                EngineError::SourceRefused {
-                    name: id.source.to_string(),
-                    error: SourceError::Malformed {
-                        message: format!(
-                            "{id}: {problem}; next: remove that entry once no copy of {id} is \
+        if let Some(intent) = intent::held(metadata, destination.name()).map_err(|problem| {
+            EngineError::SourceRefused {
+                name: id.source.to_string(),
+                error: SourceError::Malformed {
+                    message: format!(
+                        "{id}: {problem}; next: remove that entry once no copy of {id} is \
                              running"
-                        ),
-                    },
-                }
-            })?
-            && let Some(native) = self
-                .resolve_intent(
-                    destination,
-                    id,
-                    &intent,
-                    repositories_of(item),
-                    !request.dry_run,
-                )
-                .await?
+                    ),
+                },
+            }
+        })? && let Some(native) = self
+            .resolve_intent(
+                item.level(),
+                destination,
+                id,
+                &intent,
+                repositories_of(item),
+                !request.dry_run,
+            )
+            .await?
             && let Some(held) = self
                 .prior_reading(destination, item.level(), &native, request.comments)
                 .await?
@@ -7200,7 +7247,12 @@ impl Engine {
             && let Some(intent) = &item.intent
         {
             let listed = self
-                .relisted(destination, intent, repositories_of(&item.item))
+                .relisted(
+                    item.item.level(),
+                    destination,
+                    intent,
+                    repositories_of(&item.item),
+                )
                 .await?;
             if listed.len() > 1 {
                 let error = EngineError::CreateDuplicated {
@@ -8453,9 +8505,11 @@ impl Engine {
         if target.is_none() {
             journal.sending.push(item.source.clone());
             if item.intent.is_some() {
-                journal
-                    .owned
-                    .push((item.source.clone(), destination.name().clone()));
+                journal.owned.push((
+                    item.item.level(),
+                    item.source.clone(),
+                    destination.name().clone(),
+                ));
             }
         }
         let mut sent = match &landing {
@@ -9783,13 +9837,7 @@ fn outgoing(
             },
             metadata: {
                 let mut metadata = carried(&task.metadata);
-                // A create carries its key, written with the create itself.
-                if let (Some(intent), None, Target::Create) = (&item.intent, held, &item.target) {
-                    metadata.insert(
-                        MetadataKey::CREATE_KEY.to_owned(),
-                        Value::String(intent.key()),
-                    );
-                }
+                created_with(&mut metadata, item, held);
                 metadata
             },
             classification,
@@ -9801,6 +9849,7 @@ fn outgoing(
             if matches!(item.target.found(), Some(Found::Member { .. })) {
                 metadata.remove(MetadataKey::MEMBER_OF_KEY);
             }
+            created_with(&mut metadata, item, held);
             Item::Project(Box::new(Project {
                 id,
                 url: None,
@@ -9825,10 +9874,24 @@ fn outgoing(
             created_at: None,
             updated_at: None,
             project,
-            metadata: carried(&document.metadata),
+            metadata: {
+                let mut metadata = carried(&document.metadata);
+                created_with(&mut metadata, item, held);
+                metadata
+            },
             classification,
             ..(**document).clone()
         })),
+    }
+}
+
+/// A create carries its key, written with the create itself.
+fn created_with(metadata: &mut BTreeMap<String, Value>, item: &Planned, held: Option<&Prior>) {
+    if let (Some(intent), None, Target::Create) = (&item.intent, held, &item.target) {
+        metadata.insert(
+            MetadataKey::CREATE_KEY.to_owned(),
+            Value::String(intent.key()),
+        );
     }
 }
 

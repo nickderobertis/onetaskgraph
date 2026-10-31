@@ -25,7 +25,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use onetaskgraph_plugin_api::{MetadataKey, NativeId, SourceName, Task, TaskUpdate};
+use onetaskgraph_plugin_api::{MetadataKey, MetadataRecord, NativeId, SourceError, SourceName};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -33,7 +33,7 @@ use crate::GlobalId;
 use crate::resolve::ResolvedSource;
 
 use super::super::{Engine, EngineError};
-use super::refused;
+use super::{Level, refused, set_link_versioned};
 
 /// The namespace every create key is a version-5 UUID under: the UUID this store names its
 /// creates by, documented in the README so another implementation computes the same keys.
@@ -45,13 +45,24 @@ pub const CLOCK_SKEW: TimeDelta = TimeDelta::seconds(300);
 
 /// The key of the create that copies `source` into `destination`, replacing the link `replaces`
 /// names when it replaces one: the same for every attempt at that create, and a different one
-/// for a `--recreate` after a stale link.
+/// for a `--recreate` after a stale link. A project's and a document's name their kind as well,
+/// so a task and a project one source spells with one id never share a key.
 #[must_use]
-pub fn key(source: &GlobalId, destination: &SourceName, replaces: Option<&GlobalId>) -> uuid::Uuid {
-    let name = format!(
+pub(in crate::engine) fn key(
+    level: Level,
+    source: &GlobalId,
+    destination: &SourceName,
+    replaces: Option<&GlobalId>,
+) -> uuid::Uuid {
+    let mut name = format!(
         "{source}|{destination}|{}",
         replaces.map(ToString::to_string).unwrap_or_default()
     );
+    match level {
+        Level::Task => {}
+        Level::Project => name.push_str("|project"),
+        Level::Document => name.push_str("|document"),
+    }
     uuid::Uuid::new_v5(&NAMESPACE, name.as_bytes())
 }
 
@@ -201,6 +212,7 @@ pub(crate) fn replaced(
 /// [`TaskSource::hold_item`]: onetaskgraph_plugin_api::TaskSource::hold_item
 pub(crate) struct Hold<'a> {
     source: &'a ResolvedSource,
+    record: MetadataRecord,
     id: NativeId,
     held: bool,
 }
@@ -215,24 +227,95 @@ impl Hold<'_> {
 impl Drop for Hold<'_> {
     fn drop(&mut self) {
         if self.held {
-            self.source
-                .source()
-                .release_item(onetaskgraph_plugin_api::MetadataRecord::Task, &self.id);
+            self.source.source().release_item(self.record, &self.id);
         }
     }
 }
 
-/// Take `source`'s hold on the task `id`.
-fn hold<'a>(source: &'a ResolvedSource, id: &NativeId) -> Result<Hold<'a>, EngineError> {
+/// Take `source`'s hold on the `level` record `id`.
+fn hold<'a>(
+    source: &'a ResolvedSource,
+    level: Level,
+    id: &NativeId,
+) -> Result<Hold<'a>, EngineError> {
     let held = source
         .source()
-        .hold_item(onetaskgraph_plugin_api::MetadataRecord::Task, id)
+        .hold_item(level.record(), id)
         .map_err(|error| refused(source, error))?;
     Ok(Hold {
         source,
+        record: level.record(),
         id: id.clone(),
         held,
     })
+}
+
+/// The refusal of a `level` record `id` its source no longer holds.
+fn missing(level: Level, id: &GlobalId) -> EngineError {
+    let id = id.to_string();
+    match level {
+        Level::Task => EngineError::NoSuchTask { id },
+        Level::Project => EngineError::NoSuchProject { id },
+        Level::Document => EngineError::NoSuchDocument { id },
+    }
+}
+
+/// The metadata of the `level` record `id` as `source` now holds it, or `None` when it holds
+/// no such record.
+async fn metadata_of(
+    source: &ResolvedSource,
+    level: Level,
+    id: &NativeId,
+) -> Result<Option<BTreeMap<String, Value>>, SourceError> {
+    Ok(match level {
+        Level::Task => source
+            .source()
+            .get_task(id)
+            .await?
+            .map(|task| task.metadata),
+        Level::Project => source
+            .source()
+            .get_project(id)
+            .await?
+            .map(|project| project.metadata),
+        Level::Document => source
+            .source()
+            .get_document(id)
+            .await?
+            .map(|document| document.metadata),
+    })
+}
+
+/// `metadata` with `destination`'s intent taken off `onetaskgraph.creating`, written to the
+/// `level` record `id` — the remaining intents set, or the key removed once none is left — and
+/// the record's version token after it.
+async fn write_without(
+    engine: &Engine,
+    source: &ResolvedSource,
+    level: Level,
+    id: &NativeId,
+    metadata: &BTreeMap<String, Value>,
+    destination: &SourceName,
+) -> Result<Option<Option<String>>, SourceError> {
+    match replaced(metadata.get(MetadataKey::CREATING_KEY), destination, None) {
+        Some(rest) => set_link_versioned(source, level, id, &MetadataKey::creating(), &rest).await,
+        None => {
+            match source
+                .source()
+                .remove_record_metadata(level.record(), id, &MetadataKey::creating())
+                .await
+            {
+                // A source that cannot take one key off on its own has the record written back
+                // whole without it, as a link a copy takes back is.
+                Err(SourceError::Refused { .. }) if level != Level::Task => {
+                    engine
+                        .without_key(source, level, id, &MetadataKey::creating())
+                        .await
+                }
+                answered => answered,
+            }
+        }
+    }
 }
 
 /// The test-only point a copy stops at by exiting, as a process killed there would:
@@ -277,32 +360,32 @@ impl Engine {
         self.creates.get(source).copied().unwrap_or_default()
     }
 
-    /// The task `id` as its source holds it now, read under the source's hold on it when it
-    /// offers one — the read an intent is decided on.
+    /// The metadata of the `level` record `id` as its source holds it now, read under the
+    /// source's hold on it when it offers one — the read an intent is decided on.
     async fn locked_read<'a>(
         &self,
         source: &'a ResolvedSource,
+        level: Level,
         id: &GlobalId,
-    ) -> Result<(Task, Hold<'a>), EngineError> {
-        let hold = hold(source, &id.native)?;
-        let task = source
-            .source()
-            .get_task(&id.native)
+    ) -> Result<(BTreeMap<String, Value>, Hold<'a>), EngineError> {
+        let hold = hold(source, level, &id.native)?;
+        let metadata = metadata_of(source, level, &id.native)
             .await
             .map_err(|error| refused(source, error))?
-            .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
-        Ok((task, hold))
+            .ok_or_else(|| missing(level, id))?;
+        Ok((metadata, hold))
     }
 
-    /// The intent `task` records for `destination`, or the refusal of an entry that is not one.
+    /// The intent `metadata` records for `destination`, or the refusal of an entry that is not
+    /// one.
     pub(crate) fn held_or_refused(
         &self,
         source: &ResolvedSource,
         id: &GlobalId,
-        task: &Task,
+        metadata: &BTreeMap<String, Value>,
         destination: &SourceName,
     ) -> Result<Option<Intent>, EngineError> {
-        held(&task.metadata, destination).map_err(|problem| {
+        held(metadata, destination).map_err(|problem| {
             refused(
                 source,
                 onetaskgraph_plugin_api::SourceError::Malformed {
@@ -317,8 +400,9 @@ impl Engine {
     /// Take, or take over, the intent to create `id`'s counterpart in `destination` under
     /// `key`, leased until `lease_until` — refusing as `create-in-progress` when another attempt
     /// holds a live lease, before anything is written.
-    pub(crate) async fn take_intent(
+    pub(in crate::engine) async fn take_intent(
         &self,
+        level: Level,
         id: &GlobalId,
         destination: &SourceName,
         key: uuid::Uuid,
@@ -326,13 +410,13 @@ impl Engine {
         planned_link: Option<Option<&GlobalId>>,
     ) -> Result<(Intent, bool), EngineError> {
         let source = self.writable(&id.source)?;
-        let (task, hold) = self.locked_read(source, id).await?;
+        let (metadata, hold) = self.locked_read(source, level, id).await?;
         pause_at("intent-read");
         let now = now();
         // Another copy that created and linked the counterpart since this one planned to create
         // it has finished what this one would start: it is refused rather than made twice.
         if let Some(planned) = planned_link {
-            let linked = super::link_of(&task.metadata, destination);
+            let linked = super::link_of(&metadata, destination);
             if linked.as_ref() != planned
                 && let Some(linked) = linked
             {
@@ -345,7 +429,7 @@ impl Engine {
                 });
             }
         }
-        let held = self.held_or_refused(source, id, &task, destination)?;
+        let held = self.held_or_refused(source, id, &metadata, destination)?;
         if let Some(held) = &held
             && held.held_by_another(self.attempt, now)
         {
@@ -365,32 +449,31 @@ impl Engine {
             lease_until: lease_until.unwrap_or(now + self.create_settings(&id.source).lease()),
         };
         let value = replaced(
-            task.metadata.get(MetadataKey::CREATING_KEY),
+            metadata.get(MetadataKey::CREATING_KEY),
             destination,
             Some(&intent),
         )
         .unwrap_or(Value::Null);
-        source
-            .source()
-            .set_task_metadata(&id.native, &MetadataKey::creating(), &value)
+        set_link_versioned(source, level, &id.native, &MetadataKey::creating(), &value)
             .await
             .map_err(|error| refused(source, error))?
-            .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
+            .ok_or_else(|| missing(level, id))?;
         Ok((intent, hold.held()))
     }
 
     /// Renew this attempt's intent to create `id`'s counterpart in `destination`, before a
     /// destination write it sends after its create — refusing as `create-in-progress`, and
     /// writing nothing more, once the intent no longer names this attempt.
-    pub(crate) async fn renew_intent(
+    pub(in crate::engine) async fn renew_intent(
         &self,
+        level: Level,
         id: &GlobalId,
         destination: &SourceName,
         until: Option<DateTime<Utc>>,
     ) -> Result<(), EngineError> {
         let source = self.writable(&id.source)?;
-        let (task, _lock) = self.locked_read(source, id).await?;
-        let Some(mut held) = self.held_or_refused(source, id, &task, destination)? else {
+        let (metadata, _lock) = self.locked_read(source, level, id).await?;
+        let Some(mut held) = self.held_or_refused(source, id, &metadata, destination)? else {
             return Ok(());
         };
         if held.attempt != self.attempt {
@@ -401,14 +484,12 @@ impl Engine {
         }
         held.lease_until = until.unwrap_or(now() + self.create_settings(&id.source).lease());
         let value = replaced(
-            task.metadata.get(MetadataKey::CREATING_KEY),
+            metadata.get(MetadataKey::CREATING_KEY),
             destination,
             Some(&held),
         )
         .unwrap_or(Value::Null);
-        source
-            .source()
-            .set_task_metadata(&id.native, &MetadataKey::creating(), &value)
+        set_link_versioned(source, level, &id.native, &MetadataKey::creating(), &value)
             .await
             .map_err(|error| refused(source, error))?;
         Ok(())
@@ -417,8 +498,9 @@ impl Engine {
     /// Whether a create carrying `intent`'s key that got no answer may have landed in
     /// `destination`: asked of a destination whose lookup by key is current, and assumed of
     /// one whose lookup lags or cannot be made.
-    pub(crate) async fn may_have_landed(
+    pub(in crate::engine) async fn may_have_landed(
         &self,
+        level: Level,
         destination: &SourceName,
         intent: Option<&Intent>,
     ) -> bool {
@@ -428,98 +510,96 @@ impl Engine {
         if destination.source().create_key_lags() {
             return true;
         }
-        self.relisted(destination, intent, &[])
+        self.relisted(level, destination, intent, &[])
             .await
             .map_or(true, |found| !found.is_empty())
     }
 
-    /// Put the task `id` back to `snapshot`, byte for byte, through its source: what a copy that
-    /// took every write back leaves of an item whose intent it recorded.
-    pub(crate) fn restore_snapshot(&self, id: &GlobalId, snapshot: &[u8]) {
+    /// Put the `level` record `id` back to `snapshot`, byte for byte, through its source: what
+    /// a copy that took every write back leaves of an item whose intent it recorded.
+    pub(in crate::engine) fn restore_snapshot(&self, level: Level, id: &GlobalId, snapshot: &[u8]) {
         if let Ok(source) = self.writable(&id.source) {
-            let _ = source.source().restore_item(
-                onetaskgraph_plugin_api::MetadataRecord::Task,
-                &id.native,
-                snapshot,
-            );
+            let _ = source
+                .source()
+                .restore_item(level.record(), &id.native, snapshot);
         }
     }
 
     /// Remove this attempt's intent to create `id`'s counterpart in `destination`, once a copy
     /// that could not finish took back everything it wrote: nothing was made to resolve.
-    pub(crate) async fn drop_intent(
+    pub(in crate::engine) async fn drop_intent(
         &self,
+        level: Level,
         id: &GlobalId,
         destination: &SourceName,
     ) -> Result<(), EngineError> {
         let source = self.writable(&id.source)?;
-        let (task, _lock) = self.locked_read(source, id).await?;
-        if held(&task.metadata, destination)
+        let (metadata, _lock) = self.locked_read(source, level, id).await?;
+        if held(&metadata, destination)
             .ok()
             .flatten()
             .is_none_or(|held| held.attempt != self.attempt)
         {
             return Ok(());
         }
-        let mut update = TaskUpdate::default();
-        match replaced(
-            task.metadata.get(MetadataKey::CREATING_KEY),
-            destination,
-            None,
-        ) {
-            Some(rest) => {
-                update.metadata_set.insert(MetadataKey::creating(), rest);
-            }
-            None => {
-                update.metadata_remove.insert(MetadataKey::creating());
-            }
-        }
-        source
-            .source()
-            .update_task(&id.native, &update)
+        write_without(self, source, level, &id.native, &metadata, destination)
             .await
             .map_err(|error| refused(source, error))?;
         Ok(())
     }
 
-    /// Record `links` at `onetaskgraph.copies` on `id` and remove its intent for `destination`,
-    /// in one write: the link write a copy already makes, carrying the removal with it.
-    pub(crate) async fn link_settling_intent(
+    /// Record `links` at `onetaskgraph.copies` on the `level` record `id` and remove its intent
+    /// for `destination`: for a task in one write, the link write a copy already makes carrying
+    /// the removal with it; for a project or a document in the link write and one more.
+    pub(in crate::engine) async fn link_settling_intent(
         &self,
+        level: Level,
         id: &GlobalId,
         destination: &SourceName,
         links: Value,
-    ) -> Result<Option<Option<String>>, onetaskgraph_plugin_api::SourceError> {
-        let source = self.writable(&id.source).map_err(|error| {
-            onetaskgraph_plugin_api::SourceError::Refused {
+    ) -> Result<Option<Option<String>>, SourceError> {
+        let source = self
+            .writable(&id.source)
+            .map_err(|error| SourceError::Refused {
                 message: error.to_string(),
-            }
-        })?;
-        let _hold = hold(source, &id.native).map_err(|error| match error {
+            })?;
+        let _hold = hold(source, level, &id.native).map_err(|error| match error {
             EngineError::SourceRefused { error, .. } => error,
-            other => onetaskgraph_plugin_api::SourceError::Refused {
+            other => SourceError::Refused {
                 message: other.to_string(),
             },
         })?;
-        let Some(task) = source.source().get_task(&id.native).await? else {
+        if level == Level::Task {
+            let Some(task) = source.source().get_task(&id.native).await? else {
+                return Ok(None);
+            };
+            let mut update = onetaskgraph_plugin_api::TaskUpdate::default();
+            update.metadata_set.insert(MetadataKey::copies(), links);
+            match replaced(
+                task.metadata.get(MetadataKey::CREATING_KEY),
+                destination,
+                None,
+            ) {
+                Some(rest) => {
+                    update.metadata_set.insert(MetadataKey::creating(), rest);
+                }
+                None => {
+                    update.metadata_remove.insert(MetadataKey::creating());
+                }
+            }
+            let outcome = source.source().update_task(&id.native, &update).await?;
+            return Ok(outcome.map(|outcome| outcome.task.version));
+        }
+        let Some(metadata) = metadata_of(source, level, &id.native).await? else {
             return Ok(None);
         };
-        let mut update = TaskUpdate::default();
-        update.metadata_set.insert(MetadataKey::copies(), links);
-        match replaced(
-            task.metadata.get(MetadataKey::CREATING_KEY),
-            destination,
-            None,
-        ) {
-            Some(rest) => {
-                update.metadata_set.insert(MetadataKey::creating(), rest);
-            }
-            None => {
-                update.metadata_remove.insert(MetadataKey::creating());
-            }
+        if set_link_versioned(source, level, &id.native, &MetadataKey::copies(), &links)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
         }
-        let outcome = source.source().update_task(&id.native, &update).await?;
-        Ok(outcome.map(|outcome| outcome.task.version))
+        write_without(self, source, level, &id.native, &metadata, destination).await
     }
 
     /// Resolve an intent `metadata` records for `destination` before every other rule: the item
@@ -528,8 +608,9 @@ impl Engine {
     /// had until the quiescence window after the intent was first taken to list it.
     ///
     /// `waits` is false for a dry run and for `task locate`, which never wait, renew or write.
-    pub(crate) async fn resolve_intent(
+    pub(in crate::engine) async fn resolve_intent(
         &self,
+        level: Level,
         destination: &ResolvedSource,
         id: &GlobalId,
         intent: &Intent,
@@ -542,7 +623,7 @@ impl Engine {
             let found = destination
                 .source()
                 .created_with_key(
-                    onetaskgraph_plugin_api::MetadataRecord::Task,
+                    level.record(),
                     &intent.key(),
                     since,
                     &onetaskgraph_plugin_api::WriteTarget::New {
@@ -584,6 +665,7 @@ impl Engine {
             // Taken over by this attempt — refused while another's lease is live — and leased
             // once, to outlast the whole wait, so no renewal falls during it.
             self.take_intent(
+                level,
                 id,
                 destination.name(),
                 intent.key,
@@ -600,8 +682,9 @@ impl Engine {
     /// Every item `destination` lists under `key` once a create carrying it has been sent,
     /// for a destination whose lookup by key lags: one is the create, and several are a
     /// duplicate reported rather than linked.
-    pub(crate) async fn relisted(
+    pub(in crate::engine) async fn relisted(
         &self,
+        level: Level,
         destination: &ResolvedSource,
         intent: &Intent,
         repositories: &[onetaskgraph_plugin_api::Repository],
@@ -609,7 +692,7 @@ impl Engine {
         destination
             .source()
             .created_with_key(
-                onetaskgraph_plugin_api::MetadataRecord::Task,
+                level.record(),
                 &intent.key(),
                 intent.at().map(|at| at - CLOCK_SKEW),
                 &onetaskgraph_plugin_api::WriteTarget::New {

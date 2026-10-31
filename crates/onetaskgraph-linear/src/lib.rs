@@ -3298,14 +3298,14 @@ impl TaskSource for LinearSource {
         _since: Option<chrono::DateTime<chrono::Utc>>,
         _target: &onetaskgraph_plugin_api::WriteTarget<'_>,
     ) -> Result<Vec<NativeId>, SourceError> {
-        if record != MetadataRecord::Task {
-            return Ok(Vec::new());
+        let id = NativeId(linear_id_of_key(key)?);
+        Ok(match record {
+            MetadataRecord::Task => self.get_task(&id).await?.map(|task| task.id),
+            MetadataRecord::Project => self.get_project(&id).await?.map(|project| project.id),
+            MetadataRecord::Document => self.get_document(&id).await?.map(|document| document.id),
         }
-        Ok(self
-            .get_task(&NativeId(linear_id_of_key(key)?))
-            .await?
-            .map(|task| vec![task.id])
-            .unwrap_or_default())
+        .into_iter()
+        .collect())
     }
     /// The task as this instance's latest write of it was answered with — never a request.
     async fn written_task(&self, id: &NativeId) -> Option<Task> {
@@ -3579,10 +3579,7 @@ impl TaskSource for LinearSource {
         let mut metadata = write.item.metadata.clone();
         // A create's key is the issue's own id here, and stays in its slot as every source keeps
         // it, so a later copy reads the issue as the one it wrote.
-        let create_key = metadata
-            .get(MetadataKey::CREATE_KEY)
-            .and_then(|key| key.as_str().map(str::to_owned))
-            .filter(|_| write.target.is_none());
+        let create_key = create_key_of(&metadata, write.target.as_ref());
         set_task_list(&mut metadata, TaskRef::DELIVERS_KEY, &write.item.delivers);
         set_task_list(
             &mut metadata,
@@ -3690,6 +3687,7 @@ impl TaskSource for LinearSource {
             &edges,
             WriteKind::Project,
         )?;
+        let create_key = create_key_of(&write.item.metadata, write.target.as_ref());
         // A project's long form is its `content`, not its `description`: Linear documents the
         // second as "the short description of the project", and the first — the project's
         // Markdown body — is the one with room for a description and a metadata slot.
@@ -3706,14 +3704,34 @@ impl TaskSource for LinearSource {
                 {
                     let mut input = input;
                     input["teamIds"] = json!([team]);
+                    if let Some(key) = &create_key {
+                        input["id"] = Value::String(linear_id_of_key(key)?);
+                    }
                     json!({"input":input})
                 },
                 MutationRoot::ProjectCreate,
             ),
         };
-        let data = self.send(query, variables).await.inspect_err(|_| {
-            self.forget_vocabulary();
-        })?;
+        let data = match self.send(query, variables).await {
+            Ok(data) => data,
+            // Answered as an id another request already holds: that request's project is this
+            // create's, so it is read by the id and written whole, as an issue's is.
+            Err(error) => {
+                self.forget_vocabulary();
+                if let Some(key) = &create_key
+                    && let Some(held) = self.get_project(&NativeId(linear_id_of_key(key)?)).await?
+                {
+                    return self
+                        .write_project(&ItemWrite {
+                            target: Some(held.id),
+                            item: write.item.clone(),
+                            depends_on: write.depends_on.clone(),
+                        })
+                        .await;
+                }
+                return Err(error);
+            }
+        };
         let project = mutation_payload(&data, root)?
             .get("project")
             .ok_or_else(|| SourceError::Malformed {
@@ -3892,6 +3910,7 @@ impl TaskSource for LinearSource {
             Vec::new(),
         )?;
         let project = self.filed_in(write.item.project.as_ref(), "document")?;
+        let create_key = create_key_of(&write.item.metadata, write.target.as_ref());
         let (query, variables, root) = match &write.target {
             Some(id) => {
                 // A target this workspace does not hold is refused rather than created:
@@ -3929,6 +3948,9 @@ impl TaskSource for LinearSource {
                     Some(project) => input["projectId"] = Value::String(project.clone()),
                     None => input["teamId"] = Value::String(self.team_id().await?.0),
                 }
+                if let Some(key) = &create_key {
+                    input["id"] = Value::String(linear_id_of_key(key)?);
+                }
                 (
                     graphql::DOCUMENT_CREATE,
                     json!({ "input": input }),
@@ -3936,7 +3958,25 @@ impl TaskSource for LinearSource {
                 )
             }
         };
-        let data = self.send(query, variables).await?;
+        let data = match self.send(query, variables).await {
+            Ok(data) => data,
+            // Answered as an id another request already holds: that request's document is this
+            // create's, so it is read by the id and written whole, as an issue's is.
+            Err(error) => {
+                if let Some(key) = &create_key
+                    && let Some(held) = self.get_document(&NativeId(linear_id_of_key(key)?)).await?
+                {
+                    return self
+                        .write_document(&ItemWrite {
+                            target: Some(held.id),
+                            item: write.item.clone(),
+                            depends_on: Vec::new(),
+                        })
+                        .await;
+                }
+                return Err(error);
+            }
+        };
         let document = mutation_payload(&data, root)?
             .get("document")
             .ok_or_else(|| SourceError::Malformed {
@@ -4318,6 +4358,57 @@ impl TaskSource for LinearSource {
             .write_project_content(&project.id, rewritten.as_deref())
             .await?;
         map_project(&written, &self.statuses, self.spelling()).map(Some)
+    }
+    /// One metadata key taken off a project or a document, on the terms of its
+    /// `set_*_metadata`: one read, and — only when the slot holds the key — one update carrying
+    /// the content alone. A task's goes through `update_task`, its one `issueUpdate`.
+    async fn remove_record_metadata(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        match record {
+            MetadataRecord::Task => {
+                let mut update = onetaskgraph_plugin_api::TaskUpdate::default();
+                update.metadata_remove.insert(key.clone());
+                Ok(self
+                    .update_task(id, &update)
+                    .await?
+                    .map(|outcome| outcome.task.version))
+            }
+            MetadataRecord::Project => {
+                let Some((project, description)) = self.project_held(id, Read::ForWrite).await?
+                else {
+                    return Ok(None);
+                };
+                let (_, mut slot) = metadata_description(description.clone())?;
+                if slot.remove(key.as_str()).is_none() {
+                    return Ok(Some(project.version));
+                }
+                let rewritten = reslotted(description.as_deref(), &slot)?;
+                let written = self
+                    .write_project_content(&project.id, rewritten.as_deref())
+                    .await?;
+                Ok(Some(
+                    map_project(&written, &self.statuses, self.spelling())?.version,
+                ))
+            }
+            MetadataRecord::Document => {
+                let Some((document, content)) = self.document_held(id).await? else {
+                    return Ok(None);
+                };
+                let (_, mut slot) = metadata_description(content.clone())?;
+                if slot.remove(key.as_str()).is_none() {
+                    return Ok(Some(document.version));
+                }
+                let rewritten = reslotted(content.as_deref(), &slot)?;
+                let written = self
+                    .write_document_content(&document.id, rewritten.as_deref())
+                    .await?;
+                Ok(Some(map_document(&written)?.version))
+            }
+        }
     }
     /// One metadata key of a document, on the terms of `set_task_metadata`: one read, and one
     /// `documentUpdate` carrying the content alone.
@@ -5738,6 +5829,17 @@ fn classification_of(
         .map_err(|message| SourceError::Malformed { message })?;
     metadata.remove(Classification::METADATA_KEY);
     Ok(classification)
+}
+
+/// The create key a create of a new item carries, which it sends as the item's own id.
+fn create_key_of(
+    metadata: &std::collections::BTreeMap<String, Value>,
+    target: Option<&NativeId>,
+) -> Option<String> {
+    metadata
+        .get(MetadataKey::CREATE_KEY)
+        .and_then(|key| key.as_str().map(str::to_owned))
+        .filter(|_| target.is_none())
 }
 
 /// The id a create carrying `key` is sent to Linear under: the key — a version-5 UUID — with its
