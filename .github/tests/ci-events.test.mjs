@@ -11,7 +11,8 @@ import { definitions } from "./workflow-definitions.mjs";
 // pull request's last commit runs exactly the four jobs branch protection requires, because
 // every other job spends a slot of the account-wide concurrency limit (onetaskgraph-ci-job-count);
 // a push to main runs release-plz, the Rust cache warmer that catches a main that no longer
-// builds, and the canonical gallery, which skips release-plz's own release commit.
+// builds, and the canonical gallery, which skips release-plz's own release commit. The release
+// tail at the end of publish reads GitHub with the job's own token, granted read alone.
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const REQUIRED = ["lint", "test-linux", "test-windows", "test-macos"];
@@ -78,6 +79,17 @@ export function problems(all, texts = {}) {
   const ordinary = running(graph(push(ORDINARY_PUSH), { macosRequired: false }, all));
   if (Object.keys(ordinary).sort().join() !== "release-plz.yml,rust-cache-warm.yml,visual-docs.yml")
     found.push(`a push to main runs ${Object.keys(ordinary).sort().join(", ")}`);
+  // The release tail's token: read-only on what it reads, and handed to its step.
+  const publish = all["release.yml"]?.jobs?.publish;
+  for (const [scope, level] of Object.entries({
+    actions: "read",
+    contents: "read",
+    "pull-requests": "read",
+  }))
+    if (publish?.permissions?.[scope] !== level)
+      found.push(`publish does not grant ${scope}: ${level}`);
+  if (publish?.steps?.at(-1)?.env?.GH_TOKEN !== `\${{ github.token }}`)
+    found.push("publish's last step is not handed the job's token");
   const visual = all["visual-docs.yml"]?.on ?? {};
   if (JSON.stringify(visual.pull_request?.types) !== '["closed"]')
     found.push("visual-docs.yml no longer runs on a closed pull request alone");
@@ -139,6 +151,18 @@ test("another job or workflow on a pull request or on the release commit is refu
     },
     "lost its workflow_dispatch": (all) => {
       delete all["visual-docs.yml"].on.workflow_dispatch;
+    },
+    "publish does not grant actions: read": (all) => {
+      delete all["release.yml"].jobs.publish.permissions.actions;
+    },
+    "publish does not grant contents: read": (all) => {
+      all["release.yml"].jobs.publish.permissions.contents = "write";
+    },
+    "publish does not grant pull-requests: read": (all) => {
+      delete all["release.yml"].jobs.publish.permissions["pull-requests"];
+    },
+    "not handed the job's token": (all) => {
+      delete all["release.yml"].jobs.publish.steps.at(-1).env;
     },
     "closed pull request alone": (all) => {
       delete all["visual-docs.yml"].on.pull_request;
