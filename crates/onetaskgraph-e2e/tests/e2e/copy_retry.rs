@@ -1105,23 +1105,37 @@ fn two_hosted_source_copies_whose_creates_both_land_before_either_relist_both_re
     let points = ["intent-read", "after-create"];
     let first = Paused::start(&stores, &issue, "first", &points);
     let second = Paused::start(&stores, &issue, "second", &points);
-    // Both read the issue before either records its intent: the lease is advisory.
+    // Both read the issue before either records its intent: the lease is advisory, and the
+    // intent recorded last is the one that stands.
     first.reached("intent-read");
     second.reached("intent-read");
     first.release("intent-read");
     second.release("intent-read");
-    // Both create before either lists the repository by the key again.
+    // Both create before either writes anything else.
     first.reached("after-create");
     second.reached("after-create");
     first.release("after-create");
     second.release("after-create");
-    let (first_code, first_answer) = first.finish();
-    let (second_code, second_answer) = second.finish();
-    let issues = board_issues_of(&stores, &issue);
-    assert_eq!(issues.len(), 2, "both created: {issues:?}");
-    assert_eq!((first_code, second_code), (Some(4), Some(4)));
-    refused_as_duplicated(&first_answer, &issues);
-    refused_as_duplicated(&second_answer, &issues);
+    let answers = [first.finish(), second.finish()];
+    // Both issues stand: one created by the copy that holds the intent, and one created by the
+    // copy whose intent was overwritten, which found that out at the next write it asked to send
+    // after its `createIssue` and sent nothing more — not even a delete of the issue it made.
+    let made = stores.board.items_titled("Task A");
+    assert_eq!(made.len(), 2, "both created: {made:?}");
+    let lost: Vec<&Value> = answers
+        .iter()
+        .filter(|(code, answer)| {
+            *code == Some(1) && answer["failure"]["kind"] == "create-in-progress"
+        })
+        .map(|(_, answer)| answer)
+        .collect();
+    assert_eq!(lost.len(), 1, "one lost its create: {answers:#?}");
+    let (holder_code, holder) = answers
+        .iter()
+        .find(|(code, _)| *code == Some(4))
+        .expect("the holder answers its item failed");
+    assert_eq!(*holder_code, Some(4));
+    refused_as_duplicated(holder, &made);
     let linked = stores.json(&["task", "show", &issue])["items"][0]["item"]["metadata"]
         ["onetaskgraph.copies"]
         .clone();
@@ -1854,4 +1868,180 @@ fn a_holder_whose_source_record_is_gone_by_its_renewal_writes_nothing_more() {
         0,
         "no comment written once the record was gone"
     );
+}
+
+/// Whether a request is a board write other than a create: a card's field, a relationship, an
+/// issue's content, a filing on the board, or a delete.
+fn writes_after_create(document: &str, _: &Value) -> bool {
+    document.trim_start().starts_with("mutation") && !document.contains("createIssue(")
+}
+
+#[test]
+fn a_holder_renews_before_each_write_request_inside_the_plugin_call_that_created() {
+    // A folder leasing its intents for two seconds, and a board answering the create three
+    // seconds late: every write the same plugin call sends after `createIssue` goes after the
+    // first lease would have run out.
+    let stores = Stores::leased(2);
+    stores.board.after_request(creates_issue, 0, |_| {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    });
+    // The source's intent read at each of the next writes, as the board answers each one.
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    for skip in 0..8 {
+        let notes = stores.notes.clone();
+        let record = seen.clone();
+        stores
+            .board
+            .after_request(writes_after_create, skip, move |_| {
+                record
+                    .lock()
+                    .unwrap()
+                    .push((board_intent(&notes), chrono::Utc::now()));
+            });
+    }
+    let writes = count(&stores.board, writes_after_create);
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "board"]);
+    assert_eq!(copied["items"][0]["action"], "created", "{copied:#}");
+    let seen = seen.lock().unwrap().clone();
+    assert!(
+        count(&stores.board, writes_after_create) > writes && !seen.is_empty(),
+        "the create's own call wrote after `createIssue`"
+    );
+    // Only the writes before the link: the link write takes the intent off.
+    for (intent, at) in seen.iter().filter(|(intent, _)| intent.is_some()) {
+        let (_, until) = intent.as_ref().expect("an intent");
+        let until = chrono::DateTime::parse_from_rfc3339(until).expect("a time");
+        assert!(
+            until > *at,
+            "the lease was renewed before the write: it ran until {until}, written at {at}"
+        );
+    }
+    assert!(
+        seen.iter().any(|(intent, _)| intent.is_some()),
+        "a write after the create was sent while the intent stood: {seen:?}"
+    );
+}
+
+#[test]
+fn a_holder_that_loses_its_create_inside_the_plugin_call_sends_no_further_write() {
+    let stores = Stores::new();
+    let creates = count(&stores.board, creates_issue);
+    // The first copy creates the issue and is held as it asks to send its next write, until its
+    // one-second lease has run out.
+    let first = Paused::copying(&stores, &[NOTE], "first", &["guarded-write"]);
+    first.reached("guarded-write");
+    assert_eq!(
+        count(&stores.board, creates_issue),
+        creates + 1,
+        "the issue was created"
+    );
+    let (holder, _) = board_intent(&stores.notes).expect("the first copy's intent");
+    let writes = count(&stores.board, writes_after_create);
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    // A second copy finds the issue by its key and takes the create over, then dies.
+    let second = stores.run(
+        &["task", "copy", NOTE, "--to", "board", "--comments"],
+        Some("after-intent"),
+    );
+    assert_eq!(second.status.code(), Some(86), "{}", stderr(&second));
+    let (taker, _) = board_intent(&stores.notes).expect("the second copy's intent");
+    assert_ne!(taker, holder);
+
+    first.release("guarded-write");
+    let (code, failure) = first.finish();
+    assert_eq!(code, Some(1), "{failure:#}");
+    assert_eq!(
+        failure["failure"]["kind"], "create-in-progress",
+        "{failure:#}"
+    );
+    // Not the write it asked for, and no write taking the issue back.
+    assert_eq!(
+        count(&stores.board, writes_after_create),
+        writes,
+        "no write after the loss, a delete included"
+    );
+    assert_eq!(stores.board.items_titled("Task A").len(), 1);
+    let (attempt, _) = board_intent(&stores.notes).expect("the new holder's intent");
+    assert_eq!(attempt, taker);
+}
+
+#[test]
+fn a_linear_create_answered_under_another_id_or_none_is_refused_for_every_kind() {
+    let elsewhere = "00000000-0000-4000-8000-0000000000aa";
+    for kind in ["task", "project", "document"] {
+        for (what, answered) in [("another id", json!(elsewhere)), ("no id", Value::Null)] {
+            let stores = Stores::new();
+            with_a_project_and_a_document(&stores);
+            let (arguments, id) = if kind == "task" {
+                (
+                    ["task", "copy", NOTE, "--to", "linear"]
+                        .map(str::to_owned)
+                        .to_vec(),
+                    NOTE,
+                )
+            } else {
+                record_copy(kind, "linear")
+            };
+            let (create, root, member) = match kind {
+                "task" => (
+                    onetaskgraph_linear::graphql::ISSUE_CREATE,
+                    "issueCreate",
+                    "issue",
+                ),
+                "project" => (
+                    onetaskgraph_linear::graphql::PROJECT_CREATE,
+                    "projectCreate",
+                    "project",
+                ),
+                _ => (
+                    onetaskgraph_linear::graphql::DOCUMENT_CREATE,
+                    "documentCreate",
+                    "document",
+                ),
+            };
+            let bent = answered.clone();
+            stores.linear.bend_answers(
+                move |document, _| document == create,
+                1,
+                move |_, data| data[root][member]["id"] = bent.clone(),
+            );
+            let mut full = vec!["--json"];
+            full.extend(arguments.iter().map(String::as_str));
+            let output = stores.run(&full, None);
+            assert_ne!(
+                output.status.code(),
+                Some(0),
+                "{kind} {what}: {}",
+                stdout(&output)
+            );
+            let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure");
+            // Said as a destination the copy cannot vouch for, to be inspected before copying
+            // again: the item may stand where Linear put it, under an id no retry looks up.
+            assert_eq!(
+                failure["failure"]["kind"], "malformed",
+                "{kind} {what}: {failure:#}"
+            );
+            assert!(
+                failure["failure"]["message"].as_str().is_some_and(
+                    |message| message.contains("may hold an item it could not take back")
+                ),
+                "{kind} {what}: {failure:#}"
+            );
+            if what == "another id" {
+                assert!(
+                    stderr(&output).contains(elsewhere),
+                    "{kind} {what}: names the id Linear answered: {}",
+                    stderr(&output)
+                );
+            }
+            // Refused, and not linked: nothing at the source names a counterpart.
+            let shown = stores.json(&[kind, "show", id]);
+            assert!(
+                shown["items"][0]["item"]["metadata"]
+                    .get("onetaskgraph.copies")
+                    .is_none(),
+                "{kind} {what}: {shown:#}"
+            );
+        }
+    }
 }
