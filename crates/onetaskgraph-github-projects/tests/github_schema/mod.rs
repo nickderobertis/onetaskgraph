@@ -53,6 +53,20 @@ fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// This module's own directory, which holds `validate.mjs` and the tarball beside it.
+///
+/// Found from where this file is rather than from a crate's name, because the directory a
+/// crate is built from is not always its name: `scripts/check-fixture-discrimination.sh`
+/// builds this crate's tests from a copy under another name. `file!()` is this file's path as
+/// cargo handed it to rustc — relative to the workspace root, the directory rustc runs in, or
+/// absolute — so joining it to that root names this file whichever crate includes it.
+fn here() -> PathBuf {
+    let file = workspace_root().join(file!());
+    file.parent()
+        .expect("a source file has a parent directory")
+        .to_path_buf()
+}
+
 /// The running validator: `validate.mjs` under `bun`, with the pipes it is spoken to over.
 struct Validator {
     // Held so the process lives as long as this one; it ends on its own when its standard
@@ -67,10 +81,10 @@ struct Validator {
 impl Validator {
     fn start() -> Self {
         let root = workspace_root();
-        let tests = root.join("crates/onetaskgraph-github-projects/tests");
+        let here = here();
         let mut child = Command::new("bun")
-            .arg(tests.join("github_schema/validate.mjs"))
-            .arg(tests.join("fixtures/github-schema.docs.graphql"))
+            .arg(here.join("validate.mjs"))
+            .arg(here.join("../fixtures/github-schema.docs.graphql"))
             .current_dir(&root)
             // Running a script writes nothing it would otherwise cache.
             .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
