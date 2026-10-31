@@ -3646,7 +3646,11 @@ impl TaskSource for LinearSource {
                 .ok_or_else(|| SourceError::Malformed {
                     message: format!("missing {}.issue", root.as_str()),
                 })?;
-        let id = NativeId(backend_id(issue, "id")?.into());
+        let id = created_as(
+            NativeId(backend_id(issue, "id")?.into()),
+            create_key.as_deref(),
+            "issue",
+        )?;
         self.hold_stored(MetadataRecord::Task, &id, issue)?;
         let held = held_relations(write.target.as_ref(), issue)?;
         self.write_relations(&id, &edges, WriteKind::Task, held)
@@ -3738,7 +3742,11 @@ impl TaskSource for LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {}.project", root.as_str()),
             })?;
-        let id = NativeId(backend_id(project, "id")?.into());
+        let id = created_as(
+            NativeId(backend_id(project, "id")?.into()),
+            create_key.as_deref(),
+            "project",
+        )?;
         self.hold_stored(MetadataRecord::Project, &id, project)?;
         let held = held_relations(write.target.as_ref(), project)?;
         self.write_relations(&id, &edges, WriteKind::Project, held)
@@ -3983,7 +3991,11 @@ impl TaskSource for LinearSource {
             .ok_or_else(|| SourceError::Malformed {
                 message: format!("missing {}.document", root.as_str()),
             })?;
-        let id = NativeId(backend_id(document, "id")?.into());
+        let id = created_as(
+            NativeId(backend_id(document, "id")?.into()),
+            create_key.as_deref(),
+            "document",
+        )?;
         self.hold_stored(MetadataRecord::Document, &id, document)?;
         Ok(id)
     }
@@ -5834,6 +5846,30 @@ fn classification_of(
         .map_err(|message| SourceError::Malformed { message })?;
     metadata.remove(Classification::METADATA_KEY);
     Ok(classification)
+}
+
+/// `answered`, the id a create's answer gives, held to the id a keyed create sent: Linear's
+/// published schema takes a caller's `id` as the item's own, so an answer naming another is one
+/// this source cannot vouch for — and it says so rather than answer an id a retry's lookup by key
+/// would never find. A refusal is all it is: the item stands where Linear put it, and a later
+/// retry looking it up by the id sent will not find it there.
+fn created_as(answered: NativeId, key: Option<&str>, kind: &str) -> Result<NativeId, SourceError> {
+    let Some(key) = key else {
+        return Ok(answered);
+    };
+    let sent = linear_id_of_key(key)?;
+    if answered.0 == sent {
+        Ok(answered)
+    } else {
+        Err(SourceError::Malformed {
+            message: format!(
+                "Linear answered a {kind} create sent with id {sent} as {}, not the id it was sent; \
+                 next: inspect that {kind} before copying again, since a retry looks for the id \
+                 that was sent",
+                answered.0
+            ),
+        })
+    }
 }
 
 /// The create key a create of a new item carries, which it sends as the item's own id.
