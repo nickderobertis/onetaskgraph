@@ -532,6 +532,10 @@ impl TaskSource for InMemorySource {
         self.declared().writes
     }
 
+    /// The task as this process now holds it — no token, since this source gives none.
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        self.get_task(id).await.ok().flatten()
+    }
     /// A written task's `key` is dropped rather than refused: it is the handle of wherever
     /// the task was read, and refusing it would stop a copy out of Linear or a GitHub board
     /// landing here at all. A configured key is refused; see [`InMemoryConfig::validate`].

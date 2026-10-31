@@ -299,6 +299,7 @@ fn copy() -> CopyRequest {
         expect: None,
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
+        conditions: Default::default(),
     }
 }
 

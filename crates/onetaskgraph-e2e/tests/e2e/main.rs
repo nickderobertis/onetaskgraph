@@ -61,7 +61,18 @@ mod copy;
 // Markdown in seconds. The rule they prove is the engine's copy, which carries comments between
 // every pair of plugins, so no one plugin crate's edge is narrower.
 mod copy_comments;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary from a folder of Markdown into the loopback board and the loopback
+// Linear workspace in seconds. The guards they prove are the engine's copy, decided on the read
+// it makes of any destination, so no one plugin crate's edge is narrower.
+mod copy_guards;
 mod copy_link;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary from a folder of Markdown into a second folder, the loopback board
+// and the loopback Linear workspace, about twenty seconds in all, most of it one-second leases
+// run out. A create safe to retry is the engine's copy, resolved against every destination and
+// taken on every source, so no one plugin crate's edge is narrower.
+mod copy_retry;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
 // journeys drive the binary from a loopback board and a folder of Markdown into a folder of
 // Markdown and the Python store over a real pipe, in a few seconds. Which tasks a copy leaves
@@ -193,3 +204,13 @@ mod templates;
 // it cannot sit behind one plugin crate's edge, which AGENTS.md forbids depending on the engine
 // at any depth; each plugin's own half is proven behind its own edge in its own tests.
 mod update;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary from a folder of Markdown into a second folder, the loopback board
+// and the loopback Linear workspace in seconds. What a write reports it left is the engine's
+// copy and write verbs read across every plugin, so no one plugin crate's edge is narrower.
+mod write_results;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journey drives the binary into the loopback board and Linear workspace in seconds, and holds
+// what it sends to a golden recorded from the v0.12.13 binary. The copy and the write verbs are
+// the engine's, across plugins, so no one plugin crate's edge is narrower.
+mod release_requests;

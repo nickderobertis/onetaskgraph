@@ -109,6 +109,12 @@ impl Engine {
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
         let (result, fallback, spent) = self.expected_parts(id);
+        let mut result = self.verb_result(source, id, None, result).await;
+        // The priority this verb's write answered with is what the task holds, whatever else
+        // the source could say.
+        if let Some(result) = result.as_mut() {
+            result.priority = Some(read);
+        }
         Ok(TaskPrioritySet {
             id: id.clone(),
             priority: read,
@@ -161,6 +167,7 @@ impl Engine {
             .stored_content(MetadataRecord::Task, &id.native)
             .unwrap_or_else(|| content.to_owned());
         let (result, fallback, spent) = self.expected_parts(id);
+        let result = self.verb_result(source, id, None, result).await;
         Ok(TaskContentSet {
             id: id.clone(),
             content: held,

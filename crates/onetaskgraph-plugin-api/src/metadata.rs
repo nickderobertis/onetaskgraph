@@ -69,6 +69,20 @@ impl MetadataKey {
     /// and [`Self::copy_locations`] is how it names the key there.
     pub const COPY_LOCATIONS_KEY: &'static str = "onetaskgraph.copy_locations";
 
+    /// The reserved key a copied item records while a copy is creating its counterpart: a JSON
+    /// object mapping a destination source name to `{"key", "at", "attempt", "lease_until"}` —
+    /// the create's deterministic key, when it was first taken, the copy holding it and until
+    /// when. Removed for a destination in the write that records its [`Self::COPIES_KEY`]
+    /// entry, and the key dropped once its object empties, so an item with no create in flight
+    /// carries none. Written only by the engine's copy.
+    pub const CREATING_KEY: &'static str = "onetaskgraph.creating";
+
+    /// The reserved key an item a copy created carries its create's key under, as a string,
+    /// written with the create itself — so a retried copy finds the item its earlier attempt
+    /// created by the key both computed. A source that can give an item an id of the caller's
+    /// choosing may hold the key as that id instead.
+    pub const CREATE_KEY: &'static str = "onetaskgraph.create_key";
+
     /// The reserved key a **home** project records its member projects under: a JSON list of
     /// qualified project ids, each in a different source from the home and from the others,
     /// so a home has at most one member per source.
@@ -160,6 +174,12 @@ impl MetadataKey {
     // and both SDKs refuse it, and the stdio boundary admits it only with a value that is links.
     pub fn copies() -> Self {
         Self(Self::COPIES_KEY.to_owned())
+    }
+
+    /// [`Self::CREATING_KEY`], as the key the engine's copy writes it under.
+    #[must_use]
+    pub fn creating() -> Self {
+        Self(Self::CREATING_KEY.to_owned())
     }
 
     /// Whether this is [`Self::COPIES_KEY`].

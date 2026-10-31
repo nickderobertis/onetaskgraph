@@ -37,8 +37,14 @@ fn released() -> BTreeMap<String, String> {
 /// by id whose whole selection it selects in place of 0.6.0's `id`: what Linear stored, and every
 /// field a read maps, read off the write's own answer, so a later write's own read of the item
 /// is that answer and nothing is read after a write.
-fn whole_writes() -> [(&'static str, &'static str, &'static str); 8] {
+fn whole_writes() -> [(&'static str, &'static str, &'static str); 9] {
     [
+        // Widened so a priority write answers the task it left, token and all.
+        (
+            "ISSUE_PRIORITY_UPDATE",
+            graphql::ISSUE_PRIORITY_UPDATE,
+            graphql::ISSUE,
+        ),
         ("ISSUE_CREATE", graphql::ISSUE_CREATE, graphql::ISSUE),
         ("ISSUE_UPDATE", graphql::ISSUE_UPDATE, graphql::ISSUE),
         ("ISSUE_REWRITE", graphql::ISSUE_REWRITE, graphql::ISSUE),

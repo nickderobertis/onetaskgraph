@@ -1051,3 +1051,27 @@ fn concurrent_project_copies_out_of_a_folder_configured_under_another_spelling_o
         json!(qualified("one", "issue-1"))
     );
 }
+
+#[test]
+fn a_stdio_source_refusing_the_intent_key_as_malformed_copies_as_v0_12_13_did_with_no_intent() {
+    // A plugin built to the protocol before the intent existed refuses every key of this
+    // product's namespace as malformed parameters, writing nothing: the copy goes on with no
+    // intent and records its link as it always did.
+    let sandbox = Sandbox::new();
+    markdown_pair(&sandbox, SourceBoundary::Subprocess);
+    let from = qualified(SOURCE, "T-1");
+    let (destination, action, _, link) = copy(&sandbox, "task", &from, &[]);
+    assert_eq!(
+        (action, link),
+        (json!("created"), json!("recorded")),
+        "{destination}"
+    );
+    let recorded = metadata(&sandbox, "task", &from);
+    assert_eq!(recorded["onetaskgraph.copies"], json!({NOTES: destination}));
+    assert!(
+        recorded.get("onetaskgraph.creating").is_none(),
+        "no intent was kept: {recorded:#}"
+    );
+    let file = std::fs::read_to_string(source_file(&sandbox, "task", "T-1")).expect("the file");
+    assert!(!file.contains("onetaskgraph.creating"), "{file}");
+}

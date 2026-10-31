@@ -584,14 +584,18 @@ impl CachedSource {
         ExpectedWrite {
             result: Some(WriteResult {
                 version: landed_last.and_then(|entry| entry.shown.version().map(str::to_owned)),
-                parts: journal
-                    .mutations()
-                    .map(|entry| WritePart {
-                        part: entry.part.clone(),
-                        outcome: entry.outcome.clone(),
-                        fields: entry.fields.clone(),
-                    })
-                    .collect(),
+                parts: Some(
+                    journal
+                        .mutations()
+                        .map(|entry| WritePart {
+                            part: entry.part.clone(),
+                            outcome: entry.outcome.clone(),
+                            fields: entry.fields.clone(),
+                        })
+                        .collect(),
+                ),
+                status: None,
+                priority: None,
             }),
             fallback: journal
                 .read()
@@ -1141,6 +1145,51 @@ impl TaskSource for CachedSource {
             .await
     }
 
+    async fn created_with_key(
+        &self,
+        record: MetadataRecord,
+        key: &str,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        target: &WriteTarget<'_>,
+    ) -> Result<Vec<NativeId>, SourceError> {
+        self.inner
+            .created_with_key(record, key, since, target)
+            .await
+    }
+
+    fn create_key_lags(&self) -> bool {
+        self.inner.create_key_lags()
+    }
+
+    fn hold_item(&self, record: MetadataRecord, id: &NativeId) -> Result<bool, SourceError> {
+        self.inner.hold_item(record, id)
+    }
+
+    fn release_item(&self, record: MetadataRecord, id: &NativeId) {
+        self.inner.release_item(record, id);
+    }
+
+    fn item_snapshot(&self, record: MetadataRecord, id: &NativeId) -> Option<Vec<u8>> {
+        self.inner.item_snapshot(record, id)
+    }
+
+    fn restore_item(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        snapshot: &[u8],
+    ) -> Result<(), SourceError> {
+        self.inner.restore_item(record, id, snapshot)
+    }
+
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        self.inner.written_task(id).await
+    }
+
+    async fn written_version(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        self.inner.written_version(record, id).await
+    }
+
     fn written_location(&self, record: MetadataRecord, id: &NativeId) -> Option<Location> {
         self.inner.written_location(record, id)
     }
@@ -1459,6 +1508,16 @@ impl TaskSource for CachedSource {
         value: &Value,
     ) -> Result<Option<Document>, SourceError> {
         self.retiring(Some(id), self.inner.set_document_metadata(id, key, value))
+            .await
+    }
+
+    async fn remove_record_metadata(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        self.retiring(Some(id), self.inner.remove_record_metadata(record, id, key))
             .await
     }
 
@@ -1890,6 +1949,13 @@ impl TaskSource for CachedSource {
         target: &WriteTarget<'_>,
     ) -> Result<Option<onetaskgraph_plugin_api::Repository>, SourceError> {
         self.inner.creation_repository(target).await
+    }
+
+    async fn creation_refusal(
+        &self,
+        target: &WriteTarget<'_>,
+    ) -> Result<Option<String>, SourceError> {
+        self.inner.creation_refusal(target).await
     }
 
     async fn visibility_with_project(
@@ -2491,7 +2557,13 @@ mod tests {
             cache.read(&id("T-2")).is_none(),
             "nothing is written for the other task"
         );
-        assert_eq!(written.result.map(|result| result.parts.len()), Some(1));
+        assert_eq!(
+            written
+                .result
+                .and_then(|result| result.parts)
+                .map(|parts| parts.len()),
+            Some(1)
+        );
     }
 
     #[test]

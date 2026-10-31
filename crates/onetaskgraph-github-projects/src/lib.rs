@@ -976,6 +976,10 @@ pub mod graphql {
         };
     }
 
+    /// One page of a repository's issues, newest first, each with when it was created and its
+    /// body: what a retried copy reads to find the issue its earlier attempt created, by the
+    /// create key in that body's metadata slot — never through search, whose index lags.
+    pub const ISSUES_BY_CREATION: &str = "query($owner:String!,$name:String!,$first:Int!,$after:String){repository(owner:$owner,name:$name){issues(first:$first,after:$after,orderBy:{field:CREATED_AT,direction:DESC}){nodes{id createdAt body}pageInfo{hasNextPage endCursor}}}}";
     /// Every issue of one board, found by a search scoped to that board.
     ///
     /// This is how the projects a board holds are listed, and it selects no `items`
@@ -2111,7 +2115,11 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 55] = [
+    pub const DOCUMENTS: [(&str, &str); 56] = [
+        (
+            ISSUES_BY_CREATION,
+            "listing a repository's issues newest first for a create key",
+        ),
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -2766,6 +2774,20 @@ pub struct GitHubProjectsConfig {
     /// this is refused naming the field. Reads never need it.
     pub repository: Option<String>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates the `owner/name` grammar before private construction.
     // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+    /// GitHub logins whose repositories this source may create an issue in.
+    ///
+    /// Absent or empty, the default, restricts nothing. Otherwise a create whose issue the
+    /// rule `repository` describes would file in a repository owned by anyone else is refused
+    /// before anything of it is written — by `task copy`, `task copy --create`, a member
+    /// create of a project copy and a dry run of each — with the error kind `creation-owner`,
+    /// naming the repository and these owners. Logins compare case-insensitively, as GitHub
+    /// compares them. An update of an issue that already exists is never refused by it.
+    /// `task locate` reports such a refusal as `creates_in.refused` rather than failing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // Kept in the schema as `"default": []` although a serialized configuration leaves an empty
+    // list out, so both SDKs model an absent list as an empty one rather than as `null`.
+    #[schemars(!skip_serializing_if)]
+    pub creation_owners: Vec<String>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates each entry against GitHub's login grammar, naming the one it refuses.
     /// Environment variable containing a fine-grained token with Projects and Issues
     /// read/write plus Pull requests read-only access for every repository represented on
     /// the board.
@@ -3773,6 +3795,8 @@ pub struct GitHubProjectsSource {
     owner: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only by `new` after full GitHub-owner validation.
     project_number: u32, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only by `new` after GraphQL-Int validation.
     repository: Option<RepositoryTarget>,
+    /// The logins whose repositories a create may file in; empty restricts nothing.
+    creation_owners: Vec<String>, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only by `new` after each entry passes GitHub's login grammar.
     endpoint: Url,
     token: SecretString,
     credential_name: String, // llmlint: ignore[invalid_states_unrepresentable] Private diagnostic value constructed only after environment-name validation.
@@ -5044,6 +5068,18 @@ impl GitHubProjectsSource {
             .as_deref()
             .map(RepositoryTarget::parse)
             .transpose()?;
+        if let Some(entry) = config
+            .creation_owners
+            .iter()
+            .find(|entry| !valid_github_owner(entry))
+        {
+            return Err(SourceError::Config {
+                message: format!(
+                    "creation_owners entry {entry:?} is not a GitHub login: a login is 1-39 ASCII \
+                     letters, digits, or single hyphens, and cannot start or end with a hyphen"
+                ),
+            });
+        }
         let endpoint = Url::parse(&config.endpoint).map_err(|e| SourceError::Config {
             message: format!("endpoint is not a valid URL: {e}"),
         })?;
@@ -5067,6 +5103,7 @@ impl GitHubProjectsSource {
             owner: config.owner,
             project_number: config.project_number,
             repository,
+            creation_owners: config.creation_owners,
             asset_client: std::sync::OnceLock::new(),
             endpoint,
             token,
@@ -5218,6 +5255,17 @@ impl GitHubProjectsSource {
         let mut backoff = self.pacing.retry_backoff;
         loop {
             let ticket = self.pace(charge, mutation).await;
+            // Every write but a create is asked for immediately before it is sent — a create's
+            // fields, its relationships, its content and the delete that takes it back included
+            // — so a copy that owns the create renews its hold first, and one that has lost it
+            // sends nothing more. Asked again before a retry, which is sent later.
+            if mutation
+                && !query.contains("createIssue(")
+                && let Err(refused) = <dyn onetaskgraph_plugin_api::WriteGuard>::check().await
+            {
+                self.paced(ticket, mutation);
+                return Err(refused);
+            }
             let attempt = self.send_once(query, &variables, waits + 1).await;
             self.paced(ticket, mutation);
             let limited = match attempt {
@@ -9116,6 +9164,27 @@ impl GitHubProjectsSource {
             .map_err(|message| SourceError::Malformed { message })
     }
 
+    /// Why `creation_owners` refuses a create filed in `target`, or `None` when it allows it —
+    /// every create when the list is empty.
+    fn owner_refusal(&self, target: &RepositoryTarget) -> Option<String> {
+        if self.creation_owners.is_empty()
+            || self
+                .creation_owners
+                .iter()
+                .any(|owner| owner.eq_ignore_ascii_case(&target.owner))
+        {
+            return None;
+        }
+        Some(format!(
+            "source {} would create the issue in repository {}, owned by {}, and its \
+             creation_owners allows only repositories of {}",
+            self.name,
+            target.slug(),
+            target.owner,
+            self.creation_owners.join(", ")
+        ))
+    }
+
     fn configured_repository(&self) -> Result<&RepositoryTarget, SourceError> {
         self.repository
             .as_ref()
@@ -9159,8 +9228,15 @@ impl GitHubProjectsSource {
             incoming.written.kind().describes(),
             incoming.title
         );
-        self.creation_rule(incoming.repositories, incoming.parent, &what)
-            .await
+        let target = self
+            .creation_rule(incoming.repositories, incoming.parent, &what)
+            .await?;
+        // The engine asks `creation_refusal` before anything of a copy is written; this holds
+        // every other create to the same restriction, before `createIssue`.
+        match self.owner_refusal(&target) {
+            Some(message) => Err(SourceError::Refused { message }),
+            None => Ok(target),
+        }
     }
 
     /// [`Self::creation_target`]'s rule over what it reads of the item — its `repositories`
@@ -13363,6 +13439,160 @@ impl TaskSource for GitHubProjectsSource {
             .map(Some)
             .map_err(|message| SourceError::Malformed { message })
     }
+    /// Every issue of the repository a create of `target` files in whose body carries `key` in
+    /// its metadata slot, read off that repository's issues newest first back to `since` —
+    /// never through search, whose index lags a fresh issue by seconds.
+    async fn created_with_key(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        key: &str,
+        since: Option<DateTime<Utc>>,
+        target: &onetaskgraph_plugin_api::WriteTarget<'_>,
+    ) -> Result<Vec<NativeId>, SourceError> {
+        let _ = record;
+        let onetaskgraph_plugin_api::WriteTarget::New {
+            repositories,
+            project,
+        } = target
+        else {
+            return Ok(Vec::new());
+        };
+        let repository = self
+            .creation_rule(repositories, *project, "a new item")
+            .await?;
+        let wanted = Value::String(key.to_owned());
+        let mut found = Vec::new();
+        let mut after: Option<String> = None;
+        let mut followed = std::collections::HashSet::new();
+        loop {
+            let data = self
+                .graphql(
+                    graphql::ISSUES_BY_CREATION,
+                    json!({"owner": repository.owner, "name": repository.name,
+                           "first": MAX_PAGE_SIZE, "after": after}),
+                )
+                .await?;
+            let issues =
+                data.pointer("/repository/issues")
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: format!(
+                            "GitHub answered no issues for repository {}",
+                            repository.slug()
+                        ),
+                    })?;
+            let malformed = |what: &str| SourceError::Malformed {
+                message: format!(
+                    "GitHub answered a page of repository {}'s issues {what}",
+                    repository.slug()
+                ),
+            };
+            let nodes = issues
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| malformed("with no list of issues"))?;
+            let mut older = false;
+            for node in nodes {
+                let id = node
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| malformed("holding an issue with no id"))?;
+                let created = optional_time(node, "createdAt")?
+                    .ok_or_else(|| malformed("holding an issue with no creation time"))?;
+                if since.is_some_and(|since| created < since) {
+                    older = true;
+                    break;
+                }
+                let body = match node.get("body") {
+                    Some(Value::String(body)) => Some(body.clone()),
+                    Some(Value::Null) => None,
+                    _ => return Err(malformed("holding an issue with no body member")),
+                };
+                let (_, metadata) = metadata_body(body)?;
+                if metadata.get(MetadataKey::CREATE_KEY) == Some(&wanted) {
+                    found.push(NativeId(id.to_owned()));
+                }
+            }
+            let next = issues
+                .pointer("/pageInfo/hasNextPage")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| malformed("that does not say whether another follows"))?;
+            if older || !next {
+                return Ok(found);
+            }
+            // A page that says another follows names where it starts, and never a page already
+            // read: anything else would ask for the same pages again for ever.
+            let cursor = issues
+                .pointer("/pageInfo/endCursor")
+                .and_then(Value::as_str)
+                .filter(|cursor| !cursor.is_empty())
+                .map(str::to_owned);
+            if cursor
+                .as_ref()
+                .is_none_or(|cursor| !followed.insert(cursor.clone()))
+            {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "GitHub answered a page of repository {}'s issues that says another \
+                         follows without a new cursor to it",
+                        repository.slug()
+                    ),
+                });
+            }
+            after = cursor;
+        }
+    }
+
+    /// `Repository.issues` lists an issue GitHub committed only once its listing catches up.
+    fn create_key_lags(&self) -> bool {
+        true
+    }
+
+    /// The task as this process's own latest write of it left it, from the item it recorded
+    /// that write as — never a request. Its `version` is always `None`: a board's change token
+    /// is given only once an item has gone unchanged for [`change_token::SETTLED`], which an
+    /// item this command has just written has not, so no write's own answer can vouch for one.
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        let held = self
+            .created()
+            .ok()?
+            .iter()
+            .find(|held| held.id == *id)
+            .cloned()
+            .or_else(|| {
+                self.updated()
+                    .ok()?
+                    .iter()
+                    .find(|held| held.id == *id)
+                    .cloned()
+            })?;
+        let mut task = held.task().ok()?;
+        task.version = None;
+        Some(task)
+    }
+
+    /// Why `creation_owners` refuses a create of `target`, by [`Self::creation_rule`] — read
+    /// only when the list is not empty, so a source restricting nothing reads nothing.
+    async fn creation_refusal(
+        &self,
+        target: &onetaskgraph_plugin_api::WriteTarget<'_>,
+    ) -> Result<Option<String>, SourceError> {
+        let onetaskgraph_plugin_api::WriteTarget::New {
+            repositories,
+            project,
+        } = target
+        else {
+            return Ok(None);
+        };
+        if self.creation_owners.is_empty() {
+            return Ok(None);
+        }
+        let target = self
+            .creation_rule(repositories, *project, "a new item")
+            .await?;
+        Ok(self.owner_refusal(&target))
+    }
+
     async fn health(&self) -> Result<Health, SourceError> {
         let board = self.board_page(None, 1).await?;
         Ok(Health {
@@ -14140,6 +14370,35 @@ impl TaskSource for GitHubProjectsSource {
             .set_slot_key(id, BoardKind::Document, key, value)
             .await?
             .map(|item| item.document()))
+    }
+
+    /// Take one key out of one issue's metadata slot with a single body update that changes the
+    /// slot and nothing outside it, sending nothing when the slot does not hold the key.
+    async fn remove_record_metadata(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        let kind = match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => BoardKind::Work(ItemKind::Task),
+            onetaskgraph_plugin_api::MetadataRecord::Project => BoardKind::Work(ItemKind::Project),
+            onetaskgraph_plugin_api::MetadataRecord::Document => BoardKind::Document,
+        };
+        let Some(mut item) = self.bound_item(id).await?.filter(|item| item.kind == kind) else {
+            return Ok(None);
+        };
+        if item.slot.contains_key(key.as_str()) {
+            let mut slot = item.slot.clone();
+            slot.remove(key.as_str());
+            self.write_slot(&mut item, &slot).await?;
+            self.remember_written(item.clone(), false)?;
+        }
+        Ok(Some(match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => item.task()?.version,
+            onetaskgraph_plugin_api::MetadataRecord::Project => item.project().version,
+            onetaskgraph_plugin_api::MetadataRecord::Document => item.document().version,
+        }))
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {

@@ -302,7 +302,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 50);
+    assert_eq!(bundle["version"], 51);
     assert!(bundle["roots"]["HumanTaskProjection"].is_object());
     assert!(bundle["roots"]["HumanTaskProjected"].is_object());
     assert!(bundle["roots"]["LocateReport"].is_object());
@@ -997,6 +997,8 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         MetadataKey::COPIED_WITH_COMMENTS_KEY,
         MetadataKey::COPIED_DESTINATION_VERSION_KEY,
         MetadataKey::EDGES_ON_RECORD_KEY,
+        MetadataKey::CREATING_KEY,
+        MetadataKey::CREATE_KEY,
         onetaskgraph_core::GlobalId::ORIGIN_KEY,
     ]
     .into_iter()
@@ -1020,8 +1022,24 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         .collect();
     assert_eq!(listed, spelled, "the keys docs/metadata.md lists");
     let words = [
-        "", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-        "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+        "",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
     ];
     assert!(
         bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),
@@ -1360,7 +1378,7 @@ fn the_readme_names_every_word_of_the_copy_reports_via_and_link() {
                 .to_owned()
         })
         .collect();
-    assert_eq!(via.len(), 6, "{via:?}");
+    assert_eq!(via.len(), 7, "{via:?}");
     assert_eq!(link.len(), 4, "{link:?}");
 
     let readme = std::fs::read_to_string(
@@ -1368,7 +1386,7 @@ fn the_readme_names_every_word_of_the_copy_reports_via_and_link() {
     )
     .expect("README.md is readable");
     let start = readme
-        .find("`via` is one field with six words")
+        .find("`via` is one field with seven words")
         .expect("the README's paragraph on `via` and `link`");
     let paragraph = &readme[start..start + readme[start..].find("\n<!--").unwrap()];
     let named: std::collections::BTreeSet<&str> = paragraph.split('`').skip(1).step_by(2).collect();

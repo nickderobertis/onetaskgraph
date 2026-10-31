@@ -67,6 +67,11 @@ pub struct FailureDocument {
     /// its `fallback` and what it `spent` — absent for every other failure.
     #[serde(flatten)]
     pub expected: crate::cache::ExpectedWrite,
+    /// What the destination item a copy refused to write held, as the copy's read of it
+    /// before writing found it — present only for a refusal made after that read, such as
+    /// `target-task-origin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held: Option<crate::cache::WriteResult>,
 }
 
 /// Why one command failed.
@@ -233,6 +238,25 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         ),
         EngineError::QueryNotTasks => ("query-not-tasks".to_owned(), None, None),
         EngineError::StatusesNotTasks => ("statuses-not-tasks".to_owned(), None, None),
+        EngineError::ConditionsNotTasks => ("conditions-not-tasks".to_owned(), None, None),
+        EngineError::CreateInProgress { .. } => ("create-in-progress".to_owned(), None, None),
+        EngineError::CreateDuplicated { destination, .. } => (
+            "create-duplicated".to_owned(),
+            Some(destination.clone()),
+            None,
+        ),
+        EngineError::CreationOwner { destination, .. } => {
+            ("creation-owner".to_owned(), Some(destination.clone()), None)
+        }
+        EngineError::OtherwiseWithoutStatus => ("otherwise-without-status".to_owned(), None, None),
+        EngineError::StatusConditionPreserved => {
+            ("status-condition-preserved".to_owned(), None, None)
+        }
+        EngineError::DestinationStatus { destination, .. } => (
+            "destination-status".to_owned(),
+            Some(destination.source.clone()),
+            None,
+        ),
         EngineError::CommentsNotDocuments => ("comments-not-documents".to_owned(), None, None),
         EngineError::NoPriority { name, .. } => ("no-priority".to_owned(), configured(name), None),
         EngineError::CommentsNotWritable { name, .. }

@@ -245,6 +245,10 @@ impl LinearSource {
             }
             // The upload URL is signed; never send the source credential to it.
             loop {
+                // The upload is a write like any mutation, asked for before each attempt.
+                if let Err(refused) = <dyn onetaskgraph_plugin_api::WriteGuard>::check().await {
+                    return Err(failure(asset, Stage::Put, &refused.to_string()));
+                }
                 let mut request = client
                     .put(upload.upload_url.0.clone())
                     .header("Content-Type", asset.content_type.as_str())

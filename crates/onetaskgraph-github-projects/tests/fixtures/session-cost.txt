@@ -1,5 +1,5 @@
-requests 239
-node count 275642
+requests 240
+node count 275742
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -31,6 +31,7 @@ requests per call
     1       0  live scratch field removal
     1       0  live scratch field value
     1       0  live template lookup
+    1     100  node-count and point-cost reconciliation while listing a repository's issues newest first for a create key
     1     915  node-count and point-cost reconciliation while looking up the items copied from one origin
     1    3100  node-count and point-cost reconciliation while looking up the items copied from several origins, and what creating one reads
     1    3123  node-count and point-cost reconciliation while looking up the items copied from several origins, with a project's members

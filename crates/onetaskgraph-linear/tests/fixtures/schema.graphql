@@ -495,10 +495,8 @@ input EntityIdentifierIDComparator {
   eq: ID
 }
 input IssueCreateInput {
-  # The client-chosen UUID v4 a live lane's pool lease is created under, so that Linear's own
-  # refusal of a second create under one id is what makes a lease exclusive; as the recorded
-  # upstream schema (`onetaskgraph-live-janitor/tests/fixtures/linear-upstream.graphql.gz`)
-  # spells it: "If none is provided, the backend will generate one."
+  # The identifier, chosen by the caller, as Linear's published IssueCreateInput documents it:
+  # when none is given the backend generates one, and only one issue may hold an id.
   id: String
   teamId: String!
   title: String!
@@ -520,6 +518,9 @@ input IssueUpdateInput {
   projectId: String
 }
 input ProjectCreateInput {
+  # The identifier, chosen by the caller, as Linear's published ProjectCreateInput documents it:
+  # when none is given the backend generates one.
+  id: String
   teamIds: [String!]!
   name: String!
   description: String
@@ -537,6 +538,9 @@ input ProjectUpdateInput {
 # Nullability as published: `title` alone is required of a create, and every member of an
 # update is optional.
 input DocumentCreateInput {
+  # The identifier, chosen by the caller, as Linear's published DocumentCreateInput documents it:
+  # when none is given the backend generates one.
+  id: String
   title: String!
   content: String
   projectId: String

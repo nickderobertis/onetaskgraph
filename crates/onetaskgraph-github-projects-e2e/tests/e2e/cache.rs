@@ -579,7 +579,9 @@ fn a_write_without_expect_reads_as_it_always_did_and_leaves_the_entry_unserved()
         !sent.contains(&graphql::UPDATE_FIELD_WHOLE.to_owned()),
         "{sent:?}"
     );
-    assert!(written.get("result").is_none(), "{written}");
+    // What the task holds after the write, and no parts: those are an expected write's.
+    assert!(written["result"].get("parts").is_none(), "{written}");
+    assert_eq!(written["result"]["priority"], "high", "{written}");
     let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &v1, "--json"]);
     assert_eq!(sent, [ONE_READ], "the written task's entry is not served");
     assert_eq!(shown["items"][0]["item"]["priority"], "high");

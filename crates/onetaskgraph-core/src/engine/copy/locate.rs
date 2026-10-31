@@ -142,6 +142,11 @@ impl std::fmt::Display for NotATask {
 pub struct CreatesIn {
     /// The repository, as a normalized origin `host/owner/name`.
     pub repository: Repository,
+    /// Why the destination's own policy on where it creates — a GitHub Projects source's
+    /// `creation_owners` — would refuse a create there, as the copy's refusal says it; absent
+    /// when it would not. The locate itself never fails for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
 }
 
 impl Engine {
@@ -198,6 +203,7 @@ impl Engine {
             no_link: true,
             expect: None,
             statuses: Vec::new(),
+            conditions: Default::default(),
         };
         let destination = self.writable(&copy.destination)?;
         let metered = self.metered(&copy, destination)?;
@@ -286,7 +292,7 @@ impl Engine {
             })
             .await
             .map_err(|error| refused(to, error))?;
-        let repository = match (unfiled, project) {
+        let (repository, filed) = match (unfiled, project) {
             (Some(_), Some(project)) => {
                 let planned = Planned {
                     status_policy: copy.status_policy,
@@ -304,6 +310,10 @@ impl Engine {
                     carried: None,
                     comment_plan: None,
                     skipped: false,
+                    status_condition: None,
+                    priority_condition: None,
+                    intent: None,
+                    relist: false,
                 };
                 // A dry run's filing lookup, so it creates no member project; what it would have
                 // written is nothing, and the journal is dropped with nothing in it to undo.
@@ -311,15 +321,30 @@ impl Engine {
                 let filed = self
                     .counterpart(copy, &planned, Some(&project), running, &mut journal)
                     .await?;
-                to.source()
+                let repository = to
+                    .source()
                     .creation_repository(&WriteTarget::New {
                         repositories: &repositories,
                         project: filed.as_ref(),
                     })
                     .await
-                    .map_err(|error| refused(to, error))?
+                    .map_err(|error| refused(to, error))?;
+                (repository, filed)
             }
-            (unfiled, _) => unfiled,
+            (unfiled, _) => (unfiled, None),
+        };
+        // What the destination's own policy on where it creates says of that repository, which
+        // a locate reports rather than fails on: it answers where a copy would land.
+        let refused_here = match &repository {
+            Some(_) => to
+                .source()
+                .creation_refusal(&WriteTarget::New {
+                    repositories: &repositories,
+                    project: filed.as_ref(),
+                })
+                .await
+                .map_err(|error| refused(to, error))?,
+            None => None,
         };
         Ok(Located {
             source: id.clone(),
@@ -327,7 +352,10 @@ impl Engine {
             placement,
             counterpart,
             carriers,
-            creates_in: repository.map(|repository| CreatesIn { repository }),
+            creates_in: repository.map(|repository| CreatesIn {
+                repository,
+                refused: refused_here,
+            }),
         })
     }
 

@@ -420,6 +420,13 @@ fn a_bound_recopy_applies_each_change_alone_and_all_together_in_three_requests()
                     && metadata.remove("onetaskgraph.edges_on_record") == Some(json!(1)),
                 "{what}: the copy records itself on the issue"
             );
+            // And the key of the create that made it, which it keeps from then on.
+            assert!(
+                metadata
+                    .remove("onetaskgraph.create_key")
+                    .is_some_and(|key| key.is_string()),
+                "{what}: the issue keeps its create key"
+            );
         }
         assert_eq!(held, check.1, "{what}");
         // Back as it was, so the next row changes one thing.

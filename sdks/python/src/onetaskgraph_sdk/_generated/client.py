@@ -1124,6 +1124,7 @@ class GeneratedClient:
         match_by: str | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
+        otherwise: Literal["refuse", "preserve-destination"] | None = None,
         page_size: int | None = None,
         recreate: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
@@ -1144,6 +1145,21 @@ class GeneratedClient:
         target_task: GlobalId | str | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
+        when_destination_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
+        when_destination_status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
     ) -> CopyReport:
         """Run ``onetaskgraph task copy``."""
         return await self._invoke(
@@ -1159,6 +1175,7 @@ class GeneratedClient:
             match_by=match_by,
             metadata=_strings("task_copy", "metadata", metadata),
             no_link=no_link,
+            otherwise=otherwise,
             page_size=page_size,
             recreate=recreate,
             set=set,
@@ -1168,6 +1185,8 @@ class GeneratedClient:
             target_task=target_task,
             term_scope=_strings("task_copy", "term_scope", term_scope),
             to=to,
+            when_destination_priority=when_destination_priority,
+            when_destination_status=when_destination_status,
         )
 
     async def task_create(

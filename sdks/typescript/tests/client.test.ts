@@ -27,6 +27,7 @@ import {
   OnetaskgraphClient,
   OnetaskgraphExecutionError,
   OnetaskgraphValidationError,
+  otherwiseChoices,
   projectCopyFlags,
   projectGraphDirections,
   statusPolicies,
@@ -37,6 +38,35 @@ import {
 import { CONFIGURATION_PREFIX } from "./ambient.ts";
 
 const binary = resolve(import.meta.dir, "../../../target/debug/onetaskgraph");
+
+// Each item of a copy's report without the `result` every landed item now carries, checked to be
+// there on each one that landed and absent from every other — a dry run's, which writes nothing,
+// and a skipped item's, which reads nothing of the destination: what is left is what the report
+// always said.
+const LANDED = new Set(["created", "updated", "unchanged"]);
+function withoutResults(items: unknown[], dryRun = false): unknown[] {
+  return items.map((item) => {
+    if (typeof item !== "object" || item === null) return item;
+    // The items arrive untyped — a report's outcomes, a listing's rows — and are compared as
+    // plain JSON, so each is read as a record of members to look at them.
+    const fields = item as Record<string, unknown>;
+    const landed = !dryRun && fields.skipped !== true && LANDED.has(String(fields.action));
+    expect("result" in item).toBe(landed);
+    if (!("result" in item)) return item;
+    // `"result" in item` narrowed it to an object with that member; spelled out so the rest
+    // can be taken without it.
+    const { result, ...rest } = item as { result: unknown } & Record<string, unknown>;
+    expect(typeof result).toBe("object");
+    return rest;
+  });
+}
+
+// A write verb's answer without the `result` it now carries, checked to be there first.
+function withoutResult<T extends { result?: unknown }>(answer: T): Omit<T, "result"> {
+  const { result, ...rest } = answer;
+  expect(typeof result).toBe("object");
+  return rest;
+}
 let root = "";
 let client: OnetaskgraphClient;
 
@@ -303,14 +333,14 @@ test("copy drives the real binary and reports what it did to each item", async (
     const planned = await copyClient.taskCopy(["from:T-1"], "into", { dryRun: true });
     // Null only for a dry run that would create: nothing was, so there is no id.
     // A dry run says which rule would have answered, and leaves the link out: it writes none.
-    expect(planned.items).toEqual([
+    expect(withoutResults(planned.items, true)).toEqual([
       { source: "from:T-1", action: "created", destination: null, via: "created" },
     ]);
 
     // The source file's `metadata:` is written on one line, which that folder will not edit
     // one key of without rewriting the rest, so it cannot hold the link and the copy says so.
     const created = await copyClient.taskCopy(["from:T-1"], "into");
-    expect(created.items).toEqual([
+    expect(withoutResults(created.items)).toEqual([
       {
         source: "from:T-1",
         action: "created",
@@ -364,7 +394,7 @@ test("copy drives the real binary and reports what it did to each item", async (
       ),
     );
     const matched = await copyClient.taskCopy(["from:T-1"], "into", { matchBy: "title" });
-    expect(matched.items).toEqual([
+    expect(withoutResults(matched.items)).toEqual([
       {
         source: "from:T-1",
         action: "updated",
@@ -393,7 +423,7 @@ test("copy drives the real binary and reports what it did to each item", async (
     const alone = await copyClient.projectCopy("from:P-1", "into", { noTasks: true });
     // The project holds no one-line `metadata:`, so the folder could add the link to it: the
     // project copy before this one recorded it, and this one follows it.
-    expect(alone.items).toEqual([
+    expect(withoutResults(alone.items)).toEqual([
       {
         source: "from:P-1",
         action: "unchanged",
@@ -454,7 +484,7 @@ test("copy drives the real binary and reports what it did to each item", async (
       "---\ntitle: Beta engine\nstatus: todo\n---\nthe rest\n",
     );
     const fresh = await copyClient.taskCopy(["from:T-2"], "into", { create: true });
-    expect(fresh.items).toEqual([
+    expect(withoutResults(fresh.items)).toEqual([
       {
         source: "from:T-2",
         action: "created",
@@ -524,7 +554,7 @@ test("a copy keeps only the statuses it names, by query and beside ids, through 
     const byId = await statusClient.taskCopy(["plan:proposal", "plan:shipped"], "by-id", {
       statuses: ["backlog"],
     });
-    expect(byId.items).toEqual([
+    expect(withoutResults(byId.items)).toEqual([
       {
         source: "plan:proposal",
         action: "created",
@@ -589,12 +619,12 @@ test("a document copy drives the real binary and is refused by a source with non
     const documentClient = new OnetaskgraphClient({ binaryPath: binary, cwd: documentRoot });
 
     const planned = await documentClient.documentCopy(["from:D-1"], "notes", { dryRun: true });
-    expect(planned.items).toEqual([
+    expect(withoutResults(planned.items, true)).toEqual([
       { source: "from:D-1", action: "created", destination: null, via: "created" },
     ]);
 
     const created = await documentClient.documentCopy(["from:D-1"], "notes");
-    expect(created.items).toEqual([
+    expect(withoutResults(created.items)).toEqual([
       {
         source: "from:D-1",
         action: "created",
@@ -726,7 +756,7 @@ test("comments are added, listed, edited and deleted through the real binary", a
       commentClient.taskShow("notes:T-1", { noComments: JSON.parse('"false"') }),
     ).toThrow("noComments must be a boolean");
     expect("comments" in record).toBe(false);
-    expect(record.items).toEqual(shown.items);
+    expect(withoutResults(record.items)).toEqual(shown.items);
     expect(shown.comments?.map((comment) => comment.body)).toEqual(["corrected again\n"]);
     expect(shown.items[0]?.item.content).toBe("Long-form task content.");
 
@@ -797,7 +827,7 @@ test("one metadata key of a task, a project and a document is set through the re
       "myapp.review",
       '{"approved": true}',
     );
-    expect(task).toEqual({
+    expect(withoutResult(task)).toEqual({
       id: "work:T-1",
       key: "myapp.review",
       value: { approved: true },
@@ -958,6 +988,9 @@ test("taskCopy sends exactly the flags the binary's task copy reports, no more a
         expect: "gh2|v",
         statusPolicy: "preserve-destination",
         targetTask: "work:T-2",
+        whenDestinationStatus: ["backlog"],
+        otherwise: "refuse",
+        whenDestinationPriority: ["none"],
       }),
       ...taskCopyFlags({ termScope: [] }),
     ].filter((argument) => argument.startsWith("--")),
@@ -1439,7 +1472,7 @@ test("a task's priority is listed, filtered and set through the real binary", as
     expect(unranked.items.map((task) => task.id)).toEqual(["work:T-2"]);
 
     const answer = await priorityClient.taskPrioritySet("work:T-2", "urgent");
-    expect(answer).toEqual({ id: "work:T-2", priority: "urgent" });
+    expect(withoutResult(answer)).toEqual({ id: "work:T-2", priority: "urgent" });
     const shown = await priorityClient.taskShow("work:T-2");
     expect(shown.items[0]?.item.priority).toBe("urgent");
 
@@ -1675,7 +1708,7 @@ test("a task's content is replaced from a file through the real binary, and noth
 
     // The answer carries the content the task then holds: the bytes sent, from a source that
     // reports nothing else of what it stores.
-    expect(await contentClient.taskContentSet("work:T-1", body)).toEqual({
+    expect(withoutResult(await contentClient.taskContentSet("work:T-1", body))).toEqual({
       id: "work:T-1",
       content: "The new body.\n\nWith a second paragraph.",
     });
@@ -2012,7 +2045,7 @@ test("taskLocate answers where a copy lands each task through the real binary", 
 
     // A plain lookup: placed on `site` by no route, nothing found, so a copy would create.
     const fresh = await locateClient.taskLocate(["plan:fresh"], { to: "site" });
-    expect(fresh.items).toEqual([
+    expect(withoutResults(fresh.items)).toEqual([
       {
         source: "plan:fresh",
         classification: "public",
@@ -2220,7 +2253,7 @@ test("a copy with comments carries them, and a repeat by query skips the unchang
       comments: true,
       noLink: true,
     });
-    expect(again.items).toEqual([
+    expect(withoutResults(again.items)).toEqual([
       expect.objectContaining({
         source: "from:T-1",
         action: "unchanged",
@@ -2406,5 +2439,84 @@ test("copy status policy choices agree with both CLI verbs", () => {
       expect(taskCopyFlags({ statusPolicy })).toEqual(["--status-policy", statusPolicy]);
       expect(projectCopyFlags({ statusPolicy })).toEqual(["--status-policy", statusPolicy]);
     }
+  }
+});
+
+test("the otherwise choices agree with the binary's task copy", () => {
+  const help = spawnSync(binary, ["task", "copy", "--help"], { encoding: "utf8" });
+  expect(help.status, help.stderr).toBe(0);
+  const block = help.stdout.split("--otherwise <WHAT>")[1]?.split(/\n +--/)[0];
+  expect(block).toBeDefined();
+  const choices = [...(block ?? "").matchAll(/^ +- ([a-z-]+):/gm)].map((match) => match[1]);
+  expect(choices).toEqual([...otherwiseChoices]);
+  for (const otherwise of otherwiseChoices) {
+    expect(taskCopyFlags({ otherwise })).toEqual(["--otherwise", otherwise]);
+  }
+});
+
+test("taskCopy guards its writes, reports what each held and left, and retries a create via its intent", async () => {
+  // A folder `plan` holding one task, copied into the folder `snap` through the real binary.
+  const store = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-guards-"));
+  try {
+    mkdirSync(resolve(store, "plan", "tasks"), { recursive: true });
+    mkdirSync(resolve(store, "snap"));
+    const task = resolve(store, "plan", "tasks", "ready.md");
+    writeFileSync(task, "---\ntitle: Ready\nstatus: todo\npriority: high\n---\nThe body.\n");
+    const configure = (lease?: number) =>
+      writeFileSync(
+        resolve(store, "onetaskgraph.yaml"),
+        JSON.stringify({
+          sources: {
+            plan: {
+              plugin: "local-md",
+              config: { root: "plan" },
+              ...(lease === undefined ? {} : { create_lease_seconds: lease }),
+            },
+            snap: { plugin: "local-md", config: { root: "snap" } },
+          },
+        }),
+      );
+    configure(1);
+    const environment = { ...process.env, HOME: store, XDG_CONFIG_HOME: store };
+    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: store, env: environment });
+
+    // Stopped right before its link, as a killed copy would be; the retry finishes that item.
+    const stopped = new OnetaskgraphClient({
+      binaryPath: binary,
+      cwd: store,
+      env: { ...environment, OTG_TEST_STOP_AT: "before-link" },
+    });
+    await expect(stopped.taskCopy(["plan:ready"], "snap")).rejects.toThrow();
+    await new Promise((settle) => setTimeout(settle, 1500));
+    const retried = await client.taskCopy(["plan:ready"], "snap");
+    const found = retried.items[0];
+    if (found?.action !== "updated" && found?.action !== "unchanged") {
+      throw new Error(`the retry found the item its first attempt made: ${JSON.stringify(found)}`);
+    }
+    expect(found.via).toBe("intent");
+    expect(found.result?.priority).toBe("high");
+    expect(readdirSync(resolve(store, "snap", "tasks"))).toHaveLength(1);
+    expect(readFileSync(task, "utf8")).not.toContain("onetaskgraph.creating");
+
+    // A counterpart at another category is refused as a parsed outcome, not an exception.
+    writeFileSync(task, readFileSync(task, "utf8").replace("title: Ready", "title: Revised"));
+    const refused = await client.taskCopy(["plan:ready"], "snap", {
+      whenDestinationStatus: ["backlog"],
+      otherwise: "refuse",
+      whenDestinationPriority: ["high"],
+    });
+    const outcome = refused.items[0];
+    if (outcome?.action !== "failed") {
+      throw new Error(`the counterpart was refused: ${JSON.stringify(outcome)}`);
+    }
+    expect(outcome.error.kind).toBe("destination-status");
+    expect(outcome.held?.priority).toBe("high");
+    expect(outcome.status_condition).toEqual({ held: "todo", met: false });
+    expect(outcome.priority_condition).toEqual({ held: "high", met: true });
+    // A caller in plain JavaScript can pass any string: the cast stands in for one, getting a
+    // value the types refuse past them so the runtime check that refuses it is what is proven.
+    expect(() => taskCopyFlags({ otherwise: "maybe" as "refuse" })).toThrow("otherwise must be");
+  } finally {
+    rmSync(store, { recursive: true, force: true });
   }
 });

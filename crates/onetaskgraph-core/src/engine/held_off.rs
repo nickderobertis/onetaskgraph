@@ -287,6 +287,54 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.finish_writes().await)
     }
 
+    async fn created_with_key(
+        &self,
+        record: MetadataRecord,
+        key: &str,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        target: &WriteTarget<'_>,
+    ) -> Result<Vec<NativeId>, SourceError> {
+        self.refused()?;
+        self.noted(
+            self.inner
+                .created_with_key(record, key, since, target)
+                .await,
+        )
+    }
+
+    fn create_key_lags(&self) -> bool {
+        self.inner.create_key_lags()
+    }
+
+    fn hold_item(&self, record: MetadataRecord, id: &NativeId) -> Result<bool, SourceError> {
+        self.inner.hold_item(record, id)
+    }
+
+    fn release_item(&self, record: MetadataRecord, id: &NativeId) {
+        self.inner.release_item(record, id);
+    }
+
+    fn item_snapshot(&self, record: MetadataRecord, id: &NativeId) -> Option<Vec<u8>> {
+        self.inner.item_snapshot(record, id)
+    }
+
+    fn restore_item(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        snapshot: &[u8],
+    ) -> Result<(), SourceError> {
+        self.inner.restore_item(record, id, snapshot)
+    }
+
+    async fn written_task(&self, id: &NativeId) -> Option<Task> {
+        self.inner.written_task(id).await
+    }
+
+    async fn written_version(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
+        self.inner.written_version(record, id).await
+    }
+
     fn written_location(&self, record: MetadataRecord, id: &NativeId) -> Option<Location> {
         self.inner.written_location(record, id)
     }
@@ -491,6 +539,16 @@ impl TaskSource for HeldOff {
     ) -> Result<Option<Document>, SourceError> {
         self.refused()?;
         self.noted(self.inner.set_document_metadata(id, key, value).await)
+    }
+
+    async fn remove_record_metadata(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        self.refused()?;
+        self.noted(self.inner.remove_record_metadata(record, id, key).await)
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
@@ -791,6 +849,14 @@ impl TaskSource for HeldOff {
     ) -> Result<Option<onetaskgraph_plugin_api::Repository>, SourceError> {
         self.refused()?;
         self.noted(self.inner.creation_repository(target).await)
+    }
+
+    async fn creation_refusal(
+        &self,
+        target: &WriteTarget<'_>,
+    ) -> Result<Option<String>, SourceError> {
+        self.refused()?;
+        self.noted(self.inner.creation_refusal(target).await)
     }
 
     async fn visibility_with_project(

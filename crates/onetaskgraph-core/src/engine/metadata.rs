@@ -80,8 +80,9 @@ impl Engine {
             .await
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
-        let mut set = answer(source, id, key, &task.metadata, task.location)?;
+        let mut set = answer(source, id, key, &task.metadata, task.location.clone())?;
         (set.result, set.fallback, set.spent) = self.expected_parts(id);
+        set.result = self.verb_result(source, id, Some(&task), set.result).await;
         Ok(set)
     }
 

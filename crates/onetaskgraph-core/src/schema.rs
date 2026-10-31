@@ -54,7 +54,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 50;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 51;
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -232,6 +232,9 @@ pub fn schema_bundle() -> Value {
     roots.insert("MetadataSet", schema_for!(MetadataSet));
 
     roots.insert("CopyReport", schema_for!(CopyReport));
+    // A root of its own, for the reason `StatusMapping` is one: every source's block takes the
+    // two settings of a create safe to retry by name, whatever plugin it names.
+    roots.insert("CreateSettings", schema_for!(crate::config::CreateSettings));
     roots.insert("CopyOutcome", schema_for!(CopyOutcome));
     roots.insert("CopyAction", schema_for!(CopyAction));
     // Roots of their own although `CopyOutcome` reaches both, for the reason `CopyAction` is

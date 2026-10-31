@@ -1113,9 +1113,21 @@ struct BoardPlacement {
     waiting: Vec<(Value, Duration, Option<Duration>)>,
 }
 
+/// How a loopback board rewrites its answers to `Repository.issues`.
+type IssueListingBend = Box<dyn Fn(&mut Value) + Send + Sync>;
+
 /// The board this fixture keeps, and everything a request may change on it.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 struct GitHubBoard {
+    /// Issues `Repository.issues` does not list yet, by id: one GitHub committed and its
+    /// listing has not caught up with.
+    unlisted: Vec<Value>,
+    /// Whether every issue created from here on starts unlisted.
+    unlist_new: bool,
+    /// The most issues one page of `Repository.issues` answers, when fewer than asked for.
+    issue_page_rows: Option<usize>,
+    /// How every answer to `Repository.issues` is rewritten before it is sent, when it is.
+    issue_listing_bend: Option<IssueListingBend>,
     canonical_issue_urls: bool,
     /// Whether `createIssue` answers without the issue's URL, so a writer learns it only by
     /// reading the issue.
@@ -1885,6 +1897,36 @@ impl GitHubBoardFields {
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     pub fn refuse_as_stale_once(&self, operation: &'static str) {
         self.board.lock().unwrap().refusing_stale.push(operation);
+    }
+
+    /// Have every issue created from here on left out of `Repository.issues` until
+    /// [`Self::list_issue`] lists it — GitHub's listing behind a create it committed — or listed
+    /// at once again, when `unlisted` is false.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `drop_response_once`.
+    pub fn unlist_new_issues(&self, unlisted: bool) {
+        self.board.lock().unwrap().unlist_new = unlisted;
+    }
+
+    /// Rewrite every answer to `Repository.issues` through `bend`, handed the `issues`
+    /// connection: a listing answered as no correct one is.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `answer_search_pages_of`.
+    pub fn bend_issue_listings(&self, bend: impl Fn(&mut Value) + Send + Sync + 'static) {
+        self.board.lock().unwrap().issue_listing_bend = Some(Box::new(bend));
+    }
+
+    /// Answer every page of `Repository.issues` with at most `rows` issues.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `answer_search_pages_of`.
+    pub fn answer_issue_listings_in_pages_of(&self, rows: usize) {
+        self.board.lock().unwrap().issue_page_rows = Some(rows);
+    }
+
+    /// List one issue [`Self::unlist_new_issues`] left out of `Repository.issues`.
+    pub fn list_issue(&self, id: &str) {
+        self.board
+            .lock()
+            .unwrap()
+            .unlisted
+            .retain(|held| held != &json!(id));
     }
 
     /// Apply the next request carrying `operation`, and close its connection without an
@@ -3774,6 +3816,10 @@ fn github_projects_board_at(
         arrivals: Vec::new(),
         membership_first: usize::MAX,
         owed_error_objects: Vec::new(),
+        unlisted: Vec::new(),
+        unlist_new: false,
+        issue_page_rows: None,
+        issue_listing_bend: None,
         closed_filter_leaks: false,
         closed_cursor_stalls: false,
         erring_beside: Vec::new(),
@@ -5058,6 +5104,54 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let comments = board.comment_connection(&id, &variables["after"], &variables["first"]);
         return json!({"node":{"__typename":"Issue","comments":comments}});
     }
+    // A repository's issues, newest first, as `Repository.issues` ordered by creation lists
+    // them: what a retried copy reads to find the issue its earlier attempt created.
+    if query == onetaskgraph_github_projects::graphql::ISSUES_BY_CREATION {
+        let slug = format!(
+            "{}/{}",
+            variables["owner"].as_str().unwrap_or_default(),
+            variables["name"].as_str().unwrap_or_default()
+        );
+        let mut listed: Vec<&Value> = board
+            .items
+            .iter()
+            .chain(&board.pending)
+            .filter(|item| item["repo"] == json!(slug) && !GitHubBoard::is_draft(item))
+            .filter(|item| !board.unlisted.contains(&item["id"]))
+            .collect();
+        listed.sort_by_key(|item| {
+            std::cmp::Reverse(github_number(item["id"].as_str().unwrap_or_default()))
+        });
+        // One page of them, from the cursor given, at most as many as were asked for — fewer
+        // when this board answers listings in pages of its own.
+        let start = variables["after"]
+            .as_str()
+            .and_then(|cursor| cursor.parse::<usize>().ok())
+            .unwrap_or(0);
+        let asked = variables["first"]
+            .as_u64()
+            .map_or(100, |first| usize::try_from(first).unwrap_or(100));
+        let rows = board.issue_page_rows.map_or(asked, |rows| rows.min(asked));
+        let end = (start + rows).min(listed.len());
+        let more = end < listed.len();
+        let nodes: Vec<Value> = listed[start.min(end)..end]
+            .iter()
+            .map(|item| {
+                json!({"id":item["id"],
+                               // When GitHub created it: what a create here recorded, and for an
+                               // issue the dataset seeded, a time long before any test ran.
+                               "createdAt":item.get("listedCreatedAt").cloned()
+                                   .unwrap_or_else(|| json!("2026-01-01T00:00:00Z")),
+                               "body":item["body"]})
+            })
+            .collect();
+        let mut answer = json!({"repository":{"issues":{"nodes":nodes,
+            "pageInfo":{"hasNextPage":more,"endCursor":more.then(|| end.to_string())}}}});
+        if let Some(bend) = &board.issue_listing_bend {
+            bend(&mut answer["repository"]["issues"]);
+        }
+        return answer;
+    }
     if query.contains("repository(owner:$owner,name:$name)") {
         assert_eq!(variables["owner"], board.repository_owner());
         let slug = format!(
@@ -5084,11 +5178,19 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         assert!(input["body"].is_string() || input["body"].is_null());
         board.created += 1;
         let id = format!("ISSUE-{}", board.created);
+        if board.unlist_new {
+            board.unlisted.push(json!(id));
+        }
+        // `Repository.issues` reports when GitHub created the issue, on the wall clock a
+        // retried copy's lookup by create key compares with.
+        let listed_created_at =
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let at = board.tick();
         let mut created = json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue",
             "title":input["title"],"body":input["body"],"state":"OPEN","reason":null,
             "parent":Value::Null,"repo":repo,"status":"Todo",
-            "origin":"","labels":[],"updatedAt":at});
+            "origin":"","labels":[],"updatedAt":at,
+            "listedCreatedAt": listed_created_at});
         if board.files_without_status {
             created["status"] = Value::Null;
         }
@@ -6032,6 +6134,7 @@ pub fn linear_workspace_failing(
         hooks: Arc::new(Mutex::new(Vec::new())),
         bends: Arc::new(Mutex::new(Vec::new())),
         limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+        lost: Arc::new(Mutex::new(Vec::new())),
     };
     let config = linear_serve(sandbox, workspace.clone(), None, failing);
     (config, workspace)
@@ -6129,9 +6232,18 @@ pub struct LinearWorkspace {
     /// How each of the next requests is answered, in order: `Some(wait)` refused `429` naming
     /// a reset `wait` seconds ahead, `None` answered as usual.
     limits: Arc<Mutex<std::collections::VecDeque<Option<u64>>>>,
+    /// The operations whose next request is applied and then answered `502`, once each.
+    lost: Arc<Mutex<Vec<&'static str>>>,
 }
 
 impl LinearWorkspace {
+    /// Apply the next request of `operation` — a GraphQL document, as the plugin sends it — and
+    /// answer it `502 Bad Gateway`, once: an answer lost after Linear acted on the request.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its server loop here answers: like `rate_limit` below it can only be a method of this handle, and a suite of one plugin could not add it from outside.
+    pub fn lose_answer_once(&self, operation: &'static str) {
+        self.lost.lock().unwrap().push(operation);
+    }
+
     /// Answer each of the next requests by `script`, in order: `Some(wait)` is refused
     /// `429 Too Many Requests` with `retry-after: wait`, as Linear's limiter answers, and `None`
     /// is answered as it would have been. Every request after the script is answered as usual.
@@ -6677,6 +6789,7 @@ fn linear_server_over(
         hooks: Arc::new(Mutex::new(Vec::new())),
         bends: Arc::new(Mutex::new(Vec::new())),
         limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+        lost: Arc::new(Mutex::new(Vec::new())),
     };
     linear_serve(sandbox, workspace, recorded, failing)
 }
@@ -6848,7 +6961,16 @@ fn linear_serve(
                             bend.times -= 1;
                             (bend.bend)(&variables, &mut body);
                         }
-                        ("200 OK", json!({"data":body}))
+                        let mut lost = workspace.lost.lock().unwrap();
+                        if let Some(at) = lost.iter().position(|lost| *lost == operation) {
+                            lost.remove(at);
+                            (
+                                "502 Bad Gateway",
+                                json!({"errors":[{"message":"the answer was lost"}]}),
+                            )
+                        } else {
+                            ("200 OK", json!({"data":body}))
+                        }
                     }
                     Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
                 };
@@ -6887,6 +7009,11 @@ fn linear_serve(
     });
     json!({"endpoint":endpoint,"team":"FIX","status_mapping":linear_default_mapping()})
 }
+
+/// The priority write v0.12.13 and every release before it sent, selecting the priority alone:
+/// answered as the one this build sends is, so a journey can measure that release's binary over
+/// this loopback — see `crates/onetaskgraph-e2e/tests/e2e/release_requests.rs`.
+const RELEASED_ISSUE_PRIORITY_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{id priority}} }";
 
 /// The `status_mapping` every Linear workspace here is configured with unless a journey gives
 /// its own: a name for each category the shared dataset and the shared journeys write, for
@@ -7103,11 +7230,11 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                 && valid_linear_write_input(
                     variables.get("input"),
                     &["teamId", "title", "stateId", "labelIds", "priority"],
-                    &["description", "projectId"],
+                    &["description", "projectId", "id"],
                 )
         }
         // The two narrow issue writes: exactly one member, and nothing beside it.
-        graphql::ISSUE_PRIORITY_UPDATE => {
+        graphql::ISSUE_PRIORITY_UPDATE | RELEASED_ISSUE_PRIORITY_UPDATE => {
             exact_linear_variable_keys(variables, &["id", "input"])
                 && variables
                     .get("id")
@@ -7120,7 +7247,7 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                 && valid_linear_write_input(
                     variables.get("input"),
                     &["teamIds", "name", "statusId", "labelIds"],
-                    &["content"],
+                    &["content", "id"],
                 )
         }
         graphql::ISSUE_RELATION_CREATE => {
@@ -7150,7 +7277,7 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                 && valid_linear_write_input(
                     variables.get("input"),
                     &["title"],
-                    &["content", "projectId", "teamId"],
+                    &["content", "projectId", "teamId", "id"],
                 )
                 // Exactly one home, counted by the key being *present*. Linear refuses this
                 // input with `Exactly one of initiativeId, teamId, issueId, releaseId,
@@ -7330,10 +7457,24 @@ impl LinearWorkspace {
     /// Hold one more issue, `row` in the shape the dataset's tasks take, after every issue held
     /// already — as a person creating one in Linear would.
     pub fn add_issue(&self, row: Value) {
+        self.add_row("tasks", row);
+    }
+
+    /// Hold one more project, as another request created it — a row in the dataset's shape.
+    pub fn add_project(&self, row: Value) {
+        self.add_row("projects", row);
+    }
+
+    /// Hold one more document, as another request created it — a row in the dataset's shape.
+    pub fn add_document(&self, row: Value) {
+        self.add_row("documents", row);
+    }
+
+    fn add_row(&self, collection: &str, row: Value) {
         let mut data = self.state.lock().unwrap();
-        data["tasks"]
+        data[collection]
             .as_array_mut()
-            .expect("the workspace holds issues")
+            .expect("the workspace holds the collection")
             .push(row);
     }
 }
@@ -7439,6 +7580,7 @@ fn linear_response(
         graphql::ISSUE_CREATE,
         graphql::ISSUE_UPDATE,
         graphql::ISSUE_PRIORITY_UPDATE,
+        RELEASED_ISSUE_PRIORITY_UPDATE,
         graphql::PROJECT_CREATE,
         graphql::PROJECT_UPDATE,
         graphql::PROJECT_STATUS_UPDATE,
@@ -7633,7 +7775,7 @@ fn linear_response(
     // input member it was not sent as it was.
     if matches!(
         operation,
-        graphql::ISSUE_UPDATE | graphql::ISSUE_PRIORITY_UPDATE
+        graphql::ISSUE_UPDATE | graphql::ISSUE_PRIORITY_UPDATE | RELEASED_ISSUE_PRIORITY_UPDATE
     ) && vars["input"].get("labelIds").is_none()
     {
         return linear_narrow_issue_update(data, &vars, operation);
@@ -8078,7 +8220,14 @@ fn linear_write_item(
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
     let id = if create {
-        format!("{}-W{}", if project { "P" } else { "T" }, rows.len() + 1)
+        // A caller-chosen `id` is the item's own, and Linear lets only one item hold an id.
+        match input.get("id").and_then(Value::as_str) {
+            Some(chosen) if rows.iter().any(|row| row["id"] == chosen) => {
+                return Err("Entity with this id already exists");
+            }
+            Some(chosen) => chosen.to_owned(),
+            None => format!("{}-W{}", if project { "P" } else { "T" }, rows.len() + 1),
+        }
     } else {
         vars["id"]
             .as_str()
@@ -8199,7 +8348,15 @@ fn linear_write_document(
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
     let id = if create {
-        format!("D-W{}", rows.len() + 1)
+        // A caller-chosen `id` is the document's own, held by one document at most, as an
+        // issue's is.
+        match input.get("id").and_then(Value::as_str) {
+            Some(chosen) if rows.iter().any(|row| row["id"] == chosen) => {
+                return Err("Entity with this id already exists");
+            }
+            Some(chosen) => chosen.to_owned(),
+            None => format!("D-W{}", rows.len() + 1),
+        }
     } else {
         vars["id"]
             .as_str()
@@ -8898,18 +9055,17 @@ fn linear_narrow_issue_update(
         linear_put_state(row, held);
     }
     row["_updated"] = json!(stamp);
-    Ok(
-        if operation == onetaskgraph_linear::graphql::ISSUE_PRIORITY_UPDATE {
-            json!({"issueUpdate":{"success":true,
-                   "issue":{"id":id,"priority":linear_priority(&row["priority"])}}})
-        } else {
-            let mut issue = json!({"id":id});
-            if let Some(description) = stored {
-                issue["description"] = description;
-            }
-            json!({"issueUpdate":{"success":true,"issue":issue}})
-        },
-    )
+    // Linear answers every member a mutation selects, so a narrow write is answered with the
+    // whole issue as it now stands — what a read of it would answer — and its description as it
+    // stored it.
+    let row = row.clone();
+    let mut issue = linear_task(&row, data);
+    issue["id"] = json!(id);
+    if let Some(description) = stored {
+        issue["description"] = description;
+    }
+    let _ = operation;
+    Ok(json!({"issueUpdate":{"success":true,"issue":issue}}))
 }
 
 fn linear_task(v: &Value, data: &Value) -> Value {

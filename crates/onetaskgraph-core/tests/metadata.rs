@@ -276,10 +276,20 @@ async fn each_verb_sets_one_key_and_answers_with_what_the_source_holds() {
             key: review.clone(),
             value: json!({"approved": true}),
             location: None,
-            result: None,
+            // What the task holds after the write, at no version: this source answers none.
+            result: task.result.clone(),
             fallback: None,
             spent: None,
         }
+    );
+    let result = task
+        .result
+        .as_ref()
+        .expect("a task write answers what it left");
+    assert_eq!(result.version, None);
+    assert!(
+        result.status.is_some() && result.priority.is_some(),
+        "{result:?}"
     );
     let project = engine
         .set_project_metadata(&id("work:P-1"), &review, &json!([1, 2]))
@@ -302,7 +312,8 @@ async fn each_verb_sets_one_key_and_answers_with_what_the_source_holds() {
     );
     assert_eq!(
         serde_json::to_value(&task).expect("an answer serializes"),
-        json!({"id": "work:T-1", "key": "myapp.review", "value": {"approved": true}}),
+        json!({"id": "work:T-1", "key": "myapp.review", "value": {"approved": true},
+               "result": serde_json::to_value(&task.result).expect("a result serializes")}),
         "an absent location is left out rather than written as null"
     );
 

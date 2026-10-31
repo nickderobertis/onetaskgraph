@@ -624,6 +624,9 @@ copied from, which is what makes the next copy of it an update.
 | `--create` | `task copy` only: you assert the destination holds no counterpart of any task named — typically because you have just asked it — so each is created without the correspondence lookup, and a GitHub board is sent no origin query. Sound because that query reads an index that lags a fresh write by the same amount whoever asks, so repeating yours could find nothing yours did not. Refused beside `--match-by` or `--recreate`, and for a task whose own link or origin already names an item at the destination, naming that item. |
 | `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy back creates a new item. This re-establishes the lost correspondence by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
 | `--status-policy source\|preserve-destination` | Task and project copies default to `source`, carrying the source status. With `preserve-destination`, existing destination tasks and project items keep their status and open/closed state while other changed fields are copied. New items take the source status under either policy. Documents have no status. |
+| `--when-destination-status CATEGORY` | `task copy` only, repeatable: write over an existing destination task only while it is at one of these categories. Decided on the copy's own read of the destination task — from the cache under `--expect` — so it adds no request; a create is unaffected. A task at another category is handled by `--otherwise`. Each updated task's outcome carries `status_condition: {"held": <category>, "met": <bool>}`. Refused before anything is read beside `--status-policy preserve-destination`, which writes no status to guard. |
+| `--otherwise refuse\|preserve-destination` | With `--when-destination-status`, and refused without it: what a task at another category gets. `refuse`, the default, writes nothing for it and answers it `{"action": "failed", "error": {"kind": "destination-status", …}, "held": …}` — naming the item, its category and the set — while every other item lands; the copy then exits `4`, with the report on standard output, as for any item left unwritten. `preserve-destination` copies it as `--status-policy preserve-destination` would, keeping its status. |
+| `--when-destination-priority PRIORITY` | `task copy` only, repeatable: write the source's priority over an existing destination task only while that task is at one of these priorities (`none`, `urgent`, `high`, `medium`, `low`); at any other it keeps its own — a priority a person set — and every other field is written as without the flag. Nothing is refused for it. Taken beside either `--status-policy` and beside `--when-destination-status`; a task a status condition refuses is written nothing. Decided on the same read, so it adds no request; a create takes the source's priority. Each updated task's outcome carries `priority_condition: {"held": <priority>, "met": <bool>}`. A later copy of the unchanged source without the flag writes the source's priority. |
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it — a home's members' tasks included — matching each task independently. |
 | `--comments` | `task copy` and `project copy`: keep the destination's copies of each task's comments in step with the source's, as [below](#carrying-comments-and-copying-only-what-changed). Without it a copy reads and writes no comment. |
 | `--no-link` | Write nothing at all to the source — no `onetaskgraph.copies` link — and report every link `skipped`. The next copy finds each counterpart by the destination's own `onetaskgraph.origin`. |
@@ -688,6 +691,241 @@ copy undoes everything else, names the destination and the method whose answer w
 and tells you to inspect that destination before copying again, rather than to copy again and
 land a second one beside it.
 
+### A create safe to retry
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
+     `crates/onetaskgraph-e2e/tests/e2e/copy_retry.rs`, which stop a copy at each point named
+     here and run it again against a second folder, the loopback board and the loopback Linear
+     workspace, by `crates/onetaskgraph-e2e/tests/e2e/release_requests.rs`, which holds the
+     request figures to the v0.12.13 binary's, and by
+     `crates/onetaskgraph-core/src/engine/copy/intent.rs`, the one place the key and the lease
+     are spelled, and `crates/onetaskgraph-local-md/src/hold.rs`, the one place the lock is. -->
+**Every create a copy makes is safe to retry** — of a task, a project and a document alike —
+with no flag, but for the two named below: a copy that dies or times out after the destination
+created its item, run again, finds and finishes that item rather than creating a second. Two
+reserved keys carry it, neither of which `metadata set` accepts:
+
+- **`onetaskgraph.creating`**, on the item being copied, is an object keyed by destination
+  source name, each `{"key": <UUID v5>, "at": <RFC 3339 UTC, when the key was first taken>,
+  "attempt": <UUID v4 of the copy holding it>, "lease_until": <RFC 3339 UTC>}`. It is written
+  after the copy has planned — read what it needs of the destination — and before its first
+  destination write, before any create of the same command is sent — and removed for that destination with the write that records the item's
+  `onetaskgraph.copies` link: in that one write for a task, and in one more narrow write of that
+  key alone for a project or a document; the key goes when its object empties. A dry run, `--no-link`, an
+  update and a copy into a destination a link may not name write none, so an item with no create
+  in flight reads exactly as it did before this existed. A source that will not keep the key — a
+  narrow write it refuses, a record it no longer holds — is copied as it always was, with no
+  intent. An answer to that write the copy cannot read — a plugin refusing the key as malformed
+  parameters, a backend whose answer was garbled — says nothing of whether it wrote, so the item
+  is read once more, still under its hold: an intent naming this attempt there is held and settled
+  as any other, an item holding none there or no longer held copies with no intent, and a read
+  that fails, an entry that is not an intent and another attempt's intent each refuse before any
+  destination write. One whose hold or read of the item fails refuses the copy before any destination
+  write. A copy that cannot finish and takes back everything it wrote puts the item back byte
+  for byte, or, where it cannot, takes the intent alone off — an item that takes neither keeps it
+  for its retry to resolve once the lease runs out; one whose create may have landed unseen — an
+  answer that never arrived — keeps the intent and gives up its lease, so its retry takes over at
+  once.
+- **`onetaskgraph.create_key`**, on the created item, is the key as a string, written with the
+  create itself: in a GitHub issue body's metadata slot, in a folder of Markdown's file, and on
+  Linear in its slot and, transformed, as the item's own `id` — sent as `IssueCreateInput.id`,
+  `ProjectCreateInput.id` or `DocumentCreateInput.id`.
+
+**Two creates are outside it, and behave exactly as at v0.12.13**, recording no intent:
+
+- **A `--no-link` create.** Its whole promise is to write nothing to the source, and the intent is
+  a write to the source. Without one, its retry cannot be told from a deliberate second unlinked
+  copy of the same item — which is a thing a caller may want — so a second item is what a second
+  `--no-link` copy makes. It still resolves an intent another copy left, without writing.
+- **A create from a source that cannot store `onetaskgraph.creating`** — one with no write side,
+  one that refuses the narrow write of that key (a stdio plugin built before the key existed
+  refuses it as malformed, and is read once to confirm it holds none), or one that no longer
+  holds the item. The intent
+  has nowhere to live, and an intent kept anywhere else would be work data outside its plugin, so
+  the create is made as it always was.
+
+**Linear is sent a v4-shaped id, not the key.** Linear's published schema
+([`packages/sdk/src/schema.graphql`](https://github.com/linear/linear/blob/8397645/packages/sdk/src/schema.graphql)
+at commit `8397645`) documents each of those three `id` inputs as "The identifier in UUID v4
+format. If none is provided, the backend will generate one." The key is a version-5 UUID, so
+the id sent is the key with its version nibble — the first digit of its third group — set to
+`4`, every other digit, the RFC 4122 variant included, as it was:
+`8213b96a-ad84-54be-990c-798d8c12c97b` is sent as `8213b96a-ad84-44be-990c-798d8c12c97b`. The
+transform is deterministic, so every attempt sends and looks up one id; the slot keeps the key
+verbatim. What Linear answers a create naming an id it already holds is not documented, so the
+store reads the item by that id after *any* failed create carrying a key — an error, or an answer
+lost on the way — and writes it whole when it is there. A keyed create Linear answers under any
+other id, or under none, is refused as an answer the copy cannot vouch for, naming the id Linear
+gave, and the destination is to be inspected before copying again: the refusal says so, and it
+does not by itself keep a later retry from creating again, since that retry looks the item up by
+the id it sent and an item Linear stored under another is not found there.
+
+**The key is deterministic**: the version-5 UUID, under the namespace
+`7a1c3f0e-5b2d-4c8a-9e61-0f4d2b7c5a39`, of `<source qualified id>|<destination source
+name>|<the qualified id of the link this create replaces, or nothing>` for a task, with
+`|project` or `|document` appended for a project or a document, so a task and a project one
+folder spells with one id never share a key. Two attempts at one create compute one key without
+having seen each other, and `--recreate` after a stale link gets a new one.
+
+**An intent is resolved before every other rule**, and before `--create` is believed. The copy
+asks the destination for the item carrying the key: a folder of Markdown reads its own files, and
+Linear reads the item whose id is the key's v4 transform — Linear lets one item hold an id, so a
+create re-sent with it while the first is still in flight lands once, and one refused is read by
+that id and written whole. A GitHub board offers no idempotency key, so the store
+lists the repository the creation rule files in through `Repository.issues`, newest first, back
+to five minutes before the intent's `at`, and matches the key in each body's slot — never through
+search. A listing page the board answers malformed — `nodes` not a list, an issue with no `id` or
+`createdAt`, a body neither text nor `null`, no `hasNextPage`, or a next page whose cursor is
+missing or does not move — refuses the copy before anything is created again, since an issue it
+could not read might be the one carrying the key. Found, that item is the counterpart, reported `via: "intent"`: the copy writes only what
+the earlier attempt left unwritten — nothing, for an item it finished — records the link and
+removes the intent. On a board, an item not listed before `create_quiescence_seconds` have
+passed since `at` is waited for: the copy renews its lease once, to the window's end plus
+`create_lease_seconds`, waits out the window, and lists once more — a `--no-link` copy waits
+without that renewal, writing nothing to its source. Still not listed, it creates with the same
+key. `task locate` resolves an intent the same way but never waits, creates or
+writes: it answers the item the key names as `"via": "intent"`, or no counterpart.
+
+**Who owns an intent depends on the copy's source**, through that source's own plugin: an
+intent is decided under the hold `TaskSource::hold_item` gives, and a copy that takes everything
+back puts the item back through `item_snapshot` and `restore_item` — defaulted, additive methods
+a source with no hold or no byte-exact snapshot leaves alone. A folder of Markdown takes, renews
+and releases it under an exclusive lock on a file beside the item, `<file>.lock`, which the
+kernel holds: an `flock` on Unix, and on Windows the file opened shared with nobody and deleted
+as it closes. Two live processes on one host never hold it at once, and a holder that exits or
+is killed releases it with no wait — its file is taken at once, whatever it is dated, and
+nothing is judged by its age. Only where the filesystem answers `flock` as unsupported does the
+lock fall back to creating the file exclusively (`O_EXCL`) — any other failure of `flock` refuses
+the copy, the lock file left as it is — and that fallback is weaker: one older than thirty
+seconds is taken to be a dead process's and taken over — so a holder slower than that can lose
+it — and one dated ahead of this host's clock, whose age cannot be told, is refused at once.
+Under the lock the copy
+reads the intent, refuses with the failure kind `create-in-progress` — naming the lease's end,
+having written nothing anywhere — while another attempt's lease is live,
+and otherwise records its own `attempt` and a `lease_until` of now plus the source's
+`create_lease_seconds`; a copy that finds, under the lock, that another copy created and
+linked the counterpart since it planned the create refuses the same way, naming that
+counterpart. So on one host exactly one attempt owns a create; the lock excludes
+nothing across hosts, or on a network filesystem that does not honour the lock. A
+hosted source — a board or Linear as the copy's source — has no lock to offer, so its lease is
+advisory: a live one still refuses, but two attempts that read the item before either wrote both
+proceed under one key. Linear then still creates one issue. A board may create two, which is
+detected where the listing can see it: every board create made from a hosted source, and every
+create that resolves an earlier attempt's intent, lists the repository by key once more, and an
+attempt that finds more than one issue carrying it answers that item `failed` with the kind
+`create-duplicated`, naming them all and recording no link. The attempt whose intent the other
+overwrote finds that at the first write it asks to send after its `createIssue`, and stops there
+with `create-in-progress`, its issue left as `createIssue` made it. What this guarantees is at most one
+link, and every attempt either linking or refusing with what it saw — not that only one attempt
+creates.
+
+**The GitHub residual, as it is.** Safety on a board rests on GitHub ending a request within its
+documented ten seconds, and on `Repository.issues` listing a committed issue within the
+quiescence window. A duplicate is detected, as `create-duplicated`, only when the other issue is
+listed by the time of the listing that follows a create. An issue that becomes listed after that
+— a retry's predecessor outliving the window, or a simultaneous attempt from a hosted source
+whose create is listed late — leaves a second issue that no process reports.
+
+**What it costs.** The renewal rule is one statement: a holder renews its lease before each
+destination write it sends after its create request — a write that finishes the item, a comment
+it carries, and a write that finishes an earlier attempt's create alike — never before a read or a
+listing, and once before waiting out the quiescence window, to the window's end plus
+`create_lease_seconds`, so no renewal falls during the wait. That holds inside a plugin call too:
+the engine runs every call it makes to a destination while it owns a create there under a
+`WriteGuard` — an additive part of the plugin interface, which a source that never asks it leaves
+exactly as it was. A board asks it immediately before sending each write request but its
+`createIssue` — the card's field writes, its filing, its parent and dependencies, its content, its
+comments, and the delete that would take the issue back — and so does Linear, before each
+mutation but its `issueCreate`, `projectCreate` or `documentCreate`: the relations a create writes
+in the same call, the whole write that finishes a create answered as an id already held, each
+asset upload and each retry of one, and each comment. Each ask renews the lease first; once one
+cannot be renewed the answer is a refusal, to that request and to every later one, so a
+destination that has lost its create sends nothing more — not even a delete of what it made.
+A folder of Markdown writes files and sends no request, and is renewed for before every call the
+engine makes to it. So is a source over the stdio protocol, which is sent one request per call —
+but the guard does not cross the pipe, so what the plugin behind it sends its own backend in
+answer to that one request is not asked for one by one. A renewal that finds the intent naming another attempt — one that
+took it over after this copy's lease ran out — or finds it gone, that attempt having since linked
+the counterpart or released it, stops the copy with `create-in-progress` before that write,
+naming what it found, sending nothing more and taking nothing back, since what it wrote is now the
+other attempt's to finish. On the normal path the cost is exact: an update and an `unchanged`
+copy send what they always sent, to the destination and to the source; an uninterrupted create
+from a folder of Markdown sends the destination exactly what it always did and no remote party
+anything for its intent, whose take and release are lock-guarded file writes; and one from a
+hosted source sends Linear or a folder exactly what it always did, and a board that plus one
+repository listing after `createIssue`. The rare paths are bounded rather than counted. A hosted
+source is sent at most one intent write before the first destination write plus one renewal
+per destination write request sent while it owns the create — on a board, every write request of
+the creating call but `createIssue` itself — each its existing narrow metadata write, and the intent
+is removed in the link write it already sends; an intent write answered in a shape the copy cannot
+read adds one read of the item. Resolving an intent adds, on a board, one listing
+— two when it waits, and one more after a create made because nothing was listed — a page each
+for every hundred issues created since five minutes before `at`, plus the reads the counterpart's
+own copy makes; on Linear, one read by id, and a re-sent `issueCreate` answered as a duplicate
+adds one read; on a folder, a read of its files. A re-create adds nothing to a create but the
+listing after it on a board.
+
+Those exact figures are held, not asserted: `crates/onetaskgraph-e2e/tests/e2e/release_requests.rs`
+runs a create, an update, an `unchanged` copy and every task write verb against the loopback board
+and Linear and holds the requests each sends to the ones the v0.12.13 binary sent for the same
+commands — recorded with that binary in `release_requests.v0.12.13.json` — allowing only the one
+listing above. A project's or a document's create from a hosted source adds the one narrow write
+that takes its intent off beside its link.
+
+**Settings**, in each source's own block beside `cache` and `routes`, in whole seconds, each 120
+when absent and left out of `config show` when unset: `create_lease_seconds`, read off the copy's
+**source**, and `create_quiescence_seconds`, read off its **destination**, and only where that
+destination's lookup by key can lag a create (a GitHub board).
+
+```yaml
+sources:
+  notes:
+    plugin: local-md
+    config: { root: ~/notes/tasks }
+    create_lease_seconds: 120
+  board:
+    plugin: github-projects
+    config: { owner: example-org, project_number: 7, repository: example-org/store }
+    create_quiescence_seconds: 120
+```
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+### What a write reports it left
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
+     `crates/onetaskgraph-e2e/tests/e2e/write_results.rs`, which read every item back through
+     `task show` and hold each answer to it on a folder, the loopback board and the loopback
+     Linear workspace. -->
+Every `created`, `updated` and `unchanged` item of a copy that writes carries `result:
+{"version", "status", "priority"}` — what the destination item holds once the copy is done, the
+status exactly as `task show` spells it and `priority` `null` for a project or a document (and
+`status` for a document). It is read off the write's own answers, and a field the copy kept — a
+preserved status, a priority the guard kept, an `unchanged` item — off the copy's read before it;
+no request is added for it, so a dry run carries none, and nor does an item a repeat copy
+`skipped`, which read nothing of the destination. `task update`, `task status set`, `task
+priority set`, `task content set` and `task metadata set` answer the same `result` under
+`--json`, on the same terms; under `--expect` it also carries the `parts` it always did. A
+`failed` item the copy refused after reading its counterpart — `destination-status` — carries
+`held: {"version", "status", "priority"}`, the item as that read held it, and so does the failure
+document of a `target-task-origin` refusal; one never read carries none, a `stale-link`'s
+included, since its link names nothing there. `task comment add --json` answers the comment as it
+always did, plus `item`: the qualified id it commented on.
+
+`version` is the change token a read would then give, and `null` only where the write's answers
+cannot vouch for one without another read:
+
+- **a folder of Markdown** answers it: it is the digest of the file it wrote;
+- **Linear** answers it from the issue, project or document its mutation selected — `task
+  priority set` included, and with the source's local cache on as off — except for an item the
+  same command went on to give relations, whose answers do not say the token after them: `null`
+  there;
+- **a GitHub board** answers `null` for an item it wrote, because a board's token is given only
+  once an item has gone sixty seconds unchanged — the `task show` after a write answers `null`
+  too — and the version its read held for an item it left `unchanged`;
+- **an in-memory source** gives no tokens at all, and **a source hosted over the stdio plugin
+  protocol** answers `null`: the protocol does not carry what its write left.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Held by a drift gate: `the_readmes_example_of_a_copy_report_validates_against_the_schema_the_binary_emits` in `crates/onetaskgraph-e2e/tests/e2e/surface.rs` validates the example below against the `CopyReport` root the binary emits. -->
 `--json` gives one entry per item for a script to read:
 
@@ -708,14 +946,15 @@ what the journeys validate this output against.
      `the_readme_names_every_word_of_the_copy_reports_via_and_link` in
      `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this paragraph and fails unless the words
      it names are exactly the ones `onetaskgraph schema` emits for these two fields. -->
-`via` is one field with six words, on every `created`, `updated` and `unchanged` item. On
+`via` is one field with seven words, on every `created`, `updated` and `unchanged` item. On
 `updated` and `unchanged` it names the rule above that found the counterpart: `target-task`,
-`link`, `origin`, `scan`, or `match` for `--match-by`. On `created` it is always `created`, because
-none did. `link` says what became of the item's own link, on those same three actions of a
+`link`, `origin`, `scan`, `match` for `--match-by`, or `intent` for the item an earlier attempt of
+the same copy created, found by its create key ([below](#a-create-safe-to-retry)). On `created`
+it is always `created`, because none did. `link` says what became of the item's own link, on those same three actions of a
 copy that writes: `recorded`, `unchanged`, `unrecorded` where its source could not hold
 one, or `skipped` under `--no-link`, which writes nothing at all to the source. A dry run
 reports `via` and leaves `link` out, and an `orphaned` item and a `failed` one carry neither.
-In the generated SDKs the five rule words are the type `CopyVia` and `created` is
+In the generated SDKs the six rule words are the type `CopyVia` and `created` is
 `NoCounterpart`, and the link words are `CopyLink`.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
@@ -1318,6 +1557,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         no_link: false,
         expect: None,
         statuses: Vec::new(),
+        conditions: Default::default(),
     }).await?;
 
     let outcome = &report.items[0];
@@ -1595,6 +1835,34 @@ one still overwritten.
 The cache is an efficiency layer and never a snapshot: it serves the pinned version or a later
 one, keeps one entry per record, and is shared and cleared freely. To keep an exact version of a
 task, copy it into a folder of Markdown of your own with `task copy`.
+
+### Which owners a GitHub Projects source creates issues for
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
+     `crates/onetaskgraph-github-projects-e2e/tests/e2e/creation_owners.rs`, which drive every
+     road and the routed and locate cases against the loopback board. -->
+A `github-projects` source's `creation_owners` is a list of GitHub logins whose repositories a
+create may file its issue in; empty or absent, the default, restricts nothing and is left out of
+`config show`. Set, a create the creation rule would file in a repository of another owner —
+compared ignoring case, as GitHub compares logins — is refused before anything of the copy is
+written, its intent to create included, with the failure kind `creation-owner`, naming the
+repository and the allowed owners: by `task copy`, `task copy --create`, a member create of a
+project copy, and a dry run of each. An update of an issue that already exists is never refused
+by it, and a routed copy is held to the setting of the destination it was placed at. An entry
+that is not a GitHub login is refused when the configuration loads, naming it. `task locate`
+reports such a create as `creates_in.refused` rather than failing.
+
+```yaml
+sources:
+  board:
+    plugin: github-projects
+    config:
+      owner: example-org
+      project_number: 7
+      repository: example-org/store
+      creation_owners: [example-org]
+```
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ### Status mapping
 
@@ -1884,6 +2152,9 @@ repositories and classification: SOURCE itself first, then each source its route
 
 ### Which writes route, and where each item lands
 
+A routed copy is held to the destination it places each item at: its `creation_owners`, its
+`create_quiescence_seconds`, and the intent to create the item records naming that destination.
+
 `task create <SOURCE>`, `task copy --to <SOURCE>`, `project copy --to <SOURCE>` (with or
 without its tasks, and with `--member`) and `document copy --to <SOURCE>` all place each item
 by the named source's routes. So does the engine's own member copy, which is what a running
@@ -2027,7 +2298,8 @@ below is the mirror of the second.
   them, which is the one a copy picks.
 - `creates_in` is the repository a create there would file the task's issue in, whether or not
   a counterpart exists — an existing issue is never moved — and `null` where the destination
-  files no issue in a repository.
+  files no issue in a repository. It carries `refused`, the refusal's message, only when the
+  destination's `creation_owners` would refuse a create there; the locate does not fail for it.
 - `spent` is as a copy reports it, and absent when no source meters its requests.
 
 **In a private destination, a counterpart is found by the origin query.** The store writes no
@@ -2384,7 +2656,9 @@ A task and a project each carry a caller-defined `metadata` map and the `reposit
 they concern, and a dependency edge names both its ends by kind and qualified id — so an
 edge may cross projects, cross the task and project levels, and cross sources.
 [`docs/metadata.md`](./docs/metadata.md) says which keys are reserved and where each source
-keeps them.
+keeps them. Two of them make a create safe to retry: `onetaskgraph.creating`, which an item
+being copied holds only while a create of it is in flight, and `onetaskgraph.create_key`, which
+the item a copy created keeps from then on — see [A create safe to retry](#a-create-safe-to-retry).
 
 ![A terminal showing two dependency rows from `task deps`: the same task blocking another task of its own source, and blocking a task of a different source, each end named by kind and qualified id](docs/screenshots/task-deps.svg)
 
