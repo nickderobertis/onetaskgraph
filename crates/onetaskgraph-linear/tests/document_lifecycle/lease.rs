@@ -50,9 +50,6 @@ const LEASE_CREATE: &str =
 const LEASE_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){issueUpdate(id:$id,input:$input){success issue{id}}}";
 const LEASE_DELETE: &str = "mutation($id:String!){issueDelete(id:$id){success}}";
 
-/// The id generation `generation` of `team`'s `lane` lease over member `index` is created
-/// under: deterministic, so every claimant of that generation asks for the same one, and
-/// shaped as the version-4 UUID Linear's `IssueCreateInput.id` documents.
 /// The member, from 1, a claim by `holder` tries first: spread by the holder's stamp, so runs
 /// starting together try different members rather than all racing for the first.
 #[must_use]
@@ -71,6 +68,9 @@ fn digest(text: &str) -> [u8; 32] {
     bytes
 }
 
+/// The id generation `generation` of `team`'s `lane` lease over member `index` is created
+/// under: deterministic, so every claimant of that generation asks for the same one, and
+/// shaped as the version-4 UUID Linear's `IssueCreateInput.id` documents.
 #[must_use]
 pub fn lease_id(team: &str, lane: LeaseLane, index: u8, generation: u32) -> String {
     let lane = match lane {
