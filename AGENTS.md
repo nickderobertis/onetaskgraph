@@ -1350,8 +1350,9 @@ them do; this is the inventory of what is owed, not a status board.
      folder, a board and Linear; a refusal after the copy's read carries `held`, `task comment add`
      answers `item`, and both SDKs pass the guards and parse every new member.
 131. A holder renews its lease before each destination write after its create — on a board
-     before each write request inside the plugin call that sent `createIssue`, through the
-     `WriteGuard` the engine installs — and one that finds another attempt holding its intent
+     and on Linear before each write request inside the plugin call that sent the create, a
+     Linear create's relations and the whole write finishing one answered as an id held
+     included, through the `WriteGuard` the engine installs — and one that finds another attempt holding its intent
      stops `create-in-progress`, writing nothing more, a board's delete of what it made included;
      a keyed Linear create answered under another id, or none, is refused for every kind; two
      copies from a hosted source paused at every interleaving of read, create and relist make at

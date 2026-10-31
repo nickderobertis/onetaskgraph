@@ -808,13 +808,18 @@ listing, and once before waiting out the quiescence window, to the window's end 
 `create_lease_seconds`, so no renewal falls during the wait. That holds inside a plugin call too:
 the engine runs every call it makes to a destination while it owns a create there under a
 `WriteGuard` — an additive part of the plugin interface, which a source that never asks it leaves
-exactly as it was — and a board asks it immediately before sending each write request but its
-`createIssue`: the card's field writes, its filing, its parent and dependencies, its content, its
-comments, and the delete that would take the issue back. Each ask renews the lease first; once
-one cannot be renewed the answer is a refusal, to that request and to every later one, so a board
-that has lost its create sends nothing more — not even that delete. A source that does not ask —
-a folder of Markdown, Linear, a source over the stdio protocol — is renewed for before each call,
-which for each of them is one write request. A renewal that finds the intent naming another attempt — one that
+exactly as it was. A board asks it immediately before sending each write request but its
+`createIssue` — the card's field writes, its filing, its parent and dependencies, its content, its
+comments, and the delete that would take the issue back — and so does Linear, before each
+mutation but its `issueCreate`, `projectCreate` or `documentCreate`: the relations a create writes
+in the same call, the whole write that finishes a create answered as an id already held, each
+asset upload and each retry of one, and each comment. Each ask renews the lease first; once one
+cannot be renewed the answer is a refusal, to that request and to every later one, so a
+destination that has lost its create sends nothing more — not even a delete of what it made.
+A folder of Markdown writes files and sends no request, and is renewed for before every call the
+engine makes to it. So is a source over the stdio protocol, which is sent one request per call —
+but the guard does not cross the pipe, so what the plugin behind it sends its own backend in
+answer to that one request is not asked for one by one. A renewal that finds the intent naming another attempt — one that
 took it over after this copy's lease ran out — or finds it gone, that attempt having since linked
 the counterpart or released it, stops the copy with `create-in-progress` before that write,
 naming what it found, sending nothing more and taking nothing back, since what it wrote is now the
