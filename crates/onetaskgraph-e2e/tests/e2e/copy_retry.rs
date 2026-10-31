@@ -539,19 +539,17 @@ fn a_folder_lock_is_held_by_one_live_process_and_released_at_once_when_its_holde
     // The holder is killed while it holds the lock, so it never releases it itself.
     first.child.kill().expect("the holder is killed");
     let _ = first.child.wait();
-    // Whatever the file it left says of its age — dated an hour ahead, here — the lock is the
-    // kernel's to release, so the second takes it with no wait and no age-based takeover.
+    // The killed holder never removed its file. Dated an hour ahead of this clock, it is one an
+    // age-based takeover refuses outright, since its age cannot be told: the second copy taking
+    // the lock at all is the kernel having released it, not an age having run out. On Windows the
+    // kernel deletes the file as it closes it, so there is none left to date.
+    #[cfg(unix)]
+    assert!(lock.exists(), "the killed holder left its file");
     if let Ok(left) = std::fs::File::options().write(true).open(&lock) {
         left.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600))
             .expect("the left file dated ahead");
     }
-    let killed = std::time::Instant::now();
     second.reached("intent-read");
-    assert!(
-        killed.elapsed() < std::time::Duration::from_secs(10),
-        "taken at once, not after an age: {:?}",
-        killed.elapsed()
-    );
     second.release("intent-read");
     let (code, answer) = second.finish();
     assert_eq!(code, Some(0), "{answer:#}");
