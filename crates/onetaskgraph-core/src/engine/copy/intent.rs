@@ -613,12 +613,21 @@ impl Engine {
 
     /// Put the `level` record `id` back to `snapshot`, byte for byte, through its source: what
     /// a copy that took every write back leaves of an item whose intent it recorded.
-    pub(in crate::engine) fn restore_snapshot(&self, level: Level, id: &GlobalId, snapshot: &[u8]) {
-        if let Ok(source) = self.writable(&id.source) {
-            let _ = source
-                .source()
-                .restore_item(level.record(), &id.native, snapshot);
-        }
+    ///
+    /// # Errors
+    ///
+    /// Whatever kept the source from putting it back.
+    pub(in crate::engine) fn restore_snapshot(
+        &self,
+        level: Level,
+        id: &GlobalId,
+        snapshot: &[u8],
+    ) -> Result<(), EngineError> {
+        let source = self.writable(&id.source)?;
+        source
+            .source()
+            .restore_item(level.record(), &id.native, snapshot)
+            .map_err(|error| refused(source, error))
     }
 
     /// Remove this attempt's intent to create `id`'s counterpart in `destination`, once a copy

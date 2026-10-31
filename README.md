@@ -713,10 +713,14 @@ of which `metadata set` accepts:
   `onetaskgraph.copies` link: in that one write for a task, and in one more narrow write of that
   key alone for a project or a document; the key goes when its object empties. A dry run, `--no-link`, an
   update and a copy into a destination a link may not name write none, so an item with no create
-  in flight reads exactly as it did before this existed. A copy that cannot finish and takes back
-  everything it wrote puts the item back byte for byte; one whose create may have landed unseen —
-  an answer that never arrived — keeps the intent and gives up its lease, so its retry takes
-  over at once.
+  in flight reads exactly as it did before this existed. A source that will not keep the key — a
+  narrow write it refuses, a record it no longer holds — is copied as it always was, with no
+  intent; one whose hold or read of the item fails refuses the copy before any destination
+  request. A copy that cannot finish and takes back everything it wrote puts the item back byte
+  for byte, or, where it cannot, takes the intent alone off — an item that takes neither keeps it
+  for its retry to resolve once the lease runs out; one whose create may have landed unseen — an
+  answer that never arrived — keeps the intent and gives up its lease, so its retry takes over at
+  once.
 - **`onetaskgraph.create_key`**, on the created item, is the key as a string, written with the
   create itself: in a GitHub issue body's metadata slot, in a folder of Markdown's file, and on
   Linear in its slot and, transformed, as the item's own `id` — sent as `IssueCreateInput.id`,

@@ -2546,9 +2546,12 @@ impl Engine {
             Ok(Some(earlier)) if found_by_intent => earlier.key,
             _ => intent::key(level, &item.source, &item.to, replaces.as_ref()),
         };
-        // A source that will not hold the key — a file it cannot edit narrowly, an item it no
+        // A source that will not keep the key — a file it cannot edit narrowly, an item it no
         // longer answers for, a write it drops — copies as it always did, with no intent, as it
-        // then records no link either. Only another attempt's live lease refuses.
+        // then records no link either. Anything else refuses the copy before a destination
+        // request: another attempt's live lease, a hold the source could not give — another
+        // process's, or one it cannot judge — and a read of the item that failed, since copying
+        // on without the intent would leave the create unprotected while another may be running.
         let (taken, local) = match self
             .take_intent(
                 level,
@@ -2561,8 +2564,16 @@ impl Engine {
             .await
         {
             Ok(taken) => taken,
-            Err(error @ EngineError::CreateInProgress { .. }) => return Err(error),
-            Err(_) => return Ok(false),
+            Err(
+                EngineError::NoSuchTask { .. }
+                | EngineError::NoSuchProject { .. }
+                | EngineError::NoSuchDocument { .. }
+                | EngineError::SourceRefused {
+                    error: SourceError::Refused { .. } | SourceError::Malformed { .. },
+                    ..
+                },
+            ) => return Ok(false),
+            Err(error) => return Err(error),
         };
         let destination = self.writable(&item.to)?;
         item.relist =
@@ -2661,10 +2672,14 @@ impl Engine {
                         .await);
             let _ = if keep {
                 self.release_lease(level, &item, &destination).await
-            } else if let Some(bytes) = snapshot {
-                self.restore_snapshot(level, &item, &bytes);
+            } else if let Some(bytes) = snapshot
+                && self.restore_snapshot(level, &item, &bytes).is_ok()
+            {
                 Ok(())
             } else {
+                // Restored byte for byte where it can be, and otherwise its intent alone taken
+                // off; an item that takes neither keeps the intent, which its retry resolves once
+                // the lease has run out.
                 self.drop_intent(level, &item, &destination).await
             };
         }
