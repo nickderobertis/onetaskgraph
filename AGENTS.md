@@ -1673,11 +1673,11 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   `.gate-time.json` and checks it, **warning** when over and failing only when the
   measurement errs or the file is invalid, because a development machine's timing varies too
   much to refuse on. No pre-push hook runs it — CI owns the gate. Every other check of the
-  root file excludes both labels. **Known until the canonical script changes:** its
-  `--stage cd` selection counts every push or release run at the release commit, the Rust
-  cache warmer's included, so `onetaskgraph-cd-job-count`, `onetaskgraph-cd-job-time` and
-  `onetaskgraph-release-read-requests` read over after each release; the manager ruled the
-  warmer stays and the exclusion lands in dero-skills' script, which this copy then takes.
+  root file excludes both labels. **The three CD figures leave the Rust cache warmer out:**
+  `onetaskgraph-cd-job-time`, `onetaskgraph-cd-job-count` and
+  `onetaskgraph-release-read-requests` pass `--exclude-workflow "rust cache warm"` — that
+  workflow's `name:`, and no other — because the warmer builds and delivers nothing, and its
+  run at the release commit would otherwise count as CD and read its jobs.
   `.github/policy/tests/release-tail.test.mjs` runs `publish`'s two tail steps as written over
   GitHub answers recorded from this repository's own v0.12.13
   (`.github/policy/tests/fixtures/release-tail/`), GitHub the one boundary doubled.

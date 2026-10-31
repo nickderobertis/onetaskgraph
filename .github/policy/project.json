@@ -37,6 +37,7 @@
     ],
     "releaseTail": [
       "{workspaceRoot}/.github/workflows/release.yml",
+      "{workspaceRoot}/.github/workflows/rust-cache-warm.yml",
       "{projectRoot}/tests/release-tail.test.mjs",
       "{projectRoot}/tests/fixtures/release-tail/**/*",
       "{workspaceRoot}/.github/package.json",

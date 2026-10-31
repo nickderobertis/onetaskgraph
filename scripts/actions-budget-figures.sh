@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # Copied from dero-skills' create-repo skill and edited only there, never in a copy.
 # source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/budgets/actions-budget-figures.sh
-# version: 5
-# sha256: cf0842bd1ab3c01b7e72e4a18de962499a7e5de030f8175cb8e804f5f58108cd
+# version: 9
+# sha256: a29faecd791ba75ea38eb9a9940686416205ab0a4bb6c0edeba479e8129b7aaf
 #
 # The GitHub Actions budget figures, measured from onevcs's read-only host answers
 # and reported to `onebudgetspec check` (a `measure: reported` budget's command).
 # onevcs selects the runs, jobs and pull requests; this script only applies the
 # counting rules and the arithmetic. The contract is the "GitHub Actions budget
-# figures" section of create-repo's references/tools/onebudgetspec.md.
+# figures" section of create-repo's references/tools/onebudgetspec.md, whose usage
+# block the skill's tests hold to the lines below.
 #
-#   scripts/actions-budget-figures.sh longest-job --stage pr|cd [--release TAG] [--repo OWNER/NAME] [--now TIMESTAMP]
-#   scripts/actions-budget-figures.sh job-count   --stage pr|cd [--release TAG] [--repo OWNER/NAME] [--now TIMESTAMP]
+#   scripts/actions-budget-figures.sh longest-job --stage pr|cd [--release TAG] [--repo OWNER/NAME] [--now TIMESTAMP] [--exclude-workflow NAME]...
+#   scripts/actions-budget-figures.sh job-count   --stage pr|cd [--release TAG] [--repo OWNER/NAME] [--now TIMESTAMP] [--exclude-workflow NAME]...
 #   scripts/actions-budget-figures.sh release-cycle-time        [--release TAG] [--repo OWNER/NAME] [--now TIMESTAMP]
-#   scripts/actions-budget-figures.sh release-read-requests     [--release TAG] [--repo OWNER/NAME]
+#   scripts/actions-budget-figures.sh release-read-requests     [--release TAG] [--repo OWNER/NAME] [--exclude-workflow NAME]...
 #   scripts/actions-budget-figures.sh pr-read-requests          [--release TAG] [--repo OWNER/NAME]
+#
+# This script names no workflow of its own: which push workflows deliver nothing is
+# each repository's to say, with --exclude-workflow in its CD budgets' commands.
 #
 # Needs bash, jq and `onevcs` (or the binary `ONEVCS` names). Exit 0 wrote the
 # figure to ONEBUDGETSPEC_RESULT; 1 is missing data or a failed read, with the
@@ -49,17 +53,18 @@ fi
 
 figure="${1:-}"
 case "$figure" in
-  longest-job | job-count) takes="stage release repo now" ;;
+  longest-job | job-count) takes="stage release repo now exclude-workflow" ;;
   release-cycle-time) takes="release repo now" ;;
-  release-read-requests | pr-read-requests) takes="release repo" ;;
+  release-read-requests) takes="release repo exclude-workflow" ;;
+  pr-read-requests) takes="release repo" ;;
   "") usage "name a figure" ;;
   *) usage "unknown figure: $figure" ;;
 esac
 shift
-stage="" release="" repo="" now=""
+stage="" release="" repo="" now="" excludes=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --stage | --release | --repo | --now) ;;
+    --stage | --release | --repo | --now | --exclude-workflow) ;;
     *) usage "unknown argument: $1" ;;
   esac
   case " $takes " in
@@ -72,14 +77,21 @@ while [ $# -gt 0 ]; do
     --release) release=$2 ;;
     --repo) repo=$2 ;;
     --now) now=$2 ;;
+    --exclude-workflow) excludes+=("$2") ;;
   esac
   shift 2
 done
 case "$takes" in
   stage*) case "$stage" in pr | cd) ;; *) usage "$figure needs --stage pr or --stage cd" ;; esac ;;
 esac
+[ "$stage" != pr ] || [ "${#excludes[@]}" -eq 0 ] ||
+  usage "--exclude-workflow applies to the CD figures only, not --stage pr"
 
 command -v jq >/dev/null 2>&1 || die "jq is not on PATH: install jq (https://jqlang.org) where this figure is measured"
+# The workflow names --exclude-workflow gave, as a JSON array. An empty array is
+# never expanded: bash before 4.4 calls that an unbound variable under `set -u`.
+excluded='[]'
+[ "${#excludes[@]}" -eq 0 ] || excluded=$(jq -cn '$ARGS.positional' --args "${excludes[@]}")
 onevcs=${ONEVCS:-onevcs}
 command -v "$onevcs" >/dev/null 2>&1 ||
   die "onevcs is not on PATH (install a release carrying \`onevcs host\`, or name the binary in ONEVCS)"
@@ -154,7 +166,7 @@ release_changes() {
 }
 
 cd_selection() {
-  local rc cr commit id payload_run seen=" " answers=()
+  local rc cr commit id payload_run seen ids=() answers=()
   rc=$(release_changes) || exit 1
   commit=$(jq -r .commit "$rc")
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "onevcs host release-changes answered no commit SHA: $commit"
@@ -162,25 +174,43 @@ cd_selection() {
   [ "$(jq '.runs | length' "$cr")" -gt 0 ] ||
     missing "no push or release run at $release's commit $commit" \
       "check that --release names the tag this repository's CD built, and that its CD workflows run on push or release"
-  # The runs at the commit, then the run GITHUB_RUN_ID names, then the one a
-  # workflow_run payload names, one per line.
-  jq -r '.runs[].id' "$cr" >"$work/runs" || die "onevcs host commit-runs answered no run ids"
+  # A run is excluded by its workflow name, so with --exclude-workflow given every run
+  # must carry one: a run without it would be counted however it was named.
+  [ "$excluded" = '[]' ] || jq -e '.runs | all(.workflow_name | type == "string" and . != "")' "$cr" >/dev/null ||
+    die "onevcs host commit-runs answered a run with no workflow name, so --exclude-workflow cannot be applied: install an onevcs release whose \`onevcs host commit-runs\` names each run's workflow, or name one in ONEVCS"
+  # Delivery: every push or release run at the commit, except the runs of a workflow
+  # --exclude-workflow names, which count toward no CD figure and whose jobs are not
+  # read (`seen` holds them, so neither GITHUB_RUN_ID nor a payload adds one back).
+  # The runs counted, then the run GITHUB_RUN_ID names, then the one a workflow_run
+  # payload names, one per line.
+  jq -r --argjson out "$excluded" '.runs[] | select(.workflow_name | IN($out[]) | not) | .id' "$cr" >"$work/runs" ||
+    die "onevcs host commit-runs answered no run ids"
+  seen=" $(jq -r --argjson out "$excluded" '[.runs[] | select(.workflow_name | IN($out[])) | .id] | join(" ")' "$cr") "
   [ -z "${GITHUB_RUN_ID:-}" ] || printf '%s\n' "$GITHUB_RUN_ID" >>"$work/runs"
   if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
     payload_run=$(jq -r '.workflow_run.id // empty' "$GITHUB_EVENT_PATH") ||
       die "the event payload $GITHUB_EVENT_PATH is not JSON"
     [ -z "$payload_run" ] || printf '%s\n' "$payload_run" >>"$work/runs"
   fi
+  # Ids to read: each once, never an excluded run's, however the environment names it.
   while read -r id; do
     [[ "$id" =~ ^[0-9]+$ ]] || die "a run id must be a number, got: $id"
     case "$seen" in *" $id "*) continue ;; esac
     seen="$seen$id "
-    answers+=("$(fetch "run-jobs-$id" run-jobs --run "$id")") || exit 1
+    ids+=("$id")
   done <"$work/runs"
-  jq -n --slurpfile rc "$rc" --slurpfile cr "$cr" '
+  # Judged after exclusion and deduplication, before any job is read.
+  [ "${#ids[@]}" -gt 0 ] ||
+    missing "every push or release run at $release's commit $commit is a workflow --exclude-workflow names" \
+      "name with --exclude-workflow only the push workflows that deliver nothing, never the ones that make or publish the release"
+  for id in "${ids[@]}"; do
+    answers+=("$(fetch "run-jobs-$id" run-jobs --run "$id")") || exit 1
+  done
+  jq -n --slurpfile rc "$rc" --slurpfile cr "$cr" --argjson out "$excluded" '
     [inputs] as $jobs
     | ($cr[0].runs | map({key: (.id | tostring), value: .}) | from_entries) as $at
-    | {blocks: [{label: null, runs: [$jobs[] | ($at[.run_id | tostring] // {id: .run_id, workflow_name: null, event: null}) + {jobs}]}],
+    | {blocks: [{label: null, runs: [$jobs[] | ($at[.run_id | tostring] // {id: .run_id, workflow_name: null, event: null}) + {jobs}],
+                 excluded: [$cr[0].runs[] | select(.workflow_name | IN($out[])) | {id, workflow_name, event}]}],
        answers: ([{query: "release-changes --tag \($rc[0].tag)", cost: $rc[0].cost},
                   {query: "commit-runs --commit \($cr[0].commit) --event push --event release", cost: $cr[0].cost}]
                  + [$jobs[] | {query: "run-jobs --run \(.run_id)", cost}])}' "${answers[@]}"
@@ -240,15 +270,17 @@ def os: .runner_os // "no runner OS";
 def line: "\(.workflow_name) / \(.name): \(.secs)s";
 def head: if .label then ["\(.label):"] else [] end;
 def indent: if .label then "  " else "" end;
+# A run --exclude-workflow left out, one line each, after the counted jobs.
+def left_out: indent as $i | [(.excluded // [])[] | "\($i)left out by --exclude-workflow: \(.workflow_name) (run \(.id), \(.event))"];
 def blocks: [.blocks[] | . + {all: [.runs[].jobs[]], jobs: ([.runs[].jobs[] | counted] | sort_by(-.secs))}];
 
 def longest_job:
   blocks as $b
   | ([$b[].jobs[].secs] | max) as $value
   | if $value == null then {missing: "no counted job: every job the selection lists was skipped, or never taken by a runner"}
-    else {value: $value, detail: ([$b[] | indent as $i | head + if .jobs == [] then ["\($i)no counted job"]
+    else {value: $value, detail: ([$b[] | indent as $i | head + (if .jobs == [] then ["\($i)no counted job"]
           else [.jobs[] | $i + line] + ["\($i)longest per runner OS:"]
-               + [.jobs | group_by(os)[] | max_by(.secs) | "\($i)  \(os): \(line)"] end] | add | join("\n"))} end;
+               + [.jobs | group_by(os)[] | max_by(.secs) | "\($i)  \(os): \(line)"] end) + left_out] | add | join("\n"))} end;
 
 def job_count:
   blocks as $b
@@ -257,7 +289,7 @@ def job_count:
        | ["\(if .label then "\(.label): " else "" end)\($jobs | length) jobs", "\($i)per workflow:"]
          + [.all | group_by(.workflow_name)[] | .[0].workflow_name as $w
             | "\($i)  \($w): \([$jobs[] | select(.workflow_name == $w)] | length)"]
-         + ["\($i)per runner OS:"] + [$jobs | group_by(os)[] | "\($i)  \(.[0] | os): \(length)"]] | add | join("\n"))};
+         + ["\($i)per runner OS:"] + [$jobs | group_by(os)[] | "\($i)  \(.[0] | os): \(length)"] + left_out] | add | join("\n"))};
 
 def release_cycle_time:
   [blocks[] | . as $b

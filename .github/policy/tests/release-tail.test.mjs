@@ -43,6 +43,19 @@ const TAIL_IDS = [
   "onetaskgraph-pr-read-requests",
 ];
 
+// The CD figures leave out the runs of the one workflow their commands name with
+// --exclude-workflow: the main-push Rust cache warmer, which builds and delivers nothing.
+const TAIL_BUDGETS = () =>
+  parse(readFileSync(join(root, "budgets.yaml"), "utf8")).budgets.filter((budget) =>
+    TAIL_IDS.includes(budget.id),
+  );
+const excludedBy = (command) =>
+  command.flatMap((arg, n) => (command[n - 1] === "--exclude-workflow" ? [arg] : []));
+const WARMER = parse(
+  readFileSync(join(root, ".github/workflows/rust-cache-warm.yml"), "utf8"),
+).name;
+const EXCLUDED = [WARMER];
+
 const releaseWorkflow = () =>
   parse(readFileSync(join(root, ".github/workflows/release.yml"), "utf8"));
 const rootPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -372,6 +385,13 @@ const RELEASE_OWN = [
   releaseListing,
 ];
 
+const deliveryRuns = () =>
+  body(releaseListing).workflow_runs.filter(
+    (run) => ["push", "release"].includes(run.event) && !EXCLUDED.includes(run.name),
+  );
+const excludedRuns = () =>
+  body(releaseListing).workflow_runs.filter((run) => EXCLUDED.includes(run.name));
+
 function expected(served, now) {
   const prs = pullRequests.map((pr) => {
     const runs = runsAt(prListing(pr), served);
@@ -386,9 +406,7 @@ function expected(served, now) {
     );
     return { ...pr, runs, jobs, requests };
   });
-  const cdRuns = body(releaseListing).workflow_runs.filter((run) =>
-    ["push", "release"].includes(run.event),
-  );
+  const cdRuns = deliveryRuns();
   const cdJobs = cdRuns
     .flatMap((run) => jobsOf(run.id))
     .map(counted(now))
@@ -453,15 +471,37 @@ test("over a recorded release the tail reports all seven budgets with their brea
   assert.match(run.output, /longest per runner OS:/);
   assert.match(run.output, /per workflow:/);
   assert.match(run.output, /release-changes --tag v0\.12\.13: 3 requests/);
+  assert.match(
+    run.output,
+    new RegExp(`left out by --exclude-workflow: ${WARMER} \\(run \\d+, push\\)`),
+  );
+});
+
+test("the CD budgets name the cache warmer's workflow, and only it, with --exclude-workflow", () => {
+  const excluding = {
+    "onetaskgraph-cd-job-time": EXCLUDED,
+    "onetaskgraph-cd-job-count": EXCLUDED,
+    "onetaskgraph-release-read-requests": EXCLUDED,
+  };
+  for (const budget of TAIL_BUDGETS())
+    assert.deepEqual(excludedBy(budget.command), excluding[budget.id] ?? [], budget.id);
+  assert.equal(WARMER, "rust cache warm");
+  assert.ok(excludedRuns().length, "the recorded release commit carries a warmer run");
 });
 
 test("each onevcs read is made once across the seven figures", () => {
   const { served } = recorded;
   assert.equal(new Set(served).size, served.length, `a read was made twice: ${served.join("\n")}`);
+  const warmerJobs = excludedRuns().map(
+    (run) => `repos/${REPOSITORY}/actions/runs/${run.id}/jobs?per_page=100&filter=latest`,
+  );
   assert.deepEqual(
     [...served].sort(),
-    ok.map(pathOf).sort(),
-    "every recording served, and nothing else",
+    ok
+      .map(pathOf)
+      .filter((path) => !warmerJobs.includes(path))
+      .sort(),
+    "every recording served but the excluded warmer's jobs, and nothing else",
   );
 });
 
@@ -498,14 +538,14 @@ test("the selection is the release's: the pull requests' heads and the release c
   const { served } = recorded;
   for (const pr of pullRequests)
     assert.ok(served.includes(prListing(pr)), `#${pr.number}'s head was read`);
-  const cd = body(releaseListing).workflow_runs.filter((run) =>
-    ["push", "release"].includes(run.event),
-  );
-  for (const run of cd)
+  for (const run of deliveryRuns())
     assert.ok(
       runsAt(releaseListing, served).some((r) => r.id === run.id),
       run.name,
     );
+  // The cache warmer's run at the release commit is excluded, and its jobs are never read.
+  for (const run of excludedRuns())
+    assert.ok(!served.some((path) => path.includes(`/runs/${run.id}/`)), run.name);
   // A scheduled run at the release commit is no CD run, and its jobs are never read.
   for (const run of body(releaseListing).workflow_runs.filter((r) => r.event === "schedule"))
     assert.ok(!served.some((path) => path.includes(`/runs/${run.id}/`)), run.name);
@@ -579,7 +619,7 @@ test("the figures script is the unedited create-repo copy its header names", () 
     lines[2],
     "# source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/budgets/actions-budget-figures.sh",
   );
-  assert.equal(lines[3], "# version: 5");
+  assert.equal(lines[3], "# version: 9");
   const digest = lines[4].match(/^# sha256: ([0-9a-f]{64})$/)?.[1];
   const body = lines.slice(5).join("\n");
   assert.equal(
@@ -587,7 +627,7 @@ test("the figures script is the unedited create-repo copy its header names", () 
     digest,
     "the copy was edited in place",
   );
-  assert.equal(digest, "cf0842bd1ab3c01b7e72e4a18de962499a7e5de030f8175cb8e804f5f58108cd");
+  assert.equal(digest, "a29faecd791ba75ea38eb9a9940686416205ab0a4bb6c0edeba479e8129b7aaf");
 });
 
 // The reconciliation script, against a stand-in for gh that answers each path with its

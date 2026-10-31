@@ -4,6 +4,8 @@
 # - `release-tail`: the seven GitHub Actions figures, measured by scripts/actions-budget-figures.sh
 #   (dero-skills' create-repo copy, edited only there) from onevcs's read-only host answers. The
 #   last step of release.yml's `publish` checks them, reporting only: nothing reads its result.
+#   The CD figures leave out the main-push Rust cache warmer (`--exclude-workflow`, its workflow
+#   name), which builds and delivers nothing.
 # - `host-variable`: the local gate's wall clock, which `just gate` records (scripts/gate-time.sh)
 #   and checks, warning when over, because a development machine's timing varies too much to
 #   refuse on.
@@ -41,7 +43,7 @@ budgets:
       release takes, a slow job being the actionable unit inside the release cycle.
     labels: [release-tail]
     measure: reported
-    command: [bash, scripts/actions-budget-figures.sh, longest-job, --stage, cd]
+    command: [bash, scripts/actions-budget-figures.sh, longest-job, --stage, cd, --exclude-workflow, "rust cache warm"]
     unit: seconds
     direction: max
     threshold: 1800
@@ -85,7 +87,7 @@ budgets:
       release-plz, four build jobs and publish.
     labels: [release-tail]
     measure: reported
-    command: [bash, scripts/actions-budget-figures.sh, job-count, --stage, cd]
+    command: [bash, scripts/actions-budget-figures.sh, job-count, --stage, cd, --exclude-workflow, "rust cache warm"]
     unit: jobs
     direction: max
     threshold: 6
@@ -102,7 +104,7 @@ budgets:
       repository's CD shape, whatever number of pull requests a release carries.
     labels: [release-tail]
     measure: reported
-    command: [bash, scripts/actions-budget-figures.sh, release-read-requests]
+    command: [bash, scripts/actions-budget-figures.sh, release-read-requests, --exclude-workflow, "rust cache warm"]
     unit: requests
     direction: max
     threshold: 6

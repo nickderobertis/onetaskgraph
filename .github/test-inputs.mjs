@@ -93,12 +93,14 @@ export const budgetJourneyFiles = [
 ];
 
 // Every file the release tail reads outside its own tests and fixtures: release.yml, whose
-// install step is also onevcs's pin, the YAML parser's lock, the root budgets file, the copied
-// figures script and onebudgetspec's pin, which that step must match. It imports nothing of the
+// install step is also onevcs's pin, rust-cache-warm.yml, whose workflow name the CD budgets
+// exclude, the YAML parser's lock, the root budgets file, the copied figures script and
+// onebudgetspec's pin, which that step must match. It imports nothing of the
 // run graph. A target of github-workflow-policy's, which no crate edit selects, because it
 // installs both tools from npm.
 export const releaseTailReadSet = [
   ".github/workflows/release.yml",
+  ".github/workflows/rust-cache-warm.yml",
   ".github/package.json",
   ".github/bun.lock",
   "budgets.yaml",
