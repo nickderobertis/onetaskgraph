@@ -511,11 +511,23 @@ pub enum PoolSetup {
 impl PoolSetup {
     /// `None` when the variable is unset: the lane runs its journey.
     pub fn read() -> Result<Option<Self>, String> {
-        match std::env::var(POOL_VARIABLE).as_deref() {
+        match std::env::var(POOL_VARIABLE) {
             Err(std::env::VarError::NotPresent) => Ok(None),
-            Ok("dry-run") => Ok(Some(Self::DryRun)),
-            Ok("initialize") => Ok(Some(Self::Initialize)),
-            _ => Err(format!("{POOL_VARIABLE} must be dry-run or initialize")),
+            Ok(value) => Self::parse(&value).map(Some),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                Err(format!("{POOL_VARIABLE} must be dry-run or initialize"))
+            }
+        }
+    }
+
+    /// The setup `value` names.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "dry-run" => Ok(Self::DryRun),
+            "initialize" => Ok(Self::Initialize),
+            _ => Err(format!(
+                "{POOL_VARIABLE} must be dry-run or initialize, not {value:?}"
+            )),
         }
     }
 }

@@ -3737,6 +3737,17 @@ mod pool {
         assert!(released(&id), "a panicking asset lane kept its lease");
     }
 
+    #[test]
+    fn the_pool_setup_reads_exactly_its_two_actions() {
+        use document_lifecycle::PoolSetup;
+        assert_eq!(PoolSetup::parse("dry-run"), Ok(PoolSetup::DryRun));
+        assert_eq!(PoolSetup::parse("initialize"), Ok(PoolSetup::Initialize));
+        for refused in ["", "fill", "Initialize", "dry_run"] {
+            assert!(PoolSetup::parse(refused).is_err(), "{refused:?}");
+        }
+        // The recipe's spelling of both is `.github/linear-documents-policy`'s to hold.
+    }
+
     #[tokio::test]
     async fn the_namespace_guard_refuses_a_request_naming_another_runs_record() {
         let replay = replay();

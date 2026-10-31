@@ -166,6 +166,14 @@ pub async fn copy(
     )
     .await?;
     let board = copied.pointer("/data/copyProjectV2/projectV2");
+    let answered = board
+        .and_then(|board| board.get("title"))
+        .and_then(Value::as_str);
+    if answered != Some(title.as_str()) {
+        return Err(format!(
+            "GitHub answered the live board copy titled {answered:?}, not {title:?}"
+        ));
+    }
     let (Some(id), Some(number)) = (
         board
             .and_then(|board| board.get("id"))
@@ -336,11 +344,23 @@ pub enum TemplateSetup {
 impl TemplateSetup {
     /// `None` when the variable is unset: the entry point runs its journey.
     pub fn read() -> Result<Option<Self>, String> {
-        match std::env::var(TEMPLATE_VARIABLE).as_deref() {
+        match std::env::var(TEMPLATE_VARIABLE) {
             Err(std::env::VarError::NotPresent) => Ok(None),
-            Ok("dry-run") => Ok(Some(Self::DryRun)),
-            Ok("fill") => Ok(Some(Self::Fill)),
-            _ => Err(format!("{TEMPLATE_VARIABLE} must be dry-run or fill")),
+            Ok(value) => Self::parse(&value).map(Some),
+            Err(std::env::VarError::NotUnicode(_)) => {
+                Err(format!("{TEMPLATE_VARIABLE} must be dry-run or fill"))
+            }
+        }
+    }
+
+    /// The setup `value` names.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "dry-run" => Ok(Self::DryRun),
+            "fill" => Ok(Self::Fill),
+            _ => Err(format!(
+                "{TEMPLATE_VARIABLE} must be dry-run or fill, not {value:?}"
+            )),
         }
     }
 }
@@ -434,12 +454,23 @@ pub async fn setup_template(
                 if added > 0 {
                     github_pause(std::time::Duration::from_secs(1)).await;
                 }
-                send(
+                let answer = send(
                     ADD_DRAFT_DOCUMENT,
                     "live template draft",
                     json!({"input":{"projectId":id,"title":TEMPLATE_DRAFT_TITLE}}),
                 )
                 .await?;
+                if answer
+                    .pointer("/data/addProjectV2DraftIssue/projectItem/id")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+                {
+                    return Err(format!(
+                        "GitHub did not answer draft item {} of {missing} with its id; {added} \
+                         were added before it — run the dry run to count what the template holds",
+                        added + 1
+                    ));
+                }
             }
             report.push(format!("added {missing} draft items, reaching {TEMPLATE_DRAFTS}"));
         }

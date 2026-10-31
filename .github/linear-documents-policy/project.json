@@ -9,6 +9,8 @@
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/crates/onetaskgraph-linear/project.json",
       "{workspaceRoot}/crates/onetaskgraph-linear-e2e/project.json",
+      "{workspaceRoot}/crates/onetaskgraph-linear/tests/document_lifecycle/mod.rs",
+      "{workspaceRoot}/crates/onetaskgraph-github-projects/tests/journey/run_board.rs",
       "{workspaceRoot}/.github/workflows/*.yml",
       "{workspaceRoot}/.github/workflows/*.yaml",
       "{workspaceRoot}/.github/workflow-graph.mjs",

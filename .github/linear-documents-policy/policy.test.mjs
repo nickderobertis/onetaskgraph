@@ -127,6 +127,47 @@ test("only the daily schedule creates fresh documents and manual dispatch initia
   }
 });
 
+// The operator's two setup recipes reach the lanes only through the variable each lane reads
+// and the entry point that reads it, so their spellings are held to the lanes' own.
+test("the pool and template recipes set the variables their lanes read", () => {
+  const constant = (path, name) =>
+    read(path).match(new RegExp(`pub const ${name}: &str = "([^"]+)";`))[1];
+  const pool = constant(
+    "crates/onetaskgraph-linear/tests/document_lifecycle/mod.rs",
+    "POOL_VARIABLE",
+  );
+  const template = constant(
+    "crates/onetaskgraph-github-projects/tests/journey/run_board.rs",
+    "TEMPLATE_VARIABLE",
+  );
+  const recipe = (name) => read("justfile").split(`\n${name} action:\n`)[1].split("\n")[0];
+  const poolRecipe = recipe("linear-document-pool");
+  assert.ok(poolRecipe.includes(`${pool}={{action}}`), poolRecipe);
+  assert.ok(
+    poolRecipe.includes("-t live-documents --projects onetaskgraph-linear,onetaskgraph-linear-e2e"),
+    poolRecipe,
+  );
+  const templateRecipe = recipe("github-live-template");
+  assert.ok(templateRecipe.includes(`${template}={{action}}`), templateRecipe);
+  assert.ok(templateRecipe.includes("GITHUB_LIVE_SELECTION=run"), templateRecipe);
+  assert.ok(
+    templateRecipe.includes(
+      "--test live -- real_projects_v2_contract_writes_and_leaves_no_residue --exact",
+    ),
+    templateRecipe,
+  );
+  for (const [lane, journey] of [
+    ["onetaskgraph-linear", "real_linear_applies_every_declared_capability_and_leaves_no_residue"],
+    [
+      "onetaskgraph-linear-e2e",
+      "linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy",
+    ],
+  ]) {
+    const project = JSON.parse(read(`crates/${lane}/project.json`));
+    assert.ok(project.targets["live-documents"].options.command.includes(journey), lane);
+  }
+});
+
 // These surfaces select the policy. Whether they also select github-workflows is that
 // project's own read set to say: its CD journeys build and package every crate and run the
 // justfile's release recipes, so .github/test-inputs.mjs names both, reconciled by ci-contexts.

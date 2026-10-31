@@ -58,13 +58,49 @@ const POINTS_PER_HOUR: u64 = 5_000;
 const CREATIONS_PER_HOUR: u64 = 500;
 /// GitHub's cap on a board's fields.
 const FIELDS_PER_BOARD: usize = 50;
-/// The template's fields, as many as the registered workload measured.
-const TEMPLATE_FIELDS: usize = 14;
-/// Content-creating requests a session sends besides its copy: the main journey's issues,
-/// their board items, comments, label and scratch field (`fixtures/session-cost.txt`), and
-/// the asset journey's two issues and their items.
-const MAIN_CREATIONS: u64 = 24;
-const ASSET_CREATIONS: u64 = 4;
+/// The template's fields: as many as the registered workload measured.
+fn template_fields() -> usize {
+    usize::try_from(onetaskgraph_github_live::quota::reference_workload().initial_fields).unwrap()
+}
+
+/// The content-creating requests a main session sends besides its copy and its origin field,
+/// read off the session's own per-call record (`fixtures/session-cost.txt`): its issues, their
+/// board items, its comments, its label and its scratch field.
+fn main_creations() -> u64 {
+    const CREATING: [&str; 5] = [
+        "creating an issue",
+        "adding an issue to the board",
+        "adding a comment",
+        "POST /repos/{owner}/{repo}/labels",
+        "creating a board single-select field with its options",
+    ];
+    let record = include_str!("fixtures/session-cost.txt");
+    let counted: Vec<_> = record
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let count: u64 = words.next()?.parse().ok()?;
+            let _nodes = words.next()?;
+            let name = words.collect::<Vec<_>>().join(" ");
+            CREATING.contains(&name.as_str()).then_some(count)
+        })
+        .collect();
+    assert_eq!(
+        counted.len(),
+        CREATING.len(),
+        "the session record no longer names every creating call"
+    );
+    counted.iter().sum()
+}
+
+/// The asset session's: one issue and its board item for each record it copies, and the
+/// registered workload uploads two images to each.
+fn asset_creations() -> u64 {
+    2 * (onetaskgraph_github_live::quota::reference_workload()
+        .asset_bytes
+        .len() as u64
+        / 2)
+}
 
 #[derive(Clone, Debug)]
 struct Board {
@@ -89,14 +125,16 @@ struct Account {
     refused: Vec<String>,
     /// A fault in how the account answers, to drive a session's refusals: `"stalled-copy"`
     /// (a copy's count never settles), `"unread-count"` (a copy's count is refused), and the
-    /// template listing's `"no-has-next"`, `"no-cursor"` and `"stuck-cursor"`.
+    /// template listing's `"no-has-next"`, `"no-cursor"` and `"stuck-cursor"`, a copy answered
+    /// under another title (`"retitled-copy"`) and a draft answered with no item
+    /// (`"unanswered-draft"`).
     fault: Option<&'static str>,
 }
 
 impl Account {
     fn new() -> Self {
         let mut account = Self::default();
-        let fields = (0..TEMPLATE_FIELDS)
+        let fields = (0..template_fields())
             .map(|n| {
                 let name = if n == 0 {
                     "Status".to_owned()
@@ -179,7 +217,10 @@ impl Account {
                 .iter()
                 .map(|(_, name)| (self.next("F"), name.clone()))
                 .collect();
-            let title = input["title"].as_str().unwrap().to_owned();
+            let mut title = input["title"].as_str().unwrap().to_owned();
+            if self.fault == Some("retitled-copy") {
+                title = "Plans (copy)".to_owned();
+            }
             self.boards.insert(
                 number,
                 Board {
@@ -250,6 +291,9 @@ impl Account {
             board
                 .items
                 .push((id.clone(), input["title"].as_str().unwrap().to_owned()));
+            if self.fault == Some("unanswered-draft") {
+                return json!({"data":{"addProjectV2DraftIssue":{"projectItem":null}}});
+            }
             return json!({"data":{"addProjectV2DraftIssue":{"projectItem":{"id":id}}}});
         }
         if document.contains("query LiveTemplateItems(") {
@@ -493,9 +537,9 @@ async fn session_child() {
         let fields = journey::writable_fields(&token, &project_id).await?;
         journey::ensure_origin_field(&token, &project_id, &fields).await?;
         let creations = if entry == EntryPoint::Main {
-            MAIN_CREATIONS
+            main_creations()
         } else {
-            ASSET_CREATIONS
+            asset_creations()
         };
         for n in 0..creations {
             send(
@@ -592,9 +636,9 @@ async fn session_child() {
     let walked = outcome.unwrap_or_else(|error| panic!("session: {error}"));
     deleted.unwrap();
     let own = if entry == EntryPoint::Main {
-        MAIN_CREATIONS
+        main_creations()
     } else {
-        ASSET_CREATIONS
+        asset_creations()
     };
     println!(
         "run-board-gate report: {}",
@@ -638,7 +682,7 @@ fn assert_isolated(account: &Account, tokens: &[String], reports: &[Report]) {
         template.items.len(),
         usize::try_from(TEMPLATE_DRAFTS).unwrap()
     );
-    assert_eq!(template.fields.len(), TEMPLATE_FIELDS);
+    assert_eq!(template.fields.len(), template_fields());
     assert_eq!(
         account.refused,
         Vec::<String>::new(),
@@ -672,7 +716,7 @@ fn two_concurrent_sessions_of_each_entry_point_pass_on_boards_of_their_own() {
 }
 
 #[test]
-fn eight_runs_at_once_stay_inside_every_account_and_board_limit() {
+fn eight_runs_at_once_stay_inside_the_hourly_points_hourly_creations_and_board_field_limits() {
     let account = Arc::new(Mutex::new(Account::new()));
     let origin = serve(Arc::clone(&account));
     let sessions: Vec<_> = (0..8u64)
@@ -701,8 +745,8 @@ fn eight_runs_at_once_stay_inside_every_account_and_board_limit() {
 fn a_session_naming_a_board_outside_its_run_is_refused_before_sending() {
     let account = Arc::new(Mutex::new(Account::new()));
     let origin = serve(Arc::clone(&account));
-    // A session whose board stays up while the trespasser runs: its walk waits on nothing,
-    // so it is started first and the trespasser finds it listed.
+    // A bystander session first, to the end: the account has seen another run work, and the
+    // board it leaves listed below is one seeded as a live run's copy would stand.
     let other = Command::new(std::env::current_exe().unwrap())
         .args(["session_child", "--exact", "--nocapture"])
         .env("RUN_BOARD_GATE_ORIGIN", &origin)
@@ -931,4 +975,149 @@ fn a_template_listing_that_does_not_page_soundly_is_refused_writing_nothing() {
             "{fault}: a refused listing wrote"
         );
     }
+}
+
+#[test]
+fn a_copy_answered_under_another_title_is_refused_and_never_worked_on() {
+    let (said, account) = failing_session("retitled-copy", "main");
+    assert!(
+        said.contains("not \"onetaskgraph live board ci-401-1-"),
+        "{said}"
+    );
+    let account = account.lock().unwrap();
+    let after_copy = account
+        .seen
+        .iter()
+        .skip_while(|(_, document, _)| !document.contains("LiveCopyBoard("))
+        .skip(1)
+        .count();
+    assert_eq!(
+        after_copy, 0,
+        "a session worked on a board it could not vouch for"
+    );
+}
+
+#[test]
+fn a_template_fill_whose_draft_is_answered_with_no_item_is_refused() {
+    let account = Arc::new(Mutex::new(Account::new()));
+    account
+        .lock()
+        .unwrap()
+        .boards
+        .get_mut(&TEMPLATE)
+        .unwrap()
+        .items
+        .truncate(10);
+    account.lock().unwrap().fault = Some("unanswered-draft");
+    let origin = serve(Arc::clone(&account));
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["session_child", "--exact", "--nocapture"])
+        .env("RUN_BOARD_GATE_ORIGIN", &origin)
+        .env("RUN_BOARD_GATE_ENTRY", "template-fill")
+        .env("RUN_BOARD_GATE_TOKEN", "operator")
+        .env("RUN_BOARD_GATE_RUN", "1")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        said.contains("did not answer draft item 1 of 50 with its id"),
+        "{said}"
+    );
+    // It stopped at the first unanswered draft rather than reporting the template filled.
+    let drafts = account
+        .lock()
+        .unwrap()
+        .seen
+        .iter()
+        .filter(|(_, document, _)| document.contains("LiveTemplateDraft("))
+        .count();
+    assert_eq!(drafts, 1);
+}
+
+/// The newest build of this crate's `live` test binary, beside this one.
+fn live_entry_point() -> std::path::PathBuf {
+    let directory = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_owned();
+    std::fs::read_dir(&directory)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.strip_prefix("live-").is_some_and(|hash| {
+                        let hash = hash.strip_suffix(".exe").unwrap_or(hash);
+                        !hash.is_empty() && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+                })
+        })
+        .max_by_key(|path| {
+            std::fs::metadata(path)
+                .and_then(|meta| meta.modified())
+                .ok()
+        })
+        .expect("build this crate's `live` test target beside this one")
+}
+
+#[test]
+fn the_template_recipe_reaches_the_setup_through_the_real_entry_point_and_writes_nothing_dry() {
+    use journey::run_board::{TEMPLATE_VARIABLE, TemplateSetup};
+    assert_eq!(TemplateSetup::parse("dry-run"), Ok(TemplateSetup::DryRun));
+    assert_eq!(TemplateSetup::parse("fill"), Ok(TemplateSetup::Fill));
+    for refused in ["", "initialize", "Fill"] {
+        assert!(TemplateSetup::parse(refused).is_err(), "{refused:?}");
+    }
+    // The recipe's spelling of the variable and the entry point is
+    // `.github/linear-documents-policy`'s to hold; the entry point, run as it runs it, does the
+    // setup and not the journey.
+    let account = Arc::new(Mutex::new(Account::new()));
+    account
+        .lock()
+        .unwrap()
+        .boards
+        .get_mut(&TEMPLATE)
+        .unwrap()
+        .items
+        .truncate(10);
+    let origin = serve(Arc::clone(&account));
+    let output = Command::new(live_entry_point())
+        .args([
+            "real_projects_v2_contract_writes_and_leaves_no_residue",
+            "--exact",
+            "--nocapture",
+        ])
+        .env(TEMPLATE_VARIABLE, "dry-run")
+        .env("GITHUB_LIVE_SELECTION", "run")
+        .env("GITHUB_LIVE_TEST_GRAPHQL", format!("{origin}/graphql"))
+        .env("GITHUB_LIVE_TEST_REST", format!("{origin}/"))
+        .env("GH_PROJECTS_TOKEN", "operator")
+        .env("GH_PROJECTS_OWNER", OWNER)
+        .env("GH_PROJECTS_NUMBER", TEMPLATE.to_string())
+        .env("GH_PROJECTS_REPOSITORY", REPOSITORY)
+        .env_remove("GITHUB_ACTIONS")
+        .env_remove("GITHUB_LIVE_SESSION_DIR")
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{said}");
+    assert!(said.contains("template #1 holds 10 draft items"), "{said}");
+    assert!(said.contains("would add 50 draft items"), "{said}");
+    let account = account.lock().unwrap();
+    assert!(
+        !account
+            .seen
+            .iter()
+            .any(|(_, document, _)| document.starts_with("mutation"))
+    );
+    assert!(
+        account
+            .seen
+            .iter()
+            .all(|(_, document, _)| document.contains("LiveTemplate"))
+    );
 }

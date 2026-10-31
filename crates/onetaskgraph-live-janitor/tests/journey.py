@@ -237,6 +237,9 @@ class Github:
         # nominated board into one titled with its stamp.
         self.run_boards: list[RunBoard] = []
         self.run_board_queries: list[str] = []
+        # A fault in the run-board listing or its deletion: 'no-page-info', 'no-cursor',
+        # 'repeated-cursor', 'no-number', or 'unconfirmed-delete'.
+        self.run_board_fault: str | None = None
         self.field_delete_answer = None
         self.field_delete_status = 200
         # Every way a request or a served body departed from GitHub's description.
@@ -376,12 +379,25 @@ class Github:
                         # GitHub's `query` is a search: it answers every board, the template
                         # among them, and the janitor reads each title back itself.
                         page = int(variables['after'] or 0)
-                        nodes = copy.deepcopy(state.run_boards[page:page + 100])
-                        self.reply({'data': {'repositoryOwner': {'projectsV2': {'nodes': nodes, 'pageInfo': {'hasNextPage': page + 100 < len(state.run_boards), 'endCursor': str(page + 100)}}}}})
+                        nodes: list = copy.deepcopy(state.run_boards[page:page + 100])
+                        info: dict = {'hasNextPage': page + 100 < len(state.run_boards), 'endCursor': str(page + 100)}
+                        match state.run_board_fault:
+                            case 'no-page-info':
+                                info = {}
+                            case 'no-cursor':
+                                info = {'hasNextPage': True, 'endCursor': None}
+                            case 'repeated-cursor':
+                                info = {'hasNextPage': True, 'endCursor': '100'}
+                            case 'no-number' if nodes:
+                                del nodes[0]['number']
+                        self.reply({'data': {'repositoryOwner': {'projectsV2': {'nodes': nodes, 'pageInfo': info}}}})
                         return
                     case str() if 'deleteProjectV2(' in query:
                         identity = RunBoardId(variables['input']['projectId'])
                         state.writes.append(Write('POST', BoardDelete(identity)))
+                        if state.run_board_fault == 'unconfirmed-delete':
+                            self.reply({'data': {'deleteProjectV2': {'projectV2': {'id': 'another board'}}}})
+                            return
                         state.run_boards = [v for v in state.run_boards if v['id'] != identity]
                         self.reply({'data': {'deleteProjectV2': {'projectV2': {'id': identity}}}})
                         return
@@ -1260,6 +1276,31 @@ class Journeys(unittest.TestCase):
         writes = len(state.writes)
         self.assert_success(state.run())
         self.assertEqual(len(state.writes), writes)
+
+    def test_a_run_board_listing_or_deletion_that_does_not_read_soundly_fails_closed(self):
+        for fault, said in (
+            ('no-page-info', 'run board pageInfo missing'),
+            ('no-cursor', 'run board next cursor missing'),
+            ('repeated-cursor', 'run board page did not advance'),
+            ('no-number', 'run board number missing'),
+        ):
+            state = Github()
+            state.run_board(f'ci-123-1-{NOW}', 20)
+            state.status[RunId(123)] = Status.COMPLETED
+            state.artifact(SCRATCH, f'ci-123-1-{NOW}', run=123)
+            state.run_board_fault = fault
+            result = state.run()
+            self.assert_failed(result)
+            self.assertIn(said, result.stderr, fault)
+            # Enumeration came before any write, so nothing at all was removed.
+            self.assertFalse(state.writes, fault)
+        state = Github()
+        state.run_board(f'ci-123-1-{NOW}', 20)
+        state.status[RunId(123)] = Status.COMPLETED
+        state.run_board_fault = 'unconfirmed-delete'
+        result = state.run()
+        self.assert_failed(result)
+        self.assertIn('did not confirm the requested deletion', result.stderr)
 
     def test_run_boards_are_walked_across_pages(self):
         state = Github()

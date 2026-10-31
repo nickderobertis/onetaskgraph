@@ -240,6 +240,7 @@ fn run_pair(scenario: &str) {
             .env("GITHUB_LIVE_TEST_REST", &relay.origin)
             .env("GH_PROJECTS_TOKEN", "test-token")
             .env("GH_PROJECTS_OWNER", "octo-org")
+            // llmlint: ignore[e2e_not_mocked] This file's purpose is the credential-free accounting of the real entry-point executables against the repository's own GitHub double (AGENTS.md: "Never mock the layer under test" is met — the binaries are real); the credentialed lane is what reaches GitHub. Board #6 is the template each session copies; #7 is the copy the double holds.
             .env("GH_PROJECTS_NUMBER", "6")
             .env("GH_PROJECTS_REPOSITORY", "acme/work")
             .env("ONETASKGRAPH_LIVE_REQUIRED", "1")
