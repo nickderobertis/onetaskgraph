@@ -582,6 +582,10 @@ struct State {
     /// Every run board a live session copied from the template, by title, and whether that
     /// session has since deleted it. This double holds one board, so one is live at a time.
     run_boards: Vec<(String, bool)>,
+    /// Every request, after a session copied its board, that named the template it copied
+    /// from — by number in a board lookup, or by id — other than to copy it. Whoever sent it,
+    /// the lane's own helpers or the plugin source under test, it left the session's namespace.
+    trespasses: Vec<String>,
     items: Vec<Item>,
     /// Every comment on every issue this board holds, oldest first.
     comments: Vec<HeldComment>,
@@ -1344,6 +1348,7 @@ fn board(items: Vec<Item>) -> Fixture {
 fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixture {
     let state = Arc::new(Mutex::new(State {
         run_boards: Vec::new(),
+        trespasses: Vec::new(),
         items,
         comments: Vec::new(),
         comment_ticks: 0,
@@ -1652,6 +1657,15 @@ fn repository_node_id(slug: &str) -> String {
 }
 
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
+    {
+        let mut held = state.lock().unwrap();
+        let copying = query.contains("LiveTemplate(") || query.contains("LiveCopyBoard(");
+        let names_template = variables.to_string().contains("\"PVT_template\"")
+            || (query.contains("projectV2(number:") && variables["number"] == json!(6));
+        if !held.run_boards.is_empty() && !copying && names_template {
+            held.trespasses.push(query.chars().take(120).collect());
+        }
+    }
     if query.contains("rateLimit{cost nodeCount limit remaining}") {
         return board::answer_a_stateless_session_call(query, variables, Pricing::AsComputed)
             .unwrap();
@@ -22070,6 +22084,13 @@ fn live_pair_fixture_child() {
     assert!(
         boards.iter().all(|(_, deleted)| *deleted),
         "a live session left its board copy behind: {boards:?}"
+    );
+    // And no request of either session, its plugin source's included, named the template
+    // once it had a board of its own.
+    let trespasses = fixture.state.lock().unwrap().trespasses.clone();
+    assert!(
+        trespasses.is_empty(),
+        "a live session named the template outside its copy: {trespasses:?}"
     );
     // Measured here, by the board, from when its search first left the task out: the journey's
     // own account of how long it waited is what is being checked, so it is not the evidence.

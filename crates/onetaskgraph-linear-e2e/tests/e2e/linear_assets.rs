@@ -1171,6 +1171,7 @@ fn live_observer(
     key: String,
     journal: document_lifecycle::journal::Journal,
     upstream: String,
+    namespace: Arc<document_lifecycle::namespace::Namespace>,
 ) -> (String, Arc<Mutex<LiveUploads>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -1227,6 +1228,17 @@ fn live_observer(
                 answer(&mut stream, status, &[]);
             } else {
                 let request: Value = serde_json::from_slice(&bytes[split..]).unwrap();
+                // Every request the binary under test sends passes this run's namespace guard.
+                if let Err(refusal) = namespace.admit(&request) {
+                    answer(
+                        &mut stream,
+                        200,
+                        json!({"errors":[{"message":refusal}]})
+                            .to_string()
+                            .as_bytes(),
+                    );
+                    continue;
+                }
                 let response = runtime
                     .block_on(
                         client
@@ -1239,6 +1251,7 @@ fn live_observer(
                 let status = response.status().as_u16();
                 let mut body: Value = runtime.block_on(response.json()).unwrap();
                 journal.observe(&request, &body);
+                namespace.learn(&body);
                 let mut state = recording.lock().unwrap();
                 if request["query"].as_str().unwrap().contains("fileUpload(") {
                     let id = state.signed.len();
@@ -1625,7 +1638,8 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
         .unwrap();
     // The lane's own lifecycle requests — preparing and retiring its slot — pass this run's
     // namespace guard, which refuses one naming another run's record before it reaches
-    // Linear. The binary under test and the slot's reset reach Linear directly.
+    // Linear, and so do the binary's, through the relay it is pointed at (`live_observer`).
+    // The slot's reset is a write to the leased slot by its own id.
     let namespace = std::sync::Arc::new(document_lifecycle::namespace::Namespace::new(
         onetaskgraph_live::artifact::Run::current(),
         &team_key,
@@ -1688,6 +1702,7 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
                         &journal,
                         &lifecycle_endpoint,
                         &created,
+                        &namespace,
                     );
                 },
             )
@@ -1771,6 +1786,7 @@ fn drive_live_assets(
     journal: &document_lifecycle::journal::Journal,
     lifecycle_endpoint: &str,
     created: &document_lifecycle::Created,
+    namespace: &Arc<document_lifecycle::namespace::Namespace>,
 ) {
     let key = key.to_owned();
     reset_asset_slot(
@@ -1804,6 +1820,7 @@ fn drive_live_assets(
         key.clone(),
         journal.clone(),
         "https://api.linear.app/graphql".into(),
+        Arc::clone(namespace),
     );
     journey
         .sandbox
@@ -3304,7 +3321,16 @@ fn live_asset_forwarding_transport_counts_created_then_deleted_documents() {
         Some(document_lifecycle::journal::Journal::new("assets", "fresh"));
     let journal = document_lifecycle::journal::Journal::new("assets", "fresh");
     journal.journey("live-asset-forwarding-transport");
-    let (endpoint, observed) = live_observer("fixture-key".into(), journal.clone(), upstream);
+    let namespace = Arc::new(document_lifecycle::namespace::Namespace::new(
+        onetaskgraph_live::artifact::Run::current(),
+        "ENG",
+    ));
+    let (endpoint, observed) = live_observer(
+        "fixture-key".into(),
+        journal.clone(),
+        upstream.clone(),
+        Arc::clone(&namespace),
+    );
     let created=runtime.block_on(document_lifecycle::send(&endpoint,"fixture-key",onetaskgraph_linear::graphql::DOCUMENT_CREATE,json!({"input":{"title":"Synthetic forwarded document","content":"Synthetic body","teamId":"team"}}))).unwrap();
     let id = created["documentCreate"]["document"]["id"]
         .as_str()
@@ -3393,5 +3419,71 @@ fn the_pool_variable_turns_the_asset_entry_point_into_the_setup_and_skips_the_jo
             .keyed
             .iter()
             .any(|(_, request)| request["query"].as_str().unwrap().contains("mutation"))
+    );
+}
+
+/// The relay the asset lane points its binary at refuses, before it reaches Linear, a request
+/// naming another run's record it has seen answered — so the binary's traffic is held to the
+/// run's namespace as the lane's own is — and forwards everything else.
+#[test]
+fn the_binarys_relay_refuses_a_request_naming_another_runs_record() {
+    let journey = Journey::with_clients(0);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let upstream = format!("{}/0/graphql", journey.workspace.endpoint);
+    let journal = document_lifecycle::journal::Journal::new("assets", "ordinary");
+    // Another run's pool member, held in the team before this run starts.
+    let theirs = onetaskgraph_linear::live_artifact::retained_title(
+        Scope::pooled("ENG", 2).unwrap(),
+        Slot::Assets,
+    )
+    .unwrap();
+    let created = runtime
+        .block_on(document_lifecycle::send(
+            &upstream,
+            "fixture-key",
+            onetaskgraph_linear::graphql::DOCUMENT_CREATE,
+            json!({"input":{"title":theirs,"content":"theirs","teamId":"team"}}),
+        ))
+        .unwrap();
+    let id = created["documentCreate"]["document"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let namespace = Arc::new(document_lifecycle::namespace::Namespace::new(
+        onetaskgraph_live::artifact::Run::current(),
+        "ENG",
+    ));
+    namespace.leased(1);
+    let (endpoint, _) = live_observer(
+        "fixture-key".into(),
+        journal,
+        upstream,
+        Arc::clone(&namespace),
+    );
+    // A listing through the relay teaches it whose that document is...
+    runtime
+        .block_on(document_lifecycle::send(
+            &endpoint,
+            "fixture-key",
+            document_lifecycle::DOCUMENTS,
+            json!({"after":null,"filter":{"title":{"containsIgnoreCase":"retained"}}}),
+        ))
+        .unwrap();
+    // ...and a write naming it never leaves.
+    let refused = runtime.block_on(document_lifecycle::send(
+        &endpoint,
+        "fixture-key",
+        "mutation($id:String!,$input:DocumentUpdateInput!){documentUpdate(id:$id,input:$input){success document{id}}}",
+        json!({"id":id,"input":{"content":"overwritten by another run"}}),
+    ));
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(namespace.refusals().len(), 1, "{:?}", namespace.refusals());
+    assert!(
+        !journey
+            .workspace
+            .held
+            .served()
+            .iter()
+            .any(|(query, _)| query.contains("documentUpdate("))
     );
 }
