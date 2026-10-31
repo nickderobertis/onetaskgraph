@@ -287,6 +287,25 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.finish_writes().await)
     }
 
+    async fn created_with_key(
+        &self,
+        record: MetadataRecord,
+        key: &str,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        target: &WriteTarget<'_>,
+    ) -> Result<Vec<NativeId>, SourceError> {
+        self.refused()?;
+        self.noted(
+            self.inner
+                .created_with_key(record, key, since, target)
+                .await,
+        )
+    }
+
+    fn create_key_lags(&self) -> bool {
+        self.inner.create_key_lags()
+    }
+
     async fn written_task(&self, id: &NativeId) -> Option<Task> {
         self.inner.written_task(id).await
     }

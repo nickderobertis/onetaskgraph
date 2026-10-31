@@ -1950,6 +1950,38 @@ pub trait TaskSource: Send + Sync {
         Ok(None)
     }
 
+    /// Every `record` this source holds whose create carried the create key `key` — see
+    /// [`MetadataKey::CREATE_KEY`] — created at or after `since` when that is given: what a
+    /// retried copy asks to find the item its earlier attempt created. `target` is the create
+    /// the key was taken for, so a source filing creates in more than one place looks where
+    /// that one would have landed.
+    ///
+    /// Read-only, and never through a search index: a source answers from where its creates
+    /// land, by the key, so the answer is as fresh as [`Self::create_key_lags`] says. Defaulted
+    /// to none, the answer of a source that keeps no such key — a retried copy then creates
+    /// again, as it always did.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the lookup could not be made.
+    async fn created_with_key(
+        &self,
+        record: MetadataRecord,
+        key: &str,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        target: &WriteTarget<'_>,
+    ) -> Result<Vec<NativeId>, SourceError> {
+        let _ = (record, key, since, target);
+        Ok(Vec::new())
+    }
+
+    /// Whether [`Self::created_with_key`] can miss an item created moments ago — a hosted
+    /// backend that lists a new item only after a delay — so a retry waits out the source's
+    /// quiescence window before believing it absent. Defaulted to `false`.
+    fn create_key_lags(&self) -> bool {
+        false
+    }
+
     /// Why this source's own policy on where it creates would refuse a create of `target`,
     /// or `None` when it would not — asked before anything of the create is written, and by a
     /// read-only answer of where a copy would land.

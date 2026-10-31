@@ -1322,6 +1322,37 @@ pub enum EngineError {
     )]
     ConditionsNotTasks,
 
+    /// Another copy attempt holds a live lease on the intent to create this item's counterpart,
+    /// so this copy wrote nothing and sent nothing to the destination.
+    #[error(
+        "{item} is being created at its destination by another copy, whose lease runs until \
+         {until}\n\
+         next: let that copy finish, or copy {item} again once {until} has passed."
+    )]
+    CreateInProgress {
+        /// The source item being copied, qualified.
+        item: String,
+        /// When the other attempt's lease ends, RFC 3339 UTC.
+        until: String,
+    },
+
+    /// More than one item at the destination carries the key of the create copying this item,
+    /// so none of them was linked: a duplicate, reported rather than adopted.
+    #[error(
+        "{item} has more than one counterpart at {destination} carrying its create key: \
+         {found}\n\
+         next: delete all but one of them at {destination}, then copy {item} again to link \
+         the one left."
+    )]
+    CreateDuplicated {
+        /// The source item being copied, qualified.
+        item: String,
+        /// The destination source.
+        destination: String,
+        /// Every item carrying the key, qualified and joined by `, `.
+        found: String,
+    },
+
     /// A create would file its issue somewhere the destination's own policy on where it
     /// creates refuses — a GitHub Projects source's `creation_owners` — so nothing of it was
     /// written.
@@ -1768,6 +1799,14 @@ pub struct Engine {
     designators: designators::Designators,
     /// Each source's human task projection authority, as its configuration declares it.
     projections: BTreeMap<SourceName, Result<crate::task_projection::ProjectionSource, String>>,
+    /// The clock a copy waits on while an earlier attempt's create may still be listed.
+    clock: SharedClock,
+    /// Each source's settings for a create safe to retry, by name; a source not named keeps
+    /// the defaults.
+    creates: BTreeMap<SourceName, crate::config::CreateSettings>,
+    /// This engine's own name for the copy attempts it makes, recorded on every intent to
+    /// create it takes, so an intent another process holds is told from its own.
+    attempt: String,
 }
 
 /// One operation's hold on every source's visibility reads, released when dropped — on every
@@ -1850,6 +1889,11 @@ impl Engine {
         engine.caches = caches;
         engine.designators = designators::Designators::configured(config);
         engine.projections = crate::task_projection::configured(config);
+        engine.creates = config
+            .sources()
+            .iter()
+            .map(|(name, source)| (name.clone(), source.create()))
+            .collect();
         engine
     }
 
@@ -1888,6 +1932,9 @@ impl Engine {
             copy_expect: std::sync::Mutex::new(None),
             designators: designators::Designators::default(),
             projections: BTreeMap::new(),
+            clock: clock.clone(),
+            creates: BTreeMap::new(),
+            attempt: uuid::Uuid::new_v4().to_string(),
         }
     }
 

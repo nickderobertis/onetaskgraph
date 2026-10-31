@@ -3289,6 +3289,24 @@ impl TaskSource for LinearSource {
             .cloned();
         web_address(held.as_deref())
     }
+    /// The issue whose own id is `key`: a create's key is the id it was created under here, and
+    /// Linear answers a read by id at once, so it never lags.
+    async fn created_with_key(
+        &self,
+        record: MetadataRecord,
+        key: &str,
+        _since: Option<chrono::DateTime<chrono::Utc>>,
+        _target: &onetaskgraph_plugin_api::WriteTarget<'_>,
+    ) -> Result<Vec<NativeId>, SourceError> {
+        if record != MetadataRecord::Task {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .get_task(&NativeId(key.to_owned()))
+            .await?
+            .map(|task| vec![task.id])
+            .unwrap_or_default())
+    }
     /// The task as this instance's latest write of it was answered with — never a request.
     async fn written_task(&self, id: &NativeId) -> Option<Task> {
         self.answered()
@@ -3559,6 +3577,11 @@ impl TaskSource for LinearSource {
         // keys: a key of either name travelling beside the field would be a second answer to
         // the same question, and the field is the one the contract names.
         let mut metadata = write.item.metadata.clone();
+        // A create's key is the issue's own id here, never a member of its slot.
+        let create_key = metadata
+            .remove(MetadataKey::CREATE_KEY)
+            .and_then(|key| key.as_str().map(str::to_owned))
+            .filter(|_| write.target.is_none());
         set_task_list(&mut metadata, TaskRef::DELIVERS_KEY, &write.item.delivers);
         set_task_list(
             &mut metadata,
@@ -3589,14 +3612,36 @@ impl TaskSource for LinearSource {
                 {
                     let mut input = input;
                     input["teamId"] = Value::String(team.0);
+                    if let Some(key) = &create_key {
+                        input["id"] = Value::String(key.clone());
+                    }
                     json!({"input":input})
                 },
                 MutationRoot::IssueCreate,
             ),
         };
-        let data = self.send(query, variables).await.inspect_err(|_| {
-            self.forget_vocabulary();
-        })?;
+        let data = match self.send(query, variables).await {
+            Ok(data) => data,
+            // Answered as an id another request already holds: that request's issue is this
+            // create's, so it is read by the id and written whole, finishing what it left.
+            Err(error) => {
+                self.forget_vocabulary();
+                if let Some(key) = &create_key
+                    && let Some(held) = self.get_task(&NativeId(key.clone())).await?
+                {
+                    let mut item = write.item.clone();
+                    item.metadata.remove(MetadataKey::CREATE_KEY);
+                    return self
+                        .write_task(&ItemWrite {
+                            target: Some(held.id),
+                            item,
+                            depends_on: write.depends_on.clone(),
+                        })
+                        .await;
+                }
+                return Err(error);
+            }
+        };
         let issue =
             mutation_payload(&data, root)?
                 .get("issue")

@@ -42,6 +42,7 @@
 //! read back to answer a query. That is what makes it a write and not a cache.
 
 mod comments;
+pub(crate) mod intent;
 mod locate;
 mod projections;
 mod query;
@@ -607,6 +608,10 @@ pub enum CopyVia {
     Scan,
     /// A search of the destination by the caller's `--match-by`.
     Match,
+    /// The item the destination holds under the key of a create an earlier attempt of this
+    /// copy recorded its intent for, at `onetaskgraph.creating`: that attempt's create,
+    /// finished rather than made twice.
+    Intent,
 }
 
 /// What a created item reports as its `via`: no rule found a counterpart.
@@ -888,6 +893,8 @@ enum Found {
     Scan,
     /// The caller's matching escape.
     Match,
+    /// An earlier attempt's create, found by the key its intent recorded.
+    Intent,
     /// The project a copy would otherwise create is one the destination already holds of the
     /// same plan — the member its counterpart home elsewhere names there, or one naming that
     /// home as the project it is a member of — and it becomes this project's own copy.
@@ -910,6 +917,7 @@ impl Found {
             Self::Origin => CopyVia::Origin,
             Self::Scan | Self::Member { .. } => CopyVia::Scan,
             Self::Match => CopyVia::Match,
+            Self::Intent => CopyVia::Intent,
         }
     }
 }
@@ -1184,6 +1192,15 @@ async fn check_status(
         .map_err(|error| refused(destination, error))
 }
 
+/// One intent to create a copy took: the item it is on, the destination, the item's file as it
+/// was before when the item is a file on this machine, and the intent itself.
+type Intended = (
+    GlobalId,
+    SourceName,
+    Option<(std::path::PathBuf, Vec<u8>)>,
+    Option<intent::Intent>,
+);
+
 /// Everything one copy has written, in the order it wrote it, so a copy that cannot finish
 /// can undo its own writes.
 ///
@@ -1216,6 +1233,13 @@ struct Journal {
     /// The change token each copied item's source answered with once this copy wrote its link
     /// there, by the item's qualified id — what a follow-up records the source as.
     linked_versions: HashMap<GlobalId, String>,
+    /// Every intent to create this copy took, by the item it is on and its destination: a
+    /// copy that cannot finish gives up each lease, keeping the key, so its retry takes over at
+    /// once.
+    intents: Vec<Intended>,
+    /// Every item whose create was sent and not yet answered: a copy failing with one here
+    /// cannot say whether the create landed.
+    sending: Vec<GlobalId>,
 }
 
 /// One write sent again, as its own request, because the destination stores other content than
@@ -1564,6 +1588,9 @@ struct Linking {
     /// Where the destination reports it landed, when the copy knows that without asking: the
     /// counterpart's read, or what the destination's write answered.
     location: Option<Location>,
+    /// Whether the item records an intent to create for this destination, which the link
+    /// write removes.
+    intent: bool,
 }
 
 /// One task a copy landed, and what the relation rule reads of it once the copy is complete.
@@ -1676,6 +1703,12 @@ struct Planned {
     /// What the copy's priority condition found at the counterpart task it updates — `None`
     /// when the copy set none, or creates the item. Unmet, the counterpart keeps its priority.
     priority_condition: Option<PriorityCondition>,
+    /// The intent this copy holds to create its counterpart, once taken — and the one an
+    /// earlier attempt recorded, when this copy creates again under it.
+    intent: Option<intent::Intent>,
+    /// Whether the destination is listed again by the create's key once the create is sent,
+    /// to report a duplicate another attempt's create left beside it.
+    relist: bool,
 }
 
 impl Planned {
@@ -2358,6 +2391,9 @@ impl Engine {
         // is undone with nothing recorded at its sources.
         self.finished_writes(request).await?;
         let mut items = items;
+        if !request.dry_run {
+            intent::stop_at("before-link");
+        }
         self.link(linking, &mut items, request.no_link, journal)
             .await?;
         // Each item whose destination stores other content than it was sent is written once
@@ -2432,6 +2468,45 @@ impl Engine {
         }
     }
 
+    /// Record the intent to create `item`'s counterpart on the item it is copied from, when the
+    /// copy creates one and may write to that item — taking over an earlier attempt's when its
+    /// lease has run out, and refusing, before anything is written, when it has not.
+    async fn intend(&self, item: &mut Planned) -> Result<bool, EngineError> {
+        let (Target::Create, Item::Task(task)) = (&item.target, &item.item) else {
+            return Ok(false);
+        };
+        if item.skipped || item.withheld {
+            return Ok(false);
+        }
+        let Ok(source) = self.writable(&item.source.source) else {
+            return Ok(false);
+        };
+        if !source.source().writes().is_supported()
+            || (self.declared(&item.to) == crate::config::SourceVisibility::Private
+                && self.declared(source.name()) != crate::config::SourceVisibility::Private)
+        {
+            return Ok(false);
+        }
+        let earlier = intent::held(&task.metadata, &item.to);
+        let replaces = link_of(&task.metadata, &item.to);
+        let key = intent::key(&item.source, &item.to, replaces.as_ref());
+        let local = Self::is_local(task);
+        // A source that will not hold the key — a file it cannot edit narrowly — copies as it
+        // always did, with no intent, as it records no link either.
+        let taken = match self.take_intent(&item.source, &item.to, &key, None).await {
+            Ok(taken) => taken,
+            Err(EngineError::SourceRefused {
+                error: SourceError::Refused { .. } | SourceError::Malformed { .. },
+                name,
+            }) if name == item.source.source.as_str() => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let destination = self.writable(&item.to)?;
+        item.relist = destination.source().create_key_lags() && (!local || earlier.is_some());
+        item.intent = Some(taken);
+        Ok(true)
+    }
+
     /// Write every deferred item again, now that every destination id is known.
     ///
     /// This is the second half of the two passes an edge between two items of one copy
@@ -2498,7 +2573,38 @@ impl Engine {
     /// says so and names what is still there, because a user told "the copy failed" about
     /// a destination that is not as they left it will copy again over a tree nobody
     /// described.
-    async fn undo(&self, journal: Journal, error: EngineError) -> EngineError {
+    async fn undo(&self, mut journal: Journal, error: EngineError) -> EngineError {
+        // A copy that takes every write back made nothing, so its intents are taken back with
+        // its links, byte for byte; one whose writes may have landed unseen — an answer that
+        // never arrived — keeps each intent for its retry to resolve, giving up only the lease.
+        let intents = std::mem::take(&mut journal.intents);
+        // A create a source refused left nothing (§4.9); one that got no answer at all may have.
+        let unanswered = Failure::from(&error).class() == crate::FailureClass::Transient;
+        let sending = std::mem::take(&mut journal.sending);
+        let error = self.undo_writes(journal, error).await;
+        let uncertain = matches!(error, EngineError::CopyDestinationUncertain { .. });
+        let not_undone = matches!(error, EngineError::CopyNotUndone { .. });
+        for (item, destination, snapshot, intent) in intents {
+            // Kept, its lease given up, wherever its create may still stand: a create whose
+            // answer never arrived, or one a copy could not take back.
+            let keep = uncertain
+                || ((not_undone || (unanswered && sending.contains(&item)))
+                    && self.may_have_landed(&destination, intent.as_ref()).await);
+            let _ = if keep {
+                self.renew_intent(&item, &destination, Some(chrono::Utc::now()))
+                    .await
+            } else if let Some((path, bytes)) = snapshot {
+                self.restore_snapshot(&path, &bytes);
+                Ok(())
+            } else {
+                self.drop_intent(&item, &destination).await
+            };
+        }
+        error
+    }
+
+    /// Put back every write `journal` recorded, answering the error the copy then fails with.
+    async fn undo_writes(&self, journal: Journal, error: EngineError) -> EngineError {
         let created: Vec<(&SourceName, Level, &NativeId)> = journal
             .entries
             .iter()
@@ -2682,7 +2788,7 @@ impl Engine {
             .map(|location| serde_json::json!({"id": wanted, "location": location}));
         let location =
             location.filter(|location| locations.get(landed_in.as_str()) != Some(location));
-        if link_held && location.is_none() {
+        if link_held && location.is_none() && !entry.intent {
             return Ok(CopyLink::Unchanged);
         }
         let source = self.readable(&entry.item.source)?;
@@ -2710,7 +2816,7 @@ impl Engine {
             &WriteTarget::Existing(&entry.item.native),
         )
         .await?;
-        let recorded = if link_held {
+        let recorded = if link_held && !entry.intent {
             CopyLink::Unchanged
         } else {
             links.insert(landed_in.to_string(), wanted);
@@ -2722,20 +2828,31 @@ impl Engine {
                 key: MetadataKey::copies(),
                 before: entry.held,
             });
-            match set_link_versioned(
-                source,
-                entry.level,
-                &entry.item.native,
-                &MetadataKey::copies(),
-                &Value::Object(links),
-            )
-            .await
-            {
+            // An item recording an intent to create here has it removed in the same write.
+            let written = if entry.intent && entry.level == Level::Task {
+                self.link_settling_intent(&entry.item, &landed_in, Value::Object(links))
+                    .await
+            } else {
+                set_link_versioned(
+                    source,
+                    entry.level,
+                    &entry.item.native,
+                    &MetadataKey::copies(),
+                    &Value::Object(links),
+                )
+                .await
+            };
+            match written {
                 Ok(Some(version)) => {
                     if let Some(version) = version {
                         journal.linked_versions.insert(entry.item.clone(), version);
                     }
-                    CopyLink::Recorded
+                    // A write made only to take an intent off leaves the link as it was.
+                    if link_held {
+                        CopyLink::Unchanged
+                    } else {
+                        CopyLink::Recorded
+                    }
                 }
                 // Nothing was written: the source no longer holds the item, or said it cannot
                 // hold the key.
@@ -4661,6 +4778,33 @@ impl Engine {
             .await?;
         }
 
+        // Every create this call makes is recorded as an intent on the item it copies before
+        // the first destination request any of them sends, so a retry finds what it made.
+        if !request.dry_run && !request.no_link {
+            for item in &mut planned {
+                // A file on this machine is kept as it was, byte for byte, so a copy that takes
+                // everything back leaves it exactly so.
+                let snapshot = match &item.item {
+                    Item::Task(task) => match &task.location {
+                        Some(Location::Path(path)) => std::fs::read(path)
+                            .ok()
+                            .map(|bytes| (std::path::PathBuf::from(path), bytes)),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if self.intend(item).await? {
+                    journal.intents.push((
+                        item.source.clone(),
+                        item.to.clone(),
+                        snapshot,
+                        item.intent.clone(),
+                    ));
+                }
+            }
+        }
+        intent::stop_at("after-intent");
+
         if project.is_none() {
             self.pin_filing_projects(&planned, running).await;
         }
@@ -4842,6 +4986,7 @@ impl Engine {
                         held: metadata.get(MetadataKey::COPIES_KEY).cloned(),
                         held_locations: metadata.get(MetadataKey::COPY_LOCATIONS_KEY).cloned(),
                         location: landed_location(destination, item, &id.native),
+                        intent: item.intent.is_some() || intent::held(metadata, &item.to).is_some(),
                     });
                 }
             }
@@ -6271,6 +6416,8 @@ impl Engine {
             skipped: false,
             status_condition: None,
             priority_condition: None,
+            intent: None,
+            relist: false,
         })
     }
 
@@ -6463,6 +6610,32 @@ impl Engine {
         carriers: Option<&mut Vec<NativeId>>,
     ) -> Result<(Target, Option<Prior>), EngineError> {
         let (title, metadata) = described(item);
+        // An intent an earlier attempt recorded is resolved before every other rule, and before
+        // `--create` is believed: the item its create made, when the destination holds it,
+        // is this item's counterpart rather than a reason to create a second.
+        if item.level() == Level::Task
+            && let Some(intent) = intent::held(metadata, destination.name())
+            && let Some(native) = self
+                .resolve_intent(
+                    destination,
+                    id,
+                    &intent,
+                    repositories_of(item),
+                    !request.dry_run,
+                )
+                .await?
+            && let Some(held) = self
+                .prior_reading(destination, item.level(), &native, request.comments)
+                .await?
+        {
+            return Ok((
+                Target::Update {
+                    id: native,
+                    found: Found::Intent,
+                },
+                Some(held),
+            ));
+        }
         // A caller asserting there is nothing to find is believed, and nothing is looked for —
         // unless the item itself says otherwise, by naming a counterpart at the destination.
         if request.create {
@@ -6914,7 +7087,7 @@ impl Engine {
             .write(
                 destination,
                 item,
-                created.or(target),
+                created.or(target.clone()),
                 project,
                 &edges,
                 delivers,
@@ -6925,7 +7098,33 @@ impl Engine {
             .await?;
         let written = qualified(written);
         let expected = self.take_expected(&written).unwrap_or_default();
+        // A create whose source's intent another attempt could share, or that an earlier
+        // attempt's request may yet land beside, is listed again by its key: one more item
+        // carrying it is a duplicate, reported and never linked.
+        if target.is_none()
+            && item.relist
+            && let Some(intent) = &item.intent
+        {
+            let listed = self
+                .relisted(destination, intent, repositories_of(&item.item))
+                .await?;
+            if listed.len() > 1 {
+                let error = EngineError::CreateDuplicated {
+                    item: item.source.to_string(),
+                    destination: destination.name().to_string(),
+                    found: listed
+                        .iter()
+                        .map(|native| qualified(native.clone()).to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                };
+                return Ok((query::failed(item.source.clone(), &error), prior));
+            }
+        }
         if let Some(plan) = &item.comment_plan {
+            if target.is_none() {
+                self.renew_intent(&item.source, &item.to, None).await?;
+            }
             self.write_comments(destination, &written.native, plan, journal)
                 .await?;
         }
@@ -8155,6 +8354,9 @@ impl Engine {
         if let Some(id) = &target {
             stored::forget(destination, created_kind.record(), id);
         }
+        if target.is_none() {
+            journal.sending.push(item.source.clone());
+        }
         let mut sent = match &landing {
             Item::Task(task) => task.content.clone(),
             Item::Project(project) => project.content.clone(),
@@ -8234,6 +8436,7 @@ impl Engine {
         // nobody asked for. One that answered malformed is the exception no source can be
         // held to, which is why `failed` reports it as a destination this copy cannot vouch for.
         if target.is_none() {
+            journal.sending.retain(|sending| sending != &item.source);
             journal.record(Undo::Created {
                 at: destination.name().clone(),
                 kind: created_kind,
@@ -9464,7 +9667,6 @@ fn outgoing(
             created_at: None,
             updated_at: None,
             project,
-            metadata: carried(&task.metadata),
             delivers: delivers.to_vec(),
             delivered_by: match held.map(|held| &held.item) {
                 Some(Item::Task(held)) => held.delivered_by.clone(),
@@ -9477,6 +9679,17 @@ fn outgoing(
             priority: match held.map(|held| &held.item) {
                 Some(Item::Task(held)) if item.keeps_priority() => held.priority,
                 _ => task.priority,
+            },
+            metadata: {
+                let mut metadata = carried(&task.metadata);
+                // A create carries its key, written with the create itself.
+                if let (Some(intent), None, Target::Create) = (&item.intent, held, &item.target) {
+                    metadata.insert(
+                        MetadataKey::CREATE_KEY.to_owned(),
+                        Value::String(intent.key.clone()),
+                    );
+                }
+                metadata
             },
             classification,
             ..(**task).clone()
@@ -9640,7 +9853,10 @@ fn carried(
     carried.remove(TaskRef::DELIVERS_KEY);
     carried.remove(TaskRef::DELIVERED_BY_KEY);
     carried.remove(GlobalId::ORIGIN_KEY);
+    // An intent to create is the copied item's own, never its counterpart's.
+    carried.remove(MetadataKey::CREATING_KEY);
     for kept in [
+        MetadataKey::CREATE_KEY,
         MetadataKey::COPIES_KEY,
         MetadataKey::COPY_LOCATIONS_KEY,
         MetadataKey::MEMBERS_KEY,

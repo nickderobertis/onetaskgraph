@@ -1116,6 +1116,11 @@ struct BoardPlacement {
 /// The board this fixture keeps, and everything a request may change on it.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 struct GitHubBoard {
+    /// Issues `Repository.issues` does not list yet, by id: one GitHub committed and its
+    /// listing has not caught up with.
+    unlisted: Vec<Value>,
+    /// Whether every issue created from here on starts unlisted.
+    unlist_new: bool,
     canonical_issue_urls: bool,
     /// Whether `createIssue` answers without the issue's URL, so a writer learns it only by
     /// reading the issue.
@@ -1863,6 +1868,23 @@ impl GitHubBoardFields {
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `refuse_once` and `rename_option`, and a suite of one plugin could not add it from outside.
     pub fn refuse_as_stale_once(&self, operation: &'static str) {
         self.board.lock().unwrap().refusing_stale.push(operation);
+    }
+
+    /// Have every issue created from here on left out of `Repository.issues` until
+    /// [`Self::list_issue`] lists it — GitHub's listing behind a create it committed — or listed
+    /// at once again, when `unlisted` is false.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board, which lives here for the reason `GitHubBoard` records: what it changes is the board's private state, read by its own request loop, so it can only be a method of this handle, beside `drop_response_once`.
+    pub fn unlist_new_issues(&self, unlisted: bool) {
+        self.board.lock().unwrap().unlist_new = unlisted;
+    }
+
+    /// List one issue [`Self::unlist_new_issues`] left out of `Repository.issues`.
+    pub fn list_issue(&self, id: &str) {
+        self.board
+            .lock()
+            .unwrap()
+            .unlisted
+            .retain(|held| held != &json!(id));
     }
 
     /// Apply the next request carrying `operation`, and close its connection without an
@@ -3677,6 +3699,8 @@ fn github_projects_board_at(
         arrivals: Vec::new(),
         membership_first: usize::MAX,
         owed_error_objects: Vec::new(),
+        unlisted: Vec::new(),
+        unlist_new: false,
         closed_filter_leaks: false,
         closed_cursor_stalls: false,
         erring_beside: Vec::new(),
@@ -4961,6 +4985,32 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let comments = board.comment_connection(&id, &variables["after"], &variables["first"]);
         return json!({"node":{"__typename":"Issue","comments":comments}});
     }
+    // A repository's issues, newest first, as `Repository.issues` ordered by creation lists
+    // them: what a retried copy reads to find the issue its earlier attempt created.
+    if query == onetaskgraph_github_projects::graphql::ISSUES_BY_CREATION {
+        let slug = format!(
+            "{}/{}",
+            variables["owner"].as_str().unwrap_or_default(),
+            variables["name"].as_str().unwrap_or_default()
+        );
+        let mut listed: Vec<&Value> = board
+            .items
+            .iter()
+            .chain(&board.pending)
+            .filter(|item| item["repo"] == json!(slug) && !GitHubBoard::is_draft(item))
+            .filter(|item| !board.unlisted.contains(&item["id"]))
+            .collect();
+        listed.sort_by_key(|item| {
+            std::cmp::Reverse(github_number(item["id"].as_str().unwrap_or_default()))
+        });
+        let nodes: Vec<Value> = listed
+            .iter()
+            .map(|item| json!({"id":item["id"],"createdAt":item.get("createdAt").cloned().unwrap_or(Value::Null),
+                               "body":item["body"]}))
+            .collect();
+        return json!({"repository":{"issues":{"nodes":nodes,
+            "pageInfo":{"hasNextPage":false,"endCursor":null}}}});
+    }
     if query.contains("repository(owner:$owner,name:$name)") {
         assert_eq!(variables["owner"], board.repository_owner());
         let slug = format!(
@@ -4987,6 +5037,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         assert!(input["body"].is_string() || input["body"].is_null());
         board.created += 1;
         let id = format!("ISSUE-{}", board.created);
+        if board.unlist_new {
+            board.unlisted.push(json!(id));
+        }
         let at = board.tick();
         let mut created = json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue",
             "title":input["title"],"body":input["body"],"state":"OPEN","reason":null,
@@ -6963,7 +7016,7 @@ fn validate_linear_variables(operation: &str, variables: &Value) -> Result<(), &
                 && valid_linear_write_input(
                     variables.get("input"),
                     &["teamId", "title", "stateId", "labelIds", "priority"],
-                    &["description", "projectId"],
+                    &["description", "projectId", "id"],
                 )
         }
         // The two narrow issue writes: exactly one member, and nothing beside it.
@@ -7938,7 +7991,14 @@ fn linear_write_item(
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
     let id = if create {
-        format!("{}-W{}", if project { "P" } else { "T" }, rows.len() + 1)
+        // A caller-chosen `id` is the issue's own, and Linear lets only one issue hold an id.
+        match input.get("id").and_then(Value::as_str) {
+            Some(chosen) if rows.iter().any(|row| row["id"] == chosen) => {
+                return Err("Entity with this id already exists");
+            }
+            Some(chosen) => chosen.to_owned(),
+            None => format!("{}-W{}", if project { "P" } else { "T" }, rows.len() + 1),
+        }
     } else {
         vars["id"]
             .as_str()

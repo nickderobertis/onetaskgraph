@@ -1359,6 +1359,42 @@ impl TaskSource for LocalMdSource {
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.write_task_with(write, None)
     }
+    /// Every record whose file carries `key` at the create key — read off this
+    /// machine, where a create lands at once, so it never lags.
+    async fn created_with_key(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        key: &str,
+        _since: Option<chrono::DateTime<chrono::Utc>>,
+        _target: &WriteTarget<'_>,
+    ) -> Result<Vec<NativeId>, SourceError> {
+        let wanted = serde_json::Value::String(key.to_owned());
+        let carries = |metadata: &BTreeMap<String, serde_json::Value>| {
+            metadata.get(MetadataKey::CREATE_KEY) == Some(&wanted)
+        };
+        Ok(match record {
+            onetaskgraph_plugin_api::MetadataRecord::Task => self
+                .parse_work_records(WorkKind::Task, &ProjectFilter::Any)?
+                .into_iter()
+                .map(task)
+                .filter(|task| carries(&task.metadata))
+                .map(|task| task.id)
+                .collect(),
+            onetaskgraph_plugin_api::MetadataRecord::Project => self
+                .parse_work_records(WorkKind::Project, &ProjectFilter::Any)?
+                .into_iter()
+                .map(project)
+                .filter(|project| carries(&project.metadata))
+                .map(|project| project.id)
+                .collect(),
+            onetaskgraph_plugin_api::MetadataRecord::Document => self
+                .parse_document_records(&ProjectFilter::Any)?
+                .into_iter()
+                .filter(|document| carries(&document.metadata))
+                .map(|document| document.id)
+                .collect(),
+        })
+    }
     /// The task as its file now holds it: what this source's latest write of it wrote, read off
     /// this machine — no remote party is asked anything.
     async fn written_task(&self, id: &NativeId) -> Option<Task> {

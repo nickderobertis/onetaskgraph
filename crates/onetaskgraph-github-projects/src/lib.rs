@@ -976,6 +976,10 @@ pub mod graphql {
         };
     }
 
+    /// One page of a repository's issues, newest first, each with when it was created and its
+    /// body: what a retried copy reads to find the issue its earlier attempt created, by the
+    /// create key in that body's metadata slot — never through search, whose index lags.
+    pub const ISSUES_BY_CREATION: &str = "query($owner:String!,$name:String!,$first:Int!,$after:String){repository(owner:$owner,name:$name){issues(first:$first,after:$after,orderBy:{field:CREATED_AT,direction:DESC}){nodes{id createdAt body}pageInfo{hasNextPage endCursor}}}}";
     /// Every issue of one board, found by a search scoped to that board.
     ///
     /// This is how the projects a board holds are listed, and it selects no `items`
@@ -2111,7 +2115,11 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 55] = [
+    pub const DOCUMENTS: [(&str, &str); 56] = [
+        (
+            ISSUES_BY_CREATION,
+            "listing a repository's issues newest first for a create key",
+        ),
         (SEARCH_ISSUES, "searching this board's issues"),
         (ISSUE, "reading one issue"),
         (
@@ -13420,6 +13428,86 @@ impl TaskSource for GitHubProjectsSource {
             .map(Some)
             .map_err(|message| SourceError::Malformed { message })
     }
+    /// Every issue of the repository a create of `target` files in whose body carries `key` in
+    /// its metadata slot, read off that repository's issues newest first back to `since` —
+    /// never through search, whose index lags a fresh issue by seconds.
+    async fn created_with_key(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        key: &str,
+        since: Option<DateTime<Utc>>,
+        target: &onetaskgraph_plugin_api::WriteTarget<'_>,
+    ) -> Result<Vec<NativeId>, SourceError> {
+        let _ = record;
+        let onetaskgraph_plugin_api::WriteTarget::New {
+            repositories,
+            project,
+        } = target
+        else {
+            return Ok(Vec::new());
+        };
+        let repository = self
+            .creation_rule(repositories, *project, "a new item")
+            .await?;
+        let wanted = Value::String(key.to_owned());
+        let mut found = Vec::new();
+        let mut after: Option<String> = None;
+        loop {
+            let data = self
+                .graphql(
+                    graphql::ISSUES_BY_CREATION,
+                    json!({"owner": repository.owner, "name": repository.name,
+                           "first": MAX_PAGE_SIZE, "after": after}),
+                )
+                .await?;
+            let issues =
+                data.pointer("/repository/issues")
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: format!(
+                            "GitHub answered no issues for repository {}",
+                            repository.slug()
+                        ),
+                    })?;
+            let mut older = false;
+            for node in issues
+                .get("nodes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let (Some(since), Some(created)) = (since, optional_time(node, "createdAt")?)
+                    && created < since
+                {
+                    older = true;
+                    break;
+                }
+                let body = node.get("body").and_then(Value::as_str).map(str::to_owned);
+                let (_, metadata) = metadata_body(body)?;
+                if metadata.get(MetadataKey::CREATE_KEY) == Some(&wanted)
+                    && let Some(id) = node.get("id").and_then(Value::as_str)
+                {
+                    found.push(NativeId(id.to_owned()));
+                }
+            }
+            let next = issues
+                .pointer("/pageInfo/hasNextPage")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if older || !next {
+                return Ok(found);
+            }
+            after = issues
+                .pointer("/pageInfo/endCursor")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+    }
+
+    /// `Repository.issues` lists an issue GitHub committed only once its listing catches up.
+    fn create_key_lags(&self) -> bool {
+        true
+    }
+
     /// The task as this process's own latest write of it left it, from the item it recorded
     /// that write as — never a request. Its `version` is always `None`: a board's change token
     /// is given only once an item has gone unchanged for [`change_token::SETTLED`], which an

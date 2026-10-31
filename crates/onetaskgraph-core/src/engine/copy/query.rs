@@ -230,6 +230,7 @@ impl Engine {
                 // A task skipped by its tokens was not read at the destination, so where it is
                 // is not known here; whatever its own entry records is kept.
                 location: None,
+                intent: listed.item.metadata.contains_key(MetadataKey::CREATING_KEY),
             });
         }
         let counts = request.comments.then(|| {

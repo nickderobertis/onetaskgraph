@@ -312,6 +312,8 @@ impl Engine {
                     skipped: false,
                     status_condition: None,
                     priority_condition: None,
+                    intent: None,
+                    relist: false,
                 };
                 // A dry run's filing lookup, so it creates no member project; what it would have
                 // written is nothing, and the journal is dropped with nothing in it to undo.

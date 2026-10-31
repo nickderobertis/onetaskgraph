@@ -239,6 +239,12 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::QueryNotTasks => ("query-not-tasks".to_owned(), None, None),
         EngineError::StatusesNotTasks => ("statuses-not-tasks".to_owned(), None, None),
         EngineError::ConditionsNotTasks => ("conditions-not-tasks".to_owned(), None, None),
+        EngineError::CreateInProgress { .. } => ("create-in-progress".to_owned(), None, None),
+        EngineError::CreateDuplicated { destination, .. } => (
+            "create-duplicated".to_owned(),
+            configured(destination),
+            None,
+        ),
         EngineError::CreationOwner { destination, .. } => {
             ("creation-owner".to_owned(), configured(destination), None)
         }

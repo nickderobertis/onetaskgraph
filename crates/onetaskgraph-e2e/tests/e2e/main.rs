@@ -66,7 +66,12 @@ mod copy_comments;
 // Linear workspace in seconds. The guards they prove are the engine's copy, decided on the read
 // it makes of any destination, so no one plugin crate's edge is narrower.
 mod copy_guards;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary from a folder of Markdown into a second folder, the loopback board
+// and the loopback Linear workspace in seconds. A create safe to retry is the engine's copy,
+// resolved against every destination, so no one plugin crate's edge is narrower.
 mod copy_link;
+mod copy_retry;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
 // journeys drive the binary from a loopback board and a folder of Markdown into a folder of
 // Markdown and the Python store over a real pipe, in a few seconds. Which tasks a copy leaves

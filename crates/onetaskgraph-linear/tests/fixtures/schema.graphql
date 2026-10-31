@@ -495,6 +495,9 @@ input EntityIdentifierIDComparator {
   eq: ID
 }
 input IssueCreateInput {
+  # The identifier, chosen by the caller, as Linear's published IssueCreateInput documents it:
+  # when none is given the backend generates one, and only one issue may hold an id.
+  id: String
   teamId: String!
   title: String!
   description: String
