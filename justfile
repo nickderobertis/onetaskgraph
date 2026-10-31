@@ -301,7 +301,7 @@ lint-llm-diff base="origin/main" *args:
 
 # Private workflow tooling stays isolated from the product SDK workspace.
 github-workflows-bootstrap:
-    @bun install --cwd .github --frozen-lockfile
+    @bash scripts/github-workflows-bootstrap.sh
 
 # Focused workflow graph, required-context and budget proofs.
 github-workflows-check:
