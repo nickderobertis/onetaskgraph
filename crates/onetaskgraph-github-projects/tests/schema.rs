@@ -1572,7 +1572,8 @@ fn the_schema_check_refuses_a_request_breaking_each_validation_rule() {
 
 /// A malformed or adversarial request is refused, never answered by a crash or an exhausted
 /// stack: bytes that are not GraphQL, nesting far past any real document's, a fragment cycle
-/// two thousand spreads long, a wide selection and deeply nested variables.
+/// two thousand spreads long, a wide selection, more tokens than it parses and deeply nested
+/// variables.
 #[test]
 fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
     use serde_json::json;
@@ -1643,6 +1644,17 @@ fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
     assert_eq!(
         github_schema::refuse(&json!({"query": format!("query{{viewer{{{wide}}}}}")})),
         None
+    );
+    // A document that breaks no rule but holds more tokens than the check parses is refused
+    // unparsed, before any rule runs over it.
+    let oversized = "login ".repeat(200_000);
+    let answered = refused(&format!("query{{viewer{{{oversized}}}}}"), json!({}));
+    assert!(
+        answered["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message
+                .starts_with("Syntax Error: Document contains more than 200000 tokens.")),
+        "{answered}"
     );
 }
 
