@@ -99,8 +99,9 @@ case "$JOB" in
     # its suites spend most of their time waiting on the loopback servers and processes they
     # drive, not computing.
     # The workflow suites as on test-macos. The distribution journey names its slowest steps
-    # here, where it is slowest.
+    # here, where it is slowest, and so does scripts:test, the job's last task, its guards'.
     export ONETASKGRAPH_DISTRIBUTION_TIMINGS=1
+    script_timings=true
     phases="1 affected test,budgets onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows,github-workflow-policy --parallel=3
 1 affected test,budgets *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 affected rust-cache-action -
@@ -128,6 +129,10 @@ esac
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
+if "${script_timings:-false}"; then
+  export BASH_ENV="$PWD/scripts/script-start-log.sh"
+  export ONETASKGRAPH_SCRIPT_TIMINGS_LOG="$scratch/script-timings"
+fi
 
 # The tasks an Nx invocation selects, one `project:target` per line, from its task graph:
 # selected_tasks <phase> <nx arguments...>.
@@ -233,6 +238,18 @@ done <<EOF
 $phases
 EOF
 wait_for_phases
+if [ -s "$scratch/script-timings" ]; then
+  # Each guard's start to the next one's, the last's to now; a python command between two
+  # guards counts in the first one's figure.
+  "$PYTHON" - "$scratch/script-timings" "$(date +%s)" <<'PY'
+import sys
+starts = [line.split(" ", 1) for line in open(sys.argv[1], encoding="utf-8").read().splitlines()]
+ends = [int(start) for start, _ in starts[1:]] + [int(sys.argv[2])]
+figures = [f"{end - int(start)}s {name.rsplit('/', 1)[-1]}" for (start, name), end in zip(starts, ends)]
+sys.stdout.reconfigure(newline="\n")
+print("ci-job: scripts:test guard timings, each to the next one's start (the last to the job's end): " + "; ".join(figures))
+PY
+fi
 status=0
 for index in $(seq 1 "$phase"); do
   phase="$index"
