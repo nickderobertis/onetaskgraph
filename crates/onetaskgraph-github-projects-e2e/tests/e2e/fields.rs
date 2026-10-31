@@ -700,12 +700,31 @@ fn the_board_refuses_the_status_option_update_0_12_13_sent_as_github_does() {
         &json!({"input": {"projectId": "PVT-board", "fieldId": "FIELD-status",
                           "singleSelectOptions": options}}),
     );
+    // GitHub answers it HTTP 200 with `errors` naming the field it does not define, at the
+    // variable it was sent in, and no `data`.
     assert_eq!(
-        answered,
-        json!({"errors": [{"message": "Input object has key projectId not in type \
-            UpdateProjectV2FieldInput"}]}),
-        "GitHub answers it HTTP 200, with `errors` naming the field it does not define and no \
-         `data`"
+        answered.as_object().map(|body| body.len()),
+        Some(1),
+        "{answered}"
+    );
+    assert_eq!(
+        answered["errors"].as_array().map(Vec::len),
+        Some(1),
+        "{answered}"
+    );
+    assert_eq!(
+        answered["errors"][0]["locations"],
+        json!([{"line": 1, "column": 10}])
+    );
+    let message = answered["errors"][0]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        message.starts_with(
+            "Variable \"$input\" has invalid value: Expected value of type \
+             \"UpdateProjectV2FieldInput\" not to include unknown field \"projectId\""
+        ),
+        "{answered}"
     );
     assert_eq!(
         board.status_options(),
@@ -746,8 +765,9 @@ fn the_board_refuses_selections_whose_merged_response_conflicts() {
     assert_eq!(
         refused("query { viewer { a: login } viewer { a: id } }", json!({})),
         [
-            "operation must not select different types using the same name `a`",
-            "cannot select different fields into the same alias `a`"
+            "Fields \"viewer\" conflict because subfields \"a\" conflict because \"login\" and \"id\" \
+          are different fields. Use different aliases on the fields to fetch both if this was \
+          intentional."
         ]
     );
     // Two fragments that can never both apply may select different fields under one name,
@@ -757,7 +777,10 @@ fn the_board_refuses_selections_whose_merged_response_conflicts() {
             "query($id:ID!){node(id:$id){... on Issue{x:title} ... on PullRequest{x:number}}}",
             json!({"id": "I_1"})
         ),
-        ["operation must not select different types using the same name `x`"]
+        [
+            "Fields \"x\" conflict because they return conflicting types \"String!\" and \
+          \"Int!\". Use different aliases on the fields to fetch both if this was intentional."
+        ]
     );
     assert_eq!(
         refused(
@@ -766,8 +789,9 @@ fn the_board_refuses_selections_whose_merged_response_conflicts() {
             json!({"id": "I_1"})
         ),
         [
-            "operation must not select different types using the same name `y`",
-            "cannot select different fields into the same alias `y`"
+            "Fields \"x\" conflict because subfields \"y\" conflict because \"login\" and \"url\" \
+          are different fields. Use different aliases on the fields to fetch both if this was \
+          intentional."
         ]
     );
 }
@@ -819,11 +843,13 @@ fn a_request_the_board_refuses_changes_nothing_on_it() {
         "query($id:ID!){node(id:$id){... on Issue{x:title x:body}}}",
         &json!({"id": "T-2"}),
     );
-    assert_eq!(
-        answered,
-        json!({"errors": [{"message": "cannot select different fields into the same alias `x`",
-            "locations": [{"line": 1, "column": 50}]}]})
-    );
+    // graphql-js reports the conflict once for each order of the pair.
+    let conflict = json!({
+        "message": "Fields \"x\" conflict because \"title\" and \"body\" are different fields. \
+            Use different aliases on the fields to fetch both if this was intentional.",
+        "locations": [{"line": 1, "column": 42}, {"line": 1, "column": 50}]
+    });
+    assert_eq!(answered, json!({"errors": [conflict.clone(), conflict]}));
     assert!(
         listed(&sandbox),
         "a refused request removed the item it named"
@@ -855,8 +881,8 @@ fn a_fragment_cycle_inside_repeated_selections_is_refused() {
         );
         assert_eq!(
             answered,
-            json!({"errors": [{"message": "`F` fragment cannot reference itself",
-                "locations": [{"line": 1, "column": 43}]}]})
+            json!({"errors": [{"message": "Cannot spread fragment \"F\" within itself.",
+                "locations": [{"line": 1, "column": 94}]}]})
         );
         assert_eq!(board.status_options(), status);
         assert_eq!(board.priority_options(), priority);

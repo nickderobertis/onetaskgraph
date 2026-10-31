@@ -52,10 +52,6 @@ dialoguer = { version = "0.12.0", default-features = false }
 # could reach the network would be a way for work data to leave the process.
 jsonschema = { version = "0.50.1", default-features = false }
 graphql-parser = "0.4.1"
-# GitHub's static validation of a request in the GitHub test doubles
-# (`crates/onetaskgraph-github-projects/tests/github_schema`): a maintained,
-# specification-complete validator, because a hand-written one kept missing rules.
-apollo-compiler = "1.33.1"
 # The task-template renderer. A caret on 2.24 rather than an exact pin: the host that renders
 # these templates beside this engine already builds minijinja 2.24, and one compatible 2.x
 # requirement keeps a build holding both to one copy. The features beyond the defaults are
