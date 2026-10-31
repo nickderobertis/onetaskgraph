@@ -12844,6 +12844,133 @@ async fn a_mutation_refused_for_a_rate_limit_is_retried_and_lands() {
     );
 }
 
+/// GitHub's answer to a write that collided with another change to the same ordering, as the
+/// credentialed lane read it on 2026-10-31: an HTTP 200 whose `errors` say so.
+fn temporary_conflict(operation: &str) -> Refusal {
+    Refusal {
+        status: "200 OK",
+        headers: String::new(),
+        body: json!({
+            "data": { operation: null },
+            "errors": [{
+                "type": "UNPROCESSABLE",
+                "path": [operation],
+                "message": "Your attempt to move this item created a temporary conflict. \
+                            Please try again."
+            }]
+        })
+        .to_string(),
+    }
+}
+
+#[tokio::test]
+async fn a_write_github_answers_with_a_temporary_conflict_is_retried_and_lands() {
+    // The defect: GitHub asks for the write again, and the source reported it as a refusal,
+    // which failed the credentialed lane's document write in run 41229550836. A source still
+    // doing that fails this write and sends `addProjectV2ItemById` once.
+    let fixture = board(vec![]);
+    fixture.script_for(
+        "addProjectV2ItemById",
+        vec![temporary_conflict("addProjectV2ItemById")],
+    );
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":60,"retry_budget_ms":5_000}),
+    );
+    let started = Instant::now();
+    let landed = source
+        .write_task(&write(task(
+            "T-1",
+            "Publish",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("the write past the conflict GitHub asked to retry");
+    assert!(
+        started.elapsed() >= Duration::from_millis(60),
+        "the retry did not wait out the backoff"
+    );
+    assert!(fixture.holds(&landed.0), "the retried write did not land");
+    assert_eq!(
+        fixture.requests("addProjectV2ItemById"),
+        2,
+        "the conflicted write was not retried"
+    );
+    assert_eq!(
+        fixture.requests("createIssue"),
+        1,
+        "the retry replayed the create before it"
+    );
+}
+
+#[tokio::test]
+async fn a_create_github_answers_with_a_temporary_conflict_is_reported_rather_than_replayed() {
+    // A create's conflict cannot say the issue was not made, so replaying it could make two.
+    let fixture = board(vec![]);
+    fixture.script_for("createIssue", vec![temporary_conflict("createIssue")]);
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":60,"retry_budget_ms":5_000}),
+    );
+    let error = source
+        .write_task(&write(task(
+            "T-1",
+            "Publish",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect_err("a conflicted create is reported");
+    let SourceError::Unavailable { message } = &error else {
+        panic!("a conflicted create was not reported as unavailable: {error:?}");
+    };
+    assert!(message.contains("temporary conflict"), "{message}");
+    assert_eq!(
+        fixture.requests("createIssue"),
+        1,
+        "a conflicted create was replayed"
+    );
+}
+
+#[tokio::test]
+async fn a_temporary_conflict_that_never_clears_ends_in_a_diagnostic_within_the_budget() {
+    let fixture = board(vec![]);
+    fixture.script_for(
+        "addProjectV2ItemById",
+        (0..50)
+            .map(|_| temporary_conflict("addProjectV2ItemById"))
+            .collect(),
+    );
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":50,"retry_budget_ms":300}),
+    );
+    let started = Instant::now();
+    let error = source
+        .write_task(&write(task(
+            "T-1",
+            "Publish",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect_err("a conflict that never clears");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the bounded schedule did not end"
+    );
+    let SourceError::Unavailable { message } = &error else {
+        panic!("an unending conflict was not reported as unavailable: {error:?}");
+    };
+    assert!(
+        message.contains("temporary conflict") && message.contains("next:"),
+        "{message}"
+    );
+    assert!(
+        (2..50).contains(&fixture.requests("addProjectV2ItemById")),
+        "the conflict was not retried within its budget: {}",
+        fixture.requests("addProjectV2ItemById")
+    );
+}
+
 #[tokio::test]
 async fn every_wording_github_refuses_a_burst_with_is_read_as_the_secondary_limiter() {
     // GitHub has renamed this limiter and reworded its refusal more than once, and the
