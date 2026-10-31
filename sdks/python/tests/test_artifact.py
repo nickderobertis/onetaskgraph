@@ -41,8 +41,30 @@ def test_wheel_installs_and_queries_through_public_import(tmp_path: Path, binary
         cwd=package,
         check=True,
     )
+    # The requirements carry the workspace's onetaskgraph-cli, whose install builds the binary
+    # in release. Built for the host triple, under the lock the distribution journey's wheel
+    # build holds, it reuses the units that build and test 19's left in the shared build
+    # directory instead of compiling the release graph a third time beside them.
+    root = package.parents[1]
+    host = subprocess.run(
+        ["rustc", "-vV"], check=True, capture_output=True, text=True, encoding="utf-8"
+    ).stdout
+    triple = next(line.split(": ", 1)[1] for line in host.splitlines() if line.startswith("host: "))
+    install_environment = dict(os.environ)
+    install_environment["CARGO_BUILD_TARGET"] = triple
     subprocess.run(
-        ["uv", "pip", "install", "--python", str(python), "--requirement", str(requirements)],
+        [
+            sys.executable,
+            str(root / "scripts" / "cli_wheel_lock.py"),
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            str(python),
+            "--requirement",
+            str(requirements),
+        ],
+        env=install_environment,
         check=True,
     )
     subprocess.run(
