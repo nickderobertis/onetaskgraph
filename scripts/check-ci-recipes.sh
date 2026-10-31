@@ -241,7 +241,7 @@ tag_refused "a live crate's test target running cargo beside the script" "every 
 mkdir -p "$scratch/recorded-cargo"
 # Asked to list, it answers with the test it was asked for, unless CARGO_LISTS_NOTHING is set.
 # Asked for metadata, it answers with a crate holding a library and two test targets. Asked to
-# run a command containing CARGO_FAILS_ON, it fails it.
+# run exactly the command CARGO_FAILS_ON spells, it fails it.
 cat >"$scratch/recorded-cargo/cargo" <<'CARGO'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$CARGO_RECORD"
@@ -252,7 +252,7 @@ fi
 if [ "$1" = metadata ]; then
   echo '{"packages":[{"name":"onetaskgraph-linear","targets":[{"kind":["lib"],"name":"onetaskgraph_linear"},{"kind":["test"],"name":"live"},{"kind":["test"],"name":"plugin"}]}]}'
 fi
-if [ -n "${CARGO_FAILS_ON:-}" ] && [[ "$* " == *"$CARGO_FAILS_ON "* ]]; then
+if [ -n "${CARGO_FAILS_ON:-}" ] && [ "$*" = "$CARGO_FAILS_ON" ]; then
   exit 101
 fi
 CARGO
@@ -281,12 +281,12 @@ ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear live \
 [ "$LIVE_STATUS" -eq 0 ] && [ "$(sort <<<"$RECORDED")" = "$WHOLE_SUITE" ] \
   || fail "live-crate-test.sh did not run onetaskgraph-linear, tagged coverage:uninstrumented, whole with its journey first: ran '$RECORDED' (exit $LIVE_STATUS)"
 # A journey that fails fails the target, and the rest of the suite still runs beside it.
-CARGO_FAILS_ON="--test live" ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear live \
+CARGO_FAILS_ON="test --quiet -p onetaskgraph-linear --all-features --locked --test live" ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear live \
   real_linear_reads_nothing_that_is_not_there
 [ "$LIVE_STATUS" -ne 0 ] && grep -qxF -- "test --quiet -p onetaskgraph-linear --all-features --locked --lib --test plugin" <<<"$RECORDED" \
   || fail "live-crate-test.sh passed, or skipped the rest of the suite, when onetaskgraph-linear's journey failed: exit $LIVE_STATUS, ran '$RECORDED'"
 # And the rest failing fails it, with the journey still waited for rather than cut short.
-CARGO_FAILS_ON="--test plugin" ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear live \
+CARGO_FAILS_ON="test --quiet -p onetaskgraph-linear --all-features --locked --lib --test plugin" ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear live \
   real_linear_reads_nothing_that_is_not_there
 [ "$LIVE_STATUS" -ne 0 ] && grep -qxF -- "test --quiet -p onetaskgraph-linear --all-features --locked --test live" <<<"$RECORDED" \
   || fail "live-crate-test.sh passed, or did not run the journey, when the rest of onetaskgraph-linear's suite failed: exit $LIVE_STATUS, ran '$RECORDED'"
