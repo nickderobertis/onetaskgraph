@@ -204,3 +204,26 @@ fn a_lock_written_ahead_of_this_clock_is_refused_at_once_and_one_that_cannot_be_
         assert!(!lock.exists());
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn a_dead_process_lock_this_process_cannot_remove_is_refused_rather_than_tried_for_ever() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = folder();
+    let id = NativeId("T-1".to_owned());
+    let lock = root.path().join("tasks/T-1.md.lock");
+    let file = fs::File::create(&lock).expect("a dead process's lock");
+    file.set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
+        .expect("an hour old");
+    drop(file);
+    let tasks = root.path().join("tasks");
+    fs::set_permissions(&tasks, fs::Permissions::from_mode(0o555)).expect("read-only");
+    let refused = instance(root.path()).hold_item(MetadataRecord::Task, &id);
+    fs::set_permissions(&tasks, fs::Permissions::from_mode(0o755)).expect("writable");
+    assert!(
+        matches!(&refused, Err(onetaskgraph_plugin_api::SourceError::Unavailable { message })
+            if message.contains("could not be removed")),
+        "{refused:?}"
+    );
+    assert!(lock.exists(), "the lock is left where it is");
+}

@@ -936,7 +936,13 @@ fn a_holder_renews_before_each_comment_write_and_stops_between_them_once_taken_o
 #[test]
 fn a_listing_by_key_the_board_answers_malformed_is_refused_and_nothing_is_created_again() {
     type Bend = fn(&mut Value);
-    let cases: [(&str, Bend); 7] = [
+    let cases: [(&str, Bend); 8] = [
+        ("cursors that go round", |issues| {
+            static PAGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let page = PAGES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let cursor = ["one page", "another"][page % 2];
+            issues["pageInfo"] = json!({"hasNextPage": true, "endCursor": cursor});
+        }),
         ("issues that are not a list", |issues| {
             issues["nodes"] = json!({});
         }),
@@ -1820,4 +1826,32 @@ fn a_linear_project_or_document_create_whose_answer_was_lost_is_read_by_its_id_a
         );
         assert_eq!(metadata["onetaskgraph.copies"]["linear"], json!(landed));
     }
+}
+
+#[test]
+fn a_holder_whose_source_record_is_gone_by_its_renewal_writes_nothing_more() {
+    let stores = Stores::new();
+    let body = stores.sandbox.project().join("comment.md");
+    std::fs::write(&body, "A word.\n").expect("a comment body");
+    stores.json(&[
+        "task",
+        "comment",
+        "add",
+        NOTE,
+        "--body-file",
+        body.to_str().expect("a path"),
+    ]);
+    let copy = Paused::copying(&stores, &[NOTE], "copy", &["after-create"]);
+    copy.reached("after-create");
+    // The note is deleted after its issue was created and before the comment is written.
+    std::fs::remove_file(stores.notes.join("tasks/A.md")).expect("deleted");
+    copy.release("after-create");
+    let (code, failure) = copy.finish();
+    assert_ne!(code, Some(0), "{failure:#}");
+    assert_eq!(failure["failure"]["kind"], "no-such-item", "{failure:#}");
+    assert_eq!(
+        count(&stores.board, adds_comment),
+        0,
+        "no comment written once the record was gone"
+    );
 }
