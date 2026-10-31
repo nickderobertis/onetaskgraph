@@ -15,13 +15,20 @@ const LIVE_CREDENTIALS = ["LINEAR_API_KEY", "GH_PROJECTS_TOKEN"];
 /** Whether `env` names a live credential. */
 const holdsCredential = (env) => LIVE_CREDENTIALS.some((key) => env?.[key] !== undefined);
 
-/** Whether `run` invokes only the live janitor, which removes artifacts and opens no session. */
+/** One line that is a `cargo run` of the live janitor and nothing else: no shell operator. */
+const JANITOR_LINE =
+  /^cargo run(\s+--?[\w-]+)*\s+-p\s+onetaskgraph-live-janitor(\s+--(\s+[^\s;&|`$()<>]+)*)?$/;
+
+/**
+ * Whether `run` is nothing but invocations of the live janitor, which removes artifacts and
+ * opens no session: every line that is not blank or a comment is exactly one such invocation.
+ */
 const onlyJanitor = (run) =>
   run
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line !== "" && !line.startsWith("#"))
-    .every((line) => /\bonetaskgraph-live-janitor\b/.test(line));
+    .every((line) => JANITOR_LINE.test(line));
 
 /**
  * The jobs of `definitions` that run a live suite: a job with a step that runs any command —
@@ -111,6 +118,19 @@ test("a live suite is found however its credential and its command reach it", ()
         },
       },
     },
+    "compound.yml": {
+      jobs: {
+        suite: {
+          concurrency: { group: "shared" },
+          steps: [
+            {
+              env: { LINEAR_API_KEY: "x" },
+              run: "cargo run --locked -p onetaskgraph-live-janitor -- --linear; just check",
+            },
+          ],
+        },
+      },
+    },
     "uncredentialed.yml": {
       concurrency: { group: "shared" },
       jobs: { suite: { steps: [{ run: "just check" }] } },
@@ -118,11 +138,12 @@ test("a live suite is found however its credential and its command reach it", ()
   };
   assert.deepEqual(
     liveSuiteJobs(definitions).map(({ file, name }) => `${file}:${name}`),
-    ["direct.yml:suite", "script.yml:suite"],
+    ["direct.yml:suite", "script.yml:suite", "compound.yml:suite"],
   );
   assert.deepEqual(liveSerialisations(definitions, {}), [
     "direct.yml runs a live suite (job suite) under a workflow concurrency group",
     "script.yml job suite runs a live suite under a concurrency group",
+    "compound.yml job suite runs a live suite under a concurrency group",
   ]);
 });
 
