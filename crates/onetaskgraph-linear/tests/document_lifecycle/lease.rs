@@ -297,20 +297,28 @@ pub async fn verify_exclusive(
         LeaseHolder::Released,
     )?);
     let decoy = format!("{held_title} duplicate-probe");
-    let second = send(
-        endpoint,
-        key,
-        LEASE_CREATE,
-        json!({"input":{"id":held.id,"title":decoy,"teamId":team_id}}),
-    )
-    .await;
+    // Only Linear's own answer refusing the create is proof: a GraphQL error, or a create it
+    // says did not succeed. A request that never got an answer proves nothing either way.
+    let answered: Value = reqwest::Client::new()
+        .post(endpoint)
+        .header("Authorization", key)
+        .json(&json!({"query":LEASE_CREATE,"variables":{"input":{"id":held.id,"title":decoy,"teamId":team_id}}}))
+        .send()
+        .await
+        .map_err(|error| format!("the lease exclusivity probe got no answer: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("the lease exclusivity probe got no readable answer: {error}"))?;
+    let refused = answered
+        .get("errors")
+        .and_then(Value::as_array)
+        .is_some_and(|errors| !errors.is_empty())
+        || answered.pointer("/data/issueCreate/success") == Some(&json!(false));
     let still = send(endpoint, key, LEASE, json!({"id":held.id})).await?;
     let title = still.pointer("/issue/title").and_then(Value::as_str);
-    let accepted =
-        second.is_ok_and(|data| data.pointer("/issueCreate/success") == Some(&json!(true)));
-    if accepted || title == Some(decoy.as_str()) {
+    if !refused || title == Some(decoy.as_str()) {
         return Err(format!(
-            "Linear accepted a second create under pool member {}'s lease id {}, so a lease is \
+            "Linear did not refuse a second create under pool member {}'s lease id {}, so a lease is \
              not exclusive and no run may lease a member; the pool's leases rest on that refusal",
             held.index, held.id
         ));
