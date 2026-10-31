@@ -244,6 +244,33 @@ pub(crate) fn stop_at(point: &str) {
     }
 }
 
+/// The test-only points a copy waits at for a journey to let it go on, so two processes can be
+/// interleaved exactly as a race would interleave them: `OTG_TEST_PAUSE_AT` naming
+/// `<point>=<directory>` pairs, comma-separated. At a named point the copy creates
+/// `<directory>/<point>.paused` and waits until `<directory>/<point>.go` exists, a minute at most.
+/// Unset, as everywhere but those journeys, it does nothing.
+pub(crate) fn pause_at(point: &str) {
+    let Ok(spec) = std::env::var("OTG_TEST_PAUSE_AT") else {
+        return;
+    };
+    for entry in spec.split(',') {
+        let Some((named, directory)) = entry.split_once('=') else {
+            continue;
+        };
+        if named != point {
+            continue;
+        }
+        let directory = std::path::Path::new(directory);
+        let _ = std::fs::write(directory.join(format!("{point}.paused")), b"");
+        let started = std::time::Instant::now();
+        while !directory.join(format!("{point}.go")).exists()
+            && started.elapsed() < std::time::Duration::from_secs(60)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+}
+
 impl Engine {
     /// The settings of `source` for a create safe to retry.
     fn create_settings(&self, source: &SourceName) -> crate::config::CreateSettings {
@@ -300,6 +327,7 @@ impl Engine {
     ) -> Result<(Intent, bool), EngineError> {
         let source = self.writable(&id.source)?;
         let (task, hold) = self.locked_read(source, id).await?;
+        pause_at("intent-read");
         let now = now();
         // Another copy that created and linked the counterpart since this one planned to create
         // it has finished what this one would start: it is refused rather than made twice.

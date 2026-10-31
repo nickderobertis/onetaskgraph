@@ -7192,6 +7192,9 @@ impl Engine {
         // A create whose source's intent another attempt could share, or that an earlier
         // attempt's request may yet land beside, is listed again by its key: one more item
         // carrying it is a duplicate, reported and never linked.
+        if target.is_none() {
+            intent::pause_at("after-create");
+        }
         if target.is_none()
             && item.relist
             && let Some(intent) = &item.intent

@@ -844,3 +844,229 @@ fn a_listing_by_key_the_board_answers_malformed_is_refused_and_nothing_is_create
         assert_eq!(stores.board.items_titled("Task A").len(), 1, "{what}");
     }
 }
+
+/// One copy process of a Linear issue onto the board, waiting at each point `pauses` names in
+/// its own directory under the sandbox.
+struct Paused {
+    child: std::process::Child,
+    directory: PathBuf,
+}
+
+impl Paused {
+    fn start(stores: &Stores, issue: &str, name: &str, points: &[&str]) -> Self {
+        let directory = stores.sandbox.subdirectory(name);
+        let spec = points
+            .iter()
+            .map(|point| format!("{point}={}", directory.display()))
+            .collect::<Vec<_>>()
+            .join(",");
+        let child = stores
+            .sandbox
+            .subprocess(onetaskgraph_e2e_support::binary())
+            .env("OTG_TEST_PAUSE_AT", spec)
+            .args(["--json", "task", "copy", issue, "--to", "board"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("a copy starts");
+        Self { child, directory }
+    }
+
+    /// Wait until the process waits at `point`.
+    fn reached(&self, point: &str) {
+        let started = std::time::Instant::now();
+        while !self.directory.join(format!("{point}.paused")).exists() {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(30),
+                "the copy reached {point}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// Let the process go on past `point`.
+    fn release(&self, point: &str) {
+        std::fs::write(self.directory.join(format!("{point}.go")), b"").expect("released");
+    }
+
+    /// The process's exit code and the JSON it answered.
+    fn finish(self) -> (Option<i32>, Value) {
+        let output = self.child.wait_with_output().expect("the copy ends");
+        let answer = serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
+            panic!(
+                "JSON: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        });
+        (output.status.code(), answer)
+    }
+}
+
+/// A Linear issue never copied onto the board, as a hosted source for the two copies.
+fn a_linear_issue(stores: &Stores) -> String {
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "linear"]);
+    copied["items"][0]["destination"]
+        .as_str()
+        .expect("an issue")
+        .to_owned()
+}
+
+/// The issues on the board carrying `issue`'s origin.
+fn board_issues_of(stores: &Stores, issue: &str) -> Vec<String> {
+    stores.json(&["task", "list", "--source", "board", "--origin", issue])["items"]
+        .as_array()
+        .expect("a page")
+        .iter()
+        .map(|item| item["id"].as_str().expect("an id").to_owned())
+        .collect()
+}
+
+/// Assert `answer` refuses the copy as `create-duplicated`, naming every one of `issues`.
+fn refused_as_duplicated(answer: &Value, issues: &[String]) {
+    let error = &answer["items"][0]["error"];
+    assert_eq!(error["kind"], "create-duplicated", "{answer:#}");
+    let message = error["message"].as_str().expect("a message");
+    for issue in issues {
+        assert!(message.contains(issue.as_str()), "names {issue}: {message}");
+    }
+}
+
+#[test]
+fn two_hosted_source_copies_whose_creates_both_land_before_either_relist_both_refuse() {
+    let stores = Stores::new();
+    let issue = a_linear_issue(&stores);
+    let points = ["intent-read", "after-create"];
+    let first = Paused::start(&stores, &issue, "first", &points);
+    let second = Paused::start(&stores, &issue, "second", &points);
+    // Both read the issue before either records its intent: the lease is advisory.
+    first.reached("intent-read");
+    second.reached("intent-read");
+    first.release("intent-read");
+    second.release("intent-read");
+    // Both create before either lists the repository by the key again.
+    first.reached("after-create");
+    second.reached("after-create");
+    first.release("after-create");
+    second.release("after-create");
+    let (first_code, first_answer) = first.finish();
+    let (second_code, second_answer) = second.finish();
+    let issues = board_issues_of(&stores, &issue);
+    assert_eq!(issues.len(), 2, "both created: {issues:?}");
+    assert_eq!((first_code, second_code), (Some(4), Some(4)));
+    refused_as_duplicated(&first_answer, &issues);
+    refused_as_duplicated(&second_answer, &issues);
+    let linked = stores.json(&["task", "show", &issue])["items"][0]["item"]["metadata"]
+        ["onetaskgraph.copies"]
+        .clone();
+    assert!(linked.get("board").is_none(), "no link: {linked:#}");
+}
+
+#[test]
+fn a_hosted_source_copy_whose_relist_ran_first_links_and_the_later_create_refuses() {
+    let stores = Stores::new();
+    let issue = a_linear_issue(&stores);
+    let first = Paused::start(&stores, &issue, "first", &["intent-read"]);
+    let second = Paused::start(&stores, &issue, "second", &["intent-read"]);
+    first.reached("intent-read");
+    second.reached("intent-read");
+    // The first creates, lists the repository by its key and links before the second creates.
+    first.release("intent-read");
+    let (first_code, first_answer) = first.finish();
+    second.release("intent-read");
+    let (second_code, second_answer) = second.finish();
+    let issues = board_issues_of(&stores, &issue);
+    assert_eq!(issues.len(), 2, "both created: {issues:?}");
+    assert_eq!(first_code, Some(0), "{first_answer:#}");
+    let linked = first_answer["items"][0]["destination"]
+        .as_str()
+        .expect("the first linked its issue")
+        .to_owned();
+    assert_eq!(second_code, Some(4), "{second_answer:#}");
+    refused_as_duplicated(&second_answer, &issues);
+    let held = stores.json(&["task", "show", &issue])["items"][0]["item"]["metadata"]
+        ["onetaskgraph.copies"]["board"]
+        .clone();
+    assert_eq!(held, json!(linked), "exactly the first's link");
+}
+
+#[test]
+fn two_hosted_source_copies_onto_linear_at_once_make_one_issue_under_one_id() {
+    let stores = Stores::new();
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "board"]);
+    let issue = copied["items"][0]["destination"]
+        .as_str()
+        .expect("a board issue")
+        .to_owned();
+    let start = |name: &str| {
+        let directory = stores.sandbox.subdirectory(name);
+        let child = stores
+            .sandbox
+            .subprocess(onetaskgraph_e2e_support::binary())
+            .env(
+                "OTG_TEST_PAUSE_AT",
+                format!("intent-read={}", directory.display()),
+            )
+            .args(["--json", "task", "copy", &issue, "--to", "linear"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("a copy starts");
+        Paused { child, directory }
+    };
+    let (first, second) = (start("first"), start("second"));
+    first.reached("intent-read");
+    second.reached("intent-read");
+    first.release("intent-read");
+    second.release("intent-read");
+    let outcomes = [first.finish(), second.finish()];
+    let landed = stores.json(&["task", "list", "--source", "linear", "--origin", &issue])["items"]
+        .as_array()
+        .expect("a page")
+        .len();
+    assert_eq!(landed, 1, "one issue under the one id: {outcomes:#?}");
+    for (code, answer) in &outcomes {
+        match code {
+            Some(0) => assert!(answer["items"][0]["destination"].is_string(), "{answer:#}"),
+            _ => assert_eq!(
+                answer["failure"]["kind"], "create-in-progress",
+                "{answer:#}"
+            ),
+        }
+    }
+    let links = stores.json(&["task", "show", &issue])["items"][0]["item"]["metadata"]
+        ["onetaskgraph.copies"]
+        .clone();
+    assert!(links["linear"].is_string(), "one link: {links:#}");
+}
+
+#[test]
+fn a_linear_create_whose_answer_never_arrived_whole_is_found_by_its_retry_under_its_id() {
+    let stores = Stores::new();
+    // Linear stores the issue and its answer to `issueCreate` says nothing of it, as an answer
+    // lost on the way would: the copy cannot vouch for what it made, and keeps its intent.
+    stores.linear.bend_answers(
+        |document, _| document == onetaskgraph_linear::graphql::ISSUE_CREATE,
+        1,
+        |_, data| *data = json!({"issueCreate": null}),
+    );
+    let failed = stores.run(&["task", "copy", NOTE, "--to", "linear"], None);
+    assert_ne!(failed.status.code(), Some(0), "{}", stderr(&failed));
+    assert!(stores.source_metadata()["onetaskgraph.creating"]["linear"].is_object());
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "linear"]);
+    assert_eq!(copied["items"][0]["via"], "intent", "{copied:#}");
+    assert_eq!(
+        stores.carrying_origin("linear").len(),
+        1,
+        "exactly one issue"
+    );
+    let metadata = stores.source_metadata();
+    assert!(
+        metadata.get("onetaskgraph.creating").is_none(),
+        "{metadata:#}"
+    );
+    assert_eq!(
+        metadata["onetaskgraph.copies"]["linear"],
+        copied["items"][0]["destination"]
+    );
+}
