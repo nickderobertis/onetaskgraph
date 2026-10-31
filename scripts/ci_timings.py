@@ -54,9 +54,9 @@ def trace_summary(trace: str, packaging: str) -> str:
     for step in steps:
         if not math.isfinite(step.moment):
             raise ValueError(f"{step.site} is traced at {step.moment}, which is not a time")
-    for step, following in zip(steps, steps[1:]):
-        if following.moment < step.moment:
-            raise ValueError(f"{following.site} is traced at {following.moment}, before {step.site} at {step.moment}")
+    # A background subshell's lines interleave with the journey's, so the file is not in time
+    # order: each line's time runs to the next line by time, whichever process traced it.
+    steps.sort(key=lambda step: step.moment)
     spent: dict[str, float] = {}
     text: dict[str, str] = {}
     for step, following in zip(steps, steps[1:]):

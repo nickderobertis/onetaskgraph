@@ -75,13 +75,26 @@ class CiTimingsTest(unittest.TestCase):
             self.assertIn('is not a duration in seconds', result.stderr)
         self.assertEqual(summarise('guards').returncode, 2)
 
-    def test_a_trace_with_no_lines_or_out_of_order_times_is_refused(self):
+    def test_a_trace_interleaved_by_a_background_subshell_is_read_in_time_order(self):
+        trace = self.scratch / 'journey.trace'
+        trace.write_text(
+            '+10.0 test-distribution.sh:1: a\n'
+            '+30.0 test-distribution.sh:3: c\n'
+            '++20.0 test-distribution.sh:2: b\n'
+            '+31.0 test-distribution.sh:4: d\n',
+            encoding='utf-8',
+        )
+        result = summarise('trace', str(trace), str(self.scratch / 'absent'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            'slowest lines: 10s test-distribution.sh:1 a; 10s test-distribution.sh:2 b; '
+            '1s test-distribution.sh:3 c |', result.stdout)
+
+    def test_a_trace_with_no_lines_or_a_time_that_is_not_one_is_refused(self):
         trace = self.scratch / 'journey.trace'
         absent = str(self.scratch / 'absent')
         for content, reason in [
             ('+ cd /work\nnot traced\n', 'holds no traced line'),
-            ('+5.0 test-distribution.sh:1: a\n+4.0 test-distribution.sh:2: b\n',
-             'test-distribution.sh:2 is traced at 4.0, before test-distribution.sh:1 at 5.0'),
             ('+1' + '0' * 400 + '.0 test-distribution.sh:1: a\n', 'which is not a time'),
         ]:
             trace.write_text(content, encoding='utf-8')
