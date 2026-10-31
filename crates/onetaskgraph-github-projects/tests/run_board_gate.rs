@@ -594,36 +594,56 @@ async fn session_child() {
             )
             .await?;
         }
-        // The deliberate breach, when asked for: the template, then another run's board.
+        // The deliberate breach, when asked for: the template, a board nothing has answered
+        // about, and another run's board by number and by id — each as a read and as a write.
         if std::env::var_os("RUN_BOARD_GATE_TRESPASS").is_some() {
-            for (what, variables) in [
-                ("the template", json!({"owner":OWNER,"number":TEMPLATE})),
-                // A board nothing has answered about: not this run's, so not to be named.
-                ("an unseen board", json!({"owner":OWNER,"number":999})),
-                ("another run's board", {
-                    let listed = send(
-                        RUN_BOARDS_DOCUMENT,
-                        "boards",
-                        json!({"owner":OWNER,"query":"onetaskgraph live board","after":null}),
-                    )
-                    .await?;
-                    let other = listed["data"]["repositoryOwner"]["projectsV2"]["nodes"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .find(|node| {
-                            node["number"] != json!(board.number)
-                                && node["number"] != json!(TEMPLATE)
-                                && node["title"]
-                                    .as_str()
-                                    .is_some_and(|title| run_board_stamp(title).is_some())
-                        })
-                        .ok_or("no other run board to trespass on")?
-                        .clone();
-                    json!({"owner":OWNER,"number":other["number"]})
-                }),
+            let listed = send(
+                RUN_BOARDS_DOCUMENT,
+                "boards",
+                json!({"owner":OWNER,"query":"onetaskgraph live board","after":null}),
+            )
+            .await?;
+            let other = listed["data"]["repositoryOwner"]["projectsV2"]["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|node| {
+                    node["number"] != json!(board.number)
+                        && node["number"] != json!(TEMPLATE)
+                        && node["title"]
+                            .as_str()
+                            .is_some_and(|title| run_board_stamp(title).is_some())
+                })
+                .ok_or("no other run board to trespass on")?
+                .clone();
+            for (what, document, variables) in [
+                (
+                    "the template",
+                    BOARD_WORKLOAD_DOCUMENT,
+                    json!({"owner":OWNER,"number":TEMPLATE}),
+                ),
+                (
+                    "an unseen board",
+                    BOARD_WORKLOAD_DOCUMENT,
+                    json!({"owner":OWNER,"number":999}),
+                ),
+                (
+                    "another run's board",
+                    BOARD_WORKLOAD_DOCUMENT,
+                    json!({"owner":OWNER,"number":other["number"]}),
+                ),
+                (
+                    "an unseen board's projectId",
+                    ADD_DRAFT_DOCUMENT,
+                    json!({"input":{"projectId":"PVT_unseen","title":"trespass"}}),
+                ),
+                (
+                    "another run's board by id",
+                    TEMPLATE_ITEMS_DOCUMENT,
+                    json!({"id":other["id"],"after":null}),
+                ),
             ] {
-                let refused = send(BOARD_WORKLOAD_DOCUMENT, "trespass", variables).await;
+                let refused = send(document, "trespass", variables).await;
                 let refusal = refused.err().ok_or(format!("naming {what} was sent"))?;
                 if !refusal.contains("refused before sending") {
                     return Err(format!("naming {what} failed otherwise: {refusal}"));
@@ -848,10 +868,16 @@ fn a_session_naming_a_board_outside_its_run_is_refused_before_sending() {
         stdout.contains("run-board-gate refused: another run's board"),
         "{stdout}"
     );
-    assert!(
-        stdout.contains("run-board-gate refused: an unseen board"),
-        "{stdout}"
-    );
+    for what in [
+        "an unseen board",
+        "an unseen board's projectId",
+        "another run's board by id",
+    ] {
+        assert!(
+            stdout.contains(&format!("run-board-gate refused: {what}\n")),
+            "{what}: {stdout}"
+        );
+    }
     // Neither request reached the account, and the other run's board is as it stood.
     let account = account.lock().unwrap();
     let trespasses: Vec<_> = account
@@ -866,10 +892,11 @@ fn a_session_naming_a_board_outside_its_run_is_refused_before_sending() {
                     &[
                         ("PVT_template".into(), TEMPLATE),
                         (format!("PVT_{seeded}"), seeded),
+                        ("PVT_unseen".into(), 999),
                     ],
                 )
                 .iter()
-                .any(|board| *board == TEMPLATE || *board == seeded)
+                .any(|board| [TEMPLATE, seeded, 999].contains(board))
         })
         .collect();
     assert_eq!(
