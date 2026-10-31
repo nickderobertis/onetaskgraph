@@ -2,7 +2,7 @@
 // committed fixture. It runs by hand, never in a gate — it reaches GitHub, and what GitHub answers
 // moves — and says, for each recording, whether GitHub still answers what was recorded:
 //
-//   node .github/tests/fixtures/release-tail/reconcile.mjs
+//   node .github/policy/tests/fixtures/release-tail/reconcile.mjs
 //
 // Needs `gh` signed in with read access to this repository. The recorded 401 is re-fetched under
 // an invalid token, as it was recorded. Ignored, and only these, because GitHub rewrites them on
@@ -92,7 +92,7 @@ try {
 }
 if (mismatched) {
   console.error(
-    `${mismatched} recording(s) no longer match GitHub. Re-record them read-only with \`gh api --include --method GET <path> > <name>.http\` and re-run .github/tests/release-tail.test.mjs.`,
+    `${mismatched} recording(s) no longer match GitHub. Re-record them read-only with \`gh api --include --method GET <path> > <name>.http\` and re-run .github/policy/tests/release-tail.test.mjs.`,
   );
   process.exitCode = 1;
 }

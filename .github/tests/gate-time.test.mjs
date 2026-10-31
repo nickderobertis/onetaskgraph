@@ -95,6 +95,18 @@ test("a failing body fails the gate with its status, records it and checks no bu
   assert.notEqual(record.invocation, "seeded");
 });
 
+test("a record the wrapper cannot write fails the gate, and no earlier record stands in", () => {
+  const dir = tree();
+  // A directory where the record goes: removing the stale record fails, and so would the write.
+  mkdirSync(recordPath(dir));
+  writeFileSync(join(recordPath(dir), "stale"), "");
+  const ran = gate(dir, "bash", "-c", "echo the gate body ran");
+  assert.equal(ran.status, 2, ran.out);
+  assert.match(ran.out, /cannot remove the earlier record/);
+  assert.doesNotMatch(ran.out, /the gate body ran/);
+  assert.doesNotMatch(ran.out, /budget onetaskgraph-gate-time/);
+});
+
 test("a recorded gate within the threshold passes", () => {
   const dir = tree();
   seed(dir, 1200);
@@ -149,6 +161,7 @@ test("a malformed record is no figure, and fails the check naming how to recover
     ["an exit that is no integer", JSON.stringify({ ...good, exit: "0" })],
     ["a start in another format", JSON.stringify({ ...good, started_at: "2026-10-01 12:00" })],
     ["no invocation", JSON.stringify({ ...good, invocation: undefined })],
+    ["a day that does not exist", JSON.stringify({ ...good, started_at: "2026-02-30T12:00:00Z" })],
   ]) {
     const dir = tree();
     writeFileSync(recordPath(dir), text);

@@ -19,13 +19,13 @@ invocation or failed output IO. `lint` runs it on this repository's `release-plz
 where `test-macos` is skipped, and fails unless it authorizes the omission.
 
 The root `budgets.yaml`'s seven `release-tail` budgets are checked by `publish`'s last step;
-`tests/release-tail.test.mjs` runs that step and the install step before it as release.yml
-writes them, over GitHub responses recorded from this repository under
-`tests/fixtures/release-tail/` (its README says how they were taken and how to reconcile
-them). `tests/ci-events.test.mjs` holds which workflows and jobs run on a pull request and
-on the release commit, and `tests/gate-time.test.mjs` the timing wrapper `just gate` runs
-inside; those two are `github-workflows:budget-journeys`, and the release tail is
-`github-workflows:release-tail`, a target of its own because it installs from npm.
+`policy/tests/release-tail.test.mjs` runs that step and the install step before it as
+release.yml writes them, over GitHub responses recorded from this repository under
+`policy/tests/fixtures/release-tail/` (its README says how they were taken and how to reconcile
+them). It is `github-workflow-policy:release-tail`, a target of its own in the project no crate
+edit selects, because it installs from npm. `tests/ci-events.test.mjs` holds which workflows
+and jobs run on a pull request and on the release commit, and `tests/gate-time.test.mjs` the
+timing wrapper `just gate` runs inside; those two are `github-workflows:budget-journeys`.
 
 `policy/macos-budget.mjs --metric jobs-per-run|runs-per-change --telemetry PATH` exits 0 after
 validating and reporting current telemetry, and 1 for invalid invocation, missing/stale

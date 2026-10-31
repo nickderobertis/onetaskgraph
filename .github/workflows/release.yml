@@ -9,7 +9,7 @@ permissions:
 # failed build leaves the other platforms published and the platform-independent packages
 # unpublished until it is re-run, and a re-run sends only what is missing.
 #
-# llmlint: ignore-block[changed_behavior_has_e2e] Every run step below but publish's release tail calls a recipe that .github/tests/release-cd.test.mjs drives on Linux against loopback registries, and .github/tests/release-tail.test.mjs runs the tail's two steps as written over recorded GitHub answers; what is left is GitHub's own scheduling of these jobs on a published release, which a pre-publication dispatch cannot trigger.
+# llmlint: ignore-block[changed_behavior_has_e2e] Every run step below but publish's release tail calls a recipe that .github/tests/release-cd.test.mjs drives on Linux against loopback registries, and .github/policy/tests/release-tail.test.mjs runs the tail's two steps as written over recorded GitHub answers; what is left is GitHub's own scheduling of these jobs on a published release, which a pre-publication dispatch cannot trigger.
 jobs:
   build-linux:
     runs-on: ubuntu-latest
@@ -200,7 +200,7 @@ jobs:
       # read-only answers. Reporting only — an over figure turns this last step red with each
       # figure's breakdown in its log, and nothing reads its result, so it never blocks, demotes
       # or reverts a release. onevcs is pinned at the release this repository adopts and
-      # onebudgetspec at package.json's version; .github/tests/release-tail.test.mjs runs both
+      # onebudgetspec at package.json's version; .github/policy/tests/release-tail.test.mjs runs both
       # steps as written here over recorded answers.
       - name: Install onevcs and onebudgetspec for the release tail
         shell: bash

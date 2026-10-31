@@ -41,15 +41,23 @@ if [ "$1" = --check ] && [ $# -eq 1 ]; then
   exit 0
 fi
 
-# A record left by an earlier gate never stands in for this one, even if this one is killed.
-rm -f "$record"
+record_failed() {
+  echo "gate-time: cannot $1 $record; make .gate-time.json at the repository root a writable" \
+    "file (or remove whatever is there) and run \`just gate\` again." >&2
+  exit 2
+}
+
+# A record left by an earlier gate never stands in for this one, even if this one is killed,
+# so it goes before the body starts and the gate refuses to run when it cannot.
+rm -f "$record" 2>/dev/null && [ ! -e "$record" ] || record_failed "remove the earlier record"
 started="$(stamp)"
 "$@"
 status=$?
 ended="$(stamp)"
 printf '{"schema_version":1,"invocation":"%s-%s","started_at":"%s","ended_at":"%s","exit":%d}\n' \
-  "$$" "$started" "$started" "$ended" "$status" >"$record.$$"
-mv "$record.$$" "$record"
+  "$$" "$started" "$started" "$ended" "$status" >"$record.$$" 2>/dev/null \
+  || record_failed "write the record beside"
+mv "$record.$$" "$record" 2>/dev/null || { rm -f "$record.$$"; record_failed "replace"; }
 
 if [ "$status" -ne 0 ]; then
   echo "gate-time: the gate failed (exit $status), so its wall clock is not checked; fix the" \

@@ -26,6 +26,7 @@ const load = (file) => JSON.parse(readFileSync(new URL(file, import.meta.url), "
 
 test("the policy journeys are keyed on the combined read set of the tests they run", () => {
   assert.deepEqual(inputProblems(load("../project.json"), "policy-tests"), []);
+  assert.deepEqual(inputProblems(load("../project.json"), "release-tail"), []);
 });
 
 test("an undeclared read in the policy journey target is refused", () => {
@@ -50,7 +51,7 @@ test("the two projects run every journey exactly once through its owning target"
     [policy, "rust-cache-action", rustCacheJourneyFiles],
     [workflows, "cd-journeys", cdJourneyFiles],
     [workflows, "budget-journeys", budgetJourneyFiles],
-    [workflows, "release-tail", releaseTailFiles],
+    [policy, "release-tail", releaseTailFiles],
   ]) {
     assert.equal(project.targets.test.executor, "nx:noop");
     assert.ok(project.targets.test.dependsOn.includes(target));
@@ -60,7 +61,7 @@ test("the two projects run every journey exactly once through its owning target"
   // Every policy journey sits under this project's root, which github-workflows' own inputs
   // leave out, so editing one alone does not select the CD journeys.
   assert.ok(workflows.namedInputs.default.includes("!{projectRoot}/policy/**/*"));
-  for (const file of [...policyJourneyFiles, ...rustCacheJourneyFiles])
+  for (const file of [...policyJourneyFiles, ...rustCacheJourneyFiles, ...releaseTailFiles])
     assert.ok(file.startsWith(".github/policy/"), file);
   const actual = ["tests", "policy/tests"].flatMap((directory) =>
     readdirSync(new URL(`../../${directory}/`, import.meta.url))
@@ -102,6 +103,8 @@ test("a crate edit selects the CD journeys without the policy journeys", () => {
     [".github/policy/tests/policy-routing.test.mjs", false, true],
     [".github/policy/project.json", false, true],
     [".github/policy/budgets.yaml", false, true],
+    ["budgets.yaml", true, true],
+    ["scripts/actions-budget-figures.sh", false, true],
     [".github/test-inputs.mjs", true, true],
     [".github/tests/release-cd.test.mjs", true, true],
     [".github/workflows/ci.yml", true, true],
@@ -290,8 +293,10 @@ function placementProblems(ciJob) {
 
 test("the workflow suites run in test-linux, and the rust-cache journey on every runner", () => {
   assert.deepEqual(placementProblems(read("scripts/ci-job.sh")), []);
+  // release-tail runs with the rest of `test` in test-linux: what it runs is a Linux job's step.
   assert.deepEqual(load("../project.json").targets.test.dependsOn.sort(), [
     "policy-tests",
+    "release-tail",
     "rust-cache-action",
   ]);
 });

@@ -25,7 +25,7 @@ import { parse, stringify } from "yaml";
 // the runs that carried it (fixtures/release-tail/). Every figure is held to the one this test
 // computes from those recordings, and every read count to what the double itself served.
 
-const root = fileURLToPath(new URL("../../", import.meta.url));
+const root = fileURLToPath(new URL("../../../", import.meta.url));
 const FIXTURES = new URL("./fixtures/release-tail/recordings/", import.meta.url);
 // The onevcs release this repository adopts: one whose `onevcs host` answers schema_version 1.
 const ADOPTED_ONEVCS = "0.57.4";
@@ -47,7 +47,8 @@ const releaseWorkflow = () =>
   parse(readFileSync(join(root, ".github/workflows/release.yml"), "utf8"));
 const rootPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
-// What is wrong with `publish`'s tail, if anything.
+// Every way the tail could stop being a report nothing reads, or stop running the onevcs this
+// repository adopted.
 export function tailProblems(workflow) {
   const problems = [];
   const publish = workflow.jobs?.publish;
@@ -616,6 +617,9 @@ if (process.env.ANSWER === "rewritten")
     .replace(/"updated_at":"[^"]*"/g, '"updated_at":"2026-11-01T00:00:00Z"');
 if (process.env.ANSWER === "changed" && name.startsWith("runs-at-pr-3824-head"))
   text = text.replace('"total_count":', '"total_count":1');
+if (process.env.ANSWER === "no-separator") text = text.replaceAll("\\r\\n", "\\n");
+if (process.env.ANSWER === "no-status") text = text.replace(/^HTTP\\/[^\\n]*/, "garbage");
+if (process.env.ANSWER === "no-json") text = text.slice(0, text.indexOf("\\r\\n\\r\\n") + 5);
 process.stdout.write(text);
 `,
   );
@@ -642,7 +646,15 @@ process.stdout.write(text);
     /^runs-at-pr-3824-head\.http: GitHub now answers otherwise at body\.total_count$/m,
   );
   assert.match(changed.stderr, /1 recording\(s\) no longer match GitHub/);
-  const none = reconcile("none");
-  assert.equal(none.status, 2, none.stderr);
-  assert.match(none.stderr, /next: sign gh in/);
+  for (const [answer, says] of [
+    ["none", /holds no response/],
+    ["no-separator", /holds no response/],
+    ["no-status", /starts with no HTTP status line: garbage/],
+    ["no-json", /JSON/],
+  ]) {
+    const refused = reconcile(answer);
+    assert.equal(refused.status, 2, `${answer}: ${refused.stderr}`);
+    assert.match(refused.stderr, says, answer);
+    assert.match(refused.stderr, /next: sign gh in/, answer);
+  }
 });

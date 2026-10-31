@@ -63,16 +63,6 @@
       "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/scripts/gate-time.sh",
       "{workspaceRoot}/scripts/gate-time-budget.mjs"
-    ],
-    "releaseTail": [
-      "{projectRoot}/workflows/release.yml",
-      "{projectRoot}/tests/release-tail.test.mjs",
-      "{projectRoot}/tests/fixtures/release-tail/**/*",
-      "{projectRoot}/package.json",
-      "{projectRoot}/bun.lock",
-      "{workspaceRoot}/budgets.yaml",
-      "{workspaceRoot}/package.json",
-      "{workspaceRoot}/scripts/actions-budget-figures.sh"
     ]
   },
   "targets": {
@@ -142,19 +132,9 @@
       "cache": true,
       "//": "Which jobs and workflows run on a pull request and on the release commit, and the timing wrapper `just gate` runs its body inside, over the real onebudgetspec. Keyed on the workflow graph's read set and every outside file they read; ci-events also reads this repository's immutable git history."
     },
-    "release-tail": {
-      "executor": "nx:run-commands",
-      "dependsOn": ["bootstrap"],
-      "options": {
-        "command": "node --test .github/tests/release-tail.test.mjs"
-      },
-      "inputs": ["releaseTail"],
-      "cache": true,
-      "//": "publish's release tail, its install step and its last step run as release.yml writes them over GitHub answers recorded from this repository (tests/fixtures/release-tail/). A target of its own because it installs onevcs and onebudgetspec from npm, so an edit to the gate's wrapper or the event tests does not re-run it."
-    },
     "test": {
       "executor": "nx:noop",
-      "dependsOn": ["ci-jobs", "ci-contexts", "budget-journeys", "release-tail", "cd-journeys"],
+      "dependsOn": ["ci-jobs", "ci-contexts", "budget-journeys", "cd-journeys"],
       "cache": false
     },
     "coverage": {

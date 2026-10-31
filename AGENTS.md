@@ -1582,7 +1582,7 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   `release-linux`, `release-linux-arm64`, `release-macos`, `release-windows`,
   `release-publish`, all `scripts/release_cd.py` — so nothing a release does is YAML only a
   release could run; the tail's two steps are run as written by
-  `.github/tests/release-tail.test.mjs`. A build job builds each of its
+  `.github/policy/tests/release-tail.test.mjs`. A build job builds each of its
   targets once with maturin, packages the archive, the wheel and the npm platform package
   from that one binary, installs and runs those exact files, publishes them (the archive
   to the GitHub Release, the wheel to PyPI, the package to npm), and installs each back out
@@ -1678,9 +1678,9 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   cache warmer's included, so `onetaskgraph-cd-job-count`, `onetaskgraph-cd-job-time` and
   `onetaskgraph-release-read-requests` read over after each release; the manager ruled the
   warmer stays and the exclusion lands in dero-skills' script, which this copy then takes.
-  `.github/tests/release-tail.test.mjs` runs `publish`'s two tail steps as written over
+  `.github/policy/tests/release-tail.test.mjs` runs `publish`'s two tail steps as written over
   GitHub answers recorded from this repository's own v0.12.13
-  (`.github/tests/fixtures/release-tail/`), GitHub the one boundary doubled.
+  (`.github/policy/tests/fixtures/release-tail/`), GitHub the one boundary doubled.
 - **Registry lag alone never proposes a release.** `scripts/select-release-version.sh`
   recovers a partly failed publish only when `release-plz.toml`'s own `release_commits`
   policy — the single declared one, read rather than restated — accepts a commit since the

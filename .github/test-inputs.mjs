@@ -92,17 +92,21 @@ export const budgetJourneyFiles = [
   ".github/tests/gate-time.test.mjs",
 ];
 
-// The release tail's reads beyond the workflow graph: the root budgets file, the copied
-// figures script and onebudgetspec's pin, which publish's install step must match (onevcs's
-// pin is that step itself, which the graph already reads). A target of its own, because it
-// installs both from npm: a change to the gate's wrapper does not re-run it.
+// Every file the release tail reads outside its own tests and fixtures: release.yml, whose
+// install step is also onevcs's pin, the YAML parser's lock, the root budgets file, the copied
+// figures script and onebudgetspec's pin, which that step must match. It imports nothing of the
+// run graph. A target of github-workflow-policy's, which no crate edit selects, because it
+// installs both tools from npm.
 export const releaseTailReadSet = [
+  ".github/workflows/release.yml",
+  ".github/package.json",
+  ".github/bun.lock",
   "budgets.yaml",
   "package.json",
   "scripts/actions-budget-figures.sh",
 ];
 
-export const releaseTailFiles = [".github/tests/release-tail.test.mjs"];
+export const releaseTailFiles = [".github/policy/tests/release-tail.test.mjs"];
 
 // The one policy journey run on every platform, because the real action it runs does.
 export const rustCacheJourneyFiles = [".github/policy/tests/rust-cache.test.mjs"];

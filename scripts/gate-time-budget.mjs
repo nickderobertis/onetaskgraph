@@ -25,10 +25,16 @@ try {
   }
   // The wrapper writes whole-second UTC stamps and a non-empty invocation id; anything else is
   // not its record, whatever Date.parse would make of it.
-  const stamp = (value) =>
-    typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)
-      ? Date.parse(value)
+  // Round-tripped, so a calendar date that does not exist (February 30th) is refused rather
+  // than normalised into the next month.
+  const stamp = (value) => {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value))
+      return Number.NaN;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) && new Date(parsed).toISOString() === value.replace("Z", ".000Z")
+      ? parsed
       : Number.NaN;
+  };
   const started = stamp(record?.started_at);
   const ended = stamp(record?.ended_at);
   if (
