@@ -3589,6 +3589,7 @@ mod pool {
             assert_isolated(&replay, &sessions);
         }
         // Not one request of the four rounds was refused for the key's hourly quota.
+        // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] This is the functional outcome the change owes, not a cost ceiling: the stand-in refuses past each limit exactly as the service does, and the task's acceptance criterion is that eight runs at once are refused for none of them; the per-session figures themselves stay onebudgetspec's.
         assert_eq!(replay.state.lock().unwrap().rate_limited, 0);
         // Every document the four rounds created is a pool member's, made once.
         let created = replay.state.lock().unwrap().documents_ever - initial;
@@ -3746,6 +3747,106 @@ mod pool {
             assert!(PoolSetup::parse(refused).is_err(), "{refused:?}");
         }
         // The recipe's spelling of both is `.github/linear-documents-policy`'s to hold.
+    }
+
+    #[tokio::test]
+    async fn a_superseded_lease_linear_will_not_delete_leaves_the_claim_held_and_is_taken_later() {
+        let replay = replay();
+        let first = claim(&replay, LeaseLane::Plugin, &holder(run(1)))
+            .await
+            .unwrap();
+        first.release(&replay.endpoint, "synthetic").await.unwrap();
+        // The next claim of that member supersedes the released generation; its delete is
+        // refused, and the claim stands all the same.
+        replay.state.lock().unwrap().refuse_issue_deletes = true;
+        let second = lease::claim_member(
+            &replay.endpoint,
+            "synthetic",
+            "ENG",
+            "team",
+            LeaseLane::Plugin,
+            &holder(run(2)),
+            now_micros,
+            first.index,
+        )
+        .await
+        .unwrap()
+        .expect("the released member is free");
+        assert_eq!(second.generation, first.generation + 1);
+        assert!(
+            replay.state.lock().unwrap().issues.contains_key(&first.id),
+            "the leftover stays"
+        );
+        // The leftover confers nothing: the member is held by the newer generation.
+        assert!(
+            lease::claim_member(
+                &replay.endpoint,
+                "synthetic",
+                "ENG",
+                "team",
+                LeaseLane::Plugin,
+                &holder(run(3)),
+                now_micros,
+                first.index,
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        // And the claim after the next release takes both older generations out of the listing.
+        replay.state.lock().unwrap().refuse_issue_deletes = false;
+        second.release(&replay.endpoint, "synthetic").await.unwrap();
+        let third = lease::claim_member(
+            &replay.endpoint,
+            "synthetic",
+            "ENG",
+            "team",
+            LeaseLane::Plugin,
+            &holder(run(4)),
+            now_micros,
+            first.index,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(third.generation, second.generation + 1);
+        let state = replay.state.lock().unwrap();
+        assert!(!state.issues.contains_key(&first.id) && !state.issues.contains_key(&second.id));
+    }
+
+    #[tokio::test]
+    async fn a_release_linear_refuses_never_hides_the_lanes_own_outcome() {
+        let replay = replay();
+        let held = claim(&replay, LeaseLane::Plugin, &holder(run(1)))
+            .await
+            .unwrap();
+        replay.state.lock().unwrap().refuse_issue_updates = true;
+        // A body that finished answers with its own result, the refused release aside...
+        let answered =
+            document_lifecycle::lease::holding(Some(&held), &replay.endpoint, "synthetic", async {
+                7
+            })
+            .await;
+        assert_eq!(answered, 7);
+        // ...and one that panicked leaves with its own panic, not the release's refusal.
+        let panicked = document_lifecycle::unwinding(document_lifecycle::lease::holding(
+            Some(&held),
+            &replay.endpoint,
+            "synthetic",
+            async { panic!("the journey's own failure") },
+        ))
+        .await
+        .unwrap_err();
+        assert_eq!(
+            panicked.downcast_ref::<&str>(),
+            Some(&"the journey's own failure")
+        );
+        // The lease was not released, so it stays held until it is stale: never another's.
+        let title = replay.state.lock().unwrap().issues[&held.id]["title"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(!title.ends_with(" released"), "{title}");
     }
 
     #[tokio::test]

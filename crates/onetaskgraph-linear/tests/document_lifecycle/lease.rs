@@ -308,7 +308,9 @@ async fn claim_among(
         for &index in order {
             let generation = match leases.newest.get(&index) {
                 Some((_, _, LeaseState::Held)) => continue,
-                Some((generation, _, LeaseState::Free)) => generation + 1,
+                Some((generation, _, LeaseState::Free)) => generation
+                    .checked_add(1)
+                    .ok_or_else(|| format!("pool member {index}'s lease generations ran out"))?,
                 None => 1,
             };
             let lease = Lease::new(

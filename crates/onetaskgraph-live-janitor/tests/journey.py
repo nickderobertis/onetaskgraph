@@ -96,6 +96,14 @@ class RunBoard(TypedDict):
     number: int
     title: str
 
+class RunBoardFault(StrEnum):
+    """How the stand-in may misanswer the run-board listing or a board's deletion."""
+    NO_PAGE_INFO = 'no-page-info'
+    NO_CURSOR = 'no-cursor'
+    REPEATED_CURSOR = 'repeated-cursor'
+    NO_NUMBER = 'no-number'
+    UNCONFIRMED_DELETE = 'unconfirmed-delete'
+
 class BoardDelete(NamedTuple):
     id: RunBoardId
 
@@ -237,9 +245,7 @@ class Github:
         # nominated board into one titled with its stamp.
         self.run_boards: list[RunBoard] = []
         self.run_board_queries: list[str] = []
-        # A fault in the run-board listing or its deletion: 'no-page-info', 'no-cursor',
-        # 'repeated-cursor', 'no-number', or 'unconfirmed-delete'.
-        self.run_board_fault: str | None = None
+        self.run_board_fault: RunBoardFault | None = None
         self.field_delete_answer = None
         self.field_delete_status = 200
         # Every way a request or a served body departed from GitHub's description.
@@ -382,20 +388,20 @@ class Github:
                         nodes: list = copy.deepcopy(state.run_boards[page:page + 100])
                         info: dict = {'hasNextPage': page + 100 < len(state.run_boards), 'endCursor': str(page + 100)}
                         match state.run_board_fault:
-                            case 'no-page-info':
+                            case RunBoardFault.NO_PAGE_INFO:
                                 info = {}
-                            case 'no-cursor':
+                            case RunBoardFault.NO_CURSOR:
                                 info = {'hasNextPage': True, 'endCursor': None}
-                            case 'repeated-cursor':
+                            case RunBoardFault.REPEATED_CURSOR:
                                 info = {'hasNextPage': True, 'endCursor': '100'}
-                            case 'no-number' if nodes:
+                            case RunBoardFault.NO_NUMBER if nodes:
                                 del nodes[0]['number']
                         self.reply({'data': {'repositoryOwner': {'projectsV2': {'nodes': nodes, 'pageInfo': info}}}})
                         return
                     case str() if 'deleteProjectV2(' in query:
                         identity = RunBoardId(variables['input']['projectId'])
                         state.writes.append(Write('POST', BoardDelete(identity)))
-                        if state.run_board_fault == 'unconfirmed-delete':
+                        if state.run_board_fault is RunBoardFault.UNCONFIRMED_DELETE:
                             self.reply({'data': {'deleteProjectV2': {'projectV2': {'id': 'another board'}}}})
                             return
                         state.run_boards = [v for v in state.run_boards if v['id'] != identity]
@@ -1279,10 +1285,10 @@ class Journeys(unittest.TestCase):
 
     def test_a_run_board_listing_or_deletion_that_does_not_read_soundly_fails_closed(self):
         for fault, said in (
-            ('no-page-info', 'run board pageInfo missing'),
-            ('no-cursor', 'run board next cursor missing'),
-            ('repeated-cursor', 'run board page did not advance'),
-            ('no-number', 'run board number missing'),
+            (RunBoardFault.NO_PAGE_INFO, 'run board pageInfo missing'),
+            (RunBoardFault.NO_CURSOR, 'run board next cursor missing'),
+            (RunBoardFault.REPEATED_CURSOR, 'run board page did not advance'),
+            (RunBoardFault.NO_NUMBER, 'run board number missing'),
         ):
             state = Github()
             state.run_board(f'ci-123-1-{NOW}', 20)
@@ -1297,7 +1303,7 @@ class Journeys(unittest.TestCase):
         state = Github()
         state.run_board(f'ci-123-1-{NOW}', 20)
         state.status[RunId(123)] = Status.COMPLETED
-        state.run_board_fault = 'unconfirmed-delete'
+        state.run_board_fault = RunBoardFault.UNCONFIRMED_DELETE
         result = state.run()
         self.assert_failed(result)
         self.assertIn('did not confirm the requested deletion', result.stderr)

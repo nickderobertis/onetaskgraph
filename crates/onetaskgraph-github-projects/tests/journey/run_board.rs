@@ -147,11 +147,13 @@ pub async fn copy(
     let owner_id = found
         .pointer("/data/repositoryOwner/id")
         .and_then(Value::as_str)
+        .filter(|id| usable_id(id))
         .ok_or_else(|| format!("GH_PROJECTS_OWNER={owner} names no owner this credential can see"))?
         .to_owned();
     let template_id = found
         .pointer("/data/repositoryOwner/projectV2/id")
         .and_then(Value::as_str)
+        .filter(|id| usable_id(id))
         .ok_or_else(|| {
             format!(
                 "GH_PROJECTS_OWNER={owner} with GH_PROJECTS_NUMBER={template} names no project \
@@ -185,8 +187,7 @@ pub async fn copy(
     ) else {
         return Err("GitHub did not answer the live board copy with its id and number".into());
     };
-    if id.is_empty() || id.chars().any(char::is_control) || id == template_id || number == template
-    {
+    if !usable_id(id) || id == template_id || number == 0 || number == template {
         return Err(format!(
             "the live board copy answered an unusable board: {id:?} #{number}"
         ));
@@ -258,6 +259,11 @@ async fn settle(send: &impl Sender, owner: &str, board: &RunBoard) -> Result<(),
          needs at least {MINIMUM_INITIAL_ITEMS} draft items — run `just github-live-template \
          dry-run`"
     ))
+}
+
+/// Whether GitHub answered an id this lane may put into a later request.
+fn usable_id(id: &str) -> bool {
+    !id.is_empty() && !id.chars().any(char::is_control)
 }
 
 /// Deletes this session's board, and with it every item and field it held.

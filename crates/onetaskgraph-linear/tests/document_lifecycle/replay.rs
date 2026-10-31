@@ -52,6 +52,9 @@ pub struct State {
     /// Store the next `issueCreate` and then answer it with a gateway error, as a create
     /// whose acknowledgement was lost on the way back.
     pub lose_next_issue_create_ack: bool,
+    /// Refuse every `issueDelete`, and every `issueUpdate`, while set.
+    pub refuse_issue_deletes: bool,
+    pub refuse_issue_updates: bool,
     pub rate_limited: usize,
     serial: usize,
     rewrites: BTreeMap<String, String>,
@@ -289,6 +292,11 @@ fn respond(state: &mut State, request: &Value) -> Value {
     let q = request["query"].as_str().unwrap();
     let v = &request["variables"];
     graphql_parser::parse_query::<String>(q).expect("replay requests are GraphQL documents");
+    if (state.refuse_issue_deletes && q.contains("issueDelete("))
+        || (state.refuse_issue_updates && q.contains("issueUpdate("))
+    {
+        return json!({"errors":[{"message":"Something went wrong","extensions":{"code":"INTERNAL_SERVER_ERROR"}}]});
+    }
     let teams = json!({"nodes":[{"id":"team","key":"ENG","states":{"nodes":[{"id":"open","name":"Todo","type":"unstarted","position":0},{"id":"done","name":"Done","type":"completed","position":1}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}]});
     if q.contains("issueLabels(") {
         let name = v["name"].as_str().unwrap().to_lowercase();

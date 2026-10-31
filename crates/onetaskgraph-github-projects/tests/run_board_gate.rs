@@ -500,6 +500,17 @@ async fn session_child() {
         journey::Endpoints::loopback(&format!("{origin}/graphql"), &format!("{origin}/")).unwrap(),
     );
     let token = std::env::var("RUN_BOARD_GATE_TOKEN").unwrap();
+    // The entry point's template branch, as `tests/live.rs` takes it: the variable read, then
+    // the lane's own admission, credential gate and setup.
+    if std::env::var("RUN_BOARD_GATE_ENTRY").unwrap() == "template-entry" {
+        let setup = journey::run_board::TemplateSetup::read()
+            .unwrap()
+            .expect("the template variable is set");
+        journey::enter_template(&|variable| std::env::var(variable).ok(), setup)
+            .await
+            .unwrap();
+        return;
+    }
     let setup = match std::env::var("RUN_BOARD_GATE_ENTRY").unwrap().as_str() {
         "template-dry-run" => Some(journey::run_board::TemplateSetup::DryRun),
         "template-fill" => Some(journey::run_board::TemplateSetup::Fill),
@@ -532,6 +543,9 @@ async fn session_child() {
         .await
         .unwrap_or_else(|error| panic!("copy: {error}"));
     let guard = journey::run_board::Guard::new(&token, &board);
+    if std::env::var_os("RUN_BOARD_GATE_PANIC").is_some() {
+        panic!("injected session failure after the copy");
+    }
     let outcome = async {
         let project_id = journey::preflight_board(&token, OWNER, board.number, REPOSITORY).await?;
         let fields = journey::writable_fields(&token, &project_id).await?;
@@ -683,6 +697,7 @@ fn assert_isolated(account: &Account, tokens: &[String], reports: &[Report]) {
         usize::try_from(TEMPLATE_DRAFTS).unwrap()
     );
     assert_eq!(template.fields.len(), template_fields());
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] This is the functional outcome the change owes, not a cost ceiling: the stand-in refuses past each limit exactly as the service does, and the task's acceptance criterion is that eight runs at once are refused for none of them; the per-session figures themselves stay onebudgetspec's.
     assert_eq!(
         account.refused,
         Vec::<String>::new(),
@@ -1035,37 +1050,8 @@ fn a_template_fill_whose_draft_is_answered_with_no_item_is_refused() {
     assert_eq!(drafts, 1);
 }
 
-/// The newest build of this crate's `live` test binary, beside this one.
-fn live_entry_point() -> std::path::PathBuf {
-    let directory = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_owned();
-    std::fs::read_dir(&directory)
-        .unwrap()
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| {
-                    name.strip_prefix("live-").is_some_and(|hash| {
-                        let hash = hash.strip_suffix(".exe").unwrap_or(hash);
-                        !hash.is_empty() && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    })
-                })
-        })
-        .max_by_key(|path| {
-            std::fs::metadata(path)
-                .and_then(|meta| meta.modified())
-                .ok()
-        })
-        .expect("build this crate's `live` test target beside this one")
-}
-
 #[test]
-fn the_template_recipe_reaches_the_setup_through_the_real_entry_point_and_writes_nothing_dry() {
+fn the_template_variable_reaches_the_setup_through_the_lanes_admission_and_writes_nothing_dry() {
     use journey::run_board::{TEMPLATE_VARIABLE, TemplateSetup};
     assert_eq!(TemplateSetup::parse("dry-run"), Ok(TemplateSetup::DryRun));
     assert_eq!(TemplateSetup::parse("fill"), Ok(TemplateSetup::Fill));
@@ -1073,8 +1059,8 @@ fn the_template_recipe_reaches_the_setup_through_the_real_entry_point_and_writes
         assert!(TemplateSetup::parse(refused).is_err(), "{refused:?}");
     }
     // The recipe's spelling of the variable and the entry point is
-    // `.github/linear-documents-policy`'s to hold; the entry point, run as it runs it, does the
-    // setup and not the journey.
+    // `.github/linear-documents-policy`'s to hold; the variable, read as the entry point reads
+    // it, leads through the lane's admission to the setup.
     let account = Arc::new(Mutex::new(Account::new()));
     account
         .lock()
@@ -1085,16 +1071,13 @@ fn the_template_recipe_reaches_the_setup_through_the_real_entry_point_and_writes
         .items
         .truncate(10);
     let origin = serve(Arc::clone(&account));
-    let output = Command::new(live_entry_point())
-        .args([
-            "real_projects_v2_contract_writes_and_leaves_no_residue",
-            "--exact",
-            "--nocapture",
-        ])
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["session_child", "--exact", "--nocapture"])
+        .env("RUN_BOARD_GATE_ORIGIN", &origin)
+        .env("RUN_BOARD_GATE_ENTRY", "template-entry")
+        .env("RUN_BOARD_GATE_TOKEN", "operator")
+        .env("RUN_BOARD_GATE_RUN", "1")
         .env(TEMPLATE_VARIABLE, "dry-run")
-        .env("GITHUB_LIVE_SELECTION", "run")
-        .env("GITHUB_LIVE_TEST_GRAPHQL", format!("{origin}/graphql"))
-        .env("GITHUB_LIVE_TEST_REST", format!("{origin}/"))
         .env("GH_PROJECTS_TOKEN", "operator")
         .env("GH_PROJECTS_OWNER", OWNER)
         .env("GH_PROJECTS_NUMBER", TEMPLATE.to_string())
@@ -1119,5 +1102,38 @@ fn the_template_recipe_reaches_the_setup_through_the_real_entry_point_and_writes
             .seen
             .iter()
             .all(|(_, document, _)| document.contains("LiveTemplate"))
+    );
+}
+
+#[test]
+fn a_session_that_panics_after_its_copy_still_deletes_it() {
+    let account = Arc::new(Mutex::new(Account::new()));
+    let origin = serve(Arc::clone(&account));
+    let child = session(
+        &origin,
+        EntryPoint::Main,
+        "panicking",
+        501,
+        &[("RUN_BOARD_GATE_PANIC", "1")],
+    );
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success(), "the panicking session passed");
+    // The session failed for its own reason, not for its cleanup's.
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        said.contains("injected session failure after the copy"),
+        "{said}"
+    );
+    assert!(!said.contains("was not deleted"), "{said}");
+    let account = account.lock().unwrap();
+    assert_eq!(
+        account.boards.keys().copied().collect::<Vec<_>>(),
+        vec![TEMPLATE]
+    );
+    assert!(
+        account
+            .seen
+            .iter()
+            .any(|(_, document, _)| document.contains("LiveDeleteBoard("))
     );
 }
