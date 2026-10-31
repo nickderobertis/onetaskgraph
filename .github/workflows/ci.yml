@@ -723,6 +723,15 @@ jobs:
         env:
           REASON: ${{ steps.release.outputs.reason }}
         run: echo "Tests not run ($REASON); the lint job still runs in full."
+      # The instrumented build and the plain one, the live crates' whole suites included, ran
+      # this runner out of disk (run 41147797634). The image's SDKs this job never uses go in
+      # the background, finishing long before the builds peak, so the removal costs no time.
+      - name: Free the disk the two builds need
+        if: steps.release.outputs.tests == 'run'
+        shell: bash
+        run: |
+          df -h /
+          sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: astral-sh/setup-uv@v7
         if: steps.release.outputs.tests == 'run'
         with:
