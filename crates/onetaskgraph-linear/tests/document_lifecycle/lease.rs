@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 /// A lease claimed longer ago than this belongs to a job GitHub has already ended.
-// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] GitHub documents a hosted job's six-hour maximum in prose alone ("Each job in a workflow can run for up to 6 hours of execution time"); this adds half an hour of margin, and a GitHub that raised the maximum would make a stale lease's member wait longer to be reclaimed, never let two runs hold one member, because only a released or older lease is reclaimed and a claim is exclusive by Linear's own refusal.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] GitHub documents a hosted job's six-hour maximum in prose alone ("Each job in a workflow can run for up to 6 hours of execution time"), and nothing machine-readable states it; this adds half an hour of margin. It is load-bearing: were GitHub to raise that maximum, a job running past this bound could have its member reclaimed by another run while it still worked on it, so this constant has to move with GitHub's maximum.
 pub const STALE_AFTER: Duration = Duration::from_secs(6 * 60 * 60 + 30 * 60);
 
 /// How many times the whole pool is tried before a claim is refused. A member another

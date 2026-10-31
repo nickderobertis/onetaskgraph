@@ -52,7 +52,7 @@ pub struct State {
     /// Store the next `issueCreate` and then answer it with a gateway error, as a create
     /// whose acknowledgement was lost on the way back.
     pub lose_next_issue_create_ack: bool,
-    /// Refuse every `issueDelete`, and every `issueUpdate`, while set.
+    /// Refuse every `issueDelete` while set.
     pub refuse_issue_deletes: bool,
     /// How the pool's lease listing is misanswered: `"no-page-info"`, `"repeated-cursor"`,
     /// `"untitled"`, or `"unreadable-created-at"`.
@@ -60,6 +60,7 @@ pub struct State {
     /// Take a create under an id already held as an overwrite, as a Linear whose ids were not
     /// exclusive would.
     pub accept_duplicate_ids: bool,
+    /// Refuse every `issueUpdate` while set.
     pub refuse_issue_updates: bool,
     pub rate_limited: usize,
     serial: usize,
