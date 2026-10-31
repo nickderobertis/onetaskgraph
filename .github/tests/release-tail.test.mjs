@@ -27,13 +27,11 @@ import { parse, stringify } from "yaml";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const FIXTURES = new URL("./fixtures/release-tail/recordings/", import.meta.url);
-// The onevcs release this repository adopts: the first carrying `onevcs host` that this plan's
-// onevcs-host-queries node released, on npm.
+// The onevcs release this repository adopts: one whose `onevcs host` answers schema_version 1.
 const ADOPTED_ONEVCS = "0.57.4";
 const REPOSITORY = "nickderobertis/onetaskgraph";
 const RELEASE = "v0.12.13";
 const RELEASE_RUN = 41026720026;
-// The job's own token, as a step's env names it.
 const JOB_TOKEN = `\${{ github.token }}`;
 const TAIL_IDS = [
   "onetaskgraph-ci-check-time",
@@ -358,7 +356,6 @@ const pullRequests = compare.commits.map((commit) => {
   return { number: pull.number, head: pull.head.sha, merged: ts(pull.merged_at) };
 });
 
-// Which runs the double was asked the jobs of, at a head.
 function runsAt(listing, served) {
   return body(listing).workflow_runs.filter((run) =>
     served.includes(`repos/${REPOSITORY}/actions/runs/${run.id}/jobs?per_page=100&filter=latest`),
@@ -449,7 +446,6 @@ test("over a recorded release the tail reports all seven budgets with their brea
     assert.equal(run.results[id].verdict, figures[id] > threshold ? "over" : "within", id);
   }
   assert.equal(run.status, over.length ? 1 : 0, run.output);
-  // Each figure's breakdown is in the log: the pull requests, the jobs and the requests.
   for (const pr of pullRequests)
     assert.match(run.output, new RegExp(`#${pr.number}: checks \\d+s \\+ merge to release \\d+s`));
   assert.match(run.output, /Release \/ publish: \d+s/);

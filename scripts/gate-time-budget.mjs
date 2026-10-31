@@ -23,10 +23,18 @@ try {
       ".gate-time.json is not JSON: delete it and run `just gate`, which writes it afresh",
     );
   }
-  const started = Date.parse(record?.started_at);
-  const ended = Date.parse(record?.ended_at);
+  // The wrapper writes whole-second UTC stamps and a non-empty invocation id; anything else is
+  // not its record, whatever Date.parse would make of it.
+  const stamp = (value) =>
+    typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)
+      ? Date.parse(value)
+      : Number.NaN;
+  const started = stamp(record?.started_at);
+  const ended = stamp(record?.ended_at);
   if (
     record?.schema_version !== 1 ||
+    typeof record.invocation !== "string" ||
+    !record.invocation ||
     !Number.isFinite(started) ||
     !Number.isFinite(ended) ||
     ended < started ||

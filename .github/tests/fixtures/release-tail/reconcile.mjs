@@ -22,13 +22,15 @@ function parse(text, what) {
   const split = text.indexOf("\r\n\r\n");
   if (split === -1) throw Error(`${what} holds no response`);
   const [statusLine, ...headerLines] = text.slice(0, split).split(/\r?\n/);
+  const status = statusLine.match(/^HTTP\/[0-9.]+ ([1-5][0-9]{2})(?: |$)/)?.[1];
+  if (!status) throw Error(`${what} starts with no HTTP status line: ${statusLine.slice(0, 80)}`);
   const headers = {};
   for (const line of headerLines) {
     const at = line.indexOf(": ");
     if (at > 0) headers[line.slice(0, at).toLowerCase()] = line.slice(at + 2);
   }
   return {
-    status: Number(statusLine.split(" ")[1]),
+    status: Number(status),
     headers,
     body: JSON.parse(text.slice(split + 4)),
   };

@@ -127,8 +127,11 @@ export function inputProblems(project, target) {
         ? expand(project.namedInputs[input])
         : [input],
     );
-  const graph = graphReadSet().filter((path) => !path.startsWith(".github/"));
-  if (!graph.length) throw Error("the graph reads no outside file, so this proves nothing");
+  // The release tail imports nothing of the run graph, so it is keyed on its own reads alone.
+  const graph =
+    target === "release-tail" ? [] : graphReadSet().filter((path) => !path.startsWith(".github/"));
+  if (!graph.length && target !== "release-tail")
+    throw Error("the graph reads no outside file, so this proves nothing");
   const outside = [
     ...new Set([
       ...graph,

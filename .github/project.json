@@ -65,7 +65,11 @@
       "{workspaceRoot}/scripts/gate-time-budget.mjs"
     ],
     "releaseTail": [
-      "workflowGraph",
+      "{projectRoot}/workflows/release.yml",
+      "{projectRoot}/tests/release-tail.test.mjs",
+      "{projectRoot}/tests/fixtures/release-tail/**/*",
+      "{projectRoot}/package.json",
+      "{projectRoot}/bun.lock",
       "{workspaceRoot}/budgets.yaml",
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/scripts/actions-budget-figures.sh"

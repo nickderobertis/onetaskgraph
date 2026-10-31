@@ -52,7 +52,8 @@ printf '{"schema_version":1,"invocation":"%s-%s","started_at":"%s","ended_at":"%
 mv "$record.$$" "$record"
 
 if [ "$status" -ne 0 ]; then
-  echo "gate-time: the gate failed (exit $status); its wall clock is not checked." >&2
+  echo "gate-time: the gate failed (exit $status), so its wall clock is not checked; fix the" \
+    "failure reported above and run \`just gate\` again." >&2
   exit "$status"
 fi
 

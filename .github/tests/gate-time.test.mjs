@@ -88,7 +88,7 @@ test("a failing body fails the gate with its status, records it and checks no bu
   seed(dir, 10);
   const ran = gate(dir, "bash", "-c", "exit 7");
   assert.equal(ran.status, 7, ran.out);
-  assert.match(ran.out, /the gate failed \(exit 7\)/);
+  assert.match(ran.out, /the gate failed \(exit 7\), .*run `just gate` again/);
   assert.doesNotMatch(ran.out, /budget onetaskgraph-gate-time/);
   const record = readRecord(dir);
   assert.equal(record.exit, 7);
@@ -147,6 +147,8 @@ test("a malformed record is no figure, and fails the check naming how to recover
     ["an unreadable start", JSON.stringify({ ...good, started_at: "yesterday" })],
     ["an end before its start", JSON.stringify({ ...good, ended_at: "2026-10-01T11:00:00Z" })],
     ["an exit that is no integer", JSON.stringify({ ...good, exit: "0" })],
+    ["a start in another format", JSON.stringify({ ...good, started_at: "2026-10-01 12:00" })],
+    ["no invocation", JSON.stringify({ ...good, invocation: undefined })],
   ]) {
     const dir = tree();
     writeFileSync(recordPath(dir), text);

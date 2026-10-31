@@ -7,20 +7,20 @@ import { fileURLToPath } from "node:url";
 import { graph } from "../workflow-graph.mjs";
 import { definitions } from "./workflow-definitions.mjs";
 
-// Which jobs run where, as the run graph resolves the workflow files (workflow-graph.mjs): a
-// pull request's last commit runs exactly the four jobs branch protection requires, and a push
-// to main runs release-plz, the Rust cache warmer the amendment keeps (rust-cache-warm.yml) and
-// the canonical gallery — which skips release-plz's own release commit. Every other workflow is
-// held byte for byte to what it was, because this change retires jobs and names the four
-// workflows it touches.
+// Which jobs run where, as the run graph resolves the workflow files (workflow-graph.mjs). A
+// pull request's last commit runs exactly the four jobs branch protection requires, because
+// every other job spends a slot of the account-wide concurrency limit (onetaskgraph-ci-job-count);
+// a push to main runs release-plz, the Rust cache warmer that catches a main that no longer
+// builds, and the canonical gallery, which skips release-plz's own release commit.
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const REQUIRED = ["lint", "test-linux", "test-windows", "test-macos"];
 // A release commit and an ordinary push of this repository, read from its own history.
 const RELEASE_COMMIT = "3b6b228f168ab17c94613a831e1eec96a225d949";
 const ORDINARY_PUSH = "e2d3bf08e0ced82120f38a708dc2b7a92d26ce7f";
-// The workflows this change does not name, as they stood before it: the warmer is kept
-// unchanged by the amendment, and the janitor, the Linear documents and release-plz untouched.
+// The workflows whose triggers and jobs no CI budget governs, held byte for byte: a job or a
+// trigger added to one of them would spend the slots the budgets above count without either
+// test noticing. Moving one means re-deciding its schedule, then this digest.
 const UNCHANGED = {
   "linear-documents.yml": "7f5f58ca0871ec5dd839367a67bd063d49230d0ca2b26780898d2ddd3ef537e8",
   "live-janitor.yml": "12f972eff5e7402be7c9d87de5d5a01191ef96499605d01bc7f4f957001feebb",
