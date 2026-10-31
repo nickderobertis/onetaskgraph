@@ -206,6 +206,30 @@ test("the pool and template recipes set the variables their lanes read", () => {
   }
 });
 
+// A cancelled job hands back its Linear leases only if the lanes recorded them where its
+// cancellation step looks, so the variable, the directory and the step are held together.
+test("each credentialed job records its leases where its cancellation step releases them", () => {
+  const variable = read("crates/onetaskgraph-linear/tests/document_lifecycle/lease.rs").match(
+    /pub const RECORD_VARIABLE: &str = "([^"]+)";/,
+  )[1];
+  const directory = "target/linear-leases";
+  const release = `cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases ${directory}`;
+  const jobs = workflows()["ci.yml"].jobs;
+  for (const name of ["check", "test-linux"]) {
+    const steps = jobs[name].steps;
+    const sessions = steps.filter(
+      (step) => step.env?.LINEAR_API_KEY && /^just /.test(step.run ?? ""),
+    );
+    assert.ok(sessions.length > 0, `${name} opens no Linear session`);
+    for (const step of sessions) {
+      assert.equal(step.env[variable], `\${{ github.workspace }}/${directory}`, name);
+    }
+    const releases = steps.filter((step) => step.run === release);
+    assert.equal(releases.length, 1, `${name} has no step releasing ${directory}`);
+    assert.match(releases[0].if, /^cancelled\(\)/, name);
+  }
+});
+
 // These surfaces select the policy. Whether they also select github-workflows is that
 // project's own read set to say: its CD journeys build and package every crate and run the
 // justfile's release recipes, so .github/test-inputs.mjs names both, reconciled by ci-contexts.

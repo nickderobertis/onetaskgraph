@@ -18,9 +18,11 @@
 //! each a main and an asset session, every one spending its registered design allocation
 //! (`journey::budget::session_design_points`) — are none of them refused for any of those
 //! limits; and a session that names a board outside its namespace is refused before the
-//! request leaves it. GitHub's per-minute content-creation limit is not enforced here: a real
-//! session's creations are spread across its whole duration, a quarter of an hour of settle
-//! waits, and the plugin backs off on that limit rather than failing.
+//! request leaves it. GitHub's per-minute secondary limits are enforced in one test alone,
+//! `four_runs_setup_bursts_fit_the_per_minute_limits_and_a_fifth_does_not`, which states the
+//! overlap they allow; the eight-run test holds the hourly limits, because a real session's
+//! creations are spread across a quarter of an hour of settle waits and the plugin backs off
+//! on a per-minute limit rather than failing.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write as _};
