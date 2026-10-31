@@ -1,0 +1,13 @@
+# The files in this directory that do not stand in for a store, each with the reason.
+#
+# `scripts/check-store-fixtures.sh` reads this file beside the fixtures it classifies: every
+# JSON file under a `tests/fixtures` directory must be a store fixture that check names, or
+# be recorded as not one — here, for a file this crate owns, or in that check's own table.
+# Each key is a file of this directory; the check refuses a key naming a file that is not
+# here, one it already classifies, and an entry without a non-empty `reason`.
+
+["biome.json"]
+reason = """\
+Not a store: it is Biome's configuration for this directory, holding no item a query \
+reads. It leaves `github-schema.docs.graphql`, GitHub's published schema, byte for byte \
+as GitHub distributes it, so the digest `fixtures/README.md` records stays true."""
