@@ -459,7 +459,11 @@ enum Kind {
     Document,
 }
 
-/// The kind of record a contract `MetadataRecord` names here.
+/// The name a hold on the `record` `id` is kept under.
+fn held_as(record: onetaskgraph_plugin_api::MetadataRecord, id: &NativeId) -> String {
+    format!("{record:?} {}", id.0)
+}
+
 fn kind_of(record: onetaskgraph_plugin_api::MetadataRecord) -> Kind {
     match record {
         onetaskgraph_plugin_api::MetadataRecord::Task => Kind::Task,
@@ -1381,13 +1385,11 @@ impl TaskSource for LocalMdSource {
         let Some(file) = self.locate(kind_of(record), id)? else {
             return Ok(false);
         };
-        self.holds.take(&file)?;
+        self.holds.take(&held_as(record, id), &file)?;
         Ok(true)
     }
     fn release_item(&self, record: onetaskgraph_plugin_api::MetadataRecord, id: &NativeId) {
-        if let Ok(Some(file)) = self.locate(kind_of(record), id) {
-            self.holds.release(&file);
-        }
+        self.holds.release(&held_as(record, id));
     }
     /// The record's file, byte for byte.
     fn item_snapshot(
@@ -1408,12 +1410,12 @@ impl TaskSource for LocalMdSource {
         let Some(file) = self.locate(kind_of(record), id)? else {
             return Ok(());
         };
-        self.holds.take(&file)?;
+        self.holds.take(&held_as(record, id), &file)?;
         let text = String::from_utf8(snapshot.to_vec()).map_err(|error| SourceError::Malformed {
             message: format!("the snapshot of {} is not UTF-8: {error}", file.display()),
         });
         let written = text.and_then(|text| replace_atomically(&file, &text));
-        self.holds.release(&file);
+        self.holds.release(&held_as(record, id));
         written
     }
     /// Take one key out of a record's front matter, every other byte of the file as it was —

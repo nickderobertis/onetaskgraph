@@ -448,7 +448,8 @@ pub(crate) fn pause_at(point: &str) {
 }
 
 impl Engine {
-    /// The settings of `source` for a create safe to retry.
+    /// The lease and quiescence `source` is configured with — the defaults where it sets
+    /// neither, since a source with no block of its own is held to them too.
     fn create_settings(&self, source: &SourceName) -> crate::config::CreateSettings {
         self.creates.get(source).copied().unwrap_or_default()
     }

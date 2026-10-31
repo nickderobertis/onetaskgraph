@@ -21,10 +21,11 @@ use onetaskgraph_plugin_api::SourceError;
 /// the read and the one metadata write it guards.
 pub(crate) const STALE: Duration = Duration::from_secs(30);
 
-/// The lock files this source holds, by the record file each guards — shared by every clone of
-/// the source, so a clone releases what another took.
+/// The lock files this source holds, by the record each guards — not by its file, so a record
+/// deleted or moved while held is still released — shared by every clone of the source, so a
+/// clone releases what another took.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Holds(Arc<Mutex<HashMap<PathBuf, PathBuf>>>);
+pub(crate) struct Holds(Arc<Mutex<HashMap<String, PathBuf>>>);
 
 fn lock_of(file: &Path) -> PathBuf {
     let mut path = file.as_os_str().to_owned();
@@ -33,14 +34,19 @@ fn lock_of(file: &Path) -> PathBuf {
 }
 
 impl Holds {
-    /// Wait for and take the lock beside `file`.
-    pub(crate) fn take(&self, file: &Path) -> Result<(), SourceError> {
-        self.take_within(file, STALE * 2)
+    /// Wait for and take the lock beside `file`, held as the record `record` names.
+    pub(crate) fn take(&self, record: &str, file: &Path) -> Result<(), SourceError> {
+        self.take_within(record, file, STALE * 2)
     }
 
     /// [`Self::take`], waiting for a live holder no longer than `patience`: reached only while
     /// other processes keep making the lock afresh, since one lock goes stale well within it.
-    fn take_within(&self, file: &Path, patience: Duration) -> Result<(), SourceError> {
+    fn take_within(
+        &self,
+        record: &str,
+        file: &Path,
+        patience: Duration,
+    ) -> Result<(), SourceError> {
         let lock = lock_of(file);
         let started = Instant::now();
         loop {
@@ -53,7 +59,7 @@ impl Holds {
                     self.0
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .insert(file.to_path_buf(), lock);
+                        .insert(record.to_owned(), lock);
                     return Ok(());
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -117,13 +123,13 @@ impl Holds {
         }
     }
 
-    /// Release the lock beside `file`, when this source holds it.
-    pub(crate) fn release(&self, file: &Path) {
+    /// Release the lock this source holds for `record`, wherever its file now is.
+    pub(crate) fn release(&self, record: &str) {
         if let Some(lock) = self
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(file)
+            .remove(record)
         {
             let _ = std::fs::remove_file(lock);
         }
@@ -145,7 +151,7 @@ mod tests {
         std::fs::write(&file, "").expect("a record");
         std::fs::write(lock_of(&file), "").expect("a live holder's lock");
         let refused = Holds::default()
-            .take_within(&file, Duration::from_millis(50))
+            .take_within("task T-1", &file, Duration::from_millis(50))
             .expect_err("still held");
         assert!(
             matches!(&refused, SourceError::Unavailable { message }
