@@ -61,52 +61,31 @@
   "into linear": {
     "content set": {
       "board": [],
-      "linear": [
-        "query issue",
-        "mutation issueUpdate"
-      ]
+      "linear": ["query issue", "mutation issueUpdate"]
     },
     "create": {
       "board": [],
-      "linear": [
-        "query issues projects organization teams projectStatuses",
-        "mutation issueCreate"
-      ]
+      "linear": ["query issues projects organization teams projectStatuses", "mutation issueCreate"]
     },
     "metadata set": {
       "board": [],
-      "linear": [
-        "query issue",
-        "mutation issueUpdate"
-      ]
+      "linear": ["query issue", "mutation issueUpdate"]
     },
     "priority set": {
       "board": [],
-      "linear": [
-        "query issue",
-        "mutation issueUpdate"
-      ]
+      "linear": ["query issue", "mutation issueUpdate"]
     },
     "status set": {
       "board": [],
-      "linear": [
-        "query organization teams projectStatuses",
-        "mutation issueUpdate"
-      ]
+      "linear": ["query organization teams projectStatuses", "mutation issueUpdate"]
     },
     "task update": {
       "board": [],
-      "linear": [
-        "query issue",
-        "mutation issueUpdate"
-      ]
+      "linear": ["query issue", "mutation issueUpdate"]
     },
     "unchanged": {
       "board": [],
-      "linear": [
-        "query issue",
-        "query issue"
-      ]
+      "linear": ["query issue", "query issue"]
     },
     "update": {
       "board": [],

@@ -8,6 +8,10 @@
 //! sent for each command, in order. The one difference this release owes is stated where it is
 //! allowed: a create onto a board from a hosted source lists the repository by its create key
 //! once more, right after `createIssue`.
+//!
+//! The comparison parses the golden, so its layout is not part of it; a recording writes serde's
+//! pretty-print, which `workspace:format-check` refuses, so run
+//! `bun run biome format --write` over the golden after recording it.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
