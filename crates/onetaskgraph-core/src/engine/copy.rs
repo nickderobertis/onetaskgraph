@@ -6177,6 +6177,26 @@ impl Engine {
             };
             held = prior;
         }
+        // A create the destination's own policy on where it creates refuses is refused here,
+        // before anything of the copy is written and before any intent to create is recorded —
+        // a dry run's included, so it reports the refusal its copy would meet. An update is
+        // never refused by it.
+        if matches!(target, Target::Create)
+            && let Some(reason) = destination
+                .source()
+                .creation_refusal(&WriteTarget::New {
+                    repositories: repositories_of(&item),
+                    project: None,
+                })
+                .await
+                .map_err(|error| refused(destination, error))?
+        {
+            return Err(EngineError::CreationOwner {
+                item: id.to_string(),
+                destination: destination.name().to_string(),
+                reason,
+            });
+        }
         Ok(Planned {
             status_policy: request.status_policy,
             source: id,

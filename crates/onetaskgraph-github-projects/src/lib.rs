@@ -2766,6 +2766,20 @@ pub struct GitHubProjectsConfig {
     /// this is refused naming the field. Reads never need it.
     pub repository: Option<String>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates the `owner/name` grammar before private construction.
     // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
+    /// GitHub logins whose repositories this source may create an issue in.
+    ///
+    /// Absent or empty, the default, restricts nothing. Otherwise a create whose issue the
+    /// rule `repository` describes would file in a repository owned by anyone else is refused
+    /// before anything of it is written — by `task copy`, `task copy --create`, a member
+    /// create of a project copy and a dry run of each — with the error kind `creation-owner`,
+    /// naming the repository and these owners. Logins compare case-insensitively, as GitHub
+    /// compares them. An update of an issue that already exists is never refused by it.
+    /// `task locate` reports such a refusal as `creates_in.refused` rather than failing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // Kept in the schema as `"default": []` although a serialized configuration leaves an empty
+    // list out, so both SDKs model an absent list as an empty one rather than as `null`.
+    #[schemars(!skip_serializing_if)]
+    pub creation_owners: Vec<String>, // llmlint: ignore[invalid_states_unrepresentable] Schema DTO; `new` validates each entry against GitHub's login grammar, naming the one it refuses.
     /// Environment variable containing a fine-grained token with Projects and Issues
     /// read/write plus Pull requests read-only access for every repository represented on
     /// the board.
@@ -3773,6 +3787,8 @@ pub struct GitHubProjectsSource {
     owner: String, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only by `new` after full GitHub-owner validation.
     project_number: u32, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only by `new` after GraphQL-Int validation.
     repository: Option<RepositoryTarget>,
+    /// The logins whose repositories a create may file in; empty restricts nothing.
+    creation_owners: Vec<String>, // llmlint: ignore[invalid_states_unrepresentable] Private, constructed only by `new` after each entry passes GitHub's login grammar.
     endpoint: Url,
     token: SecretString,
     credential_name: String, // llmlint: ignore[invalid_states_unrepresentable] Private diagnostic value constructed only after environment-name validation.
@@ -5044,6 +5060,18 @@ impl GitHubProjectsSource {
             .as_deref()
             .map(RepositoryTarget::parse)
             .transpose()?;
+        if let Some(entry) = config
+            .creation_owners
+            .iter()
+            .find(|entry| !valid_github_owner(entry))
+        {
+            return Err(SourceError::Config {
+                message: format!(
+                    "creation_owners entry {entry:?} is not a GitHub login: a login is 1-39 ASCII \
+                     letters, digits, or single hyphens, and cannot start or end with a hyphen"
+                ),
+            });
+        }
         let endpoint = Url::parse(&config.endpoint).map_err(|e| SourceError::Config {
             message: format!("endpoint is not a valid URL: {e}"),
         })?;
@@ -5067,6 +5095,7 @@ impl GitHubProjectsSource {
             owner: config.owner,
             project_number: config.project_number,
             repository,
+            creation_owners: config.creation_owners,
             asset_client: std::sync::OnceLock::new(),
             endpoint,
             token,
@@ -9116,6 +9145,27 @@ impl GitHubProjectsSource {
             .map_err(|message| SourceError::Malformed { message })
     }
 
+    /// Why `creation_owners` refuses a create filed in `target`, or `None` when it allows it —
+    /// every create when the list is empty.
+    fn owner_refusal(&self, target: &RepositoryTarget) -> Option<String> {
+        if self.creation_owners.is_empty()
+            || self
+                .creation_owners
+                .iter()
+                .any(|owner| owner.eq_ignore_ascii_case(&target.owner))
+        {
+            return None;
+        }
+        Some(format!(
+            "source {} would create the issue in repository {}, owned by {}, and its \
+             creation_owners allows only repositories of {}",
+            self.name,
+            target.slug(),
+            target.owner,
+            self.creation_owners.join(", ")
+        ))
+    }
+
     fn configured_repository(&self) -> Result<&RepositoryTarget, SourceError> {
         self.repository
             .as_ref()
@@ -9159,8 +9209,15 @@ impl GitHubProjectsSource {
             incoming.written.kind().describes(),
             incoming.title
         );
-        self.creation_rule(incoming.repositories, incoming.parent, &what)
-            .await
+        let target = self
+            .creation_rule(incoming.repositories, incoming.parent, &what)
+            .await?;
+        // The engine asks `creation_refusal` before anything of a copy is written; this holds
+        // every other create to the same restriction, before `createIssue`.
+        match self.owner_refusal(&target) {
+            Some(message) => Err(SourceError::Refused { message }),
+            None => Ok(target),
+        }
     }
 
     /// [`Self::creation_target`]'s rule over what it reads of the item — its `repositories`
@@ -13363,6 +13420,28 @@ impl TaskSource for GitHubProjectsSource {
             .map(Some)
             .map_err(|message| SourceError::Malformed { message })
     }
+    /// Why `creation_owners` refuses a create of `target`, by [`Self::creation_rule`] — read
+    /// only when the list is not empty, so a source restricting nothing reads nothing.
+    async fn creation_refusal(
+        &self,
+        target: &onetaskgraph_plugin_api::WriteTarget<'_>,
+    ) -> Result<Option<String>, SourceError> {
+        let onetaskgraph_plugin_api::WriteTarget::New {
+            repositories,
+            project,
+        } = target
+        else {
+            return Ok(None);
+        };
+        if self.creation_owners.is_empty() {
+            return Ok(None);
+        }
+        let target = self
+            .creation_rule(repositories, *project, "a new item")
+            .await?;
+        Ok(self.owner_refusal(&target))
+    }
+
     async fn health(&self) -> Result<Health, SourceError> {
         let board = self.board_page(None, 1).await?;
         Ok(Health {

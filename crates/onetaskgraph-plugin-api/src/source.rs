@@ -1929,6 +1929,31 @@ pub trait TaskSource: Send + Sync {
         Ok(None)
     }
 
+    /// Why this source's own policy on where it creates would refuse a create of `target`,
+    /// or `None` when it would not — asked before anything of the create is written, and by a
+    /// read-only answer of where a copy would land.
+    ///
+    /// A refusal here is the source's configured restriction on the place a create would file
+    /// in — a GitHub Projects source's `creation_owners` — and never a refusal of the item
+    /// itself, which [`Self::check_task_write`] answers. It is answered rather than returned
+    /// as an error so a caller that only reports where a create would go can say so without
+    /// failing. Read-only, as [`Self::creation_repository`] is, and reading only what that
+    /// rule reads; a source with no such restriction reads nothing at all.
+    ///
+    /// Defaulted to `None`, the answer of every source with no such policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the rule deciding where the create would file could not
+    /// be applied — refused as the create would refuse it, or a read it needs failed.
+    async fn creation_refusal(
+        &self,
+        target: &WriteTarget<'_>,
+    ) -> Result<Option<String>, SourceError> {
+        let _ = target;
+        Ok(None)
+    }
+
     /// Read a create's visibility under a project this copy will create or update.
     ///
     /// `project` names the destination project, including a create whose id does not exist

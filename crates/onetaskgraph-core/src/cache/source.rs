@@ -1892,6 +1892,13 @@ impl TaskSource for CachedSource {
         self.inner.creation_repository(target).await
     }
 
+    async fn creation_refusal(
+        &self,
+        target: &WriteTarget<'_>,
+    ) -> Result<Option<String>, SourceError> {
+        self.inner.creation_refusal(target).await
+    }
+
     async fn visibility_with_project(
         &self,
         target: &WriteTarget<'_>,

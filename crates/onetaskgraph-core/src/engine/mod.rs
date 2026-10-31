@@ -1320,6 +1320,23 @@ pub enum EngineError {
     )]
     ConditionsNotTasks,
 
+    /// A create would file its issue somewhere the destination's own policy on where it
+    /// creates refuses — a GitHub Projects source's `creation_owners` — so nothing of it was
+    /// written.
+    #[error(
+        "{item} was not copied: {reason}\n\
+         next: name a repository of an allowed owner on {item}, set the source's repository to \
+         one, or add the owner to creation_owners on source {destination}."
+    )]
+    CreationOwner {
+        /// The source item whose create was refused, qualified.
+        item: String,
+        /// The destination source.
+        destination: String,
+        /// The destination's own reason, naming the repository and the allowed owners.
+        reason: String,
+    },
+
     /// `--otherwise` was given without `--when-destination-status`, which is what it is the
     /// other branch of.
     #[error(
