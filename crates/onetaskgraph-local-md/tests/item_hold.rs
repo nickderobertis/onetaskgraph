@@ -227,3 +227,19 @@ fn a_dead_process_lock_this_process_cannot_remove_is_refused_rather_than_tried_f
     );
     assert!(lock.exists(), "the lock is left where it is");
 }
+
+#[test]
+fn a_hold_on_a_record_deleted_while_held_is_still_released() {
+    let root = folder();
+    let id = NativeId("T-1".to_owned());
+    let source = instance(root.path());
+    assert!(source.hold_item(MetadataRecord::Task, &id).expect("held"));
+    let lock = root.path().join("tasks/T-1.md.lock");
+    assert!(lock.exists());
+    fs::remove_file(root.path().join("tasks/T-1.md")).expect("deleted while held");
+    source.release_item(MetadataRecord::Task, &id);
+    assert!(
+        !lock.exists(),
+        "the lock goes with the release, wherever the record went"
+    );
+}
