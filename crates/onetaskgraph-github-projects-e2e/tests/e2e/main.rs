@@ -11,6 +11,13 @@
 
 use onetaskgraph_e2e_support::{common, fixtures};
 
+// GitHub's static validation of a request, from the GitHub Projects plugin's tests, which own
+// it: what the loopback board refuses requests by, called directly where a journey proves a
+// document the board does not answer is one GitHub runs.
+#[allow(dead_code)] // these journeys call `validate` alone
+#[path = "../../../onetaskgraph-github-projects/tests/github_schema/mod.rs"]
+mod github_schema;
+
 mod approval;
 mod boundary;
 mod cache;

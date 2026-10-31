@@ -2087,6 +2087,14 @@ impl GitHubBoardFields {
     /// Send this board one GraphQL request, as the product sends one, and answer its `data`:
     /// what a journey replaying a recorded request sequence drives the board with.
     pub fn graphql(&self, query: &str, variables: &Value) -> Value {
+        self.graphql_over_http(query, variables)["data"].clone()
+    }
+
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] One request to this shared board through the harness's own `graphql_over_http`, beside `graphql`: the board's refusal of a request GitHub's schema rejects is its private request loop's, so only this handle can show it.
+    /// Send this board one GraphQL request, as [`Self::graphql`] does, and answer the whole
+    /// response body — `errors` as well as `data` — which is what a journey needs to say the
+    /// board refused a request the way GitHub refuses it.
+    pub fn graphql_response(&self, query: &str, variables: &Value) -> Value {
         self.graphql_over_http(query, variables)
     }
 
@@ -2719,12 +2727,12 @@ impl GitHubBoardFields {
         self.graphql_over_http(
             "query($id:ID!){node(id:$id){... on ProjectV2{title shortDescription readme}}}",
             &json!({"id":"PVT-board"}),
-        )["node"]
+        )["data"]["node"]
             .clone()
     }
 
     /// One GraphQL request to this board, sent as the product itself sends one, over the
-    /// connection this handle keeps to it, and the `data` it is answered with.
+    /// connection this handle keeps to it, and the whole body it is answered with.
     ///
     /// A connection that ends or is reset before the answer arrives — which a Windows host
     /// reports as `ConnectionReset` (`os error 10054`) — is answered here rather than
@@ -2770,7 +2778,7 @@ impl GitHubBoardFields {
                 + 4;
             let answered: Value =
                 serde_json::from_slice(&response[at..]).expect("fixture response JSON");
-            return answered["data"].clone();
+            return answered;
         }
         panic!("the board answered none of {ATTEMPTS} sendings of {query}")
     }
@@ -3769,6 +3777,7 @@ fn github_projects_board_at(
     extra: Vec<Value>,
 ) -> (Value, GitHubBoardFields) {
     sandbox.secrets_file(GITHUB_FIXTURE_SECRETS);
+    crate::github_schema::warm();
     let listener = TcpListener::bind("127.0.0.1:0").expect("GitHub fixture listener");
     let endpoint = format!(
         "http://{}/graphql",
@@ -3949,6 +3958,20 @@ fn github_projects_board_at(
             served.variables.push(variables.clone());
             served.tokens.push(token.clone());
             served.arrivals.push(std::time::Instant::now());
+        }
+        // GitHub refuses a document its schema rejects before running any of it, answering
+        // HTTP 200 with `errors` and no `data`; so does this board, against GitHub's complete
+        // published schema, so a request GitHub would refuse cannot pass here. It is recorded
+        // above, as GitHub counts it, and changes nothing below.
+        if let Some(refusal) = crate::github_schema::refuse(&request) {
+            let body = refusal.to_string();
+            return Some(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ));
+        }
+        {
+            let mut served = board.lock().unwrap();
             served.membership_first = ["memberships", "boardItems"]
                 .iter()
                 .find_map(|name| variables[name].as_u64())
@@ -4722,7 +4745,6 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     let input = variables.get("input").cloned().unwrap_or(Value::Null);
     if query.contains("updateProjectV2Field(input:$input)") && input["fieldId"] == "FIELD-priority"
     {
-        assert_eq!(input["projectId"], "PVT-board");
         let old = board
             .priority_options
             .clone()
@@ -4839,7 +4861,6 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         return json!({"clearProjectV2ItemFieldValue":{"projectV2Item":{"id":item_id,"fieldValueByName":null}}});
     }
     if query.contains("updateProjectV2Field(input:$input)") {
-        assert_eq!(input["projectId"], "PVT-board");
         assert_eq!(input["fieldId"], "FIELD-status");
         let old = board.status_options.clone();
         let sent = input["singleSelectOptions"]

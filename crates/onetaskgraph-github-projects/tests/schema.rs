@@ -8,6 +8,10 @@
 use graphql_parser::{query, schema};
 use std::collections::{HashMap, HashSet};
 
+// Shared with the two GitHub doubles, which call the halves of it this file does not.
+#[allow(dead_code)]
+mod github_schema;
+
 #[test]
 fn status_option_colors_match_the_pinned_graphql_vocabulary() {
     use onetaskgraph_github_projects::StatusOptionColor;
@@ -1033,4 +1037,741 @@ fn every_batch_document_declares_and_sends_exactly_the_slots_its_constant_counts
             );
         }
     }
+}
+
+/// Every document this source sends holds to GitHub's complete published schema, not only to
+/// the reduced subset above: the subset is written by the same hand as the documents, which is
+/// how a field-setup input GitHub does not define passed the check above in 0.12.13.
+#[test]
+fn every_production_document_validates_against_githubs_complete_published_schema() {
+    let refused = onetaskgraph_github_projects::graphql::DOCUMENTS
+        .iter()
+        .filter_map(|(document, doing)| {
+            github_schema::validate_document(document)
+                .err()
+                .map(|errors| format!("{doing}: {errors:?}"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        refused.is_empty(),
+        "GitHub would refuse:\n{}",
+        refused.join("\n")
+    );
+}
+
+/// The field setup's two writes, with the variables it sends, are what GitHub accepts — and
+/// the input 0.12.13 sent is refused with the message GitHub answered it with.
+#[test]
+fn the_field_setup_requests_validate_and_the_input_0_12_13_sent_is_refused() {
+    use onetaskgraph_github_projects::graphql::{CREATE_FIELD, STATUS_OPTIONS_UPDATE};
+    use serde_json::json;
+
+    let options = json!([
+        {"id": "opt-todo", "name": "Todo", "color": "GRAY", "description": ""},
+        {"name": "Cancelled", "color": "GRAY", "description": ""},
+    ]);
+    github_schema::validate(
+        STATUS_OPTIONS_UPDATE,
+        &json!({"input": {"fieldId": "PVTSSF-status", "singleSelectOptions": options}}),
+    )
+    .expect("adding a Status option is a request GitHub runs");
+    github_schema::validate(
+        CREATE_FIELD,
+        &json!({"input": {"projectId": "PVT-board", "dataType": "SINGLE_SELECT",
+            "name": "Priority", "singleSelectOptions": [
+                {"name": "Critical", "color": "GRAY", "description": ""},
+                {"name": "Low", "color": "GRAY", "description": ""}]}}),
+    )
+    .expect("creating the Priority field is a request GitHub runs");
+    github_schema::validate(
+        CREATE_FIELD,
+        &json!({"input": {"projectId": "PVT-board", "dataType": "TEXT", "name": "Origin"}}),
+    )
+    .expect("creating a metadata field is a request GitHub runs");
+
+    assert_eq!(
+        github_schema::validate(
+            STATUS_OPTIONS_UPDATE,
+            &json!({"input": {"projectId": "PVT-board", "fieldId": "PVTSSF-status",
+                "singleSelectOptions": options}}),
+        ),
+        Err(vec![
+            "Variable \"$input\" has invalid value: Expected value of type \
+             \"UpdateProjectV2FieldInput\" not to include unknown field \"projectId\", found: { \
+             fieldId: \"PVTSSF-status\", projectId: \"PVT-board\", singleSelectOptions: \
+             [[Object], [Object]] }."
+                .to_owned()
+        ])
+    );
+}
+
+/// Every validation rule of the GraphQL specification's §5, and the coercion of variables in
+/// §6.1.2, each broken by one request that the doubles refuse, as GitHub refuses it: a body of
+/// `errors` alone — no `data` — each error a `message` and, where the document has one, the
+/// `locations` it stands at.
+#[test]
+fn the_schema_check_refuses_a_request_breaking_each_validation_rule() {
+    use serde_json::{Value, json};
+
+    // (the rule, the specification's section, the document, its variables, what is answered)
+    let cases: &[(&str, &str, &str, Value, &[&str])] = &[
+        (
+            "document parses",
+            "2",
+            "query{viewer{login}",
+            json!({}),
+            &["Syntax Error: Expected Name, found <EOF>."],
+        ),
+        (
+            "executable definitions",
+            "5.1.1",
+            "query{viewer{login}} type Extra{id:ID}",
+            json!({}),
+            &["The \"Extra\" definition is not executable."],
+        ),
+        (
+            "operation name uniqueness",
+            "5.2.1.1",
+            "query a{viewer{login}} query a{viewer{name}}",
+            json!({}),
+            &["There can be only one operation named \"a\"."],
+        ),
+        (
+            "lone anonymous operation",
+            "5.2.2.1",
+            "{viewer{login}} query b{viewer{name}}",
+            json!({}),
+            &["This anonymous operation must be the only defined operation."],
+        ),
+        // GitHub's schema defines no subscription root, so §5.2.3.1's single root field is
+        // reached only as the operation type it cannot answer.
+        (
+            "operation type is defined",
+            "5.2.3.1",
+            "subscription{a:__typename b:__typename}",
+            json!({}),
+            &["The subscription operation is not supported by the schema."],
+        ),
+        (
+            "field selections",
+            "5.3.1",
+            "query{viewer{loginName}}",
+            json!({}),
+            &["Cannot query field \"loginName\" on type \"User\". Did you mean \"login\"?"],
+        ),
+        (
+            "field selections, introspection",
+            "5.3.1",
+            "query{__schema{queryType{nom}}}",
+            json!({}),
+            &["Cannot query field \"nom\" on type \"__Type\". Did you mean \"name\"?"],
+        ),
+        (
+            "field selection merging, aliases",
+            "5.3.2",
+            "query{viewer{x:login x:name}}",
+            json!({}),
+            &[
+                "Fields \"x\" conflict because \"login\" and \"name\" are different fields. Use different aliases on the fields to fetch both if this was intentional.",
+            ],
+        ),
+        (
+            "field selection merging, arguments",
+            "5.3.2",
+            "query{viewer{repositories(first:1){totalCount} repositories(first:2){totalCount}}}",
+            json!({}),
+            &[
+                "Fields \"repositories\" conflict because they have differing arguments. Use different aliases on the fields to fetch both if this was intentional.",
+            ],
+        ),
+        (
+            "field selection merging, nested",
+            "5.3.2",
+            "query{viewer{r:repositories(first:1){nodes{a:name}} r:repositories(first:1){nodes{a:id}}}}",
+            json!({}),
+            &[
+                "Fields \"r\" conflict because subfields \"nodes\" conflict because subfields \"a\" conflict because \"name\" and \"id\" are different fields. Use different aliases on the fields to fetch both if this was intentional.",
+            ],
+        ),
+        (
+            "field selection merging, exclusive fragments",
+            "5.3.2",
+            "query($id:ID!){node(id:$id){... on Issue{x:title} ... on PullRequest{x:number}}}",
+            json!({"id": "I_1"}),
+            &[
+                "Fields \"x\" conflict because they return conflicting types \"String!\" and \"Int!\". Use different aliases on the fields to fetch both if this was intentional.",
+            ],
+        ),
+        (
+            "leaf field selections, scalar",
+            "5.3.3",
+            "query{viewer{login{name}}}",
+            json!({}),
+            &["Field \"login\" must not have a selection since type \"String!\" has no subfields."],
+        ),
+        (
+            "leaf field selections, composite",
+            "5.3.3",
+            "query{viewer}",
+            json!({}),
+            &[
+                "Field \"viewer\" of type \"User!\" must have a selection of subfields. Did you mean \"viewer { ... }\"?",
+            ],
+        ),
+        (
+            "argument names",
+            "5.4.1",
+            "query{viewer{login(first:1)}}",
+            json!({}),
+            &["Unknown argument \"first\" on field \"User.login\"."],
+        ),
+        (
+            "argument uniqueness",
+            "5.4.2",
+            "query{node(id:\"A\",id:\"B\"){id}}",
+            json!({}),
+            &["There can be only one argument named \"id\"."],
+        ),
+        (
+            "required arguments",
+            "5.4.2.1",
+            "query{node{id}}",
+            json!({}),
+            &["Argument \"Query.node(id:)\" of type \"ID!\" is required, but it was not provided."],
+        ),
+        (
+            "fragment name uniqueness",
+            "5.5.1.1",
+            "query{viewer{...f}} fragment f on User{name} fragment f on User{login}",
+            json!({}),
+            &["There can be only one fragment named \"f\"."],
+        ),
+        (
+            "fragment spread type existence",
+            "5.5.1.2",
+            "query($id:ID!){node(id:$id){... on Labelled{id}}}",
+            json!({"id": "I_1"}),
+            &[
+                "Unknown type \"Labelled\". Did you mean \"Label\", \"LabelEdge\", \"Labelable\", or \"LabelOrder\"?",
+            ],
+        ),
+        (
+            "fragments on composite types",
+            "5.5.1.3",
+            "query{viewer{...f}} fragment f on String{__typename}",
+            json!({}),
+            &["Fragment \"f\" cannot condition on non composite type \"String\"."],
+        ),
+        (
+            "fragments must be used",
+            "5.5.1.4",
+            "query{viewer{login}} fragment f on User{name}",
+            json!({}),
+            &["Fragment \"f\" is never used."],
+        ),
+        (
+            "fragment spread target defined",
+            "5.5.2.1",
+            "query{viewer{...g}}",
+            json!({}),
+            &["Unknown fragment \"g\"."],
+        ),
+        (
+            "fragment spreads must not form cycles",
+            "5.5.2.2",
+            "query{viewer{...a}} fragment a on User{login ...b} fragment b on User{...a}",
+            json!({}),
+            &["Cannot spread fragment \"a\" within itself via \"b\"."],
+        ),
+        (
+            "fragment spread is possible",
+            "5.5.2.3",
+            "query{viewer{... on Issue{title}}}",
+            json!({}),
+            &[
+                "Fragment cannot be spread here as objects of type \"User\" can never be of type \"Issue\".",
+            ],
+        ),
+        (
+            "values of correct type",
+            "5.6.1",
+            "query{viewer{repositories(first:3000000000){totalCount}}}",
+            json!({}),
+            &["Int cannot represent non 32-bit signed integer value: 3000000000"],
+        ),
+        (
+            "input object field names",
+            "5.6.2",
+            "mutation{updateProjectV2Field(input:{fieldId:\"F\",projectId:\"P\"}){clientMutationId}}",
+            json!({}),
+            &[
+                "Expected value of type \"UpdateProjectV2FieldInput\" not to include unknown field \"projectId\", found: { fieldId: \"F\", projectId: \"P\" }.",
+            ],
+        ),
+        (
+            "input object field uniqueness",
+            "5.6.3",
+            "mutation{updateProjectV2Field(input:{fieldId:\"F\",fieldId:\"G\"}){clientMutationId}}",
+            json!({}),
+            &["There can be only one input field named \"fieldId\"."],
+        ),
+        (
+            "input object required fields",
+            "5.6.4",
+            "mutation{updateProjectV2Field(input:{}){clientMutationId}}",
+            json!({}),
+            &[
+                "Expected value of type \"UpdateProjectV2FieldInput\" to include required field \"fieldId\", found: {  }.",
+            ],
+        ),
+        (
+            "directives are defined",
+            "5.7.1",
+            "query{viewer{login @nowhere}}",
+            json!({}),
+            &["Unknown directive \"@nowhere\"."],
+        ),
+        (
+            "directives are in valid locations",
+            "5.7.2",
+            "query @include(if:true){viewer{login}}",
+            json!({}),
+            &["Directive \"@include\" may not be used on QUERY."],
+        ),
+        (
+            "directives are unique per location",
+            "5.7.3",
+            "query{viewer{login @skip(if:false) @skip(if:false)}}",
+            json!({}),
+            &["The directive \"@skip\" can only be used once at this location."],
+        ),
+        (
+            "directive required arguments",
+            "5.4.2.1",
+            "query{viewer{login @skip}}",
+            json!({}),
+            &["Argument \"@skip(if:)\" of type \"Boolean!\" is required, but it was not provided."],
+        ),
+        (
+            "variable uniqueness",
+            "5.8.1",
+            "query($id:ID!,$id:ID!){node(id:$id){id}}",
+            json!({"id": "I_1"}),
+            &["There can be only one variable named \"$id\"."],
+        ),
+        (
+            "variables are input types",
+            "5.8.2",
+            "query($u:User){viewer{login}}",
+            json!({}),
+            &[
+                "Variable \"$u\" is never used.",
+                "Variable \"$u\" cannot be non-input type \"User\".",
+            ],
+        ),
+        (
+            "all variable uses defined",
+            "5.8.3",
+            "query{node(id:$id){id}}",
+            json!({}),
+            &["Variable \"$id\" is not defined."],
+        ),
+        (
+            "all variable uses defined, through a fragment",
+            "5.8.3",
+            "query{viewer{...f}} fragment f on User{repositories(first:$n){totalCount}}",
+            json!({}),
+            &["Variable \"$n\" is not defined."],
+        ),
+        (
+            "all variables used",
+            "5.8.4",
+            "query($id:ID!,$unused:Int){node(id:$id){id}}",
+            json!({"id": "I_1"}),
+            &["Variable \"$unused\" is never used."],
+        ),
+        (
+            "all variable usages are allowed, nullability",
+            "5.8.5",
+            "query($id:ID){node(id:$id){id}}",
+            json!({"id": "I_1"}),
+            &["Variable \"$id\" of type \"ID\" used in position expecting type \"ID!\"."],
+        ),
+        (
+            "all variable usages are allowed, a null default is no licence",
+            "5.8.5",
+            "query($id:ID = null){node(id:$id){id}}",
+            json!({}),
+            &["Variable \"$id\" of type \"ID\" used in position expecting type \"ID!\"."],
+        ),
+        (
+            "all variable usages are allowed, list",
+            "5.8.5",
+            "query($ids:[ID!]!){node(id:$ids){id}}",
+            json!({"ids": ["I_1"]}),
+            &["Variable \"$ids\" of type \"[ID!]!\" used in position expecting type \"ID!\"."],
+        ),
+        (
+            "a default is a value of its type",
+            "5.6.1",
+            "query($first:Int = \"ten\"){viewer{repositories(first:$first){totalCount}}}",
+            json!({}),
+            &["Int cannot represent non-integer value: \"ten\""],
+        ),
+        (
+            "a default is a constant",
+            "2.10",
+            "query($a:Int,$b:Int=$a){viewer{repositories(first:$b){totalCount}}}",
+            json!({}),
+            &["Syntax Error: Unexpected variable \"$a\" in constant value."],
+        ),
+        // §6.1.2, CoerceVariableValues, over each variable's JSON value.
+        (
+            "variables are an object",
+            "7.1.1",
+            "query{viewer{login}}",
+            json!(["not", "an", "object"]),
+            &["Variables must be provided as an Object where each property is a variable value."],
+        ),
+        (
+            "a required variable is given",
+            "6.1.2",
+            "mutation($input:UpdateProjectV2FieldInput!){updateProjectV2Field(input:$input){clientMutationId}}",
+            json!({}),
+            &[
+                "Variable \"$input\" has invalid value: Expected a value of non-null type \"UpdateProjectV2FieldInput!\" to be provided.",
+            ],
+        ),
+        (
+            "a variable coerces to its scalar",
+            "6.1.2",
+            "query($first:Int){viewer{repositories(first:$first){totalCount}}}",
+            json!({"first": "ten"}),
+            &[
+                "Variable \"$first\" has invalid value: Int cannot represent non-integer value: \"ten\"",
+            ],
+        ),
+        (
+            "a variable coerces to its enum",
+            "6.1.2",
+            "mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){clientMutationId}}",
+            json!({"input": {"projectId": "PVT_1", "dataType": "PRIORITY", "name": "Priority"}}),
+            &[
+                "Variable \"$input\" has invalid value at .dataType: Value \"PRIORITY\" does not exist in \"ProjectV2CustomFieldType\" enum.",
+            ],
+        ),
+        (
+            "a variable names no input field its type lacks",
+            "6.1.2",
+            "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){clientMutationId}}",
+            json!({"input": {"issueId": "I_1", "projectId": "PVT_1"}}),
+            &[
+                "Variable \"$input\" has invalid value: Expected value of type \"DeleteIssueInput\" not to include unknown field \"projectId\", found: { issueId: \"I_1\", projectId: \"PVT_1\" }.",
+            ],
+        ),
+        (
+            "a variable gives every required input field",
+            "6.1.2",
+            "mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){clientMutationId}}",
+            json!({"input": {"projectId": "PVT_1", "dataType": "SINGLE_SELECT",
+                "name": "Priority", "singleSelectOptions": [{"name": "High", "color": "GRAY"}]}}),
+            &[
+                "Variable \"$input\" has invalid value at .singleSelectOptions[0]: Expected value of type \"ProjectV2SingleSelectFieldOptionInput\" to include required field \"description\", found: { color: \"GRAY\", name: \"High\" }.",
+            ],
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (rule, section, document, variables, expected) in cases {
+        let answered = github_schema::refuse(&json!({"query": document, "variables": variables}));
+        let Some(answered) = answered else {
+            wrong.push(format!("§{section} {rule}: {document} was not refused"));
+            continue;
+        };
+        let errors = answered["errors"].as_array().cloned().unwrap_or_default();
+        let messages = errors
+            .iter()
+            .map(|error| error["message"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        if messages != *expected {
+            wrong.push(format!(
+                "§{section} {rule}: {document} answered {messages:?}"
+            ));
+        }
+        let shaped = answered.as_object().is_some_and(|body| body.len() == 1)
+            && errors.iter().all(|error| {
+                error["message"].is_string()
+                    && error.as_object().is_some_and(|fields| {
+                        fields
+                            .keys()
+                            .all(|key| key == "message" || key == "locations")
+                    })
+                    && error.get("locations").is_none_or(|locations| {
+                        locations.as_array().is_some_and(|all| {
+                            all.iter()
+                                .all(|at| at["line"].is_u64() && at["column"].is_u64())
+                        })
+                    })
+            });
+        if !shaped {
+            wrong.push(format!(
+                "§{section} {rule}: {answered} is not GraphQL's error shape"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+
+    // A refusal of a rule broken at a place in the document says where.
+    assert_eq!(
+        github_schema::refuse(&json!({"query": "query{\n  viewer{loginName}}"})),
+        Some(
+            json!({"errors": [{"message": "Cannot query field \"loginName\" on type \"User\". \
+                Did you mean \"login\"?",
+            "locations": [{"line": 2, "column": 10}]}]})
+        )
+    );
+    // And what breaks none of them runs: a nullable variable with a non-null default is allowed
+    // where a non-null one is expected, a list position takes a single value, and a named
+    // operation is chosen by `operationName`.
+    for (document, variables, operation) in [
+        ("query($id:ID = \"I_1\"){node(id:$id){id}}", json!({}), None),
+        (
+            "query($ids:[ID!]!){nodes(ids:$ids){id}}",
+            json!({"ids": "I_1"}),
+            None,
+        ),
+        (
+            "query a{viewer{login}} query b{viewer{name}}",
+            json!({}),
+            Some("b"),
+        ),
+    ] {
+        assert_eq!(
+            github_schema::refuse(
+                &json!({"query": document, "variables": variables, "operationName": operation})
+            ),
+            None,
+            "{document}"
+        );
+    }
+    // A document of several operations names the one to run, or GitHub runs none of them.
+    assert_eq!(
+        github_schema::refuse(&json!({"query": "query a{viewer{login}} query b{viewer{id}}"})),
+        Some(json!({"errors": [{
+            "message": "Must provide operation name if query contains multiple operations."
+        }]}))
+    );
+    assert_eq!(
+        github_schema::refuse(&json!({"query": "query a{viewer{login}}", "operationName": "c"})),
+        Some(json!({"errors": [{"message": "Unknown operation named \"c\"."}]}))
+    );
+    assert_eq!(
+        github_schema::refuse(&json!({"query": "query a{viewer{login}}", "operationName": 1})),
+        Some(json!({"errors": [{"message": "operationName must be a string, not 1"}]}))
+    );
+}
+
+/// A malformed or adversarial request is refused, never answered by a crash or an exhausted
+/// stack: bytes that are not GraphQL, nesting far past any real document's, a fragment cycle
+/// two thousand spreads long, a wide selection and deeply nested variables.
+#[test]
+fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
+    use serde_json::json;
+
+    let refused = |document: &str, variables: serde_json::Value| {
+        github_schema::refuse(&json!({"query": document, "variables": variables}))
+            .unwrap_or_else(|| panic!("{} was not refused", &document[..document.len().min(80)]))
+    };
+    refused("", json!({}));
+    refused("\u{0}\u{1}garbage{{{", json!({}));
+    refused("query{viewer{login}} }}}}", json!({}));
+    let deep = |open: &str, close: &str, depth: usize| (open.repeat(depth), close.repeat(depth));
+    let (open, close) = deep("viewer{", "}", 50_000);
+    assert_eq!(
+        refused(&format!("query{{{open}login{close}}}"), json!({})),
+        json!({"errors": [{"message": "The request nests too deeply to validate."}]})
+    );
+    // A deep document that breaks no rule is validated, not refused for its depth.
+    let (open, close) = deep("ofType{", "}", 190);
+    assert_eq!(
+        github_schema::refuse(
+            &json!({"query": format!("query{{__schema{{types{{{open}name{close}}}}}}}")})
+        ),
+        None
+    );
+    let (open, close) = deep("[", "]", 50_000);
+    assert_eq!(
+        refused(
+            &format!("query{{node(id:{open}1{close}){{id}}}}"),
+            json!({}),
+        ),
+        json!({"errors": [{"message": "The request nests too deeply to validate."}]})
+    );
+    let (open, close) = deep("{a:", "}", 50_000);
+    assert_eq!(
+        refused(
+            &format!("mutation{{updateProjectV2Field(input:{open}1{close}){{clientMutationId}}}}"),
+            json!({}),
+        ),
+        json!({"errors": [{"message": "The request nests too deeply to validate."}]})
+    );
+    let chain = (0..2_000)
+        .map(|at| format!("fragment f{at} on User{{...f{}}} ", at + 1))
+        .collect::<String>();
+    let cycle = refused(
+        &format!("query{{viewer{{...f0}}}} {chain} fragment f2000 on User{{...f0}}"),
+        json!({}),
+    );
+    assert!(
+        cycle["errors"][0]["message"].as_str().is_some_and(
+            |message| message.starts_with("Cannot spread fragment \"f0\" within itself via")
+        ),
+        "{cycle}"
+    );
+    let mut nested = json!("I_1");
+    for _ in 0..300 {
+        nested = json!([nested]);
+    }
+    let answered = refused("query($id:ID!){node(id:$id){id}}", json!({"id": nested}));
+    assert_eq!(
+        answered,
+        json!({"errors": [{"message": "Variables nest deeper than 200 levels"}]})
+    );
+    // A wide document that breaks nothing is not refused for its width.
+    let wide = (0..3_000)
+        .map(|at| format!("a{at}:login "))
+        .collect::<String>();
+    assert_eq!(
+        github_schema::refuse(&json!({"query": format!("query{{viewer{{{wide}}}}}")})),
+        None
+    );
+}
+
+/// The schema check stops, rather than answering requests, against a schema breaking any
+/// type-system rule but the one GitHub's published file breaks — so a copy that is not the
+/// schema GitHub serves cannot pass for it — and starts against one breaking that rule alone.
+#[test]
+fn the_schema_check_refuses_a_schema_breaking_any_rule_but_the_tolerated_one() {
+    use serde_json::{Value, json};
+
+    let first_answer = |sdl: &str| -> Value {
+        let file = tempfile::NamedTempFile::new().expect("a scratch schema file");
+        std::fs::write(file.path(), sdl).expect("the scratch schema is written");
+        let output = std::process::Command::new("bun")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/github_schema/validate.mjs"
+            ))
+            .arg(file.path())
+            .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("bun runs the schema check");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        serde_json::from_str(stdout.lines().next().unwrap_or_default())
+            .unwrap_or_else(|_| panic!("the schema check answered {stdout:?}"))
+    };
+    let tolerated = "interface Node { id: ID! } \
+                     type Card implements Node { id: ID! @deprecated(reason: \"gone\") } \
+                     type Query { node: Node card: Card }";
+    assert_eq!(first_answer(tolerated)["ready"], json!(true));
+
+    let invalid = first_answer("type Empty type Query { empty: Empty }");
+    assert!(
+        invalid["internal"]
+            .as_str()
+            .is_some_and(|message| message.contains("is invalid")
+                && message.contains("Type Empty must define one or more fields.")),
+        "{invalid}"
+    );
+}
+
+/// graphql-js is npm's own published tarball, and a copy of it that does not hash to the
+/// integrity npm records is refused before anything is unpacked or imported from it — so the
+/// validation every GitHub double runs cannot quietly become some other code. The check is run
+/// from a scratch directory holding `validate.mjs` beside a tarball one byte off npm's.
+#[test]
+fn the_schema_check_refuses_a_graphql_tarball_npm_did_not_publish() {
+    let tests = concat!(env!("CARGO_MANIFEST_DIR"), "/tests");
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    std::fs::copy(
+        format!("{tests}/github_schema/validate.mjs"),
+        scratch.path().join("validate.mjs"),
+    )
+    .expect("the schema check is copied");
+    let mut tarball = std::fs::read(format!("{tests}/github_schema/graphql-17.0.2.tgz"))
+        .expect("the pinned graphql-js tarball is readable");
+    let last = tarball.len() - 1;
+    tarball[last] ^= 0xff;
+    std::fs::write(scratch.path().join("graphql-17.0.2.tgz"), tarball)
+        .expect("the altered tarball is written");
+
+    let output = std::process::Command::new("bun")
+        .arg(scratch.path().join("validate.mjs"))
+        .arg(format!("{tests}/fixtures/github-schema.docs.graphql"))
+        .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("bun runs the schema check");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let answer: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap_or_default())
+        .unwrap_or_else(|_| panic!("the schema check answered {stdout:?}"));
+    assert!(!output.status.success(), "{answer}");
+    assert!(
+        answer["internal"].as_str().is_some_and(|message| {
+            message.contains("graphql-17.0.2.tgz has integrity sha512-")
+                && message.contains("not the sha512-FRWbddMx")
+        }),
+        "{answer}"
+    );
+    assert!(
+        !scratch.path().join("node_modules").exists(),
+        "nothing is unpacked from a tarball npm did not publish"
+    );
+}
+
+/// A copy of graphql-js already unpacked beside the check from another pin — its marker naming
+/// another integrity, its code not this release's — is replaced by the pinned tarball's before
+/// anything is imported, so the validation cannot stay on a release the pin has moved past.
+#[test]
+fn the_schema_check_replaces_a_graphql_copy_unpacked_from_another_pin() {
+    let tests = concat!(env!("CARGO_MANIFEST_DIR"), "/tests");
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    for file in ["validate.mjs", "graphql-17.0.2.tgz"] {
+        std::fs::copy(
+            format!("{tests}/github_schema/{file}"),
+            scratch.path().join(file),
+        )
+        .expect("the schema check is copied");
+    }
+    let stale = scratch.path().join("node_modules/graphql");
+    std::fs::create_dir_all(&stale).expect("a stale copy's directory");
+    std::fs::write(stale.join(".onetaskgraph-integrity"), "sha512-another").expect("its marker");
+    std::fs::write(
+        stale.join("index.mjs"),
+        "throw new Error('the stale copy was imported');\n",
+    )
+    .expect("its code");
+
+    let output = std::process::Command::new("bun")
+        .arg(scratch.path().join("validate.mjs"))
+        .arg(format!("{tests}/fixtures/github-schema.docs.graphql"))
+        .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("bun runs the schema check");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let answer: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap_or_default())
+        .unwrap_or_else(|_| panic!("the schema check answered {stdout:?}"));
+    assert_eq!(answer["ready"], serde_json::json!(true), "{answer}");
+    assert!(output.status.success(), "{answer}");
+    assert!(
+        std::fs::read_to_string(stale.join(".onetaskgraph-integrity"))
+            .is_ok_and(|marker| marker.starts_with("sha512-FRWbddMx")),
+        "the stale copy is replaced by the pinned one"
+    );
+    assert!(
+        std::fs::read_to_string(stale.join("index.mjs"))
+            .is_ok_and(|code| !code.contains("the stale copy was imported")),
+        "the stale copy's code is gone"
+    );
 }

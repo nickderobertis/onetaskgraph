@@ -44,6 +44,12 @@ mod board;
 
 use board::{FIXTURE_BUDGET_LIMIT, Pricing, ample_allowance};
 
+// GitHub's own validation of a request against its complete published schema, which this
+// board puts every request to before it answers. Shared with `tests/schema.rs` and the e2e
+// loopback board, each of which calls only part of it.
+#[allow(dead_code)]
+mod github_schema;
+
 // `status_mapping` scoped by item kind, over this file's board: a module of this target
 // rather than a target of its own because it is this board it drives.
 mod status_by_kind;
@@ -83,6 +89,69 @@ async fn guarded_status_options_preserve_the_complete_existing_options_and_assig
                 && option["color"] == "PURPLE"
                 && option["description"] == "custom")
     );
+}
+
+/// The Status-option update 0.12.13 sent — `projectId` inside `UpdateProjectV2FieldInput`,
+/// which GitHub does not define — put to this board over HTTP as GitHub was sent it, is
+/// answered as GitHub answered it: HTTP 200, GraphQL's `errors` naming the field, no `data`,
+/// and the board's Status options as they were. The same setup without that field then lands.
+#[tokio::test]
+async fn the_status_option_update_the_previous_release_sent_is_refused_over_http_and_changes_nothing()
+ {
+    let fixture = board(vec![Item::issue("I_task", "task").status("Todo")]);
+    fixture.status_options_missing_queued();
+    let before = fixture.state.lock().unwrap().guarded_status_options.clone();
+    let body = json!({
+        "query": onetaskgraph_github_projects::graphql::STATUS_OPTIONS_UPDATE,
+        "variables": {"input": {
+            "projectId": "PVT_board", "fieldId": "PVTSSF_status",
+            "singleSelectOptions": [{"name": "Queued", "color": "GRAY", "description": ""}],
+        }},
+    })
+    .to_string();
+    let address = fixture
+        .endpoint
+        .trim_start_matches("http://")
+        .trim_end_matches("/graphql")
+        .to_owned();
+    let mut stream = std::net::TcpStream::connect(&address).expect("the board accepts");
+    write!(
+        stream,
+        "POST /graphql HTTP/1.1\r\nhost: {address}\r\nauthorization: Bearer test-token\r\n\
+         content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .expect("the request is sent");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("the board answers");
+    let (head, answer) = response.split_once("\r\n\r\n").expect("an HTTP answer");
+    assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+    let answer: Value = serde_json::from_str(answer).expect("a JSON answer");
+    assert!(answer.get("data").is_none(), "{answer}");
+    let errors = answer["errors"].as_array().expect("GraphQL's errors");
+    assert!(
+        errors.iter().any(|error| error["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("UpdateProjectV2FieldInput")
+                && message.contains("unknown field \"projectId\""))),
+        "{answer}"
+    );
+    assert!(
+        !fixture
+            .seen()
+            .iter()
+            .any(|entry| entry[0] == "updateProjectV2Field"),
+        "a refused request reaches no board state"
+    );
+    assert_eq!(fixture.state.lock().unwrap().guarded_status_options, before);
+
+    let report = status_options_source(&fixture)
+        .status_options(StatusOptionsMode::Apply)
+        .await
+        .expect("the setup this release sends lands");
+    assert_eq!(report.outcome, StatusOptionsOutcome::Applied);
 }
 
 #[tokio::test]
@@ -1388,6 +1457,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         next: 0,
         limits: Limits::default(),
     }));
+    github_schema::warm();
     let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
     let served = Arc::clone(&state);
@@ -1481,6 +1551,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                          date: {served_at}\r\n"
                     ),
                     match unbound_refusal(&served, query, variables)
+                        .or_else(|| schema_refusal(query, variables))
                         .or_else(|| refused(&served, query, variables))
                     {
                         Some(message) => {
@@ -1545,6 +1616,21 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         }
     });
     Fixture { endpoint, state }
+}
+
+/// GitHub's refusal of a request its complete published schema rejects — a field, an argument
+/// or an input field it does not define, a value of the wrong type — or `None` when GitHub
+/// would run it. GitHub answers every such message at once, before any of the request runs.
+fn schema_refusal(query: &str, variables: &Value) -> Option<String> {
+    let empty = json!({});
+    let variables = if variables.is_null() {
+        &empty
+    } else {
+        variables
+    };
+    github_schema::validate(query, variables)
+        .err()
+        .map(|errors| errors.join("; "))
 }
 
 /// GitHub's refusal of a request that leaves a non-null variable unbound, recorded, or
@@ -14885,6 +14971,115 @@ fn the_pinned_delete_mutations_are_the_ones_the_live_lane_introspects() {
                 .collect::<Vec<_>>();
             live.sort();
             assert_eq!(fields(type_name), live, "{type_name}");
+        }
+    }
+}
+
+/// The vendored copy of GitHub's published schema hashes to the SHA-256 `fixtures/README.md`
+/// records beside its source and retrieval date, so neither can move without the other — a
+/// hand edit of the copy fails here, and a refresh records its new digest in the same change.
+/// It says nothing of whether GitHub has published a newer file since.
+#[test]
+fn the_vendored_github_schema_hashes_to_the_digest_its_readme_records() {
+    let digest = github_schema::schema_sha256();
+    let readme = include_str!("fixtures/README.md");
+    assert!(
+        readme.contains(&format!("SHA-256 `{digest}`")),
+        "fixtures/github-schema.docs.graphql hashes to {digest}, which fixtures/README.md does \
+         not record; refresh the file from https://docs.github.com/public/fpt/schema.docs.graphql \
+         and record its date, size and digest there"
+    );
+}
+
+/// The vendored schema agrees with every contract the credentialed lane re-reads from GitHub
+/// on every run — each mutation's input and payload, each contract type's fields and their
+/// types, each contract enum's members — so the snapshot the doubles validate against cannot
+/// drift from GitHub there without either this or the live introspection failing.
+#[test]
+fn the_vendored_github_schema_agrees_with_every_contract_the_live_lane_introspects() {
+    use graphql_parser::schema::{Definition, TypeDefinition, parse_schema};
+    let vendored = parse_schema::<String>(github_schema::SCHEMA).unwrap();
+    let definition = |name: &str| {
+        vendored
+            .definitions
+            .iter()
+            .find_map(|definition| match definition {
+                Definition::TypeDefinition(kind) => {
+                    let named = match kind {
+                        TypeDefinition::Object(value) => &value.name,
+                        TypeDefinition::InputObject(value) => &value.name,
+                        TypeDefinition::Enum(value) => &value.name,
+                        TypeDefinition::Interface(value) => &value.name,
+                        TypeDefinition::Scalar(value) => &value.name,
+                        TypeDefinition::Union(value) => &value.name,
+                    };
+                    (named == name).then_some(kind)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("GitHub's published schema has no {name}"))
+    };
+    let members = |name: &str| -> Vec<(String, String)> {
+        match definition(name) {
+            TypeDefinition::Object(object) => object
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), f.field_type.to_string()))
+                .collect(),
+            TypeDefinition::InputObject(input) => input
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), f.value_type.to_string()))
+                .collect(),
+            _ => panic!("{name} is neither an object nor an input"),
+        }
+    };
+    let mutation = members("Mutation");
+    let TypeDefinition::Object(mutation_type) = definition("Mutation") else {
+        panic!("Mutation is an object");
+    };
+    for (name, input, payload) in journey::MUTATION_CONTRACT {
+        assert!(
+            mutation.contains(&(name.to_owned(), payload.to_owned())),
+            "GitHub's published schema has no {name}: {payload}"
+        );
+        let field = mutation_type
+            .fields
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap();
+        assert!(
+            field
+                .arguments
+                .iter()
+                .any(|a| a.name == "input" && a.value_type.to_string() == format!("{input}!")),
+            "GitHub's published {name} takes no input: {input}!"
+        );
+    }
+    for (type_name, _, expected) in journey::CONTRACT_TYPES {
+        let held = members(type_name);
+        for field in expected {
+            assert!(
+                held.iter().any(|(name, _)| name == field),
+                "GitHub's published {type_name} has no {field}"
+            );
+        }
+        for (field, kind) in journey::contract_field_types(type_name) {
+            assert!(
+                held.contains(&((*field).to_owned(), (*kind).to_owned())),
+                "GitHub's published {type_name}.{field} is not {kind}: {held:?}"
+            );
+        }
+    }
+    for (enum_name, expected) in journey::CONTRACT_ENUMS {
+        let TypeDefinition::Enum(values) = definition(enum_name) else {
+            panic!("{enum_name} is an enum");
+        };
+        for member in expected {
+            assert!(
+                values.values.iter().any(|value| value.name == *member),
+                "GitHub's published {enum_name} has no {member}"
+            );
         }
     }
 }

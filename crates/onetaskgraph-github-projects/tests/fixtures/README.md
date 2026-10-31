@@ -238,3 +238,66 @@ documentation-derived and carries no captured response.
 `public: Boolean!`, "Returns true if the project is public." It is what
 `graphql::PROJECT_VISIBILITY` selects, the board half of the visibility a write to a source
 declared private is held to.
+
+## `github-schema.docs.graphql` — GitHub's complete published schema
+
+`github-schema.docs.graphql` is GitHub.com's public GraphQL schema file exactly as GitHub
+distributes it, whole and unedited: <https://docs.github.com/public/fpt/schema.docs.graphql>,
+retrieved 2026-10-31 (served `last-modified: Mon, 26 Oct 2026 10:30:11 GMT`), 1,561,946 bytes,
+SHA-256 `ee690896ae7d9126765c6a660174b40c9d1974b70db36af8559117b9c4a7b7a6`. To refresh it,
+download that URL over the file and record the new date, size and digest here.
+
+Two gates hold the copy, both in `tests/plugin.rs`. One pins it to that digest — computed by
+`validate.mjs` from the file it builds, so the check and the pin read the same bytes — so it cannot be
+edited by hand or refreshed without its provenance moving in the same change. The other
+reconciles it with every contract the credentialed lane introspects from GitHub on every run —
+each mutation's input and payload, each contract type's fields and types, each contract enum's
+members (`journey::MUTATION_CONTRACT`, `CONTRACT_TYPES`, `contract_field_types`,
+`CONTRACT_ENUMS`) — so where GitHub changes one of those contracts, either the live lane fails
+against GitHub or this reconciliation fails against the copy, and the copy is refreshed. A
+change GitHub makes elsewhere in its schema is caught only when the copy is next refreshed;
+`updateProjectV2Field`, which the field setup sends, is not among those live contracts.
+
+It is not a reduction, and that is its purpose. `schema.graphql` above is a subset written by
+the same hand as the documents it checks, and in 0.12.13 it defined `projectId` on
+`UpdateProjectV2FieldInput` — which GitHub does not — so the field setup's Status-option
+update passed both that check and the loopback board and was refused by the live API with
+`Variable $input of type UpdateProjectV2FieldInput! was provided invalid value for projectId
+(Field is not defined on UpdateProjectV2FieldInput)`. Against this file:
+
+- `tests/github_schema/mod.rs` validates a request by every rule of the GraphQL
+  specification's Validation section and coerces its variables (`CoerceVariableValues`), as
+  GitHub does before running anything, through graphql-js — the GraphQL Foundation's reference
+  implementation, run under `bun` by `tests/github_schema/validate.mjs`, since no Rust
+  validator fits this workspace's dependency policy unchanged (the module documentation says
+  which and why); `tests/schema.rs` breaks
+  each rule once and shows it refused. graphql-js 17 finds one type-system rule this file
+  breaks — an implementation field deprecated where its interface field is not, eight times
+  — which governs how a schema is written rather than what a request may ask, so that rule
+  alone is tolerated and any other schema error stops every check;
+- `tests/schema.rs` holds every document in `graphql::DOCUMENTS` to it, and the field setup's
+  requests with the variables they are sent with;
+- this crate's board (`tests/plugin.rs`) and the shared loopback board every binary journey
+  drives (`onetaskgraph-e2e-support`, which includes that module by path) refuse any request
+  it rejects, answering as GitHub does: HTTP 200, `errors`, no `data`, and changing nothing on
+  the board. The GitHub Projects e2e suite includes the module by path too, to show a
+  document the board does not answer is one GitHub runs.
+
+
+## `../github_schema/graphql-17.0.2.tgz` — graphql-js, as npm publishes it
+
+The validator's graphql-js is npm's own published tarball, committed byte for byte:
+<https://registry.npmjs.org/graphql/-/graphql-17.0.2.tgz>, retrieved 2026-10-31, 1,019,024
+bytes, integrity `sha512-FRWbddMxfkjiB7z+aQDWIR+E34xo9I8c9mtK2RPv8PmMzKRvrdsreHL/Ui/TmwHJfhHChEtsFPyMHKI+xuarQQ==`
+— the `dist.integrity` npm records for it. `validate.mjs` refuses a tarball that does not hash
+to that before unpacking anything (`tests/schema.rs` shows it refusing one byte off), then
+unpacks it once into the git-ignored `tests/github_schema/node_modules/graphql` and imports it
+from there.
+
+It is not a dependency in the workspace's `package.json` because that file, like `bun.lock`,
+is one of the `sharedGlobals` every project's inputs name: declaring a test double's validator
+there would make each change to it select every crate in the graph — the hosted live lanes
+included — where a change to this crate should select this crate and what depends on it. To
+move to another release, download its tarball beside `validate.mjs`, set `GRAPHQL_TARBALL`
+and `GRAPHQL_INTEGRITY` there to its name and `npm view graphql@<version> dist.integrity`,
+delete the old tarball, and record the new one here.
