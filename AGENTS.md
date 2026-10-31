@@ -1321,6 +1321,32 @@ them do; this is the inventory of what is owed, not a status board.
      afresh once an option changes; a person's body edit survives every terminal projection;
      and an approval creates and resolves its review task through `task project-human`, a stale
      version refusing the approval and leaving the review open.
+127. A copy stopped at a point of a create — after its intent, with its `createIssue` answer
+     dropped, before its link — and run again leaves exactly one destination item carrying the
+     source's origin on a folder, a board and Linear, reported `via: "intent"` where the item
+     existed, with the link recorded and no `onetaskgraph.creating` left; an uninterrupted create
+     writes its intent before its first destination request and none after, the created item
+     carries `onetaskgraph.create_key` (Linear: its id), a dry run writes neither, `metadata set`
+     refuses the key, `task locate` answers the counterpart `via: "intent"` writing nothing, and
+     another attempt's live lease refuses `create-in-progress` before any destination request.
+128. `task copy --when-destination-status … --otherwise refuse|preserve-destination` writes over a
+     counterpart only at the named categories, answers any other `failed` as `destination-status`
+     with `held` and exits `4` — or keeps its status — and `--when-destination-priority` keeps a
+     priority a person set while writing every other field; both are decided on the copy's own
+     read — from the cache under `--expect`, with no read of the destination — cost no request,
+     leave a create alone, report `status_condition` and `priority_condition`, and a later
+     unguarded copy of the unchanged source writes what was kept; a status guard beside
+     `preserve-destination`, and `--otherwise` alone, are refused before any request.
+129. A GitHub Projects source's `creation_owners` refuses, as `creation-owner` and writing
+     nothing, a create filed in another owner's repository by `task copy`, `--create`, a member
+     create and a dry run; allows an owner spelled in another case; never refuses an update; holds
+     a routed copy to the destination it placed it at; refuses a malformed login at load; and
+     `task locate` answers it as `creates_in.refused` without failing.
+130. Every landed copy outcome's `result` — and `task update`, `status set`, `priority set`,
+     `content set` and `metadata set`'s — holds the status and priority `task show` then reads,
+     and its version wherever it is not `null` (a board's after a write; see the README), on a
+     folder, a board and Linear; a refusal after the copy's read carries `held`, `task comment add`
+     answers `item`, and both SDKs pass the guards and parse every new member.
 
 ## The public boundary
 
