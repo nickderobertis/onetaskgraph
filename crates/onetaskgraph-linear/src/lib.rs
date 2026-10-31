@@ -1946,6 +1946,20 @@ impl LinearSource {
         query: &str,
         variables: Value,
     ) -> Result<Result<Value, Refusal>, SourceError> {
+        // Every mutation but a create is asked for immediately before it is sent — a create's
+        // relations, the whole write that finishes a create answered as an id already held, an
+        // upload, a comment — so a copy that owns the create renews its hold first, and one that
+        // has lost it sends nothing more. A write retried later is asked for again here.
+        if query.trim_start().starts_with("mutation")
+            && ![
+                graphql::ISSUE_CREATE,
+                graphql::PROJECT_CREATE,
+                graphql::DOCUMENT_CREATE,
+            ]
+            .contains(&query)
+        {
+            <dyn onetaskgraph_plugin_api::WriteGuard>::check().await?;
+        }
         let response = client
             .post(&self.endpoint.0)
             .header("Authorization", self.key.expose_secret())
