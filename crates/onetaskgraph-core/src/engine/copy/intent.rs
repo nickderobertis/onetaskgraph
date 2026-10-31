@@ -154,12 +154,15 @@ impl Intent {
 }
 
 /// What resolving an earlier attempt's intent may do beyond reading.
-#[derive(Debug, Clone, Copy)]
-pub(in crate::engine) struct Resolving {
-    /// Whether it may wait out the destination's quiescence window.
-    pub(in crate::engine) waits: bool,
-    /// Whether it may write the lease that outlasts that wait to the copied item.
-    pub(in crate::engine) writes: bool,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::engine) enum Resolving {
+    /// Read only: a dry run and `task locate`, which never wait or write.
+    Reads,
+    /// Wait out the destination's quiescence window, writing nothing to the copied item: a
+    /// `--no-link` copy.
+    Waits,
+    /// Wait, having first taken the intent over under a lease that outlasts the wait.
+    WaitsLeased,
 }
 
 /// What taking an intent came to.
@@ -795,7 +798,7 @@ impl Engine {
                     });
                 }
             }
-            if waited || !resolving.waits || !destination.source().create_key_lags() {
+            if waited || resolving == Resolving::Reads || !destination.source().create_key_lags() {
                 return Ok(None);
             }
             let Some(window_end) = intent
@@ -811,7 +814,7 @@ impl Engine {
             // Taken over by this attempt — refused while another's lease is live — and leased
             // once, to outlast the whole wait, so no renewal falls during it. A source that will
             // not keep the key, or a copy that may not write to it, waits all the same, unleased.
-            if resolving.writes {
+            if resolving == Resolving::WaitsLeased {
                 self.take_intent(
                     level,
                     id,

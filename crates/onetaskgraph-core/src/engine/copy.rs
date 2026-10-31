@@ -6765,9 +6765,12 @@ impl Engine {
                 id,
                 &intent,
                 repositories_of(item),
-                intent::Resolving {
-                    waits: !request.dry_run,
-                    writes: !request.dry_run && !request.no_link,
+                if request.dry_run {
+                    intent::Resolving::Reads
+                } else if request.no_link {
+                    intent::Resolving::Waits
+                } else {
+                    intent::Resolving::WaitsLeased
                 },
             )
             .await?
