@@ -3564,6 +3564,8 @@ mod pool {
             // And the key's hourly request quota, which every run shares.
             // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Linear's documented hourly request quota for one API key, the figure `crates/onetaskgraph-linear-e2e/budgets.yaml` already shares against; Linear publishes it in prose alone, and the plugin backs off on the `RATELIMITED` refusal it answers past it with.
             state.request_limit = Some(2_500);
+            // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Linear's documented hourly complexity quota for one API key, the figure `crates/onetaskgraph-linear-e2e/budgets.yaml` already shares against; Linear publishes it in prose alone, scores each document at its own runtime (`complexity.rs` reconciles the model against Linear's reported scores), and refuses past it with `RATELIMITED`.
+            state.complexity_limit = Some(3_000_000.0);
         }
         // Rounds of eight runs at once, each run both lanes, until every member is warm:
         // claims start at a member their holder derives, so rounds spread over the pool.
@@ -3594,7 +3596,8 @@ mod pool {
             // None refused — for the limit, for the pool, or for anything else.
             assert_isolated(&replay, &sessions);
         }
-        // Not one request of the four rounds was refused for the key's hourly quota.
+        // Not one request of the four rounds was refused for the key's hourly request or
+        // complexity quota.
         // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] This is the functional outcome the change owes, not a cost ceiling: the stand-in refuses past each limit exactly as the service does, and the task's acceptance criterion is that eight runs at once are refused for none of them; the per-session figures themselves stay onebudgetspec's.
         assert_eq!(replay.state.lock().unwrap().rate_limited, 0);
         // Every document the four rounds created is a pool member's, made once.

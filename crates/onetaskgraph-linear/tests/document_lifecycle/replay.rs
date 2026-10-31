@@ -49,6 +49,10 @@ pub struct State {
     /// Linear's hourly request quota for one key, which every session of every run shares: a
     /// request past it is refused `RATELIMITED`, as Linear refuses it, and counted here.
     pub request_limit: Option<usize>,
+    /// Linear's hourly complexity quota for one key, which every session shares too: a request
+    /// whose score — as Linear scores it — would carry the hour past it is refused the same way.
+    pub complexity_limit: Option<f64>,
+    pub complexity_spent: f64,
     /// Store the next `issueCreate` and then answer it with a gateway error, as a create
     /// whose acknowledgement was lost on the way back.
     pub lose_next_issue_create_ack: bool,
@@ -153,9 +157,21 @@ impl Replay {
                 let (key, request) = read(&mut stream);
                 let mut state = serving.lock().unwrap();
                 state.keyed.push((key, request.clone()));
-                if state
-                    .request_limit
-                    .is_some_and(|limit| state.keyed.len() > limit)
+                let scored = schema::complexity::score(
+                    request["query"].as_str().unwrap_or_default(),
+                    &request["variables"],
+                )
+                .map_or(0.0, |points| {
+                    points + schema::complexity::LINEAR_ABOVE_MODEL
+                });
+                state.complexity_spent += scored;
+                let over_complexity = state
+                    .complexity_limit
+                    .is_some_and(|limit| state.complexity_spent > limit);
+                if over_complexity
+                    || state
+                        .request_limit
+                        .is_some_and(|limit| state.keyed.len() > limit)
                 {
                     state.rate_limited += 1;
                     drop(state);

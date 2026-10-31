@@ -60,6 +60,37 @@ fn creations_per_hour() -> u64 {
     let pinned: Value = serde_json::from_str(include_str!("fixtures/rate-limits.json")).unwrap();
     pinned["content_creation"]["per_hour"].as_u64().unwrap()
 }
+/// GitHub's per-minute secondary limits, from the same pinned `fixtures/rate-limits.json`:
+/// content-creating requests a minute, secondary points a minute, and what a mutation and a
+/// query each count against them.
+fn per_minute() -> (u64, u64, u64, u64) {
+    let pinned: Value = serde_json::from_str(include_str!("fixtures/rate-limits.json")).unwrap();
+    let read = |pointer: &str| pinned.pointer(pointer).and_then(Value::as_u64).unwrap();
+    (
+        read("/content_creation/per_minute"),
+        read("/secondary_points/per_minute"),
+        read("/secondary_points/per_mutation_request"),
+        read("/secondary_points/per_query_request"),
+    )
+}
+
+/// The content creations of a main session's setup burst: its nine issues and their nine
+/// board items, created back to back (`fixtures/session-cost.txt`).
+fn setup_burst() -> u64 {
+    let record = include_str!("fixtures/session-cost.txt");
+    let count = |name: &str| -> u64 {
+        record
+            .lines()
+            .find_map(|line| {
+                let mut words = line.split_whitespace();
+                let count: u64 = words.next()?.parse().ok()?;
+                let _nodes = words.next()?;
+                (words.collect::<Vec<_>>().join(" ") == name).then_some(count)
+            })
+            .unwrap()
+    };
+    count("creating an issue") + count("adding an issue to the board")
+}
 /// GitHub's cap on a board's fields.
 // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] GitHub states this cap in prose alone and answers past it with a refusal; a session's own board starts from the template's fields and adds two, so the credentialed lane meets the real cap only if the template is near it, and then by GitHub's own refusal.
 const FIELDS_PER_BOARD: usize = 50;
@@ -136,6 +167,11 @@ struct Account {
     /// answered without its id (`"copy-without-id"`) or as the template itself
     /// (`"copy-as-template"`), and a deletion refused (`"refused-delete"`).
     faults: Vec<&'static str>,
+    /// Whether the per-minute secondary limits are enforced, over every request since the
+    /// account was made: a burst test's whole run falls inside one minute.
+    per_minute: bool,
+    minute_creations: u64,
+    minute_points: u64,
     /// Under `"lagging-listing"`, how many listings of the template still leave its newest
     /// draft out: GitHub's listing lags a draft's create by some seconds.
     lagging: usize,
@@ -197,7 +233,21 @@ impl Account {
             "LiveTemplateDraft(",
             "createProjectV2Field(",
         ];
-        if creates.iter().any(|name| document.contains(name)) {
+        let creating = creates.iter().any(|name| document.contains(name));
+        if self.per_minute {
+            let (creations, points, per_mutation, per_query) = per_minute();
+            self.minute_points += if document.starts_with("mutation") {
+                per_mutation
+            } else {
+                per_query
+            };
+            self.minute_creations += u64::from(creating);
+            if self.minute_creations > creations || self.minute_points > points {
+                self.refused.push(format!("per-minute: {document}"));
+                return json!({"errors":[{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}]});
+            }
+        }
+        if creating {
             self.creations += 1;
             if self.creations > creations_per_hour() {
                 self.refused.push(format!("creations: {document}"));
@@ -597,7 +647,10 @@ async fn session_child() {
         let project_id = journey::preflight_board(&token, OWNER, board.number, REPOSITORY).await?;
         let fields = journey::writable_fields(&token, &project_id).await?;
         journey::ensure_origin_field(&token, &project_id, &fields).await?;
-        let creations = if entry == EntryPoint::Main {
+        let burst = std::env::var_os("RUN_BOARD_GATE_BURST").is_some();
+        let creations = if burst {
+            setup_burst()
+        } else if entry == EntryPoint::Main {
             main_creations()
         } else {
             asset_creations()
@@ -671,7 +724,8 @@ async fn session_child() {
         // session draws from the account's allowance, at one point a request.
         let spent = journey::SESSION.snapshot().total_requests() as u64;
         let design = journey::budget::session_design_points(entry);
-        for _ in spent..design.saturating_sub(4) {
+        let filler = if burst { 0 } else { design.saturating_sub(4) };
+        for _ in spent..filler {
             send(
                 BOARD_WORKLOAD_DOCUMENT,
                 "session read",
@@ -718,7 +772,9 @@ async fn session_child() {
     guard.disarm();
     let walked = outcome.unwrap_or_else(|error| panic!("session: {error}"));
     deleted.unwrap();
-    let own = if entry == EntryPoint::Main {
+    let own = if std::env::var_os("RUN_BOARD_GATE_BURST").is_some() {
+        setup_burst()
+    } else if entry == EntryPoint::Main {
         main_creations()
     } else {
         asset_creations()
@@ -1347,4 +1403,50 @@ fn a_template_count_that_never_settles_is_refused_writing_nothing() {
             .iter()
             .any(|(_, document, _)| document.starts_with("mutation"))
     );
+}
+
+/// Runs `runs` main sessions at once, every one making its setup burst at the same moment.
+fn bursts(runs: u64) -> (Arc<Mutex<Account>>, Vec<Result<Report, String>>) {
+    let account = Arc::new(Mutex::new(Account::new()));
+    account.lock().unwrap().per_minute = true;
+    let origin = serve(Arc::clone(&account));
+    let children: Vec<_> = (0..runs)
+        .map(|run| {
+            session(
+                &origin,
+                EntryPoint::Main,
+                &format!("burst-{run}"),
+                600 + run,
+                &[("RUN_BOARD_GATE_BURST", "1")],
+            )
+        })
+        .collect();
+    let reports = children.into_iter().map(finish).collect();
+    (account, reports)
+}
+
+/// The overlap GitHub's per-minute secondary limits allow, and no more: four runs whose
+/// setup bursts — eighteen content creations each, with the copy and the origin field — land
+/// in the same minute stay inside 80 creations a minute and 2,000 secondary points; a fifth
+/// does not. Beyond four, runs overlap safely only because a real session spreads its writes
+/// over a quarter of an hour of settle waits, and the plugin backs off on a secondary limit
+/// rather than failing; this change claims no more headroom than this test shows.
+#[test]
+fn four_runs_setup_bursts_fit_the_per_minute_limits_and_a_fifth_does_not() {
+    let (account, reports) = bursts(4);
+    for report in &reports {
+        assert!(report.is_ok(), "{report:?}");
+    }
+    assert_eq!(account.lock().unwrap().refused, Vec::<String>::new());
+    let (account, reports) = bursts(5);
+    assert!(
+        reports.iter().any(Result::is_err),
+        "five bursts in one minute all fit"
+    );
+    let refused = account.lock().unwrap().refused.clone();
+    assert!(
+        refused.iter().all(|why| why.starts_with("per-minute")),
+        "{refused:?}"
+    );
+    assert!(!refused.is_empty());
 }
