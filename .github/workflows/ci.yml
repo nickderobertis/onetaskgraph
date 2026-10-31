@@ -90,15 +90,8 @@ jobs:
   # matrix; affected selection is what keeps that affordable.
   check:
     name: check (${{ matrix.os }})
-    # The live journeys remain inside the affected gate. Serialize only this job's
-    # credentialed leg — the Linux one on a push; on a pull request `test-linux` carries the
-    # credentials and joins the group instead — and retain every waiting check rather than
-    # replacing a pending writer.
-    # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] This block moves no suite into the gate: the live journeys were already ordinary affected tests, run only when their own plugin changed, which AGENTS.md records as reversing the separate live tier. It only serializes the one credentialed leg so two writers cannot interleave updates to the standing Linear set.
-    concurrency:
-      group: ${{ matrix.os == 'ubuntu-latest' && github.event_name == 'push' && 'linear-live-documents' || format('check-{0}-{1}', matrix.os, github.run_id) }}
-      cancel-in-progress: false
-      queue: max
+    # No concurrency group: each live session works only on its own board copy and its own
+    # leased Linear slot set, so runs need no serialising (.github/linear-documents-policy).
     needs: [macos-lanes]
     if: ${{ !cancelled() && github.event_name != 'workflow_dispatch' }}
     runs-on: ${{ matrix.os }}
@@ -685,13 +678,8 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # This run's one live session, serialized with every other writer to the standing Linear
-    # set (linear-documents.yml, and `check`'s Linux leg on a push), every waiting writer kept.
-    # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] This block moves no suite into the job: the live journeys are ordinary affected tests here as on `check`, run only when their own plugin changed. It only serializes the credentialed job so two writers cannot interleave updates to the standing Linear set.
-    concurrency:
-      group: linear-live-documents
-      cancel-in-progress: false
-      queue: max
+    # No concurrency group: this run's live sessions touch only resources of its own
+    # namespace, so any number of runs may execute them at once.
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"

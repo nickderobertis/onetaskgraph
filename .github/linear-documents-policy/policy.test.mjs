@@ -6,26 +6,74 @@ import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { read, workflows } from "../workflow-graph.mjs";
 
-// The service owns the queue. Reconcile its actual declarations instead of simulating
-// a second scheduler whose behavior could disagree with Actions.
-test("ordinary, daily and explicit initialization retain three pending CI writers", () => {
-  const definitions = workflows();
-  const ci = definitions["ci.yml"];
-  const creation = definitions["linear-documents.yml"];
-  assert.equal(ci.concurrency, undefined, "outer cancellation must not cancel pending checks");
-  // A push's credentials are on check's Linux leg; a pull request's on test-linux.
-  const ordinary = ci.jobs.check.concurrency;
-  assert.match(ordinary.group, /'linear-live-documents'/);
-  const pullRequest = ci.jobs["test-linux"].concurrency;
-  assert.equal(pullRequest.group, "linear-live-documents");
-  const daily = creation.jobs.documents.concurrency;
-  assert.equal(daily.group, "linear-live-documents");
-  // Three simultaneous pending writers must all reach the service's 100-waiter queue;
-  // the default single pending setting would silently replace two required checks.
-  for (const declaration of [ordinary, pullRequest, daily, daily]) {
-    assert.equal(declaration["cancel-in-progress"], false);
-    assert.equal(declaration.queue, "max");
+// No lock serialises the live suites: every session works only on its own run's board copy
+// and leased Linear slot set, so runs execute them side by side. A job-level or
+// workflow-level concurrency group on anything that runs a live suite would bring back the
+// queue a pull request once waited hours in, so this refuses one wherever it appears.
+const LIVE_CREDENTIALS = ["LINEAR_API_KEY", "GH_PROJECTS_TOKEN"];
+
+/** The jobs of `definitions` that run a live suite: a credentialed step that runs `just`. */
+export function liveSuiteJobs(definitions) {
+  const found = [];
+  for (const [file, workflow] of Object.entries(definitions)) {
+    for (const [name, job] of Object.entries(workflow.jobs ?? {})) {
+      const jobCredentialed = LIVE_CREDENTIALS.some((key) => job.env?.[key] !== undefined);
+      const runsSuite = (job.steps ?? []).some(
+        (step) =>
+          typeof step.run === "string" &&
+          /(^|\s)just\s/.test(step.run) &&
+          (jobCredentialed || LIVE_CREDENTIALS.some((key) => step.env?.[key] !== undefined)),
+      );
+      if (runsSuite) found.push({ file, name, workflow, job });
+    }
   }
+  return found;
+}
+
+/** Every serialisation of a live suite `definitions` declares, as one line each. */
+export function liveSerialisations(definitions, sources) {
+  const problems = [];
+  for (const { file, name, workflow, job } of liveSuiteJobs(definitions)) {
+    if (job.concurrency !== undefined) {
+      problems.push(`${file} job ${name} runs a live suite under a concurrency group`);
+    }
+    if (workflow.concurrency !== undefined) {
+      problems.push(`${file} runs a live suite (job ${name}) under a workflow concurrency group`);
+    }
+  }
+  for (const [file, text] of Object.entries(sources)) {
+    if (text.includes("linear-live-documents")) {
+      problems.push(`${file} names the retired linear-live-documents lock`);
+    }
+  }
+  return problems;
+}
+
+const workflowSources = () =>
+  Object.fromEntries(
+    Object.keys(workflows()).map((file) => [file, read(`.github/workflows/${file}`)]),
+  );
+
+test("no workflow serialises a live suite", () => {
+  const definitions = workflows();
+  const jobs = liveSuiteJobs(definitions).map(({ file, name }) => `${file}:${name}`);
+  // The scan has to see every lane that opens a live session, or a pass proves nothing.
+  for (const expected of ["ci.yml:check", "ci.yml:test-linux", "linear-documents.yml:documents"]) {
+    assert.ok(jobs.includes(expected), `${expected} runs a live suite and was not found`);
+  }
+  assert.deepEqual(liveSerialisations(definitions, workflowSources()), []);
+});
+
+test("a reintroduced live lock is refused, at job and at workflow level", () => {
+  const definitions = structuredClone(workflows());
+  definitions["ci.yml"].jobs["test-linux"].concurrency = { group: "any-shared-group" };
+  definitions["linear-documents.yml"].concurrency = { group: "documents" };
+  const sources = { "ci.yml": "concurrency:\n  group: linear-live-documents\n" };
+  assert.deepEqual(liveSerialisations(definitions, sources), [
+    "ci.yml job test-linux runs a live suite under a concurrency group",
+    "linear-documents.yml runs a live suite (job documents) under a workflow concurrency group",
+    "ci.yml names the retired linear-live-documents lock",
+  ]);
 });
 
 test("only the daily schedule creates fresh documents and manual dispatch initializes", () => {
