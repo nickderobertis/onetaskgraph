@@ -2650,7 +2650,9 @@ impl Engine {
                 &item.to,
                 key,
                 None,
-                Some(replaces.as_ref()),
+                replaces
+                    .as_ref()
+                    .map_or(intent::PlannedLink::Absent, intent::PlannedLink::Replacing),
             )
             .await?
         {

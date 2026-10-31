@@ -36,6 +36,16 @@ impl Stores {
 
     /// The stores, the folder of notes leasing an intent for `lease` seconds.
     fn leased(lease: u64) -> Self {
+        Self::configured(lease, false)
+    }
+
+    /// The stores beside a folder `hub` that routes a task naming a repository of the board's
+    /// owner onto the board.
+    fn routed() -> Self {
+        Self::configured(1, true)
+    }
+
+    fn configured(lease: u64, routed: bool) -> Self {
         let sandbox = Sandbox::new();
         let (board_config, board) = github_projects_with_board(&sandbox);
         let (mut linear_config, linear) = linear_workspace(&sandbox, dataset());
@@ -46,7 +56,7 @@ impl Stores {
         std::fs::create_dir_all(notes.join("tasks")).expect("the task folder");
         let folder = sandbox.subdirectory("folder");
         std::fs::create_dir_all(folder.join("tasks")).expect("the task folder");
-        sandbox.project_document(&document(&json!({
+        let mut sources = json!({
             "board": {"plugin": "github-projects", "config": board_config,
                       "create_quiescence_seconds": 2},
             "linear": {"plugin": "linear", "config": linear_config},
@@ -54,10 +64,21 @@ impl Stores {
             "notes": {"plugin": "local-md", "config": {"root": notes},
                       "create_lease_seconds": lease},
             "folder": {"plugin": "local-md", "config": {"root": folder}},
-        })));
+        });
+        if routed {
+            let hub = sandbox.subdirectory("hub");
+            std::fs::create_dir_all(hub.join("tasks")).expect("the task folder");
+            sources["hub"] = json!({"plugin": "local-md", "config": {"root": hub},
+                "routes": [{"repositories": ["github.com/nickderobertis/*"], "to": "board"}]});
+        }
+        sandbox.project_document(&document(&sources));
         std::fs::write(
             notes.join("tasks/A.md"),
-            "---\ntitle: Task A\nstatus: todo\n---\nThe body.\n",
+            if routed {
+                "---\ntitle: Task A\nstatus: todo\nrepositories: [github.com/nickderobertis/onetaskgraph]\n---\nThe body.\n"
+            } else {
+                "---\ntitle: Task A\nstatus: todo\n---\nThe body.\n"
+            },
         )
         .expect("the task file");
         Self {
@@ -329,6 +350,61 @@ fn unlisted_first_attempt(stores: &Stores) -> String {
     let made = stores.board.items_titled("Task A");
     assert_eq!(made.len(), 1, "the first attempt's issue: {made:?}");
     made[0].clone()
+}
+
+#[test]
+fn a_routed_create_records_its_intent_for_the_placed_destination_and_its_retry_finds_it_there() {
+    let stores = Stores::routed();
+    // Copied to the hub, the task is placed on the board by the hub's route; the board's
+    // `createIssue` lands, its answer is lost, and the board does not list the issue yet.
+    stores.board.unlist_new_issues(true);
+    stores.board.drop_response_once("createIssue");
+    let failed = stores.run(&["task", "copy", NOTE, "--to", "hub"], None);
+    assert_ne!(failed.status.code(), Some(0), "{}", stderr(&failed));
+    stores.board.unlist_new_issues(false);
+    let made = stores.board.items_titled("Task A");
+    assert_eq!(made.len(), 1, "the first attempt's issue: {made:?}");
+    let creating = stores.source_metadata()["onetaskgraph.creating"].clone();
+    assert!(
+        creating.get("board").is_some() && creating.get("hub").is_none(),
+        "the intent names the destination the route placed the create at: {creating:#}"
+    );
+    // The issue is listed once the retry's first lookup has answered without it: within the
+    // board's two-second quiescence window, which the retry waits out before looking again.
+    let board = stores.board.clone();
+    let listed = made[0].clone();
+    stores
+        .board
+        .after_request(lists_by_key, 0, move |_| board.list_issue(&listed));
+    let creates = count(&stores.board, creates_issue);
+    let lookups = count(&stores.board, lists_by_key);
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "hub"]);
+    let outcome = &copied["items"][0];
+    assert_eq!(outcome["via"], "intent", "{copied:#}");
+    assert_eq!(
+        count(&stores.board, creates_issue),
+        creates,
+        "nothing created"
+    );
+    assert_eq!(
+        count(&stores.board, lists_by_key) - lookups,
+        2,
+        "one lookup, then one after the board's window"
+    );
+    assert_eq!(stores.board.items_titled("Task A"), made, "exactly one");
+    let metadata = stores.source_metadata();
+    assert!(
+        metadata.get("onetaskgraph.creating").is_none(),
+        "{metadata:#}"
+    );
+    assert_eq!(
+        metadata["onetaskgraph.copies"]["board"],
+        outcome["destination"]
+    );
+    assert!(
+        metadata["onetaskgraph.copies"].get("hub").is_none(),
+        "{metadata:#}"
+    );
 }
 
 #[test]

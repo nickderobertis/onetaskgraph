@@ -449,6 +449,29 @@ pub(crate) fn pause_at(point: &str) {
     }
 }
 
+/// What a copy taking an intent expects the item's link to the destination to be, so it can
+/// refuse a create another copy finished and linked since this one planned it.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::engine) enum PlannedLink<'a> {
+    /// Not checked: a renewal before a wait, which planned nothing of the link.
+    Unchecked,
+    /// Planned with no link to the destination.
+    Absent,
+    /// Planned replacing this link — a `--recreate` after a stale one.
+    Replacing(&'a GlobalId),
+}
+
+impl<'a> PlannedLink<'a> {
+    /// The link planned from, or `None` when nothing is checked.
+    fn expected(self) -> Option<Option<&'a GlobalId>> {
+        match self {
+            Self::Unchecked => None,
+            Self::Absent => Some(None),
+            Self::Replacing(link) => Some(Some(link)),
+        }
+    }
+}
+
 impl Engine {
     /// The lease and quiescence `source` is configured with — the defaults where it sets
     /// neither, since a source with no block of its own is held to them too.
@@ -503,7 +526,7 @@ impl Engine {
         destination: &SourceName,
         key: CreateKey,
         lease_until: Option<DateTime<Utc>>,
-        planned_link: Option<Option<&GlobalId>>,
+        planned_link: PlannedLink<'_>,
     ) -> Result<Taken, EngineError> {
         let source = self.writable(&id.source)?;
         pause_at("before-intent");
@@ -519,7 +542,7 @@ impl Engine {
         let now = now();
         // Another copy that created and linked the counterpart since this one planned to create
         // it has finished what this one would start: it is refused rather than made twice.
-        if let Some(planned) = planned_link {
+        if let Some(planned) = planned_link.expected() {
             let linked = super::link_of(&metadata, destination);
             if linked.as_ref() != planned
                 && let Some(linked) = linked
@@ -840,7 +863,7 @@ impl Engine {
                     destination.name(),
                     intent.key,
                     window_end.checked_add_signed(self.create_settings(&id.source).lease()),
-                    None,
+                    PlannedLink::Unchecked,
                 )
                 .await?;
             }
