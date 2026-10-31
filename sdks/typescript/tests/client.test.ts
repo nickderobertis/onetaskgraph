@@ -47,10 +47,14 @@ const LANDED = new Set(["created", "updated", "unchanged"]);
 function withoutResults(items: unknown[], dryRun = false): unknown[] {
   return items.map((item) => {
     if (typeof item !== "object" || item === null) return item;
+    // The items arrive untyped — a report's outcomes, a listing's rows — and are compared as
+    // plain JSON, so each is read as a record of members to look at them.
     const fields = item as Record<string, unknown>;
     const landed = !dryRun && fields.skipped !== true && LANDED.has(String(fields.action));
     expect("result" in item).toBe(landed);
     if (!("result" in item)) return item;
+    // `"result" in item` narrowed it to an object with that member; spelled out so the rest
+    // can be taken without it.
     const { result, ...rest } = item as { result: unknown } & Record<string, unknown>;
     expect(typeof result).toBe("object");
     return rest;

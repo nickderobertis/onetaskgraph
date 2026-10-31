@@ -872,9 +872,9 @@ cannot vouch for one without another read:
 
 - **a folder of Markdown** answers it: it is the digest of the file it wrote;
 - **Linear** answers it from the issue, project or document its mutation selected — `task
-  priority set` included — except for an item the same command went on to give relations, whose
-  answers do not say the token after them, and with the source's local cache on, whose token also
-  carries comment and relation pages a write does not answer: `null` there;
+  priority set` included, and with the source's local cache on as off — except for an item the
+  same command went on to give relations, whose answers do not say the token after them: `null`
+  there;
 - **a GitHub board** answers `null` for an item it wrote, because a board's token is given only
   once an item has gone sixty seconds unchanged — the `task show` after a write answers `null`
   too — and the version its read held for an item it left `unchanged`;

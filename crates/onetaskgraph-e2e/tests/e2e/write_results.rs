@@ -36,6 +36,11 @@ struct Stores {
 
 impl Stores {
     fn new() -> Self {
+        Self::caching_linear(false)
+    }
+
+    /// The stores, the Linear source's local cache on when `cached` says so.
+    fn caching_linear(cached: bool) -> Self {
         let sandbox = Sandbox::new();
         let (board_config, board) = github_projects_with_board(&sandbox);
         let (mut linear_config, linear) = linear_workspace(&sandbox, dataset());
@@ -48,7 +53,8 @@ impl Stores {
         std::fs::create_dir_all(folder.join("tasks")).expect("the task folder");
         sandbox.project_document(&document(&json!({
             "board": {"plugin": "github-projects", "config": board_config},
-            "linear": {"plugin": "linear", "config": linear_config},
+            "linear": {"plugin": "linear", "config": linear_config,
+                       "cache": {"enabled": cached}},
             "notes": {"plugin": "local-md",
                       "config": {"root": notes, "status_mapping": folder_mapping()}},
             "folder": {"plugin": "local-md",
@@ -466,4 +472,32 @@ fn a_linear_task_the_copy_gave_relations_reports_no_version_and_what_it_holds() 
         deps["items"][0]["to"]["id"], blocking["destination"],
         "the relation landed: {deps:#}"
     );
+}
+
+#[test]
+fn a_linear_source_with_its_cache_on_reports_the_version_a_read_then_gives() {
+    let stores = Stores::caching_linear(true);
+    stores.note("A", "Task A", "todo", "high");
+    let created = stores.json(&["task", "copy", "notes:A", "--to", "linear"]);
+    let outcome = only_outcome(&created);
+    assert_eq!(outcome["action"], "created", "{created:#}");
+    let landed = outcome["destination"].as_str().expect("an id").to_owned();
+    // The cache sits between the engine and the plugin, and passes on what the write's own
+    // answer said: the version a read through the cache then gives.
+    holds_as_shown(&stores, &landed, &outcome["result"], true, "cached linear");
+
+    // Again once the issue holds a comment, which no write of the issue answers.
+    let body = stores.sandbox.project().join("comment.md");
+    std::fs::write(&body, "A word.\n").expect("a body");
+    stores.json(&[
+        "task",
+        "comment",
+        "add",
+        &landed,
+        "--body-file",
+        body.to_str().expect("a path"),
+    ]);
+    let set = stores.json(&["task", "priority", "set", &landed, "low"]);
+    assert_eq!(set["result"]["priority"], "low", "{set:#}");
+    holds_as_shown(&stores, &landed, &set["result"], true, "cached linear");
 }
