@@ -164,3 +164,41 @@ async fn one_metadata_key_comes_off_a_project_and_a_document_and_nothing_else_mo
             .is_none()
     );
 }
+
+#[test]
+fn a_lock_written_ahead_of_this_clock_is_refused_at_once_and_one_that_cannot_be_made_is_refused() {
+    let root = folder();
+    let id = NativeId("T-1".to_owned());
+    let lock = root.path().join("tasks/T-1.md.lock");
+    let file = fs::File::create(&lock).expect("another host's lock");
+    file.set_modified(std::time::SystemTime::now() + Duration::from_secs(3600))
+        .expect("an hour ahead");
+    drop(file);
+    let source = instance(root.path());
+    let refused = source
+        .hold_item(MetadataRecord::Task, &id)
+        .expect_err("its age cannot be told");
+    assert!(
+        matches!(&refused, onetaskgraph_plugin_api::SourceError::Unavailable { message }
+            if message.contains("ahead of this host's clock")),
+        "{refused:?}"
+    );
+    assert!(lock.exists(), "another host's lock is left where it is");
+    fs::remove_file(&lock).expect("removed");
+
+    // A folder this process may not write in: no lock can be made beside the record.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let tasks = root.path().join("tasks");
+        fs::set_permissions(&tasks, fs::Permissions::from_mode(0o555)).expect("read-only");
+        let refused = source.hold_item(MetadataRecord::Task, &id);
+        fs::set_permissions(&tasks, fs::Permissions::from_mode(0o755)).expect("writable");
+        assert!(
+            matches!(&refused, Err(onetaskgraph_plugin_api::SourceError::Unavailable { message })
+                if message.contains("could not lock")),
+            "{refused:?}"
+        );
+        assert!(!lock.exists());
+    }
+}

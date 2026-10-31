@@ -134,6 +134,11 @@ fn a_create_stopped_after_its_intent_holds_it_and_its_retry_creates_under_that_k
         assert!(intent["key"].is_string(), "{destination}: {intent:#}");
         assert!(intent["lease_until"].is_string() && intent["at"].is_string());
         let key = intent["key"].as_str().unwrap().to_owned();
+        assert_eq!(
+            key,
+            documented_key(NOTE, destination, None),
+            "{destination}: the key the README states"
+        );
 
         let copied = stores.json(&["task", "copy", NOTE, "--to", destination]);
         let outcome = &copied["items"][0];
@@ -548,6 +553,15 @@ fn an_intent_entry_that_is_not_one_is_refused_and_nothing_is_created() {
             "{{\"key\": \"{key}\", \"at\": \"2020-01-01T00:00:00Z\", \"attempt\": \
              \"{attempt}\", \"lease_until\": \"0001-01-01T00:00:00Z\"}}"
         ),
+        // A key and an attempt of the wrong version each: neither is what a copy writes.
+        format!(
+            "{{\"key\": \"{attempt}\", \"at\": \"2020-01-01T00:00:00Z\", \"attempt\": \
+             \"{attempt}\", \"lease_until\": \"2020-01-01T00:00:00Z\"}}"
+        ),
+        format!(
+            "{{\"key\": \"{key}\", \"at\": \"2020-01-01T00:00:00Z\", \"attempt\": \
+             \"{key}\", \"lease_until\": \"2020-01-01T00:00:00Z\"}}"
+        ),
     ] {
         let stores = Stores::new();
         std::fs::write(
@@ -808,9 +822,73 @@ fn a_holder_that_finds_another_attempt_holding_its_intent_writes_nothing_more() 
 }
 
 #[test]
+fn a_holder_whose_create_another_copy_has_since_finished_and_linked_writes_nothing_more() {
+    let stores = Stores::new();
+    let body = stores.sandbox.project().join("comment.md");
+    std::fs::write(&body, "A word.\n").expect("a comment body");
+    stores.json(&[
+        "task",
+        "comment",
+        "add",
+        NOTE,
+        "--body-file",
+        body.to_str().expect("a path"),
+    ]);
+    let first = Paused::copying(&stores, &[NOTE], "first", &["after-create"]);
+    first.reached("after-create");
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    // A second copy finds the first's issue by its key, takes the create over, finishes it —
+    // its comment included — links it and removes the intent.
+    let finished = stores.json(&["task", "copy", NOTE, "--to", "board", "--comments"]);
+    assert_eq!(finished["items"][0]["via"], "intent", "{finished:#}");
+    let linked = finished["items"][0]["destination"]
+        .as_str()
+        .expect("the counterpart")
+        .to_owned();
+    assert!(
+        board_intent(&stores.notes).is_none(),
+        "the intent is settled"
+    );
+    let comments = count(&stores.board, adds_comment);
+
+    first.release("after-create");
+    let (code, failure) = first.finish();
+    assert_eq!(code, Some(1), "{failure:#}");
+    assert_eq!(
+        failure["failure"]["kind"], "create-in-progress",
+        "{failure:#}"
+    );
+    assert!(
+        failure["failure"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&linked)),
+        "names the counterpart the other copy linked: {failure:#}"
+    );
+    assert_eq!(
+        count(&stores.board, adds_comment),
+        comments,
+        "no comment written after the loss"
+    );
+    assert_eq!(stores.board.items_titled("Task A").len(), 1);
+    assert_eq!(
+        stores.source_metadata()["onetaskgraph.copies"]["board"],
+        json!(linked)
+    );
+}
+
+#[test]
 fn a_listing_by_key_the_board_answers_malformed_is_refused_and_nothing_is_created_again() {
     type Bend = fn(&mut Value);
-    let cases: [(&str, Bend); 4] = [
+    let cases: [(&str, Bend); 7] = [
+        ("issues that are not a list", |issues| {
+            issues["nodes"] = json!({});
+        }),
+        ("a body that is not text", |issues| {
+            issues["nodes"][0]["body"] = json!(5);
+        }),
+        ("a cursor that does not move", |issues| {
+            issues["pageInfo"] = json!({"hasNextPage": true, "endCursor": "the same page"});
+        }),
         ("no creation time", |issues| {
             issues["nodes"][0]
                 .as_object_mut()
@@ -1096,6 +1174,21 @@ fn a_linear_create_whose_answer_never_arrived_whole_is_found_by_its_retry_under_
     );
 }
 
+/// The key the README states a create is made under: the version-5 UUID, under the documented
+/// namespace, of `<source>|<destination>|<replaced link>`, with the kind appended for a project
+/// or a document — computed here from that statement, independently of the engine.
+fn documented_key(source: &str, destination: &str, kind: Option<&str>) -> String {
+    let namespace =
+        uuid::Uuid::parse_str("7a1c3f0e-5b2d-4c8a-9e61-0f4d2b7c5a39").expect("the namespace");
+    let mut name = format!("{source}|{destination}|");
+    if let Some(kind) = kind {
+        name.push_str(&format!("|{kind}"));
+    }
+    uuid::Uuid::new_v5(&namespace, name.as_bytes())
+        .hyphenated()
+        .to_string()
+}
+
 /// A project and a document of the notes, each copied on its own.
 fn with_a_project_and_a_document(stores: &Stores) {
     std::fs::create_dir_all(stores.notes.join("projects")).expect("the project folder");
@@ -1172,6 +1265,11 @@ fn a_project_or_document_copy_stopped_at_either_point_of_its_create_is_finished_
                     "{kind} {destination} {point}: the intent is recorded: {intent:#}"
                 );
                 let key = intent["key"].as_str().expect("a key").to_owned();
+                assert_eq!(
+                    key,
+                    documented_key(id, destination, Some(kind)),
+                    "{kind} {destination}: the key the README states"
+                );
 
                 let mut full = vec!["--json"];
                 full.extend(&arguments);

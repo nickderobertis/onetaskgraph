@@ -375,33 +375,61 @@ fn every_task_write_verb_answers_what_the_task_then_holds() {
 
 #[test]
 fn a_project_and_a_document_copy_report_what_they_left_as_a_read_then_shows() {
-    let stores = Stores::new();
-    std::fs::create_dir_all(stores.notes.join("projects")).expect("projects");
-    std::fs::write(
-        stores.notes.join("projects/P.md"),
-        "---\ntitle: Plan\nstatus: todo\n---\nThe plan.\n",
-    )
-    .expect("a project");
-    std::fs::create_dir_all(stores.notes.join("documents")).expect("documents");
-    std::fs::write(
-        stores.notes.join("documents/D.md"),
-        "---\ntitle: Design\n---\nThe design.\n",
-    )
-    .expect("a document");
-    let project = stores.json(&["project", "copy", "notes:P", "--to", "folder", "--no-tasks"]);
-    let outcome = &project["items"][0];
-    let shown = stores.json(&["project", "show", outcome["destination"].as_str().unwrap()])
-        ["items"][0]["item"]
-        .clone();
-    assert_eq!(outcome["result"]["status"], shown["status"], "{project:#}");
-    assert_eq!(outcome["result"]["priority"], Value::Null);
-    assert_eq!(outcome["result"]["version"], shown["version"]);
-    let document = stores.json(&["document", "copy", "notes:D", "--to", "folder"]);
-    let outcome = &document["items"][0];
-    let shown = stores.json(&["document", "show", outcome["destination"].as_str().unwrap()])
-        ["items"][0]["item"]
-        .clone();
-    assert_eq!(outcome["result"]["status"], Value::Null, "{document:#}");
-    assert_eq!(outcome["result"]["priority"], Value::Null);
-    assert_eq!(outcome["result"]["version"], shown["version"]);
+    for (destination, versioned) in DESTINATIONS {
+        let stores = Stores::new();
+        std::fs::create_dir_all(stores.notes.join("projects")).expect("projects");
+        std::fs::write(
+            stores.notes.join("projects/P.md"),
+            "---\ntitle: Plan\nstatus: todo\n---\nThe plan.\n",
+        )
+        .expect("a project");
+        std::fs::create_dir_all(stores.notes.join("documents")).expect("documents");
+        std::fs::write(
+            stores.notes.join("documents/D.md"),
+            "---\ntitle: Design\n---\nThe design.\n",
+        )
+        .expect("a document");
+        let project = stores.json(&[
+            "project",
+            "copy",
+            "notes:P",
+            "--to",
+            destination,
+            "--no-tasks",
+        ]);
+        let outcome = &project["items"][0];
+        let shown =
+            stores.json(&["project", "show", outcome["destination"].as_str().unwrap()])["items"][0]
+                ["item"]
+                .clone();
+        assert_eq!(
+            outcome["result"]["status"], shown["status"],
+            "{destination}: {project:#}"
+        );
+        assert_eq!(outcome["result"]["priority"], Value::Null);
+        assert_versioned(&outcome["result"], &shown, versioned, destination);
+        let document = stores.json(&["document", "copy", "notes:D", "--to", destination]);
+        let outcome = &document["items"][0];
+        let shown =
+            stores.json(&["document", "show", outcome["destination"].as_str().unwrap()])["items"]
+                [0]["item"]
+                .clone();
+        assert_eq!(
+            outcome["result"]["status"],
+            Value::Null,
+            "{destination}: {document:#}"
+        );
+        assert_eq!(outcome["result"]["priority"], Value::Null);
+        assert_versioned(&outcome["result"], &shown, versioned, destination);
+    }
+}
+
+/// `result` carries the version a read then shows where the destination's write answers one,
+/// and `null` where it does not.
+fn assert_versioned(result: &Value, shown: &Value, versioned: bool, destination: &str) {
+    if versioned {
+        assert_eq!(result["version"], shown["version"], "{destination}");
+    } else {
+        assert_eq!(result["version"], Value::Null, "{destination}");
+    }
 }

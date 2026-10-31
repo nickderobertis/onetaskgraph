@@ -37,6 +37,9 @@ serde_json.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
+# The retry journeys compute a create's key from the README's own formula, rather than asking
+# the engine that computed it to check its own work.
+uuid.workspace = true
 
 # A pseudo-terminal for the template prompting journeys, which only a Unix host can open.
 [target.'cfg(unix)'.dev-dependencies]

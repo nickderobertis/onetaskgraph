@@ -5875,6 +5875,29 @@ async fn a_priority_is_set_by_sending_only_priority_and_answers_what_linear_read
     );
 }
 
+/// A priority set answered with a whole issue whose fields do not read is refused as malformed,
+/// rather than reported as the issue read before it.
+#[tokio::test]
+async fn a_priority_set_answered_with_a_whole_issue_that_does_not_read_is_refused() {
+    let mut answered = prioritised_issue("I-1", Some("body"), 4.into());
+    answered["issue"]["state"] = serde_json::json!("not a state");
+    let (endpoint, _) = response_server(vec![
+        prioritised_issue("I-1", Some("body"), 3.into()),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":answered["issue"]}}),
+    ]);
+    let refused = writable_source(&endpoint)
+        .set_task_priority(&"I-1".into(), Priority::Low)
+        .await
+        .expect_err("a malformed answer");
+    assert!(
+        matches!(
+            refused,
+            onetaskgraph_plugin_api::SourceError::Malformed { .. }
+        ),
+        "{refused:?}"
+    );
+}
+
 /// No such issue, and an issue Linear has trashed, are no such task for both narrow writes:
 /// `None`, after the read alone.
 #[tokio::test]
