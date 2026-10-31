@@ -4071,6 +4071,66 @@ mod pool {
         assert!(leases[0].1.ends_with(" released"), "{leases:?}");
     }
 
+    /// The child: claims a member against the replay its parent names and ends, as a
+    /// cancelled job's lane does, before it releases anything.
+    #[tokio::test]
+    async fn lease_record_child() {
+        let Ok(endpoint) = std::env::var("LEASE_RECORD_CHILD_ENDPOINT") else {
+            return;
+        };
+        lease::claim(
+            &endpoint,
+            "synthetic",
+            "ENG",
+            "team",
+            LeaseLane::Plugin,
+            &holder(run(1)),
+            now_micros,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_claim_records_its_lease_where_the_cancellation_step_releases_it() {
+        let replay = replay();
+        let records = std::env::temp_dir().join(format!("lease-records-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&records);
+        let output = tokio::task::spawn_blocking({
+            let endpoint = replay.endpoint.clone();
+            let records = records.clone();
+            move || {
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["pool::lease_record_child", "--exact"])
+                    .env("LEASE_RECORD_CHILD_ENDPOINT", endpoint)
+                    .env(lease::RECORD_VARIABLE, &records)
+                    .output()
+                    .unwrap()
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // One record, naming the lease issue exactly as Linear holds it.
+        let written: Vec<_> = std::fs::read_dir(&records)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(written.len(), 1, "{written:?}");
+        let record: Value = serde_json::from_slice(&std::fs::read(&written[0]).unwrap()).unwrap();
+        let id = record["id"].as_str().unwrap();
+        assert_eq!(
+            replay.state.lock().unwrap().issues[id]["title"],
+            record["title"],
+            "the record does not name the lease as Linear holds it"
+        );
+        let _ = std::fs::remove_dir_all(&records);
+    }
+
     #[tokio::test]
     async fn the_namespace_guard_refuses_a_request_naming_another_runs_record() {
         let replay = replay();

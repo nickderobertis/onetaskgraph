@@ -117,8 +117,15 @@ test("only the daily schedule creates fresh documents and manual dispatch initia
     assert.ok(!project.targets.check.dependsOn.includes("live-documents"));
     if (lane.endsWith("-e2e")) assert.deepEqual(target.dependsOn, ["onetaskgraph:build"]);
   }
+  // The cancellation steps that hand back a run's leases hold the key too, and open no session;
+  // scripts/check-live-janitor.sh holds them to their shape.
+  const releasesLeases = (step) =>
+    step.run ===
+    "cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases";
   const credentialed = (job) =>
-    definitions["ci.yml"].jobs[job].steps.filter((step) => step.env?.LINEAR_API_KEY);
+    definitions["ci.yml"].jobs[job].steps.filter(
+      (step) => step.env?.LINEAR_API_KEY && !releasesLeases(step),
+    );
   const ordinarySteps = [...credentialed("check"), ...credentialed("test-linux")];
   assert.ok(credentialed("test-linux").length > 0, "test-linux carries a pull request's session");
   for (const step of ordinarySteps) {

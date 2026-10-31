@@ -563,9 +563,13 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   journey's own cleanup. The 24-hour expiry is a document-specific recovery policy; the
   existing local lock sweep and GitHub run-status ownership rules do not change.
   **A cancelled run cleans up after itself, and a pre-flight never refuses a finished run's
-  residue.** `ci.yml`'s step on cancellation runs the janitor with `--cancelled-run`, which
-  removes exactly that run attempt's stamps and reads no run (`scripts/check-live-janitor.sh`
-  holds the step's shape; the two lane guards exempt that one step). The lane's board
+  residue.** Each credentialed `ci.yml` job — `check`'s Linux leg and `test-linux` — runs
+  the janitor on cancellation: `--cancelled-run`, which removes exactly that run attempt's
+  stamps, board copies included, and reads no run; and `--linear --release-leases
+  target/linear-leases`, which releases exactly the pool leases the job recorded there
+  (`ONETASKGRAPH_LINEAR_LEASE_DIR`) while each still reads back as recorded
+  (`scripts/check-live-janitor.sh` holds all four steps' shape; the two lane guards exempt
+  exactly those commands). The lane's board
   pre-flight (`journey::preflight_board`) removes a stamped field whose run reads
   `completed` before it counts the board — and, when the board holds more items than the
   registered workload, such a run's issues in the lane's repository and their items — says so, and keeps and counts

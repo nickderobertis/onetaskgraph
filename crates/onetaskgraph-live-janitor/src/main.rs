@@ -3,6 +3,8 @@
 //!
 //! `--linear` instead expires stamped test documents in `LINEAR_WRITE_TEAM` after 24
 //! hours, using `LINEAR_API_KEY` alone. It recovers residue from discarded CI hosts.
+//! `--linear --release-leases DIR`, which `ci.yml` runs when a live run is cancelled, releases
+//! the pool leases that run recorded in `DIR` and still holds, and nothing else.
 //!
 //! `--cancelled-run` removes exactly the artifacts stamped with the run and attempt GitHub
 //! Actions names in `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT` (with `GITHUB_ACTIONS=true`),
@@ -122,6 +124,25 @@ async fn enter() -> Result<Report, Failure> {
         let key = variable("LINEAR_API_KEY")?;
         let team = variable("LINEAR_WRITE_TEAM")?;
         let args: Vec<_> = std::env::args().skip(2).collect();
+        // `--release-leases DIR [--loopback URL]`: a cancelled job hands back its pool leases.
+        if args.first().map(String::as_str) == Some("--release-leases") {
+            use onetaskgraph_live_janitor::linear::release_recorded_leases;
+            let config = match args.as_slice() {
+                [_, _] => LinearConfig::production(&key, &team),
+                [_, _, flag, origin] if flag == "--loopback" => {
+                    LinearConfig::loopback(origin, &key, &team)
+                }
+                _ => {
+                    return Err(Failure::Configuration(
+                        "expected --linear --release-leases DIR [--loopback URL]".into(),
+                    ));
+                }
+            }
+            .map_err(Failure::Configuration)?;
+            return release_recorded_leases(config, std::path::Path::new(&args[1]))
+                .await
+                .map_err(Failure::Cleanup);
+        }
         let result = if args.is_empty() {
             run_linear(LinearConfig::production(&key, &team).map_err(Failure::Configuration)?).await
         } else if (args.len() == 2 || (args.len() == 3 && args[2] == "--virtual-clock"))

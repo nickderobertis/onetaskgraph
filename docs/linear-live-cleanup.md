@@ -29,7 +29,10 @@ runs share a member. The next generation may be claimed once the newest is relea
 and a half hours ago: no GitHub-hosted job runs longer than six hours, so such a lease
 belongs to a run that has ended. A claim that finds every member held is refused, naming
 the pool; it is not queued. The claimant that supersedes a generation deletes it, and
-that id is never asked for again because generations only rise.
+that id is never asked for again because generations only rise. A CI lane records each lease it holds in
+`ONETASKGRAPH_LINEAR_LEASE_DIR`, and a cancelled job's last step releases exactly those
+(`onetaskgraph-live-janitor --linear --release-leases`), each only while it still reads back
+as recorded, so a cancellation does not keep a member for six and a half hours.
 
 The pool bounds the team's documents: 16 members of 3 plugin documents and 16 of 1 asset
 document, 64 of the 1000 the team may hold with its trash, created once per member and

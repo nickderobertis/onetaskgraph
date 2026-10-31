@@ -422,5 +422,87 @@ class LinearJourneys(unittest.TestCase):
                 self.assertEqual(workspace.deleted, [])
 
 
+
+class LeaseJourneys(unittest.TestCase):
+    """`--linear --release-leases DIR`: a cancelled job hands back what it recorded, only that."""
+
+    PREFIX = 'onetaskgraph live cleanup lease-v1 TEST plugin '
+
+    def release(self, issues: dict[str, str], records: dict[str, str]) -> tuple[subprocess.CompletedProcess[str], list[dict[str, Any]], Path]:
+        requests: list[dict[str, Any]] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_args: object) -> None:
+                pass
+
+            def do_POST(self) -> None:
+                assert self.headers['Authorization'] == 'offline-linear-key'
+                request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                requests.append(request)
+                identifier = request['variables']['id']
+                if 'issueUpdate(' in request['query']:
+                    issues[identifier] = request['variables']['input']['title']
+                    answer: dict[str, Any] = {'data': {'issueUpdate': {'success': True}}}
+                else:
+                    assert 'issue(id:$id)' in request['query'], request['query']
+                    title = issues.get(identifier)
+                    answer = {'data': {'issue': None if title is None else {'id': identifier, 'title': title}}}
+                body = json.dumps(answer).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        directory = Path(os.environ.get('TMPDIR', '/tmp')) / f'lease-records-{os.getpid()}-{time.monotonic_ns()}'
+        directory.mkdir(parents=True)
+        for identifier, title in records.items():
+            (directory / f'{identifier}.json').write_text(json.dumps({'id': identifier, 'title': title}))
+        try:
+            environment = {key: value for key, value in os.environ.items()
+                           if not key.startswith(('LINEAR_', 'GH_', 'GITHUB_'))}
+            environment.update(LINEAR_API_KEY='offline-linear-key', LINEAR_WRITE_TEAM='test')
+            result = subprocess.run(
+                [os.environ['JANITOR_BINARY'], '--linear', '--release-leases', str(directory),
+                 '--loopback', f'http://127.0.0.1:{server.server_port}'],
+                env=environment, capture_output=True, text=True, timeout=30)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+        return result, requests, directory
+
+    def test_a_cancelled_runs_recorded_lease_is_released_and_nothing_else(self) -> None:
+        held = self.PREFIX + 'pool-3 gen-2 7-42-1700000000000000'
+        superseded = self.PREFIX + 'pool-4 gen-1 7-42-1700000000000000'
+        issues = {
+            'held': held,
+            # Recorded by this run, since superseded by another claimant's generation.
+            'superseded': self.PREFIX + 'pool-4 gen-1 8-1-1700000000000000',
+            # Another run's lease, never recorded here.
+            'other': self.PREFIX + 'pool-5 gen-1 8-1-1700000000000000',
+        }
+        result, requests, directory = self.release(dict(issues), {'held': held, 'superseded': superseded})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        updates = [r for r in requests if 'issueUpdate(' in r['query']]
+        self.assertEqual([r['variables']['id'] for r in updates], ['held'])
+        self.assertEqual(updates[0]['variables']['input']['title'], self.PREFIX + 'pool-3 gen-2 released')
+        self.assertFalse(any(r['variables']['id'] == 'other' for r in requests))
+        self.assertEqual(list(directory.iterdir()), [], 'every settled record is removed')
+
+    def test_no_records_send_nothing_and_a_foreign_record_is_refused(self) -> None:
+        result, requests, _ = self.release({}, {})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(requests, [])
+        foreign = 'onetaskgraph live cleanup lease-v1 OTHER plugin pool-3 gen-2 7-42-1'
+        result, requests, directory = self.release({'x': foreign}, {'x': foreign})
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('records no held lease of test', result.stderr)
+        self.assertEqual(requests, [])
+        self.assertEqual(len(list(directory.iterdir())), 1, 'a refused record is kept')
+
 if __name__ == '__main__':
     unittest.main()

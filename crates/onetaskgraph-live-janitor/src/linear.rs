@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use onetaskgraph_live::Credential;
 use onetaskgraph_live::artifact::{CiStamp, Stamp, now_micros};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::{Value, json};
 
 use crate::{Clock, GRAPHQL_READ_LIMIT, RealClock, Report, WRITE_INTERVAL, WRITE_LIMIT};
 
@@ -327,6 +328,70 @@ pub async fn run_linear_with_clock(
         if !deleted.document_delete.success {
             return Err("Linear did not confirm document deletion".into());
         }
+    }
+    Ok(report)
+}
+
+const LEASE_READ: &str = "query($id:String!){issue(id:$id){id title}}";
+const LEASE_RELEASE: &str =
+    "mutation($id:String!,$input:IssueUpdateInput!){issueUpdate(id:$id,input:$input){success}}";
+
+/// Releases every pool lease a cancelled job recorded in `directory`
+/// (`ONETASKGRAPH_LINEAR_LEASE_DIR`), and nothing else: a recorded lease is released only when
+/// it still reads back exactly as recorded — this run's holder, this generation — which is the
+/// positive evidence that it is still the cancelled run's. One that reads otherwise was
+/// superseded or released already, and is left alone. Each record is removed once settled.
+/// An absent directory is a run that held no lease.
+pub async fn release_recorded_leases(
+    config: LinearConfig,
+    directory: &std::path::Path,
+) -> Result<Report, String> {
+    use onetaskgraph_linear::live_artifact::{Lease, LeaseHolder, classify_lease, lease_title};
+    let mut report = Report::default();
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(report),
+        Err(error) => return Err(format!("the lease records could not be read: {error}")),
+    };
+    let client = reqwest::Client::new();
+    let team = config.team.0.clone();
+    for entry in entries {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        let record: Value = serde_json::from_slice(
+            &std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?,
+        )
+        .map_err(|error| format!("{} is not a lease record: {error}", path.display()))?;
+        let (Some(id), Some(title)) = (record["id"].as_str(), record["title"].as_str()) else {
+            return Err(format!("{} names no lease id and title", path.display()));
+        };
+        let lease = classify_lease(title)
+            .filter(|lease| matches!(lease.holder(), LeaseHolder::Held(_)))
+            .filter(|lease| lease.team().eq_ignore_ascii_case(&team))
+            .ok_or_else(|| format!("{} records no held lease of {team}", path.display()))?;
+        let read: Value = request(&client, &config, LEASE_READ, json!({"id":id})).await?;
+        report.graphql_queries += 1;
+        let still = read.pointer("/issue/id").and_then(Value::as_str) == Some(id)
+            && read.pointer("/issue/title").and_then(Value::as_str) == Some(title);
+        if still {
+            let released = lease_title(Lease::new(
+                lease.scope(),
+                lease.lane(),
+                std::num::NonZeroU32::new(lease.generation()).ok_or("generation 0")?,
+                LeaseHolder::Released,
+            )?);
+            let answer: Value = request(
+                &client,
+                &config,
+                LEASE_RELEASE,
+                json!({"id":id,"input":{"title":released}}),
+            )
+            .await?;
+            if answer.pointer("/issueUpdate/success") != Some(&json!(true)) {
+                return Err(format!("Linear did not confirm releasing lease {id}"));
+            }
+            report.writes += 1;
+        }
+        std::fs::remove_file(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     }
     Ok(report)
 }

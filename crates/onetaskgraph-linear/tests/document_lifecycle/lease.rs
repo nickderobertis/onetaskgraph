@@ -119,9 +119,43 @@ impl Held {
                 self.index
             ));
         }
+        if let Some(path) = self.record_path() {
+            let _ = std::fs::remove_file(path);
+        }
         Ok(())
     }
+
+    /// Where this lease is recorded for the cancellation step, when the job names a place
+    /// ([`RECORD_VARIABLE`]); `None` outside such a job.
+    fn record_path(&self) -> Option<std::path::PathBuf> {
+        let directory = std::env::var_os(RECORD_VARIABLE)?;
+        Some(std::path::Path::new(&directory).join(format!("{}.json", self.id)))
+    }
+
+    /// Records the lease where the job's cancellation step finds it, so a run cancelled before
+    /// its own release still hands the member back: `onetaskgraph-live-janitor --linear
+    /// --release-leases` releases exactly a recorded lease that still reads as recorded.
+    fn record(&self) -> Result<(), String> {
+        let Some(path) = self.record_path() else {
+            return Ok(());
+        };
+        if let Some(directory) = path.parent() {
+            std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+        }
+        std::fs::write(&path, json!({"id":self.id,"title":self.title}).to_string()).map_err(
+            |error| {
+                format!(
+                    "the lease could not be recorded at {}: {error}",
+                    path.display()
+                )
+            },
+        )
+    }
 }
+
+/// The variable a CI job names the directory it records its held leases in, for its own
+/// cancellation step.
+pub const RECORD_VARIABLE: &str = "ONETASKGRAPH_LINEAR_LEASE_DIR";
 
 /// The newest generation of each member's lease, and every older one still present.
 struct Leases {
@@ -444,14 +478,23 @@ async fn claim_among(
                     eprintln!("a superseded lease of pool member {index} was left: {error}");
                 }
             }
-            return Ok(Some(Held {
+            let held = Held {
                 team: team.to_owned(),
                 lane,
                 index,
                 generation,
                 id,
                 title,
-            }));
+            };
+            if let Err(error) = held.record() {
+                // A lease nothing could release on cancellation is not taken at all.
+                let released = held.release(endpoint, key).await;
+                return Err(match released {
+                    Ok(()) => error,
+                    Err(also) => format!("{error}; additionally, {also}"),
+                });
+            }
+            return Ok(Some(held));
         }
     }
     Ok(None)

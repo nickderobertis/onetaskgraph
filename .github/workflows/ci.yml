@@ -217,6 +217,8 @@ jobs:
           GITHUB_LIVE_SESSION_DIR: ${{ github.workspace }}/target/debug/telemetry/github-live-session/${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SOURCE_REVISION: ${{ github.sha }}
           ONETASKGRAPH_LINEAR_DOCUMENT_MODE: ordinary
+          # Where the Linear lanes record the pool leases they hold, for the cancellation step.
+          ONETASKGRAPH_LINEAR_LEASE_DIR: ${{ github.workspace }}/target/linear-leases
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] As on that step: the lane's own refusal is the drift gate, because ONETASKGRAPH_LIVE_REQUIRED is 1 here too, so a name spelled differently on either side fails this run naming the variable rather than skipping green.
           GH_PROJECTS_OWNER: nickderobertis
@@ -245,6 +247,17 @@ jobs:
           GH_PROJECTS_NUMBER: "1"
           GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
         run: cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run
+
+      # And the pool leases its Linear lanes held, which would otherwise keep their members for
+      # six and a half hours: exactly the leases this job recorded, each only while it still
+      # reads back as recorded. scripts/check-live-janitor.sh holds this step to that shape.
+      - name: Release this run's Linear leases after a cancellation
+        if: cancelled() && matrix.os == 'ubuntu-latest' && !github.event.pull_request.head.repo.fork
+        timeout-minutes: 15
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
+        run: cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases
 
   # The explicit manual diagnostic alone. On a pull request the one Mac job is `test-macos`,
   # which the two carriers below read in this job's place.
@@ -806,6 +819,8 @@ jobs:
           GITHUB_LIVE_SESSION_DIR: ${{ github.workspace }}/target/debug/telemetry/github-live-session/${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SOURCE_REVISION: ${{ github.sha }}
           ONETASKGRAPH_LINEAR_DOCUMENT_MODE: ordinary
+          # Where the Linear lanes record the pool leases they hold, for the cancellation step.
+          ONETASKGRAPH_LINEAR_LEASE_DIR: ${{ github.workspace }}/target/linear-leases
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The lane's own refusal is the drift gate: ONETASKGRAPH_LIVE_REQUIRED below is 1 on this lane, so a name spelled differently on either side fails this job naming the variable rather than skipping green.
           GH_PROJECTS_OWNER: nickderobertis
@@ -819,6 +834,31 @@ jobs:
         # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] As on check's Linux leg: these suites run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just ci-test-linux
       # llmlint: ignore-end[no_second_broader_sweep_over_an_already_gated_commit]
+
+      # A cancelled pull request's live journeys die before their own cleanup, leaving their
+      # board copies, scratch issues and pool leases behind; these two steps remove exactly this
+      # run attempt's and open no session, as on check's Linux leg.
+      # scripts/check-live-janitor.sh holds both to that shape.
+      - name: Remove this run's live artifacts after a cancellation
+        if: cancelled() && !github.event.pull_request.head.repo.fork
+        timeout-minutes: 15
+        env:
+          GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
+          GH_PROJECTS_OWNER: nickderobertis
+          GH_PROJECTS_NUMBER: "1"
+          GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
+        run: cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run
+
+      # And its Linear pool leases, which would otherwise keep their members for
+      # six and a half hours: exactly the leases this job recorded, each only while it still
+      # reads back as recorded. scripts/check-live-janitor.sh holds this step to that shape.
+      - name: Release this run's Linear leases after a cancellation
+        if: cancelled() && !github.event.pull_request.head.repo.fork
+        timeout-minutes: 15
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
+        run: cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases
 
   test-windows:
     if: github.event_name == 'pull_request'
