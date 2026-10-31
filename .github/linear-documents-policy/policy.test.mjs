@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
@@ -142,13 +142,37 @@ test("the pool and template recipes set the variables their lanes read", () => {
   );
   const recipe = (name) => read("justfile").split(`\n${name} action:\n`)[1].split("\n")[0];
   const poolRecipe = recipe("linear-document-pool");
-  assert.ok(poolRecipe.includes(`${pool}={{action}}`), poolRecipe);
+  // Each recipe hands its lane only an action that lane reads, refused by `just` before any
+  // shell sees it, so an operator's argument is never shell syntax.
+  assert.ok(
+    poolRecipe.includes(
+      `${pool}={{ if action =~ '^(dry-run|initialize)$' { action } else { error(`,
+    ),
+    poolRecipe,
+  );
   assert.ok(
     poolRecipe.includes("-t live-documents --projects onetaskgraph-linear,onetaskgraph-linear-e2e"),
     poolRecipe,
   );
   const templateRecipe = recipe("github-live-template");
-  assert.ok(templateRecipe.includes(`${template}={{action}}`), templateRecipe);
+  assert.ok(
+    templateRecipe.includes(
+      `${template}={{ if action =~ '^(dry-run|fill)$' { action } else { error(`,
+    ),
+    templateRecipe,
+  );
+  for (const [recipe, refused] of [
+    ["linear-document-pool", "initialize; echo injected"],
+    ["github-live-template", "$(echo injected)"],
+  ]) {
+    const result = spawnSync("just", ["--dry-run", recipe, refused], {
+      cwd: fileURLToPath(new URL("../../", import.meta.url)),
+      encoding: "utf8",
+    });
+    assert.notEqual(result.status, 0, `${recipe} accepted ${refused}`);
+    assert.equal(result.stdout, "", `${recipe} ran something for ${refused}`);
+    assert.match(result.stderr, /takes dry-run or/, result.stderr);
+  }
   assert.ok(templateRecipe.includes("GITHUB_LIVE_SELECTION=run"), templateRecipe);
   assert.ok(
     templateRecipe.includes(

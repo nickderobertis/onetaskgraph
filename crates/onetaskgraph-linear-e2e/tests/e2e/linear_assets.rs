@@ -21,9 +21,15 @@ const REQUEST_WINDOW: Duration = Duration::from_secs(3_600);
 use crate::fixtures::{LinearMarkdown, LinearWorkspace, document, linear_workspace};
 #[path = "../../../onetaskgraph-linear/tests/document_lifecycle/mod.rs"]
 pub(crate) mod document_lifecycle;
-#[path = "../../../onetaskgraph-linear/tests/document_lifecycle/replay_schema.rs"]
-mod document_replay_schema;
+// The plugin lane's replay of Linear, which this lane's pool setup is driven against.
+#[path = "../../../onetaskgraph-linear/tests/document_lifecycle/replay.rs"]
+#[allow(
+    dead_code,
+    reason = "the replay's fault switches serve the plugin lane's journeys; this lane drives its pool setup alone"
+)]
+mod document_replay;
 use document_lifecycle::Mode;
+use document_replay::schema as document_replay_schema;
 use onetaskgraph_linear::live_artifact::{LeaseLane, Scope, Slot};
 
 #[derive(Default)]
@@ -1518,9 +1524,11 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
     let key = session.credential().expose().to_owned();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let client = reqwest::Client::new();
+    // Linear, unless a credential-free drive points the pool setup at a loopback stand-in.
+    let linear = document_lifecycle::linear_endpoint();
     let response: Value = runtime.block_on(async {
         client
-            .post("https://api.linear.app/graphql")
+            .post(&linear)
             .header("Authorization", &key)
             .json(
                 &json!({"query":onetaskgraph_linear::graphql::RESOLUTION,"variables":{"key":team}}),
@@ -1557,7 +1565,7 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
     if let Some(setup) = document_lifecycle::PoolSetup::read().unwrap() {
         let report = runtime
             .block_on(document_lifecycle::setup_pool(
-                "https://api.linear.app/graphql",
+                &linear,
                 &key,
                 &team_key,
                 team_id,
@@ -1572,6 +1580,12 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
         }
         return;
     }
+    // Only the pool setup is redirected; the journey drives the binary against Linear itself.
+    assert!(
+        document_lifecycle::loopback_endpoint().is_none(),
+        "{} drives the asset lane's pool setup alone",
+        document_lifecycle::LOOPBACK_VARIABLE
+    );
     // A CI run works over the one standing pool member it leases, and no other run's: see
     // `document_lifecycle::lease`. A local run's destination is its own by its stamp already.
     let lease = ci.then(|| {
@@ -3317,4 +3331,53 @@ fn live_asset_forwarding_transport_counts_created_then_deleted_documents() {
     .unwrap();
     assert_eq!(recorded["operations"].as_array().unwrap().len(), 1);
     assert_eq!(recorded["completed"], true);
+}
+
+#[test]
+fn the_pool_variable_turns_the_asset_entry_point_into_the_setup_and_skips_the_journey() {
+    use onetaskgraph_linear::live_artifact::POOL_SIZE;
+    let replay = document_replay::Replay::start(
+        document_lifecycle::journal::Journal::new("assets", "initialize"),
+        BTreeMap::new(),
+    );
+    let sandbox = Sandbox::new();
+    let seats = sandbox.subdirectory("seats");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy",
+            "--exact",
+            "--nocapture",
+        ])
+        .env(document_lifecycle::POOL_VARIABLE, "dry-run")
+        .env(document_lifecycle::LOOPBACK_VARIABLE, &replay.endpoint)
+        .env("LINEAR_API_KEY", "synthetic")
+        .env("LINEAR_WRITE_TEAM", "ENG")
+        .env(onetaskgraph_live::SEAT_DIRECTORY_VARIABLE, &seats)
+        .env_remove("GITHUB_ACTIONS")
+        .env_remove(onetaskgraph_live::REQUIRED_VARIABLE)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let planned: Vec<_> = said
+        .lines()
+        .filter(|line| line.contains("would create "))
+        .collect();
+    assert_eq!(planned.len(), usize::from(POOL_SIZE), "{said}");
+    assert!(
+        planned.iter().all(|line| line.contains(" assets pool-")),
+        "{planned:?}"
+    );
+    // A dry run in place of the journey: nothing written, no upload asked for.
+    let state = replay.state.lock().unwrap();
+    assert!(
+        !state
+            .keyed
+            .iter()
+            .any(|(_, request)| request["query"].as_str().unwrap().contains("mutation"))
+    );
 }

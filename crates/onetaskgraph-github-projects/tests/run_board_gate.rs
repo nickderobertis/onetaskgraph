@@ -127,8 +127,10 @@ struct Account {
     /// (a copy's count never settles), `"unread-count"` (a copy's count is refused), and the
     /// template listing's `"no-has-next"`, `"no-cursor"` and `"stuck-cursor"`, a copy answered
     /// under another title (`"retitled-copy"`) and a draft answered with no item
-    /// (`"unanswered-draft"`).
-    fault: Option<&'static str>,
+    /// (`"unanswered-draft"`), an item answered without its type (`"untyped-item"`), a copy
+    /// answered without its id (`"copy-without-id"`) or as the template itself
+    /// (`"copy-as-template"`), and a deletion refused (`"refused-delete"`).
+    faults: Vec<&'static str>,
 }
 
 impl Account {
@@ -158,6 +160,10 @@ impl Account {
             },
         );
         account
+    }
+
+    fn has(&self, fault: &str) -> bool {
+        self.faults.contains(&fault)
     }
 
     fn next(&mut self, prefix: &str) -> String {
@@ -218,7 +224,7 @@ impl Account {
                 .map(|(_, name)| (self.next("F"), name.clone()))
                 .collect();
             let mut title = input["title"].as_str().unwrap().to_owned();
-            if self.fault == Some("retitled-copy") {
+            if self.has("retitled-copy") {
                 title = "Plans (copy)".to_owned();
             }
             self.boards.insert(
@@ -231,21 +237,24 @@ impl Account {
                     fields,
                 },
             );
+            if self.has("copy-without-id") {
+                return json!({"data":{"copyProjectV2":{"projectV2":{"number":number,"title":title}}}});
+            }
+            if self.has("copy-as-template") {
+                return json!({"data":{"copyProjectV2":{"projectV2":{"id":"PVT_template","number":TEMPLATE,"title":title}}}});
+            }
             return json!({"data":{"copyProjectV2":{"projectV2":{"id":id,"number":number,"title":title}}}});
         }
         if document.contains("query LiveRunBoardItems(") {
-            match self.fault {
-                Some("unread-count") => {
-                    return json!({"errors":[{"message":"Something went wrong while executing your query."}]});
+            if self.has("unread-count") {
+                return json!({"errors":[{"message":"Something went wrong while executing your query."}]});
+            }
+            if self.has("stalled-copy") {
+                // A copy still filling in on every read: no two reads agree.
+                let id = self.next("DI");
+                if let Some(board) = self.boards.get_mut(&number(variables)) {
+                    board.items.push((id, TEMPLATE_DRAFT_TITLE.to_owned()));
                 }
-                Some("stalled-copy") => {
-                    // A copy still filling in on every read: no two reads agree.
-                    let id = self.next("DI");
-                    if let Some(board) = self.boards.get_mut(&number(variables)) {
-                        board.items.push((id, TEMPLATE_DRAFT_TITLE.to_owned()));
-                    }
-                }
-                _ => {}
             }
         }
         if document.contains("query LiveRunBoardItems(")
@@ -291,26 +300,40 @@ impl Account {
             board
                 .items
                 .push((id.clone(), input["title"].as_str().unwrap().to_owned()));
-            if self.fault == Some("unanswered-draft") {
+            if self.has("unanswered-draft") {
                 return json!({"data":{"addProjectV2DraftIssue":{"projectItem":null}}});
             }
             return json!({"data":{"addProjectV2DraftIssue":{"projectItem":{"id":id}}}});
         }
         if document.contains("query LiveTemplateItems(") {
-            let board = self.by_id(variables["id"].as_str().unwrap()).unwrap();
             let start: usize = variables["after"]
                 .as_str()
                 .map_or(0, |after| after.parse().unwrap());
-            let nodes: Vec<_> = board.items.iter().skip(start).take(100)
-                .map(|(id, title)| json!({"id":id,"content":{"__typename":"DraftIssue","title":title}}))
+            let untyped = self.has("untyped-item");
+            let board = self.by_id(variables["id"].as_str().unwrap()).unwrap();
+            let nodes: Vec<_> = board
+                .items
+                .iter()
+                .skip(start)
+                .take(100)
+                .map(|(id, title)| {
+                    if untyped {
+                        json!({"id":id,"content":{"title":title}})
+                    } else {
+                        json!({"id":id,"content":{"__typename":"DraftIssue","title":title}})
+                    }
+                })
                 .collect();
             let next = start + nodes.len();
             let more = next < board.items.len();
-            let page = match self.fault {
-                Some("no-has-next") => json!({"endCursor":next.to_string()}),
-                Some("no-cursor") if more => json!({"hasNextPage":true,"endCursor":null}),
-                Some("stuck-cursor") if more => json!({"hasNextPage":true,"endCursor":"0"}),
-                _ => json!({"hasNextPage":more,"endCursor":next.to_string()}),
+            let page = if self.has("no-has-next") {
+                json!({"endCursor":next.to_string()})
+            } else if self.has("no-cursor") && more {
+                json!({"hasNextPage":true,"endCursor":null})
+            } else if self.has("stuck-cursor") && more {
+                json!({"hasNextPage":true,"endCursor":"0"})
+            } else {
+                json!({"hasNextPage":more,"endCursor":next.to_string()})
             };
             return json!({"data":{"node":{"items":{"nodes":nodes,"pageInfo":page}}}});
         }
@@ -321,6 +344,9 @@ impl Account {
                 .map(|board| json!({"id":board.id,"number":board.number,"title":board.title}))
                 .collect();
             return json!({"data":{"repositoryOwner":{"projectsV2":{"nodes":nodes,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}});
+        }
+        if document.contains("mutation LiveDeleteBoard(") && self.has("refused-delete") {
+            return json!({"errors":[{"message":"Something went wrong while executing your query."}]});
         }
         if document.contains("mutation LiveDeleteBoard(") {
             let id = input["projectId"].as_str().unwrap().to_owned();
@@ -917,13 +943,20 @@ fn the_template_setup_dry_runs_without_writing_then_fills_once() {
 
 /// One session, started with the account answering it `fault`, that is expected to fail.
 fn failing_session(fault: &'static str, entry: &str) -> (String, Arc<Mutex<Account>>) {
+    failing_session_with(&[fault], entry)
+}
+
+/// [`failing_session`], with every one of `faults` at once.
+fn failing_session_with(faults: &[&'static str], entry: &str) -> (String, Arc<Mutex<Account>>) {
+    let fault = faults.join("+");
     let account = Arc::new(Mutex::new(Account::new()));
     {
         let mut held = account.lock().unwrap();
-        held.fault = Some(fault);
+        held.faults = faults.to_vec();
         // A template listing two pages long, so a fault in its cursor is met.
         let template = held.boards.get_mut(&TEMPLATE).unwrap();
-        for n in 0..60 {
+        let pages = if entry.starts_with("template-") { 60 } else { 0 };
+        for n in 0..pages {
             template.items.push((
                 format!("DI_second_page_{n}"),
                 TEMPLATE_DRAFT_TITLE.to_owned(),
@@ -1023,7 +1056,7 @@ fn a_template_fill_whose_draft_is_answered_with_no_item_is_refused() {
         .unwrap()
         .items
         .truncate(10);
-    account.lock().unwrap().fault = Some("unanswered-draft");
+    account.lock().unwrap().faults = vec!["unanswered-draft"];
     let origin = serve(Arc::clone(&account));
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["session_child", "--exact", "--nocapture"])
@@ -1135,5 +1168,61 @@ fn a_session_that_panics_after_its_copy_still_deletes_it() {
             .seen
             .iter()
             .any(|(_, document, _)| document.contains("LiveDeleteBoard("))
+    );
+}
+
+#[test]
+fn a_copy_answered_without_an_id_or_as_the_template_is_refused_and_never_worked_on() {
+    for (fault, expected) in [
+        (
+            "copy-without-id",
+            "did not answer the live board copy with its id and number",
+        ),
+        ("copy-as-template", "answered an unusable board"),
+    ] {
+        let (said, account) = failing_session(fault, "main");
+        assert!(said.contains(expected), "{fault}: {said}");
+        let account = account.lock().unwrap();
+        let after_copy = account
+            .seen
+            .iter()
+            .skip_while(|(_, document, _)| !document.contains("LiveCopyBoard("))
+            .skip(1)
+            .count();
+        assert_eq!(
+            after_copy, 0,
+            "{fault}: a session worked on a board it could not vouch for"
+        );
+        // Above all, the template was never deleted in its stead.
+        assert!(account.boards.contains_key(&TEMPLATE));
+    }
+}
+
+#[test]
+fn a_copy_that_cannot_be_deleted_says_so_beside_the_failure_that_ended_it() {
+    let (said, account) = failing_session_with(&["stalled-copy", "refused-delete"], "main");
+    assert!(said.contains("did not settle"), "{said}");
+    assert!(
+        said.contains("additionally, the copy was not deleted"),
+        "{said}"
+    );
+    // It stayed listed, where the janitor will find it once the run reads completed.
+    assert_eq!(account.lock().unwrap().boards.len(), 2);
+    // A session whose own cleanup cannot delete its board fails naming that, too.
+    let (said, _) = failing_session_with(&["refused-delete"], "main");
+    assert!(said.contains("live board deletion"), "{said}");
+}
+
+#[test]
+fn a_template_item_answered_without_its_type_is_refused_writing_nothing() {
+    let (said, account) = failing_session("untyped-item", "template-fill");
+    assert!(said.contains("an item without its type"), "{said}");
+    assert!(
+        !account
+            .lock()
+            .unwrap()
+            .seen
+            .iter()
+            .any(|(_, document, _)| document.starts_with("mutation"))
     );
 }

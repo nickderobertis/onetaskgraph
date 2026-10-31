@@ -1588,8 +1588,15 @@ async fn drive_documents(
     Ok(())
 }
 
-/// Where the lane sends what it sends to Linear itself rather than through its source.
-const LINEAR_GRAPHQL: &str = "https://api.linear.app/graphql";
+/// Where the lane sends what it sends to Linear — [`document_lifecycle::linear_endpoint`] —
+/// with its cleanup pointed there too when that is a loopback stand-in.
+fn linear_graphql() -> String {
+    let url = document_lifecycle::linear_endpoint();
+    if document_lifecycle::loopback_endpoint().is_some() {
+        cleanup::against(&url);
+    }
+    url
+}
 
 #[tokio::test]
 async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
@@ -1655,6 +1662,42 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             "non-CI creation pass: initialize invocation-owned plugin document slots, exercise reuse assertions, and retire the set"
         );
     }
+    // Where this lane's Linear is: Linear, unless a credential-free drive points it at a
+    // loopback stand-in (see `linear_graphql`).
+    let linear_graphql = linear_graphql();
+    let team_id = linear(&key, TEAM_STATES, json!({"key":team}), "live team lookup")
+        .await
+        .and_then(|data| {
+            data.pointer("/teams/nodes/0/id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    format!("LINEAR_WRITE_TEAM={team} names no team this credential can see")
+                })
+        })
+        .unwrap_or_else(|error| {
+            panic!("the Linear live lane cannot reach its scratch team: {error}")
+        });
+    // The operator's one-time pool setup, asked for by `just linear-document-pool`, in place
+    // of the journey: every member's plugin slots, reported or created under its lease.
+    if let Some(setup) = document_lifecycle::PoolSetup::read().unwrap_or_else(|e| panic!("{e}")) {
+        let report = document_lifecycle::setup_pool(
+            &linear_graphql,
+            &key,
+            &team_key,
+            &team_id,
+            LeaseLane::Plugin,
+            &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+            &stamp,
+            setup,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("the Linear plugin pool setup failed: {error}"));
+        for line in report {
+            println!("{line}");
+        }
+        return;
+    }
     let journal = document_lifecycle::journal::Journal::new("plugin", effective_mode.name())
         .durable(
             std::env::current_exe()
@@ -1673,7 +1716,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         owner, &team_key,
     ));
     let endpoint = document_lifecycle::observer::guarded(
-        "https://api.linear.app/graphql",
+        &linear_graphql,
         &key,
         journal.clone(),
         std::sync::Arc::clone(&namespace),
@@ -1726,45 +1769,12 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
         }
     );
 
-    let team_id = linear(&key, TEAM_STATES, json!({"key":team}), "live team lookup")
-        .await
-        .and_then(|data| {
-            data.pointer("/teams/nodes/0/id")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .ok_or_else(|| {
-                    format!("LINEAR_WRITE_TEAM={team} names no team this credential can see")
-                })
-        })
-        .unwrap_or_else(|error| {
-            panic!("the Linear live lane cannot reach its scratch team: {error}")
-        });
-    // The operator's one-time pool setup, asked for by `just linear-document-pool`, in place
-    // of the journey: every member's plugin slots, reported or created under its lease.
-    if let Some(setup) = document_lifecycle::PoolSetup::read().unwrap_or_else(|e| panic!("{e}")) {
-        let report = document_lifecycle::setup_pool(
-            LINEAR_GRAPHQL,
-            &key,
-            &team_key,
-            &team_id,
-            LeaseLane::Plugin,
-            &[Slot::Filed, Slot::Loose, Slot::FollowUp],
-            &stamp,
-            setup,
-        )
-        .await
-        .unwrap_or_else(|error| panic!("the Linear plugin pool setup failed: {error}"));
-        for line in report {
-            println!("{line}");
-        }
-        return;
-    }
     // A CI run works over the one standing pool member it leases, and no other run's: see
     // `document_lifecycle::lease`. A local run's set is its own by its stamp already.
     let lease = if ci {
         Some(
             document_lifecycle::lease::claim(
-                LINEAR_GRAPHQL,
+                &linear_graphql,
                 &key,
                 &team_key,
                 &team_id,
@@ -1792,7 +1802,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
     let lane_key = key.clone();
     document_lifecycle::lease::holding(
         lease.as_ref(),
-        LINEAR_GRAPHQL,
+        &linear_graphql,
         &lane_key,
         guard_plugin_invocation(
             &lane_endpoint,
@@ -3847,6 +3857,131 @@ mod pool {
             .unwrap()
             .to_owned();
         assert!(!title.ends_with(" released"), "{title}");
+    }
+
+    #[tokio::test]
+    async fn a_lease_listing_that_does_not_read_soundly_refuses_the_claim_creating_nothing() {
+        for (fault, said) in [
+            ("no-page-info", "the lease listing answered no pagination"),
+            (
+                "repeated-cursor",
+                "the lease listing cursor did not advance",
+            ),
+            ("unreadable-created-at", "unreadable createdAt"),
+        ] {
+            let replay = replay();
+            // One lease already there, so a listing holds a row whose time is read.
+            claim(&replay, LeaseLane::Plugin, &holder(run(1)))
+                .await
+                .unwrap();
+            let before = replay.state.lock().unwrap().issues.len();
+            replay.state.lock().unwrap().lease_listing_fault = Some(fault);
+            let refused = claim(&replay, LeaseLane::Plugin, &holder(run(2)))
+                .await
+                .unwrap_err();
+            assert!(refused.contains(said), "{fault}: {refused}");
+            assert_eq!(
+                replay.state.lock().unwrap().issues.len(),
+                before,
+                "{fault}: it created"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_issue_titled_as_a_lease_under_another_id_confers_no_lease() {
+        let replay = replay();
+        // Someone's issue carrying a held lease's exact title, but not the id that lease's
+        // generation is created under: it holds nothing, so the member is free.
+        let stamp = holder(run(9));
+        let forged = onetaskgraph_linear::live_artifact::lease_title(
+            onetaskgraph_linear::live_artifact::Lease::new(
+                Scope::pooled("ENG", 1).unwrap(),
+                LeaseLane::Plugin,
+                std::num::NonZeroU32::MIN,
+                onetaskgraph_linear::live_artifact::LeaseHolder::Held(
+                    onetaskgraph_linear::live_artifact::HolderStamp::new(&stamp).unwrap(),
+                ),
+            )
+            .unwrap(),
+        );
+        replay.state.lock().unwrap().issues.insert(
+            "forged".into(),
+            json!({"id":"forged","title":forged,"createdAt":chrono::Utc::now().to_rfc3339()}),
+        );
+        let held = lease::claim_member(
+            &replay.endpoint,
+            "synthetic",
+            "ENG",
+            "team",
+            LeaseLane::Plugin,
+            &holder(run(1)),
+            now_micros,
+            1,
+        )
+        .await
+        .unwrap()
+        .expect("a forged lease holds nothing");
+        assert_eq!(held.generation, 1);
+        // And it is no claimant's to delete either.
+        assert!(replay.state.lock().unwrap().issues.contains_key("forged"));
+    }
+
+    #[tokio::test]
+    async fn the_pool_variable_turns_the_lanes_entry_point_into_the_setup_and_skips_the_journey() {
+        let replay = replay();
+        let seats = std::env::temp_dir().join(format!("linear-pool-entry-{}", std::process::id()));
+        std::fs::create_dir_all(&seats).unwrap();
+        let output = tokio::task::spawn_blocking({
+            let endpoint = replay.endpoint.clone();
+            let seats = seats.clone();
+            move || {
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "real_linear_applies_every_declared_capability_and_leaves_no_residue",
+                        "--exact",
+                        "--nocapture",
+                    ])
+                    .env(document_lifecycle::POOL_VARIABLE, "dry-run")
+                    .env("LINEAR_LIVE_TEST_GRAPHQL", endpoint)
+                    .env("LINEAR_API_KEY", "synthetic")
+                    .env("LINEAR_WRITE_TEAM", "ENG")
+                    .env(onetaskgraph_live::SEAT_DIRECTORY_VARIABLE, &seats)
+                    .env_remove("GITHUB_ACTIONS")
+                    .env_remove(onetaskgraph_live::REQUIRED_VARIABLE)
+                    .output()
+                    .unwrap()
+            }
+        })
+        .await
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&seats);
+        let said = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{said}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let planned = said
+            .lines()
+            .filter(|line| line.contains("would create "))
+            .count();
+        assert_eq!(planned, usize::from(POOL_SIZE) * 4, "{said}");
+        // A dry run, and the setup in place of the journey: nothing written, no fixture read.
+        let state = replay.state.lock().unwrap();
+        let sent: Vec<_> = state
+            .keyed
+            .iter()
+            .map(|(_, request)| request["query"].as_str().unwrap().to_owned())
+            .collect();
+        assert!(
+            !sent.iter().any(|query| query.contains("mutation")),
+            "{sent:?}"
+        );
+        assert!(
+            !sent.iter().any(|query| query.contains("projectStatuses")),
+            "{sent:?}"
+        );
     }
 
     #[tokio::test]

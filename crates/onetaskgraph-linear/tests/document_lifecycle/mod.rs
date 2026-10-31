@@ -609,3 +609,33 @@ pub async fn setup_pool(
     }
     Ok(report)
 }
+
+/// The variable a credential-free drive points both Linear lanes at, a plain-HTTP loopback
+/// URL with an explicit port, as `GITHUB_LIVE_TEST_GRAPHQL` points the GitHub lane.
+pub const LOOPBACK_VARIABLE: &str = "LINEAR_LIVE_TEST_GRAPHQL";
+
+/// The loopback stand-in [`LOOPBACK_VARIABLE`] names, when it names one; anything else it
+/// holds is refused, so a lane is never pointed off Linear at a host that is not this one.
+pub fn loopback_endpoint() -> Option<String> {
+    let url = std::env::var(LOOPBACK_VARIABLE).ok()?;
+    let parsed = reqwest::Url::parse(&url)
+        .unwrap_or_else(|error| panic!("{LOOPBACK_VARIABLE} is not a URL: {error}"));
+    let loopback = parsed
+        .host_str()
+        .and_then(|host| {
+            host.trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .ok()
+        })
+        .is_some_and(|host| host.is_loopback());
+    assert!(
+        parsed.scheme() == "http" && loopback && parsed.port().is_some(),
+        "{LOOPBACK_VARIABLE} must be a plain-HTTP loopback URL with an explicit port"
+    );
+    Some(url)
+}
+
+/// Where a lane sends what it sends to Linear: Linear, unless [`loopback_endpoint`] says.
+pub fn linear_endpoint() -> String {
+    loopback_endpoint().unwrap_or_else(|| "https://api.linear.app/graphql".to_owned())
+}

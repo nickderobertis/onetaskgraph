@@ -1,7 +1,7 @@
 //! Synthetic HTTP replay of the recorded Linear wire shapes, never a source double.
 use super::document_lifecycle::journal::Journal;
 #[path = "replay_schema.rs"]
-mod schema;
+pub(crate) mod schema;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
@@ -54,6 +54,9 @@ pub struct State {
     pub lose_next_issue_create_ack: bool,
     /// Refuse every `issueDelete`, and every `issueUpdate`, while set.
     pub refuse_issue_deletes: bool,
+    /// How the pool's lease listing is misanswered: `"no-page-info"`, `"repeated-cursor"`, or
+    /// `"unreadable-created-at"`.
+    pub lease_listing_fault: Option<&'static str>,
     pub refuse_issue_updates: bool,
     pub rate_limited: usize,
     serial: usize,
@@ -188,6 +191,32 @@ impl Replay {
                 {
                     state.schema_errors.push(error.clone());
                     body = json!({"errors":[{"message":error}]});
+                }
+                // The pool's lease listing, misanswered after it validated.
+                let lease_listing = request["query"].as_str().unwrap().contains("issues(")
+                    && request
+                        .pointer("/variables/filter/title/startsWith")
+                        .and_then(Value::as_str)
+                        .is_some_and(|prefix| prefix.contains("lease-v1"));
+                if let (Some(fault), true, Some(connection)) = (
+                    state.lease_listing_fault,
+                    lease_listing,
+                    body.pointer_mut("/data/issues"),
+                ) {
+                    match fault {
+                        "no-page-info" => {
+                            connection.as_object_mut().unwrap().remove("pageInfo");
+                        }
+                        "repeated-cursor" => {
+                            let after = request["variables"]["after"].as_str().unwrap_or("0");
+                            connection["pageInfo"] = json!({"hasNextPage":true,"endCursor":after});
+                        }
+                        _ => {
+                            for node in connection["nodes"].as_array_mut().unwrap() {
+                                node["createdAt"] = json!("yesterday");
+                            }
+                        }
+                    }
                 }
                 // Negative wire journeys corrupt an otherwise schema-validated response.
                 // Missing pagination must reach discovery's guard, rather than becoming a

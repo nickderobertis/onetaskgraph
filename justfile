@@ -311,7 +311,7 @@ linear-document-creation:
 # GH_PROJECTS_TOKEN, GH_PROJECTS_OWNER, GH_PROJECTS_NUMBER and GH_PROJECTS_REPOSITORY; it
 # writes to that board.
 github-live-template action:
-    @ONETASKGRAPH_GITHUB_TEMPLATE={{action}} GITHUB_LIVE_SELECTION=run cargo test --quiet -p onetaskgraph-github-projects --all-features --locked --test live -- real_projects_v2_contract_writes_and_leaves_no_residue --exact --nocapture
+    @ONETASKGRAPH_GITHUB_TEMPLATE={{ if action =~ '^(dry-run|fill)$' { action } else { error("github-live-template takes dry-run or fill") } }} GITHUB_LIVE_SELECTION=run cargo test --quiet -p onetaskgraph-github-projects --all-features --locked --test live -- real_projects_v2_contract_writes_and_leaves_no_residue --exact --nocapture
 
 # The operator's one-time setup of the standing Linear slot pool both live lanes lease from:
 # `just linear-document-pool dry-run` prints, member by member, what it would create and
@@ -319,4 +319,4 @@ github-live-template action:
 # every member no live run holds, and a second run creates nothing. Needs LINEAR_API_KEY and
 # LINEAR_WRITE_TEAM; it writes to that team.
 linear-document-pool action:
-    @ONETASKGRAPH_LINEAR_POOL={{action}} ONETASKGRAPH_LIVE_REQUIRED=1 {{nx}} run-many -t live-documents --projects onetaskgraph-linear,onetaskgraph-linear-e2e --parallel=1 --skip-nx-cache
+    @ONETASKGRAPH_LINEAR_POOL={{ if action =~ '^(dry-run|initialize)$' { action } else { error("linear-document-pool takes dry-run or initialize") } }} ONETASKGRAPH_LIVE_REQUIRED=1 {{nx}} run-many -t live-documents --projects onetaskgraph-linear,onetaskgraph-linear-e2e --parallel=1 --skip-nx-cache

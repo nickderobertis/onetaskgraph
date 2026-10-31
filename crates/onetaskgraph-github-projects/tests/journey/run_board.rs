@@ -412,12 +412,30 @@ pub async fn setup_template(
         let items = page
             .pointer("/data/node/items")
             .ok_or("the template's items were not reported")?;
-        drafts += items["nodes"]
+        for node in items["nodes"]
             .as_array()
             .ok_or("the template's item nodes were not reported")?
-            .iter()
-            .filter(|node| node.pointer("/content/__typename") == Some(&json!("DraftIssue")))
-            .count() as u64;
+        {
+            // `null` content is an item this credential cannot see, which is no draft; any
+            // other content has to say what it is, or the count could not be trusted.
+            match node.get("content") {
+                Some(Value::Null) => {}
+                Some(content) => match content.get("__typename").and_then(Value::as_str) {
+                    Some("DraftIssue") => drafts += 1,
+                    Some(_) => {}
+                    None => {
+                        return Err(format!(
+                            "the template's item listing answered an item without its type: {node}"
+                        ));
+                    }
+                },
+                None => {
+                    return Err(format!(
+                        "the template's item listing answered an item without its content: {node}"
+                    ));
+                }
+            }
+        }
         match items
             .pointer("/pageInfo/hasNextPage")
             .and_then(Value::as_bool)
