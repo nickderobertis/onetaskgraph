@@ -59,6 +59,8 @@ case "$JOB" in
     # crates' own suites (tagged coverage:uninstrumented) run every case uninstrumented in
     # `test` and contribute no coverage: the user's decision of 2026-10-30.
     export ONETASKGRAPH_TESTS_UNDER_COVERAGE=1
+    # The release CD journeys name each recipe call's seconds, so a slow phase is visible here.
+    export ONETASKGRAPH_CD_TIMINGS=1
     # Exercise the relative interpreter without paying for a second distribution run.
     # check-relative-interpreter.sh owns the call-site comparison.
     export ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1

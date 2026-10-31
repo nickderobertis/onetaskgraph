@@ -96,7 +96,10 @@ const ownTarget = {
   CARGO_TARGET_DIR: join(checkout, "target", "release-cd"),
   CARGO_BUILD_BUILD_DIR: join(checkout, "target"),
 };
+// With ONETASKGRAPH_CD_TIMINGS=1, which test-linux sets (scripts/ci-job.sh), each recipe call
+// names its seconds on standard error, so the job's log says which phase of a journey is slow.
 function recipe(job, args, env = {}) {
+  const started = Date.now();
   const result = spawnSync("just", [`release-${job}`, ...args], {
     cwd: checkout,
     encoding: "utf8",
@@ -108,6 +111,10 @@ function recipe(job, args, env = {}) {
     },
     maxBuffer: 1 << 26,
   });
+  if (process.env.ONETASKGRAPH_CD_TIMINGS === "1")
+    process.stderr.write(
+      `release-cd timing: ${((Date.now() - started) / 1000).toFixed(1)}s release-${job} ${args.join(" ")}\n`,
+    );
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
 // A run still going after `bound` is stopped and fails with what it wrote and the build
