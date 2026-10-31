@@ -11,7 +11,7 @@
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import {
-  buildSchema,
+  buildASTSchema,
   GraphQLError,
   getOperationAST,
   getVariableValues,
@@ -36,18 +36,22 @@ const write = (answer) => process.stdout.write(`${JSON.stringify(answer)}\n`);
 const schemaPath = process.argv[2];
 let schema;
 try {
-  schema = buildSchema(readFileSync(schemaPath, "utf8"), { assumeValid: true });
+  const sdl = parse(readFileSync(schemaPath, "utf8"));
+  // Checked as built without `assumeValid`, which would record no errors for `validateSchema`
+  // to report; the schema requests are validated against is then built with it, because
+  // `validate` refuses to run against a schema with any error, the tolerated one included.
+  const untolerated = validateSchema(buildASTSchema(sdl)).filter(
+    (error) => !TOLERATED_SCHEMA_ERROR.test(error.message),
+  );
+  if (untolerated.length > 0) {
+    write({
+      internal: `the schema at ${schemaPath} is invalid: ${untolerated.map((error) => error.message).join("; ")}`,
+    });
+    process.exit(1);
+  }
+  schema = buildASTSchema(sdl, { assumeValid: true });
 } catch (error) {
   write({ internal: `the schema at ${schemaPath} does not build: ${error}` });
-  process.exit(1);
-}
-const untolerated = validateSchema(schema).filter(
-  (error) => !TOLERATED_SCHEMA_ERROR.test(error.message),
-);
-if (untolerated.length > 0) {
-  write({
-    internal: `the schema at ${schemaPath} is invalid: ${untolerated.map((error) => error.message).join("; ")}`,
-  });
   process.exit(1);
 }
 

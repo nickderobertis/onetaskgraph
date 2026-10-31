@@ -1638,3 +1638,42 @@ fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
         None
     );
 }
+
+/// The schema check stops, rather than answering requests, against a schema breaking any
+/// type-system rule but the one GitHub's published file breaks — so a copy that is not the
+/// schema GitHub serves cannot pass for it — and starts against one breaking that rule alone.
+#[test]
+fn the_schema_check_refuses_a_schema_breaking_any_rule_but_the_tolerated_one() {
+    use serde_json::{Value, json};
+
+    let first_answer = |sdl: &str| -> Value {
+        let file = tempfile::NamedTempFile::new().expect("a scratch schema file");
+        std::fs::write(file.path(), sdl).expect("the scratch schema is written");
+        let output = std::process::Command::new("bun")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/github_schema/validate.mjs"
+            ))
+            .arg(file.path())
+            .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("bun runs the schema check");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        serde_json::from_str(stdout.lines().next().unwrap_or_default())
+            .unwrap_or_else(|_| panic!("the schema check answered {stdout:?}"))
+    };
+    let tolerated = "interface Node { id: ID! } \
+                     type Card implements Node { id: ID! @deprecated(reason: \"gone\") } \
+                     type Query { node: Node card: Card }";
+    assert_eq!(first_answer(tolerated), json!({"ready": true}));
+
+    let invalid = first_answer("type Empty type Query { empty: Empty }");
+    assert!(
+        invalid["internal"]
+            .as_str()
+            .is_some_and(|message| message.contains("is invalid")
+                && message.contains("Type Empty must define one or more fields.")),
+        "{invalid}"
+    );
+}
