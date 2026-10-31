@@ -55,7 +55,9 @@ pub use clock::{
     ClockChoice, SIMULATED_CLOCK_VARIABLE, attach as attach_simulated_clock, clock_choice,
     process_clock,
 };
-pub use config::{Config, ConfigError, Loaded, OutputFormat, SourceCacheConfig, SourceConfig};
+pub use config::{
+    Config, ConfigError, CreateSettings, Loaded, OutputFormat, SourceCacheConfig, SourceConfig,
+};
 pub use engine::boundary;
 pub use engine::{
     Body, BudgetSpent, CommentCounts, CommentList, CommentWritten, CompleteAction, Completeness,

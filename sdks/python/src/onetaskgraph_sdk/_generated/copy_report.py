@@ -48,6 +48,7 @@ class CopyVia(StrEnum):
     CopyViaOrigin = "origin"
     CopyViaScan = "scan"
     CopyViaMatch = "match"
+    CopyViaIntent = "intent"
 
 
 class FailureClass(StrEnum):
@@ -66,6 +67,22 @@ class GlobalId(RootModel[str]):
 
 class NoCounterpart(StrEnum):
     NoCounterpartCreated = "created"
+
+
+class Priority(StrEnum):
+    PriorityNone = "none"
+    PriorityUrgent = "urgent"
+    PriorityHigh = "high"
+    PriorityMedium = "medium"
+    PriorityLow = "low"
+
+
+class PriorityCondition(BaseModel):
+    held: Annotated[
+        Priority,
+        Field(description="The counterpart's priority, as the copy's own pre-write read held it."),
+    ]
+    met: Annotated[bool, Field(description="Whether that priority is one the condition names.")]
 
 
 class SourceName(RootModel[str]):
@@ -103,6 +120,16 @@ class StatusCategory(StrEnum):
     StatusCategoryDone = "done"
     StatusCategoryCancelled = "cancelled"
     StatusCategoryUnknown = "unknown"
+
+
+class StatusCondition(BaseModel):
+    held: Annotated[
+        StatusCategory,
+        Field(
+            description="The counterpart's status category, as the copy's own pre-write read held it."
+        ),
+    ]
+    met: Annotated[bool, Field(description="Whether that category is one the condition names.")]
 
 
 class WriteFallback(BaseModel):
@@ -167,18 +194,6 @@ class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown
         WritePartLanded | WritePartRejected | WritePartUnknown,
         Field(description="One mutation of an expected write."),
     ]
-
-
-class WriteResult(BaseModel):
-    parts: Annotated[
-        list[WritePart], Field(description="One per mutation sent, in the order sent.")
-    ]
-    version: Annotated[
-        str | None,
-        Field(
-            description="The task's version after the write, where the last response determines it."
-        ),
-    ] = None
 
 
 class DeliveredWritten(BaseModel):
@@ -286,6 +301,41 @@ class Placement(BaseModel):
     ] = None
 
 
+class Status(BaseModel):
+    category: Annotated[
+        StatusCategory,
+        Field(description="The normalised value filters compare against."),
+    ]
+    name: Annotated[str, Field(description="The source's own label for this status.")]
+
+
+class WriteResult(BaseModel):
+    parts: Annotated[
+        list[WritePart] | None,
+        Field(
+            description="One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`."
+        ),
+    ] = None
+    priority: Annotated[
+        Priority | None,
+        Field(
+            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+        ),
+    ] = None
+    status: Annotated[
+        Status | None,
+        Field(
+            description="The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
+        ),
+    ] = None
+    version: Annotated[
+        str | None,
+        Field(
+            description="The item's version after the write, where the write's responses determine it."
+        ),
+    ] = None
+
+
 class CopyOutcomeCreatedOrWouldCreate(BaseModel):
     fallback: Annotated[
         WriteFallback | None,
@@ -293,10 +343,22 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
             description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
         ),
     ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     result: Annotated[
@@ -310,6 +372,12 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
         Spent | None,
         Field(
             description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
+    status_condition: Annotated[
+        StatusCondition | None,
+        Field(
+            description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
         ),
     ] = None
     action: Literal["created"]
@@ -346,10 +414,22 @@ class CopyOutcomeUpdated(BaseModel):
             description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
         ),
     ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     result: Annotated[
@@ -363,6 +443,12 @@ class CopyOutcomeUpdated(BaseModel):
         Spent | None,
         Field(
             description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
+    status_condition: Annotated[
+        StatusCondition | None,
+        Field(
+            description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
         ),
     ] = None
     action: Literal["updated"]
@@ -387,10 +473,22 @@ class CopyOutcomeUnchanged(BaseModel):
             description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
         ),
     ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     result: Annotated[
@@ -404,6 +502,12 @@ class CopyOutcomeUnchanged(BaseModel):
         Spent | None,
         Field(
             description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
+    status_condition: Annotated[
+        StatusCondition | None,
+        Field(
+            description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
         ),
     ] = None
     action: Literal["unchanged"]
@@ -434,10 +538,22 @@ class CopyOutcomeOrphaned(BaseModel):
             description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
         ),
     ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     result: Annotated[
@@ -451,6 +567,12 @@ class CopyOutcomeOrphaned(BaseModel):
         Spent | None,
         Field(
             description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
+    status_condition: Annotated[
+        StatusCondition | None,
+        Field(
+            description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
         ),
     ] = None
     action: Literal["orphaned"]
@@ -464,10 +586,22 @@ class CopyOutcomeFailed(BaseModel):
             description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
         ),
     ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     result: Annotated[
@@ -481,6 +615,12 @@ class CopyOutcomeFailed(BaseModel):
         Spent | None,
         Field(
             description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
+    status_condition: Annotated[
+        StatusCondition | None,
+        Field(
+            description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
         ),
     ] = None
     action: Literal["failed"]
@@ -497,10 +637,22 @@ class CopyOutcomeSkipped(BaseModel):
             description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
         ),
     ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     result: Annotated[
@@ -514,6 +666,12 @@ class CopyOutcomeSkipped(BaseModel):
         Spent | None,
         Field(
             description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
+    status_condition: Annotated[
+        StatusCondition | None,
+        Field(
+            description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
         ),
     ] = None
     action: Literal["skipped"]

@@ -700,7 +700,10 @@ def test_task_copy_create_drives_the_binary(binary: Path, tmp_path: Path) -> Non
     assert [(item.root.source.root, landed(item), item.root.action) for item in created.items] == [
         ("from:T-2", "into:T-2", "created")
     ]
-    assert without_record(run(client.task_show(id="into:T-2")).items[0].item.metadata) == {
+    held = without_record(run(client.task_show(id="into:T-2")).items[0].item.metadata)
+    # The key of the create that made it, which a retried copy finds it by.
+    assert isinstance(held.pop("onetaskgraph.create_key"), str)
+    assert held == {
         "onetaskgraph.edges_on_record": 1,
         "onetaskgraph.origin": "from:T-2",
     }

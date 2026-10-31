@@ -58,6 +58,17 @@ class Spent(BaseModel):
     ]
 
 
+class StatusCategory(StrEnum):
+    StatusCategoryDraft = "draft"
+    StatusCategoryBacklog = "backlog"
+    StatusCategoryTodo = "todo"
+    StatusCategoryQueued = "queued"
+    StatusCategoryInProgress = "in-progress"
+    StatusCategoryDone = "done"
+    StatusCategoryCancelled = "cancelled"
+    StatusCategoryUnknown = "unknown"
+
+
 class WriteFallback(BaseModel):
     read: Annotated[bool, Field(description="Always `true`: the write made one read.")]
     reason: Annotated[
@@ -122,14 +133,37 @@ class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown
     ]
 
 
+class Status(BaseModel):
+    category: Annotated[
+        StatusCategory,
+        Field(description="The normalised value filters compare against."),
+    ]
+    name: Annotated[str, Field(description="The source's own label for this status.")]
+
+
 class WriteResult(BaseModel):
     parts: Annotated[
-        list[WritePart], Field(description="One per mutation sent, in the order sent.")
-    ]
+        list[WritePart] | None,
+        Field(
+            description="One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`."
+        ),
+    ] = None
+    priority: Annotated[
+        Priority | None,
+        Field(
+            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+        ),
+    ] = None
+    status: Annotated[
+        Status | None,
+        Field(
+            description="The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
+        ),
+    ] = None
     version: Annotated[
         str | None,
         Field(
-            description="The task's version after the write, where the last response determines it."
+            description="The item's version after the write, where the write's responses determine it."
         ),
     ] = None
 

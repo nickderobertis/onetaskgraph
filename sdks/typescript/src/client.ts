@@ -117,9 +117,23 @@ export type CopyQueryOptions = {
 };
 // `create` asserts the destination holds no counterpart of any task named, so each is created
 // without the correspondence lookup. Only `task copy` takes it, and the query narrowing.
+/** What a status-guarded copy does with a task whose destination status the guard does not name. */
+export const otherwiseChoices = ["refuse", "preserve-destination"] as const;
+export type Otherwise = (typeof otherwiseChoices)[number];
+// Conditions on the counterpart each task updates, decided on the copy's own read of it:
+// `whenDestinationStatus` writes over a counterpart only at those categories — `otherwise` says
+// what happens at another, refusing it as `destination-status` (the copy exits 4 with the report)
+// or keeping its status — and `whenDestinationPriority` writes the source's priority only over
+// those priorities, keeping any other. A create is never conditioned.
+export type CopyConditionOptions = {
+  whenDestinationStatus?: StatusCategory[];
+  otherwise?: Otherwise;
+  whenDestinationPriority?: Priority[];
+};
 export type TaskCopyOptions = StatusCopyOptions &
   CopyOptions &
   CopyQueryOptions &
+  CopyConditionOptions &
   ExpectOptions & { create?: boolean; targetTask?: string };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
@@ -866,8 +880,30 @@ export function taskCopyFlags(options: TaskCopyOptions): string[] {
   if (options.create !== undefined && typeof options.create !== "boolean") {
     throw new TypeError("taskCopy: create must be a boolean");
   }
+  const conditions: string[] = [];
+  for (const status of stringList(
+    "taskCopy",
+    "whenDestinationStatus",
+    options.whenDestinationStatus,
+  )) {
+    conditions.push("--when-destination-status", status);
+  }
+  if (options.otherwise !== undefined) {
+    if (!otherwiseChoices.some((choice) => choice === options.otherwise)) {
+      throw new TypeError(`taskCopy: otherwise must be ${otherwiseChoices.join(" or ")}`);
+    }
+    conditions.push("--otherwise", options.otherwise);
+  }
+  for (const priority of stringList(
+    "taskCopy",
+    "whenDestinationPriority",
+    options.whenDestinationPriority,
+  )) {
+    conditions.push("--when-destination-priority", priority);
+  }
   return [
     ...copyFlags("taskCopy", options),
+    ...conditions,
     ...(options.create ? ["--create"] : []),
     ...(options.targetTask === undefined
       ? []

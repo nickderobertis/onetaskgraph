@@ -490,7 +490,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # which rule found where it landed, and what became of the link it records at
     # `onetaskgraph.copies` — on the three actions that land an item, and not on an orphan.
     for root, words in (
-        ("CopyVia", {"target-task", "link", "origin", "scan", "match"}),
+        ("CopyVia", {"target-task", "link", "origin", "scan", "match", "intent"}),
         # Version 36 added `skipped`, the link a `--no-link` copy leaves unwritten.
         ("CopyLink", {"recorded", "unchanged", "unrecorded", "skipped"}),
     ):

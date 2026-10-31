@@ -686,6 +686,13 @@ url?: (string | null)
 export type CommentList = GeneratedCommentList.CommentList;
 export namespace GeneratedCommentWritten {
 /**
+ * One item, qualified by the source it came from.
+ *
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+export type GlobalId = string
+/**
  * One mutation of an expected write.
  */
 export type WritePart = ({
@@ -725,6 +732,16 @@ error: string
 outcome: "unknown"
 [k: string]: any
 })
+/**
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
+ */
+export type Priority = ("none" | "urgent" | "high" | "medium" | "low")
 
 /**
  * What `task comment add` and `task comment edit` answer with: the comment as its source now
@@ -756,6 +773,11 @@ fallback?: (WriteFallback | null)
  * the qualified id of the task it is on, so its own id needs no source of its own.
  */
 id: string
+/**
+ * The qualified id of the task the comment was added to — present on `task comment add`'s
+ * answer, so a caller records what it commented on from the answer alone.
+ */
+item?: (GlobalId | null)
 /**
  * The comment this one is a copy of, at its origin — present only on a comment a copy
  * wrote, and absent on every comment a person wrote where it is.
@@ -830,17 +852,52 @@ url?: (string | null)
 [k: string]: any
 }
 /**
- * What each mutation of an expected write came to, built from the mutations' own responses.
+ * What an item holds once a write is done, read off the write's own responses — and, for an
+ * expected write, what each mutation it sent came to.
+ *
+ * Every write verb and every item a copy lands answers one, with no request added for it: a
+ * field the write kept is what the read before it held. `version` is `null` where the source
+ * cannot vouch for a token from its write's responses — a GitHub board for an item it has just
+ * written, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would
+ * then give.
  */
 export interface WriteResult {
 /**
- * One per mutation sent, in the order sent.
+ * One per mutation an expected write sent, in the order sent — absent for a write made
+ * without `--expect`.
  */
-parts: WritePart[]
+parts?: (WritePart[] | null)
 /**
- * The task's version after the write, where the last response determines it.
+ * A task's priority after the write — `null` for a project or a document, which carry
+ * none, and where an expected write that failed cannot say.
+ */
+priority?: (Priority | null)
+/**
+ * The item's status after the write, exactly as `task show` spells it — `null` for a
+ * document, which has none, and where an expected write that failed cannot say.
+ */
+status?: (Status | null)
+/**
+ * The item's version after the write, where the write's responses determine it.
  */
 version?: (string | null)
+[k: string]: any
+}
+/**
+ * A source's status, kept in both normalised and original form.
+ *
+ * `category` is what every filter compares against; `name` is the source's own
+ * wording, preserved so display never flattens "In Review" into "In Progress".
+ */
+export interface Status {
+/**
+ * The normalised value filters compare against.
+ */
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * The source's own label for this status.
+ */
+name: string
 [k: string]: any
 }
 /**
@@ -1408,7 +1465,7 @@ link?: (CopyLink | null)
 /**
  * Which rule found it.
  */
-via: ("target-task" | "link" | "origin" | "scan" | "match")
+via: ("target-task" | "link" | "origin" | "scan" | "match" | "intent")
 [k: string]: any
 } | {
 action: "unchanged"
@@ -1439,7 +1496,7 @@ skipped?: boolean
 /**
  * Which rule found it.
  */
-via: ("target-task" | "link" | "origin" | "scan" | "match")
+via: ("target-task" | "link" | "origin" | "scan" | "match" | "intent")
 [k: string]: any
 } | {
 action: "orphaned"
@@ -1566,6 +1623,11 @@ export type CopyOutcome = ({
  */
 fallback?: (WriteFallback | null)
 /**
+ * What the counterpart held, as the copy's read of it before writing found it — present
+ * only on an item the copy refused after that read, such as `destination-status`.
+ */
+held?: (WriteResult | null)
+/**
  * Which source a routed copy placed it in, and the index of the route entry that
  * matched — `null` there when none did.
  *
@@ -1575,6 +1637,12 @@ fallback?: (WriteFallback | null)
  * not placed at all.
  */
 placed?: (Placement | null)
+/**
+ * What `--when-destination-priority` found the counterpart's priority at, and whether
+ * that met it — present only when the copy was given the condition and this item was an
+ * update of a task.
+ */
+priority_condition?: (PriorityCondition | null)
 /**
  * What each mutation the write sent came to, and the version it left the task at — for a
  * source that reports its writes' parts.
@@ -1592,6 +1660,12 @@ source: string
  * read included.
  */
 spent?: (Spent | null)
+/**
+ * What `--when-destination-status` found the counterpart's status at, and whether that
+ * met it — present only when the copy was given the condition and this item was an update
+ * of a task, a refused one included.
+ */
+status_condition?: (StatusCondition | null)
 [k: string]: any
 } & ({
 action: "created"
@@ -1639,7 +1713,7 @@ link?: (CopyLink | null)
 /**
  * Which rule found it.
  */
-via: ("target-task" | "link" | "origin" | "scan" | "match")
+via: ("target-task" | "link" | "origin" | "scan" | "match" | "intent")
 [k: string]: any
 } | {
 action: "unchanged"
@@ -1670,7 +1744,7 @@ skipped?: boolean
 /**
  * Which rule found it.
  */
-via: ("target-task" | "link" | "origin" | "scan" | "match")
+via: ("target-task" | "link" | "origin" | "scan" | "match" | "intent")
 [k: string]: any
 } | {
 action: "orphaned"
@@ -1735,6 +1809,16 @@ outcome: "unknown"
 [k: string]: any
 })
 /**
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
+ */
+export type Priority = ("none" | "urgent" | "high" | "medium" | "low")
+/**
  * One item, qualified by the source it came from.
  *
  * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
@@ -1766,6 +1850,55 @@ reason: string
 [k: string]: any
 }
 /**
+ * What an item holds once a write is done, read off the write's own responses — and, for an
+ * expected write, what each mutation it sent came to.
+ *
+ * Every write verb and every item a copy lands answers one, with no request added for it: a
+ * field the write kept is what the read before it held. `version` is `null` where the source
+ * cannot vouch for a token from its write's responses — a GitHub board for an item it has just
+ * written, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would
+ * then give.
+ */
+export interface WriteResult {
+/**
+ * One per mutation an expected write sent, in the order sent — absent for a write made
+ * without `--expect`.
+ */
+parts?: (WritePart[] | null)
+/**
+ * A task's priority after the write — `null` for a project or a document, which carry
+ * none, and where an expected write that failed cannot say.
+ */
+priority?: (Priority | null)
+/**
+ * The item's status after the write, exactly as `task show` spells it — `null` for a
+ * document, which has none, and where an expected write that failed cannot say.
+ */
+status?: (Status | null)
+/**
+ * The item's version after the write, where the write's responses determine it.
+ */
+version?: (string | null)
+[k: string]: any
+}
+/**
+ * A source's status, kept in both normalised and original form.
+ *
+ * `category` is what every filter compares against; `name` is the source's own
+ * wording, preserved so display never flattens "In Review" into "In Progress".
+ */
+export interface Status {
+/**
+ * The normalised value filters compare against.
+ */
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * The source's own label for this status.
+ */
+name: string
+[k: string]: any
+}
+/**
  * Where one item written to a source lands, and which of its routes put it there.
  *
  * `route` is always written, `null` included: a reader of a routed copy's report is told
@@ -1784,17 +1917,17 @@ route?: (number | null)
 [k: string]: any
 }
 /**
- * What each mutation of an expected write came to, built from the mutations' own responses.
+ * What a guarded copy found a counterpart's priority at, and whether that met the condition.
  */
-export interface WriteResult {
+export interface PriorityCondition {
 /**
- * One per mutation sent, in the order sent.
+ * The counterpart's priority, as the copy's own pre-write read held it.
  */
-parts: WritePart[]
+held: ("none" | "urgent" | "high" | "medium" | "low")
 /**
- * The task's version after the write, where the last response determines it.
+ * Whether that priority is one the condition names.
  */
-version?: (string | null)
+met: boolean
 [k: string]: any
 }
 /**
@@ -1838,6 +1971,20 @@ lower_bound: boolean
  * What it is metered in — `points`, `requests`.
  */
 unit: string
+[k: string]: any
+}
+/**
+ * What a guarded copy found a counterpart's status at, and whether that met the condition.
+ */
+export interface StatusCondition {
+/**
+ * The counterpart's status category, as the copy's own pre-write read held it.
+ */
+held: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * Whether that category is one the condition names.
+ */
+met: boolean
 [k: string]: any
 }
 /**
@@ -1991,6 +2138,11 @@ export type CopyOutcome = ({
  */
 fallback?: (WriteFallback | null)
 /**
+ * What the counterpart held, as the copy's read of it before writing found it — present
+ * only on an item the copy refused after that read, such as `destination-status`.
+ */
+held?: (WriteResult | null)
+/**
  * Which source a routed copy placed it in, and the index of the route entry that
  * matched — `null` there when none did.
  *
@@ -2000,6 +2152,12 @@ fallback?: (WriteFallback | null)
  * not placed at all.
  */
 placed?: (Placement | null)
+/**
+ * What `--when-destination-priority` found the counterpart's priority at, and whether
+ * that met it — present only when the copy was given the condition and this item was an
+ * update of a task.
+ */
+priority_condition?: (PriorityCondition | null)
 /**
  * What each mutation the write sent came to, and the version it left the task at — for a
  * source that reports its writes' parts.
@@ -2017,6 +2175,12 @@ source: string
  * read included.
  */
 spent?: (Spent | null)
+/**
+ * What `--when-destination-status` found the counterpart's status at, and whether that
+ * met it — present only when the copy was given the condition and this item was an update
+ * of a task, a refused one included.
+ */
+status_condition?: (StatusCondition | null)
 [k: string]: any
 } & CopyOutcome1)
 /**
@@ -2059,6 +2223,16 @@ error: string
 outcome: "unknown"
 [k: string]: any
 })
+/**
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
+ */
+export type Priority = ("none" | "urgent" | "high" | "medium" | "low")
 export type CopyOutcome1 = ({
 action: "created"
 /**
@@ -2105,7 +2279,7 @@ link?: (CopyLink | null)
 /**
  * Which rule found it.
  */
-via: ("target-task" | "link" | "origin" | "scan" | "match")
+via: ("target-task" | "link" | "origin" | "scan" | "match" | "intent")
 [k: string]: any
 } | {
 action: "unchanged"
@@ -2136,7 +2310,7 @@ skipped?: boolean
 /**
  * Which rule found it.
  */
-via: ("target-task" | "link" | "origin" | "scan" | "match")
+via: ("target-task" | "link" | "origin" | "scan" | "match" | "intent")
 [k: string]: any
 } | {
 action: "orphaned"
@@ -2281,6 +2455,55 @@ reason: string
 [k: string]: any
 }
 /**
+ * What an item holds once a write is done, read off the write's own responses — and, for an
+ * expected write, what each mutation it sent came to.
+ *
+ * Every write verb and every item a copy lands answers one, with no request added for it: a
+ * field the write kept is what the read before it held. `version` is `null` where the source
+ * cannot vouch for a token from its write's responses — a GitHub board for an item it has just
+ * written, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would
+ * then give.
+ */
+export interface WriteResult {
+/**
+ * One per mutation an expected write sent, in the order sent — absent for a write made
+ * without `--expect`.
+ */
+parts?: (WritePart[] | null)
+/**
+ * A task's priority after the write — `null` for a project or a document, which carry
+ * none, and where an expected write that failed cannot say.
+ */
+priority?: (Priority | null)
+/**
+ * The item's status after the write, exactly as `task show` spells it — `null` for a
+ * document, which has none, and where an expected write that failed cannot say.
+ */
+status?: (Status | null)
+/**
+ * The item's version after the write, where the write's responses determine it.
+ */
+version?: (string | null)
+[k: string]: any
+}
+/**
+ * A source's status, kept in both normalised and original form.
+ *
+ * `category` is what every filter compares against; `name` is the source's own
+ * wording, preserved so display never flattens "In Review" into "In Progress".
+ */
+export interface Status {
+/**
+ * The normalised value filters compare against.
+ */
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * The source's own label for this status.
+ */
+name: string
+[k: string]: any
+}
+/**
  * Where one item written to a source lands, and which of its routes put it there.
  *
  * `route` is always written, `null` included: a reader of a routed copy's report is told
@@ -2299,17 +2522,23 @@ route?: (number | null)
 [k: string]: any
 }
 /**
- * What each mutation of an expected write came to, built from the mutations' own responses.
+ * What a guarded copy found a counterpart's priority at, and whether that met the condition.
  */
-export interface WriteResult {
+export interface PriorityCondition {
 /**
- * One per mutation sent, in the order sent.
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
  */
-parts: WritePart[]
+held: ("none" | "urgent" | "high" | "medium" | "low")
 /**
- * The task's version after the write, where the last response determines it.
+ * Whether that priority is one the condition names.
  */
-version?: (string | null)
+met: boolean
 [k: string]: any
 }
 /**
@@ -2353,6 +2582,20 @@ lower_bound: boolean
  * What it is metered in — `points`, `requests`.
  */
 unit: string
+[k: string]: any
+}
+/**
+ * What a guarded copy found a counterpart's status at, and whether that met the condition.
+ */
+export interface StatusCondition {
+/**
+ * The counterpart's status category, as the copy's own pre-write read held it.
+ */
+held: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * Whether that category is one the condition names.
+ */
+met: boolean
 [k: string]: any
 }
 /**
@@ -2425,7 +2668,7 @@ export namespace GeneratedCopyVia {
  * recording it as its origin, and the caller's `--match-by`. When none answers, the item is created and says
  * so as [`NoCounterpart`] instead.
  */
-export type CopyVia = ("target-task" | "link" | "origin" | "scan" | "match")
+export type CopyVia = ("target-task" | "link" | "origin" | "scan" | "match" | "intent")
 
 }
 export type CopyVia = GeneratedCopyVia.CopyVia;
@@ -2478,6 +2721,16 @@ error: string
 outcome: "unknown"
 [k: string]: any
 })
+/**
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
+ */
+export type Priority = ("none" | "urgent" | "high" | "medium" | "low")
 
 /**
  * What `task comment delete` answers with: the id of the comment it removed.
@@ -2519,17 +2772,52 @@ reason: string
 [k: string]: any
 }
 /**
- * What each mutation of an expected write came to, built from the mutations' own responses.
+ * What an item holds once a write is done, read off the write's own responses — and, for an
+ * expected write, what each mutation it sent came to.
+ *
+ * Every write verb and every item a copy lands answers one, with no request added for it: a
+ * field the write kept is what the read before it held. `version` is `null` where the source
+ * cannot vouch for a token from its write's responses — a GitHub board for an item it has just
+ * written, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would
+ * then give.
  */
 export interface WriteResult {
 /**
- * One per mutation sent, in the order sent.
+ * One per mutation an expected write sent, in the order sent — absent for a write made
+ * without `--expect`.
  */
-parts: WritePart[]
+parts?: (WritePart[] | null)
 /**
- * The task's version after the write, where the last response determines it.
+ * A task's priority after the write — `null` for a project or a document, which carry
+ * none, and where an expected write that failed cannot say.
+ */
+priority?: (Priority | null)
+/**
+ * The item's status after the write, exactly as `task show` spells it — `null` for a
+ * document, which has none, and where an expected write that failed cannot say.
+ */
+status?: (Status | null)
+/**
+ * The item's version after the write, where the write's responses determine it.
  */
 version?: (string | null)
+[k: string]: any
+}
+/**
+ * A source's status, kept in both normalised and original form.
+ *
+ * `category` is what every filter compares against; `name` is the source's own
+ * wording, preserved so display never flattens "In Review" into "In Progress".
+ */
+export interface Status {
+/**
+ * The normalised value filters compare against.
+ */
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * The source's own label for this status.
+ */
+name: string
 [k: string]: any
 }
 /**
@@ -3635,6 +3923,16 @@ error: string
 outcome: "unknown"
 [k: string]: any
 })
+/**
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
+ */
+export type Priority = ("none" | "urgent" | "high" | "medium" | "low")
 
 /**
  * What a write that expected a version of its task came to: the `result`, `fallback` and
@@ -3673,17 +3971,52 @@ reason: string
 [k: string]: any
 }
 /**
- * What each mutation of an expected write came to, built from the mutations' own responses.
+ * What an item holds once a write is done, read off the write's own responses — and, for an
+ * expected write, what each mutation it sent came to.
+ *
+ * Every write verb and every item a copy lands answers one, with no request added for it: a
+ * field the write kept is what the read before it held. `version` is `null` where the source
+ * cannot vouch for a token from its write's responses — a GitHub board for an item it has just
+ * written, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would
+ * then give.
  */
 export interface WriteResult {
 /**
- * One per mutation sent, in the order sent.
+ * One per mutation an expected write sent, in the order sent — absent for a write made
+ * without `--expect`.
  */
-parts: WritePart[]
+parts?: (WritePart[] | null)
 /**
- * The task's version after the write, where the last response determines it.
+ * A task's priority after the write — `null` for a project or a document, which carry
+ * none, and where an expected write that failed cannot say.
+ */
+priority?: (Priority | null)
+/**
+ * The item's status after the write, exactly as `task show` spells it — `null` for a
+ * document, which has none, and where an expected write that failed cannot say.
+ */
+status?: (Status | null)
+/**
+ * The item's version after the write, where the write's responses determine it.
  */
 version?: (string | null)
+[k: string]: any
+}
+/**
+ * A source's status, kept in both normalised and original form.
+ *
+ * `category` is what every filter compares against; `name` is the source's own
+ * wording, preserved so display never flattens "In Review" into "In Progress".
+ */
+export interface Status {
+/**
+ * The normalised value filters compare against.
+ */
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * The source's own label for this status.
+ */
+name: string
 [k: string]: any
 }
 /**
@@ -3829,6 +4162,16 @@ error: string
 outcome: "unknown"
 [k: string]: any
 })
+/**
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
+ */
+export type Priority = ("none" | "urgent" | "high" | "medium" | "low")
 
 /**
  * The document a command writes to standard output when it exits `1` under machine
@@ -3844,6 +4187,12 @@ failure: Failure
  * mutations.
  */
 fallback?: (WriteFallback | null)
+/**
+ * What the destination item a copy refused to write held, as the copy's read of it
+ * before writing found it — present only for a refusal made after that read, such as
+ * `target-task-origin`.
+ */
+held?: (WriteResult | null)
 /**
  * What each mutation the write sent came to, and the version it left the task at — for a
  * source that reports its writes' parts.
@@ -3899,17 +4248,52 @@ reason: string
 [k: string]: any
 }
 /**
- * What each mutation of an expected write came to, built from the mutations' own responses.
+ * What an item holds once a write is done, read off the write's own responses — and, for an
+ * expected write, what each mutation it sent came to.
+ *
+ * Every write verb and every item a copy lands answers one, with no request added for it: a
+ * field the write kept is what the read before it held. `version` is `null` where the source
+ * cannot vouch for a token from its write's responses — a GitHub board for an item it has just
+ * written, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would
+ * then give.
  */
 export interface WriteResult {
 /**
- * One per mutation sent, in the order sent.
+ * One per mutation an expected write sent, in the order sent — absent for a write made
+ * without `--expect`.
  */
-parts: WritePart[]
+parts?: (WritePart[] | null)
 /**
- * The task's version after the write, where the last response determines it.
+ * A task's priority after the write — `null` for a project or a document, which carry
+ * none, and where an expected write that failed cannot say.
+ */
+priority?: (Priority | null)
+/**
+ * The item's status after the write, exactly as `task show` spells it — `null` for a
+ * document, which has none, and where an expected write that failed cannot say.
+ */
+status?: (Status | null)
+/**
+ * The item's version after the write, where the write's responses determine it.
  */
 version?: (string | null)
+[k: string]: any
+}
+/**
+ * A source's status, kept in both normalised and original form.
+ *
+ * `category` is what every filter compares against; `name` is the source's own
+ * wording, preserved so display never flattens "In Review" into "In Progress".
+ */
+export interface Status {
+/**
+ * The normalised value filters compare against.
+ */
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * The source's own label for this status.
+ */
+name: string
 [k: string]: any
 }
 /**
@@ -5088,13 +5472,19 @@ id: string
 /**
  * Which rule found it, as a copy's report spells it.
  */
-via: ("target-task" | "link" | "origin" | "scan" | "match")
+via: ("target-task" | "link" | "origin" | "scan" | "match" | "intent")
 [k: string]: any
 }
 /**
  * Where a create would file a task's issue.
  */
 export interface CreatesIn {
+/**
+ * Why the destination's own policy on where it creates — a GitHub Projects source's
+ * `creation_owners` — would refuse a create there, as the copy's refusal says it; absent
+ * when it would not. The locate itself never fails for it.
+ */
+refused?: (string | null)
 /**
  * The repository, as a normalized origin `host/owner/name`.
  */
@@ -5234,6 +5624,16 @@ error: string
 outcome: "unknown"
 [k: string]: any
 })
+/**
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
+ */
+export type Priority = ("none" | "urgent" | "high" | "medium" | "low")
 
 /**
  * What `task`, `project` and `document metadata set` answer with.
@@ -5288,17 +5688,52 @@ reason: string
 [k: string]: any
 }
 /**
- * What each mutation of an expected write came to, built from the mutations' own responses.
+ * What an item holds once a write is done, read off the write's own responses — and, for an
+ * expected write, what each mutation it sent came to.
+ *
+ * Every write verb and every item a copy lands answers one, with no request added for it: a
+ * field the write kept is what the read before it held. `version` is `null` where the source
+ * cannot vouch for a token from its write's responses — a GitHub board for an item it has just
+ * written, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would
+ * then give.
  */
 export interface WriteResult {
 /**
- * One per mutation sent, in the order sent.
+ * One per mutation an expected write sent, in the order sent — absent for a write made
+ * without `--expect`.
  */
-parts: WritePart[]
+parts?: (WritePart[] | null)
 /**
- * The task's version after the write, where the last response determines it.
+ * A task's priority after the write — `null` for a project or a document, which carry
+ * none, and where an expected write that failed cannot say.
+ */
+priority?: (Priority | null)
+/**
+ * The item's status after the write, exactly as `task show` spells it — `null` for a
+ * document, which has none, and where an expected write that failed cannot say.
+ */
+status?: (Status | null)
+/**
+ * The item's version after the write, where the write's responses determine it.
  */
 version?: (string | null)
+[k: string]: any
+}
+/**
+ * A source's status, kept in both normalised and original form.
+ *
+ * `category` is what every filter compares against; `name` is the source's own
+ * wording, preserved so display never flattens "In Review" into "In Progress".
+ */
+export interface Status {
+/**
+ * The normalised value filters compare against.
+ */
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * The source's own label for this status.
+ */
+name: string
 [k: string]: any
 }
 /**
@@ -11785,6 +12220,16 @@ error: string
 outcome: "unknown"
 [k: string]: any
 })
+/**
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
+ */
+export type Priority = ("none" | "urgent" | "high" | "medium" | "low")
 
 /**
  * What `task content set` answers with.
@@ -11833,17 +12278,52 @@ reason: string
 [k: string]: any
 }
 /**
- * What each mutation of an expected write came to, built from the mutations' own responses.
+ * What an item holds once a write is done, read off the write's own responses — and, for an
+ * expected write, what each mutation it sent came to.
+ *
+ * Every write verb and every item a copy lands answers one, with no request added for it: a
+ * field the write kept is what the read before it held. `version` is `null` where the source
+ * cannot vouch for a token from its write's responses — a GitHub board for an item it has just
+ * written, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would
+ * then give.
  */
 export interface WriteResult {
 /**
- * One per mutation sent, in the order sent.
+ * One per mutation an expected write sent, in the order sent — absent for a write made
+ * without `--expect`.
  */
-parts: WritePart[]
+parts?: (WritePart[] | null)
 /**
- * The task's version after the write, where the last response determines it.
+ * A task's priority after the write — `null` for a project or a document, which carry
+ * none, and where an expected write that failed cannot say.
+ */
+priority?: (Priority | null)
+/**
+ * The item's status after the write, exactly as `task show` spells it — `null` for a
+ * document, which has none, and where an expected write that failed cannot say.
+ */
+status?: (Status | null)
+/**
+ * The item's version after the write, where the write's responses determine it.
  */
 version?: (string | null)
+[k: string]: any
+}
+/**
+ * A source's status, kept in both normalised and original form.
+ *
+ * `category` is what every filter compares against; `name` is the source's own
+ * wording, preserved so display never flattens "In Review" into "In Progress".
+ */
+export interface Status {
+/**
+ * The normalised value filters compare against.
+ */
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * The source's own label for this status.
+ */
+name: string
 [k: string]: any
 }
 /**
@@ -13262,6 +13742,16 @@ error: string
 outcome: "unknown"
 [k: string]: any
 })
+/**
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
+ */
+export type Priority = ("none" | "urgent" | "high" | "medium" | "low")
 
 /**
  * What `task priority set` answers with.
@@ -13277,7 +13767,13 @@ fallback?: (WriteFallback | null)
  */
 id: string
 /**
- * Its priority as its source reads it back after the write.
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
  */
 priority: ("none" | "urgent" | "high" | "medium" | "low")
 /**
@@ -13307,17 +13803,52 @@ reason: string
 [k: string]: any
 }
 /**
- * What each mutation of an expected write came to, built from the mutations' own responses.
+ * What an item holds once a write is done, read off the write's own responses — and, for an
+ * expected write, what each mutation it sent came to.
+ *
+ * Every write verb and every item a copy lands answers one, with no request added for it: a
+ * field the write kept is what the read before it held. `version` is `null` where the source
+ * cannot vouch for a token from its write's responses — a GitHub board for an item it has just
+ * written, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would
+ * then give.
  */
 export interface WriteResult {
 /**
- * One per mutation sent, in the order sent.
+ * One per mutation an expected write sent, in the order sent — absent for a write made
+ * without `--expect`.
  */
-parts: WritePart[]
+parts?: (WritePart[] | null)
 /**
- * The task's version after the write, where the last response determines it.
+ * A task's priority after the write — `null` for a project or a document, which carry
+ * none, and where an expected write that failed cannot say.
+ */
+priority?: (Priority | null)
+/**
+ * The item's status after the write, exactly as `task show` spells it — `null` for a
+ * document, which has none, and where an expected write that failed cannot say.
+ */
+status?: (Status | null)
+/**
+ * The item's version after the write, where the write's responses determine it.
  */
 version?: (string | null)
+[k: string]: any
+}
+/**
+ * A source's status, kept in both normalised and original form.
+ *
+ * `category` is what every filter compares against; `name` is the source's own
+ * wording, preserved so display never flattens "In Review" into "In Progress".
+ */
+export interface Status {
+/**
+ * The normalised value filters compare against.
+ */
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * The source's own label for this status.
+ */
+name: string
 [k: string]: any
 }
 /**
@@ -13653,6 +14184,16 @@ error: string
 outcome: "unknown"
 [k: string]: any
 })
+/**
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
+ */
+export type Priority = ("none" | "urgent" | "high" | "medium" | "low")
 
 /**
  * What `task status set` answers with.
@@ -13690,7 +14231,7 @@ result?: (WriteResult | null)
  * fallback read included — absent for a write made without `--expect`.
  */
 spent?: (Spent | null)
-status: Status
+status: Status1
 [k: string]: any
 }
 /**
@@ -13738,17 +14279,52 @@ reason: string
 [k: string]: any
 }
 /**
- * What each mutation of an expected write came to, built from the mutations' own responses.
+ * What an item holds once a write is done, read off the write's own responses — and, for an
+ * expected write, what each mutation it sent came to.
+ *
+ * Every write verb and every item a copy lands answers one, with no request added for it: a
+ * field the write kept is what the read before it held. `version` is `null` where the source
+ * cannot vouch for a token from its write's responses — a GitHub board for an item it has just
+ * written, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would
+ * then give.
  */
 export interface WriteResult {
 /**
- * One per mutation sent, in the order sent.
+ * One per mutation an expected write sent, in the order sent — absent for a write made
+ * without `--expect`.
  */
-parts: WritePart[]
+parts?: (WritePart[] | null)
 /**
- * The task's version after the write, where the last response determines it.
+ * A task's priority after the write — `null` for a project or a document, which carry
+ * none, and where an expected write that failed cannot say.
+ */
+priority?: (Priority | null)
+/**
+ * The item's status after the write, exactly as `task show` spells it — `null` for a
+ * document, which has none, and where an expected write that failed cannot say.
+ */
+status?: (Status | null)
+/**
+ * The item's version after the write, where the write's responses determine it.
  */
 version?: (string | null)
+[k: string]: any
+}
+/**
+ * A source's status, kept in both normalised and original form.
+ *
+ * `category` is what every filter compares against; `name` is the source's own
+ * wording, preserved so display never flattens "In Review" into "In Progress".
+ */
+export interface Status {
+/**
+ * The normalised status vocabulary shared across every source.
+ */
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * The source's own label for this status.
+ */
+name: string
 [k: string]: any
 }
 /**
@@ -13795,9 +14371,12 @@ unit: string
 [k: string]: any
 }
 /**
- * Its status as its source reads it back.
+ * A source's status, kept in both normalised and original form.
+ *
+ * `category` is what every filter compares against; `name` is the source's own
+ * wording, preserved so display never flattens "In Review" into "In Progress".
  */
-export interface Status {
+export interface Status1 {
 /**
  * The normalised status vocabulary shared across every source.
  */
@@ -14330,6 +14909,16 @@ outcome: "unknown"
 [k: string]: any
 })
 /**
+ * How much a task matters, in the one vocabulary every source is normalised into.
+ *
+ * Five values, most pressing first after [`None`](Self::None): Linear's own priority has
+ * exactly these, and a source whose backend has none of its own maps its representation
+ * onto them. `none` is a value rather than an absent field, because "no priority is set" is
+ * something a person sets — writing `none` clears a priority — and a reader tells it apart
+ * from nothing by the value alone.
+ */
+export type Priority = ("none" | "urgent" | "high" | "medium" | "low")
+/**
  * One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].
  *
  * A string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:
@@ -14468,17 +15057,52 @@ reason: string
 [k: string]: any
 }
 /**
- * What each mutation of an expected write came to, built from the mutations' own responses.
+ * What an item holds once a write is done, read off the write's own responses — and, for an
+ * expected write, what each mutation it sent came to.
+ *
+ * Every write verb and every item a copy lands answers one, with no request added for it: a
+ * field the write kept is what the read before it held. `version` is `null` where the source
+ * cannot vouch for a token from its write's responses — a GitHub board for an item it has just
+ * written, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would
+ * then give.
  */
 export interface WriteResult {
 /**
- * One per mutation sent, in the order sent.
+ * One per mutation an expected write sent, in the order sent — absent for a write made
+ * without `--expect`.
  */
-parts: WritePart[]
+parts?: (WritePart[] | null)
 /**
- * The task's version after the write, where the last response determines it.
+ * A task's priority after the write — `null` for a project or a document, which carry
+ * none, and where an expected write that failed cannot say.
+ */
+priority?: (Priority | null)
+/**
+ * The item's status after the write, exactly as `task show` spells it — `null` for a
+ * document, which has none, and where an expected write that failed cannot say.
+ */
+status?: (Status | null)
+/**
+ * The item's version after the write, where the write's responses determine it.
  */
 version?: (string | null)
+[k: string]: any
+}
+/**
+ * A source's status, kept in both normalised and original form.
+ *
+ * `category` is what every filter compares against; `name` is the source's own
+ * wording, preserved so display never flattens "In Review" into "In Progress".
+ */
+export interface Status {
+/**
+ * The normalised status vocabulary shared across every source.
+ */
+category: ("draft" | "backlog" | "todo" | "queued" | "in-progress" | "done" | "cancelled" | "unknown")
+/**
+ * The source's own label for this status.
+ */
+name: string
 [k: string]: any
 }
 /**
@@ -14636,7 +15260,7 @@ project?: (NativeId | null)
  * repeats.
  */
 repositories?: Repository[]
-status: Status
+status: Status1
 /**
  * The one-line summary a user recognises the task by.
  */
@@ -14693,7 +15317,7 @@ name: string
 /**
  * The source's status, normalised and preserved.
  */
-export interface Status {
+export interface Status1 {
 /**
  * The normalised status vocabulary shared across every source.
  */

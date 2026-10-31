@@ -240,6 +240,11 @@ OPTION_TYPES = {
     "to": "str",
     "unset": "list[str] | tuple[str, ...]",
     "var": "list[str] | tuple[str, ...]",
+    # The categories and priorities a copy writes over at its destination, and what it does
+    # with a task at another category.
+    "when_destination_status": "choice_list",
+    "otherwise": "choices",
+    "when_destination_priority": "choice_list",
 }
 OPTION_PLACEHOLDERS = {
     "apply": None,
@@ -308,6 +313,9 @@ OPTION_PLACEHOLDERS = {
     "to": "SOURCE",
     "unset": "NAME",
     "var": "NAME=VALUE",
+    "when_destination_status": "CATEGORY",
+    "otherwise": "WHAT",
+    "when_destination_priority": "PRIORITY",
 }
 
 

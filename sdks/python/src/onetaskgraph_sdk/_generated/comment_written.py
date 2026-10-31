@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, Field, JsonValue, RootModel
@@ -24,6 +25,15 @@ class BudgetSpent(BaseModel):
     unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
 
 
+class GlobalId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
+        ),
+    ]
+
+
 class NativeId(RootModel[str]):
     root: Annotated[
         str,
@@ -31,6 +41,14 @@ class NativeId(RootModel[str]):
             description="A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true."
         ),
     ]
+
+
+class Priority(StrEnum):
+    PriorityNone = "none"
+    PriorityUrgent = "urgent"
+    PriorityHigh = "high"
+    PriorityMedium = "medium"
+    PriorityLow = "low"
 
 
 class Spent(BaseModel):
@@ -47,6 +65,17 @@ class Spent(BaseModel):
             ge=0,
         ),
     ]
+
+
+class StatusCategory(StrEnum):
+    StatusCategoryDraft = "draft"
+    StatusCategoryBacklog = "backlog"
+    StatusCategoryTodo = "todo"
+    StatusCategoryQueued = "queued"
+    StatusCategoryInProgress = "in-progress"
+    StatusCategoryDone = "done"
+    StatusCategoryCancelled = "cancelled"
+    StatusCategoryUnknown = "unknown"
 
 
 class WriteFallback(BaseModel):
@@ -113,18 +142,6 @@ class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown
     ]
 
 
-class WriteResult(BaseModel):
-    parts: Annotated[
-        list[WritePart], Field(description="One per mutation sent, in the order sent.")
-    ]
-    version: Annotated[
-        str | None,
-        Field(
-            description="The task's version after the write, where the last response determines it."
-        ),
-    ] = None
-
-
 class CommentOrigin(BaseModel):
     author: Annotated[
         str | None,
@@ -146,6 +163,41 @@ class CommentOrigin(BaseModel):
     url: Annotated[str | None, Field(description="Where a person can open it at its origin.")] = (
         None
     )
+
+
+class Status(BaseModel):
+    category: Annotated[
+        StatusCategory,
+        Field(description="The normalised value filters compare against."),
+    ]
+    name: Annotated[str, Field(description="The source's own label for this status.")]
+
+
+class WriteResult(BaseModel):
+    parts: Annotated[
+        list[WritePart] | None,
+        Field(
+            description="One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`."
+        ),
+    ] = None
+    priority: Annotated[
+        Priority | None,
+        Field(
+            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+        ),
+    ] = None
+    status: Annotated[
+        Status | None,
+        Field(
+            description="The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
+        ),
+    ] = None
+    version: Annotated[
+        str | None,
+        Field(
+            description="The item's version after the write, where the write's responses determine it."
+        ),
+    ] = None
 
 
 class CommentWritten(BaseModel):
@@ -174,6 +226,12 @@ class CommentWritten(BaseModel):
             description="The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
         ),
     ]
+    item: Annotated[
+        GlobalId | None,
+        Field(
+            description="The qualified id of the task the comment was added to — present on `task comment add`'s\nanswer, so a caller records what it commented on from the answer alone."
+        ),
+    ] = None
     origin: Annotated[
         CommentOrigin | None,
         Field(
