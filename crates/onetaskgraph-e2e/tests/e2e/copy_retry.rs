@@ -627,11 +627,12 @@ fn a_linear_create_answered_as_an_id_already_held_is_read_by_that_id_and_written
                 "status": {"name": "Todo", "category": "todo"},
                 "_linear_state": {"name": "Todo", "type": "unstarted"},
                 "labels": [], "priority": "none",
-                "metadata": {"onetaskgraph.origin": NOTE},
             }));
         },
     );
+    let from = stores.linear.served().len();
     let copied = stores.json(&["task", "copy", NOTE, "--to", "linear"]);
+    finished_as_held(&stores, from);
     let destination = copied["items"][0]["destination"].as_str().expect("an id");
     let landed = stores.carrying_origin("linear");
     assert_eq!(landed.len(), 1, "one issue: {landed:#?}");
@@ -714,12 +715,17 @@ fn adds_comment(document: &str, _: &Value) -> bool {
 
 /// The intent the note's file records for the board, read off the file as it stands.
 fn board_intent(notes: &std::path::Path) -> Option<(String, String)> {
+    intent_at(notes, "board")
+}
+
+/// The intent the note's file records for `destination`: its attempt and its lease's end.
+fn intent_at(notes: &std::path::Path, destination: &str) -> Option<(String, String)> {
     let text = std::fs::read_to_string(notes.join("tasks/A.md")).ok()?;
     let line = text
         .lines()
         .find(|line| line.contains("onetaskgraph.creating"))?;
     let value: Value = serde_json::from_str(line.split_once(':')?.1.trim()).ok()?;
-    let entry = &value["board"];
+    let entry = &value[destination];
     Some((
         entry["attempt"].as_str()?.to_owned(),
         entry["lease_until"].as_str()?.to_owned(),
@@ -2044,4 +2050,245 @@ fn a_linear_create_answered_under_another_id_or_none_is_refused_for_every_kind()
             );
         }
     }
+}
+
+/// Whether a request is a Linear write other than a create: a relation, a whole write, a comment.
+fn linear_writes_after_create(document: &str, _: &Value) -> bool {
+    use onetaskgraph_linear::graphql;
+    document.trim_start().starts_with("mutation")
+        && ![
+            graphql::ISSUE_CREATE,
+            graphql::PROJECT_CREATE,
+            graphql::DOCUMENT_CREATE,
+        ]
+        .contains(&document)
+}
+
+/// A note `B` already copied into Linear, and the note `A` made to depend on it: A's create in
+/// Linear is `issueCreate` and then, in the same plugin call, the relation to B's issue.
+fn depending_on_a_linear_issue(stores: &Stores) {
+    std::fs::write(
+        stores.notes.join("tasks/B.md"),
+        "---\ntitle: Task B\nstatus: todo\n---\nBlocking.\n",
+    )
+    .expect("the blocking note");
+    stores.json(&["task", "copy", "notes:B", "--to", "linear"]);
+    std::fs::write(
+        stores.notes.join("tasks/A.md"),
+        "---\ntitle: Task A\nstatus: todo\ndepends_on: [B]\n---\nThe body.\n",
+    )
+    .expect("the dependent note");
+}
+
+/// The note's intent — attempt and lease end — at one write, beside the moment it was answered.
+type IntentAt = (Option<(String, String)>, chrono::DateTime<chrono::Utc>);
+
+/// Record the note's Linear intent each time Linear answers one of the next writes after a
+/// create, beside the moment it did.
+fn record_linear_intents(stores: &Stores) -> std::sync::Arc<std::sync::Mutex<Vec<IntentAt>>> {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    for skip in 0..6 {
+        let notes = stores.notes.clone();
+        let record = seen.clone();
+        stores
+            .linear
+            .after_request(linear_writes_after_create, skip, move |_| {
+                record
+                    .lock()
+                    .unwrap()
+                    .push((intent_at(&notes, "linear"), chrono::Utc::now()));
+            });
+    }
+    seen
+}
+
+/// Every intent in `seen` was leased past the moment its write was answered, and at least one
+/// write after the create was sent while the intent stood.
+fn renewed_at_each(seen: &[IntentAt]) {
+    let held: Vec<_> = seen
+        .iter()
+        .filter_map(|(intent, at)| intent.as_ref().map(|intent| (intent, at)))
+        .collect();
+    assert!(
+        !held.is_empty(),
+        "a write after the create while the intent stood: {seen:?}"
+    );
+    for ((_, until), at) in held {
+        let until = chrono::DateTime::parse_from_rfc3339(until).expect("a time");
+        assert!(
+            until > *at,
+            "the lease was renewed before the write: it ran until {until}, written at {at}"
+        );
+    }
+}
+
+#[test]
+fn a_linear_create_renews_before_each_relation_write_its_call_sends() {
+    // A folder leasing its intents for two seconds, and Linear answering the create three
+    // seconds late: the relation the same call writes next goes after the first lease ran out.
+    let stores = Stores::leased(2);
+    depending_on_a_linear_issue(&stores);
+    stores.linear.after_request(
+        |document, _| document == onetaskgraph_linear::graphql::ISSUE_CREATE,
+        0,
+        |_| std::thread::sleep(std::time::Duration::from_secs(3)),
+    );
+    let seen = record_linear_intents(&stores);
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "linear"]);
+    assert_eq!(copied["items"][0]["action"], "created", "{copied:#}");
+    let landed = copied["items"][0]["destination"].as_str().expect("an id");
+    assert!(
+        !stores.json(&["task", "deps", landed])["items"]
+            .as_array()
+            .expect("edges")
+            .is_empty(),
+        "the relation landed"
+    );
+    renewed_at_each(&seen.lock().unwrap());
+}
+
+#[test]
+fn a_linear_create_finished_as_an_id_held_renews_before_its_whole_write() {
+    // The earlier attempt's issue lands under the key's id once the retry has looked for it and
+    // not found it, so the retry's create is refused and finished by a whole write — sent three
+    // seconds after the refusal, past the two-second lease the intent was taken under.
+    let stores = Stores::leased(2);
+    let stopped = stores.run(
+        &["task", "copy", NOTE, "--to", "linear"],
+        Some("after-intent"),
+    );
+    assert_eq!(stopped.status.code(), Some(86), "{}", stderr(&stopped));
+    // The stopped copy's two-second lease outlives the second-and-a-half the run waits.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let key = stores.source_metadata()["onetaskgraph.creating"]["linear"]["key"]
+        .as_str()
+        .expect("the intent's key")
+        .to_owned();
+    let held = onetaskgraph_linear::linear_id_of_key(&key).expect("a key");
+    let landed = held.clone();
+    stores.linear.after_request(
+        move |document, variables| {
+            document == onetaskgraph_linear::graphql::ISSUE && variables["id"] == json!(landed)
+        },
+        0,
+        move |workspace| {
+            workspace.add_issue(json!({
+                "id": held, "title": "Task A, as first sent", "content": "The body.",
+                "status": {"name": "Todo", "category": "todo"},
+                "_linear_state": {"name": "Todo", "type": "unstarted"},
+                "labels": [], "priority": "none",
+            }));
+        },
+    );
+    stores.linear.after_request(
+        |document, _| document == onetaskgraph_linear::graphql::ISSUE_CREATE,
+        0,
+        |_| std::thread::sleep(std::time::Duration::from_secs(3)),
+    );
+    let from = stores.linear.served().len();
+    let seen = record_linear_intents(&stores);
+    let copied = stores.json(&["task", "copy", NOTE, "--to", "linear"]);
+    finished_as_held(&stores, from);
+    assert_eq!(
+        stores.carrying_origin("linear").len(),
+        1,
+        "one issue: {copied:#}"
+    );
+    renewed_at_each(&seen.lock().unwrap());
+}
+
+#[test]
+fn a_linear_create_that_loses_its_create_before_its_relation_sends_no_further_write() {
+    let stores = Stores::new();
+    depending_on_a_linear_issue(&stores);
+    let creates = stores
+        .linear
+        .served()
+        .iter()
+        .filter(|(document, _)| document == onetaskgraph_linear::graphql::ISSUE_CREATE)
+        .count();
+    let directory = stores.sandbox.subdirectory("first");
+    let first = stores
+        .sandbox
+        .subprocess(onetaskgraph_e2e_support::binary())
+        .env(
+            "OTG_TEST_PAUSE_AT",
+            format!("guarded-write={}", directory.display()),
+        )
+        .args(["--json", "task", "copy", NOTE, "--to", "linear"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("a copy starts");
+    let started = std::time::Instant::now();
+    while !directory.join("guarded-write.paused").exists() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the copy paused"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let served = stores.linear.served();
+    assert_eq!(
+        served
+            .iter()
+            .filter(|(document, _)| document == onetaskgraph_linear::graphql::ISSUE_CREATE)
+            .count(),
+        creates + 1,
+        "the issue was created"
+    );
+    let writes = served
+        .iter()
+        .filter(|(document, variables)| linear_writes_after_create(document, variables))
+        .count();
+    let (holder, _) = intent_at(&stores.notes, "linear").expect("the first copy's intent");
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    // A second copy finds the issue by its id and takes the create over, then dies.
+    let second = stores.run(
+        &["task", "copy", NOTE, "--to", "linear"],
+        Some("after-intent"),
+    );
+    assert_eq!(second.status.code(), Some(86), "{}", stderr(&second));
+    let (taker, _) = intent_at(&stores.notes, "linear").expect("the second copy's intent");
+    assert_ne!(taker, holder);
+
+    std::fs::write(directory.join("guarded-write.go"), b"").expect("released");
+    let output = first.wait_with_output().expect("the copy ends");
+    let failure: Value = serde_json::from_slice(&output.stdout).expect("a failure document");
+    assert_eq!(output.status.code(), Some(1), "{failure:#}");
+    assert_eq!(
+        failure["failure"]["kind"], "create-in-progress",
+        "{failure:#}"
+    );
+    assert_eq!(
+        stores
+            .linear
+            .served()
+            .iter()
+            .filter(|(document, variables)| linear_writes_after_create(document, variables))
+            .count(),
+        writes,
+        "no write after the loss — no relation and nothing taken back"
+    );
+    let (attempt, _) = intent_at(&stores.notes, "linear").expect("the new holder's intent");
+    assert_eq!(attempt, taker);
+}
+
+/// Assert the Linear requests from `from` on hold a create, then a read of the issue by its id,
+/// then a whole write of it: a create answered as an id already held, finished.
+fn finished_as_held(stores: &Stores, from: usize) {
+    use onetaskgraph_linear::graphql;
+    let sent: Vec<String> = stores.linear.served()[from..]
+        .iter()
+        .map(|(document, _)| document.clone())
+        .collect();
+    let created = sent
+        .iter()
+        .position(|document| document == graphql::ISSUE_CREATE);
+    let after = created.map(|at| &sent[at + 1..]).unwrap_or_default();
+    let read = after.iter().position(|document| document == graphql::ISSUE);
+    assert!(
+        read.is_some_and(|read| after[read + 1..].contains(&graphql::ISSUE_REWRITE.to_owned())),
+        "a create, a read by its id, then a whole write: {sent:#?}"
+    );
 }
