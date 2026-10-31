@@ -1317,4 +1317,38 @@ fn the_schema_check_refuses_a_request_breaking_each_rule_its_documentation_lists
         refused("query{viewer{login}}", json!(["not", "an", "object"])),
         "Variables must be a JSON object, not [\"not\",\"an\",\"object\"]"
     );
+
+    // A document that does not parse, a variable of an output type, a default naming a
+    // variable, and values that do not coerce: of the wrong scalar, or with an input field the
+    // type does not define.
+    assert!(refused("query{viewer{login}", json!({})).starts_with("Parse error on document: "));
+    assert_eq!(
+        refused("query($u:User){viewer{login}}", json!({})),
+        "User isn't a defined input type (on $u); Variable $u is declared by anonymous query \
+         but not used"
+    );
+    // A default naming a variable is not a constant, and does not parse.
+    assert!(
+        refused(
+            "query($a:Int,$b:Int=$a){viewer{repositories(first:$b){totalCount}}}",
+            json!({})
+        )
+        .starts_with("Parse error on document: ")
+    );
+    assert_eq!(
+        refused(
+            "query($first:Int){viewer{repositories(first:$first){totalCount}}}",
+            json!({"first": "ten"})
+        ),
+        "Variable $first of type Int was provided invalid value (Could not coerce value \"ten\" \
+         to Int)"
+    );
+    assert_eq!(
+        refused(
+            "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){clientMutationId}}",
+            json!({"input": {"issueId": "I_1", "projectId": "PVT_1"}})
+        ),
+        "Variable $input of type DeleteIssueInput! was provided invalid value for projectId \
+         (Field is not defined on DeleteIssueInput)"
+    );
 }

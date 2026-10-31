@@ -572,11 +572,9 @@ impl<'q> Walk<'q> {
                 has_default: false,
                 described: &definition.name,
             };
-            // A default is a constant: it may name no variable, so it is checked against an
-            // empty declaration, and a variable inside it is reported as not one of its type.
-            if let Err(problem) =
-                literal(&position, default, &HashMap::new()).and_then(|()| constant(default))
-            {
+            // A default is a constant — the parser refuses one naming a variable — so it is
+            // checked against an empty declaration.
+            if let Err(problem) = literal(&position, default, &HashMap::new()) {
                 self.errors.push(format!(
                     "Default value for ${} doesn't match type {kind}{problem}",
                     definition.name
@@ -945,16 +943,6 @@ fn non_null_default(default: Option<&query::Value<'_, String>>) -> bool {
 /// `INLINE_FRAGMENT`.
 fn spelled_location(location: &str) -> String {
     format!("{}s", location.to_lowercase().replace('_', " "))
-}
-
-/// Whether a default value is a constant — no variable anywhere inside it.
-fn constant(value: &query::Value<'_, String>) -> Result<(), String> {
-    let mut named = HashSet::new();
-    collect_variables(value, &mut named);
-    match named.into_iter().next() {
-        None => Ok(()),
-        Some(variable) => Err(format!(" (a default cannot name the variable ${variable})")),
-    }
 }
 
 fn collect_variables(value: &query::Value<'_, String>, used: &mut HashSet<String>) {
