@@ -4132,6 +4132,40 @@ mod pool {
     }
 
     #[tokio::test]
+    async fn a_claim_whose_record_cannot_be_written_releases_its_lease_and_refuses() {
+        let replay = replay();
+        // A file where the record directory should be: nothing can be written under it.
+        let blocked =
+            std::env::temp_dir().join(format!("lease-records-blocked-{}", std::process::id()));
+        std::fs::write(&blocked, "not a directory").unwrap();
+        let output = tokio::task::spawn_blocking({
+            let endpoint = replay.endpoint.clone();
+            let blocked = blocked.join("leases");
+            move || {
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["pool::lease_record_child", "--exact"])
+                    .env("LEASE_RECORD_CHILD_ENDPOINT", endpoint)
+                    .env(lease::RECORD_VARIABLE, &blocked)
+                    .output()
+                    .unwrap()
+            }
+        })
+        .await
+        .unwrap();
+        let _ = std::fs::remove_file(&blocked);
+        let said = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !output.status.success(),
+            "a lease nothing could release was taken"
+        );
+        assert!(said.contains("could not be recorded"), "{said}");
+        // The member it claimed was handed straight back.
+        let leases = leases(&replay);
+        assert_eq!(leases.len(), 1, "{leases:?}");
+        assert!(leases[0].1.ends_with(" released"), "{leases:?}");
+    }
+
+    #[tokio::test]
     async fn the_namespace_guard_refuses_a_request_naming_another_runs_record() {
         let replay = replay();
         let theirs = ci_session(&replay, LeaseLane::Assets, "theirs", run(1)).await;

@@ -265,7 +265,9 @@ fn linear_documents_stay_under_linears_complexity_cap() {
 
 #[test]
 fn linear_documents_match_the_pinned_upstream_schema() {
-    use onetaskgraph_live_janitor::linear::{DELETE_DOCUMENT, DOCUMENTS};
+    use onetaskgraph_live_janitor::linear::{
+        DELETE_DOCUMENT, DOCUMENTS, LEASE_READ, LEASE_RELEASE,
+    };
     let upstream = std::process::Command::new("python3")
         .args([
             "-c",
@@ -279,7 +281,7 @@ fn linear_documents_match_the_pinned_upstream_schema() {
         .expect("read the pinned upstream schema");
     assert!(upstream.status.success());
     let pinned = String::from_utf8(upstream.stdout).expect("upstream schema is UTF-8");
-    for document in [DOCUMENTS, DELETE_DOCUMENT] {
+    for document in [DOCUMENTS, DELETE_DOCUMENT, LEASE_READ, LEASE_RELEASE] {
         validate_against(document, &pinned);
     }
     let input_schema = schema::parse_schema::<String>(&pinned).expect("upstream parses");

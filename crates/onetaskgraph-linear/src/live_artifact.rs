@@ -379,3 +379,62 @@ pub fn is_reserved_title(title: &str) -> bool {
         .strip_prefix(LIVE_ARTIFACT_TITLE_PREFIX)
         .is_some_and(|suffix| suffix.starts_with("retained-") || suffix.starts_with("lease-"))
 }
+
+/// What a CI lane writes down of each lease it holds, for its job's cancellation step to hand
+/// back (`onetaskgraph-live-janitor --linear --release-leases`): the lease issue's id and the
+/// title it carries while held. One definition, written by the lane and read by the janitor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaseRecord {
+    id: String,
+    title: String,
+}
+
+impl LeaseRecord {
+    /// A record of the held lease titled `title`, under issue `id`.
+    pub fn new(id: &str, title: &str) -> Result<Self, String> {
+        let record = Self {
+            id: id.to_owned(),
+            title: title.to_owned(),
+        };
+        record.lease()?;
+        if id.is_empty() || id.chars().any(char::is_control) {
+            return Err("a lease record names an unusable issue id".into());
+        }
+        Ok(record)
+    }
+
+    /// The record as written to its file.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        serde_json::json!({"id":self.id,"title":self.title}).to_string()
+    }
+
+    /// The record a file holds, refused unless it names a held lease and its issue.
+    pub fn read(bytes: &[u8]) -> Result<Self, String> {
+        let value: serde_json::Value = serde_json::from_slice(bytes)
+            .map_err(|error| format!("not a lease record: {error}"))?;
+        let (Some(id), Some(title)) = (value["id"].as_str(), value["title"].as_str()) else {
+            return Err("a lease record names no issue id and title".into());
+        };
+        Self::new(id, title)
+    }
+
+    /// The lease issue's id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The title the issue carries while the recorded holder holds it.
+    #[must_use]
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// The held lease the record names.
+    pub fn lease(&self) -> Result<Lease<'_>, String> {
+        classify_lease(&self.title)
+            .filter(|lease| matches!(lease.holder(), LeaseHolder::Held(_)))
+            .ok_or_else(|| format!("a lease record names no held lease: {:?}", self.title))
+    }
+}

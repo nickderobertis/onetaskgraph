@@ -68,11 +68,12 @@ pub(crate) struct Workspace {
 }
 
 impl Workspace {
-    fn new(sandbox: &Sandbox, clients: usize) -> (Value, Self) {
+    /// The storage, over a team already holding `documents`.
+    fn holding(sandbox: &Sandbox, clients: usize, documents: Value) -> (Value, Self) {
         let (mut config, held) = linear_workspace(
             sandbox,
             json!({
-                "tasks": [], "projects": [], "documents": [], "labels": [],
+                "tasks": [], "projects": [], "documents": documents, "labels": [],
                 "task_dependencies": [], "project_dependencies": []
             }),
         );
@@ -611,6 +612,11 @@ impl Journey {
     }
 
     fn with_clients(clients: usize) -> Self {
+        Self::holding(clients, json!([]))
+    }
+
+    /// A journey over a team already holding `documents`.
+    fn holding(clients: usize, documents: Value) -> Self {
         let sandbox = Sandbox::new();
         let root = sandbox.subdirectory("notes");
         std::fs::create_dir_all(root.join("projects")).unwrap();
@@ -619,7 +625,7 @@ impl Journey {
             "---\ntitle: Launch\nstatus: todo\n---\nLaunch.\n",
         )
         .unwrap();
-        let (config, workspace) = Workspace::new(&sandbox, clients);
+        let (config, workspace) = Workspace::holding(&sandbox, clients, documents);
         let mut sources = json!({
             "notes":{"plugin":"local-md","config":{"root":root}},
             "dest":{"plugin":"linear","config":config}
@@ -3422,68 +3428,91 @@ fn the_pool_variable_turns_the_asset_entry_point_into_the_setup_and_skips_the_jo
     );
 }
 
-/// The relay the asset lane points its binary at refuses, before it reaches Linear, a request
-/// naming another run's record it has seen answered — so the binary's traffic is held to the
-/// run's namespace as the lane's own is — and forwards everything else.
+/// The relay the asset lane points its binary at holds the binary to the run's namespace: a
+/// `document copy --match-by title` onto another run's pool member is refused before anything
+/// reaches Linear and the copy fails, while the same copy onto the run's own member goes through.
 #[test]
-fn the_binarys_relay_refuses_a_request_naming_another_runs_record() {
-    let journey = Journey::with_clients(0);
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let upstream = format!("{}/0/graphql", journey.workspace.endpoint);
-    let journal = document_lifecycle::journal::Journal::new("assets", "ordinary");
-    // Another run's pool member, held in the team before this run starts.
-    let theirs = onetaskgraph_linear::live_artifact::retained_title(
-        Scope::pooled("ENG", 2).unwrap(),
-        Slot::Assets,
-    )
-    .unwrap();
-    let created = runtime
-        .block_on(document_lifecycle::send(
-            &upstream,
-            "fixture-key",
-            onetaskgraph_linear::graphql::DOCUMENT_CREATE,
-            json!({"input":{"title":theirs,"content":"theirs","teamId":"team"}}),
-        ))
-        .unwrap();
-    let id = created["documentCreate"]["document"]["id"]
-        .as_str()
+fn the_binarys_relay_refuses_its_copy_onto_another_runs_pool_member() {
+    let title = |index| {
+        onetaskgraph_linear::live_artifact::retained_title(
+            Scope::pooled("ENG", index).unwrap(),
+            Slot::Assets,
+        )
         .unwrap()
-        .to_owned();
+    };
+    // Two members held in the team: this run's own (1), and another run's (2).
+    let journey = Journey::holding(
+        1,
+        json!([
+            {"id":"D-mine","title":title(1),"content":"member 1","project":null,"labels":[]},
+            {"id":"D-theirs","title":title(2),"content":"member 2","project":null,"labels":[]}
+        ]),
+    );
+    let upstream = format!("{}/0/graphql", journey.workspace.endpoint);
     let namespace = Arc::new(document_lifecycle::namespace::Namespace::new(
         onetaskgraph_live::artifact::Run::current(),
         "ENG",
     ));
     namespace.leased(1);
-    let (endpoint, _) = live_observer(
+    let (relay, _) = live_observer(
         "fixture-key".into(),
-        journal,
+        document_lifecycle::journal::Journal::new("assets", "ordinary"),
         upstream,
         Arc::clone(&namespace),
     );
-    // A listing through the relay teaches it whose that document is...
-    runtime
-        .block_on(document_lifecycle::send(
-            &endpoint,
-            "fixture-key",
-            document_lifecycle::DOCUMENTS,
-            json!({"after":null,"filter":{"title":{"containsIgnoreCase":"retained"}}}),
-        ))
-        .unwrap();
-    // ...and a write naming it never leaves.
-    let refused = runtime.block_on(document_lifecycle::send(
-        &endpoint,
-        "fixture-key",
-        "mutation($id:String!,$input:DocumentUpdateInput!){documentUpdate(id:$id,input:$input){success document{id}}}",
-        json!({"id":id,"input":{"content":"overwritten by another run"}}),
-    ));
-    assert!(refused.is_err(), "{refused:?}");
-    assert_eq!(namespace.refusals().len(), 1, "{:?}", namespace.refusals());
-    assert!(
-        !journey
+    // The binary is pointed at the relay, as the live lane points it.
+    let mut config = journey.config.clone();
+    config["endpoint"] = json!(relay);
+    let root = journey.sandbox.subdirectory("notes");
+    journey.sandbox.project_document(&document(&json!({
+        "notes":{"plugin":"local-md","config":{"root":root}},
+        "dest":{"plugin":"linear","config":config}
+    })));
+    let copy = |index| {
+        // No asset: what the relay holds to the namespace is the document write itself.
+        let (id, _) = journey.create_named("document", 0, &title(index), false);
+        journey
+            .sandbox
+            .command()
+            .envs(journey.workspace.clock.client_env(0))
+            .args([
+                "--json",
+                "document",
+                "copy",
+                &id,
+                "--to",
+                "dest",
+                "--match-by",
+                "title",
+            ])
+            .output()
+            .unwrap()
+    };
+    let written = |id: &str| {
+        journey
             .workspace
             .held
             .served()
             .iter()
-            .any(|(query, _)| query.contains("documentUpdate("))
+            .any(|(query, variables)| {
+                query.contains("documentUpdate(") && variables["id"] == json!(id)
+            })
+    };
+    let theirs = copy(2);
+    assert!(
+        !theirs.status.success(),
+        "the copy onto another run's member succeeded"
     );
+    assert!(!namespace.refusals().is_empty());
+    assert!(!written("D-theirs"), "another run's member was written");
+    let refused = namespace.refusals().len();
+    let mine = copy(1);
+    assert!(mine.status.success(), "{}", stderr(&mine));
+    assert_eq!(
+        namespace.refusals().len(),
+        refused,
+        "{:?}",
+        namespace.refusals()
+    );
+    assert!(written("D-mine"), "the run's own member was not written");
 }

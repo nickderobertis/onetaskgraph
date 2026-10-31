@@ -140,16 +140,20 @@ impl Held {
             return Ok(());
         };
         if let Some(directory) = path.parent() {
-            std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
-        }
-        std::fs::write(&path, json!({"id":self.id,"title":self.title}).to_string()).map_err(
-            |error| {
+            std::fs::create_dir_all(directory).map_err(|error| {
                 format!(
                     "the lease could not be recorded at {}: {error}",
                     path.display()
                 )
-            },
-        )
+            })?;
+        }
+        let record = onetaskgraph_linear::live_artifact::LeaseRecord::new(&self.id, &self.title)?;
+        std::fs::write(&path, record.to_json()).map_err(|error| {
+            format!(
+                "the lease could not be recorded at {}: {error}",
+                path.display()
+            )
+        })
     }
 }
 
