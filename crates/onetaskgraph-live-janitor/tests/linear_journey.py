@@ -432,16 +432,35 @@ class LeaseIssue(TypedDict):
     title: LeaseTitle
 
 
-class LeaseRead(TypedDict):
+@dataclass(frozen=True)
+class LeaseRead:
     """`issue(id:)`, what `--release-leases` asks of each recorded lease."""
-    query: str
-    variables: dict[str, LeaseId]
+    id: LeaseId
 
 
-class LeaseUpdate(TypedDict):
-    """`issueUpdate`, the one write `--release-leases` sends."""
-    query: str
-    variables: dict[str, LeaseId | dict[str, LeaseTitle]]
+@dataclass(frozen=True)
+class LeaseUpdate:
+    """`issueUpdate`, the one write `--release-leases` sends: the lease and its new title."""
+    id: LeaseId
+    title: LeaseTitle
+
+
+def read_lease_request(value: object) -> LeaseRead | LeaseUpdate:
+    """The janitor's request, its whole shape checked rather than assumed."""
+    assert isinstance(value, dict), value
+    query, variables = value.get('query'), value.get('variables')
+    assert isinstance(query, str) and isinstance(variables, dict), value
+    identifier = variables.get('id')
+    assert isinstance(identifier, str) and identifier, variables
+    if 'issueUpdate(' in query:
+        assert set(variables) == {'id', 'input'}, variables
+        update = variables['input']
+        assert isinstance(update, dict) and set(update) == {'title'}, update
+        title = update['title']
+        assert isinstance(title, str) and title, update
+        return LeaseUpdate(LeaseId(identifier), LeaseTitle(title))
+    assert 'issue(id:$id)' in query and set(variables) == {'id'}, value
+    return LeaseRead(LeaseId(identifier))
 
 
 class LeaseFault(StrEnum):
@@ -455,25 +474,23 @@ class LeaseTeam:
     issues: dict[LeaseId, LeaseTitle]
     fault: LeaseFault | None = None
     reads: list[LeaseId] = field(default_factory=list)
-    updates: list[tuple[LeaseId, LeaseTitle]] = field(default_factory=list)
+    updates: list[LeaseUpdate] = field(default_factory=list)
 
     def answer(self, request: LeaseRead | LeaseUpdate) -> dict[str, object]:
-        identifier = cast(LeaseId, request['variables']['id'])
-        if 'issueUpdate(' in request['query']:
-            update = cast(LeaseUpdate, request)
-            title = cast(dict[str, LeaseTitle], update['variables']['input'])['title']
-            self.updates.append((identifier, title))
-            if self.fault is LeaseFault.UNCONFIRMED_RELEASE:
-                return {'data': {'issueUpdate': {'success': False}}}
-            self.issues[identifier] = title
-            return {'data': {'issueUpdate': {'success': True}}}
-        assert 'issue(id:$id)' in request['query'], request['query']
-        self.reads.append(identifier)
-        if self.fault is LeaseFault.UNIDENTIFIED_READ:
-            return {'data': {'issue': {'title': self.issues.get(identifier)}}}
-        title = self.issues.get(identifier)
-        issue: LeaseIssue | None = None if title is None else LeaseIssue(id=identifier, title=title)
-        return {'data': {'issue': issue}}
+        match request:
+            case LeaseUpdate():
+                self.updates.append(request)
+                if self.fault is LeaseFault.UNCONFIRMED_RELEASE:
+                    return {'data': {'issueUpdate': {'success': False}}}
+                self.issues[request.id] = request.title
+                return {'data': {'issueUpdate': {'success': True}}}
+            case LeaseRead():
+                self.reads.append(request.id)
+                title = self.issues.get(request.id)
+                if self.fault is LeaseFault.UNIDENTIFIED_READ:
+                    return {'data': {'issue': {'title': title}}}
+                issue: LeaseIssue | None = None if title is None else LeaseIssue(id=request.id, title=title)
+                return {'data': {'issue': issue}}
 
 
 class LeaseJourneys(unittest.TestCase):
@@ -488,7 +505,7 @@ class LeaseJourneys(unittest.TestCase):
 
             def do_POST(self) -> None:
                 assert self.headers['Authorization'] == 'offline-linear-key'
-                request = cast(LeaseRead | LeaseUpdate, json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+                request = read_lease_request(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
                 body = json.dumps(team.answer(request)).encode()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -538,7 +555,7 @@ class LeaseJourneys(unittest.TestCase):
             'gone': self.record('gone', LeaseTitle(self.PREFIX + 'pool-6 gen-1 7-42-1700000000000000')),
         })
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(team.updates, [(LeaseId('held'), LeaseTitle(self.PREFIX + 'pool-3 gen-2 released'))])
+        self.assertEqual(team.updates, [LeaseUpdate(LeaseId('held'), LeaseTitle(self.PREFIX + 'pool-3 gen-2 released'))])
         self.assertNotIn(LeaseId('other'), team.reads)
         self.assertEqual(list(directory.iterdir()), [], 'every settled record is removed')
 
