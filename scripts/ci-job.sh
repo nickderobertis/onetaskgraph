@@ -64,24 +64,16 @@ case "$JOB" in
     # Exercise the relative interpreter without paying for a second distribution run.
     # check-relative-interpreter.sh owns the call-site comparison.
     export ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1
-    # Work that would queue behind a long phase gets one of its own: each live lane's crates
-    # (tagged ci-phase:*) — the two Linear crates, whose credentialed journeys take one seat and
-    # so run one at a time, and the two GitHub Projects crates, whose journeys spend a quarter of
-    # an hour waiting on GitHub and would otherwise hold two of the other phase's three slots
-    # idle while everything else queued through the third — and the SDKs' coverage, which would
-    # otherwise wait for every crate's. The runner has four cores and every phase here but the
-    # live lanes' is CPU-bound, so the slots the GitHub crates' phase takes come out of the main
-    # one, which keeps two: given three beside a fourth for the crates' coverage, every phase ran
-    # a third slower and the job went past its 30 minutes (runs 41266524030 and 41266553208,
-    # against 41258284271's 25 minutes with one slot fewer in all).
+    # Work that would queue behind a long phase gets one of its own: the two Linear crates,
+    # whose credentialed journeys take one seat and so run one at a time, and the SDKs'
+    # coverage, which would otherwise wait for every crate's.
     #
     # The budgets are judged last, once coverage has run: the loopback journeys that record
     # their telemetry are coverage's here, and scripts/rust-coverage.sh writes it where
     # `budgets` reads it. Their `test` has already run in this job, so it is not run again,
     # and the cache cannot answer for telemetry its key never saw.
-    phases="1 affected test tag:test-in-coverage:*,tag:ci-phase:* --parallel=2
-1 affected test *,!tag:ci-phase:linear-live
-1 affected test *,!tag:ci-phase:github-live
+    phases="1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e
+1 affected test *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 affected test-uncovered,coverage tag:layer:sdk,tag:coverage:uninstrumented
 1 affected test-uncovered,coverage *,!tag:layer:sdk
 1 run scripts:distribution-check -
