@@ -575,7 +575,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   `retained-`/`lease-` title no current scheme parses. A lane's standing discovery passes over
   every title that is not the exact identity it asks for, an unparsed one included, so no
   stray in the shared workspace can fail a live run
-  (`pool::every_linear_lane_passes_over_standing_identities_no_current_scheme_owns`).
+  (`pool::every_linear_lane_passes_over_standing_identities_no_current_scheme_owns` for the
+  plugin lane, and `the_asset_journey_passes_over_standing_identities_no_current_scheme_owns`
+  in `onetaskgraph-linear-e2e`, which drives the real asset journey).
   **A cancelled run cleans up after itself, and a pre-flight never refuses a finished run's
   residue.** Each credentialed `ci.yml` job — `check`'s Linux leg and `test-linux` — runs
   the janitor on cancellation: `--cancelled-run`, which removes exactly that run attempt's

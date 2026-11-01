@@ -3703,7 +3703,11 @@ mod pool {
         };
         assert!(untouched.contains_key(&held.id));
         let from = replay.state.lock().unwrap().keyed.len();
-        // Each lane's CI session, two of each at once, over a pool member of its own.
+        // Each lane's CI session, two of each at once, over a pool member of its own. The plugin
+        // sessions drive that lane's real document paths; an assets session here is only its
+        // lease, preparation and reset, and the real asset journey is driven over the same
+        // identities by `onetaskgraph-linear-e2e`'s
+        // `the_asset_journey_passes_over_standing_identities_no_current_scheme_owns`.
         let sessions = {
             let (a, b, c, d) = tokio::join!(
                 ci_session(&replay, LeaseLane::Plugin, "plugin-a", run(1)),
