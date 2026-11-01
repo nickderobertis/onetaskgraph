@@ -303,8 +303,9 @@ The validator's graphql-js is npm's own published tarball, committed byte for by
 bytes, integrity `sha512-FRWbddMxfkjiB7z+aQDWIR+E34xo9I8c9mtK2RPv8PmMzKRvrdsreHL/Ui/TmwHJfhHChEtsFPyMHKI+xuarQQ==`
 — the `dist.integrity` npm records for it. `validate.mjs` refuses a tarball that does not hash
 to that before unpacking anything (`tests/schema.rs` shows it refusing one byte off), then
-unpacks it once into the git-ignored `tests/github_schema/node_modules/graphql` and imports it
-from there.
+unpacks it once into `target/github-schema/node_modules/graphql` and imports it from there —
+under the workspace's `target` rather than beside it, so a test run changes nothing in this
+crate's directory, which a release hashes between building and publishing the crate.
 
 It is not a dependency in the workspace's `package.json` because that file, like `bun.lock`,
 is one of the `sharedGlobals` every project's inputs name: declaring a test double's validator

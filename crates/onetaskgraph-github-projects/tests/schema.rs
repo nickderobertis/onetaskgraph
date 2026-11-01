@@ -1839,6 +1839,15 @@ fn the_schema_check_refuses_a_schema_breaking_any_rule_but_the_tolerated_one() {
             ))
             .arg(file.path())
             .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+            // Where the doubles' own check unpacks graphql-js, so this run writes nothing
+            // inside the crate either.
+            .env(
+                "GITHUB_SCHEMA_MODULES",
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../target/github-schema/node_modules"
+                ),
+            )
             .stdin(std::process::Stdio::null())
             .output()
             .expect("bun runs the schema check");
@@ -1858,6 +1867,65 @@ fn the_schema_check_refuses_a_schema_breaking_any_rule_but_the_tolerated_one() {
             .is_some_and(|message| message.contains("is invalid")
                 && message.contains("Type Empty must define one or more fields.")),
         "{invalid}"
+    );
+}
+
+/// The check writes nothing inside the crate it tests: graphql-js is unpacked, and the shared
+/// server records where it listens, under the workspace's `target`. A release records the digest
+/// of each crate's directory when it builds and refuses to publish one that has moved since, and
+/// the release journeys run beside these tests in one checkout, so a file written into this
+/// crate's directory by a test run refused the release journeys' publication of this crate.
+#[test]
+fn the_schema_check_writes_nothing_inside_the_crate_it_tests() {
+    assert_eq!(
+        github_schema::validate("query { viewer { login } }", &serde_json::json!({})),
+        Ok(())
+    );
+    let (here, modules, rendezvous) = github_schema::locations();
+    let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .canonicalize()
+        .expect("the workspace's target exists once a test has been built");
+    for written in [&modules, &rendezvous] {
+        let written = written
+            .canonicalize()
+            .unwrap_or_else(|error| panic!("the check wrote {} ({error})", written.display()));
+        assert!(
+            written.starts_with(&target),
+            "{} is not under {}",
+            written.display(),
+            target.display()
+        );
+    }
+    assert!(
+        modules
+            .join("graphql")
+            .join(".onetaskgraph-integrity")
+            .is_file(),
+        "graphql-js is unpacked under {}",
+        modules.display()
+    );
+    assert!(
+        rendezvous.join("endpoint.json").is_file(),
+        "the shared server records its endpoint"
+    );
+    let mut entries: Vec<String> = std::fs::read_dir(&here)
+        .expect("the check's directory is readable")
+        .map(|entry| {
+            entry
+                .expect("a directory entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    entries.sort();
+    assert_eq!(
+        entries,
+        ["graphql-17.0.2.tgz", "mod.rs", "validate.mjs"],
+        "{} holds only its committed files; a `node_modules` left there by an earlier \
+         version of this check can be deleted",
+        here.display()
     );
 }
 

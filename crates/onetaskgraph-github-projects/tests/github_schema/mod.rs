@@ -18,9 +18,14 @@
 //!
 //! It is not in the workspace's `package.json` either, because that file is an input of every
 //! project in the graph: naming it there selects every crate's tests, the live lanes included,
-//! for a change to this one crate's test double. `validate.mjs` unpacks the tarball into the
-//! ignored `node_modules` beside it and imports it from there, holding that copy to the tarball's
-//! files byte for byte on every start and unpacking it again when it differs.
+//! for a change to this one crate's test double. `validate.mjs` unpacks the tarball into
+//! [`modules`] and imports it from there, holding that copy to the tarball's files byte for byte
+//! on every start and unpacking it again when it differs.
+//!
+//! Everything the check writes is under the workspace's `target` ([`state`]) and nothing is
+//! inside a crate's directory: a release records the digest of each crate's directory when it
+//! builds and refuses to publish one that has moved since (`scripts/release_cd.py`), and the
+//! release journeys run beside these tests in one checkout.
 //!
 //! One `bun` process per clone serves every test process on the machine (see [`Validators`]),
 //! because building GitHub's whole schema is costly in time and memory and nextest runs each test
@@ -88,10 +93,20 @@ fn here() -> PathBuf {
         .to_path_buf()
 }
 
-/// Where this clone's shared server records its port and its starters take their lock: inside
-/// the ignored `node_modules` the check already unpacks graphql-js into.
+/// Where the check keeps what it writes: under the workspace's `target`, which no crate's
+/// directory holds, so a test run moves nothing a release hashes.
+fn state() -> PathBuf {
+    workspace_root().join("target").join("github-schema")
+}
+
+/// Where `validate.mjs` unpacks graphql-js, handed to it as `GITHUB_SCHEMA_MODULES`.
+fn modules() -> PathBuf {
+    state().join("node_modules")
+}
+
+/// Where this clone's shared server records its port and its starters take their lock.
 fn shared_rendezvous() -> PathBuf {
-    here().join("node_modules").join(".github-schema-server")
+    state().join("server")
 }
 
 /// One connection to the server, greeted.
@@ -162,7 +177,7 @@ impl Validators {
     }
 
     /// The rendezvous directory, made on every use rather than once: the start lock lives in it
-    /// before any server has run, and a fresh clone has no `node_modules` until one has.
+    /// before any server has run, and a fresh clone has no such directory until one has.
     fn rendezvous(&self) -> PathBuf {
         std::fs::create_dir_all(&self.rendezvous).unwrap_or_else(|error| {
             panic!(
@@ -291,6 +306,7 @@ impl Validators {
             .current_dir(std::env::temp_dir())
             // Running a script writes nothing it would otherwise cache.
             .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+            .env("GITHUB_SCHEMA_MODULES", modules())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(log);
@@ -517,6 +533,12 @@ pub fn schema_sha256() -> String {
         .get()
         .expect("a connected server reported the schema's digest")
         .clone()
+}
+
+/// Where the check lives and where it writes: `(its own directory, graphql-js's unpacked copy,
+/// the shared server's rendezvous)`.
+pub fn locations() -> (PathBuf, PathBuf, PathBuf) {
+    (here(), modules(), shared_rendezvous())
 }
 
 /// The port and process id of the server this clone's checks share, as it records them,

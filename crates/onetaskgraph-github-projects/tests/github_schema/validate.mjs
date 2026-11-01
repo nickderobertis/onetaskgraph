@@ -80,10 +80,16 @@ function* tarFiles(archive) {
 // changed file keeps it. Any other copy is replaced: unpacked beside its final place and renamed
 // into it whole, so a process never imports a half-written copy, and concurrent first runs
 // leave one.
+//
+// It is unpacked into `GITHUB_SCHEMA_MODULES` when that is set — `mod.rs` sets it to a directory
+// under the workspace's `target`, so a test run writes nothing inside the crate it tests, whose
+// directory a release hashes between building and publishing a crate — and into `node_modules`
+// beside this file otherwise.
 const here = dirname(fileURLToPath(import.meta.url));
+const modules = process.env.GITHUB_SCHEMA_MODULES || join(here, "node_modules");
 
 function graphqlPackage() {
-  const target = join(here, "node_modules", "graphql");
+  const target = join(modules, "graphql");
   const marker = join(target, ".onetaskgraph-integrity");
   const tarball = readFileSync(join(here, GRAPHQL_TARBALL));
   const integrity = `sha512-${createHash("sha512").update(tarball).digest("base64")}`;
@@ -108,7 +114,7 @@ function graphqlPackage() {
     );
   };
   if (unpacked()) return target;
-  const staging = join(here, "node_modules", `.graphql-${process.pid}-${Date.now()}`);
+  const staging = join(modules, `.graphql-${process.pid}-${Date.now()}`);
   rmSync(staging, { recursive: true, force: true });
   for (const [relative, contents] of files) {
     const file = join(staging, relative);
