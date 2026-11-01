@@ -163,6 +163,22 @@ class ListedProject:
                    Teams([Team(**node) for node in teams['nodes']], TeamPageInfo(**teams['pageInfo'])))
 
 
+@dataclass
+class ProjectPage:
+    nodes: list[ListedProject]
+    pageInfo: PageInfo
+
+
+@dataclass
+class ProjectData:
+    projects: ProjectPage
+
+
+@dataclass
+class ProjectResponse:
+    data: ProjectData
+
+
 def recorded_projects() -> list[ListedProject]:
     record = json.loads((Path(__file__).parent / 'fixtures/linear-projects.json').read_text())
     return [ListedProject.recorded(node) for node in record['data']['projects']['nodes']]
@@ -253,17 +269,16 @@ class Workspace:
             case FailureMode.PROJECT_LISTING:
                 return {'errors': [{'message': 'recorded listing refusal'}]}
             case FailureMode.PROJECT_CURSOR:
-                return {'data': {'projects': {'nodes': [], 'pageInfo': {
-                    'hasNextPage': True, 'endCursor': 'project-0'}}}}
+                return asdict(ProjectResponse(ProjectData(ProjectPage([], PageInfo(True, Cursor('project-0'))))))
             case FailureMode.PROJECT_READ_LIMIT:
-                return {'data': {'projects': {'nodes': [], 'pageInfo': {
-                    'hasNextPage': True, 'endCursor': f'project-{start + 1}'}}}}
+                return asdict(ProjectResponse(ProjectData(ProjectPage(
+                    [], PageInfo(True, Cursor(f'project-{start + 1}'))))))
         # A deleted record is gone from the next listing, as it is from Linear's.
-        live = [asdict(project) for project in self.projects if project.id not in self.deleted]
+        live = [project for project in self.projects if project.id not in self.deleted]
         end = start + self.project_page_size
         more = end < len(live)
-        return {'data': {'projects': {'nodes': live[start:end], 'pageInfo': {
-            'hasNextPage': more, 'endCursor': f'project-{end}' if more else None}}}}
+        return asdict(ProjectResponse(ProjectData(ProjectPage(
+            live[start:end], PageInfo(more, Cursor(f'project-{end}') if more else None)))))
 
     def delete_document(self, identifier: DocumentId) -> dict[str, Any]:
         # Any admits deliberately malformed wire payloads as well as schema-checked success records.
@@ -487,6 +502,22 @@ class LinearJourneys(unittest.TestCase):
                 result = self.run_janitor(workspace)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(workspace.deleted, SUPERSEDED)
+
+    def test_a_superseded_document_expires_a_day_after_linear_last_changed_it(self) -> None:
+        day = 24 * 3600
+        for name, stamp, retired in [('just-past', updated(day + 60), True),
+                                     ('just-short', updated(day - 60), False),
+                                     ('unreadable', 'yesterday', False)]:
+            with self.subTest(updated=name):
+                workspace = Workspace()
+                self.standing(workspace)
+                nodes = workspace.pages[0].data.documents.nodes
+                nodes[0] = replace(nodes[0], updatedAt=stamp)
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                # One the janitor keeps holds its parent back with it.
+                self.assertEqual(workspace.deleted,
+                                 [*SUPERSEDED, 'superseded-parent'] if retired else SUPERSEDED[1:])
 
     def test_a_project_listing_that_does_not_complete_writes_nothing(self) -> None:
         for failure in [FailureMode.PROJECT_LISTING, FailureMode.PROJECT_CURSOR]:
