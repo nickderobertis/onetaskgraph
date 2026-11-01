@@ -193,6 +193,7 @@ class FailureMode(StrEnum):
     PROJECT_LISTING = auto()
     PROJECT_CURSOR = auto()
     PROJECT_READ_LIMIT = auto()
+    MALFORMED_PROJECT_DELETE = auto()
     PROJECT_DELETE = auto()
     DELETE = auto()
     SECOND_DELETE = auto()
@@ -218,6 +219,16 @@ class Malformation(StrEnum):
     NO_PAGE_INFO = auto()
 
 
+class ProjectMalformation(StrEnum):
+    NO_ID = auto()
+    NO_NAME = auto()
+    NO_UPDATED_AT = auto()
+    NO_TEAMS = auto()
+    NO_TEAM_PAGE_INFO = auto()
+    NO_CURSOR = auto()
+    NO_PAGE_INFO = auto()
+
+
 @dataclass(frozen=True)
 class ConfigCase:
     variables: dict[str, str | None]
@@ -235,6 +246,7 @@ class Workspace:
         # No project unless a journey seeds one: `linear-projects.json` is what one seeds.
         self.projects: list[ListedProject] = []
         self.project_page_size = 100
+        self.project_malformed: ProjectMalformation | None = None
         self.deleted: list[DocumentId] = []
         self.requests: list[Request] = []
         self.failure = failure
@@ -257,8 +269,11 @@ class Workspace:
 
     def delete_project(self, identifier: DocumentId) -> dict[str, Any]:
         # Any admits deliberately malformed wire payloads as well as schema-checked success records.
-        if self.failure is FailureMode.PROJECT_DELETE:
-            return {'data': {'projectDelete': {'success': False}}}
+        match self.failure:
+            case FailureMode.PROJECT_DELETE:
+                return {'data': {'projectDelete': {'success': False}}}
+            case FailureMode.MALFORMED_PROJECT_DELETE:
+                return {'data': {'projectDelete': {}}}
         self.deleted.append(identifier)
         return json.loads((Path(__file__).parent / 'fixtures/linear-project-delete.json').read_text())
 
@@ -277,8 +292,26 @@ class Workspace:
         live = [project for project in self.projects if project.id not in self.deleted]
         end = start + self.project_page_size
         more = end < len(live)
-        return asdict(ProjectResponse(ProjectData(ProjectPage(
+        answer = asdict(ProjectResponse(ProjectData(ProjectPage(
             live[start:end], PageInfo(more, Cursor(f'project-{end}') if more else None)))))
+        # Deliberately corrupt wire records, never construct invalid domain models.
+        page = answer['data']['projects']
+        match self.project_malformed:
+            case ProjectMalformation.NO_ID:
+                page['nodes'][0].pop('id')
+            case ProjectMalformation.NO_NAME:
+                page['nodes'][0].pop('name')
+            case ProjectMalformation.NO_UPDATED_AT:
+                page['nodes'][0].pop('updatedAt')
+            case ProjectMalformation.NO_TEAMS:
+                page['nodes'][0].pop('teams')
+            case ProjectMalformation.NO_TEAM_PAGE_INFO:
+                page['nodes'][0]['teams'].pop('pageInfo')
+            case ProjectMalformation.NO_CURSOR:
+                page['pageInfo'] = {'hasNextPage': True}
+            case ProjectMalformation.NO_PAGE_INFO:
+                page.pop('pageInfo')
+        return answer
 
     def delete_document(self, identifier: DocumentId) -> dict[str, Any]:
         # Any admits deliberately malformed wire payloads as well as schema-checked success records.
@@ -528,13 +561,26 @@ class LinearJourneys(unittest.TestCase):
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertEqual(workspace.deleted, [])
 
-    def test_an_unconfirmed_project_delete_fails_after_its_documents(self) -> None:
-        workspace = Workspace(FailureMode.PROJECT_DELETE)
-        self.standing(workspace)
-        result = self.run_janitor(workspace)
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn('did not confirm project deletion', result.stderr)
-        self.assertEqual(workspace.deleted, SUPERSEDED)
+    def test_a_malformed_project_listing_writes_nothing(self) -> None:
+        for malformed in ProjectMalformation:
+            with self.subTest(malformed=malformed):
+                workspace = Workspace()
+                self.standing(workspace)
+                workspace.project_malformed = malformed
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(workspace.deleted, [])
+
+    def test_an_unconfirmed_or_malformed_project_delete_fails_after_its_documents(self) -> None:
+        for failure, said in [(FailureMode.PROJECT_DELETE, 'did not confirm project deletion'),
+                              (FailureMode.MALFORMED_PROJECT_DELETE, 'invalid or malformed JSON')]:
+            with self.subTest(failure=failure):
+                workspace = Workspace(failure)
+                self.standing(workspace)
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertEqual(workspace.deleted, SUPERSEDED)
 
     def test_a_superseded_document_it_cannot_vouch_for_is_kept_with_its_parent(self) -> None:
         sample_project = Project(Teams([Team('TEST')], TeamPageInfo(False)))
