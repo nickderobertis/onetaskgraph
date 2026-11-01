@@ -1671,8 +1671,38 @@ fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
 /// stopped. A protocol it does not speak is answered `stale`, never served. Driven against a
 /// server of this test's own, through the same rendezvous every test process shares one by, so
 /// stopping it holds up no other test.
+///
+/// Bounded: two server starts and a stop take about a second, so a replacement that hangs fails
+/// this test within a minute rather than holding the run until its runner's timeout.
 #[test]
 fn a_stopped_schema_check_server_is_replaced_by_the_next_request() {
+    within(
+        std::time::Duration::from_secs(60),
+        "replacing a stopped schema check server",
+        a_stopped_server_is_replaced,
+    );
+}
+
+/// Runs `body` on a thread of its own and fails, naming `what`, when it has not finished within
+/// `limit`; a panic inside it fails the test as itself.
+fn within(limit: std::time::Duration, what: &str, body: impl FnOnce() + Send + 'static) {
+    use std::sync::mpsc::RecvTimeoutError;
+
+    let (done, finished) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        body();
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(limit) {
+        Ok(()) => worker.join().expect("the body finished"),
+        Err(RecvTimeoutError::Disconnected) => {
+            std::panic::resume_unwind(worker.join().expect_err("the body panicked"));
+        }
+        Err(RecvTimeoutError::Timeout) => panic!("{what} did not finish within {limit:?}"),
+    }
+}
+
+fn a_stopped_server_is_replaced() {
     use serde_json::{Value, json};
     use std::io::{BufRead, BufReader, Write};
 
