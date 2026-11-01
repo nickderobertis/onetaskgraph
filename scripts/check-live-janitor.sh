@@ -47,36 +47,49 @@ def constant(name, spelled=r'&str = "([^"]+)"'):
     found = re.search(rf'pub const {name}: {spelled};', declarations)
     return found.group(1) if found else None
 
-# The one ci.yml step that runs the janitor: its cancellation cleanup, in test-linux, the job
-# that carries the credentials. It is credentialed and opens no live session, so
-# scripts/check-live-lane.sh and scripts/check-live-lane-selection.sh exempt exactly a step
-# running CANCELLED_RUN, and this holds that step to its whole shape.
+# The ci.yml steps that run the janitor: test-linux's cancellation cleanup, one for its GitHub
+# artifacts and one for its Linear pool leases — test-linux being the one job that carries the
+# credentials. They are credentialed and open no live session, so scripts/check-live-lane.sh and
+# scripts/check-live-lane-selection.sh exempt exactly a step running one of these two commands,
+# and this holds each to its whole shape: its job, its command, its condition, and exactly the
+# credentials it is given.
 CANCELLED_RUN = 'cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run'
+RELEASE_LEASES = 'cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases'
 CANCELLED_IF = "cancelled() && steps.release.outputs.tests == 'run' && !github.event.pull_request.head.repo.fork"
 CANCELLED_ENV = {'GH_PROJECTS_TOKEN', 'GH_PROJECTS_OWNER', 'GH_PROJECTS_NUMBER', 'GH_PROJECTS_REPOSITORY'}
+RELEASE_ENV = {'LINEAR_API_KEY', 'LINEAR_WRITE_TEAM'}
 ci_steps = re.split(r'(?m)^      - (?=name:|uses:)', ci)
 # A job's last step runs on to the next job's header; cut it there.
 ci_steps = [re.split(r'(?m)^  (?=[a-z])', step, maxsplit=1)[0] for step in ci_steps]
 cleanups = [step for step in ci_steps if re.search(r'onetaskgraph-live-janitor', step)]
-if len(cleanups) != 1 or values(cleanups[0], 'run') != [CANCELLED_RUN]:
-    refuse(f'ci.yml must run the janitor in exactly one step, as {CANCELLED_RUN!r}', '.github/workflows/ci.yml',
-           'restore the cancellation cleanup step, then rerun')
-else:
-    cleanup = cleanups[0]
-    test_linux = section(ci, '\n  test-linux:\n', '\n  test-windows:\n', 'test-linux job')
-    if CANCELLED_RUN not in test_linux:
-        refuse('the cancellation cleanup must be a step of test-linux, the job that carries the credentials',
-               '.github/workflows/ci.yml', 'move it back into test-linux, then rerun')
-    if values(cleanup, 'if') != [CANCELLED_IF]:
-        refuse(f'the cancellation cleanup must run only when {CANCELLED_IF}', '.github/workflows/ci.yml',
-               'restore its if: condition, then rerun')
-    environment = section(cleanup, '\n        env:\n', '\n        run:', 'cancellation cleanup env')
-    if set(re.findall(r'^          ([A-Z_]+):', environment, re.M)) != CANCELLED_ENV:
-        refuse(f'the cancellation cleanup must be given exactly {sorted(CANCELLED_ENV)}', '.github/workflows/ci.yml',
+test_linux = section(ci, '\n  test-linux:\n', '\n  test-windows:\n', 'test-linux job')
+for command, expected_env, credential in [
+    (CANCELLED_RUN, CANCELLED_ENV, ('GH_PROJECTS_TOKEN', '${{ secrets.GH_PROJECTS_TOKEN }}')),
+    (RELEASE_LEASES, RELEASE_ENV, ('LINEAR_API_KEY', '${{ secrets.LINEAR_API_KEY }}')),
+]:
+    steps = [step for step in cleanups if values(step, 'run') == [command]]
+    if len(steps) != 1:
+        refuse(f'ci.yml must run {command!r} in exactly one cancellation step', '.github/workflows/ci.yml',
+               'restore the cancellation cleanup step, then rerun')
+        continue
+    step = steps[0]
+    if command not in test_linux:
+        refuse(f'the cancellation step running {command!r} must be a step of test-linux, the job that '
+               'carries the credentials', '.github/workflows/ci.yml', 'move it back into test-linux, then rerun')
+    if values(step, 'if') != [CANCELLED_IF]:
+        refuse(f'the cancellation step running {command!r} must run only when {CANCELLED_IF}',
+               '.github/workflows/ci.yml', 'restore its if: condition, then rerun')
+    environment = section(step, '\n        env:\n', '\n        run:', 'cancellation cleanup env')
+    if set(re.findall(r'^          ([A-Z_]+):', environment, re.M)) != expected_env:
+        refuse(f'a cancellation step running {command!r} must be given exactly {sorted(expected_env)}',
+               '.github/workflows/ci.yml',
                'it reads no run, so it takes no GITHUB_TOKEN and no other credential; restore its env, then rerun')
-    if values(cleanup, 'GH_PROJECTS_TOKEN') != ['${{ secrets.GH_PROJECTS_TOKEN }}']:
-        refuse('the cancellation cleanup must use secrets.GH_PROJECTS_TOKEN', '.github/workflows/ci.yml',
+    if values(step, credential[0]) != [credential[1]]:
+        refuse(f'a cancellation step must use {credential[1]}', '.github/workflows/ci.yml',
                'restore its credential, then rerun')
+if len(cleanups) != 2 or any(values(step, 'run')[:1] not in ([CANCELLED_RUN], [RELEASE_LEASES]) for step in cleanups):
+    refuse('ci.yml runs the janitor only in the two cancellation steps', '.github/workflows/ci.yml',
+           'remove the other janitor step, then rerun')
 for key in ('GH_PROJECTS_OWNER', 'GH_PROJECTS_NUMBER', 'GH_PROJECTS_REPOSITORY'):
     nominated = values(source, key)
     if len(nominated) != 1 or values(ci, key) != nominated * 2:

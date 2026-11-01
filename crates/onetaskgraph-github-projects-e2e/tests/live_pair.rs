@@ -240,7 +240,8 @@ fn run_pair(scenario: &str) {
             .env("GITHUB_LIVE_TEST_REST", &relay.origin)
             .env("GH_PROJECTS_TOKEN", "test-token")
             .env("GH_PROJECTS_OWNER", "octo-org")
-            .env("GH_PROJECTS_NUMBER", "7")
+            // llmlint: ignore[e2e_not_mocked] This file's purpose is the credential-free accounting of the real entry-point executables against the repository's own GitHub double (AGENTS.md: "Never mock the layer under test" is met — the binaries are real); the credentialed lane is what reaches GitHub. Board #6 is the template each session copies; #7 is the copy the double holds.
+            .env("GH_PROJECTS_NUMBER", "6")
             .env("GH_PROJECTS_REPOSITORY", "acme/work")
             .env("ONETASKGRAPH_LIVE_REQUIRED", "1")
             .env("GITHUB_LIVE_SESSION_DIR", &records)
@@ -322,11 +323,24 @@ fn run_pair(scenario: &str) {
         let main: SessionRecord =
             serde_json::from_slice(&std::fs::read(records.join("main.json")).unwrap()).unwrap();
         assert!(!main.complete);
+        // Its own board copy is all a refused session wrote: the copy is what it measured, and
+        // the double holds it to having deleted that copy again (`live_pair_fixture_child`).
+        let copy = onetaskgraph_github_live::quota::operation_sha256(
+            onetaskgraph_github_live::COPY_BOARD_DOCUMENT,
+        );
+        let delete = onetaskgraph_github_live::quota::operation_sha256(
+            onetaskgraph_github_live::DELETE_BOARD_DOCUMENT,
+        );
+        let mutations: Vec<_> = main
+            .calls
+            .iter()
+            .filter(|call| call.kind == onetaskgraph_github_live::quota::RequestKind::Mutation)
+            .map(|call| call.operation_sha256.clone())
+            .collect();
+        assert!(mutations.contains(&copy), "{mutations:?}");
         assert!(
-            !main
-                .calls
-                .iter()
-                .any(|call| call.kind == onetaskgraph_github_live::quota::RequestKind::Mutation)
+            mutations.iter().all(|sha| *sha == copy || *sha == delete),
+            "{mutations:?}"
         );
         if let Some(items) = population {
             assert_eq!(main.workload.initial_items, items);

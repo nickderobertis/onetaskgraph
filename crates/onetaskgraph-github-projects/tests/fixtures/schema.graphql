@@ -135,6 +135,44 @@ type Mutation {
   addComment(input: AddCommentInput!): AddCommentPayload
   updateIssueComment(input: UpdateIssueCommentInput!): UpdateIssueCommentPayload
   deleteIssueComment(input: DeleteIssueCommentInput!): DeleteIssueCommentPayload
+  copyProjectV2(input: CopyProjectV2Input!): CopyProjectV2Payload
+  deleteProjectV2(input: DeleteProjectV2Input!): DeleteProjectV2Payload
+  addProjectV2DraftIssue(input: AddProjectV2DraftIssueInput!): AddProjectV2DraftIssuePayload
+}
+input CopyProjectV2Input {
+  clientMutationId: String
+  includeDraftIssues: Boolean = false
+  ownerId: ID!
+  projectId: ID!
+  title: String!
+}
+type CopyProjectV2Payload {
+  clientMutationId: String
+  projectV2: ProjectV2
+}
+input DeleteProjectV2Input {
+  clientMutationId: String
+  projectId: ID!
+}
+type DeleteProjectV2Payload {
+  clientMutationId: String
+  projectV2: ProjectV2
+}
+input AddProjectV2DraftIssueInput {
+  assigneeIds: [ID!]
+  body: String
+  clientMutationId: String
+  projectId: ID!
+  title: String!
+}
+type AddProjectV2DraftIssuePayload {
+  clientMutationId: String
+  projectItem: ProjectV2Item
+}
+type ProjectV2Connection {
+  nodes: [ProjectV2]
+  pageInfo: PageInfo!
+  totalCount: Int!
 }
 input DeleteIssueInput {
   issueId: ID!
@@ -322,15 +360,19 @@ interface RepositoryOwner {
   id: ID!
 }
 interface ProjectV2Owner {
+  id: ID!
   projectV2(number: Int!): ProjectV2
+  projectsV2(after: String, first: Int, query: String): ProjectV2Connection!
 }
 type Organization implements Node & RepositoryOwner & ProjectV2Owner {
   id: ID!
   projectV2(number: Int!): ProjectV2
+  projectsV2(after: String, first: Int, query: String): ProjectV2Connection!
 }
 type User implements Node & RepositoryOwner & ProjectV2Owner {
   id: ID!
   projectV2(number: Int!): ProjectV2
+  projectsV2(after: String, first: Int, query: String): ProjectV2Connection!
 }
 
 type ProjectV2 implements Node {

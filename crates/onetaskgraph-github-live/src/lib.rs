@@ -231,5 +231,93 @@ pub const RESIDUE_ITEMS_DOCUMENT: &str = "query($id:ID!,$after:String){node(id:$
 /// hundred fields, so one page holds them all and `hasNextPage` is read to prove it.
 pub const BOARD_WORKLOAD_DOCUMENT: &str = "query LiveBoardWorkload($owner:String!,$number:Int!){repositoryOwner(login:$owner){... on ProjectV2Owner{projectV2(number:$number){id items(first:1){totalCount} fields(first:100){totalCount nodes{... on ProjectV2Field{id name} ... on ProjectV2SingleSelectField{id name}} pageInfo{hasNextPage}}}}}}";
 
+/// The prefix of the title of every board a live session copies for itself.
+///
+/// **Each session works on a board of its own.** The nominated board ([`BOARD_NUMBER`]) is a
+/// *template* no session writes to: a session copies it with `copyProjectV2` — its fields,
+/// its `Status` options and its draft items, in one mutation — under
+/// `<this prefix><stamp>`, runs every journey on that copy, and deletes the copy when it
+/// ends. So no session reads, writes, counts or removes another's items, fields or origin
+/// field, and the board's field and item limits are each session's own. What the janitor
+/// may remove of an interrupted session's is decided by the stamp in that title, by the same
+/// rule as an issue's.
+pub const RUN_BOARD_PREFIX: &str = "onetaskgraph live board ";
+
+/// The stamp a session's board copy is titled with: either of the two stamps a lane writes,
+/// read and validated where it is made, so a board can carry no other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunStamp {
+    /// A session outside GitHub Actions.
+    Machine(onetaskgraph_live::artifact::Stamp),
+    /// A session inside GitHub Actions, naming its run.
+    Ci(onetaskgraph_live::artifact::CiStamp),
+}
+
+impl RunStamp {
+    /// The stamp `spelled` is, or `None` when it is neither form.
+    #[must_use]
+    pub fn read(spelled: &str) -> Option<Self> {
+        use onetaskgraph_live::artifact::{CiStamp, Stamp};
+        Stamp::read(spelled)
+            .filter(|stamp| stamp.to_string() == spelled)
+            .map(Self::Machine)
+            .or_else(|| CiStamp::read(spelled).map(Self::Ci))
+    }
+}
+
+impl std::fmt::Display for RunStamp {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Machine(stamp) => stamp.fmt(formatter),
+            Self::Ci(stamp) => stamp.fmt(formatter),
+        }
+    }
+}
+
+/// The title of the board a session stamped `stamp` copies for itself.
+#[must_use]
+pub fn run_board_title(stamp: RunStamp) -> String {
+    format!("{RUN_BOARD_PREFIX}{stamp}")
+}
+
+/// The stamp a run board's title carries; `None` for any other board, the nominated
+/// template among them, and for a title under the prefix that carries no stamp.
+#[must_use]
+pub fn run_board_stamp(title: &str) -> Option<RunStamp> {
+    RunStamp::read(title.strip_prefix(RUN_BOARD_PREFIX)?)
+}
+
+/// How many draft items the nominated template holds for each copy to start with:
+/// `copyProjectV2` carries draft items and no others, and the main journey's cursor walk needs
+/// more than one page of them ([`quota::MINIMUM_INITIAL_ITEMS`]), never more than the
+/// registered workload measured ([`quota::reference_workload`]).
+pub const TEMPLATE_DRAFTS: u64 = 60;
+
+const _: () = assert!(TEMPLATE_DRAFTS >= quota::MINIMUM_INITIAL_ITEMS);
+
+/// The title the fill recipe gives each draft item it adds to the template. It counts every
+/// draft item the template holds, whoever added it, because a copy carries them all.
+pub const TEMPLATE_DRAFT_TITLE: &str = "onetaskgraph live template draft";
+
+/// The nominated template's id and its owner's, which a copy needs both of.
+pub const TEMPLATE_DOCUMENT: &str = "query LiveTemplate($owner:String!,$number:Int!){repositoryOwner(login:$owner){id ... on ProjectV2Owner{projectV2(number:$number){id}}}}";
+
+/// Copies the template, its draft items included, into a session's own board.
+pub const COPY_BOARD_DOCUMENT: &str = "mutation LiveCopyBoard($input:CopyProjectV2Input!){copyProjectV2(input:$input){projectV2{id number title}}}";
+
+/// Deletes a session's own board, and with it every item and field it held.
+pub const DELETE_BOARD_DOCUMENT: &str = "mutation LiveDeleteBoard($input:DeleteProjectV2Input!){deleteProjectV2(input:$input){projectV2{id}}}";
+
+/// One page of an owner's boards whose title matches `$query` — [`RUN_BOARD_PREFIX`],
+/// trimmed — for the janitor. GitHub's matching is a search, so every title is still read
+/// back through [`run_board_stamp`] before anything is decided on it.
+pub const RUN_BOARDS_DOCUMENT: &str = "query LiveRunBoards($owner:String!,$query:String!,$after:String){repositoryOwner(login:$owner){... on ProjectV2Owner{projectsV2(first:100,after:$after,query:$query){nodes{id number title} pageInfo{hasNextPage endCursor}}}}}";
+
+/// One page of the template's items and what each one is, for the fill recipe's count.
+pub const TEMPLATE_ITEMS_DOCUMENT: &str = "query LiveTemplateItems($id:ID!,$after:String){node(id:$id){... on ProjectV2{items(first:100,after:$after){nodes{id content{__typename ... on DraftIssue{title}}} pageInfo{hasNextPage endCursor}}}}}";
+
+/// Adds one draft item to the template.
+pub const ADD_DRAFT_DOCUMENT: &str = "mutation LiveTemplateDraft($input:AddProjectV2DraftIssueInput!){addProjectV2DraftIssue(input:$input){projectItem{id}}}";
+
 /// Internal session accounting shared by the two GitHub journeys and their reporter.
 pub mod quota;

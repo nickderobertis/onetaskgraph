@@ -44,6 +44,16 @@
       }
     }
   },
+  "conflict": {
+    "wordings": ["created a temporary conflict"],
+    "observed": {
+      "created a temporary conflict": {
+        "read": "2026-10-31",
+        "where": "GitHub GraphQL API, HTTP 200 whose errors[].message is 'Your attempt to move this item created a temporary conflict. Please try again.', answering the credentialed lane's document write filed under its project",
+        "evidence": "run 41229550836 of ci.yml (test-linux), whose GitHub Projects live journey failed on it while run 41229663880 wrote to the same scratch repository; see README.md"
+      }
+    }
+  },
   "content_creation": {
     "per_minute": 80,
     "per_hour": 500

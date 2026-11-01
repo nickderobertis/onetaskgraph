@@ -121,14 +121,31 @@ for project_file in sorted(Path("crates").glob("*/project.json")):
         if any(str(tag).startswith("test-in-coverage:") for tag in tags):
             problems.append(f"{display}: tagged {UNINSTRUMENTED} and test-in-coverage, so its suite would run nowhere on Linux")
         build_only = f"bash scripts/rust-coverage.sh --build-only {crate}"
+        # Optionally narrowed to the test targets another crate's measured run executes, each
+        # one this crate really has.
+        command = command_of(coverage) if coverage else None
+        narrowed = (
+            re.fullmatch(re.escape(build_only) + r"((?: --test [A-Za-z0-9_-]+)*)", command)
+            if isinstance(command, str)
+            else None
+        )
+        named_tests = narrowed.group(1).split()[1::2] if narrowed else []
+        missing_tests = [
+            name for name in named_tests if not (project_file.parent / "tests" / f"{name}.rs").is_file()
+        ]
         if not coverage:
             pass  # read_target named the file it cannot read
         elif coverage.get("executor") == "nx:noop":
             pass
-        elif command_of(coverage) != build_only:
+        elif missing_tests:
+            problems.append(
+                f"{display}: its build-only coverage target names the test targets {missing_tests}, "
+                "which this crate does not have, so the measured run that drives them finds nothing"
+            )
+        elif not narrowed:
             problems.append(
                 f"{display}: tagged {UNINSTRUMENTED}, but its coverage target still runs a "
-                f"measurement; it is a no-op or '{build_only}'"
+                f"measurement; it is a no-op or '{build_only}' with any '--test <target>' pairs"
             )
         elif "workspace:coverage-clear" not in names_in(coverage.get("dependsOn")) or coverage.get("cache") is not False:
             problems.append(

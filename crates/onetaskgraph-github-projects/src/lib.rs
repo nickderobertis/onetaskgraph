@@ -2352,6 +2352,18 @@ pub const PRIMARY_WORDINGS: [&str; 4] = [
     "rate_limited",
 ];
 
+/// The wordings GitHub answers a write that collided with another change to the same
+/// ordering with, in the `errors` of an HTTP 200: "Your attempt to move this item created a
+/// temporary conflict. Please try again." The write did not take effect and GitHub asks for it
+/// again, so it is retried on the same growing schedule a rate limit without a hint is, within
+/// the same retry budget — except a `createIssue`, whose answer cannot say the issue was not
+/// made, and which is therefore reported rather than replayed into a duplicate.
+///
+/// Observed rather than documented, so it is pinned exactly as [`SECONDARY_WORDINGS`] is:
+/// `tests/fixtures/rate-limits.json` records where it was read under `conflict.observed`, and
+/// the same drift gate reconciles the two both ways. Public for that gate alone.
+pub const CONFLICT_WORDINGS: [&str; 1] = ["created a temporary conflict"];
+
 /// What a response *says about itself*, which is the only place a refusal can be read.
 ///
 /// Deliberately not the whole response body. A board is a place people write about their
@@ -2556,6 +2568,9 @@ struct Attempted {
 enum Attempt {
     Failed(SourceError),
     Limited(Limited),
+    /// GitHub refused a write as a temporary conflict and asked for it again — see
+    /// [`CONFLICT_WORDINGS`]. Carries what GitHub said, for the diagnostic once retrying ends.
+    Conflicted(String),
 }
 
 fn plural(count: u32, thing: &str) -> String {
@@ -5268,25 +5283,45 @@ impl GitHubProjectsSource {
             }
             let attempt = self.send_once(query, &variables, waits + 1).await;
             self.paced(ticket, mutation);
-            let limited = match attempt {
+            let remaining = self.pacing.retry_budget.saturating_sub(waited);
+            let (wait, cause) = match attempt {
                 Ok(data) => return Ok(data),
                 Err(Attempt::Failed(error)) => return Err(error),
-                Err(Attempt::Limited(limited)) => limited,
+                Err(Attempt::Conflicted(said)) => {
+                    // A create is never replayed: see `CONFLICT_WORDINGS`.
+                    if query.contains("createIssue(") || backoff.is_zero() || backoff > remaining {
+                        return Err(SourceError::Unavailable {
+                            message: format!(
+                                "GitHub refused this source while {doing} as a temporary \
+                                 conflict ({said}); it retried {} over {} and the conflict \
+                                 did not clear within the {} one call may spend waiting. \
+                                 next: run the command again once nothing else is writing to \
+                                 the same items",
+                                plural(waits, "time"),
+                                seconds(waited),
+                                seconds(self.pacing.retry_budget),
+                            ),
+                        });
+                    }
+                    (backoff, pacing::cause::BACKOFF)
+                }
+                Err(Attempt::Limited(limited)) => {
+                    let (wait, cause) = limited.wait(backoff);
+                    // A wait of nothing spends none of the budget, so it is exhaustion rather
+                    // than a retry. `Pacing::resolve` rules out every way of configuring one
+                    // except a budget of zero, where reporting the first refusal is the ask.
+                    if wait.is_zero() || wait > remaining {
+                        return Err(limited.exhausted(
+                            doing,
+                            waits,
+                            waited,
+                            wait,
+                            self.pacing.retry_budget,
+                        ));
+                    }
+                    (wait, cause)
+                }
             };
-            let (wait, cause) = limited.wait(backoff);
-            let remaining = self.pacing.retry_budget.saturating_sub(waited);
-            // A wait of nothing spends none of the budget, so it is exhaustion rather
-            // than a retry. `Pacing::resolve` rules out every way of configuring one
-            // except a budget of zero, where reporting the first refusal is the ask.
-            if wait.is_zero() || wait > remaining {
-                return Err(limited.exhausted(
-                    doing,
-                    waits,
-                    waited,
-                    wait,
-                    self.pacing.retry_budget,
-                ));
-            }
             self.clock.sleep_because(wait, cause).await;
             waited += wait;
             waits += 1;
@@ -5400,7 +5435,7 @@ impl GitHubProjectsSource {
         let outcome = match &result {
             Ok(_) => accounting::Outcome::Answered,
             Err(Attempt::Limited(_)) => accounting::Outcome::RateLimited,
-            Err(Attempt::Failed(_)) => accounting::Outcome::Refused,
+            Err(Attempt::Failed(_) | Attempt::Conflicted(_)) => accounting::Outcome::Refused,
         };
         self.ledger
             .record(sending.finished(outcome, limits).with_execution(
@@ -5539,6 +5574,14 @@ impl GitHubProjectsSource {
             return Err(Attempt::Failed(SourceError::Unavailable {
                 message: format!("GitHub GraphQL returned HTTP {status}"),
             }));
+        }
+        let said = refusal_wording(status, &body);
+        let normalized = said.to_ascii_lowercase();
+        if CONFLICT_WORDINGS
+            .iter()
+            .any(|wording| normalized.contains(wording))
+        {
+            return Err(Attempt::Conflicted(said));
         }
         let answered = if query == graphql::ISSUES_BY_REFERENCE {
             self.answer_unresolved(&body)

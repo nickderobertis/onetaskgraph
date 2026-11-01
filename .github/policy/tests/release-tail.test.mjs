@@ -21,17 +21,20 @@ import { parse, stringify } from "yaml";
 // from release.yml and run as written, with the real onevcs and onebudgetspec they install, the
 // real jq and the copied figures script, over the root budgets.yaml. GitHub is the one boundary
 // stood in for: `ONEVCS_GH` — onevcs's seam for replaying recorded responses — names a double
-// serving the responses recorded, read-only, from this repository's own release v0.12.13 and
-// the runs that carried it (fixtures/release-tail/). Every figure is held to the one this test
-// computes from those recordings, and every read count to what the double itself served.
+// serving the responses recorded, read-only, from two of this repository's own releases and the
+// runs that carried them (fixtures/release-tail/): v0.12.13, and v0.13.0, whose release commit
+// carries a push run concluded skipped. Every figure is held to the one this test computes from
+// those recordings, and every read count to what the double itself served.
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
-const FIXTURES = new URL("./fixtures/release-tail/recordings/", import.meta.url);
 // The onevcs release this repository adopts: one whose `onevcs host` answers schema_version 1.
 const ADOPTED_ONEVCS = "0.57.4";
 const REPOSITORY = "nickderobertis/onetaskgraph";
-const RELEASE = "v0.12.13";
-const RELEASE_RUN = 41026720026;
+// Each recorded release: its recordings, and the Release run whose publish job runs the tail.
+const RELEASES = {
+  "v0.12.13": { dir: "recordings/", run: 41026720026 },
+  "v0.13.0": { dir: "recordings-v0.13.0/", run: 41252264998 },
+};
 const JOB_TOKEN = `\${{ github.token }}`;
 const TAIL_IDS = [
   "onetaskgraph-ci-check-time",
@@ -170,22 +173,7 @@ function response(text) {
     body: JSON.parse(text.slice(split + 4)),
   };
 }
-const recordings = readdirSync(FIXTURES)
-  .filter((name) => name.endsWith(".http"))
-  .map((name) => {
-    const text = readFileSync(new URL(name, FIXTURES), "utf8");
-    return {
-      name,
-      text,
-      response: response(text),
-      sidecar: JSON.parse(readFileSync(new URL(`${name}.source.json`, FIXTURES), "utf8")),
-    };
-  });
 const pathOf = (recording) => recording.sidecar.path;
-const ok = recordings.filter((r) => r.response.status === 200);
-const refusal = recordings.find((r) => r.response.status !== 200);
-const byPath = new Map(ok.map((r) => [pathOf(r), r]));
-const body = (path) => byPath.get(path).response.body;
 
 // What the double serves for a recording: the recording itself, byte for byte, but for the one
 // change its sidecar names — the job running the tail is still in progress when the tail reads it.
@@ -202,10 +190,76 @@ function served(recording) {
     body: answer,
   };
 }
-const publishRecord = ok.find((r) => r.sidecar.served_in_progress);
-const TAIL_RUNNER = publishRecord.response.body.jobs.find(
-  (job) => job.name === "publish",
-).runner_name;
+
+// One recorded release: its recordings, the paths they answer, and the pull requests and runs
+// the tail selects from them.
+function loadRelease(release) {
+  const { dir, run: releaseRun } = RELEASES[release];
+  const fixtures = new URL(`./fixtures/release-tail/${dir}`, import.meta.url);
+  const recordings = readdirSync(fixtures)
+    .filter((name) => name.endsWith(".http"))
+    .map((name) => {
+      const text = readFileSync(new URL(name, fixtures), "utf8");
+      return {
+        name,
+        text,
+        response: response(text),
+        sidecar: JSON.parse(readFileSync(new URL(`${name}.source.json`, fixtures), "utf8")),
+      };
+    });
+  const ok = recordings.filter((r) => r.response.status === 200);
+  const byPath = new Map(ok.map((r) => [pathOf(r), r]));
+  const body = (path) => byPath.get(path).response.body;
+  const publishRecord = ok.find((r) => r.sidecar.served_in_progress);
+  const publishJob = publishRecord.response.body.jobs.find((job) => job.name === "publish");
+  // The pull requests the release carries: every commit the comparison lists, by the merged pull
+  // request the closed page names it the merge commit of.
+  const compare = ok.find((r) => pathOf(r).includes("/compare/")).response.body;
+  const pulls = ok.find((r) => pathOf(r).includes("/pulls?")).response.body;
+  const releaseCommit = compare.commits.at(-1).sha;
+  const pullRequests = compare.commits.map((commit) => {
+    const pull = pulls.find((p) => p.merge_commit_sha === commit.sha);
+    assert.ok(pull, `commit ${commit.sha} maps to a merged pull request`);
+    return { number: pull.number, head: pull.head.sha, merged: ts(pull.merged_at) };
+  });
+  const releaseListing = `repos/${REPOSITORY}/actions/runs?per_page=100&head_sha=${releaseCommit}`;
+  const atRelease = () => body(releaseListing).workflow_runs;
+  return {
+    release,
+    releaseRun,
+    recordings,
+    ok,
+    refusal: recordings.find((r) => r.response.status !== 200),
+    byPath,
+    body,
+    publishRecord,
+    tailRunner: publishJob.runner_name,
+    // The moment the tail's own step started on GitHub, from the step the recording names.
+    tailStep: publishJob.steps.find((step) => step.name === "Report the release-tail budgets"),
+    pullRequests,
+    releaseListing,
+    // The runs the CD figures count: push and release runs at the release commit, but the
+    // excluded workflow's and a run that concluded skipped, which ran nothing.
+    deliveryRuns: () =>
+      atRelease().filter(
+        (run) =>
+          ["push", "release"].includes(run.event) &&
+          !EXCLUDED.includes(run.name) &&
+          run.conclusion !== "skipped",
+      ),
+    excludedRuns: () => atRelease().filter((run) => EXCLUDED.includes(run.name)),
+    skippedRuns: () =>
+      atRelease().filter(
+        (run) =>
+          ["push", "release"].includes(run.event) &&
+          !EXCLUDED.includes(run.name) &&
+          run.conclusion === "skipped",
+      ),
+  };
+}
+const ts = (stamp) => Date.parse(stamp.replace(/\.\d+Z$/, "Z")) / 1000;
+const V12 = loadRelease("v0.12.13");
+const V13 = loadRelease("v0.13.0");
 
 // `gh api --include` as onevcs's journeys write it: the response routed for the request asked,
 // the request recorded, and a failure the way gh fails on an error status.
@@ -297,10 +351,10 @@ function checkout(budgets = readFileSync(join(root, "budgets.yaml"), "utf8")) {
 
 // The last step of publish, run as written in a runner's environment for the release event and
 // nothing of this process's own (no GITHUB_* of the CI running these tests leaks in).
-function tail({ double, dir = checkout(), runnerTemp }) {
+function tail({ double, dir = checkout(), runnerTemp, rel = V12 }) {
   const step = releaseWorkflow().jobs.publish.steps.at(-1);
-  const event = join(scratch, "event.json");
-  writeFileSync(event, JSON.stringify({ action: "published", release: { tag_name: RELEASE } }));
+  const event = join(scratch, `event-${cases++}.json`);
+  writeFileSync(event, JSON.stringify({ action: "published", release: { tag_name: rel.release } }));
   const home = join(scratch, `home-${cases++}`);
   mkdirSync(home);
   if (!runnerTemp) {
@@ -318,8 +372,8 @@ function tail({ double, dir = checkout(), runnerTemp }) {
       GH_TOKEN: step.env.GH_TOKEN === JOB_TOKEN ? "replay-token" : "",
       GITHUB_REPOSITORY: REPOSITORY,
       GITHUB_EVENT_PATH: event,
-      GITHUB_RUN_ID: String(RELEASE_RUN),
-      RUNNER_NAME: TAIL_RUNNER,
+      GITHUB_RUN_ID: String(rel.releaseRun),
+      RUNNER_NAME: rel.tailRunner,
       RUNNER_TEMP: runnerTemp,
     },
     encoding: "utf8",
@@ -340,64 +394,46 @@ function tail({ double, dir = checkout(), runnerTemp }) {
   return { status: ran.status, output, results, started, ended, runnerTemp };
 }
 
-const ts = (stamp) => Date.parse(stamp.replace(/\.\d+Z$/, "Z")) / 1000;
 // A counted job is completed, not skipped and taken by a runner — GitHub records a job no runner
 // took with a null or an empty runner_name, which onevcs answers alike — or the job running the
 // tail, still in progress, timed to the tail's moment.
-const counted = (now) => (job) => {
+const counted = (rel, now) => (job) => {
   if (job.status === "completed" && job.conclusion !== "skipped" && job.runner_name)
     return {
       ...job,
       secs: Math.max(ts(job.completed_at) - ts(job.started_at), 0),
       end: ts(job.completed_at),
     };
-  if (job.run_id === RELEASE_RUN && job.status === "in_progress" && job.runner_name === TAIL_RUNNER)
+  if (
+    job.run_id === rel.releaseRun &&
+    job.status === "in_progress" &&
+    job.runner_name === rel.tailRunner
+  )
     return { ...job, secs: Math.max(now - ts(job.started_at), 0), end: now };
   return null;
 };
-const jobsOf = (runId) =>
-  served(byPath.get(`repos/${REPOSITORY}/actions/runs/${runId}/jobs?per_page=100&filter=latest`))
-    .body.jobs;
+const jobsPath = (runId) =>
+  `repos/${REPOSITORY}/actions/runs/${runId}/jobs?per_page=100&filter=latest`;
+const jobsOf = (rel, runId) => served(rel.byPath.get(jobsPath(runId))).body.jobs;
 
-// The pull requests the release carries: every commit the comparison lists, by the merged pull
-// request the closed page names it the merge commit of.
-const compare = ok.find((r) => pathOf(r).includes("/compare/")).response.body;
-const pulls = ok.find((r) => pathOf(r).includes("/pulls?")).response.body;
-const releaseCommit = compare.commits.at(-1).sha;
-const pullRequests = compare.commits.map((commit) => {
-  const pull = pulls.find((p) => p.merge_commit_sha === commit.sha);
-  assert.ok(pull, `commit ${commit.sha} maps to a merged pull request`);
-  return { number: pull.number, head: pull.head.sha, merged: ts(pull.merged_at) };
-});
-
-function runsAt(listing, served) {
-  return body(listing).workflow_runs.filter((run) =>
-    served.includes(`repos/${REPOSITORY}/actions/runs/${run.id}/jobs?per_page=100&filter=latest`),
-  );
+function runsAt(rel, listing, served) {
+  return rel.body(listing).workflow_runs.filter((run) => served.includes(jobsPath(run.id)));
 }
 const prListing = (pr) =>
   `repos/${REPOSITORY}/actions/runs?per_page=100&head_sha=${pr.head}&event=pull_request`;
-const releaseListing = `repos/${REPOSITORY}/actions/runs?per_page=100&head_sha=${releaseCommit}`;
-const RELEASE_OWN = [
+const releaseOwn = (rel) => [
   `repos/${REPOSITORY}/releases?per_page=100`,
   `repos/${REPOSITORY}/compare/`,
   `repos/${REPOSITORY}/pulls?`,
-  releaseListing,
+  rel.releaseListing,
 ];
 
-const deliveryRuns = () =>
-  body(releaseListing).workflow_runs.filter(
-    (run) => ["push", "release"].includes(run.event) && !EXCLUDED.includes(run.name),
-  );
-const excludedRuns = () =>
-  body(releaseListing).workflow_runs.filter((run) => EXCLUDED.includes(run.name));
-
-function expected(served, now) {
-  const prs = pullRequests.map((pr) => {
-    const runs = runsAt(prListing(pr), served);
+function expected(rel, served, now) {
+  const prs = rel.pullRequests.map((pr) => {
+    const runs = runsAt(rel, prListing(pr), served);
     const jobs = runs
-      .flatMap((run) => jobsOf(run.id))
-      .map(counted(now))
+      .flatMap((run) => jobsOf(rel, run.id))
+      .map(counted(rel, now))
       .filter(Boolean);
     const requests = served.filter(
       (path) =>
@@ -406,14 +442,14 @@ function expected(served, now) {
     );
     return { ...pr, runs, jobs, requests };
   });
-  const cdRuns = deliveryRuns();
+  const cdRuns = rel.deliveryRuns();
   const cdJobs = cdRuns
-    .flatMap((run) => jobsOf(run.id))
-    .map(counted(now))
+    .flatMap((run) => jobsOf(rel, run.id))
+    .map(counted(rel, now))
     .filter(Boolean);
-  const releaseOwn = served.filter(
+  const own = served.filter(
     (path) =>
-      RELEASE_OWN.some((prefix) => path === prefix || path.startsWith(prefix)) ||
+      releaseOwn(rel).some((prefix) => path === prefix || path.startsWith(prefix)) ||
       cdRuns.some((run) => path.startsWith(`repos/${REPOSITORY}/actions/runs/${run.id}/`)),
   );
   return {
@@ -429,34 +465,34 @@ function expected(served, now) {
     ),
     "onetaskgraph-ci-job-count": Math.max(...prs.map((pr) => pr.jobs.length)),
     "onetaskgraph-cd-job-count": cdJobs.length,
-    "onetaskgraph-release-read-requests": releaseOwn.length,
+    "onetaskgraph-release-read-requests": own.length,
     "onetaskgraph-pr-read-requests": Math.max(...prs.map((pr) => pr.requests.length)),
   };
 }
 // A figure timed to the tail's own moment lies between the one computed at the step's start and
 // the one at its end; every other figure is exact.
-function assertFigures(run, served) {
-  const low = expected(served, run.started);
-  const high = expected(served, run.ended);
+function assertFigures(rel, run, served) {
+  const low = expected(rel, served, run.started);
+  const high = expected(rel, served, run.ended);
   for (const id of TAIL_IDS) {
     const value = run.results[id]?.value;
     assert.ok(
       value >= Math.min(low[id], high[id]) && value <= Math.max(low[id], high[id]),
-      `${id} reported ${value}, computed ${low[id]}..${high[id]}`,
+      `${rel.release} ${id} reported ${value}, computed ${low[id]}..${high[id]}`,
     );
   }
   return low;
 }
 
 let recorded;
-test("over a recorded release the tail reports all seven budgets with their breakdowns", () => {
-  const double = replay(ok);
+test("over release v0.12.13 the tail reports all seven budgets with their breakdowns", () => {
+  const double = replay(V12.ok);
   const run = tail({ double });
   const servedPaths = double.served();
   recorded = { run, served: servedPaths };
   const budgets = parse(readFileSync(join(root, "budgets.yaml"), "utf8")).budgets;
   assert.deepEqual(Object.keys(run.results).sort(), [...TAIL_IDS].sort(), run.output);
-  const figures = assertFigures(run, servedPaths);
+  const figures = assertFigures(V12, run, servedPaths);
   // The step's exit is onebudgetspec's: 1 when any reading is over, 0 when all are within.
   const over = TAIL_IDS.filter((id) => run.results[id].verdict === "over");
   for (const id of TAIL_IDS) {
@@ -465,7 +501,7 @@ test("over a recorded release the tail reports all seven budgets with their brea
     assert.equal(run.results[id].verdict, figures[id] > threshold ? "over" : "within", id);
   }
   assert.equal(run.status, over.length ? 1 : 0, run.output);
-  for (const pr of pullRequests)
+  for (const pr of V12.pullRequests)
     assert.match(run.output, new RegExp(`#${pr.number}: checks \\d+s \\+ merge to release \\d+s`));
   assert.match(run.output, /Release \/ publish: \d+s/);
   assert.match(run.output, /longest per runner OS:/);
@@ -486,18 +522,16 @@ test("the CD budgets name the cache warmer's workflow, and only it, with --exclu
   for (const budget of TAIL_BUDGETS())
     assert.deepEqual(excludedBy(budget.command), excluding[budget.id] ?? [], budget.id);
   assert.equal(WARMER, "rust cache warm");
-  assert.ok(excludedRuns().length, "the recorded release commit carries a warmer run");
+  assert.ok(V12.excludedRuns().length, "the recorded release commit carries a warmer run");
 });
 
 test("each onevcs read is made once across the seven figures", () => {
   const { served } = recorded;
   assert.equal(new Set(served).size, served.length, `a read was made twice: ${served.join("\n")}`);
-  const warmerJobs = excludedRuns().map(
-    (run) => `repos/${REPOSITORY}/actions/runs/${run.id}/jobs?per_page=100&filter=latest`,
-  );
+  const warmerJobs = V12.excludedRuns().map((run) => jobsPath(run.id));
   assert.deepEqual(
     [...served].sort(),
-    ok
+    V12.ok
       .map(pathOf)
       .filter((path) => !warmerJobs.includes(path))
       .sort(),
@@ -507,7 +541,7 @@ test("each onevcs read is made once across the seven figures", () => {
 
 test("the read figures are the requests the double served", () => {
   const { run, served } = recorded;
-  const figures = expected(served, run.started);
+  const figures = expected(V12, served, run.started);
   assert.equal(
     run.results["onetaskgraph-release-read-requests"].value,
     figures["onetaskgraph-release-read-requests"],
@@ -520,13 +554,13 @@ test("the read figures are the requests the double served", () => {
   // counts cannot hide between them.
   assert.equal(
     figures["onetaskgraph-release-read-requests"] +
-      pullRequests
+      V12.pullRequests
         .map(
           (pr) =>
             served.filter(
               (path) =>
                 path === prListing(pr) ||
-                runsAt(prListing(pr), served).some((r) => path.includes(`/runs/${r.id}/`)),
+                runsAt(V12, prListing(pr), served).some((r) => path.includes(`/runs/${r.id}/`)),
             ).length,
         )
         .reduce((a, b) => a + b, 0),
@@ -536,18 +570,20 @@ test("the read figures are the requests the double served", () => {
 
 test("the selection is the release's: the pull requests' heads and the release commit's CD runs", () => {
   const { served } = recorded;
-  for (const pr of pullRequests)
+  for (const pr of V12.pullRequests)
     assert.ok(served.includes(prListing(pr)), `#${pr.number}'s head was read`);
-  for (const run of deliveryRuns())
+  for (const run of V12.deliveryRuns())
     assert.ok(
-      runsAt(releaseListing, served).some((r) => r.id === run.id),
+      runsAt(V12, V12.releaseListing, served).some((r) => r.id === run.id),
       run.name,
     );
   // The cache warmer's run at the release commit is excluded, and its jobs are never read.
-  for (const run of excludedRuns())
+  for (const run of V12.excludedRuns())
     assert.ok(!served.some((path) => path.includes(`/runs/${run.id}/`)), run.name);
   // A scheduled run at the release commit is no CD run, and its jobs are never read.
-  for (const run of body(releaseListing).workflow_runs.filter((r) => r.event === "schedule"))
+  for (const run of V12.body(V12.releaseListing).workflow_runs.filter(
+    (r) => r.event === "schedule",
+  ))
     assert.ok(!served.some((path) => path.includes(`/runs/${run.id}/`)), run.name);
 });
 
@@ -561,12 +597,12 @@ test("a threshold below a recorded figure turns the step's exit non-zero naming 
         budget.threshold = budget.id in lowered ? lowered[budget.id] : 10 ** 9;
     return stringify(document);
   };
-  const within = tail({ double: replay(ok), dir: checkout(copy({})), runnerTemp });
+  const within = tail({ double: replay(V12.ok), dir: checkout(copy({})), runnerTemp });
   assert.equal(within.status, 0, within.output);
-  const figures = expected(recorded.served, recorded.run.started);
+  const figures = expected(V12, recorded.served, recorded.run.started);
   for (const id of TAIL_IDS) {
     const run = tail({
-      double: replay(ok),
+      double: replay(V12.ok),
       dir: checkout(copy({ [id]: figures[id] - 1 })),
       runnerTemp,
     });
@@ -578,7 +614,8 @@ test("a threshold below a recorded figure turns the step's exit non-zero naming 
 });
 
 test("an error status from GitHub fails the step and reports no figure", () => {
-  const serve = [refusal, ...ok.filter((r) => pathOf(r) !== pathOf(refusal))];
+  const { refusal } = V12;
+  const serve = [refusal, ...V12.ok.filter((r) => pathOf(r) !== pathOf(refusal))];
   const run = tail({ double: replay(serve) });
   assert.notEqual(run.status, 0, run.output);
   assert.equal(run.status, 3, run.output);
@@ -588,24 +625,135 @@ test("an error status from GitHub fails the step and reports no figure", () => {
 });
 
 test("every recording names its API path and where it was fetched from", () => {
-  assert.ok(refusal, "an error status is recorded");
-  for (const recording of recordings) {
-    const { path, repository, fetched_from, recorded } = recording.sidecar;
-    assert.ok(path.startsWith(`repos/${REPOSITORY}/`), recording.name);
-    assert.equal(repository, REPOSITORY, recording.name);
-    assert.equal(fetched_from.release, RELEASE, recording.name);
-    assert.ok(
-      recorded.read_only && recorded.with.startsWith(`gh api --include --method GET '${path}'`),
-      recording.name,
+  assert.ok(V12.refusal, "an error status is recorded");
+  for (const rel of [V12, V13])
+    for (const recording of rel.recordings) {
+      const { path, repository, fetched_from, recorded } = recording.sidecar;
+      assert.ok(path.startsWith(`repos/${REPOSITORY}/`), recording.name);
+      assert.equal(repository, REPOSITORY, recording.name);
+      assert.equal(fetched_from.release, rel.release, recording.name);
+      assert.ok(
+        recorded.read_only && recorded.with.startsWith(`gh api --include --method GET '${path}'`),
+        recording.name,
+      );
+      assert.match(recording.response.head, /^HTTP\/2\.0 \d{3} /, recording.name);
+      assert.ok(Object.keys(recording.response.body).length, recording.name);
+    }
+  for (const rel of [V12, V13])
+    assert.deepEqual(
+      rel.recordings.filter((r) => r.sidecar.served_in_progress).map((r) => r.name),
+      [rel.publishRecord.name],
+      `${rel.release}: one recording carries the one change`,
     );
-    assert.match(recording.response.head, /^HTTP\/2\.0 \d{3} /, recording.name);
-    assert.ok(Object.keys(recording.response.body).length, recording.name);
-  }
+});
+
+// v0.13.0's release commit carries four push or release runs: release-plz's, the Release run, the
+// main-push cache warmer's and a "Visual docs" run that concluded skipped, every job of it skipped
+// by its condition. The double serves the jobs of all four, so a script that reads the warmer's
+// or the skipped run's jobs is caught counting the read, not failing on a missing recording. That
+// skipped run's jobs read was v0.13.0's seventh release read, against a budget of six.
+const CD_WORKFLOWS = ["Release", "Release-plz"];
+test("over release v0.13.0 the CD figures count release-plz and Release, and neither the warmer nor the skipped run", () => {
+  const double = replay(V13.ok);
+  const run = tail({ double, rel: V13 });
+  const served = double.served();
+  assert.deepEqual(Object.keys(run.results).sort(), [...TAIL_IDS].sort(), run.output);
+  assertFigures(V13, run, served);
+  assert.equal(new Set(served).size, served.length, `a read was made twice: ${served.join("\n")}`);
+
   assert.deepEqual(
-    recordings.filter((r) => r.sidecar.served_in_progress).map((r) => r.name),
-    [publishRecord.name],
-    "one recording carries the one change",
+    V13.deliveryRuns()
+      .map((r) => r.name)
+      .sort(),
+    CD_WORKFLOWS,
   );
+  for (const cd of V13.deliveryRuns()) assert.ok(served.includes(jobsPath(cd.id)), cd.name);
+  const cdJobs = V13.deliveryRuns().flatMap((cd) =>
+    jobsOf(V13, cd.id).map(counted(V13, run.started)).filter(Boolean),
+  );
+  assert.deepEqual(
+    [...new Set(cdJobs.map((job) => job.workflow_name))].sort(),
+    CD_WORKFLOWS,
+    "every counted CD job is release-plz's or the Release workflow's",
+  );
+  assert.equal(run.results["onetaskgraph-cd-job-count"].value, 6, run.output);
+
+  const [warmer] = V13.excludedRuns().filter((r) => r.event === "push");
+  assert.ok(warmer, "v0.13.0's release commit carries a warmer push run");
+  assert.ok(!served.includes(jobsPath(warmer.id)), "the warmer's jobs were read");
+  assert.match(
+    run.output,
+    new RegExp(`left out by --exclude-workflow: ${WARMER} \\(run ${warmer.id}, push\\)`),
+  );
+  const warmerJobs = jobsOf(V13, warmer.id).map(counted(V13, run.started)).filter(Boolean);
+  assert.ok(warmerJobs.length, "the warmer ran jobs a figure could have counted");
+  // The CD figures are the counted runs' alone: assertFigures above brackets each between its
+  // value at the step's start and end, computed from release-plz's and Release's jobs only.
+  assert.equal(run.results["onetaskgraph-cd-job-count"].value, cdJobs.length, run.output);
+
+  const skipped = V13.skippedRuns();
+  assert.deepEqual(
+    skipped.map((r) => [r.name, r.event]),
+    [["Visual docs", "push"]],
+  );
+  for (const r of skipped) {
+    assert.ok(!served.includes(jobsPath(r.id)), `${r.name}'s jobs were read`);
+    assert.match(
+      run.output,
+      new RegExp(`left out as concluded skipped: ${r.name} \\(run ${r.id}, push\\)`),
+    );
+  }
+
+  // Every read is the release's own four or one of the counted runs' jobs, so the release read
+  // figure is six, within the threshold budgets.yaml states.
+  assert.deepEqual(
+    [...served].sort(),
+    V13.ok
+      .map(pathOf)
+      .filter((path) => ![warmer, ...skipped].some((r) => path === jobsPath(r.id)))
+      .sort(),
+  );
+  const threshold = TAIL_BUDGETS().find(
+    (b) => b.id === "onetaskgraph-release-read-requests",
+  ).threshold;
+  const reads = run.results["onetaskgraph-release-read-requests"];
+  assert.equal(reads.value, 6, run.output);
+  assert.equal(reads.threshold, threshold);
+  // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The node's acceptance criteria require this test to show the release read-request figure within its budget's threshold as budgets.yaml states it: the defect fixed here is that figure reading 7 against 6, so the bound is the regression being proven, read from budgets.yaml rather than restated.
+  assert.ok(reads.value <= threshold, `${reads.value} release reads over ${threshold}`);
+  assert.equal(reads.verdict, "within", run.output);
+  // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
+  assert.match(run.output, /release-changes --tag v0\.13\.0: 3 requests/);
+});
+
+// Timed to the moment the tail's own step started on GitHub — `--now`, which every figure timed
+// to the tail's moment takes — the budgets' own commands report v0.13.0's figures exactly, each
+// beside its threshold with the verdict that comparison gives, and the step exits as they say.
+test("at the moment v0.13.0's tail ran, the budgets' commands report each figure exactly", (t) => {
+  const now = V13.tailStep.started_at;
+  const document = parse(readFileSync(join(root, "budgets.yaml"), "utf8"));
+  for (const budget of document.budgets)
+    if (
+      TAIL_IDS.includes(budget.id) &&
+      ["longest-job", "job-count", "release-cycle-time"].includes(budget.command[2])
+    )
+      budget.command = [...budget.command, "--now", now];
+  const double = replay(V13.ok);
+  const run = tail({ double, rel: V13, dir: checkout(stringify(document)) });
+  const figures = expected(V13, double.served(), ts(now));
+  for (const id of TAIL_IDS) {
+    const threshold = document.budgets.find((b) => b.id === id).threshold;
+    assert.equal(run.results[id]?.value, figures[id], `${id}: ${run.output}`);
+    assert.equal(run.results[id].threshold, threshold, id);
+    assert.equal(
+      run.results[id].verdict,
+      figures[id] > threshold ? "over" : "within",
+      `${id}: ${run.output}`,
+    );
+    t.diagnostic(`${id}: ${figures[id]} against ${threshold} (${run.results[id].verdict})`);
+  }
+  const over = TAIL_IDS.some((id) => run.results[id].verdict === "over");
+  assert.equal(run.status, over ? 1 : 0, run.output);
 });
 
 // The copy is dero-skills' create-repo source, edited only there. create-repo's
@@ -619,7 +767,7 @@ test("the figures script is the unedited create-repo copy its header names", () 
     lines[2],
     "# source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/budgets/actions-budget-figures.sh",
   );
-  assert.equal(lines[3], "# version: 9");
+  assert.equal(lines[3], "# version: 10");
   const digest = lines[4].match(/^# sha256: ([0-9a-f]{64})$/)?.[1];
   const body = lines.slice(5).join("\n");
   assert.equal(
@@ -627,7 +775,7 @@ test("the figures script is the unedited create-repo copy its header names", () 
     digest,
     "the copy was edited in place",
   );
-  assert.equal(digest, "a29faecd791ba75ea38eb9a9940686416205ab0a4bb6c0edeba479e8129b7aaf");
+  assert.equal(digest, "13ac7d79aaa3902dc7cfe87449283a05ba397fbc0612701e9b788ed59daf438d");
 });
 
 // The reconciliation script, against a stand-in for gh that answers each path with its
@@ -640,7 +788,8 @@ test("the reconciliation names a recording GitHub no longer answers, and ignores
   writeFileSync(
     answer,
     `import { readdirSync, readFileSync } from "node:fs";
-const dir = ${JSON.stringify(fileURLToPath(FIXTURES))};
+// GitHub as it answers now: the recordings of the release the reconciliation was asked about.
+const dir = ${JSON.stringify(fileURLToPath(new URL("./fixtures/release-tail/", import.meta.url)))} + (process.env.RECORDINGS ?? "recordings");
 const path = process.argv.at(-1);
 // GitHub answers the releases path 401 under an invalid token, as the reconciliation asks it.
 const invalid = (process.env.GH_TOKEN ?? "").startsWith("ghp_invalid");
@@ -656,6 +805,8 @@ if (process.env.ANSWER === "rewritten")
     .replace(/^Date: .*$/m, "Date: Sun, 01 Nov 2026 00:00:00 GMT")
     .replace(/^X-Ratelimit-Remaining: .*$/im, "X-Ratelimit-Remaining: 1")
     .replace(/"updated_at":"[^"]*"/g, '"updated_at":"2026-11-01T00:00:00Z"');
+if (process.env.ANSWER === "v13-changed" && name === "runs-at-release-commit.http.source.json")
+  text = text.replace('"total_count":', '"total_count":1');
 if (process.env.ANSWER === "changed" && name.startsWith("runs-at-pr-3824-head"))
   text = text.replace('"total_count":', '"total_count":1');
 // One recording drifting in a way the reconciliation must see: its status, a header it keeps,
@@ -679,17 +830,45 @@ process.stdout.write(text);
   mkdirSync(join(dir, "bin"));
   writeFileSync(join(dir, "bin", "gh"), `#!/bin/sh\nexec "${process.execPath}" "${answer}" "$@"\n`);
   chmodSync(join(dir, "bin", "gh"), 0o755);
-  const reconcile = (ANSWER) =>
+  const reconcile = (ANSWER, RECORDINGS) =>
     spawnSync(
       process.execPath,
-      [fileURLToPath(new URL("./fixtures/release-tail/reconcile.mjs", import.meta.url))],
+      [
+        fileURLToPath(new URL("./fixtures/release-tail/reconcile.mjs", import.meta.url)),
+        ...(RECORDINGS ? [RECORDINGS] : []),
+      ],
       {
-        env: { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}`, ANSWER },
+        env: {
+          ...process.env,
+          PATH: `${join(dir, "bin")}:${process.env.PATH}`,
+          ANSWER,
+          RECORDINGS: RECORDINGS ?? "recordings",
+        },
         encoding: "utf8",
       },
     );
   const same = reconcile("same");
   assert.equal(same.status, 0, same.stderr);
+  const v13Same = reconcile("same", "recordings-v0.13.0");
+  assert.equal(v13Same.status, 0, v13Same.stderr);
+  const v13Drift = reconcile("v13-changed", "recordings-v0.13.0");
+  assert.equal(v13Drift.status, 1, v13Drift.stderr);
+  assert.match(
+    v13Drift.stderr,
+    /^runs-at-release-commit\.http: GitHub now answers otherwise at body\.total_count$/m,
+  );
+  // A directory that is no release's recordings is refused before anything is read.
+  for (const named of ["../release-tail/recordings", "/tmp", "recordings-latest"]) {
+    const refused = reconcile("same", named);
+    assert.equal(refused.status, 2, `${named}: ${refused.stderr}`);
+    assert.match(
+      refused.stderr,
+      /is not a recordings directory; next: name one beside this script/,
+    );
+  }
+  const empty = reconcile("same", "recordings-v0.0.0");
+  assert.equal(empty.status, 2, empty.stderr);
+  assert.match(empty.stderr, /recordings-v0\.0\.0 holds no recording; next:/);
   const rewritten = reconcile("rewritten");
   assert.equal(rewritten.status, 0, rewritten.stderr);
   const changed = reconcile("changed");

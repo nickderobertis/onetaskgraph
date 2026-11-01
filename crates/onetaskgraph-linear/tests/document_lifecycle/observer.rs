@@ -1,12 +1,30 @@
 //! A transport observer forwards requests unchanged and records only successful creates.
+//!
+//! Started [`guarded`], it also holds the lane to its run's [`Namespace`]: a request naming
+//! another run's record is answered with that refusal and never reaches Linear.
 use super::journal::Journal;
-use serde_json::Value;
+use super::namespace::Namespace;
+use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
     net::TcpListener,
+    sync::Arc,
 };
 
+#[allow(
+    dead_code,
+    reason = "this module is compiled into both lanes' test binaries, and the asset lane's only observer is the guarded one"
+)]
 pub fn start(upstream: &str, key: &str, journal: Journal) -> String {
+    serve(upstream, key, journal, None)
+}
+
+/// [`start`], refusing every request outside `namespace`.
+pub fn guarded(upstream: &str, key: &str, journal: Journal, namespace: Arc<Namespace>) -> String {
+    serve(upstream, key, journal, Some(namespace))
+}
+
+fn serve(upstream: &str, key: &str, journal: Journal, namespace: Option<Arc<Namespace>>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("loopback observer");
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
     let upstream = upstream.to_owned();
@@ -37,6 +55,18 @@ pub fn start(upstream: &str, key: &str, journal: Journal) -> String {
                     }
                 }
             };
+            if let Some(refusal) = namespace
+                .as_ref()
+                .and_then(|namespace| namespace.admit(&request).err())
+            {
+                let body = json!({"errors":[{"message":refusal}]}).to_string();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 Refused\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                continue;
+            }
             let response = runtime.block_on(
                 client
                     .post(&upstream)
@@ -48,8 +78,11 @@ pub fn start(upstream: &str, key: &str, journal: Journal) -> String {
                 Ok(response) => {
                     let status = response.status().as_u16();
                     let body = runtime.block_on(response.bytes()).unwrap();
-                    if let Ok(value) = serde_json::from_slice(&body) {
+                    if let Ok(value) = serde_json::from_slice::<Value>(&body) {
                         journal.observe(&request, &value);
+                        if let Some(namespace) = &namespace {
+                            namespace.learn(&value);
+                        }
                     }
                     let _ = write!(
                         stream,

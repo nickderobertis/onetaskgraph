@@ -88,9 +88,28 @@ class LabelDelete(NamedTuple):
 class FieldDelete(NamedTuple):
     id: FieldId
 
+RunBoardId = NewType('RunBoardId', str)
+
+class RunBoard(TypedDict):
+    """One of the owner's boards, as the run-board listing answers it."""
+    id: RunBoardId
+    number: int
+    title: str
+
+class RunBoardFault(StrEnum):
+    """How the stand-in may misanswer the run-board listing or a board's deletion."""
+    NO_PAGE_INFO = 'no-page-info'
+    NO_CURSOR = 'no-cursor'
+    REPEATED_CURSOR = 'repeated-cursor'
+    NO_NUMBER = 'no-number'
+    UNCONFIRMED_DELETE = 'unconfirmed-delete'
+
+class BoardDelete(NamedTuple):
+    id: RunBoardId
+
 class Write(NamedTuple):
     method: str
-    target: IssueDelete | ItemDelete | LabelDelete | FieldDelete
+    target: IssueDelete | ItemDelete | LabelDelete | FieldDelete | BoardDelete
 
 class OriginField(TypedDict):
     id: str
@@ -122,6 +141,8 @@ CORE = Repository(declaration('CORE_REPOSITORY'))
 SCRATCH = Repository(declaration('SCRATCH_REPOSITORY'))
 TITLE = declaration('ARTIFACT_PREFIX')
 LABEL = declaration('LABEL_PREFIX')
+RUN_BOARD = declaration('RUN_BOARD_PREFIX')
+RUN_BOARDS_DOCUMENT = declaration('RUN_BOARDS_DOCUMENT')
 DAY = 86_400_000_000
 RestShape = dict[str, 'RestShape | None']
 
@@ -220,6 +241,11 @@ class Github:
         # Every board field besides the origin field, which `origin_field` holds alone.
         self.fields: list[Field | dict] = [{'id': FieldId('status'), 'name': 'Status'}]
         self.fields_next_page = False
+        # The owner's other boards: each `{'id', 'number', 'title'}`. A live session copies the
+        # nominated board into one titled with its stamp.
+        self.run_boards: list[RunBoard] = []
+        self.run_board_queries: list[str] = []
+        self.run_board_fault: RunBoardFault | None = None
         self.field_delete_answer = None
         self.field_delete_status = 200
         # Every way a request or a served body departed from GitHub's description.
@@ -247,6 +273,11 @@ class Github:
         """A board field named the way the live lane names its scratch field."""
         identity = FieldId(f'field:{len(self.fields)}')
         self.fields.append({'id': identity, 'name': LABEL + stamp})
+        return identity
+
+    def run_board(self, stamp: str | None, number: int, title: str | None = None) -> RunBoardId:
+        identity = RunBoardId(f'board:{number}')
+        self.run_boards.append(RunBoard(id=identity, number=number, title=title if title is not None else RUN_BOARD + (stamp or '')))
         return identity
 
     def board_fields(self) -> list:
@@ -348,6 +379,34 @@ class Github:
                 state.requests.append(Request('POST', query))
                 state.authentication.append(Authentication('/graphql', Token(self.headers.get('Authorization', ''))))
                 match query:
+                    case str() if 'projectsV2(' in query:
+                        assert variables['owner'] == BOARD_OWNER, variables
+                        state.run_board_queries.append(variables['query'])
+                        # GitHub's `query` is a search: it answers every board, the template
+                        # among them, and the janitor reads each title back itself.
+                        page = int(variables['after'] or 0)
+                        nodes: list = copy.deepcopy(state.run_boards[page:page + 100])
+                        info: dict = {'hasNextPage': page + 100 < len(state.run_boards), 'endCursor': str(page + 100)}
+                        match state.run_board_fault:
+                            case RunBoardFault.NO_PAGE_INFO:
+                                info = {}
+                            case RunBoardFault.NO_CURSOR:
+                                info = {'hasNextPage': True, 'endCursor': None}
+                            case RunBoardFault.REPEATED_CURSOR:
+                                info = {'hasNextPage': True, 'endCursor': '100'}
+                            case RunBoardFault.NO_NUMBER if nodes:
+                                del nodes[0]['number']
+                        self.reply({'data': {'repositoryOwner': {'projectsV2': {'nodes': nodes, 'pageInfo': info}}}})
+                        return
+                    case str() if 'deleteProjectV2(' in query:
+                        identity = RunBoardId(variables['input']['projectId'])
+                        state.writes.append(Write('POST', BoardDelete(identity)))
+                        if state.run_board_fault is RunBoardFault.UNCONFIRMED_DELETE:
+                            self.reply({'data': {'deleteProjectV2': {'projectV2': {'id': 'another board'}}}})
+                            return
+                        state.run_boards = [v for v in state.run_boards if v['id'] != identity]
+                        self.reply({'data': {'deleteProjectV2': {'projectV2': {'id': identity}}}})
+                        return
                     case str() if query.startswith('query'):
                         board = Board(variables.get('owner'), variables.get('number'))
                         state.boards.add(board)
@@ -539,6 +598,7 @@ class Journeys(unittest.TestCase):
             Request('GET', '/rate_limit'),
             Request('POST', documents['BOARD_DOCUMENT']),
             Request('POST', documents['BOARD_DOCUMENT']),
+            Request('POST', RUN_BOARDS_DOCUMENT),
             Request('GET', f'/repos/{SCRATCH}/issues?state=all&sort=created&direction=asc&per_page=100&page=1'),
             Request('GET', f'/repos/{SCRATCH}/labels?&per_page=100&page=1'),
             Request('GET', f'/repos/{CORE}/actions/runs/123'),
@@ -999,7 +1059,7 @@ class Journeys(unittest.TestCase):
         self.assertEqual(state.status_reads, {321: 1, 999: 1})
         document = re.search(r'pub const DELETE_FIELD_DOCUMENT: &str = "([^"]+)";', SHARED)[1]
         self.assertEqual(sum(request == Request('POST', document) for request in state.requests), 1)
-        self.assertEqual(sum(method == 'POST' and target.startswith('query') for method, target in state.requests), 2)
+        self.assertEqual(sum(method == 'POST' and target.startswith('query') and 'projectsV2(' not in target for method, target in state.requests), 2)
         # The next pass finds the finished run's field gone and the active run's still owned.
         state.writes.clear()
         self.assert_success(state.run())
@@ -1090,12 +1150,14 @@ class Journeys(unittest.TestCase):
         state.artifact(SCRATCH, own)
         state.artifact(SCRATCH, own, design=True)
         own_field = state.field(own)
+        own_board = state.run_board(own, 40)
         # Another active run, an earlier attempt of this run and a finished run are not this
         # run's to remove, however their runs read: the scheduled pass decides those.
         kept = [f'ci-777-1-{NOW}', f'ci-555-1-{NOW - DAY}', f'ci-888-1-{NOW - DAY}']
-        for stamp in kept:
+        for number, stamp in enumerate(kept, 41):
             state.artifact(SCRATCH, stamp)
             state.field(stamp)
+            state.run_board(stamp, number)
         state.status.update({RunId(777): Status.IN_PROGRESS, RunId(555): Status.IN_PROGRESS, RunId(888): Status.COMPLETED})
         machine = state.artifact(SCRATCH, f'1-1-{NOW - DAY}')
         result = state.run(
@@ -1110,6 +1172,8 @@ class Journeys(unittest.TestCase):
         self.assertEqual(sum(isinstance(target, IssueDelete) for target in removed), 2)
         self.assertEqual(sum(isinstance(target, LabelDelete) for target in removed), 1)
         self.assertEqual([target for target in removed if isinstance(target, FieldDelete)], [FieldDelete(own_field)])
+        self.assertEqual([target for target in removed if isinstance(target, BoardDelete)], [BoardDelete(own_board)])
+        self.assertEqual(sorted(v['number'] for v in state.run_boards), [41, 42, 43])
         titles = [issue['title'] for issue in state.issues[SCRATCH]]
         self.assertFalse([title for title in titles if own in title])
         for stamp in kept:
@@ -1188,13 +1252,70 @@ class Journeys(unittest.TestCase):
             pages = [path for method, path in requests if method == 'GET' and urlparse(path).path == f'/repos/{repo}/{kind}']
             self.assertEqual(len(pages), size // 100 + 1)
             self.assertEqual([int(parse_qs(urlparse(path).query)['page'][0]) for path in pages], list(range(1, len(pages) + 1)))
-        self.assertEqual(sum(method == 'POST' and path.startswith('query') for method, path in requests), board_pages)
+        self.assertEqual(sum(method == 'POST' and path.startswith('query') and 'projectsV2(' not in path for method, path in requests), board_pages)
         self.assertLessEqual(sum(method == 'GET' for method, _ in requests), 250)
         self.assertLessEqual(sum(method == 'POST' and path.startswith('query') for method, path in requests), 50)
         self.assertLessEqual(len(state.writes) - writes, 150)
         self.assertEqual(len(state.writes), 130)
         self.assertEqual(state.issues[SCRATCH], protected)
         self.assertTrue(any(v['id'] == 'draft' for v in state.items))
+
+    def test_a_run_board_goes_only_once_its_ci_run_reads_completed(self):
+        state = Github()
+        finished = state.run_board(f'ci-123-1-{NOW}', 20)
+        state.status[RunId(123)] = Status.COMPLETED
+        # A run still going, a machine stamp, the template itself and boards that are not run
+        # boards are never removed, however they read.
+        state.run_board(f'ci-456-1-{NOW}', 21)
+        state.status[RunId(456)] = Status.IN_PROGRESS
+        state.run_board(f'1-1-{NOW - DAY}', 22)
+        state.run_board(None, BOARD_NUMBER, title=RUN_BOARD + f'ci-123-1-{NOW}')
+        state.run_board(None, 23, title='onetaskgraph live board')
+        state.run_board(None, 24, title='Roadmap')
+        state.run_board(None, 25, title=RUN_BOARD + 'not-a-stamp')
+        self.assert_success(state.run())
+        self.assertEqual(state.writes, [Write('POST', BoardDelete(finished))])
+        self.assertEqual(state.run_board_queries, [RUN_BOARD.strip()])
+        self.assertEqual(sorted(v['number'] for v in state.run_boards), [BOARD_NUMBER, 21, 22, 23, 24, 25])
+        # The next pass reads the run again and, while it is going, writes nothing more.
+        state.status[RunId(456)] = Status.IN_PROGRESS
+        writes = len(state.writes)
+        self.assert_success(state.run())
+        self.assertEqual(len(state.writes), writes)
+
+    def test_a_run_board_listing_or_deletion_that_does_not_read_soundly_fails_closed(self):
+        for fault, said in (
+            (RunBoardFault.NO_PAGE_INFO, 'run board pageInfo missing'),
+            (RunBoardFault.NO_CURSOR, 'run board next cursor missing'),
+            (RunBoardFault.REPEATED_CURSOR, 'run board page did not advance'),
+            (RunBoardFault.NO_NUMBER, 'run board number missing'),
+        ):
+            state = Github()
+            state.run_board(f'ci-123-1-{NOW}', 20)
+            state.status[RunId(123)] = Status.COMPLETED
+            state.artifact(SCRATCH, f'ci-123-1-{NOW}', run=123)
+            state.run_board_fault = fault
+            result = state.run()
+            self.assert_failed(result)
+            self.assertIn(said, result.stderr, fault)
+            # Enumeration came before any write, so nothing at all was removed.
+            self.assertFalse(state.writes, fault)
+        state = Github()
+        state.run_board(f'ci-123-1-{NOW}', 20)
+        state.status[RunId(123)] = Status.COMPLETED
+        state.run_board_fault = RunBoardFault.UNCONFIRMED_DELETE
+        result = state.run()
+        self.assert_failed(result)
+        self.assertIn('did not confirm the requested deletion', result.stderr)
+
+    def test_run_boards_are_walked_across_pages(self):
+        state = Github()
+        for number in range(30, 131):
+            state.run_board(f'ci-{number}-1-{NOW}', number)
+            state.status[RunId(number)] = Status.COMPLETED
+        self.assert_success(state.run())
+        self.assertEqual(len(state.run_board_queries), 2)
+        self.assertEqual(state.run_boards, [])
 
 if __name__ == '__main__':
     unittest.main()

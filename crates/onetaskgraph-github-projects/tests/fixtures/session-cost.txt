@@ -1,5 +1,5 @@
-requests 233
-node count 275937
+requests 240
+node count 275742
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -12,7 +12,7 @@ requests per call
     3       0  adding a comment
     9       0  adding an issue to the board
     2     100  board page size probe
-   10       0  contract schema introspection
+   12       0  contract schema introspection
     1       0  creating a board single-select field with its options
     9       0  creating an issue
     1       0  deleting a comment
@@ -21,13 +21,16 @@ requests per call
     5       0  filing an issue under its project
     8       0  live artifact cleanup
     3     300  live artifact lookup
+    1       0  live board copy
+    5       5  live board copy item count
+    1       0  live board deletion
     2      40  live board item lookup
     1       0  live board text field write
     4       0  live label attachment
-    1       0  live origin field cleanup
     1       0  live origin field creation
     1       0  live scratch field removal
     1       0  live scratch field value
+    1       0  live template lookup
     1     100  node-count and point-cost reconciliation while listing a repository's issues newest first for a create key
     1     915  node-count and point-cost reconciliation while looking up the items copied from one origin
     1    3100  node-count and point-cost reconciliation while looking up the items copied from several origins, and what creating one reads
@@ -75,5 +78,5 @@ requests per call
     2   20200  terminal status read-back
     9       0  the GraphQL rateLimit object
     6       0  updating an issue
-    4     400  writable field discovery
+    2     200  writable field discovery
    10       0  writing a board field

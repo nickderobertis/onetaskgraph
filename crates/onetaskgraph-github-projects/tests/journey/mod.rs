@@ -19,6 +19,7 @@
 
 pub mod budget;
 pub mod quota;
+pub mod run_board;
 
 use std::{
     collections::BTreeMap,
@@ -314,6 +315,10 @@ async fn graphql_answer_at(
     variables: Value,
     attempt: u32,
 ) -> Result<Value, Refusal> {
+    // Held to this session's own board before anything is sent: see `run_board`.
+    if let Err(refusal) = run_board::admit(query, &variables) {
+        return Err(Refusal::Answered(refusal, None));
+    }
     let priced = SESSION.priced_document(query);
     let query = priced.as_ref();
     let sending =
@@ -370,6 +375,9 @@ async fn graphql_answer_at(
         }
     };
     let parsed = serde_json::from_str::<Value>(&body);
+    if let Ok(answer) = &parsed {
+        run_board::learn(answer);
+    }
     // An actual alias is selected separately from the hypothetical reconciliation price.
     let reported_cost = parsed.as_ref().ok().and_then(|response| {
         if query.contains("actualCost:rateLimit(dryRun:false)") {
@@ -816,7 +824,7 @@ pub fn dry_run_variables(document: &str) -> Value {
 /// The one board text field this source keeps a copy's origin in.
 const ORIGIN_FIELD: &str = "onetaskgraph.origin";
 
-async fn writable_fields(token: &str, project_id: &str) -> Result<Vec<Value>, String> {
+pub async fn writable_fields(token: &str, project_id: &str) -> Result<Vec<Value>, String> {
     let mut after = Value::Null;
     let mut fields = Vec::new();
     loop {
@@ -863,7 +871,7 @@ async fn writable_fields(token: &str, project_id: &str) -> Result<Vec<Value>, St
 /// `Status` option is called — were two separate walks of the same connection and one
 /// answers both. Nothing this creates can change what the other reads: the `Status` field
 /// was on the board before this ran.
-async fn ensure_origin_field(
+pub async fn ensure_origin_field(
     token: &str,
     project_id: &str,
     fields: &[Value],
@@ -2056,7 +2064,7 @@ fn type_signature(value: &Value) -> Option<String> {
 /// journey believes GitHub's mutation surface to be: the credentialed drive holds GitHub to
 /// it, and the fixture drive answers introspection *from* it, so the stand-in cannot answer
 /// a contract the real check is not making.
-pub const MUTATION_CONTRACT: [(&str, &str, &str); 16] = [
+pub const MUTATION_CONTRACT: [(&str, &str, &str); 19] = [
     ("createIssue", "CreateIssueInput", "CreateIssuePayload"),
     (
         "addProjectV2ItemById",
@@ -2113,6 +2121,22 @@ pub const MUTATION_CONTRACT: [(&str, &str, &str); 16] = [
         "DeleteIssueCommentInput",
         "DeleteIssueCommentPayload",
     ),
+    // A session's own board: the copy it works on, its deletion, and the template's drafts.
+    (
+        "copyProjectV2",
+        "CopyProjectV2Input",
+        "CopyProjectV2Payload",
+    ),
+    (
+        "deleteProjectV2",
+        "DeleteProjectV2Input",
+        "DeleteProjectV2Payload",
+    ),
+    (
+        "addProjectV2DraftIssue",
+        "AddProjectV2DraftIssueInput",
+        "AddProjectV2DraftIssuePayload",
+    ),
 ];
 
 /// Every input and payload type those mutations reach, and the one board type a write reads
@@ -2121,7 +2145,7 @@ pub const MUTATION_CONTRACT: [(&str, &str, &str); 16] = [
 ///
 /// The `bool` is whether the type is an input — GitHub spells an input type's members
 /// `inputFields` and an output type's `fields`, and asking for the wrong one answers null.
-pub const CONTRACT_TYPES: [(&str, bool, &[&str]); 35] = [
+pub const CONTRACT_TYPES: [(&str, bool, &[&str]); 42] = [
     ("CreateIssueInput", true, &["repositoryId", "title", "body"]),
     (
         "AddProjectV2ItemByIdInput",
@@ -2192,6 +2216,22 @@ pub const CONTRACT_TYPES: [(&str, bool, &[&str]); 35] = [
     // value can be written to from a number or date field of the same GraphQL type, and what
     // `sources fields` reads to report a conflict — so GitHub is held to it here too.
     ("ProjectV2Field", false, &["id", "name", "dataType"]),
+    (
+        "CopyProjectV2Input",
+        true,
+        &["projectId", "ownerId", "title", "includeDraftIssues"],
+    ),
+    ("DeleteProjectV2Input", true, &["projectId"]),
+    ("AddProjectV2DraftIssueInput", true, &["projectId", "title"]),
+    ("CopyProjectV2Payload", false, &["projectV2"]),
+    ("DeleteProjectV2Payload", false, &["projectV2"]),
+    ("AddProjectV2DraftIssuePayload", false, &["projectItem"]),
+    // What the janitor's listing of a session's leftover board copies answers in.
+    (
+        "ProjectV2Connection",
+        false,
+        &["nodes", "pageInfo", "totalCount"],
+    ),
 ];
 
 /// Every enum a read or a write names a member of, with the members it names.
@@ -2256,6 +2296,13 @@ pub fn contract_schema_documents() -> Vec<String> {
         ),
         String::from(
             "DraftIssue:__type(name:\"DraftIssue\"){fields{name type{kind name \
+         ofType{kind name ofType{kind name}}}args{name type{kind name \
+         ofType{kind name ofType{kind name}}}}}}",
+        ),
+        // A copy's owner id, and the listing — with its arguments — the janitor finds a
+        // session's leftover board copies by.
+        String::from(
+            "User:__type(name:\"User\"){fields{name type{kind name \
          ofType{kind name ofType{kind name}}}args{name type{kind name \
          ofType{kind name ofType{kind name}}}}}}",
         ),
@@ -2356,6 +2403,44 @@ async fn verify_contract_schema<Recheck: std::future::Future<Output = ()>>(
         if actual.as_deref() != Some(expected) {
             return Err(format!(
                 "GitHub DraftIssue.projectV2Items({name}:) changed: expected {expected}, got {actual:?}"
+            ));
+        }
+    }
+    let user_fields = response
+        .pointer("/data/User/fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "GitHub schema has no User fields".to_owned())?;
+    let user_field = |name: &str| {
+        user_fields
+            .iter()
+            .find(|field| field.get("name").and_then(Value::as_str) == Some(name))
+            .ok_or_else(|| format!("GitHub User has no {name} field"))
+    };
+    if user_field("id")?
+        .get("type")
+        .and_then(type_signature)
+        .as_deref()
+        != Some("ID!")
+    {
+        return Err("GitHub User.id changed its type".to_owned());
+    }
+    let boards = user_field("projectsV2")?;
+    if boards.get("type").and_then(type_signature).as_deref() != Some("ProjectV2Connection!") {
+        return Err("GitHub User.projectsV2 changed its return type".to_owned());
+    }
+    for (name, expected) in [("after", "String"), ("first", "Int"), ("query", "String")] {
+        let actual = boards
+            .get("args")
+            .and_then(Value::as_array)
+            .and_then(|args| {
+                args.iter()
+                    .find(|arg| arg.get("name").and_then(Value::as_str) == Some(name))
+            })
+            .and_then(|arg| arg.get("type"))
+            .and_then(type_signature);
+        if actual.as_deref() != Some(expected) {
+            return Err(format!(
+                "GitHub User.projectsV2({name}:) changed: expected {expected}, got {actual:?}"
             ));
         }
     }
@@ -2500,6 +2585,17 @@ pub fn contract_field_types(type_name: &str) -> &'static [(&'static str, &'stati
             &[("projectV2Field", "ProjectV2FieldConfiguration")]
         }
         "ProjectV2Field" => &[("dataType", "ProjectV2FieldType!")],
+        "CopyProjectV2Input" => &[
+            ("projectId", "ID!"),
+            ("ownerId", "ID!"),
+            ("title", "String!"),
+            ("includeDraftIssues", "Boolean"),
+        ],
+        "DeleteProjectV2Input" => &[("projectId", "ID!")],
+        "AddProjectV2DraftIssueInput" => &[("projectId", "ID!"), ("title", "String!")],
+        "CopyProjectV2Payload" | "DeleteProjectV2Payload" => &[("projectV2", "ProjectV2")],
+        "AddProjectV2DraftIssuePayload" => &[("projectItem", "ProjectV2Item")],
+        "ProjectV2Connection" => &[("pageInfo", "PageInfo!"), ("totalCount", "Int!")],
         _ => &[],
     }
 }
@@ -4779,6 +4875,43 @@ pub async fn enter(
     Ok(())
 }
 
+/// The operator's template setup in place of the journey (`just github-live-template`): the
+/// lane's own admission and credential gate, then [`run_board::setup_template`], printed.
+pub async fn enter_template(
+    read: &dyn Fn(&str) -> Option<String>,
+    setup: run_board::TemplateSetup,
+) -> Result<(), String> {
+    let (token, owner, project_number) = match admit(read)? {
+        Admission::Run {
+            token,
+            owner,
+            project_number,
+            ..
+        } => (token, owner, project_number),
+        Admission::Skip(reason) => {
+            return Err(format!("the template setup cannot run: {reason}"));
+        }
+    };
+    let session = onetaskgraph_live::Session::open(
+        crate::lane::SESSION_NAME,
+        token,
+        onetaskgraph_live::Exclusivity::Shared,
+    )
+    .unwrap_or_else(|declined| declined.refuse());
+    let token = session.credential().expose().to_owned();
+    for line in run_board::setup_template(
+        &run_board::main_sender(&token),
+        &owner,
+        project_number,
+        setup,
+    )
+    .await?
+    {
+        say(&line);
+    }
+    Ok(())
+}
+
 /// Drives the whole session — schema verification, board and field lookups, every declared
 /// capability, this run's own cleanup and the orphan sweep — against whatever [`Endpoints`]
 /// names.
@@ -4857,6 +4990,19 @@ pub async fn run(nomination: Nomination) {
     )
     .await
     .unwrap_or_else(|declined| declined.refuse());
+    // The nominated board is the template; this session works on a copy of its own, which
+    // every request below is held to and which is deleted however the session ends.
+    let template = project_number;
+    let board = run_board::copy(
+        &run_board::main_sender(&token),
+        &owner,
+        template,
+        &writer.stamp(stamp_micros),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("the GitHub Projects live lane cannot copy its board: {error}"));
+    let board_guard = run_board::Guard::new(&token, &board);
+    let project_number = board.number;
     let source = onetaskgraph_github_projects::Plugin
         .build_recording_into(
             &SourceName::new("github-live").unwrap(),
@@ -5041,14 +5187,10 @@ pub async fn run(nomination: Nomination) {
             )
             .await
             .map_err(|declined| declined.to_string());
-            let mine = remove_live_state(
-                &token,
-                &project_id,
-                &repository,
-                &run.own,
-                origin_field_created,
-            )
-            .await;
+            // The board's own items and fields go with the board; its issues and labels live
+            // in the scratch repository and go by this run's stamp.
+            let _ = origin_field_created;
+            let mine = remove_live_state(&token, &project_id, &repository, &run.own, false).await;
             // Made as this process's machine run whichever stamp it wrote: what it can
             // recover is a machine-stamped orphan of THIS machine, and on a fresh hosted
             // runner that is none.
@@ -5070,7 +5212,10 @@ pub async fn run(nomination: Nomination) {
                 &Sweep::of(Run::current(), now_micros()),
             )
             .await;
+            let deleted = run_board::delete(&run_board::main_sender(&token), &board).await;
+            board_guard.disarm();
             let mine = mine
+                .and(deleted)
                 .and(cleanup_telemetry)
                 .and(orphan_telemetry)
                 .and(cleanup_budget)

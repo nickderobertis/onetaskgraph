@@ -35,8 +35,9 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use onetaskgraph_github_live::{
-    BOARD_NUMBER, BOARD_OWNER, DELETE_FIELD_DOCUMENT, RunStatus, SCRATCH_REPOSITORY, fielded_stamp,
-    labelled_stamp, run_path, titled_stamp,
+    BOARD_NUMBER, BOARD_OWNER, DELETE_BOARD_DOCUMENT, DELETE_FIELD_DOCUMENT, RUN_BOARD_PREFIX,
+    RUN_BOARDS_DOCUMENT, RunStamp, RunStatus, SCRATCH_REPOSITORY, fielded_stamp, labelled_stamp,
+    run_board_stamp, run_path, titled_stamp,
 };
 use onetaskgraph_github_projects::DESIGN_TITLE_PREFIX;
 use onetaskgraph_live::artifact::{CiRun, CiStamp};
@@ -210,6 +211,8 @@ enum GraphqlOperation {
     DeleteIssue { id: IssueId },
     DeleteItem { board: BoardId, id: ItemId },
     DeleteField { id: FieldId },
+    RunBoards { after: Option<Cursor> },
+    DeleteBoard { id: BoardId },
 }
 impl GraphqlOperation {
     fn payload(&self) -> (&'static str, Value) {
@@ -226,11 +229,24 @@ impl GraphqlOperation {
                 json!({"input":{"projectId":board.0,"itemId":id.0}}),
             ),
             Self::DeleteField { id } => (DELETE_FIELD_DOCUMENT, json!({"input":{"fieldId":id.0}})),
+            Self::RunBoards { after } => (
+                RUN_BOARDS_DOCUMENT,
+                json!({"owner":BOARD_OWNER,"query":RUN_BOARD_PREFIX.trim(),"after":after.as_ref().map(|cursor| &cursor.0)}),
+            ),
+            Self::DeleteBoard { id } => {
+                (DELETE_BOARD_DOCUMENT, json!({"input":{"projectId":id.0}}))
+            }
         }
     }
     fn confirm(&self, value: &Value) -> Result<(), String> {
         let confirmed = match self {
-            Self::Board { .. } => true,
+            Self::Board { .. } | Self::RunBoards { .. } => true,
+            Self::DeleteBoard { id } => {
+                value
+                    .pointer("/data/deleteProjectV2/projectV2/id")
+                    .and_then(Value::as_str)
+                    == Some(id.0.as_str())
+            }
             Self::DeleteIssue { .. } => {
                 value
                     .pointer("/data/deleteIssue/repository/nameWithOwner")
@@ -279,6 +295,8 @@ pub struct Report {
 
 #[derive(Clone)]
 enum Delete {
+    /// A live session's own board copy, with every item and field it held.
+    Board(BoardId),
     Issue(IssueId),
     Item(ItemId),
     Label(LabelName),
@@ -370,7 +388,7 @@ impl Janitor {
 
     async fn graphql(&mut self, operation: GraphqlOperation) -> Result<Value, String> {
         match &operation {
-            GraphqlOperation::Board { .. } => {
+            GraphqlOperation::Board { .. } | GraphqlOperation::RunBoards { .. } => {
                 if self.report.graphql_queries == GRAPHQL_READ_LIMIT {
                     return Err(format!(
                         "GraphQL read limit {GRAPHQL_READ_LIMIT} exhausted before board enumeration completed"
@@ -380,7 +398,8 @@ impl Janitor {
             }
             GraphqlOperation::DeleteIssue { .. }
             | GraphqlOperation::DeleteItem { .. }
-            | GraphqlOperation::DeleteField { .. } => self.pace().await?,
+            | GraphqlOperation::DeleteField { .. }
+            | GraphqlOperation::DeleteBoard { .. } => self.pace().await?,
         }
         let (query, variables) = operation.payload();
         let response = self
@@ -589,8 +608,68 @@ impl Janitor {
         Ok(())
     }
 
+    /// Lists every board copy a CI session titled with its stamp, never the nominated template
+    /// and never a board whose title is not exactly a run board's.
+    async fn run_boards(&mut self, listed: &mut Listed) -> Result<(), String> {
+        let mut after = None;
+        let mut cursors = BTreeSet::new();
+        loop {
+            let value = self
+                .graphql(GraphqlOperation::RunBoards {
+                    after: after.take(),
+                })
+                .await?;
+            let boards = value
+                .pointer("/data/repositoryOwner/projectsV2")
+                .ok_or("run boards missing")?;
+            for node in boards
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or("run board nodes missing")?
+            {
+                let number = node
+                    .get("number")
+                    .and_then(Value::as_u64)
+                    .ok_or("run board number missing")?;
+                if number == u64::from(BOARD_NUMBER) {
+                    continue;
+                }
+                let id = BoardId(identifier(node, "id")?);
+                // A machine-stamped copy is its own machine's to sweep, never this pass's.
+                if let Some(RunStamp::Ci(owner)) = run_board_stamp(text(node, "title")?) {
+                    listed.push(Artifact {
+                        owner,
+                        delete: Delete::Board(id),
+                    });
+                }
+            }
+            match boards
+                .pointer("/pageInfo/hasNextPage")
+                .and_then(Value::as_bool)
+            {
+                Some(false) => return Ok(()),
+                Some(true) => {
+                    let cursor = boards
+                        .pointer("/pageInfo/endCursor")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .ok_or("run board next cursor missing")?;
+                    if !cursors.insert(cursor.to_owned()) {
+                        return Err("run board page did not advance".into());
+                    }
+                    after = Some(Cursor(cursor.to_owned()));
+                }
+                None => return Err("run board pageInfo missing".into()),
+            }
+        }
+    }
+
     async fn delete(&mut self, delete: &Delete) -> Result<(), String> {
         match delete {
+            Delete::Board(id) => {
+                self.graphql(GraphqlOperation::DeleteBoard { id: id.clone() })
+                    .await?;
+            }
             Delete::Issue(id) => {
                 self.graphql(GraphqlOperation::DeleteIssue { id: id.clone() })
                     .await?;
@@ -810,6 +889,7 @@ pub async fn run_with_clock(config: Config, clock: Arc<dyn Clock>) -> Result<Rep
     }
     let mut listed = Listed::default();
     janitor.board(&mut listed).await?;
+    janitor.run_boards(&mut listed).await?;
     janitor.repositories(&mut listed).await?;
     // A cancelled run removes exactly its own attempt's stamps: another run's, and another
     // attempt of its own, are the scheduled pass's once their run reads `completed`.

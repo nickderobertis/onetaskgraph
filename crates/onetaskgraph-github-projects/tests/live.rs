@@ -43,6 +43,14 @@ async fn real_projects_v2_contract_writes_and_leaves_no_residue() {
     // budget one, inside `journey::run`, which `scripts/check-budget-decline.sh` drives
     // through to a red check without a credential. A session that is refused did not run and
     // did not pass, and says so.
+    // The operator's template setup, asked for by `just github-live-template`, in place of
+    // the journey.
+    if let Some(setup) = journey::run_board::TemplateSetup::read().unwrap() {
+        journey::enter_template(&|variable| env::var(variable).ok(), setup)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        return;
+    }
     let mut recording = None;
     journey::enter(
         &|variable| match env::var(variable) {
@@ -200,7 +208,7 @@ fn the_actual_main_entry_point_reaches_only_its_loopback_allowance_boundary() {
     let said = String::from_utf8_lossy(&output.stderr);
     assert!(said.contains("DID NOT RUN"), "{said}");
     // The design total (`tests/fixtures/session-cost.md`).
-    assert!(said.contains("estimated to spend 327"), "{said}");
+    assert!(said.contains("estimated to spend 343"), "{said}");
 }
 
 #[test]

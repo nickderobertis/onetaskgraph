@@ -648,6 +648,13 @@ impl HeldComment {
 
 /// Everything the fixture remembers between requests.
 struct State {
+    /// Every run board a live session copied from the template, by title, and whether that
+    /// session has since deleted it. This double holds one board, so one is live at a time.
+    run_boards: Vec<(String, bool)>,
+    /// Every request, after a session copied its board, that named the template it copied
+    /// from — by number in a board lookup, or by id — other than to copy it. Whoever sent it,
+    /// the lane's own helpers or the plugin source under test, it left the session's namespace.
+    trespasses: Vec<String>,
     items: Vec<Item>,
     /// Every comment on every issue this board holds, oldest first.
     comments: Vec<HeldComment>,
@@ -1409,6 +1416,8 @@ fn board(items: Vec<Item>) -> Fixture {
 
 fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixture {
     let state = Arc::new(Mutex::new(State {
+        run_boards: Vec::new(),
+        trespasses: Vec::new(),
         items,
         comments: Vec::new(),
         comment_ticks: 0,
@@ -1734,6 +1743,15 @@ fn repository_node_id(slug: &str) -> String {
 }
 
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
+    {
+        let mut held = state.lock().unwrap();
+        let copying = query.contains("LiveTemplate(") || query.contains("LiveCopyBoard(");
+        let names_template = variables.to_string().contains("\"PVT_template\"")
+            || (query.contains("projectV2(number:") && variables["number"] == json!(6));
+        if !held.run_boards.is_empty() && !copying && names_template {
+            held.trespasses.push(query.chars().take(120).collect());
+        }
+    }
     if query.contains("rateLimit{cost nodeCount limit remaining}") {
         return board::answer_a_stateless_session_call(query, variables, Pricing::AsComputed)
             .unwrap();
@@ -3021,6 +3039,46 @@ fn answer_a_session_call(
         board::answer_a_stateless_session_call(query, variables, Pricing::AsComputed)
     {
         return Some(answered);
+    }
+    // The live session's own board: the template (#6) it copies, the copy (#7) it then
+    // works on — the board this double holds — and the copy's deletion at its end.
+    if query.contains("query LiveTemplate(") {
+        assert_eq!(variables["owner"], json!("octo-org"));
+        assert_eq!(variables["number"], json!(6));
+        return Some(json!({"repositoryOwner":{"id":"U_octo","projectV2":{"id":"PVT_template"}}}));
+    }
+    if query.contains("mutation LiveCopyBoard(") {
+        assert_eq!(input["projectId"], json!("PVT_template"));
+        assert_eq!(input["ownerId"], json!("U_octo"));
+        assert_eq!(input["includeDraftIssues"], json!(true));
+        let title = input["title"].as_str().unwrap().to_owned();
+        assert!(
+            onetaskgraph_github_live::run_board_stamp(&title).is_some(),
+            "{title}"
+        );
+        assert!(
+            state.run_boards.iter().all(|(_, deleted)| *deleted),
+            "a session copied a board while another session's copy was live"
+        );
+        state.run_boards.push((title.clone(), false));
+        return Some(
+            json!({"copyProjectV2":{"projectV2":{"id":"PVT_board","number":7,"title":title}}}),
+        );
+    }
+    if query.contains("query LiveRunBoardItems(") {
+        assert_eq!(variables["number"], json!(7));
+        return Some(json!({"repositoryOwner":{"projectV2":{"id":"PVT_board",
+            "items":{"totalCount":state.items.len()}}}}));
+    }
+    if query.contains("mutation LiveDeleteBoard(") {
+        assert_eq!(input["projectId"], json!("PVT_board"));
+        let board = state
+            .run_boards
+            .last_mut()
+            .expect("a board deleted after it was copied");
+        assert!(!board.1, "a run board is deleted once");
+        board.1 = true;
+        return Some(json!({"deleteProjectV2":{"projectV2":{"id":"PVT_board"}}}));
     }
     // The lane's own board metadata lookup, distinct from the production item walk:
     // `graphql::BOARD` reaches `repositoryOwner` too, and answering it here would hand the
@@ -12872,6 +12930,133 @@ async fn a_mutation_refused_for_a_rate_limit_is_retried_and_lands() {
     );
 }
 
+/// GitHub's answer to a write that collided with another change to the same ordering, as the
+/// credentialed lane read it on 2026-10-31: an HTTP 200 whose `errors` say so.
+fn temporary_conflict(operation: &str) -> Refusal {
+    Refusal {
+        status: "200 OK",
+        headers: String::new(),
+        body: json!({
+            "data": { operation: null },
+            "errors": [{
+                "type": "UNPROCESSABLE",
+                "path": [operation],
+                "message": "Your attempt to move this item created a temporary conflict. \
+                            Please try again."
+            }]
+        })
+        .to_string(),
+    }
+}
+
+#[tokio::test]
+async fn a_write_github_answers_with_a_temporary_conflict_is_retried_and_lands() {
+    // The defect: GitHub asks for the write again, and the source reported it as a refusal,
+    // which failed the credentialed lane's document write in run 41229550836. A source still
+    // doing that fails this write and sends `addProjectV2ItemById` once.
+    let fixture = board(vec![]);
+    fixture.script_for(
+        "addProjectV2ItemById",
+        vec![temporary_conflict("addProjectV2ItemById")],
+    );
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":60,"retry_budget_ms":5_000}),
+    );
+    let started = Instant::now();
+    let landed = source
+        .write_task(&write(task(
+            "T-1",
+            "Publish",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect("the write past the conflict GitHub asked to retry");
+    assert!(
+        started.elapsed() >= Duration::from_millis(60),
+        "the retry did not wait out the backoff"
+    );
+    assert!(fixture.holds(&landed.0), "the retried write did not land");
+    assert_eq!(
+        fixture.requests("addProjectV2ItemById"),
+        2,
+        "the conflicted write was not retried"
+    );
+    assert_eq!(
+        fixture.requests("createIssue"),
+        1,
+        "the retry replayed the create before it"
+    );
+}
+
+#[tokio::test]
+async fn a_create_github_answers_with_a_temporary_conflict_is_reported_rather_than_replayed() {
+    // A create's conflict cannot say the issue was not made, so replaying it could make two.
+    let fixture = board(vec![]);
+    fixture.script_for("createIssue", vec![temporary_conflict("createIssue")]);
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":60,"retry_budget_ms":5_000}),
+    );
+    let error = source
+        .write_task(&write(task(
+            "T-1",
+            "Publish",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect_err("a conflicted create is reported");
+    let SourceError::Unavailable { message } = &error else {
+        panic!("a conflicted create was not reported as unavailable: {error:?}");
+    };
+    assert!(message.contains("temporary conflict"), "{message}");
+    assert_eq!(
+        fixture.requests("createIssue"),
+        1,
+        "a conflicted create was replayed"
+    );
+}
+
+#[tokio::test]
+async fn a_temporary_conflict_that_never_clears_ends_in_a_diagnostic_within_the_budget() {
+    let fixture = board(vec![]);
+    fixture.script_for(
+        "addProjectV2ItemById",
+        (0..50)
+            .map(|_| temporary_conflict("addProjectV2ItemById"))
+            .collect(),
+    );
+    let source = paced(
+        &fixture.endpoint,
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":50,"retry_budget_ms":300}),
+    );
+    let started = Instant::now();
+    let error = source
+        .write_task(&write(task(
+            "T-1",
+            "Publish",
+            status(StatusCategory::Todo, "Todo"),
+        )))
+        .await
+        .expect_err("a conflict that never clears");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the bounded schedule did not end"
+    );
+    let SourceError::Unavailable { message } = &error else {
+        panic!("an unending conflict was not reported as unavailable: {error:?}");
+    };
+    assert!(
+        message.contains("temporary conflict") && message.contains("next:"),
+        "{message}"
+    );
+    assert!(
+        (2..50).contains(&fixture.requests("addProjectV2ItemById")),
+        "the conflict was not retried within its budget: {}",
+        fixture.requests("addProjectV2ItemById")
+    );
+}
+
 #[tokio::test]
 async fn every_wording_github_refuses_a_burst_with_is_read_as_the_secondary_limiter() {
     // GitHub has renamed this limiter and reworded its refusal more than once, and the
@@ -15106,15 +15291,17 @@ async fn a_whole_session_of_the_live_journey_costs_what_the_record_beside_it_say
         settle: std::time::Duration::ZERO,
         fixture_wait: journey::STAND_IN_FIXTURE_WAIT,
     });
+    // Board #6 is the template the session copies; the copy it works on is #7, which is the
+    // board this double holds.
     journey::run(journey::Nomination {
         token: "test-token".to_owned(),
         owner: "octo-org".to_owned(),
-        project_number: 7,
+        project_number: 6,
         repository: "acme/work".to_owned(),
         writer: match lane::admit(&|name| match name {
             "GH_PROJECTS_TOKEN" => Some("test-token".to_owned()),
             "GH_PROJECTS_OWNER" => Some("octo-org".to_owned()),
-            "GH_PROJECTS_NUMBER" => Some("7".to_owned()),
+            "GH_PROJECTS_NUMBER" => Some("6".to_owned()),
             "GH_PROJECTS_REPOSITORY" => Some("acme/work".to_owned()),
             "GITHUB_ACTIONS" => Some("true".to_owned()),
             "GITHUB_RUN_ID" => Some("37616803489".to_owned()),
@@ -22213,6 +22400,20 @@ fn live_pair_fixture_child() {
     std::fs::rename(&staged, &ready).unwrap();
     let mut done = String::new();
     std::io::stdin().read_to_string(&mut done).unwrap();
+    // Every board a session copied for itself is gone by the time the pair is done with it,
+    // whichever way that session ended.
+    let boards = fixture.state.lock().unwrap().run_boards.clone();
+    assert!(
+        boards.iter().all(|(_, deleted)| *deleted),
+        "a live session left its board copy behind: {boards:?}"
+    );
+    // And no request of either session, its plugin source's included, named the template
+    // once it had a board of its own.
+    let trespasses = fixture.state.lock().unwrap().trespasses.clone();
+    assert!(
+        trespasses.is_empty(),
+        "a live session named the template outside its copy: {trespasses:?}"
+    );
     // Measured here, by the board, from when its search first left the task out: the journey's
     // own account of how long it waited is what is being checked, so it is not the evidence.
     if fixture.state.lock().unwrap().search_withheld.is_some() {

@@ -2,8 +2,12 @@
 // committed fixture. It runs by hand, never in a gate — it reaches GitHub, and what GitHub answers
 // moves — and says, for each recording, whether GitHub still answers what was recorded:
 //
-//   node .github/policy/tests/fixtures/release-tail/reconcile.mjs
+//   node .github/policy/tests/fixtures/release-tail/reconcile.mjs [recordings-v0.13.0]
 //
+// Each release's recordings are a directory of their own beside this script — `recordings`, the
+// default, for v0.12.13, and `recordings-v0.13.0` — reconciled one directory per run, because two
+// releases record the same paths (the releases listing, the closed pull requests) as GitHub
+// answered them at different moments.
 // Needs `gh` signed in with read access to this repository. The recorded 401 is re-fetched under
 // an invalid token, as it was recorded. Ignored, and only these, because GitHub rewrites them on
 // every answer or with no change to the record: the response's date, etag, last-modified,
@@ -12,7 +16,16 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 
-const RECORDINGS = new URL("./recordings/", import.meta.url);
+// The one argument names a release's recordings directory beside this script — `recordings`, or
+// `recordings-v<version>` — and nothing else, so no path can select a directory elsewhere.
+const directory = process.argv[2] ?? "recordings";
+if (!/^recordings(-v\d+\.\d+\.\d+)?$/.test(directory)) {
+  console.error(
+    `reconcile: ${JSON.stringify(directory)} is not a recordings directory; next: name one beside this script, \`recordings\` or \`recordings-v<version>\`, or none for \`recordings\``,
+  );
+  process.exit(2);
+}
+const RECORDINGS = new URL(`./${directory}/`, import.meta.url);
 const IGNORED_HEADERS = /^(date|etag|last-modified|x-ratelimit-.*|x-github-request-id)$/;
 const IGNORED_FIELDS = new Set(["download_count", "updated_at"]);
 const INVALID_TOKEN = "ghp_invalidreplaytoken000000000000000000000";
@@ -61,9 +74,19 @@ function differences(recorded, fetched, at = "body") {
     .flatMap((key) => differences(recorded[key], fetched[key], `${at}.${key}`));
 }
 
+let names = [];
+try {
+  names = readdirSync(RECORDINGS).filter((n) => n.endsWith(".http"));
+} catch {}
+if (!names.length) {
+  console.error(
+    `reconcile: ${directory} holds no recording; next: name a directory beside this script that holds the \`*.http\` recordings of one release`,
+  );
+  process.exit(2);
+}
 let mismatched = 0;
 try {
-  for (const name of readdirSync(RECORDINGS).filter((n) => n.endsWith(".http"))) {
+  for (const name of names) {
     const recorded = parse(readFileSync(new URL(name, RECORDINGS), "utf8"), name);
     const { path } = JSON.parse(readFileSync(new URL(`${name}.source.json`, RECORDINGS), "utf8"));
     const fetched = fetch(path, recorded.status !== 200);

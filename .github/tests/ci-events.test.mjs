@@ -8,8 +8,11 @@ import { graph } from "../workflow-graph.mjs";
 import { definitions } from "./workflow-definitions.mjs";
 
 // Which jobs run where, as the run graph resolves the workflow files (workflow-graph.mjs). A
-// pull request's last commit runs exactly the four jobs branch protection requires, because
-// every other job spends a slot of the account-wide concurrency limit (onetaskgraph-ci-job-count);
+// pull request's last commit runs lint, test-linux and test-windows, and test-macos on every pull
+// request but one from this repository's own `release-plz-*` branch, whose job-level condition
+// skips it — a skipped job satisfies a required check, which is how the release pull request
+// spends no Mac runner. Nothing else runs, because every other job spends a slot of the
+// account-wide concurrency limit (onetaskgraph-ci-job-count);
 // a push to main runs release-plz, the Rust cache warmer that catches a main that no longer
 // builds, and the canonical gallery, which skips release-plz's own release commit. The release
 // tail at the end of publish reads GitHub with the job's own token, granted read alone.
@@ -23,7 +26,7 @@ const ORDINARY_PUSH = "e2d3bf08e0ced82120f38a708dc2b7a92d26ce7f";
 // trigger added to one of them would spend the slots the budgets above count without either
 // test noticing. Moving one means re-deciding its schedule, then this digest.
 const UNCHANGED = {
-  "linear-documents.yml": "7f5f58ca0871ec5dd839367a67bd063d49230d0ca2b26780898d2ddd3ef537e8",
+  "linear-documents.yml": "cbee6e4eaa87bb4231469d90995eab95398bd1eb48885088a14dc405dc08088d",
   "live-janitor.yml": "12f972eff5e7402be7c9d87de5d5a01191ef96499605d01bc7f4f957001feebb",
   "release-plz.yml": "a1a98448486d5c0ff89880124f5d0757d0dfb1cf8317ca945b02e6af00d5469e",
   "rust-cache-warm.yml": "9baa87baacb5eacd55e2744152d45ecb40f9f354b9944c27c358b158a80786ce",
@@ -48,13 +51,16 @@ export function problems(all, texts = {}) {
   for (const [name, digest] of Object.entries(UNCHANGED))
     if (createHash("sha256").update(texts[name]).digest("hex") !== digest)
       found.push(`${name} changed, and this change does not name it`);
-  // A pull request's last commit, from this repository, from a fork, and from release-plz's
-  // own branch, on every action that starts a pull request's checks.
+  // A pull request's last commit, from this repository, from a fork, from release-plz's own
+  // branch, and from a fork's branch of that name, on every action that starts a pull request's
+  // checks: lint, test-linux and test-windows always, and test-macos but on this repository's
+  // own release-plz branch.
   for (const action of ["opened", "synchronize", "reopened"])
     for (const [headRef, fork] of [
       ["feature", false],
       ["feature", true],
       ["release-plz-2026-10-31", false],
+      ["release-plz-2026-10-31", true],
     ]) {
       const scenario = { event: "pull_request", action, headRef, fork };
       const runs = running(graph(scenario, { macosRequired: true, reason: "a change" }, all));
@@ -107,7 +113,7 @@ const texts = () =>
     ]),
   );
 
-test("a pull request runs the four jobs, a push to main runs release-plz, the warmer and the gallery", () => {
+test("a pull request runs lint, test-linux, test-windows and, but on release-plz's branch, test-macos; a push to main runs release-plz, the warmer and the gallery", () => {
   assert.deepEqual(problems(definitions(), texts()), []);
 });
 
@@ -132,6 +138,21 @@ test("another job or workflow on a pull request or on the release commit is refu
     },
     "runs lint, test-linux, test-windows, test-macos, deny": (all) => {
       all["ci.yml"].jobs.deny = { "runs-on": "ubuntu-latest", steps: [{ run: "just deny" }] };
+    },
+    "a pull request opened from release-plz-2026-10-31 runs lint, test-linux, test-windows, test-macos":
+      (all) => {
+        delete all["ci.yml"].jobs["test-macos"].if;
+      },
+    "a pull request opened from release-plz-2026-10-31 (fork) runs lint, test-linux, test-windows":
+      (all) => {
+        all["ci.yml"].jobs["test-macos"].if =
+          "github.event_name == 'pull_request' && !startsWith(github.head_ref, 'release-plz-')";
+      },
+    "a pull request opened from release-plz-2026-10-31 runs lint, test-linux": (all) => {
+      all["ci.yml"].jobs["test-windows"].if = all["ci.yml"].jobs["test-macos"].if;
+    },
+    "a pull request opened from feature runs lint, test-linux, test-macos": (all) => {
+      all["ci.yml"].jobs["test-windows"].if = "github.event_name == 'push'";
     },
     "visual-docs.yml runs": (all) => {
       all["visual-docs.yml"].on.pull_request.types.push("synchronize");

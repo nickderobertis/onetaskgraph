@@ -1,5 +1,5 @@
 """Drive the scheduled Linear executable through its real HTTP and process boundaries."""
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum, auto
 import http.server
 import json
@@ -421,6 +421,217 @@ class LinearJourneys(unittest.TestCase):
                 self.assertEqual(len(workspace.requests), 3)
                 self.assertEqual(workspace.deleted, [])
 
+
+
+LeaseId = NewType('LeaseId', str)
+LeaseTitle = NewType('LeaseTitle', str)
+
+
+class LeaseIssue(TypedDict):
+    id: LeaseId
+    title: LeaseTitle
+
+
+@dataclass(frozen=True)
+class LeaseRead:
+    """`issue(id:)`, what `--release-leases` asks of each recorded lease."""
+    id: LeaseId
+
+
+@dataclass(frozen=True)
+class LeaseUpdate:
+    """`issueUpdate`, the one write `--release-leases` sends: the lease and its new title."""
+    id: LeaseId
+    title: LeaseTitle
+
+
+def read_lease_request(value: object) -> LeaseRead | LeaseUpdate:
+    """The janitor's request, its whole shape checked rather than assumed."""
+    assert isinstance(value, dict), value
+    query, variables = value.get('query'), value.get('variables')
+    assert isinstance(query, str) and isinstance(variables, dict), value
+    identifier = variables.get('id')
+    assert isinstance(identifier, str) and identifier, variables
+    if 'issueUpdate(' in query:
+        assert set(variables) == {'id', 'input'}, variables
+        update = variables['input']
+        assert isinstance(update, dict) and set(update) == {'title'}, update
+        title = update['title']
+        assert isinstance(title, str) and title, update
+        return LeaseUpdate(LeaseId(identifier), LeaseTitle(title))
+    assert 'issue(id:$id)' in query and set(variables) == {'id'}, value
+    return LeaseRead(LeaseId(identifier))
+
+
+class LeaseFault(StrEnum):
+    UNIDENTIFIED_READ = auto()
+    NO_ISSUE = auto()
+    UNCONFIRMED_RELEASE = auto()
+
+
+class RecordsPath(StrEnum):
+    """What stands at the path `--release-leases` is given."""
+    DIRECTORY = auto()
+    ABSENT = auto()
+    FILE = auto()
+
+
+@dataclass
+class LeaseTeam:
+    """What the stand-in Linear holds of the pool's lease issues, and what it was asked."""
+    issues: dict[LeaseId, LeaseTitle]
+    fault: LeaseFault | None = None
+    reads: list[LeaseId] = field(default_factory=list)
+    updates: list[LeaseUpdate] = field(default_factory=list)
+
+    def answer(self, request: LeaseRead | LeaseUpdate) -> dict[str, object]:
+        match request:
+            case LeaseUpdate():
+                self.updates.append(request)
+                if self.fault is LeaseFault.UNCONFIRMED_RELEASE:
+                    return {'data': {'issueUpdate': {'success': False}}}
+                self.issues[request.id] = request.title
+                return {'data': {'issueUpdate': {'success': True}}}
+            case LeaseRead():
+                self.reads.append(request.id)
+                title = self.issues.get(request.id)
+                match self.fault:
+                    case LeaseFault.UNIDENTIFIED_READ:
+                        return {'data': {'issue': {'title': title}}}
+                    case LeaseFault.NO_ISSUE:
+                        return {'data': {}}
+                    case _:
+                        issue: LeaseIssue | None = None if title is None else LeaseIssue(id=request.id, title=title)
+                        return {'data': {'issue': issue}}
+
+
+class LeaseJourneys(unittest.TestCase):
+    """`--linear --release-leases DIR`: a cancelled job hands back what it recorded, only that."""
+
+    PREFIX = 'onetaskgraph live cleanup lease-v1 TEST plugin '
+
+    def release(self, team: LeaseTeam, records: dict[str, str],
+                path: RecordsPath = RecordsPath.DIRECTORY) -> tuple[subprocess.CompletedProcess[str], Path]:
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_args: object) -> None:
+                pass
+
+            def do_POST(self) -> None:
+                assert self.headers['Authorization'] == 'offline-linear-key'
+                request = read_lease_request(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+                body = json.dumps(team.answer(request)).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        directory = Path(os.environ.get('TMPDIR', '/tmp')) / f'lease-records-{os.getpid()}-{time.monotonic_ns()}'
+        match path:
+            case RecordsPath.DIRECTORY:
+                directory.mkdir(parents=True)
+                for name, content in records.items():
+                    (directory / f'{name}.json').write_text(content)
+            case RecordsPath.FILE:
+                directory.write_text('not a directory of lease records')
+            case RecordsPath.ABSENT:
+                pass
+        try:
+            environment = {key: value for key, value in os.environ.items()
+                           if not key.startswith(('LINEAR_', 'GH_', 'GITHUB_'))}
+            environment.update(LINEAR_API_KEY='offline-linear-key', LINEAR_WRITE_TEAM='test')
+            result = subprocess.run(
+                [os.environ['JANITOR_BINARY'], '--linear', '--release-leases', str(directory),
+                 '--loopback', f'http://127.0.0.1:{server.server_port}'],
+                env=environment, capture_output=True, text=True, timeout=30)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+        return result, directory
+
+    @staticmethod
+    def record(identifier: str, title: str) -> str:
+        return json.dumps({'id': identifier, 'title': title})
+
+    def test_a_cancelled_runs_recorded_lease_is_released_and_nothing_else(self) -> None:
+        held = LeaseTitle(self.PREFIX + 'pool-3 gen-2 7-42-1700000000000000')
+        superseded = LeaseTitle(self.PREFIX + 'pool-4 gen-1 7-42-1700000000000000')
+        team = LeaseTeam({
+            LeaseId('held'): held,
+            # Recorded by this run, since superseded by another claimant's generation.
+            LeaseId('superseded'): LeaseTitle(self.PREFIX + 'pool-4 gen-1 8-1-1700000000000000'),
+            # Another run's lease, never recorded here.
+            LeaseId('other'): LeaseTitle(self.PREFIX + 'pool-5 gen-1 8-1-1700000000000000'),
+        })
+        result, directory = self.release(team, {
+            'held': self.record('held', held),
+            'superseded': self.record('superseded', superseded),
+            # Recorded by this run and gone from Linear: nothing to hand back.
+            'gone': self.record('gone', LeaseTitle(self.PREFIX + 'pool-6 gen-1 7-42-1700000000000000')),
+        })
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(team.updates, [LeaseUpdate(LeaseId('held'), LeaseTitle(self.PREFIX + 'pool-3 gen-2 released'))])
+        self.assertNotIn(LeaseId('other'), team.reads)
+        self.assertEqual(list(directory.iterdir()), [], 'every settled record is removed')
+
+    def test_no_records_send_nothing(self) -> None:
+        team = LeaseTeam({})
+        result, _ = self.release(team, {})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((team.reads, team.updates), ([], []))
+
+    def test_an_absent_records_directory_is_a_run_that_held_no_lease(self) -> None:
+        team = LeaseTeam({LeaseId('held'): LeaseTitle(self.PREFIX + 'pool-3 gen-2 7-42-1700000000000000')})
+        result, directory = self.release(team, {}, RecordsPath.ABSENT)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((team.reads, team.updates), ([], []))
+        self.assertFalse(directory.exists(), 'nothing is created where no lease was recorded')
+
+    def test_a_records_path_that_is_not_a_directory_fails_sending_nothing(self) -> None:
+        team = LeaseTeam({LeaseId('held'): LeaseTitle(self.PREFIX + 'pool-3 gen-2 7-42-1700000000000000')})
+        result, directory = self.release(team, {}, RecordsPath.FILE)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('the lease records could not be read', result.stderr)
+        self.assertEqual((team.reads, team.updates), ([], []))
+        self.assertTrue(directory.is_file(), 'what stood there is left as it was')
+
+    def test_a_record_that_does_not_read_soundly_is_refused_writing_nothing(self) -> None:
+        held = self.PREFIX + 'pool-3 gen-2 7-42-1700000000000000'
+        for name, content, said in [
+            ('invalid-json', '{', 'not a lease record'),
+            ('no-title', json.dumps({'id': 'held'}), 'names no issue id and title'),
+            ('released', self.record('held', self.PREFIX + 'pool-3 gen-2 released'), 'names no held lease'),
+            ('malformed', self.record('held', self.PREFIX + 'pool-3 gen-02 7-42-1'), 'names no held lease'),
+            ('empty-id', self.record('', held), 'unusable issue id'),
+            ('foreign-team', self.record('held', held.replace(' TEST ', ' OTHER ')), 'records no held lease of test'),
+        ]:
+            with self.subTest(name=name):
+                team = LeaseTeam({LeaseId('held'): LeaseTitle(held)})
+                result, directory = self.release(team, {name: content})
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertEqual((team.reads, team.updates), ([], []))
+                self.assertEqual(len(list(directory.iterdir())), 1, 'a refused record is kept')
+
+    def test_an_unidentified_or_missing_read_or_an_unconfirmed_release_keeps_the_record(self) -> None:
+        held = LeaseTitle(self.PREFIX + 'pool-3 gen-2 7-42-1700000000000000')
+        for fault, said in [
+            (LeaseFault.UNIDENTIFIED_READ, 'does not identify'),
+            (LeaseFault.NO_ISSUE, 'with no issue at all'),
+            (LeaseFault.UNCONFIRMED_RELEASE, 'did not confirm releasing'),
+        ]:
+            with self.subTest(fault=fault):
+                team = LeaseTeam({LeaseId('held'): held}, fault)
+                result, directory = self.release(team, {'held': self.record('held', held)})
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(said, result.stderr)
+                if fault is not LeaseFault.UNCONFIRMED_RELEASE:
+                    self.assertEqual(team.updates, [], 'a read that settles nothing writes nothing')
+                self.assertEqual(len(list(directory.iterdir())), 1, 'the record is kept for a re-run')
 
 if __name__ == '__main__':
     unittest.main()
