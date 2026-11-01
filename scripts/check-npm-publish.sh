@@ -16,11 +16,10 @@ fatal() {
   exit 1
 }
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
+CHECKOUT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || fatal \
   "could not resolve this repository's root from ${BASH_SOURCE[0]}" \
   "run the check from a checkout of this repository, as 'just distribution-test' does"
-readonly ROOT
-cd "$ROOT" || fatal "could not enter $ROOT" "check that directory's permissions, then rerun"
+readonly CHECKOUT
 
 for tool in node npm python3; do
   command -v "$tool" >/dev/null 2>&1 || fatal \
@@ -38,6 +37,25 @@ cleanup() {
   rm -rf "$scratch"
 }
 trap cleanup EXIT
+
+# Everything below runs in a copy of the files the publication reads, never in the checkout.
+# The SDK's stand-in `dist` below once went into the checkout and was removed on exit, while
+# github-workflows:cd-journeys builds the real one there and reads it back: a build landing
+# between the two was deleted under it, failing that journey ENOENT on dist/index.js.
+# scripts/check-npm-publish-leaves-checkout.sh holds this script to leaving the checkout alone.
+# shellcheck source=scripts/scratch-clone.sh
+if [ ! -r "$CHECKOUT/scripts/scratch-clone.sh" ] || ! source "$CHECKOUT/scripts/scratch-clone.sh"; then
+  fatal "could not load $CHECKOUT/scripts/scratch-clone.sh" \
+    "restore it with 'git checkout -- scripts/scratch-clone.sh', then rerun"
+fi
+scratch_clone_strip_git_env
+ROOT="$scratch/checkout"
+readonly ROOT
+mkdir -p "$ROOT" || fatal "could not create $ROOT" "check \$TMPDIR permissions, then rerun"
+copy_tracked_files "$CHECKOUT" "$ROOT" scripts npm sdks/typescript || fatal \
+  "could not copy the files the npm publication reads into $ROOT" \
+  "check \$TMPDIR and 'df -h' for free space, then rerun"
+cd "$ROOT" || fatal "could not enter $ROOT" "check that directory's permissions, then rerun"
 
 readonly PUBLISHED="$scratch/published.jsonl"
 readonly PORT_FILE="$scratch/port"
@@ -175,19 +193,12 @@ for package in npm/platforms/*; do
 done
 
 # The TypeScript SDK publishes what it built, and the manifest names `dist`. Nothing here
-# reads it, so a stand-in is enough to make the pack succeed.
-built_sdk=""
-if [ ! -d sdks/typescript/dist ]; then
-  mkdir -p sdks/typescript/dist || fatal \
-    "could not create sdks/typescript/dist" "check the permissions of $ROOT, then rerun"
-  printf 'export {};\n' > sdks/typescript/dist/index.js
-  printf 'export {};\n' > sdks/typescript/dist/index.d.ts
-  built_sdk=yes
-fi
-remove_stand_in() {
-  [ -z "$built_sdk" ] || rm -rf sdks/typescript/dist
-}
-trap 'remove_stand_in; cleanup' EXIT
+# reads it, so a stand-in is enough to make the pack succeed. The copy above holds tracked
+# files alone, so it never has a build of its own.
+mkdir -p sdks/typescript/dist || fatal \
+  "could not create sdks/typescript/dist" "check the permissions of $ROOT, then rerun"
+printf 'export {};\n' > sdks/typescript/dist/index.js
+printf 'export {};\n' > sdks/typescript/dist/index.d.ts
 
 # Without a token, npm packs every tarball in full and then fails ENEEDAUTH as though it
 # were logged out — so the publication refuses first, saying what to set. The token is read

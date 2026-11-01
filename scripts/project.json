@@ -56,6 +56,7 @@
           "bash scripts/check-python-call-sites-enforced.sh",
           "bash scripts/check-line-reads.sh",
           "bash scripts/check-loopback-registries.sh",
+          "bash scripts/check-npm-publish-leaves-checkout.sh",
           "bash scripts/check-live-decline-reading.sh",
           "bash scripts/check-live-lane-enforced.sh",
           "bash scripts/check-live-seat-serialised.sh",
