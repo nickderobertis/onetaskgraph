@@ -1658,6 +1658,57 @@ fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
     );
 }
 
+/// The check's server, shared by every test process, stops when a client greets it with another
+/// protocol — as it does when its files change or it has been idle — and the next request after
+/// it stops is still answered, by a server started in its place, over connections this process
+/// held open to the one that stopped. A protocol it does not speak is answered `stale`, never
+/// served.
+#[test]
+fn a_stopped_schema_check_server_is_replaced_by_the_next_request() {
+    use serde_json::{Value, json};
+    use std::io::{BufRead, BufReader, Write};
+
+    let (port, pid) = github_schema::server();
+    let mut stream =
+        std::net::TcpStream::connect(("127.0.0.1", port)).expect("the server accepts a client");
+    stream
+        .write_all(b"{\"hello\":0}\n")
+        .expect("the hello is sent");
+    let mut answer = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut answer)
+        .expect("the server answers the hello");
+    let answer: Value = serde_json::from_str(&answer).expect("the answer is JSON");
+    assert!(
+        answer["stale"]
+            .as_str()
+            .is_some_and(|why| why.contains("protocol 1 was sent 0")),
+        "{answer}"
+    );
+    let stopped = std::time::Instant::now();
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        assert!(
+            stopped.elapsed() < std::time::Duration::from_secs(30),
+            "the stale server stopped listening"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    // A document no other test sends, so this process has no answer to it kept.
+    let answered = github_schema::refuse(&json!({
+        "query": "query StoppedServer{viewer{loginName}}",
+    }));
+    assert_eq!(
+        answered,
+        Some(json!({"errors": [{
+            "message": "Cannot query field \"loginName\" on type \"User\". Did you mean \"login\"?",
+            "locations": [{"line": 1, "column": 28}],
+        }]}))
+    );
+    let (_, replaced_by) = github_schema::server();
+    assert_ne!(replaced_by, pid, "a new server answered");
+}
+
 /// The schema check stops, rather than answering requests, against a schema breaking any
 /// type-system rule but the one GitHub's published file breaks — so a copy that is not the
 /// schema GitHub serves cannot pass for it — and starts against one breaking that rule alone.

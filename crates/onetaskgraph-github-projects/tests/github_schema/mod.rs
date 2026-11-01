@@ -22,11 +22,13 @@
 //! ignored `node_modules` beside it and imports it from there, holding that copy to the tarball's
 //! files byte for byte on every start and unpacking it again when it differs.
 //!
-//! One `bun` process per test process holds the schema, built once, and answers one JSON line
-//! per request; requests from every thread are put to it in turn, and one already answered is
-//! not sent again (see [`Validators`]). A request nested past what
-//! it can recurse through is refused rather than crashing it — JavaScript reports an exhausted
-//! stack as an exception — and the variables' nesting is bounded here before they are sent.
+//! One `bun` process per clone serves every test process on the machine (see [`Validators`]):
+//! building GitHub's schema takes a fifth of a second and a quarter of a gigabyte, and once per
+//! test process — nextest runs each test in a process of its own — that added about a fifth to
+//! the wall time of the suites these doubles serve.
+//! A request nested past what it can recurse through is refused rather than crashing it —
+//! JavaScript reports an exhausted stack as an exception — and the variables' nesting is bounded
+//! here before they are sent.
 //!
 //! What it does not hold a request to is what only GitHub's executor knows — a node id's
 //! existence, a permission, a rate or a node-count limit, a custom scalar's spelling. Its
@@ -38,10 +40,13 @@
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufRead, BufReader, Write};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::Duration;
 
 // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] A dated snapshot of an external contract by design: it is pinned to the provenance in fixtures/README.md, which states its gates and why upstream freshness is not one.
 /// GitHub's published GraphQL schema, whole.
@@ -50,6 +55,17 @@ pub const SCHEMA: &str = include_str!("../fixtures/github-schema.docs.graphql");
 /// The deepest a request's variables may nest before they are refused unsent: far beyond any
 /// value this source sends, and far short of what serializing them could exhaust.
 const NESTING_LIMIT: usize = 200;
+
+/// The protocol `validate.mjs` speaks, sent in each connection's hello; it is `PROTOCOL` there.
+const PROTOCOL: u64 = 1;
+
+/// How many times a request is put to a server before the check gives up: a server stops when it
+/// is stale or idle, so a request in flight then is sent again to the one started after it.
+const ATTEMPTS: usize = 4;
+
+/// The longest one answer may take: far beyond the largest document this source sends, and a
+/// bound on how long a server that has stopped answering can hold a test.
+const ANSWER_WITHIN: Duration = Duration::from_secs(120);
 
 /// The workspace root: every crate including this module sits at `crates/<name>`.
 fn workspace_root() -> PathBuf {
@@ -70,87 +86,259 @@ fn here() -> PathBuf {
         .to_path_buf()
 }
 
-/// The running validator: `validate.mjs` under `bun`, with the pipes it is spoken to over.
-struct Validator {
-    // Held so the process lives as long as this one; it ends on its own when its standard
-    // input closes with this process.
-    _child: Child,
-    input: ChildStdin,
-    output: BufReader<ChildStdout>,
-    /// The SHA-256, in lowercase hex, of the schema file the process built.
-    schema_sha256: String,
+/// Where this clone's server records its port and its starters take their lock: inside the
+/// ignored `node_modules` the check already unpacks graphql-js into.
+fn rendezvous() -> PathBuf {
+    let directory = here().join("node_modules").join(".github-schema-server");
+    std::fs::create_dir_all(&directory).unwrap_or_else(|error| {
+        panic!(
+            "the GitHub schema check could not create {} ({error})",
+            directory.display()
+        )
+    });
+    directory
 }
 
-impl Validator {
-    fn start() -> Self {
-        let root = workspace_root();
+/// One connection to the server, greeted.
+struct Connection {
+    reader: BufReader<TcpStream>,
+    writer: TcpStream,
+}
+
+impl Connection {
+    /// Connects to the server at `port` and greets it: `Ok` with the connection and the
+    /// schema's digest once it answers ready, `Err` when nothing current answers there.
+    fn open(port: u16) -> io::Result<(Self, String)> {
+        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        let writer = TcpStream::connect_timeout(&address, Duration::from_secs(5))?;
+        writer.set_nodelay(true)?;
+        writer.set_read_timeout(Some(ANSWER_WITHIN))?;
+        let mut connection = Self {
+            reader: BufReader::new(writer.try_clone()?),
+            writer,
+        };
+        let ready = connection.exchange(&json!({ "hello": PROTOCOL }).to_string())?;
+        match ready["schema_sha256"].as_str() {
+            Some(digest) if ready["ready"] == json!(true) => Ok((connection, digest.to_owned())),
+            _ => Err(io::Error::other(format!("the server answered {ready}"))),
+        }
+    }
+
+    fn exchange(&mut self, line: &str) -> io::Result<Value> {
+        self.writer.write_all(format!("{line}\n").as_bytes())?;
+        let mut answer = String::new();
+        if self.reader.read_line(&mut answer)? == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        serde_json::from_str(&answer).map_err(io::Error::other)
+    }
+}
+
+/// The server this clone's check runs, shared by every test process on the machine; the
+/// connections this process keeps open to it; and the answers it has given.
+///
+/// A process takes an idle connection from [`Validators::idle`] for each request, opening one
+/// when none is idle, so its test threads' requests go to the server side by side rather than
+/// in turn behind one lock. The server answers them as they arrive, keeping each document's
+/// validation so one sent again with new variables costs only their coercion, and a request
+/// already answered is answered from [`Validators::answers`] without being sent — the validation
+/// is a function of the request and the schema alone, both fixed while a server runs.
+///
+/// The server records its port in [`rendezvous`]'s `endpoint.json`. A process that finds none
+/// answering there takes the OS lock on `start.lock` beside it, looks once more, and starts one,
+/// so concurrent first requests start one server between them. It is started in a process group
+/// of its own, outside any test's, so a test that times out does not take it down; and it
+/// stops by itself once idle, so nothing is left running after the tests.
+struct Validators {
+    idle: Mutex<Vec<Connection>>,
+    schema_sha256: OnceLock<String>,
+    answers: Mutex<HashMap<String, Vec<Value>>>,
+}
+
+impl Validators {
+    fn kept(&self) -> MutexGuard<'_, HashMap<String, Vec<Value>>> {
+        self.answers.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn idle(&self) -> MutexGuard<'_, Vec<Connection>> {
+        self.idle.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// An idle connection, or a new one to the running server, which this starts if none runs.
+    fn connection(&self) -> Connection {
+        if let Some(connection) = self.idle().pop() {
+            return connection;
+        }
+        let directory = rendezvous();
+        let mut tried = Vec::new();
+        for _ in 0..ATTEMPTS {
+            match self.running(&directory) {
+                Ok(connection) => return connection,
+                Err(error) => tried.push(error.to_string()),
+            }
+            let lock = File::create(directory.join("start.lock"))
+                .and_then(|lock| lock.lock().map(|()| lock))
+                .expect("the GitHub schema check's start lock can be taken");
+            let started = self.running(&directory).or_else(|_| self.start(&directory));
+            drop(lock);
+            match started {
+                Ok(connection) => return connection,
+                Err(error) => tried.push(error.to_string()),
+            }
+        }
+        panic!(
+            "the GitHub schema check could not be reached ({}); its server's standard error is \
+             in {}",
+            tried.join("; "),
+            directory.join("server.log").display()
+        )
+    }
+
+    /// A connection to the server `endpoint.json` names, if it answers ready.
+    fn running(&self, directory: &std::path::Path) -> io::Result<Connection> {
+        let endpoint: Value =
+            serde_json::from_slice(&std::fs::read(directory.join("endpoint.json"))?)
+                .map_err(io::Error::other)?;
+        let port = endpoint["port"]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .ok_or_else(|| io::Error::other(format!("endpoint.json holds {endpoint}")))?;
+        let (connection, digest) = Connection::open(port)?;
+        self.schema_sha256.get_or_init(|| digest);
+        Ok(connection)
+    }
+
+    /// Starts a server, waits for it to report its port, and connects to it.
+    fn start(&self, directory: &std::path::Path) -> io::Result<Connection> {
         let here = here();
-        let mut child = Command::new("bun")
+        let log = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(directory.join("server.log"))?;
+        let mut command = Command::new("bun");
+        command
             .arg(here.join("validate.mjs"))
             .arg(here.join("../fixtures/github-schema.docs.graphql"))
-            .current_dir(&root)
+            .arg("--serve")
+            .arg(directory)
+            // Outside the clone, so a server still idling holds no directory a test removes.
+            .current_dir(std::env::temp_dir())
             // Running a script writes nothing it would otherwise cache.
             .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
-            .stdin(Stdio::piped())
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap_or_else(|error| {
-                panic!(
-                    "the GitHub schema check could not start `bun` ({error}); install the \
-                     workspace's toolchain with `just bootstrap`"
-                )
-            });
-        let input = child.stdin.take().expect("a piped standard input");
-        let output = BufReader::new(child.stdout.take().expect("a piped standard output"));
-        let mut validator = Self {
-            _child: child,
-            input,
-            output,
-            schema_sha256: String::new(),
-        };
-        let ready = validator.read();
-        assert_eq!(
-            ready["ready"],
-            json!(true),
-            "the GitHub schema check did not start: {ready}"
-        );
-        validator.schema_sha256 = ready["schema_sha256"]
-            .as_str()
-            .expect("the GitHub schema check reports the schema's digest")
-            .to_owned();
-        validator
-    }
-
-    fn read(&mut self) -> Value {
-        let mut line = String::new();
-        let read = self
-            .output
-            .read_line(&mut line)
-            .expect("the GitHub schema check's answer is readable");
-        assert!(
-            read > 0,
-            "the GitHub schema check ended without answering; its standard error above says why"
-        );
-        serde_json::from_str(&line).expect("the GitHub schema check answers one JSON line")
-    }
-
-    fn ask(&mut self, request: &str) -> Vec<Value> {
-        let mut line = request.to_owned();
-        line.push('\n');
-        self.input
-            .write_all(line.as_bytes())
-            .and_then(|()| self.input.flush())
-            .expect("the GitHub schema check takes a request");
-        let answer = self.read();
-        if let Some(internal) = answer.get("internal") {
-            panic!("the GitHub schema check failed on {request}: {internal}");
+            .stderr(log);
+        detach(&mut command);
+        let mut child = spawn(&mut command).unwrap_or_else(|error| {
+            panic!(
+                "the GitHub schema check could not start `bun` ({error}); install the \
+                 workspace's toolchain with `just bootstrap`"
+            )
+        });
+        let output = child.stdout.take().expect("a piped standard output");
+        // Reaped whenever it stops, on a thread nothing waits for: the server outlives the test
+        // that started it more often than not, and this process ends without waiting for it.
+        std::thread::spawn(move || child.wait());
+        let mut ready = String::new();
+        BufReader::new(output).read_line(&mut ready)?;
+        let ready: Value = serde_json::from_str(&ready)
+            .map_err(|_| io::Error::other(format!("the server started by answering {ready:?}")))?;
+        if let Some(internal) = ready.get("internal") {
+            panic!("the GitHub schema check did not start: {internal}");
         }
-        answer["errors"]
-            .as_array()
-            .cloned()
-            .expect("the GitHub schema check answers `errors`")
+        let port = ready["port"]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .ok_or_else(|| io::Error::other(format!("the server started with {ready}")))?;
+        let (connection, digest) = Connection::open(port)?;
+        self.schema_sha256.get_or_init(|| digest);
+        Ok(connection)
     }
+
+    fn ask(&self, request: &str) -> Vec<Value> {
+        let mut failures = Vec::new();
+        for _ in 0..ATTEMPTS {
+            let mut connection = self.connection();
+            match connection.exchange(request) {
+                Ok(answer) => {
+                    self.idle().push(connection);
+                    if let Some(internal) = answer.get("internal") {
+                        panic!("the GitHub schema check failed on {request}: {internal}");
+                    }
+                    return answer["errors"]
+                        .as_array()
+                        .cloned()
+                        .expect("the GitHub schema check answers `errors`");
+                }
+                // The server stopped: every connection to it is closed, so none is kept.
+                Err(error) => {
+                    failures.push(error.to_string());
+                    self.idle().clear();
+                }
+            }
+        }
+        panic!(
+            "the GitHub schema check did not answer {request}: {}",
+            failures.join("; ")
+        )
+    }
+
+    fn answer(&self, request: String) -> Vec<Value> {
+        if let Some(answer) = self.kept().get(&request) {
+            return answer.clone();
+        }
+        let answer = self.ask(&request);
+        let mut answers = self.kept();
+        if answers.len() >= ANSWERS_KEPT {
+            answers.clear();
+        }
+        answers.insert(request, answer.clone());
+        answer
+    }
+}
+
+/// Puts the server in a process group of its own, so the signal that ends a test's group — a
+/// timeout, an interrupt — does not end the server other tests are using.
+#[cfg(unix)]
+fn detach(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+/// A new process group, so a console interrupt to the test's group does not reach the server.
+#[cfg(windows)]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+/// No console window for the server.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// Outside the job object the test runs in, so ending that job does not end the server.
+#[cfg(windows)]
+const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+
+/// Puts the server in a process group of its own and, where the job the test runs in allows it,
+/// outside that job, so ending the test's job does not end the server other tests are using.
+#[cfg(windows)]
+fn detach(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn detach(_command: &mut Command) {}
+
+/// Spawns `command`; on Windows, inside the test's job when that job refuses a breakaway, in
+/// which case a server outlives only the tests whose job it was started in and is started again
+/// after.
+fn spawn(command: &mut Command) -> io::Result<std::process::Child> {
+    let spawned = command.spawn();
+    #[cfg(windows)]
+    if spawned.is_err() {
+        use std::os::windows::process::CommandExt;
+        return command
+            .creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
+            .spawn();
+    }
+    spawned
 }
 
 /// Every error GitHub's static validation answers `document`, sent with `operation_name` and
@@ -177,65 +365,54 @@ fn errors(document: &str, operation_name: Option<&str>, variables: Option<&Value
 /// hold.
 const ANSWERS_KEPT: usize = 16_384;
 
-/// This test process's validator, and the answers it has given.
-///
-/// Every test thread's requests go to the one validator in turn, so a test timing a double's
-/// answers on the real clock counts the other threads' requests against its own. A request
-/// already answered is therefore answered from [`Validators::answers`] without being sent — the
-/// validation is a function of the request and the schema alone, both fixed for the life of the
-/// process — and `validate.mjs` keeps each document's validation, so one sent again with new
-/// variables costs only their coercion.
-struct Validators {
-    validator: Mutex<Validator>,
-    answers: Mutex<HashMap<String, Vec<Value>>>,
-}
-
-impl Validators {
-    fn kept(&self) -> MutexGuard<'_, HashMap<String, Vec<Value>>> {
-        self.answers.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn validator(&self) -> MutexGuard<'_, Validator> {
-        self.validator
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn answer(&self, request: String) -> Vec<Value> {
-        if let Some(answer) = self.kept().get(&request) {
-            return answer.clone();
-        }
-        let answer = self.validator().ask(&request);
-        let mut answers = self.kept();
-        if answers.len() >= ANSWERS_KEPT {
-            answers.clear();
-        }
-        answers.insert(request, answer.clone());
-        answer
-    }
-}
-
-/// The validator of this test process, started on first use.
+/// This process's way to the server, connected on first use.
 fn validators() -> &'static Validators {
     static VALIDATORS: OnceLock<Validators> = OnceLock::new();
-    VALIDATORS.get_or_init(|| Validators {
-        validator: Mutex::new(Validator::start()),
-        answers: Mutex::new(HashMap::new()),
+    VALIDATORS.get_or_init(|| {
+        let validators = Validators {
+            idle: Mutex::new(Vec::new()),
+            schema_sha256: OnceLock::new(),
+            answers: Mutex::new(HashMap::new()),
+        };
+        let connection = validators.connection();
+        validators.idle().push(connection);
+        validators
     })
 }
 
-/// Starts this process's validator now, if it has not started, rather than inside the first
-/// request a double answers: building GitHub's schema takes a fraction of a second, and a
+/// Connects this process to the server now, starting it if none runs, rather than inside the
+/// first request a double answers: building GitHub's schema takes a fraction of a second, and a
 /// double whose test times its answers on the real clock would otherwise count that against
 /// whichever request came first. Each double calls it before it starts listening.
 pub fn warm() {
     validators();
 }
 
-/// The SHA-256, in lowercase hex, of the schema file the validator built — [`SCHEMA`]'s bytes,
+/// The SHA-256, in lowercase hex, of the schema file the server built — [`SCHEMA`]'s bytes,
 /// read from the same path.
 pub fn schema_sha256() -> String {
-    validators().validator().schema_sha256.clone()
+    validators()
+        .schema_sha256
+        .get()
+        .expect("a connected server reported the schema's digest")
+        .clone()
+}
+
+/// The port and process id of the server this clone's checks share, as it records them,
+/// connecting this process to it first.
+pub fn server() -> (u16, u64) {
+    validators();
+    let endpoint: Value = serde_json::from_slice(
+        &std::fs::read(rendezvous().join("endpoint.json")).expect("a running server's endpoint"),
+    )
+    .expect("the endpoint is JSON");
+    (
+        endpoint["port"]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .expect("the endpoint names a port"),
+        endpoint["pid"].as_u64().expect("the endpoint names a pid"),
+    )
 }
 
 /// How deeply `value` nests, measured without recursion so that no depth of it can exhaust

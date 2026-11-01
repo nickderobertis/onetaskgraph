@@ -1,12 +1,19 @@
 // GitHub's static validation of a GraphQL request, by graphql-js — the GraphQL Foundation's
 // reference implementation — against GitHub's complete published schema. `mod.rs` beside this
-// file starts it once per test process and speaks to it one JSON line per request; see there
-// for why it is graphql-js and what it answers.
+// file runs it once per machine and clone as a loopback server every test process shares, and
+// speaks to it one JSON line per request; see there for why it is graphql-js and what it answers.
 //
-// Usage: bun validate.mjs <schema.graphql>
+// Usage: bun validate.mjs <schema.graphql> [--serve <directory>]
 // Writes `{"ready":true,"schema_sha256":"<hex>"}` once the schema is built, then answers each
 // request line `{"query", "operationName", "variables", "coerce"}` with `{"errors":[…]}`, empty
 // when the request is valid. A failure that is not a refusal answers `{"internal": "<what>"}`.
+//
+// Without `--serve` the requests are its standard input's lines. With it, the ready line also
+// carries the `port` it listens on at 127.0.0.1, which it records in `<directory>/endpoint.json`
+// for other processes to find; each connection opens with `{"hello": PROTOCOL}`, answered with
+// the ready line — or `{"stale": "<why>"}` when this file, the schema or the tarball has changed
+// since it started or the protocol differs, after which it stops so a current one can start —
+// and its later lines are requests. It stops once no connection has been open for `IDLE_MS`.
 //
 // graphql-js is imported from the pinned tarball beside this file (see `mod.rs` for why).
 
@@ -21,6 +28,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:net";
 import { dirname, join, normalize, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -72,8 +80,9 @@ function* tarFiles(archive) {
 // changed file keeps it. Any other copy is replaced: unpacked beside its final place and renamed
 // into it whole, so a process never imports a half-written copy, and concurrent first runs
 // leave one.
+const here = dirname(fileURLToPath(import.meta.url));
+
 function graphqlPackage() {
-  const here = dirname(fileURLToPath(import.meta.url));
   const target = join(here, "node_modules", "graphql");
   const marker = join(target, ".onetaskgraph-integrity");
   const tarball = readFileSync(join(here, GRAPHQL_TARBALL));
@@ -226,18 +235,109 @@ function answer({ query, operationName, variables, coerce }) {
   return coerced.errors ? answered(coerced.errors) : { errors: [] };
 }
 
-write({ ready: true, schema_sha256: schemaSha256 });
-for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
+// One request line answered. A document or a value nested past what the parser, the validation
+// or the coercion can recurse through exhausts the engine's stack, which JavaScript reports as a
+// RangeError rather than a crash: the request is refused for it, as one too deep to run.
+function answerLine(line) {
   try {
-    write(answer(JSON.parse(line)));
+    return answer(JSON.parse(line));
   } catch (error) {
-    // A document or a value nested past what the parser, the validation or the coercion can
-    // recurse through exhausts the engine's stack, which JavaScript reports as a RangeError
-    // rather than a crash: the request is refused for it, as one too deep to run.
-    write(
-      error instanceof RangeError
-        ? refusal("The request nests too deeply to validate.")
-        : { internal: String(error?.stack ?? error) },
-    );
+    return error instanceof RangeError
+      ? refusal("The request nests too deeply to validate.")
+      : { internal: String(error?.stack ?? error) };
+  }
+}
+
+// The protocol `mod.rs` speaks; it sends this in its hello, so a client and a server built from
+// different revisions of the two files cannot answer each other.
+const PROTOCOL = 1;
+// How long a server with no open connection waits before it stops: long enough to carry one test
+// process's work to the next, short enough that nothing lingers once the tests are done.
+const IDLE_MS = 10_000;
+
+function serve(directory) {
+  const endpoint = join(directory, "endpoint.json");
+  // What this server was built from. A change to any of them makes it stale.
+  const watched = [fileURLToPath(import.meta.url), schemaPath, join(here, GRAPHQL_TARBALL)];
+  const stamp = () =>
+    watched
+      .map((file) => {
+        try {
+          const { size, mtimeMs } = statSync(file);
+          return `${size}:${mtimeMs}`;
+        } catch {
+          return "absent";
+        }
+      })
+      .join("|");
+  const built = stamp();
+  let open = 0;
+  let idle;
+  const stop = () => {
+    server.close();
+    try {
+      if (JSON.parse(readFileSync(endpoint, "utf8")).pid === process.pid) rmSync(endpoint);
+    } catch {
+      // Already gone, or another server's: either way not this one's to remove.
+    }
+    process.exit(0);
+  };
+  const quiet = () => {
+    clearTimeout(idle);
+    if (open === 0) idle = setTimeout(stop, IDLE_MS);
+  };
+  const server = createServer((socket) => {
+    open += 1;
+    clearTimeout(idle);
+    socket.setNoDelay(true);
+    socket.on("error", () => {});
+    socket.on("close", () => {
+      open -= 1;
+      quiet();
+    });
+    let greeted = false;
+    const send = (value) => socket.write(`${JSON.stringify(value)}\n`);
+    createInterface({ input: socket, crlfDelay: Infinity }).on("line", (line) => {
+      if (greeted) {
+        send(answerLine(line));
+        return;
+      }
+      let hello;
+      try {
+        hello = JSON.parse(line).hello;
+      } catch {
+        hello = undefined;
+      }
+      const why =
+        hello !== PROTOCOL
+          ? `protocol ${PROTOCOL} was sent ${JSON.stringify(hello)}`
+          : stamp() !== built
+            ? `${watched.join(", ")} changed since it started`
+            : undefined;
+      if (why) {
+        socket.end(`${JSON.stringify({ stale: why })}\n`, stop);
+        return;
+      }
+      greeted = true;
+      send({ ready: true, schema_sha256: schemaSha256 });
+    });
+  });
+  server.on("error", (error) => fail(`the schema check could not listen: ${error}`));
+  server.listen(0, "127.0.0.1", () => {
+    const { port } = server.address();
+    const staged = `${endpoint}.${process.pid}`;
+    writeFileSync(staged, JSON.stringify({ port, pid: process.pid, protocol: PROTOCOL }));
+    renameSync(staged, endpoint);
+    write({ ready: true, schema_sha256: schemaSha256, port });
+    quiet();
+  });
+}
+
+if (process.argv[3] === "--serve") {
+  serve(process.argv[4]);
+} else {
+  write({ ready: true, schema_sha256: schemaSha256 });
+  for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {
+    write(answerLine(line));
   }
 }
