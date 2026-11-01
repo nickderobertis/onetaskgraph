@@ -246,7 +246,8 @@ test("a skip widened past Windows, or test-linux leaving distribution-check, is 
 });
 
 // Which projects a job's phases run a target for, as Nx reads each phase's exclusions: a name,
-// a `tag:`, `*`, and `!name` putting one back, in order.
+// a `tag:` (a trailing `*` matching any tag it begins), `*`, and `!name` or `!tag:` putting
+// one back, in order.
 function selects(job, target, project, tags, ciJob) {
   const arm = ciJob.match(new RegExp(`\\n {2}${job}\\)\\n[\\s\\S]*?phases="([\\s\\S]*?)"\\n`));
   if (!arm) return false;
@@ -254,13 +255,15 @@ function selects(job, target, project, tags, ciJob) {
     const [, kind, targets, excluded = "-"] = line.trim().split(/\s+/);
     if (kind !== "affected" || !targets.split(",").includes(target)) return false;
     let out = false;
+    const tagged = (spelled) =>
+      spelled.endsWith("*")
+        ? tags.some((tag) => tag.startsWith(spelled.slice(0, -1)))
+        : tags.includes(spelled);
     for (const pattern of excluded === "-" ? [] : excluded.split(",")) {
       if (pattern === "*") out = true;
       else if (pattern === `!${project}`) out = false;
-      else if (
-        pattern === project ||
-        (pattern.startsWith("tag:") && tags.includes(pattern.slice(4)))
-      )
+      else if (pattern.startsWith("!tag:") && tagged(pattern.slice(5))) out = false;
+      else if (pattern === project || (pattern.startsWith("tag:") && tagged(pattern.slice(4))))
         out = true;
     }
     return !out;
@@ -310,8 +313,8 @@ test("a workflow suite leaving test-linux, or the rust-cache journey leaving a r
     );
   refused(
     ciJob.replace(
-      "1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e\n",
-      "1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows\n",
+      "1 affected test tag:test-in-coverage:*,tag:ci-phase:*\n",
+      "1 affected test tag:test-in-coverage:*,tag:ci-phase:*,github-workflows\n",
     ),
     /test-linux does not run github-workflows:test/,
   );
