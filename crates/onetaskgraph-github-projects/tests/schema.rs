@@ -1583,10 +1583,11 @@ fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
     use serde_json::json;
 
     // Each of these takes the server seconds, which would be every other test's wait too.
-    let _server = github_schema::serve_privately();
+    let server = github_schema::serve_privately();
 
     let refused = |document: &str, variables: serde_json::Value| {
-        github_schema::refuse(&json!({"query": document, "variables": variables}))
+        server
+            .refuse(&json!({"query": document, "variables": variables}))
             .unwrap_or_else(|| panic!("{} was not refused", &document[..document.len().min(80)]))
     };
     refused("", json!({}));
@@ -1601,9 +1602,8 @@ fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
     // A deep document that breaks no rule is validated, not refused for its depth.
     let (open, close) = deep("ofType{", "}", 190);
     assert_eq!(
-        github_schema::refuse(
-            &json!({"query": format!("query{{__schema{{types{{{open}name{close}}}}}}}")})
-        ),
+        server
+            .refuse(&json!({"query": format!("query{{__schema{{types{{{open}name{close}}}}}}}")})),
         None
     );
     let (open, close) = deep("[", "]", 50_000);
@@ -1649,7 +1649,7 @@ fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
         .map(|at| format!("a{at}:login "))
         .collect::<String>();
     assert_eq!(
-        github_schema::refuse(&json!({"query": format!("query{{viewer{{{wide}}}}}")})),
+        server.refuse(&json!({"query": format!("query{{viewer{{{wide}}}}}")})),
         None
     );
     // A document that breaks no rule but holds more tokens than the check parses is refused
@@ -1676,8 +1676,8 @@ fn a_stopped_schema_check_server_is_replaced_by_the_next_request() {
     use serde_json::{Value, json};
     use std::io::{BufRead, BufReader, Write};
 
-    let _server = github_schema::serve_privately();
-    let (port, pid) = github_schema::server();
+    let server = github_schema::serve_privately();
+    let (port, pid) = server.server();
     let mut stream =
         std::net::TcpStream::connect(("127.0.0.1", port)).expect("the server accepts a client");
     stream
@@ -1704,7 +1704,7 @@ fn a_stopped_schema_check_server_is_replaced_by_the_next_request() {
     }
 
     // A document no other test sends, so this process has no answer to it kept.
-    let answered = github_schema::refuse(&json!({
+    let answered = server.refuse(&json!({
         "query": "query StoppedServer{viewer{loginName}}",
     }));
     assert_eq!(
@@ -1714,7 +1714,7 @@ fn a_stopped_schema_check_server_is_replaced_by_the_next_request() {
             "locations": [{"line": 1, "column": 28}],
         }]}))
     );
-    let (_, replaced_by) = github_schema::server();
+    let (_, replaced_by) = server.server();
     assert_ne!(replaced_by, pid, "a new server answered");
 }
 

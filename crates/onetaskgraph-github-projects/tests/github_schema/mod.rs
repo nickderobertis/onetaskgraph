@@ -27,7 +27,7 @@
 //! test process — nextest runs each test in a process of its own — that added about a fifth to
 //! the wall time of the suites these doubles serve. A test that would hold that server up for
 //! the others — stopping it, or sending documents that take seconds to refuse — takes one of its
-//! own instead ([`serve_privately`]).
+//! own instead ([`serve_privately`]), beside it.
 //! A request nested past what it can recurse through is refused rather than crashing it —
 //! JavaScript reports an exhausted stack as an exception — and the variables' nesting is bounded
 //! here before they are sent.
@@ -88,21 +88,10 @@ fn here() -> PathBuf {
         .to_path_buf()
 }
 
-/// Where this clone's server records its port and its starters take their lock: inside the
-/// ignored `node_modules` the check already unpacks graphql-js into — or, in a process that has
-/// asked for a server of its own ([`serve_privately`]), that server's scratch directory.
-fn rendezvous() -> PathBuf {
-    let directory = PRIVATE.get().map_or_else(
-        || here().join("node_modules").join(".github-schema-server"),
-        Clone::clone,
-    );
-    std::fs::create_dir_all(&directory).unwrap_or_else(|error| {
-        panic!(
-            "the GitHub schema check could not create {} ({error})",
-            directory.display()
-        )
-    });
-    directory
+/// Where this clone's shared server records its port and its starters take their lock: inside
+/// the ignored `node_modules` the check already unpacks graphql-js into.
+fn shared_rendezvous() -> PathBuf {
+    here().join("node_modules").join(".github-schema-server")
 }
 
 /// One connection to the server, greeted.
@@ -150,18 +139,87 @@ impl Connection {
 /// already answered is answered from [`Validators::answers`] without being sent — the validation
 /// is a function of the request and the schema alone, both fixed while a server runs.
 ///
-/// The server records its port in [`rendezvous`]'s `endpoint.json`. A process that finds none
+/// The server records its port in its rendezvous directory's `endpoint.json`. A process that finds none
 /// answering there takes the OS lock on `start.lock` beside it, looks once more, and starts one,
 /// so concurrent first requests start one server between them. It is started in a process group
 /// of its own, outside any test's, so a test that times out does not take it down; and it
 /// stops by itself once idle, so nothing is left running after the tests.
 struct Validators {
+    rendezvous: PathBuf,
     idle: Mutex<Vec<Connection>>,
     schema_sha256: OnceLock<String>,
     answers: Mutex<HashMap<String, Vec<Value>>>,
 }
 
 impl Validators {
+    fn new(rendezvous: PathBuf) -> Self {
+        Self {
+            rendezvous,
+            idle: Mutex::new(Vec::new()),
+            schema_sha256: OnceLock::new(),
+            answers: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The directory the server records its port in, created if it is not there.
+    fn rendezvous(&self) -> PathBuf {
+        std::fs::create_dir_all(&self.rendezvous).unwrap_or_else(|error| {
+            panic!(
+                "the GitHub schema check could not create {} ({error})",
+                self.rendezvous.display()
+            )
+        });
+        self.rendezvous.clone()
+    }
+
+    /// The port and process id of the running server, as it records them, connecting to it
+    /// first.
+    fn endpoint(&self) -> (u16, u64) {
+        // Taken before the idle list is locked, since taking one locks it too.
+        let connection = self.connection();
+        self.idle().push(connection);
+        let endpoint: Value = serde_json::from_slice(
+            &std::fs::read(self.rendezvous().join("endpoint.json"))
+                .expect("a running server's endpoint"),
+        )
+        .expect("the endpoint is JSON");
+        (
+            endpoint["port"]
+                .as_u64()
+                .and_then(|port| u16::try_from(port).ok())
+                .expect("the endpoint names a port"),
+            endpoint["pid"].as_u64().expect("the endpoint names a pid"),
+        )
+    }
+
+    /// Stops the running server, if there is one, and waits until it no longer listens: a
+    /// client greeting it with a protocol it does not speak is answered `stale`, and it stops.
+    fn stop(&self) {
+        self.idle().clear();
+        let Ok(endpoint) = std::fs::read(self.rendezvous.join("endpoint.json")) else {
+            return;
+        };
+        let Some(port) = serde_json::from_slice::<Value>(&endpoint)
+            .ok()
+            .and_then(|endpoint| endpoint["port"].as_u64())
+            .and_then(|port| u16::try_from(port).ok())
+        else {
+            return;
+        };
+        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+        if let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_secs(5)) {
+            let _ = stream.write_all(b"{\"hello\":0}\n");
+            let _ = stream.set_read_timeout(Some(ANSWER_WITHIN));
+            let _ = BufReader::new(stream).read_line(&mut String::new());
+        }
+        let asked = std::time::Instant::now();
+        while TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_ok()
+            && asked.elapsed() < ANSWER_WITHIN
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn kept(&self) -> MutexGuard<'_, HashMap<String, Vec<Value>>> {
         self.answers.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -175,7 +233,7 @@ impl Validators {
         if let Some(connection) = self.idle().pop() {
             return connection;
         }
-        let directory = rendezvous();
+        let directory = self.rendezvous();
         let mut tried = Vec::new();
         for _ in 0..ATTEMPTS {
             match self.running(&directory) {
@@ -350,7 +408,12 @@ fn spawn(command: &mut Command) -> io::Result<std::process::Child> {
 /// Every error GitHub's static validation answers `document`, sent with `operation_name` and
 /// `variables`, with; empty when GitHub would run it. `variables` of `None` skips their
 /// coercion, for a document whose values a caller supplies later.
-fn errors(document: &str, operation_name: Option<&str>, variables: Option<&Value>) -> Vec<Value> {
+fn errors(
+    validators: &Validators,
+    document: &str,
+    operation_name: Option<&str>,
+    variables: Option<&Value>,
+) -> Vec<Value> {
     if variables.is_some_and(|variables| nesting(variables) > NESTING_LIMIT) {
         return vec![
             json!({"message": format!("Variables nest deeper than {NESTING_LIMIT} levels")}),
@@ -363,7 +426,7 @@ fn errors(document: &str, operation_name: Option<&str>, variables: Option<&Value
         "coerce": variables.is_some(),
     })
     .to_string();
-    validators().answer(request)
+    validators.answer(request)
 }
 
 /// The most answers [`Validators`] keeps before it starts again from none: far more distinct
@@ -371,46 +434,48 @@ fn errors(document: &str, operation_name: Option<&str>, variables: Option<&Value
 /// hold.
 const ANSWERS_KEPT: usize = 16_384;
 
-/// This process's way to the server, connected on first use.
-static VALIDATORS: OnceLock<Validators> = OnceLock::new();
-
-/// The scratch directory of this process's own server, once it has asked for one.
-static PRIVATE: OnceLock<PathBuf> = OnceLock::new();
-
-/// A server of this process's own, in place of the one every test process shares, until it is
-/// dropped: for a test whose requests would hold the shared one up for every other process —
-/// one that stops a server, or that sends documents each taking seconds to refuse. The server
-/// is single-threaded, so either would add those seconds to whatever another test's double is
-/// answering at the time, and a test timing its answers on the real clock would count them.
-///
-/// Taken before the process's first request, and once per process; nextest runs each test in a
-/// process of its own. Dropping it stops the server and removes its directory.
+/// A server of a test's own, beside the one every test process shares, until it is dropped:
+/// for a test whose requests would hold the shared one up for every other test — one that stops
+/// a server, or that sends documents each taking seconds to refuse. A server is single-threaded,
+/// so either would add those seconds to whatever another test's double is asking at the time,
+/// and a test timing its answers on the real clock would count them. Its rendezvous is a
+/// scratch directory of its own, which dropping it stops the server in and removes.
 #[must_use]
-pub struct PrivateServer(());
+pub struct PrivateServer(Validators);
 
-/// Gives this process a server of its own; see [`PrivateServer`].
+/// A server of the calling test's own; see [`PrivateServer`].
 pub fn serve_privately() -> PrivateServer {
+    static TAKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
-    let directory = std::env::temp_dir().join(format!(
-        "onetaskgraph-github-schema-{}-{nanos}",
-        std::process::id()
-    ));
-    assert!(
-        VALIDATORS.get().is_none() && PRIVATE.set(directory).is_ok(),
-        "a private GitHub schema check is asked for before this process's first request, once"
-    );
-    PrivateServer(())
+    PrivateServer(Validators::new(std::env::temp_dir().join(format!(
+        "onetaskgraph-github-schema-{}-{nanos}-{}",
+        std::process::id(),
+        TAKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ))))
+}
+
+impl PrivateServer {
+    /// [`refuse`], answered by this server.
+    #[must_use]
+    pub fn refuse(&self, body: &Value) -> Option<Value> {
+        refuse_by(&self.0, body)
+    }
+
+    /// [`server`] of this server.
+    pub fn server(&self) -> (u16, u64) {
+        self.0.endpoint()
+    }
 }
 
 impl Drop for PrivateServer {
     fn drop(&mut self) {
-        stop();
+        self.0.stop();
         // The server has stopped listening; on Windows its log stays open until it has exited.
-        let directory = rendezvous();
+        let directory = &self.0.rendezvous;
         let stopped = std::time::Instant::now();
-        while std::fs::remove_dir_all(&directory).is_err() && directory.exists() {
+        while std::fs::remove_dir_all(directory).is_err() && directory.exists() {
             if stopped.elapsed() > Duration::from_secs(10) {
                 eprintln!(
                     "the private GitHub schema check's directory {} could not be removed",
@@ -423,42 +488,11 @@ impl Drop for PrivateServer {
     }
 }
 
-/// Stops the server this process's checks use, if one is running, and waits until it no longer
-/// listens: a client greeting it with a protocol it does not speak is answered `stale`, and the
-/// server stops.
-pub fn stop() {
-    validators().idle().clear();
-    let Ok(endpoint) = std::fs::read(rendezvous().join("endpoint.json")) else {
-        return;
-    };
-    let Some(port) = serde_json::from_slice::<Value>(&endpoint)
-        .ok()
-        .and_then(|endpoint| endpoint["port"].as_u64())
-        .and_then(|port| u16::try_from(port).ok())
-    else {
-        return;
-    };
-    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    if let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_secs(5)) {
-        let _ = stream.write_all(b"{\"hello\":0}\n");
-        let _ = stream.set_read_timeout(Some(ANSWER_WITHIN));
-        let _ = BufReader::new(stream).read_line(&mut String::new());
-    }
-    let asked = std::time::Instant::now();
-    while TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_ok()
-        && asked.elapsed() < ANSWER_WITHIN
-    {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-}
-
+/// This process's way to the shared server, connected on first use.
 fn validators() -> &'static Validators {
+    static VALIDATORS: OnceLock<Validators> = OnceLock::new();
     VALIDATORS.get_or_init(|| {
-        let validators = Validators {
-            idle: Mutex::new(Vec::new()),
-            schema_sha256: OnceLock::new(),
-            answers: Mutex::new(HashMap::new()),
-        };
+        let validators = Validators::new(shared_rendezvous());
         let connection = validators.connection();
         validators.idle().push(connection);
         validators
@@ -486,18 +520,7 @@ pub fn schema_sha256() -> String {
 /// The port and process id of the server this clone's checks share, as it records them,
 /// connecting this process to it first.
 pub fn server() -> (u16, u64) {
-    validators();
-    let endpoint: Value = serde_json::from_slice(
-        &std::fs::read(rendezvous().join("endpoint.json")).expect("a running server's endpoint"),
-    )
-    .expect("the endpoint is JSON");
-    (
-        endpoint["port"]
-            .as_u64()
-            .and_then(|port| u16::try_from(port).ok())
-            .expect("the endpoint names a port"),
-        endpoint["pid"].as_u64().expect("the endpoint names a pid"),
-    )
+    validators().endpoint()
 }
 
 /// How deeply `value` nests, measured without recursion so that no depth of it can exhaust
@@ -530,13 +553,13 @@ fn messages(errors: Vec<Value>) -> Result<(), Vec<String>> {
 /// Whether GitHub's static validation accepts `document` sent with `variables`; `Err` carries
 /// each message it would answer, in order.
 pub fn validate(document: &str, variables: &Value) -> Result<(), Vec<String>> {
-    messages(errors(document, None, Some(variables)))
+    messages(errors(validators(), document, None, Some(variables)))
 }
 
 /// [`validate`] of the document alone: every rule but the coercion of the variables' values,
 /// for a document whose values a caller supplies later.
 pub fn validate_document(document: &str) -> Result<(), Vec<String>> {
-    messages(errors(document, None, None))
+    messages(errors(validators(), document, None, None))
 }
 
 /// `body`, a GraphQL request's JSON — `query`, and `operationName` and `variables` when given —
@@ -545,6 +568,10 @@ pub fn validate_document(document: &str) -> Result<(), Vec<String>> {
 /// a GraphQL request.
 #[must_use]
 pub fn refuse(body: &Value) -> Option<Value> {
+    refuse_by(validators(), body)
+}
+
+fn refuse_by(validators: &Validators, body: &Value) -> Option<Value> {
     let document = body.get("query")?.as_str()?;
     let operation_name = match body.get("operationName") {
         None | Some(Value::Null) => None,
@@ -560,6 +587,6 @@ pub fn refuse(body: &Value) -> Option<Value> {
         .get("variables")
         .filter(|value| !value.is_null())
         .unwrap_or(&empty);
-    let errors = errors(document, operation_name, Some(variables));
+    let errors = errors(validators, document, operation_name, Some(variables));
     (!errors.is_empty()).then(|| json!({ "errors": errors }))
 }
