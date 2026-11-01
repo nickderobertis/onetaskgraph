@@ -3218,6 +3218,11 @@ mod pool {
     use onetaskgraph_linear::live_artifact::{POOL_SIZE, classify_lease};
     use std::collections::BTreeSet;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// One order over every claim and release of this module's sessions, so a test can
+    /// tell two holds of one member that overlapped from one that followed the other.
+    static HOLD_ORDER: AtomicU64 = AtomicU64::new(0);
 
     /// Drives every future at once, on this task, and hands back their outputs in order.
     async fn join_all<F: std::future::Future>(futures: Vec<F>) -> Vec<F::Output> {
@@ -3412,6 +3417,9 @@ mod pool {
         standing: BTreeMap<&'static str, String>,
         namespace: Arc<Namespace>,
         result: Result<(), String>,
+        /// Where in `HOLD_ORDER` the lease was confirmed claimed and where its release was
+        /// begun: the session held its member over exactly that span.
+        held: (u64, u64),
     }
 
     /// One whole ordinary CI session of `lane` as the live lane runs it: lease a member,
@@ -3436,6 +3444,7 @@ mod pool {
         let lease = lease::claim(&raw, key, "ENG", "team", lane, &holder(owner), now_micros)
             .await
             .unwrap();
+        let claimed = HOLD_ORDER.fetch_add(1, Ordering::SeqCst);
         namespace.leased(lease.index);
         let slots: &[Slot] = match lane {
             LeaseLane::Plugin => &[Slot::Filed, Slot::Loose, Slot::FollowUp],
@@ -3468,6 +3477,7 @@ mod pool {
             Ok::<_, String>(ids)
         }
         .await;
+        let releasing = HOLD_ORDER.fetch_add(1, Ordering::SeqCst);
         lease.release(&raw, key).await.unwrap();
         let (standing, result) = match result {
             Ok(ids) => (ids, Ok(())),
@@ -3479,6 +3489,7 @@ mod pool {
             standing,
             namespace,
             result,
+            held: (claimed, releasing),
         }
     }
 
@@ -3513,15 +3524,24 @@ mod pool {
                 }
             }
         }
-        let members: BTreeSet<_> = sessions
-            .iter()
-            .map(|s| (s.lease.lane == LeaseLane::Plugin, s.lease.index))
-            .collect();
-        assert_eq!(
-            members.len(),
-            sessions.len(),
-            "two sessions of one lane shared a member"
-        );
+        // A member released and claimed again within one round is the pool working, and
+        // happens whenever a session ends before another's claim reaches that member, which a
+        // slower host makes more likely. What may never happen is two holds of one member at
+        // once.
+        for (n, a) in sessions.iter().enumerate() {
+            for b in &sessions[n + 1..] {
+                let same = a.lease.lane == b.lease.lane && a.lease.index == b.lease.index;
+                let overlap = a.held.0 < b.held.1 && b.held.0 < a.held.1;
+                assert!(
+                    !(same && overlap),
+                    "{} and {} held {:?} member {} at once",
+                    a.key,
+                    b.key,
+                    a.lease.lane,
+                    a.lease.index
+                );
+            }
+        }
     }
 
     #[tokio::test]
