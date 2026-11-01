@@ -2,7 +2,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "name": "onetaskgraph-linear",
   "projectType": "library",
-  "tags": ["lang:rust", "layer:plugin", "live:linear", "coverage:uninstrumented"],
+  "tags": ["lang:rust", "layer:plugin", "live:linear", "coverage:uninstrumented", "ci-phase:linear-live"],
   "//": "implicitDependencies mirror this crate's Cargo dependencies; scripts/check-nx-graph.sh fails when the two disagree. llmlint: ignore-file[external_service_suite_stays_out_of_the_affected_tier] JSON has no comment to scope this to `test`, whose live tests reach a real API; affected selection is the edge they sit behind, so they run only when this crate changed. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `coverage`: the line floor is one report over every crate's instrumented run, so workspace:coverage runs this crate's whether or not the change reached it. `test` still selects by the graph.",
   "implicitDependencies": ["onetaskgraph-live", "onetaskgraph-plugin-api"],
   "targets": {
