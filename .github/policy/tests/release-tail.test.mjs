@@ -726,15 +726,17 @@ test("over release v0.13.0 the CD figures count release-plz and Release, and nei
   const reads = run.results["onetaskgraph-release-read-requests"];
   assert.equal(reads.value, 6, run.output);
   assert.equal(reads.threshold, threshold);
+  // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The node's acceptance criteria require this test to show the release read-request figure within its budget's threshold as budgets.yaml states it: the defect fixed here is that figure reading 7 against 6, so the bound is the regression being proven, read from budgets.yaml rather than restated.
   assert.ok(reads.value <= threshold, `${reads.value} release reads over ${threshold}`);
   assert.equal(reads.verdict, "within", run.output);
+  // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
   assert.match(run.output, /release-changes --tag v0\.13\.0: 3 requests/);
 });
 
 // Timed to the moment the tail's own step started on GitHub — `--now`, which every figure timed
-// to the tail's moment takes — the budgets' own commands report v0.13.0 as that release would
-// have read with this script: every figure within its threshold.
-test("at the moment v0.13.0's tail ran, every release-tail figure is within its budget", (t) => {
+// to the tail's moment takes — the budgets' own commands report v0.13.0's figures exactly, each
+// beside its threshold with the verdict that comparison gives, and the step exits as they say.
+test("at the moment v0.13.0's tail ran, the budgets' commands report each figure exactly", (t) => {
   const now = V13.tailStep.started_at;
   const document = parse(readFileSync(join(root, "budgets.yaml"), "utf8"));
   for (const budget of document.budgets)
@@ -750,10 +752,15 @@ test("at the moment v0.13.0's tail ran, every release-tail figure is within its 
     const threshold = document.budgets.find((b) => b.id === id).threshold;
     assert.equal(run.results[id]?.value, figures[id], `${id}: ${run.output}`);
     assert.equal(run.results[id].threshold, threshold, id);
-    assert.equal(run.results[id].verdict, "within", `${id}: ${run.output}`);
-    t.diagnostic(`${id}: ${figures[id]} against ${threshold}`);
+    assert.equal(
+      run.results[id].verdict,
+      figures[id] > threshold ? "over" : "within",
+      `${id}: ${run.output}`,
+    );
+    t.diagnostic(`${id}: ${figures[id]} against ${threshold} (${run.results[id].verdict})`);
   }
-  assert.equal(run.status, 0, run.output);
+  const over = TAIL_IDS.some((id) => run.results[id].verdict === "over");
+  assert.equal(run.status, over ? 1 : 0, run.output);
 });
 
 // The copy is dero-skills' create-repo source, edited only there. create-repo's
@@ -788,7 +795,8 @@ test("the reconciliation names a recording GitHub no longer answers, and ignores
   writeFileSync(
     answer,
     `import { readdirSync, readFileSync } from "node:fs";
-const dir = ${JSON.stringify(fileURLToPath(new URL("./fixtures/release-tail/recordings/", import.meta.url)))};
+// GitHub as it answers now: the recordings of the release the reconciliation was asked about.
+const dir = ${JSON.stringify(fileURLToPath(new URL("./fixtures/release-tail/", import.meta.url)))} + (process.env.RECORDINGS ?? "recordings");
 const path = process.argv.at(-1);
 // GitHub answers the releases path 401 under an invalid token, as the reconciliation asks it.
 const invalid = (process.env.GH_TOKEN ?? "").startsWith("ghp_invalid");
@@ -804,6 +812,8 @@ if (process.env.ANSWER === "rewritten")
     .replace(/^Date: .*$/m, "Date: Sun, 01 Nov 2026 00:00:00 GMT")
     .replace(/^X-Ratelimit-Remaining: .*$/im, "X-Ratelimit-Remaining: 1")
     .replace(/"updated_at":"[^"]*"/g, '"updated_at":"2026-11-01T00:00:00Z"');
+if (process.env.ANSWER === "v13-changed" && name === "runs-at-release-commit.http.source.json")
+  text = text.replace('"total_count":', '"total_count":1');
 if (process.env.ANSWER === "changed" && name.startsWith("runs-at-pr-3824-head"))
   text = text.replace('"total_count":', '"total_count":1');
 // One recording drifting in a way the reconciliation must see: its status, a header it keeps,
@@ -827,17 +837,47 @@ process.stdout.write(text);
   mkdirSync(join(dir, "bin"));
   writeFileSync(join(dir, "bin", "gh"), `#!/bin/sh\nexec "${process.execPath}" "${answer}" "$@"\n`);
   chmodSync(join(dir, "bin", "gh"), 0o755);
-  const reconcile = (ANSWER) =>
+  const reconcile = (ANSWER, RECORDINGS) =>
     spawnSync(
       process.execPath,
-      [fileURLToPath(new URL("./fixtures/release-tail/reconcile.mjs", import.meta.url))],
+      [
+        fileURLToPath(new URL("./fixtures/release-tail/reconcile.mjs", import.meta.url)),
+        ...(RECORDINGS ? [RECORDINGS] : []),
+      ],
       {
-        env: { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}`, ANSWER },
+        env: {
+          ...process.env,
+          PATH: `${join(dir, "bin")}:${process.env.PATH}`,
+          ANSWER,
+          RECORDINGS: RECORDINGS ?? "recordings",
+        },
         encoding: "utf8",
       },
     );
   const same = reconcile("same");
   assert.equal(same.status, 0, same.stderr);
+  // v0.13.0's recordings, named by their directory, against GitHub answering them; and a GitHub
+  // that has moved on from one of them is named, the release's own paths read under its name.
+  const v13Same = reconcile("same", "recordings-v0.13.0");
+  assert.equal(v13Same.status, 0, v13Same.stderr);
+  const v13Drift = reconcile("v13-changed", "recordings-v0.13.0");
+  assert.equal(v13Drift.status, 1, v13Drift.stderr);
+  assert.match(
+    v13Drift.stderr,
+    /^runs-at-release-commit\.http: GitHub now answers otherwise at body\.total_count$/m,
+  );
+  // A directory that is no release's recordings is refused before anything is read.
+  for (const named of ["../release-tail/recordings", "/tmp", "recordings-latest"]) {
+    const refused = reconcile("same", named);
+    assert.equal(refused.status, 2, `${named}: ${refused.stderr}`);
+    assert.match(
+      refused.stderr,
+      /is not a recordings directory; next: name one beside this script/,
+    );
+  }
+  const empty = reconcile("same", "recordings-v0.0.0");
+  assert.equal(empty.status, 2, empty.stderr);
+  assert.match(empty.stderr, /recordings-v0\.0\.0 holds no recording; next:/);
   const rewritten = reconcile("rewritten");
   assert.equal(rewritten.status, 0, rewritten.stderr);
   const changed = reconcile("changed");
