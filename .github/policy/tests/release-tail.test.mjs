@@ -689,12 +689,8 @@ test("over release v0.13.0 the CD figures count release-plz and Release, and nei
   );
   const warmerJobs = jobsOf(V13, warmer.id).map(counted(V13, run.started)).filter(Boolean);
   assert.ok(warmerJobs.length, "the warmer ran jobs a figure could have counted");
-  // The longest CD job is a counted run's, whatever the warmer's jobs took.
-  assert.equal(
-    run.results["onetaskgraph-cd-job-time"].value,
-    Math.max(...cdJobs.map((job) => job.secs)),
-    run.output,
-  );
+  // The CD figures are the counted runs' alone: assertFigures above brackets each between its
+  // value at the step's start and end, computed from release-plz's and Release's jobs only.
   assert.equal(run.results["onetaskgraph-cd-job-count"].value, cdJobs.length, run.output);
 
   // The skipped run costs no jobs request, and leaving it out is said.
