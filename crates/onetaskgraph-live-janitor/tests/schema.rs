@@ -6,7 +6,9 @@ use std::collections::HashMap;
 
 use graphql_parser::{query, schema};
 use onetaskgraph_github_live::{
-    BOARD_WORKLOAD_DOCUMENT, DELETE_FIELD_DOCUMENT, RESIDUE_ITEMS_DOCUMENT,
+    ADD_DRAFT_DOCUMENT, BOARD_WORKLOAD_DOCUMENT, COPY_BOARD_DOCUMENT, DELETE_BOARD_DOCUMENT,
+    DELETE_FIELD_DOCUMENT, RESIDUE_ITEMS_DOCUMENT, RUN_BOARDS_DOCUMENT, TEMPLATE_DOCUMENT,
+    TEMPLATE_ITEMS_DOCUMENT,
 };
 use onetaskgraph_live_janitor::{BOARD_DOCUMENT, DELETE_ISSUE_DOCUMENT, DELETE_ITEM_DOCUMENT};
 
@@ -188,6 +190,12 @@ fn every_janitor_document_is_valid_against_the_pinned_schema() {
         DELETE_FIELD_DOCUMENT,
         BOARD_WORKLOAD_DOCUMENT,
         RESIDUE_ITEMS_DOCUMENT,
+        TEMPLATE_DOCUMENT,
+        COPY_BOARD_DOCUMENT,
+        DELETE_BOARD_DOCUMENT,
+        RUN_BOARDS_DOCUMENT,
+        TEMPLATE_ITEMS_DOCUMENT,
+        ADD_DRAFT_DOCUMENT,
     ] {
         validate(document);
     }
@@ -257,7 +265,9 @@ fn linear_documents_stay_under_linears_complexity_cap() {
 
 #[test]
 fn linear_documents_match_the_pinned_upstream_schema() {
-    use onetaskgraph_live_janitor::linear::{DELETE_DOCUMENT, DOCUMENTS};
+    use onetaskgraph_live_janitor::linear::{
+        DELETE_DOCUMENT, DOCUMENTS, LEASE_READ, LEASE_RELEASE,
+    };
     let upstream = std::process::Command::new("python3")
         .args([
             "-c",
@@ -271,7 +281,7 @@ fn linear_documents_match_the_pinned_upstream_schema() {
         .expect("read the pinned upstream schema");
     assert!(upstream.status.success());
     let pinned = String::from_utf8(upstream.stdout).expect("upstream schema is UTF-8");
-    for document in [DOCUMENTS, DELETE_DOCUMENT] {
+    for document in [DOCUMENTS, DELETE_DOCUMENT, LEASE_READ, LEASE_RELEASE] {
         validate_against(document, &pinned);
     }
     let input_schema = schema::parse_schema::<String>(&pinned).expect("upstream parses");

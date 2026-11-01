@@ -5,9 +5,10 @@
 #   rust-coverage.sh --clear     what a plain `cargo llvm-cov` does before every run
 #   rust-coverage.sh <crate>     one crate's tests under nextest, instrumented, profiles kept
 #   rust-coverage.sh --report    the one report over every crate's run, held to the floor
-#   rust-coverage.sh --build-only <crate>
+#   rust-coverage.sh --build-only <crate> [--test <target>]...
 #                                that crate's tests built instrumented and none run, for a
-#                                suite another crate's run executes (no profile is written)
+#                                suite another crate's run executes (no profile is written);
+#                                only the named test targets when any are named
 #
 # `--no-report` is the whole reason the crates can share the directory under Nx's parallel
 # fan-out: a plain run clears every raw profile in it first, so two crates deleted each
@@ -19,7 +20,7 @@
 # typecheck, test) still run on all three platforms, so Windows is still gated.
 set -euo pipefail
 
-readonly REQUEST="${1:?usage: scripts/rust-coverage.sh --clear | <crate-name> | --report | --build-only <crate-name>}"
+readonly REQUEST="${1:?usage: scripts/rust-coverage.sh --clear | <crate-name> | --report | --build-only <crate-name> [--test <target>]...}"
 # 92 over the instrumented suites, the live crates' suites running uninstrumented: the user's
 # decision of 2026-10-30, which replaced 95 over every suite.
 readonly MIN_LINES=92
@@ -98,9 +99,22 @@ if [ "$REQUEST" = "--report" ]; then
 fi
 
 build_only=false
+# The test targets a build-only run is limited to: the ones another crate's measured run
+# executes. Building the rest instrumented spends the job's CPU on binaries nothing runs.
+only_tests=()
 if [ "$REQUEST" = "--build-only" ]; then
   build_only=true
-  readonly CRATE="${2:?usage: scripts/rust-coverage.sh --build-only <crate-name>}"
+  readonly CRATE="${2:?usage: scripts/rust-coverage.sh --build-only <crate-name> [--test <target>]...}"
+  shift 2
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" != --test ] || [ "$#" -lt 2 ] || [ -z "$2" ] || [ "${2#-}" != "$2" ]; then
+      echo "rust-coverage: --build-only takes a crate and then only '--test <target>' pairs, not '$*'." >&2
+      echo "rust-coverage: next: name each test target another crate's run executes as --test <target>." >&2
+      exit 2
+    fi
+    only_tests+=(--test "$2")
+    shift 2
+  done
 else
   readonly CRATE="$REQUEST"
 fi
@@ -144,7 +158,7 @@ fi
 # them, with a filter selecting no test, so nothing of the crate's own suite is measured.
 if "$build_only"; then
   if ! built="$(cargo llvm-cov --no-report nextest --package "$CRATE" --all-features --locked \
-    -E 'none()' --no-tests=pass 2>&1)"; then
+    ${only_tests[@]+"${only_tests[@]}"} -E 'none()' --no-tests=pass 2>&1)"; then
     printf '%s\n' "$built" >&2
     echo "rust-coverage: $CRATE's tests did not build under instrumentation — fix what cargo reports above, then re-run." >&2
     exit 1

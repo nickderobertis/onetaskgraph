@@ -23,7 +23,7 @@ const ORDINARY_PUSH = "e2d3bf08e0ced82120f38a708dc2b7a92d26ce7f";
 // trigger added to one of them would spend the slots the budgets above count without either
 // test noticing. Moving one means re-deciding its schedule, then this digest.
 const UNCHANGED = {
-  "linear-documents.yml": "7f5f58ca0871ec5dd839367a67bd063d49230d0ca2b26780898d2ddd3ef537e8",
+  "linear-documents.yml": "cbee6e4eaa87bb4231469d90995eab95398bd1eb48885088a14dc405dc08088d",
   "live-janitor.yml": "12f972eff5e7402be7c9d87de5d5a01191ef96499605d01bc7f4f957001feebb",
   "release-plz.yml": "a1a98448486d5c0ff89880124f5d0757d0dfb1cf8317ca945b02e6af00d5469e",
   "rust-cache-warm.yml": "9baa87baacb5eacd55e2744152d45ecb40f9f354b9944c27c358b158a80786ce",

@@ -119,3 +119,116 @@ fn local_grammar_matches_canonical_positive_vouched_live_stamps_at_every_boundar
         }
     }
 }
+
+#[test]
+fn pool_members_round_trip_and_stay_distinct_from_each_other_and_the_pre_pool_set() {
+    use onetaskgraph_linear::live_artifact::POOL_SIZE;
+    let legacy = retained_title(Scope::ci("TEST").unwrap(), Slot::Filed).unwrap();
+    let mut seen = std::collections::BTreeSet::from([legacy.clone()]);
+    for index in 1..=POOL_SIZE {
+        let scope = Scope::pooled("TEST", index).unwrap();
+        let title = retained_title(scope, Slot::Filed).unwrap();
+        assert!(seen.insert(title.clone()), "{title} repeats");
+        let found = classify_retained(&title).unwrap();
+        assert_eq!(
+            (found.scope, found.scope.pool_index()),
+            (scope, Some(index))
+        );
+        assert!(found.scope.is_ci());
+    }
+    assert_eq!(classify_retained(&legacy).unwrap().scope.pool_index(), None);
+    for index in [0, POOL_SIZE + 1] {
+        assert!(Scope::pooled("TEST", index).is_err());
+    }
+    for bad in ["pool-0", "pool-01", "pool-17", "pool-", "pool-x", "7"] {
+        assert!(
+            classify_retained(&format!("{legacy} {bad}")).is_none(),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn lease_titles_round_trip_and_malformed_ones_confer_no_lease() {
+    use onetaskgraph_linear::live_artifact::{
+        HolderStamp, Lease, LeaseHolder, LeaseLane, classify_lease, is_reserved_title, lease_title,
+        lease_title_prefix,
+    };
+    use std::num::NonZeroU32;
+    let member = Scope::pooled("TEST", 16).unwrap();
+    for holder in [
+        LeaseHolder::Held(HolderStamp::new("1-2-3").unwrap()),
+        LeaseHolder::Held(HolderStamp::new("0-2-3").unwrap()),
+        LeaseHolder::Released,
+    ] {
+        for lane in [LeaseLane::Plugin, LeaseLane::Assets] {
+            let lease = Lease::new(member, lane, NonZeroU32::new(41).unwrap(), holder).unwrap();
+            let title = lease_title(lease);
+            assert!(title.starts_with(&lease_title_prefix("TEST", lane)));
+            assert_eq!(classify_lease(&title), Some(lease));
+            assert_eq!(
+                (lease.team(), lease.index(), lease.generation()),
+                ("TEST", 16, 41)
+            );
+            assert!(is_reserved_title(&title));
+            assert!(classify_retained(&title).is_none());
+        }
+    }
+    let good = lease_title(
+        Lease::new(
+            Scope::pooled("TEST", 3).unwrap(),
+            LeaseLane::Plugin,
+            NonZeroU32::MIN,
+            LeaseHolder::Held(HolderStamp::new("1-2-3").unwrap()),
+        )
+        .unwrap(),
+    );
+    for bad in [
+        format!("{good} "),
+        good.replace("gen-1", "gen-0"),
+        good.replace("gen-1", "gen-01"),
+        good.replace("pool-3", "pool-17"),
+        good.replace("plugin", "other"),
+        good.replace("1-2-3", "ci-1-2-3"),
+        good.replace("lease-v1", "lease-v2"),
+    ] {
+        assert!(classify_lease(&bad).is_none(), "{bad}");
+    }
+    // Nothing but a pool member's scope and a canonical stamp makes a lease at all.
+    for stamp in ["ci-1-2-3", "1-2", "01-2-3", ""] {
+        assert!(HolderStamp::new(stamp).is_err(), "{stamp}");
+    }
+    assert!(
+        Lease::new(
+            Scope::ci("TEST").unwrap(),
+            LeaseLane::Plugin,
+            NonZeroU32::MIN,
+            LeaseHolder::Released
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn a_lease_creation_time_is_read_to_the_microsecond_and_an_unreadable_one_is_not_read() {
+    use onetaskgraph_linear::live_artifact::lease_created_micros;
+    assert_eq!(
+        lease_created_micros("2026-10-31T18:28:02.123456Z"),
+        Some(1_793_471_282_123_456)
+    );
+    assert_eq!(
+        lease_created_micros("2026-10-31T20:28:02.123456+02:00"),
+        Some(1_793_471_282_123_456)
+    );
+    for unreadable in ["", "yesterday", "2026-10-31", "1969-12-31T23:59:59Z"] {
+        assert_eq!(lease_created_micros(unreadable), None, "{unreadable}");
+    }
+    // What the replay doubles stamp reads back as a time no earlier than this test started.
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_micros();
+    let stamped = lease_created_micros(&onetaskgraph_linear::live_artifact::now_rfc3339())
+        .expect("its own stamp reads back");
+    assert!(u128::from(stamped) >= started / 1_000_000 * 1_000_000);
+}

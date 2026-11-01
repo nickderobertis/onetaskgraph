@@ -240,12 +240,20 @@ tag_refused "a live crate's test target running cargo beside the script" "every 
 # The script itself, driven with a stand-in cargo that records each invocation and runs nothing.
 mkdir -p "$scratch/recorded-cargo"
 # Asked to list, it answers with the test it was asked for, unless CARGO_LISTS_NOTHING is set.
+# Asked for metadata, it answers with a crate holding a library and two test targets. Asked to
+# run exactly the command CARGO_FAILS_ON spells, it fails it.
 cat >"$scratch/recorded-cargo/cargo" <<'CARGO'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$CARGO_RECORD"
 if [ "${*: -1}" = --list ] && [ -z "${CARGO_LISTS_NOTHING:-}" ]; then
   arguments=("$@")
   echo "${arguments[$#-2]}: test"
+fi
+if [ "$1" = metadata ]; then
+  echo '{"packages":[{"name":"onetaskgraph-linear","targets":[{"kind":["lib"],"name":"onetaskgraph_linear"},{"kind":["test"],"name":"live"},{"kind":["test"],"name":"plugin"}]}]}'
+fi
+if [ -n "${CARGO_FAILS_ON:-}" ] && [ "$*" = "$CARGO_FAILS_ON" ]; then
+  exit 101
 fi
 CARGO
 chmod +x "$scratch/recorded-cargo/cargo"
@@ -260,10 +268,28 @@ ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear-e2e e2e 
 [ "$LIVE_STATUS" -eq 0 ] && [ "$RECORDED" = "test --quiet -p onetaskgraph-linear-e2e --all-features --locked --test e2e -- --exact linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy --list
 test --quiet -p onetaskgraph-linear-e2e --all-features --locked --test e2e -- --exact linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy" ] \
   || fail "where coverage stands in, live-crate-test.sh ran '$RECORDED' (exit $LIVE_STATUS), not the credentialed journey alone"
+# A crate tagged coverage:uninstrumented runs whole: its journey's binary built first and set
+# running, then every other target and the doctests beside it. The journey runs in the
+# background, so the record is compared in sorted order.
+WHOLE_SUITE="metadata --no-deps --format-version 1 --locked
+test --quiet -p onetaskgraph-linear --all-features --locked --doc
+test --quiet -p onetaskgraph-linear --all-features --locked --lib --test plugin
+test --quiet -p onetaskgraph-linear --all-features --locked --test live
+test --quiet -p onetaskgraph-linear --all-features --locked --test live --no-run"
 ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear live \
   real_linear_reads_nothing_that_is_not_there
-[ "$LIVE_STATUS" -eq 0 ] && [ "$RECORDED" = "test --quiet -p onetaskgraph-linear --all-features --locked" ] \
-  || fail "live-crate-test.sh narrowed onetaskgraph-linear, tagged coverage:uninstrumented, to its journey: ran '$RECORDED' (exit $LIVE_STATUS), not the whole suite"
+[ "$LIVE_STATUS" -eq 0 ] && [ "$(sort <<<"$RECORDED")" = "$WHOLE_SUITE" ] \
+  || fail "live-crate-test.sh did not run onetaskgraph-linear, tagged coverage:uninstrumented, whole with its journey first: ran '$RECORDED' (exit $LIVE_STATUS)"
+# A journey that fails fails the target, and the rest of the suite still runs beside it.
+CARGO_FAILS_ON="test --quiet -p onetaskgraph-linear --all-features --locked --test live" ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear live \
+  real_linear_reads_nothing_that_is_not_there
+[ "$LIVE_STATUS" -ne 0 ] && grep -qxF -- "test --quiet -p onetaskgraph-linear --all-features --locked --lib --test plugin" <<<"$RECORDED" \
+  || fail "live-crate-test.sh passed, or skipped the rest of the suite, when onetaskgraph-linear's journey failed: exit $LIVE_STATUS, ran '$RECORDED'"
+# And the rest failing fails it, with the journey still waited for rather than cut short.
+CARGO_FAILS_ON="test --quiet -p onetaskgraph-linear --all-features --locked --lib --test plugin" ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-linear live \
+  real_linear_reads_nothing_that_is_not_there
+[ "$LIVE_STATUS" -ne 0 ] && grep -qxF -- "test --quiet -p onetaskgraph-linear --all-features --locked --test live" <<<"$RECORDED" \
+  || fail "live-crate-test.sh passed, or did not run the journey, when the rest of onetaskgraph-linear's suite failed: exit $LIVE_STATUS, ran '$RECORDED'"
 ONETASKGRAPH_TESTS_UNDER_COVERAGE=1 live_crate_test onetaskgraph-no-such-crate live journey
 [ "$LIVE_STATUS" -eq 2 ] && [ -z "$RECORDED" ] && grep -qF "has no crates/onetaskgraph-no-such-crate/project.json" <<<"$LIVE_OUTPUT" \
   || fail "live-crate-test.sh ran a crate with no project.json under the variable: exit $LIVE_STATUS, ran '$RECORDED'"

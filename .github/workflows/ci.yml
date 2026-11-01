@@ -274,13 +274,8 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # This run's one live session, serialized with every other writer to the standing Linear
-    # set (linear-documents.yml), every waiting writer kept.
-    # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] This block moves no suite into the job: the live journeys are ordinary affected tests here, run only when their own plugin changed. It only serializes the credentialed job so two writers cannot interleave updates to the standing Linear set.
-    concurrency:
-      group: linear-live-documents
-      cancel-in-progress: false
-      queue: max
+    # No concurrency group: this run's live sessions touch only resources of its own
+    # namespace, so any number of runs may execute them at once.
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"
@@ -406,6 +401,8 @@ jobs:
           GITHUB_LIVE_SESSION_DIR: ${{ github.workspace }}/target/debug/telemetry/github-live-session/${{ github.run_id }}-${{ github.run_attempt }}
           GITHUB_LIVE_SOURCE_REVISION: ${{ github.sha }}
           ONETASKGRAPH_LINEAR_DOCUMENT_MODE: ordinary
+          # Where the Linear lanes record the pool leases they hold, for the cancellation step.
+          ONETASKGRAPH_LINEAR_LEASE_DIR: ${{ github.workspace }}/target/linear-leases
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The lane's own refusal is the drift gate: ONETASKGRAPH_LIVE_REQUIRED below is 1 on this lane, so a name spelled differently on either side fails this job naming the variable rather than skipping green.
           GH_PROJECTS_OWNER: nickderobertis
@@ -418,11 +415,11 @@ jobs:
           NX_HEAD: HEAD
         # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] These suites run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just ci-test-linux
-      # A cancelled run's live journey dies before its own cleanup, and what it wrote would
-      # make the next session refuse the shared board. On cancellation this job, the one that
-      # carries the credentials, removes exactly this run attempt's stamped artifacts and opens
-      # no session; the hourly janitor takes anything left once the run reads completed.
-      # scripts/check-live-janitor.sh holds this step to that shape.
+      # A cancelled run's live journeys die before their own cleanup, leaving their board
+      # copies, scratch issues and pool leases behind. On cancellation this job, the one that
+      # carries the credentials, removes exactly this run attempt's and opens no session; the
+      # hourly janitor takes anything left once the run reads completed.
+      # scripts/check-live-janitor.sh holds both steps to that shape.
       - name: Remove this run's live artifacts after a cancellation
         if: cancelled() && steps.release.outputs.tests == 'run' && !github.event.pull_request.head.repo.fork
         timeout-minutes: 15
@@ -432,6 +429,17 @@ jobs:
           GH_PROJECTS_NUMBER: "1"
           GH_PROJECTS_REPOSITORY: nickderobertis/onetaskgraph-live-scratch
         run: cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run
+
+      # And its Linear pool leases, which would otherwise keep their members for
+      # six and a half hours: exactly the leases this job recorded, each only while it still
+      # reads back as recorded. scripts/check-live-janitor.sh holds this step to that shape.
+      - name: Release this run's Linear leases after a cancellation
+        if: cancelled() && steps.release.outputs.tests == 'run' && !github.event.pull_request.head.repo.fork
+        timeout-minutes: 15
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
+        run: cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases
 
   test-windows:
     if: github.event_name == 'pull_request'

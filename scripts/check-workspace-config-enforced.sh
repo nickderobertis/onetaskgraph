@@ -307,6 +307,16 @@ mutate "$GITHUB_PROJECTS_PROJECT" 'document["targets"]["coverage"].pop("dependsO
 expect check-coverage-enforced.sh "an uninstrumented crate building its tests before the clear" \
   "its build-only coverage target must depend on workspace:coverage-clear"
 restore "$GITHUB_PROJECTS_PROJECT"
+# Narrowed to the test binaries another crate's measured run drives, each must be one the crate
+# has, or that run finds nothing to drive.
+mutate "$GITHUB_PROJECTS_PROJECT" 'document["targets"]["coverage"]["options"]["command"] = "bash scripts/rust-coverage.sh --build-only onetaskgraph-github-projects --test plugin --test no_such_binary"'
+expect check-coverage-enforced.sh "a build-only coverage target naming a test binary the crate lacks" \
+  "which this crate does not have"
+restore "$GITHUB_PROJECTS_PROJECT"
+mutate "$GITHUB_PROJECTS_PROJECT" 'document["targets"]["coverage"]["options"]["command"] = "bash scripts/rust-coverage.sh --build-only onetaskgraph-github-projects --tests plugin"'
+expect check-coverage-enforced.sh "a build-only coverage target with an argument that is not a --test pair" \
+  "but its coverage target still runs a measurement"
+restore "$GITHUB_PROJECTS_PROJECT"
 
 mutate "$WORKSPACE_PROJECT" 'document["targets"]["coverage"]["options"]["commands"] = ["bash scripts/check-coverage-enforced.sh"]'
 expect check-coverage-enforced.sh "an aggregate that no longer reports" \

@@ -356,16 +356,22 @@ for job in re.split(r"(?m)^  (?=[a-z][a-z0-9-]*:[ \t]*$)", code):
     runner = re.search(r"(?m)^    runs-on:[ \t]*(\S+)[ \t]*$", job)
     for step in re.split(r"(?m)^      - (?=name:|uses:)", job):
         lanes.append((runner.group(1) if runner else "", step))
-# The one credentialed step that opens no session: the janitor's cleanup of a cancelled run,
+# The credentialed steps that open no session: the janitor's cleanups of a cancelled run,
 # which reads no ONETASKGRAPH_LIVE_REQUIRED and no nomination it could skip for. Exactly a step
 # running this command is left out, and scripts/check-live-janitor.sh holds it to its whole
 # shape — its condition, its leg and the four variables it is given — so this cannot shelter
 # a session step, which runs a `just` recipe.
-CANCELLATION_CLEANUP = "cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run"
+CANCELLATION_CLEANUPS = (
+    "cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run",
+    "cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases",
+)
 lanes = [
     (runner, step)
     for runner, step in lanes
-    if not re.search(rf"(?m)^\s*run:\s*{re.escape(CANCELLATION_CLEANUP)}\s*$", step)
+    if not any(
+        re.search(rf"(?m)^\s*run:\s*{re.escape(cleanup)}\s*$", step)
+        for cleanup in CANCELLATION_CLEANUPS
+    )
 ]
 steps = [step for _, step in lanes]
 

@@ -94,6 +94,7 @@ if not run or '"$CRATE"' not in run.group(1):
     sys.exit("pr-build-commands: scripts/rust-coverage.sh has no `run=\"$(cargo llvm-cov ... \"$CRATE\" ... 2>&1)\"`; next: point this at its instrumented run")
 instrumented = " ".join(run.group(1).replace("\\\n", " ").split())
 uninstrumented = set()
+narrowed_tests = {}
 for found in pathlib.Path("crates").glob("*/project.json"):
     try:
         project = json.loads(found.read_text(encoding="utf-8"))
@@ -102,15 +103,21 @@ for found in pathlib.Path("crates").glob("*/project.json"):
     coverage = project.get("targets", {}).get("coverage", {})
     if "coverage:uninstrumented" in project.get("tags", []) and coverage.get("executor") == "nx:noop":
         uninstrumented.add(found.parent.name)
+    # A build-only coverage target narrowed to the test targets another crate's run executes
+    # builds only those, so they are what is built here too.
+    command = coverage.get("options", {}).get("command", "")
+    prefix = f"bash scripts/rust-coverage.sh --build-only {found.parent.name}"
+    if isinstance(command, str) and command.startswith(prefix):
+        narrowed_tests[found.parent.name] = command[len(prefix):]
 # The crates test-linux builds under cargo-llvm-cov: every one a test command builds but those
 # whose suites run uninstrumented (coverage:uninstrumented) with a no-op coverage target. One
 # whose coverage only builds its tests (`rust-coverage.sh --build-only`) is built exactly as
-# below, with the filter selecting no test.
+# below, with the filter selecting no test, and only the `--test` targets it names when any.
 crates = sorted({m for c in out for m in re.findall(r"(?:-p|--package) (\S+)", c)} - uninstrumented)
 if not crates:
     sys.exit("pr-build-commands: no crate's test target runs `cargo test`; next: restore the crates' test targets")
 for crate in crates:
-    out.append(instrumented.replace('"$CRATE"', crate) + " -E none() --no-tests=pass")
+    out.append(instrumented.replace('"$CRATE"', crate) + narrowed_tests.get(crate, "") + " -E none() --no-tests=pass")
 try:
     metadata = json.loads(subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],

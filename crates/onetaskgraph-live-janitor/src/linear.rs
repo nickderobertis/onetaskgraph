@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use onetaskgraph_live::Credential;
 use onetaskgraph_live::artifact::{CiStamp, Stamp, now_micros};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::{Value, json};
 
 use crate::{Clock, GRAPHQL_READ_LIMIT, RealClock, Report, WRITE_INTERVAL, WRITE_LIMIT};
 
@@ -246,7 +247,8 @@ async fn request<V: Serialize, T: DeserializeOwned>(
 
 fn old_test_title(title: &str, now: u64) -> bool {
     // Retained sets retire only through their invocation registration, never by age.
-    if onetaskgraph_linear::live_artifact::classify_retained(title).is_some() {
+    // So do pool leases and any malformed or future version of either, which confer nothing.
+    if onetaskgraph_linear::live_artifact::is_reserved_title(title) {
         return false;
     }
     let Some(suffix) = title.strip_prefix(DOCUMENT_PREFIX) else {
@@ -326,6 +328,94 @@ pub async fn run_linear_with_clock(
         if !deleted.document_delete.success {
             return Err("Linear did not confirm document deletion".into());
         }
+    }
+    Ok(report)
+}
+
+/// Reads one lease issue back, for `--release-leases`.
+pub const LEASE_READ: &str = "query($id:String!){issue(id:$id){id title}}";
+/// Retitles one lease issue released, for `--release-leases`.
+pub const LEASE_RELEASE: &str =
+    "mutation($id:String!,$input:IssueUpdateInput!){issueUpdate(id:$id,input:$input){success}}";
+
+/// Releases every pool lease a cancelled job recorded in `directory`
+/// (`ONETASKGRAPH_LINEAR_LEASE_DIR`), and nothing else: a recorded lease is released only when
+/// it still reads back exactly as recorded — this run's holder, this generation — which is the
+/// positive evidence that it is still the cancelled run's. One Linear answers absent, or that
+/// reads otherwise, was superseded or released already, and its record is settled without a
+/// write; an answer that is neither stops the pass with the record kept. An absent directory is
+/// a run that held no lease.
+pub async fn release_recorded_leases(
+    config: LinearConfig,
+    directory: &std::path::Path,
+) -> Result<Report, String> {
+    use onetaskgraph_linear::live_artifact::{Lease, LeaseHolder, LeaseRecord, lease_title};
+    let mut report = Report::default();
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(report),
+        Err(error) => return Err(format!("the lease records could not be read: {error}")),
+    };
+    let client = reqwest::Client::new();
+    let team = config.team.0.clone();
+    for entry in entries {
+        let path = entry.map_err(|error| error.to_string())?.path();
+        let record = LeaseRecord::read(
+            &std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?,
+        )
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+        let lease = record.lease()?;
+        if !lease.team().eq_ignore_ascii_case(&team) {
+            return Err(format!(
+                "{} records no held lease of {team}",
+                path.display()
+            ));
+        }
+        let id = record.id();
+        let read: Value = request(&client, &config, LEASE_READ, json!({"id":id})).await?;
+        report.graphql_queries += 1;
+        let still = match read.get("issue") {
+            Some(Value::Null) => false,
+            Some(issue) => match (
+                issue.get("id").and_then(Value::as_str),
+                issue.get("title").and_then(Value::as_str),
+            ) {
+                (Some(answered), Some(title)) if answered == id => title == record.title(),
+                _ => {
+                    return Err(format!(
+                        "Linear answered lease {id} with an issue it does not identify: {issue}; \
+                         the record is kept"
+                    ));
+                }
+            },
+            None => {
+                return Err(format!(
+                    "Linear answered lease {id} with no issue at all; the record is kept"
+                ));
+            }
+        };
+        if still {
+            let released = lease_title(Lease::new(
+                lease.scope(),
+                lease.lane(),
+                std::num::NonZeroU32::new(lease.generation()).ok_or("generation 0")?,
+                LeaseHolder::Released,
+            )?);
+            let answer: Value = request(
+                &client,
+                &config,
+                LEASE_RELEASE,
+                json!({"id":id,"input":{"title":released}}),
+            )
+            .await?;
+            if answer.pointer("/issueUpdate/success") != Some(&json!(true)) {
+                return Err(format!(
+                    "Linear did not confirm releasing lease {id}; the record is kept"
+                ));
+            }
+            report.writes += 1;
+        }
+        std::fs::remove_file(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     }
     Ok(report)
 }
