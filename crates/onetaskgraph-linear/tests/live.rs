@@ -3672,19 +3672,8 @@ mod pool {
     async fn every_linear_lane_passes_over_standing_identities_no_current_scheme_owns() {
         let replay = replay();
         let strays = seed_stray_retained(&replay).await;
-        let from = replay.state.lock().unwrap().keyed.len();
-        // Each lane's CI session, two of each at once, over a pool member of its own.
-        let sessions = {
-            let (a, b, c, d) = tokio::join!(
-                ci_session(&replay, LeaseLane::Plugin, "plugin-a", run(1)),
-                ci_session(&replay, LeaseLane::Plugin, "plugin-b", run(2)),
-                ci_session(&replay, LeaseLane::Assets, "assets-a", run(3)),
-                ci_session(&replay, LeaseLane::Assets, "assets-b", run(4)),
-            );
-            vec![a, b, c, d]
-        };
-        assert_isolated(&replay, &sessions);
-        // A local invocation's own set initializes, is found again and is retired as before.
+        // Beside them, what the lanes must also leave as it is: a local invocation's own set,
+        // and a pool member's lease another run holds for the whole of the sessions below.
         let local = Scope::local("ENG", "1-2-900").unwrap();
         let created = document_lifecycle::Created::default();
         document_lifecycle::prepare_owned(
@@ -3699,6 +3688,59 @@ mod pool {
         )
         .await
         .unwrap();
+        let held = claim(&replay, LeaseLane::Plugin, &holder(run(9)))
+            .await
+            .unwrap();
+        let untouched: BTreeMap<String, Value> = {
+            let state = replay.state.lock().unwrap();
+            state
+                .documents
+                .iter()
+                .chain(state.projects.iter())
+                .chain(state.issues.iter())
+                .map(|(id, row)| (id.clone(), row.clone()))
+                .collect()
+        };
+        assert!(untouched.contains_key(&held.id));
+        let from = replay.state.lock().unwrap().keyed.len();
+        // Each lane's CI session, two of each at once, over a pool member of its own.
+        let sessions = {
+            let (a, b, c, d) = tokio::join!(
+                ci_session(&replay, LeaseLane::Plugin, "plugin-a", run(1)),
+                ci_session(&replay, LeaseLane::Plugin, "plugin-b", run(2)),
+                ci_session(&replay, LeaseLane::Assets, "assets-a", run(3)),
+                ci_session(&replay, LeaseLane::Assets, "assets-b", run(4)),
+            );
+            vec![a, b, c, d]
+        };
+        assert_isolated(&replay, &sessions);
+        assert!(
+            sessions
+                .iter()
+                .all(|s| s.lease.index != held.index || s.lease.lane != LeaseLane::Plugin)
+        );
+        {
+            // Nobody's identities, the local set and the held lease are passed over, never
+            // written to or named: each is exactly as it was before the sessions.
+            let state = replay.state.lock().unwrap();
+            for (id, row) in &untouched {
+                let now = state
+                    .documents
+                    .get(id)
+                    .or_else(|| state.projects.get(id))
+                    .or_else(|| state.issues.get(id));
+                assert_eq!(now, Some(row), "{id} was changed or removed by a lane");
+            }
+            for (_, request) in &state.keyed[from..] {
+                let mut named = Vec::new();
+                document_lifecycle::namespace::ids_named(&request["variables"], &mut named);
+                assert!(
+                    named.iter().all(|id| !strays.contains_key(id)),
+                    "a lane named a stray in {request}"
+                );
+            }
+        }
+        // The local invocation still finds its own set and retires exactly it.
         replay_prepare(&replay, local, Mode::Ordinary)
             .await
             .unwrap();
@@ -3708,20 +3750,7 @@ mod pool {
                 .unwrap(),
             4
         );
-        // Nobody's identities are ignored, not written to: every one is as it was seeded.
-        let state = replay.state.lock().unwrap();
-        for (id, row) in &strays {
-            let now = state.documents.get(id).or_else(|| state.projects.get(id));
-            assert_eq!(now, Some(row), "stray {id} was changed or removed");
-        }
-        for (_, request) in &state.keyed[from..] {
-            let mut named = Vec::new();
-            document_lifecycle::namespace::ids_named(&request["variables"], &mut named);
-            assert!(
-                named.iter().all(|id| !strays.contains_key(id)),
-                "a lane named a stray in {request}"
-            );
-        }
+        held.release(&replay.endpoint, "synthetic").await.unwrap();
     }
 
     #[tokio::test]
