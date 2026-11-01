@@ -214,7 +214,31 @@ function checked(query) {
   return result;
 }
 
-function answer({ query, operationName, variables, coerce }) {
+// The request line's own shape, which `mod.rs` always sends whole: a string `query`, a string or
+// null `operationName`, and an explicit boolean `coerce`. Anything else is a defect of the client,
+// answered `internal` rather than read with defaults — a missing `coerce` would otherwise skip the
+// coercion of the variables silently.
+function envelope(request) {
+  if (request === null || typeof request !== "object" || Array.isArray(request)) {
+    throw new TypeError(`a request is a JSON object, not ${JSON.stringify(request)}`);
+  }
+  const { query, operationName, variables, coerce } = request;
+  if (typeof query !== "string") {
+    throw new TypeError(`a request's query is a string, not ${JSON.stringify(query)}`);
+  }
+  if (operationName !== null && operationName !== undefined && typeof operationName !== "string") {
+    throw new TypeError(
+      `a request's operationName is a string or null, not ${JSON.stringify(operationName)}`,
+    );
+  }
+  if (typeof coerce !== "boolean") {
+    throw new TypeError(`a request's coerce is true or false, not ${JSON.stringify(coerce)}`);
+  }
+  return { query, operationName, variables, coerce };
+}
+
+function answer(request) {
+  const { query, operationName, variables, coerce } = envelope(request);
   const { document, refused } = checked(query);
   if (refused) return refused;
   if (!coerce) return { errors: [] };

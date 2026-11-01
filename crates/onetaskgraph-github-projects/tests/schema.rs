@@ -1748,6 +1748,80 @@ fn a_stopped_server_is_replaced() {
     assert_ne!(replaced_by, pid, "a new server answered");
 }
 
+/// A request line that is not the protocol's shape — not an object, a query that is not a
+/// string, an `operationName` that is neither a string nor null, a `coerce` missing or not a
+/// boolean — is answered `internal`, naming what is wrong, rather than read with defaults: a
+/// missing `coerce` read as false would skip the variables' coercion silently. The server goes on
+/// answering a well-formed request on the same connection.
+#[test]
+fn a_request_line_not_in_the_protocols_shape_is_answered_internal() {
+    use serde_json::{Value, json};
+    use std::io::{BufRead, BufReader, Write};
+
+    let server = github_schema::serve_privately();
+    let (port, _) = server.server();
+    let mut stream =
+        std::net::TcpStream::connect(("127.0.0.1", port)).expect("the server accepts a client");
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(60)))
+        .expect("a read timeout");
+    let mut reader = BufReader::new(stream.try_clone().expect("a second handle"));
+    let mut exchange = |line: &str| -> Value {
+        stream
+            .write_all(format!("{line}\n").as_bytes())
+            .expect("the line is sent");
+        let mut answer = String::new();
+        reader.read_line(&mut answer).expect("the server answers");
+        serde_json::from_str(&answer).expect("the answer is JSON")
+    };
+    assert_eq!(exchange(r#"{"hello":1}"#)["ready"], json!(true));
+
+    let valid =
+        r#""query":"query($id:ID!){node(id:$id){id}}","operationName":null,"variables":{"id":5.5}"#;
+    for (line, named) in [
+        ("null".to_owned(), "a request is a JSON object"),
+        ("[1]".to_owned(), "a request is a JSON object"),
+        (
+            r#"{"query":5,"operationName":null,"variables":{},"coerce":true}"#.to_owned(),
+            "a request's query is a string",
+        ),
+        (
+            r#"{"query":"query{viewer{login}}","operationName":3,"variables":{},"coerce":true}"#
+                .to_owned(),
+            "a request's operationName is a string or null",
+        ),
+        (
+            format!("{{{valid}}}"),
+            "a request's coerce is true or false",
+        ),
+        (
+            format!(r#"{{{valid},"coerce":"yes"}}"#),
+            "a request's coerce is true or false",
+        ),
+    ] {
+        let answer = exchange(&line);
+        assert!(
+            answer["internal"]
+                .as_str()
+                .is_some_and(|internal| internal.contains(named)),
+            "{line} was answered {answer}"
+        );
+        assert!(
+            answer.get("errors").is_none(),
+            "{line} was answered {answer}"
+        );
+    }
+
+    // The same request, whole, has its variables coerced: an `ID` is a string or an integer.
+    let answer = exchange(&format!(r#"{{{valid},"coerce":true}}"#));
+    assert!(
+        answer["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("$id")),
+        "{answer}"
+    );
+}
+
 /// The schema check stops, rather than answering requests, against a schema breaking any
 /// type-system rule but the one GitHub's published file breaks — so a copy that is not the
 /// schema GitHub serves cannot pass for it — and starts against one breaking that rule alone.

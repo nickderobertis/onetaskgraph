@@ -22,10 +22,10 @@
 //! ignored `node_modules` beside it and imports it from there, holding that copy to the tarball's
 //! files byte for byte on every start and unpacking it again when it differs.
 //!
-//! One `bun` process per clone serves every test process on the machine (see [`Validators`]):
-//! building GitHub's schema takes a fifth of a second and a quarter of a gigabyte, and once per
-//! test process — nextest runs each test in a process of its own — that added about a fifth to
-//! the wall time of the suites these doubles serve. A test that would hold that server up for
+//! One `bun` process per clone serves every test process on the machine (see [`Validators`]),
+//! because building GitHub's whole schema is costly in time and memory and nextest runs each test
+//! in a process of its own, so building it per process would repeat that cost for every test of
+//! the suites these doubles serve. A test that would hold that server up for
 //! the others — stopping it, or sending documents that take seconds to refuse — takes one of its
 //! own instead ([`serve_privately`]), beside it.
 //! A request nested past what it can recurse through is refused rather than crashing it —
