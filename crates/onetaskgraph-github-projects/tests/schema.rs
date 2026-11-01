@@ -8,6 +8,10 @@
 use graphql_parser::{query, schema};
 use std::collections::{HashMap, HashSet};
 
+// Shared with the two GitHub doubles, which call the halves of it this file does not.
+#[allow(dead_code)]
+mod github_schema;
+
 #[test]
 fn status_option_colors_match_the_pinned_graphql_vocabulary() {
     use onetaskgraph_github_projects::StatusOptionColor;
@@ -1036,5 +1040,1241 @@ fn every_batch_document_declares_and_sends_exactly_the_slots_its_constant_counts
                 "{name} aliases `{prefix}<n>` other than once each for {slots} slots"
             );
         }
+    }
+}
+
+/// Every document this source sends holds to GitHub's complete published schema, not only to
+/// the reduced subset above: the subset is written by the same hand as the documents, which is
+/// how a field-setup input GitHub does not define passed the check above in 0.12.13.
+#[test]
+fn every_production_document_validates_against_githubs_complete_published_schema() {
+    let refused = onetaskgraph_github_projects::graphql::DOCUMENTS
+        .iter()
+        .filter_map(|(document, doing)| {
+            github_schema::validate_document(document)
+                .err()
+                .map(|errors| format!("{doing}: {errors:?}"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        refused.is_empty(),
+        "GitHub would refuse:\n{}",
+        refused.join("\n")
+    );
+}
+
+/// The field setup's two writes, with the variables it sends, are what GitHub accepts — and
+/// the input 0.12.13 sent is refused with the message GitHub answered it with.
+#[test]
+fn the_field_setup_requests_validate_and_the_input_0_12_13_sent_is_refused() {
+    use onetaskgraph_github_projects::graphql::{CREATE_FIELD, STATUS_OPTIONS_UPDATE};
+    use serde_json::json;
+
+    let options = json!([
+        {"id": "opt-todo", "name": "Todo", "color": "GRAY", "description": ""},
+        {"name": "Cancelled", "color": "GRAY", "description": ""},
+    ]);
+    github_schema::validate(
+        STATUS_OPTIONS_UPDATE,
+        &json!({"input": {"fieldId": "PVTSSF-status", "singleSelectOptions": options}}),
+    )
+    .expect("adding a Status option is a request GitHub runs");
+    github_schema::validate(
+        CREATE_FIELD,
+        &json!({"input": {"projectId": "PVT-board", "dataType": "SINGLE_SELECT",
+            "name": "Priority", "singleSelectOptions": [
+                {"name": "Critical", "color": "GRAY", "description": ""},
+                {"name": "Low", "color": "GRAY", "description": ""}]}}),
+    )
+    .expect("creating the Priority field is a request GitHub runs");
+    github_schema::validate(
+        CREATE_FIELD,
+        &json!({"input": {"projectId": "PVT-board", "dataType": "TEXT", "name": "Origin"}}),
+    )
+    .expect("creating a metadata field is a request GitHub runs");
+
+    assert_eq!(
+        github_schema::validate(
+            STATUS_OPTIONS_UPDATE,
+            &json!({"input": {"projectId": "PVT-board", "fieldId": "PVTSSF-status",
+                "singleSelectOptions": options}}),
+        ),
+        Err(vec![
+            "Variable \"$input\" has invalid value: Expected value of type \
+             \"UpdateProjectV2FieldInput\" not to include unknown field \"projectId\", found: { \
+             fieldId: \"PVTSSF-status\", projectId: \"PVT-board\", singleSelectOptions: \
+             [[Object], [Object]] }."
+                .to_owned()
+        ])
+    );
+}
+
+/// Every validation rule of the GraphQL specification's §5, and the coercion of variables in
+/// §6.1.2, each broken by one request that the doubles refuse, as GitHub refuses it: a body of
+/// `errors` alone — no `data` — each error a `message` and, where the document has one, the
+/// `locations` it stands at.
+#[test]
+fn the_schema_check_refuses_a_request_breaking_each_validation_rule() {
+    use serde_json::{Value, json};
+
+    // (the rule, the specification's section, the document, its variables, what is answered)
+    let cases: &[(&str, &str, &str, Value, &[&str])] = &[
+        (
+            "document parses",
+            "2",
+            "query{viewer{login}",
+            json!({}),
+            &["Syntax Error: Expected Name, found <EOF>."],
+        ),
+        (
+            "executable definitions",
+            "5.1.1",
+            "query{viewer{login}} type Extra{id:ID}",
+            json!({}),
+            &["The \"Extra\" definition is not executable."],
+        ),
+        (
+            "operation name uniqueness",
+            "5.2.1.1",
+            "query a{viewer{login}} query a{viewer{name}}",
+            json!({}),
+            &["There can be only one operation named \"a\"."],
+        ),
+        (
+            "lone anonymous operation",
+            "5.2.2.1",
+            "{viewer{login}} query b{viewer{name}}",
+            json!({}),
+            &["This anonymous operation must be the only defined operation."],
+        ),
+        // GitHub's schema defines no subscription root, so §5.2.3.1's single root field is
+        // reached only as the operation type it cannot answer.
+        (
+            "operation type is defined",
+            "5.2.3.1",
+            "subscription{a:__typename b:__typename}",
+            json!({}),
+            &["The subscription operation is not supported by the schema."],
+        ),
+        (
+            "field selections",
+            "5.3.1",
+            "query{viewer{loginName}}",
+            json!({}),
+            &["Cannot query field \"loginName\" on type \"User\". Did you mean \"login\"?"],
+        ),
+        (
+            "field selections, introspection",
+            "5.3.1",
+            "query{__schema{queryType{nom}}}",
+            json!({}),
+            &["Cannot query field \"nom\" on type \"__Type\". Did you mean \"name\"?"],
+        ),
+        (
+            "field selection merging, aliases",
+            "5.3.2",
+            "query{viewer{x:login x:name}}",
+            json!({}),
+            &[
+                "Fields \"x\" conflict because \"login\" and \"name\" are different fields. Use different aliases on the fields to fetch both if this was intentional.",
+            ],
+        ),
+        (
+            "field selection merging, arguments",
+            "5.3.2",
+            "query{viewer{repositories(first:1){totalCount} repositories(first:2){totalCount}}}",
+            json!({}),
+            &[
+                "Fields \"repositories\" conflict because they have differing arguments. Use different aliases on the fields to fetch both if this was intentional.",
+            ],
+        ),
+        (
+            "field selection merging, nested",
+            "5.3.2",
+            "query{viewer{r:repositories(first:1){nodes{a:name}} r:repositories(first:1){nodes{a:id}}}}",
+            json!({}),
+            &[
+                "Fields \"r\" conflict because subfields \"nodes\" conflict because subfields \"a\" conflict because \"name\" and \"id\" are different fields. Use different aliases on the fields to fetch both if this was intentional.",
+            ],
+        ),
+        (
+            "field selection merging, exclusive fragments",
+            "5.3.2",
+            "query($id:ID!){node(id:$id){... on Issue{x:title} ... on PullRequest{x:number}}}",
+            json!({"id": "I_1"}),
+            &[
+                "Fields \"x\" conflict because they return conflicting types \"String!\" and \"Int!\". Use different aliases on the fields to fetch both if this was intentional.",
+            ],
+        ),
+        (
+            "leaf field selections, scalar",
+            "5.3.3",
+            "query{viewer{login{name}}}",
+            json!({}),
+            &["Field \"login\" must not have a selection since type \"String!\" has no subfields."],
+        ),
+        (
+            "leaf field selections, composite",
+            "5.3.3",
+            "query{viewer}",
+            json!({}),
+            &[
+                "Field \"viewer\" of type \"User!\" must have a selection of subfields. Did you mean \"viewer { ... }\"?",
+            ],
+        ),
+        (
+            "argument names",
+            "5.4.1",
+            "query{viewer{login(first:1)}}",
+            json!({}),
+            &["Unknown argument \"first\" on field \"User.login\"."],
+        ),
+        (
+            "argument uniqueness",
+            "5.4.2",
+            "query{node(id:\"A\",id:\"B\"){id}}",
+            json!({}),
+            &["There can be only one argument named \"id\"."],
+        ),
+        (
+            "required arguments",
+            "5.4.2.1",
+            "query{node{id}}",
+            json!({}),
+            &["Argument \"Query.node(id:)\" of type \"ID!\" is required, but it was not provided."],
+        ),
+        (
+            "fragment name uniqueness",
+            "5.5.1.1",
+            "query{viewer{...f}} fragment f on User{name} fragment f on User{login}",
+            json!({}),
+            &["There can be only one fragment named \"f\"."],
+        ),
+        (
+            "fragment spread type existence",
+            "5.5.1.2",
+            "query($id:ID!){node(id:$id){... on Labelled{id}}}",
+            json!({"id": "I_1"}),
+            &[
+                "Unknown type \"Labelled\". Did you mean \"Label\", \"LabelEdge\", \"Labelable\", or \"LabelOrder\"?",
+            ],
+        ),
+        (
+            "fragments on composite types",
+            "5.5.1.3",
+            "query{viewer{...f}} fragment f on String{__typename}",
+            json!({}),
+            &["Fragment \"f\" cannot condition on non composite type \"String\"."],
+        ),
+        (
+            "fragments must be used",
+            "5.5.1.4",
+            "query{viewer{login}} fragment f on User{name}",
+            json!({}),
+            &["Fragment \"f\" is never used."],
+        ),
+        (
+            "fragment spread target defined",
+            "5.5.2.1",
+            "query{viewer{...g}}",
+            json!({}),
+            &["Unknown fragment \"g\"."],
+        ),
+        (
+            "fragment spreads must not form cycles",
+            "5.5.2.2",
+            "query{viewer{...a}} fragment a on User{login ...b} fragment b on User{...a}",
+            json!({}),
+            &["Cannot spread fragment \"a\" within itself via \"b\"."],
+        ),
+        (
+            "fragment spread is possible",
+            "5.5.2.3",
+            "query{viewer{... on Issue{title}}}",
+            json!({}),
+            &[
+                "Fragment cannot be spread here as objects of type \"User\" can never be of type \"Issue\".",
+            ],
+        ),
+        (
+            "values of correct type",
+            "5.6.1",
+            "query{viewer{repositories(first:3000000000){totalCount}}}",
+            json!({}),
+            &["Int cannot represent non 32-bit signed integer value: 3000000000"],
+        ),
+        (
+            "input object field names",
+            "5.6.2",
+            "mutation{updateProjectV2Field(input:{fieldId:\"F\",projectId:\"P\"}){clientMutationId}}",
+            json!({}),
+            &[
+                "Expected value of type \"UpdateProjectV2FieldInput\" not to include unknown field \"projectId\", found: { fieldId: \"F\", projectId: \"P\" }.",
+            ],
+        ),
+        (
+            "input object field uniqueness",
+            "5.6.3",
+            "mutation{updateProjectV2Field(input:{fieldId:\"F\",fieldId:\"G\"}){clientMutationId}}",
+            json!({}),
+            &["There can be only one input field named \"fieldId\"."],
+        ),
+        (
+            "input object required fields",
+            "5.6.4",
+            "mutation{updateProjectV2Field(input:{}){clientMutationId}}",
+            json!({}),
+            &[
+                "Expected value of type \"UpdateProjectV2FieldInput\" to include required field \"fieldId\", found: {  }.",
+            ],
+        ),
+        (
+            "directives are defined",
+            "5.7.1",
+            "query{viewer{login @nowhere}}",
+            json!({}),
+            &["Unknown directive \"@nowhere\"."],
+        ),
+        (
+            "directives are in valid locations",
+            "5.7.2",
+            "query @include(if:true){viewer{login}}",
+            json!({}),
+            &["Directive \"@include\" may not be used on QUERY."],
+        ),
+        (
+            "directives are unique per location",
+            "5.7.3",
+            "query{viewer{login @skip(if:false) @skip(if:false)}}",
+            json!({}),
+            &["The directive \"@skip\" can only be used once at this location."],
+        ),
+        (
+            "directive required arguments",
+            "5.4.2.1",
+            "query{viewer{login @skip}}",
+            json!({}),
+            &["Argument \"@skip(if:)\" of type \"Boolean!\" is required, but it was not provided."],
+        ),
+        (
+            "variable uniqueness",
+            "5.8.1",
+            "query($id:ID!,$id:ID!){node(id:$id){id}}",
+            json!({"id": "I_1"}),
+            &["There can be only one variable named \"$id\"."],
+        ),
+        (
+            "variables are input types",
+            "5.8.2",
+            "query($u:User){viewer{login}}",
+            json!({}),
+            &[
+                "Variable \"$u\" is never used.",
+                "Variable \"$u\" cannot be non-input type \"User\".",
+            ],
+        ),
+        (
+            "all variable uses defined",
+            "5.8.3",
+            "query{node(id:$id){id}}",
+            json!({}),
+            &["Variable \"$id\" is not defined."],
+        ),
+        (
+            "all variable uses defined, through a fragment",
+            "5.8.3",
+            "query{viewer{...f}} fragment f on User{repositories(first:$n){totalCount}}",
+            json!({}),
+            &["Variable \"$n\" is not defined."],
+        ),
+        (
+            "all variables used",
+            "5.8.4",
+            "query($id:ID!,$unused:Int){node(id:$id){id}}",
+            json!({"id": "I_1"}),
+            &["Variable \"$unused\" is never used."],
+        ),
+        (
+            "all variable usages are allowed, nullability",
+            "5.8.5",
+            "query($id:ID){node(id:$id){id}}",
+            json!({"id": "I_1"}),
+            &["Variable \"$id\" of type \"ID\" used in position expecting type \"ID!\"."],
+        ),
+        (
+            "all variable usages are allowed, a null default is no licence",
+            "5.8.5",
+            "query($id:ID = null){node(id:$id){id}}",
+            json!({}),
+            &["Variable \"$id\" of type \"ID\" used in position expecting type \"ID!\"."],
+        ),
+        (
+            "all variable usages are allowed, list",
+            "5.8.5",
+            "query($ids:[ID!]!){node(id:$ids){id}}",
+            json!({"ids": ["I_1"]}),
+            &["Variable \"$ids\" of type \"[ID!]!\" used in position expecting type \"ID!\"."],
+        ),
+        (
+            "a default is a value of its type",
+            "5.6.1",
+            "query($first:Int = \"ten\"){viewer{repositories(first:$first){totalCount}}}",
+            json!({}),
+            &["Int cannot represent non-integer value: \"ten\""],
+        ),
+        (
+            "a default is a constant",
+            "2.10",
+            "query($a:Int,$b:Int=$a){viewer{repositories(first:$b){totalCount}}}",
+            json!({}),
+            &["Syntax Error: Unexpected variable \"$a\" in constant value."],
+        ),
+        // §6.1.2, CoerceVariableValues, over each variable's JSON value.
+        (
+            "variables are an object",
+            "7.1.1",
+            "query{viewer{login}}",
+            json!(["not", "an", "object"]),
+            &["Variables must be provided as an Object where each property is a variable value."],
+        ),
+        (
+            "a required variable is given",
+            "6.1.2",
+            "mutation($input:UpdateProjectV2FieldInput!){updateProjectV2Field(input:$input){clientMutationId}}",
+            json!({}),
+            &[
+                "Variable \"$input\" has invalid value: Expected a value of non-null type \"UpdateProjectV2FieldInput!\" to be provided.",
+            ],
+        ),
+        (
+            "a variable coerces to its scalar",
+            "6.1.2",
+            "query($first:Int){viewer{repositories(first:$first){totalCount}}}",
+            json!({"first": "ten"}),
+            &[
+                "Variable \"$first\" has invalid value: Int cannot represent non-integer value: \"ten\"",
+            ],
+        ),
+        (
+            "a variable coerces to its enum",
+            "6.1.2",
+            "mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){clientMutationId}}",
+            json!({"input": {"projectId": "PVT_1", "dataType": "PRIORITY", "name": "Priority"}}),
+            &[
+                "Variable \"$input\" has invalid value at .dataType: Value \"PRIORITY\" does not exist in \"ProjectV2CustomFieldType\" enum.",
+            ],
+        ),
+        (
+            "a variable names no input field its type lacks",
+            "6.1.2",
+            "mutation($input:DeleteIssueInput!){deleteIssue(input:$input){clientMutationId}}",
+            json!({"input": {"issueId": "I_1", "projectId": "PVT_1"}}),
+            &[
+                "Variable \"$input\" has invalid value: Expected value of type \"DeleteIssueInput\" not to include unknown field \"projectId\", found: { issueId: \"I_1\", projectId: \"PVT_1\" }.",
+            ],
+        ),
+        (
+            "a variable gives every required input field",
+            "6.1.2",
+            "mutation($input:CreateProjectV2FieldInput!){createProjectV2Field(input:$input){clientMutationId}}",
+            json!({"input": {"projectId": "PVT_1", "dataType": "SINGLE_SELECT",
+                "name": "Priority", "singleSelectOptions": [{"name": "High", "color": "GRAY"}]}}),
+            &[
+                "Variable \"$input\" has invalid value at .singleSelectOptions[0]: Expected value of type \"ProjectV2SingleSelectFieldOptionInput\" to include required field \"description\", found: { color: \"GRAY\", name: \"High\" }.",
+            ],
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (rule, section, document, variables, expected) in cases {
+        let answered = github_schema::refuse(&json!({"query": document, "variables": variables}));
+        let Some(answered) = answered else {
+            wrong.push(format!("§{section} {rule}: {document} was not refused"));
+            continue;
+        };
+        let errors = answered["errors"].as_array().cloned().unwrap_or_default();
+        let messages = errors
+            .iter()
+            .map(|error| error["message"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>();
+        if messages != *expected {
+            wrong.push(format!(
+                "§{section} {rule}: {document} answered {messages:?}"
+            ));
+        }
+        let shaped = answered.as_object().is_some_and(|body| body.len() == 1)
+            && errors.iter().all(|error| {
+                error["message"].is_string()
+                    && error.as_object().is_some_and(|fields| {
+                        fields
+                            .keys()
+                            .all(|key| key == "message" || key == "locations")
+                    })
+                    && error.get("locations").is_none_or(|locations| {
+                        locations.as_array().is_some_and(|all| {
+                            all.iter()
+                                .all(|at| at["line"].is_u64() && at["column"].is_u64())
+                        })
+                    })
+            });
+        if !shaped {
+            wrong.push(format!(
+                "§{section} {rule}: {answered} is not GraphQL's error shape"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+
+    // A refusal of a rule broken at a place in the document says where.
+    assert_eq!(
+        github_schema::refuse(&json!({"query": "query{\n  viewer{loginName}}"})),
+        Some(
+            json!({"errors": [{"message": "Cannot query field \"loginName\" on type \"User\". \
+                Did you mean \"login\"?",
+            "locations": [{"line": 2, "column": 10}]}]})
+        )
+    );
+    // And what breaks none of them runs: a nullable variable with a non-null default is allowed
+    // where a non-null one is expected, a list position takes a single value, and a named
+    // operation is chosen by `operationName`.
+    for (document, variables, operation) in [
+        ("query($id:ID = \"I_1\"){node(id:$id){id}}", json!({}), None),
+        (
+            "query($ids:[ID!]!){nodes(ids:$ids){id}}",
+            json!({"ids": "I_1"}),
+            None,
+        ),
+        (
+            "query a{viewer{login}} query b{viewer{name}}",
+            json!({}),
+            Some("b"),
+        ),
+    ] {
+        assert_eq!(
+            github_schema::refuse(
+                &json!({"query": document, "variables": variables, "operationName": operation})
+            ),
+            None,
+            "{document}"
+        );
+    }
+    // A document of several operations names the one to run, or GitHub runs none of them.
+    assert_eq!(
+        github_schema::refuse(&json!({"query": "query a{viewer{login}} query b{viewer{id}}"})),
+        Some(json!({"errors": [{
+            "message": "Must provide operation name if query contains multiple operations."
+        }]}))
+    );
+    assert_eq!(
+        github_schema::refuse(&json!({"query": "query a{viewer{login}}", "operationName": "c"})),
+        Some(json!({"errors": [{"message": "Unknown operation named \"c\"."}]}))
+    );
+    assert_eq!(
+        github_schema::refuse(&json!({"query": "query a{viewer{login}}", "operationName": 1})),
+        Some(json!({"errors": [{"message": "operationName must be a string, not 1"}]}))
+    );
+}
+
+/// A malformed or adversarial request is refused, never answered by a crash or an exhausted
+/// stack: bytes that are not GraphQL, nesting far past any real document's, a fragment cycle
+/// two thousand spreads long, a wide selection, more tokens than it parses and deeply nested
+/// variables.
+#[test]
+fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
+    use serde_json::json;
+
+    // Each of these takes the server seconds, which would be every other test's wait too.
+    let server = github_schema::serve_privately();
+
+    let refused = |document: &str, variables: serde_json::Value| {
+        server
+            .refuse(&json!({"query": document, "variables": variables}))
+            .unwrap_or_else(|| panic!("{} was not refused", &document[..document.len().min(80)]))
+    };
+    refused("", json!({}));
+    refused("\u{0}\u{1}garbage{{{", json!({}));
+    refused("query{viewer{login}} }}}}", json!({}));
+    let deep = |open: &str, close: &str, depth: usize| (open.repeat(depth), close.repeat(depth));
+    let (open, close) = deep("viewer{", "}", 50_000);
+    assert_eq!(
+        refused(&format!("query{{{open}login{close}}}"), json!({})),
+        json!({"errors": [{"message": "The request nests too deeply to validate."}]})
+    );
+    // A deep document that breaks no rule is validated, not refused for its depth.
+    let (open, close) = deep("ofType{", "}", 190);
+    assert_eq!(
+        server
+            .refuse(&json!({"query": format!("query{{__schema{{types{{{open}name{close}}}}}}}")})),
+        None
+    );
+    let (open, close) = deep("[", "]", 50_000);
+    assert_eq!(
+        refused(
+            &format!("query{{node(id:{open}1{close}){{id}}}}"),
+            json!({}),
+        ),
+        json!({"errors": [{"message": "The request nests too deeply to validate."}]})
+    );
+    let (open, close) = deep("{a:", "}", 50_000);
+    assert_eq!(
+        refused(
+            &format!("mutation{{updateProjectV2Field(input:{open}1{close}){{clientMutationId}}}}"),
+            json!({}),
+        ),
+        json!({"errors": [{"message": "The request nests too deeply to validate."}]})
+    );
+    let chain = (0..2_000)
+        .map(|at| format!("fragment f{at} on User{{...f{}}} ", at + 1))
+        .collect::<String>();
+    let cycle = refused(
+        &format!("query{{viewer{{...f0}}}} {chain} fragment f2000 on User{{...f0}}"),
+        json!({}),
+    );
+    assert!(
+        cycle["errors"][0]["message"].as_str().is_some_and(
+            |message| message.starts_with("Cannot spread fragment \"f0\" within itself via")
+        ),
+        "{cycle}"
+    );
+    let mut nested = json!("I_1");
+    for _ in 0..300 {
+        nested = json!([nested]);
+    }
+    let answered = refused("query($id:ID!){node(id:$id){id}}", json!({"id": nested}));
+    assert_eq!(
+        answered,
+        json!({"errors": [{"message": "Variables nest deeper than 200 levels"}]})
+    );
+    // A wide document that breaks nothing is not refused for its width.
+    let wide = (0..3_000)
+        .map(|at| format!("a{at}:login "))
+        .collect::<String>();
+    assert_eq!(
+        server.refuse(&json!({"query": format!("query{{viewer{{{wide}}}}}")})),
+        None
+    );
+    // A document that breaks no rule but holds more tokens than the check parses is refused
+    // unparsed, before any rule runs over it.
+    let oversized = "login ".repeat(200_000);
+    let answered = refused(&format!("query{{viewer{{{oversized}}}}}"), json!({}));
+    assert!(
+        answered["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message
+                .starts_with("Syntax Error: Document contains more than 200000 tokens.")),
+        "{answered}"
+    );
+}
+
+/// The check's server stops when a client greets it with another protocol — as it does when its
+/// files change or it has been idle — and the next request after it stops is still answered, by
+/// a server started in its place, over connections this process held open to the one that
+/// stopped. A protocol it does not speak is answered `stale`, never served. Driven against a
+/// server of this test's own, through the same rendezvous every test process shares one by, so
+/// stopping it holds up no other test.
+///
+/// Bounded: two server starts and a stop take about a second, so a replacement that hangs fails
+/// this test within a minute rather than holding the run until its runner's timeout.
+#[test]
+fn a_stopped_schema_check_server_is_replaced_by_the_next_request() {
+    within(
+        std::time::Duration::from_secs(60),
+        "replacing a stopped schema check server",
+        a_stopped_server_is_replaced,
+    );
+}
+
+/// Runs `body` on a thread of its own and fails, naming `what`, when it has not finished within
+/// `limit`; a panic inside it fails the test as itself.
+fn within(limit: std::time::Duration, what: &str, body: impl FnOnce() + Send + 'static) {
+    use std::sync::mpsc::RecvTimeoutError;
+
+    let (done, finished) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        body();
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(limit) {
+        Ok(()) => worker.join().expect("the body finished"),
+        Err(RecvTimeoutError::Disconnected) => {
+            std::panic::resume_unwind(worker.join().expect_err("the body panicked"));
+        }
+        Err(RecvTimeoutError::Timeout) => panic!("{what} did not finish within {limit:?}"),
+    }
+}
+
+fn a_stopped_server_is_replaced() {
+    use serde_json::{Value, json};
+    use std::io::{BufRead, BufReader, Write};
+
+    let server = github_schema::serve_privately();
+    let (port, pid) = server.server();
+    let mut stream =
+        std::net::TcpStream::connect(("127.0.0.1", port)).expect("the server accepts a client");
+    stream
+        .write_all(b"{\"hello\":0}\n")
+        .expect("the hello is sent");
+    let mut answer = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut answer)
+        .expect("the server answers the hello");
+    let answer: Value = serde_json::from_str(&answer).expect("the answer is JSON");
+    assert!(
+        answer["stale"]
+            .as_str()
+            .is_some_and(|why| why.contains("protocol 1 was sent 0")),
+        "{answer}"
+    );
+    let stopped = std::time::Instant::now();
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        assert!(
+            stopped.elapsed() < std::time::Duration::from_secs(30),
+            "the stale server stopped listening"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    // A document no other test sends, so this process has no answer to it kept.
+    let answered = server.refuse(&json!({
+        "query": "query StoppedServer{viewer{loginName}}",
+    }));
+    assert_eq!(
+        answered,
+        Some(json!({"errors": [{
+            "message": "Cannot query field \"loginName\" on type \"User\". Did you mean \"login\"?",
+            "locations": [{"line": 1, "column": 28}],
+        }]}))
+    );
+    let (_, replaced_by) = server.server();
+    assert_ne!(replaced_by, pid, "a new server answered");
+}
+
+/// The check's server stops by itself once no client has held a connection to it for its idle
+/// period, and not while one does: a connection open across several such periods keeps it
+/// serving, a connection opened inside one cancels the stop it was counting down to, and once
+/// the last connection closes it stops and removes its rendezvous endpoint. The next request is
+/// answered by a server started in its place. Driven against a server of this test's own, idling
+/// for half a second rather than the shared server's ten.
+#[test]
+fn a_schema_check_server_stops_once_idle_and_never_while_a_client_is_connected() {
+    within(
+        std::time::Duration::from_secs(60),
+        "watching a schema check server stop once idle",
+        an_idle_server_stops,
+    );
+}
+
+/// The check's server answers a client greeting it `stale`, naming what changed, once a file it
+/// was built from has changed since it started — here the schema, a copy in the test's own
+/// directory — and stops; the next request is answered, over the connection this process held
+/// to the one that stopped, by a server built from the file as it now stands.
+#[test]
+fn a_schema_check_server_whose_schema_changed_is_replaced_by_the_next_request() {
+    within(
+        std::time::Duration::from_secs(60),
+        "replacing a schema check server whose schema changed",
+        a_changed_server_is_replaced,
+    );
+}
+
+/// Connects to the server at `port` and greets it with the protocol it speaks, answering the
+/// connection and the server's first line.
+fn greeted(port: u16) -> (std::net::TcpStream, serde_json::Value) {
+    use std::io::{BufRead, BufReader, Write};
+
+    let mut stream =
+        std::net::TcpStream::connect(("127.0.0.1", port)).expect("the server accepts a client");
+    stream
+        .write_all(b"{\"hello\":1}\n")
+        .expect("the hello is sent");
+    let mut answer = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut answer)
+        .expect("the server answers the hello");
+    (
+        stream,
+        serde_json::from_str(&answer).expect("the answer is JSON"),
+    )
+}
+
+/// Waits, without connecting, until the server that wrote `endpoint` has removed it — which it
+/// does as it stops — and then that nothing listens on `port`. Connecting to poll would itself
+/// be the connection that keeps an idle server running.
+fn wait_until_stopped(endpoint: &std::path::Path, port: u16) {
+    let asked = std::time::Instant::now();
+    while endpoint.exists() {
+        assert!(
+            asked.elapsed() < std::time::Duration::from_secs(30),
+            "the server stopped and removed {}",
+            endpoint.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        assert!(
+            asked.elapsed() < std::time::Duration::from_secs(30),
+            "the stopped server stopped listening"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// The answer to a field `User` does not have, named `field`, so each request is one no other
+/// test sends and no process has an answer to kept.
+fn unknown_user_field(server: &github_schema::PrivateServer, field: &str) {
+    use serde_json::json;
+
+    let query = format!("query{{viewer{{{field}}}}}");
+    let answered = server.refuse(&json!({ "query": query }));
+    let message = answered
+        .as_ref()
+        .and_then(|answered| answered["errors"][0]["message"].as_str());
+    assert_eq!(
+        message,
+        Some(format!("Cannot query field \"{field}\" on type \"User\".").as_str()),
+        "{answered:?}"
+    );
+}
+
+fn an_idle_server_stops() {
+    use std::io::{BufRead, BufReader, Write};
+
+    let idle = std::time::Duration::from_millis(500);
+    let server = github_schema::serve_privately_from_a_copy(idle);
+    let endpoint = server
+        .schema()
+        .parent()
+        .expect("the copy sits in the rendezvous directory")
+        .join("endpoint.json");
+    // `server()` holds this process's connection open, across four idle periods.
+    let (port, pid) = server.server();
+    std::thread::sleep(idle * 4);
+    unknown_user_field(&server, "heldAcrossIdlePeriods");
+    assert_eq!(
+        server.server(),
+        (port, pid),
+        "a connection held open keeps it serving"
+    );
+
+    // Every connection closed starts the count; one opened inside it cancels it.
+    server.disconnect();
+    std::thread::sleep(idle / 2);
+    let (mut stream, ready) = greeted(port);
+    assert_eq!(ready["ready"], true, "{ready}");
+    std::thread::sleep(idle * 4);
+    stream
+        .write_all(b"{\"query\":\"query{viewer{openedInsideTheCount}}\",\"operationName\":null,\"variables\":null,\"coerce\":false}\n")
+        .expect("the request is sent");
+    let mut answer = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut answer)
+        .expect("a server whose stop was cancelled answers");
+    assert!(answer.contains("openedInsideTheCount"), "{answer}");
+    assert!(
+        endpoint.exists(),
+        "a server serving a client keeps its endpoint"
+    );
+
+    // The last connection closed, it stops by itself.
+    drop(stream);
+    wait_until_stopped(&endpoint, port);
+
+    unknown_user_field(&server, "askedAfterTheIdleStop");
+    let (_, replaced_by) = server.server();
+    assert_ne!(replaced_by, pid, "a new server answered");
+}
+
+fn a_changed_server_is_replaced() {
+    let server = github_schema::serve_privately_from_a_copy(std::time::Duration::from_secs(30));
+    let endpoint = server
+        .schema()
+        .parent()
+        .expect("the copy sits in the rendezvous directory")
+        .join("endpoint.json");
+    let (port, pid) = server.server();
+    unknown_user_field(&server, "beforeTheSchemaChanged");
+
+    // A comment changes the file and not the schema it describes.
+    let mut schema = std::fs::read(server.schema()).expect("the copy is read");
+    schema.extend_from_slice(b"\n# changed after the server started\n");
+    std::fs::write(server.schema(), schema).expect("the copy is changed");
+
+    let (_, stale) = greeted(port);
+    assert!(
+        stale["stale"]
+            .as_str()
+            .is_some_and(|why| why.contains(&server.schema().display().to_string())
+                && why.ends_with("changed since it started")),
+        "{stale}"
+    );
+    wait_until_stopped(&endpoint, port);
+
+    unknown_user_field(&server, "afterTheSchemaChanged");
+    let (_, replaced_by) = server.server();
+    assert_ne!(replaced_by, pid, "a new server answered");
+}
+
+/// A request line that is not the protocol's shape — not an object, a query that is not a
+/// string, an `operationName` that is neither a string nor null, a `coerce` missing or not a
+/// boolean — is answered `internal`, naming what is wrong, rather than read with defaults: a
+/// missing `coerce` read as false would skip the variables' coercion silently. The server goes on
+/// answering a well-formed request on the same connection.
+#[test]
+fn a_request_line_not_in_the_protocols_shape_is_answered_internal() {
+    use serde_json::{Value, json};
+    use std::io::{BufRead, BufReader, Write};
+
+    let server = github_schema::serve_privately();
+    let (port, _) = server.server();
+    let mut stream =
+        std::net::TcpStream::connect(("127.0.0.1", port)).expect("the server accepts a client");
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(60)))
+        .expect("a read timeout");
+    let mut reader = BufReader::new(stream.try_clone().expect("a second handle"));
+    let mut exchange = |line: &str| -> Value {
+        stream
+            .write_all(format!("{line}\n").as_bytes())
+            .expect("the line is sent");
+        let mut answer = String::new();
+        reader.read_line(&mut answer).expect("the server answers");
+        serde_json::from_str(&answer).expect("the answer is JSON")
+    };
+    assert_eq!(exchange(r#"{"hello":1}"#)["ready"], json!(true));
+
+    let valid =
+        r#""query":"query($id:ID!){node(id:$id){id}}","operationName":null,"variables":{"id":5.5}"#;
+    for (line, named) in [
+        ("null".to_owned(), "a request is a JSON object"),
+        ("[1]".to_owned(), "a request is a JSON object"),
+        (
+            r#"{"query":5,"operationName":null,"variables":{},"coerce":true}"#.to_owned(),
+            "a request's query is a string",
+        ),
+        (
+            r#"{"query":"query{viewer{login}}","operationName":3,"variables":{},"coerce":true}"#
+                .to_owned(),
+            "a request's operationName is a string or null",
+        ),
+        (
+            format!("{{{valid}}}"),
+            "a request's coerce is true or false",
+        ),
+        (
+            format!(r#"{{{valid},"coerce":"yes"}}"#),
+            "a request's coerce is true or false",
+        ),
+    ] {
+        let answer = exchange(&line);
+        assert!(
+            answer["internal"]
+                .as_str()
+                .is_some_and(|internal| internal.contains(named)),
+            "{line} was answered {answer}"
+        );
+        assert!(
+            answer.get("errors").is_none(),
+            "{line} was answered {answer}"
+        );
+    }
+
+    // The same request, whole, has its variables coerced: an `ID` is a string or an integer.
+    let answer = exchange(&format!(r#"{{{valid},"coerce":true}}"#));
+    assert!(
+        answer["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("$id")),
+        "{answer}"
+    );
+}
+
+/// The schema check stops, rather than answering requests, against a schema breaking any
+/// type-system rule but the one GitHub's published file breaks — so a copy that is not the
+/// schema GitHub serves cannot pass for it — and starts against one breaking that rule alone.
+#[test]
+fn the_schema_check_refuses_a_schema_breaking_any_rule_but_the_tolerated_one() {
+    use serde_json::{Value, json};
+
+    let first_answer = |sdl: &str| -> Value {
+        let file = tempfile::NamedTempFile::new().expect("a scratch schema file");
+        std::fs::write(file.path(), sdl).expect("the scratch schema is written");
+        let output = std::process::Command::new("bun")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/github_schema/validate.mjs"
+            ))
+            .arg(file.path())
+            .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+            // Where the doubles' own check unpacks graphql-js, so this run writes nothing
+            // inside the crate either.
+            .env(
+                "GITHUB_SCHEMA_MODULES",
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../target/github-schema/node_modules"
+                ),
+            )
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("bun runs the schema check");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        serde_json::from_str(stdout.lines().next().unwrap_or_default())
+            .unwrap_or_else(|_| panic!("the schema check answered {stdout:?}"))
+    };
+    let tolerated = "interface Node { id: ID! } \
+                     type Card implements Node { id: ID! @deprecated(reason: \"gone\") } \
+                     type Query { node: Node card: Card }";
+    assert_eq!(first_answer(tolerated)["ready"], json!(true));
+
+    let invalid = first_answer("type Empty type Query { empty: Empty }");
+    assert!(
+        invalid["internal"]
+            .as_str()
+            .is_some_and(|message| message.contains("is invalid")
+                && message.contains("Type Empty must define one or more fields.")),
+        "{invalid}"
+    );
+}
+
+/// The check refuses a command line in neither shape its usage names, and an idle period that
+/// is not a whole number of milliseconds a timer holds, answering `internal` and exiting
+/// non-zero before it builds anything or serves — never read as the standard-input mode, nor an
+/// idle period silently replaced by its default.
+#[test]
+fn the_schema_check_refuses_a_malformed_command_line_or_idle_period() {
+    use serde_json::Value;
+
+    let schema = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/github-schema.docs.graphql"
+    );
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let directory = scratch.path().to_str().expect("a UTF-8 scratch path");
+    let run = |args: &[&str], idle: Option<&str>| -> (bool, Value) {
+        let mut command = std::process::Command::new("bun");
+        command
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/github_schema/validate.mjs"
+            ))
+            .args(args)
+            .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+            .env(
+                "GITHUB_SCHEMA_MODULES",
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../target/github-schema/node_modules"
+                ),
+            )
+            .env_remove("GITHUB_SCHEMA_IDLE_MS")
+            .stdin(std::process::Stdio::null());
+        if let Some(idle) = idle {
+            command.env("GITHUB_SCHEMA_IDLE_MS", idle);
+        }
+        let output = command.output().expect("bun runs the schema check");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        (
+            output.status.success(),
+            serde_json::from_str(stdout.lines().next().unwrap_or_default())
+                .unwrap_or_else(|_| panic!("the schema check answered {stdout:?}")),
+        )
+    };
+    let refused = |args: &[&str], idle: Option<&str>, naming: &str| {
+        let (succeeded, answer) = run(args, idle);
+        assert!(
+            !succeeded,
+            "{args:?} with idle {idle:?} exited zero: {answer}"
+        );
+        assert!(
+            answer["internal"]
+                .as_str()
+                .is_some_and(|message| message.contains(naming)),
+            "{args:?} with idle {idle:?} answered {answer}, not naming {naming:?}"
+        );
+    };
+
+    for args in [
+        &[][..],
+        &[schema, "--server", directory],
+        &[schema, "--serve"],
+        &[schema, "--serve", ""],
+        &[schema, "--serve", directory, "extra"],
+        &["", "--serve", directory],
+    ] {
+        refused(
+            args,
+            None,
+            "usage: bun validate.mjs <schema.graphql> [--serve <directory>]",
+        );
+    }
+    for idle in ["", "0", "-5", "1.5", "Infinity", "2147483648", "ten"] {
+        refused(
+            &[schema, "--serve", directory],
+            Some(idle),
+            "GITHUB_SCHEMA_IDLE_MS is",
+        );
+    }
+    // Both shapes, with an idle period in range, still start.
+    let (succeeded, ready) = run(&[schema], Some("2147483647"));
+    assert!(succeeded && ready["ready"] == true, "{ready}");
+}
+
+/// The check writes nothing inside the crate it tests: graphql-js is unpacked, and the shared
+/// server records where it listens, under the workspace's `target`. A release records the digest
+/// of each crate's directory when it builds and refuses to publish one that has moved since, and
+/// the release journeys run beside these tests in one checkout, so a file written into this
+/// crate's directory by a test run refused the release journeys' publication of this crate.
+#[test]
+fn the_schema_check_writes_nothing_inside_the_crate_it_tests() {
+    assert_eq!(
+        github_schema::validate("query { viewer { login } }", &serde_json::json!({})),
+        Ok(())
+    );
+    let (here, modules, rendezvous) = github_schema::locations();
+    let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .canonicalize()
+        .expect("the workspace's target exists once a test has been built");
+    for written in [&modules, &rendezvous] {
+        let written = written
+            .canonicalize()
+            .unwrap_or_else(|error| panic!("the check wrote {} ({error})", written.display()));
+        assert!(
+            written.starts_with(&target),
+            "{} is not under {}",
+            written.display(),
+            target.display()
+        );
+    }
+    assert!(
+        modules
+            .join("graphql")
+            .join(".onetaskgraph-integrity")
+            .is_file(),
+        "graphql-js is unpacked under {}",
+        modules.display()
+    );
+    assert!(
+        rendezvous.join("endpoint.json").is_file(),
+        "the shared server records its endpoint"
+    );
+    let mut entries: Vec<String> = std::fs::read_dir(&here)
+        .expect("the check's directory is readable")
+        .map(|entry| {
+            entry
+                .expect("a directory entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    entries.sort();
+    assert_eq!(
+        entries,
+        ["graphql-17.0.2.tgz", "mod.rs", "validate.mjs"],
+        "{} holds only its committed files; a `node_modules` left there by an earlier \
+         version of this check can be deleted",
+        here.display()
+    );
+}
+
+/// graphql-js is npm's own published tarball, and a copy of it that does not hash to the
+/// integrity npm records is refused before anything is unpacked or imported from it — so the
+/// validation every GitHub double runs cannot quietly become some other code. The check is run
+/// from a scratch directory holding `validate.mjs` beside a tarball one byte off npm's.
+#[test]
+fn the_schema_check_refuses_a_graphql_tarball_npm_did_not_publish() {
+    let tests = concat!(env!("CARGO_MANIFEST_DIR"), "/tests");
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    std::fs::copy(
+        format!("{tests}/github_schema/validate.mjs"),
+        scratch.path().join("validate.mjs"),
+    )
+    .expect("the schema check is copied");
+    let mut tarball = std::fs::read(format!("{tests}/github_schema/graphql-17.0.2.tgz"))
+        .expect("the pinned graphql-js tarball is readable");
+    let last = tarball.len() - 1;
+    tarball[last] ^= 0xff;
+    std::fs::write(scratch.path().join("graphql-17.0.2.tgz"), tarball)
+        .expect("the altered tarball is written");
+
+    let output = std::process::Command::new("bun")
+        .arg(scratch.path().join("validate.mjs"))
+        .arg(format!("{tests}/fixtures/github-schema.docs.graphql"))
+        .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("bun runs the schema check");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let answer: serde_json::Value = serde_json::from_str(stdout.lines().next().unwrap_or_default())
+        .unwrap_or_else(|_| panic!("the schema check answered {stdout:?}"));
+    assert!(!output.status.success(), "{answer}");
+    assert!(
+        answer["internal"].as_str().is_some_and(|message| {
+            message.contains("graphql-17.0.2.tgz has integrity sha512-")
+                && message.contains("not the sha512-FRWbddMx")
+        }),
+        "{answer}"
+    );
+    assert!(
+        !scratch.path().join("node_modules").exists(),
+        "nothing is unpacked from a tarball npm did not publish"
+    );
+}
+
+/// A copy of graphql-js already unpacked beside the check that is not the pinned tarball's —
+/// one from another pin, its marker naming another integrity, and one whose marker names the
+/// pin but whose code was changed after it was unpacked — is replaced by the pinned tarball's
+/// before anything is imported, so the validation runs only the code npm published.
+#[test]
+fn the_schema_check_replaces_a_graphql_copy_that_is_not_the_pinned_tarballs() {
+    let tests = concat!(env!("CARGO_MANIFEST_DIR"), "/tests");
+    for marker in [
+        "sha512-another",
+        "sha512-FRWbddMxfkjiB7z+aQDWIR+E34xo9I8c9mtK2RPv8PmMzKRvrdsreHL/Ui/TmwHJfhHChEtsFPyMHKI+xuarQQ==",
+    ] {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        for file in ["validate.mjs", "graphql-17.0.2.tgz"] {
+            std::fs::copy(
+                format!("{tests}/github_schema/{file}"),
+                scratch.path().join(file),
+            )
+            .expect("the schema check is copied");
+        }
+        let stale = scratch.path().join("node_modules/graphql");
+        std::fs::create_dir_all(&stale).expect("a stale copy's directory");
+        std::fs::write(stale.join(".onetaskgraph-integrity"), marker).expect("its marker");
+        std::fs::write(
+            stale.join("index.mjs"),
+            "throw new Error('the stale copy was imported');\n",
+        )
+        .expect("its code");
+
+        let output = std::process::Command::new("bun")
+            .arg(scratch.path().join("validate.mjs"))
+            .arg(format!("{tests}/fixtures/github-schema.docs.graphql"))
+            .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("bun runs the schema check");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let answer: serde_json::Value =
+            serde_json::from_str(stdout.lines().next().unwrap_or_default())
+                .unwrap_or_else(|_| panic!("the schema check answered {stdout:?}"));
+        assert_eq!(
+            answer["ready"],
+            serde_json::json!(true),
+            "{marker}: {answer}"
+        );
+        assert!(output.status.success(), "{marker}: {answer}");
+        assert!(
+            std::fs::read_to_string(stale.join(".onetaskgraph-integrity"))
+                .is_ok_and(|marker| marker.starts_with("sha512-FRWbddMx")),
+            "{marker}: the stale copy is replaced by the pinned one"
+        );
+        assert!(
+            std::fs::read_to_string(stale.join("index.mjs"))
+                .is_ok_and(|code| !code.contains("the stale copy was imported")),
+            "{marker}: the stale copy's code is gone"
+        );
     }
 }

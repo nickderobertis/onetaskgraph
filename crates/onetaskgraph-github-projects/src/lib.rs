@@ -4442,7 +4442,7 @@ impl GitHubProjectsSource {
         self.graphql(
             graphql::STATUS_OPTIONS_UPDATE,
             json!({"input": {
-                "projectId": before.board_id, "fieldId": before.field_id,
+                "fieldId": before.field_id,
                 "singleSelectOptions": options,
             }}),
         )
@@ -4890,7 +4890,7 @@ impl GitHubProjectsSource {
                     self.graphql(
                         graphql::STATUS_OPTIONS_UPDATE,
                         json!({"input": {
-                            "projectId": before.board_id, "fieldId": held.field_id,
+                            "fieldId": held.field_id,
                             "singleSelectOptions": options,
                         }}),
                     )

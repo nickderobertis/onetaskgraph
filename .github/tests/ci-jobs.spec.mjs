@@ -15,6 +15,9 @@ const FOUR = {
   "test-macos": "macos-latest",
 };
 const TESTS = ["test-linux", "test-windows", "test-macos"];
+// Each job's execution limit. The three test jobs hold 40 minutes, by the user's decision of
+// 2026-10-31: passing runs reached 29.8 minutes against 30, so ordinary variance cancelled them.
+const TIMEOUT_MINUTES = { lint: 30, "test-linux": 40, "test-windows": 40, "test-macos": 40 };
 // Every pull request, and for test-macos every one but release-plz's own release branch, so
 // the release pull request allocates no Mac runner at all.
 const PULL_REQUEST = "github.event_name == 'pull_request'";
@@ -75,7 +78,8 @@ export function problems(all) {
       continue;
     }
     if (job.name !== undefined) found.push(`${id} overrides its name; its check context is its id`);
-    if (job["timeout-minutes"] !== 30) found.push(`${id} has timeout-minutes other than 30`);
+    if (job["timeout-minutes"] !== TIMEOUT_MINUTES[id])
+      found.push(`${id} has timeout-minutes other than ${TIMEOUT_MINUTES[id]}`);
     if (job.needs !== undefined) found.push(`${id} has a needs edge`);
     if (job["runs-on"] !== runner) found.push(`${id} runs on ${job["runs-on"]}, not ${runner}`);
     if (job.if !== CONDITIONS[id])
@@ -242,10 +246,14 @@ test("a job missing, renamed, given a needs edge or another timeout is refused",
     refuses((all) => {
       all["ci.yml"].jobs[id].needs = ["deny"];
     }, /needs edge/);
-    for (const minutes of [29, 31, 45, undefined])
-      refuses((all) => {
-        all["ci.yml"].jobs[id]["timeout-minutes"] = minutes;
-      }, /timeout-minutes other than 30/);
+    const limit = TIMEOUT_MINUTES[id];
+    for (const minutes of [limit - 1, limit + 1, 45, undefined])
+      refuses(
+        (all) => {
+          all["ci.yml"].jobs[id]["timeout-minutes"] = minutes;
+        },
+        new RegExp(`${id} has timeout-minutes other than ${limit}`),
+      );
     refuses((all) => {
       all["ci.yml"].jobs[id].if = "github.event_name == 'push'";
     }, /every pull_request event/);

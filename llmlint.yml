@@ -27,6 +27,14 @@ files:
     # them, which every figure is read from, stay judged.
     - "docs/measurements/**/*.json"
     - "docs/measurements/**/*.jsonl"
+    # GitHub's published GraphQL schema, vendored byte for byte and pinned by digest to the
+    # provenance in that directory's README.md (tests/plugin.rs); 1.5 MB that cannot carry a
+    # comment without ceasing to be GitHub's file. Its consumer, tests/github_schema/mod.rs,
+    # stays judged.
+    - "crates/onetaskgraph-github-projects/tests/fixtures/github-schema.docs.graphql"
+    # graphql-js as npm publishes it, a gzipped tarball held to npm's integrity by
+    # tests/github_schema/validate.mjs, which stays judged.
+    - "crates/onetaskgraph-github-projects/tests/github_schema/graphql-17.0.2.tgz"
     # GitHub's own responses, recorded byte for byte as `gh api --include` printed them, which
     # the release-tail journey replays: about 6 MB that nobody wrote and that, like the logs
     # above, would put a diff-scoped run past the harness's input limit. Each one's sidecar

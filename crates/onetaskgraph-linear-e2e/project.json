@@ -60,7 +60,8 @@
         "command": "bash scripts/live-crate-test.sh onetaskgraph-linear-e2e e2e linear_assets::live_disposable_issue_and_document_assets_copy_and_recopy"
       },
       "// end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]",
-      "dependsOn": ["onetaskgraph:build"],
+      "// linear": "llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier,expensive_tests_stay_behind_their_own_edge] `budgets` reads the plugin's ordinary-pass journal, which onetaskgraph-linear:test alone writes, and test-linux judges `budgets` without task dependencies after running `test` for affected projects only; so the producer runs wherever this suite does. The plugin's target is `parallelism: false`, so the two seat-holders still run in turn. As a task dependency it runs even for a project the live-lane decision excludes.",
+      "dependsOn": ["onetaskgraph:build", "onetaskgraph-linear:test"],
       "//": "These credential inputs prevent an uncredentialed cache hit from replacing that required run. Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement. Its output is the telemetry the budget journeys record, which `budgets` reads, so a cache hit restores it.",
       "inputs": [
         "default",
