@@ -47,18 +47,35 @@ class Request(TypedDict):
     variables: ListingVariables | ProjectListingVariables | DeleteVariables
 
 
+class Operation(StrEnum):
+    """Which of the janitor's four Linear operations a request is, read once off its query."""
+    DOCUMENTS = auto()
+    PROJECTS = auto()
+    DELETE_DOCUMENT = auto()
+    DELETE_PROJECT = auto()
+
+    @classmethod
+    def of(cls, query: str) -> 'Operation':
+        for root, operation in [('documentDelete(', cls.DELETE_DOCUMENT), ('projectDelete(', cls.DELETE_PROJECT),
+                                ('documents(', cls.DOCUMENTS), ('projects(', cls.PROJECTS)]:
+            if root in query:
+                return operation
+        raise AssertionError(f'not an operation the janitor sends: {query}')
+
+
 def read_request(value: object) -> Request:
     assert isinstance(value, dict) and isinstance(value.get('query'), str)
     variables = value.get('variables')
     assert isinstance(variables, dict)
-    if 'documentDelete(' in value['query'] or 'projectDelete(' in value['query']:
-        assert set(variables) == {'id'}
-        assert isinstance(variables['id'], str) and variables['id'].strip()
-    else:
-        assert set(variables) == {'after', 'filter'}
-        assert variables['after'] is None or (isinstance(variables['after'], str) and variables['after'].strip())
-        field = 'name' if 'projects(' in value['query'] else 'title'
-        assert variables['filter'] == {field: {'startsWith': 'onetaskgraph live cleanup '}}
+    match Operation.of(value['query']):
+        case Operation.DELETE_DOCUMENT | Operation.DELETE_PROJECT:
+            assert set(variables) == {'id'}
+            assert isinstance(variables['id'], str) and variables['id'].strip()
+        case listing:
+            assert set(variables) == {'after', 'filter'}
+            assert variables['after'] is None or (isinstance(variables['after'], str) and variables['after'].strip())
+            field = 'name' if listing is Operation.PROJECTS else 'title'
+            assert variables['filter'] == {field: {'startsWith': 'onetaskgraph live cleanup '}}
     # Runtime checks above establish the union shape; Python cannot infer a TypedDict from dictionary checks.
     return cast(Request, value)
 
@@ -159,6 +176,7 @@ def updated(seconds_ago: int) -> str:
 class FailureMode(StrEnum):
     PROJECT_LISTING = auto()
     PROJECT_CURSOR = auto()
+    PROJECT_READ_LIMIT = auto()
     PROJECT_DELETE = auto()
     DELETE = auto()
     SECOND_DELETE = auto()
@@ -200,6 +218,7 @@ class Workspace:
                       Response(DocumentData(DocumentPage(nodes[5:], PageInfo(False, None))))]
         # No project unless a journey seeds one: `linear-projects.json` is what one seeds.
         self.projects: list[ListedProject] = []
+        self.project_page_size = 100
         self.deleted: list[DocumentId] = []
         self.requests: list[Request] = []
         self.failure = failure
@@ -208,37 +227,58 @@ class Workspace:
     def answer(self, request: Request) -> dict[str, Any]:
         # Any admits deliberately malformed wire payloads as well as schema-checked success records.
         self.requests.append(request)
-        if 'projectDelete(' in request['query']:
-            identifier = cast(DeleteVariables, request['variables'])['id']
-            if self.failure is FailureMode.PROJECT_DELETE:
-                return {'data': {'projectDelete': {'success': False}}}
-            self.deleted.append(identifier)
-            return json.loads((Path(__file__).parent / 'fixtures/linear-project-delete.json').read_text())
-        if 'projects(' in request['query']:
-            assert 'teams(first:2){nodes{key} pageInfo{hasNextPage}}' in request['query']
-            after = cast(ProjectListingVariables, request['variables'])['after']
-            match self.failure:
-                case FailureMode.PROJECT_LISTING:
-                    return {'errors': [{'message': 'recorded listing refusal'}]}
-                case FailureMode.PROJECT_CURSOR:
-                    return {'data': {'projects': {'nodes': [], 'pageInfo': {
-                        'hasNextPage': True, 'endCursor': 'project-page'}}}}
-            assert after is None
-            # A deleted record is gone from the next listing, as it is from Linear's.
-            nodes = [asdict(project) for project in self.projects if project.id not in self.deleted]
-            return {'data': {'projects': {'nodes': nodes, 'pageInfo': {'hasNextPage': False, 'endCursor': None}}}}
-        if 'documentDelete(' in request['query']:
-            # read_request validated delete variables before this operation discriminator.
-            identifier = cast(DeleteVariables, request['variables'])['id']
-            match self.failure:
-                case FailureMode.DELETE:
-                    return {'data': {'documentDelete': {'success': False}}}
-                case FailureMode.SECOND_DELETE if len(self.deleted) == 1:
-                    return {'data': {'documentDelete': {'success': False}}}
-                case FailureMode.MALFORMED_DELETE:
-                    return {'data': {'documentDelete': {}}}
-            self.deleted.append(identifier)
-            return json.loads((Path(__file__).parent / 'fixtures/linear-document-delete.json').read_text())
+        match Operation.of(request['query']):
+            case Operation.DELETE_PROJECT:
+                return self.delete_project(cast(DeleteVariables, request['variables'])['id'])
+            case Operation.PROJECTS:
+                assert 'teams(first:2){nodes{key} pageInfo{hasNextPage}}' in request['query']
+                return self.project_page(cast(ProjectListingVariables, request['variables'])['after'])
+            case Operation.DELETE_DOCUMENT:
+                # read_request validated delete variables before this operation discriminator.
+                return self.delete_document(cast(DeleteVariables, request['variables'])['id'])
+            case Operation.DOCUMENTS:
+                return self.document_page(request)
+
+    def delete_project(self, identifier: DocumentId) -> dict[str, Any]:
+        # Any admits deliberately malformed wire payloads as well as schema-checked success records.
+        if self.failure is FailureMode.PROJECT_DELETE:
+            return {'data': {'projectDelete': {'success': False}}}
+        self.deleted.append(identifier)
+        return json.loads((Path(__file__).parent / 'fixtures/linear-project-delete.json').read_text())
+
+    def project_page(self, after: Cursor | None) -> dict[str, Any]:
+        # Any admits deliberately malformed wire payloads as well as schema-checked success records.
+        start = int(after.removeprefix('project-')) if after else 0
+        match self.failure:
+            case FailureMode.PROJECT_LISTING:
+                return {'errors': [{'message': 'recorded listing refusal'}]}
+            case FailureMode.PROJECT_CURSOR:
+                return {'data': {'projects': {'nodes': [], 'pageInfo': {
+                    'hasNextPage': True, 'endCursor': 'project-0'}}}}
+            case FailureMode.PROJECT_READ_LIMIT:
+                return {'data': {'projects': {'nodes': [], 'pageInfo': {
+                    'hasNextPage': True, 'endCursor': f'project-{start + 1}'}}}}
+        # A deleted record is gone from the next listing, as it is from Linear's.
+        live = [asdict(project) for project in self.projects if project.id not in self.deleted]
+        end = start + self.project_page_size
+        more = end < len(live)
+        return {'data': {'projects': {'nodes': live[start:end], 'pageInfo': {
+            'hasNextPage': more, 'endCursor': f'project-{end}' if more else None}}}}
+
+    def delete_document(self, identifier: DocumentId) -> dict[str, Any]:
+        # Any admits deliberately malformed wire payloads as well as schema-checked success records.
+        match self.failure:
+            case FailureMode.DELETE:
+                return {'data': {'documentDelete': {'success': False}}}
+            case FailureMode.SECOND_DELETE if len(self.deleted) == 1:
+                return {'data': {'documentDelete': {'success': False}}}
+            case FailureMode.MALFORMED_DELETE:
+                return {'data': {'documentDelete': {}}}
+        self.deleted.append(identifier)
+        return json.loads((Path(__file__).parent / 'fixtures/linear-document-delete.json').read_text())
+
+    def document_page(self, request: Request) -> dict[str, Any]:
+        # Any admits deliberately malformed wire payloads as well as schema-checked success records.
         assert 'team{key}' in request['query']
         assert 'project{teams(first:2)' in request['query']
         # read_request validated the listing shape; Python cannot narrow a TypedDict union by query text.
@@ -464,6 +504,72 @@ class LinearJourneys(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn('did not confirm project deletion', result.stderr)
         self.assertEqual(workspace.deleted, SUPERSEDED)
+
+    def test_a_superseded_document_it_cannot_vouch_for_is_kept_with_its_parent(self) -> None:
+        sample_project = Project(Teams([Team('TEST')], TeamPageInfo(False)))
+        for name, change in [
+            ('other-team', {'team': Team('OTHER')}),
+            ('shared-project', {'team': None, 'project': Project(Teams([Team('TEST'), Team('OTHER')], TeamPageInfo(False)))}),
+            ('incomplete-project', {'team': None, 'project': Project(Teams([Team('TEST')], TeamPageInfo(True)))}),
+            ('filed', {'team': None, 'project': sample_project}),
+        ]:
+            with self.subTest(document=name):
+                workspace = Workspace()
+                self.standing(workspace)
+                nodes = workspace.pages[0].data.documents.nodes
+                nodes[0] = replace(nodes[0], **change)
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                if name == 'filed':
+                    # Filed under a project of the nomination alone, it is vouched for.
+                    self.assertEqual(workspace.deleted, [*SUPERSEDED, 'superseded-parent'])
+                else:
+                    self.assertEqual(workspace.deleted, SUPERSEDED[1:])
+
+    def test_a_parent_whose_teams_do_not_read_as_the_nomination_alone_is_kept(self) -> None:
+        for name, teams in [('no-team', Teams([], TeamPageInfo(False))),
+                            ('incomplete', Teams([Team('TEST')], TeamPageInfo(True)))]:
+            with self.subTest(teams=name):
+                workspace = Workspace()
+                self.standing(workspace)
+                workspace.projects = [replace(project, teams=teams) if project.id == 'superseded-parent' else project
+                                      for project in workspace.projects]
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(workspace.deleted, SUPERSEDED)
+
+    def test_the_parent_is_found_on_a_later_project_page(self) -> None:
+        workspace = Workspace()
+        self.standing(workspace)
+        workspace.projects = [*workspace.projects[1:], workspace.projects[0]]
+        workspace.project_page_size = 2
+        result = self.run_janitor(workspace)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(workspace.deleted, [*SUPERSEDED, 'superseded-parent'])
+        # Two document pages and three project pages.
+        self.assertIn('5 GraphQL queries, 5 content writes', result.stdout)
+
+    def test_a_repeated_project_id_writes_nothing(self) -> None:
+        for name in ['repeated-project', 'project-named-as-a-document']:
+            with self.subTest(case=name):
+                workspace = Workspace()
+                self.standing(workspace)
+                parent = workspace.projects[0]
+                twin = parent if name == 'repeated-project' else replace(parent, id=DocumentId(SUPERSEDED[0]))
+                workspace.projects = [*workspace.projects, twin]
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn('repeated an id', result.stderr)
+                self.assertEqual(workspace.deleted, [])
+
+    def test_the_project_listing_shares_the_read_cap_and_writes_nothing_past_it(self) -> None:
+        workspace = Workspace(FailureMode.PROJECT_READ_LIMIT)
+        self.standing(workspace)
+        result = self.run_janitor(workspace)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('project listing exceeded its read limit', result.stderr)
+        self.assertEqual(len(workspace.requests), 50)
+        self.assertEqual(workspace.deleted, [])
 
     def test_direct_team_precedes_project_and_unvouched_documents_survive(self) -> None:
         workspace = Workspace()

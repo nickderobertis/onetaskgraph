@@ -133,12 +133,32 @@ impl Teams {
 #[serde(transparent)]
 struct Nullable<T>(Option<T>);
 
+/// When Linear last changed a record, in microseconds since the epoch, or `None` for a time
+/// that does not read — which is never taken for an old one.
+#[derive(Deserialize)]
+#[serde(from = "String")]
+struct UpdatedAt(Option<u64>);
+impl From<String> for UpdatedAt {
+    fn from(value: String) -> Self {
+        Self(lease_created_micros(&value))
+    }
+}
+impl UpdatedAt {
+    /// Whether Linear last changed it longer than [`DOCUMENT_MAX_AGE`] ago. A run still on a
+    /// branch from before the pool writes its set every pass, so this keeps that set in place
+    /// while such a run may be using it.
+    fn untouched(&self, now: u64) -> bool {
+        self.0
+            .is_some_and(|micros| now.saturating_sub(micros) > DOCUMENT_MAX_AGE.as_micros() as u64)
+    }
+}
+
 #[derive(Deserialize)]
 struct Document {
     id: DocumentId,
     title: String,
     #[serde(rename = "updatedAt")]
-    updated_at: String,
+    updated_at: UpdatedAt,
     #[serde(deserialize_with = "Nullable::deserialize")]
     team: Nullable<Team>,
     #[serde(deserialize_with = "Nullable::deserialize")]
@@ -164,7 +184,7 @@ struct Documents {
 struct ListedProject {
     id: DocumentId,
     name: String,
-    updated_at: String,
+    updated_at: UpdatedAt,
     teams: Teams,
 }
 #[derive(Deserialize)]
@@ -326,14 +346,6 @@ fn superseded_slot(title: &str, nomination: &TeamKey) -> Option<Slot> {
     .then_some(retained.slot)
 }
 
-/// Whether Linear last changed it longer than [`DOCUMENT_MAX_AGE`] ago. A run still on a
-/// branch from before the pool writes its set every pass, so this keeps that set in place
-/// while such a run may be using it; an unreadable time is never read as old.
-fn untouched(updated_at: &str, now: u64) -> bool {
-    lease_created_micros(updated_at)
-        .is_some_and(|micros| now.saturating_sub(micros) > DOCUMENT_MAX_AGE.as_micros() as u64)
-}
-
 enum Retire {
     Document(DocumentId),
     Project(DocumentId),
@@ -384,7 +396,7 @@ pub async fn run_linear_with_clock(
             let superseded = superseded_slot(&document.title, &config.team)
                 .is_some_and(|slot| slot != Slot::Parent);
             if superseded {
-                if document.in_team(&config.team) && untouched(&document.updated_at, now) {
+                if document.in_team(&config.team) && document.updated_at.untouched(now) {
                     listed.push(Retire::Document(document.id))
                 } else {
                     superseded_kept = true;
@@ -427,7 +439,7 @@ pub async fn run_linear_with_clock(
             }
             if superseded_slot(&project.name, &config.team) == Some(Slot::Parent)
                 && project.teams.only(&config.team)
-                && untouched(&project.updated_at, now)
+                && project.updated_at.untouched(now)
             {
                 projects.push(Retire::Project(project.id))
             }
