@@ -64,6 +64,15 @@ MANIFEST = {
             "team": ["team", "key"],
         },
     },
+    "crates/onetaskgraph-live-janitor/tests/fixtures/linear-projects.json": {
+        "items": ["data", "projects", "nodes"],
+        "id": ["id"],
+        "title": ["name"],
+        "facets": {
+            "ownership name": ["name"],
+            "team": ["teams", "nodes", [], "key"],
+        },
+    },
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
     "crates/onetaskgraph-linear/tests/fixtures/issues.json": {
         "items": ["data", "issues", "nodes"],
@@ -211,6 +220,10 @@ NOT_A_STORE = {
     # llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The existing central NOT_A_STORE table requires every non-store response fixture to be named with its reason, matching all other domains here.
     "crates/onetaskgraph-live-janitor/tests/fixtures/linear-document-delete.json": (
         "Not a store: a single documentDelete acknowledgement, validated against the pinned "
+        "upstream schema and served by the janitor subprocess journey, with no item collection."
+    ),
+    "crates/onetaskgraph-live-janitor/tests/fixtures/linear-project-delete.json": (
+        "Not a store: a single projectDelete acknowledgement, validated against the pinned "
         "upstream schema and served by the janitor subprocess journey, with no item collection."
     ),
     # llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]

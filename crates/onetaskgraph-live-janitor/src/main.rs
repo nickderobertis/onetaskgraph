@@ -2,7 +2,8 @@
 //! first — the one `.github/workflows/ci.yml` runs when a live run is cancelled.
 //!
 //! `--linear` instead expires stamped test documents in `LINEAR_WRITE_TEAM` after 24
-//! hours, using `LINEAR_API_KEY` alone. It recovers residue from discarded CI hosts.
+//! hours, using `LINEAR_API_KEY` alone. It recovers residue from discarded CI hosts, and
+//! retires the pre-pool standing CI set the pool superseded once it is a day untouched.
 //! `--linear --release-leases DIR`, which `ci.yml` runs when a live run is cancelled, releases
 //! the pool leases that run recorded in `DIR` and still holds, and nothing else.
 //!
