@@ -3632,9 +3632,18 @@ mod pool {
         "Onetaskgraph Live Cleanup retained-v1 ci ENG filed pool-1",
     ];
 
+    /// Projects named with the retained prefix that no current scheme parses, which the plugin
+    /// lane's discovery of its parent project lists beside its own.
+    const UNPARSED_RETAINED_PROJECTS: [&str; 3] = [
+        "onetaskgraph live cleanup retained-v2 ci ENG parent pool-1",
+        "onetaskgraph live cleanup retained-v1 ci ENG parent pool-x",
+        "Onetaskgraph Live Cleanup retained-v1 ci ENG parent pool-1",
+    ];
+
     /// Seeds the workspace another manager's history left behind: the pre-pool standing CI set
-    /// — four documents and their parent project, titled without `pool-N` — and one document
-    /// under every unparsed retained title. Returns each seeded record's id and content.
+    /// — four documents and their parent project, titled without `pool-N` — one document under
+    /// every unparsed retained title, and one project under every unparsed retained name.
+    /// Returns each seeded record's id and content.
     async fn seed_stray_retained(replay: &document_replay::Replay) -> BTreeMap<String, Value> {
         document_lifecycle::prepare(
             &replay.endpoint,
@@ -3657,6 +3666,16 @@ mod pool {
             .await
             .unwrap();
         }
+        for name in UNPARSED_RETAINED_PROJECTS {
+            document_lifecycle::send(
+                &replay.endpoint,
+                "synthetic",
+                "mutation($input:ProjectCreateInput!){projectCreate(input:$input){success project{id}}}",
+                json!({"input":{"name":name,"teamIds":["team"]}}),
+            )
+            .await
+            .unwrap();
+        }
         let state = replay.state.lock().unwrap();
         let strays: BTreeMap<String, Value> = state
             .documents
@@ -3664,7 +3683,10 @@ mod pool {
             .chain(state.projects.iter())
             .map(|(id, row)| (id.clone(), row.clone()))
             .collect();
-        assert_eq!(strays.len(), 4 + 1 + UNPARSED_RETAINED.len());
+        assert_eq!(
+            strays.len(),
+            4 + 1 + UNPARSED_RETAINED.len() + UNPARSED_RETAINED_PROJECTS.len()
+        );
         strays
     }
 

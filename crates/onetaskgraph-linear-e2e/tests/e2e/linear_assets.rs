@@ -2923,12 +2923,16 @@ fn document_modes_replay_the_live_binary_asset_entry_over_http() {
     journal.finish().unwrap();
 }
 
-/// What the workspace holds of each protected record, by kind and title: its id and the long
-/// form it stores. A record changed, retitled or removed reads otherwise.
+/// One protected record as the workspace holds it: its id and the long form it stores, absent
+/// once it is gone.
+type Held = Option<(String, Option<String>)>;
+
+/// What the workspace holds of each protected record, by kind and title. A record changed,
+/// retitled or removed reads otherwise.
 fn standing_snapshot(
     workspace: &onetaskgraph_e2e_support::fixtures::LinearWorkspace,
     records: &[(&'static str, String)],
-) -> Vec<(String, Option<(String, Option<String>)>)> {
+) -> Vec<(String, Held)> {
     records
         .iter()
         .map(|(kind, title)| {
@@ -3034,7 +3038,10 @@ fn the_asset_journey_passes_over_standing_identities_no_current_scheme_owns() {
     let mark = journey.workspace.held.served_count();
     // This run's journey, over pool member 1: the cold rebuild of its slot, its reset, and the
     // copy and recopy of every kind.
-    let journal = Journal::new("assets", "ordinary");
+    // Kept in the sandbox, so this pass is not written over the suite's own telemetry.
+    let journal = Journal::new("assets", "ordinary")
+        .durable(journey.sandbox.subdirectory("journal"))
+        .unwrap();
     journey.workspace.state.lock().unwrap().document_journal = Some(journal.clone());
     journal.begin("ordinary");
     let scope = Scope::pooled("ENG", 1).unwrap();
