@@ -161,7 +161,8 @@ impl Validators {
         }
     }
 
-    /// The directory the server records its port in, created if it is not there.
+    /// The rendezvous directory, made on every use rather than once: the start lock lives in it
+    /// before any server has run, and a fresh clone has no `node_modules` until one has.
     fn rendezvous(&self) -> PathBuf {
         std::fs::create_dir_all(&self.rendezvous).unwrap_or_else(|error| {
             panic!(
@@ -272,7 +273,8 @@ impl Validators {
         Ok(connection)
     }
 
-    /// Starts a server, waits for it to report its port, and connects to it.
+    /// Starts a server and reads its first line rather than waiting for `endpoint.json`, so a
+    /// server that cannot build the schema is reported with its own reason instead of a timeout.
     fn start(&self, directory: &std::path::Path) -> io::Result<Connection> {
         let here = here();
         let log = OpenOptions::new()
