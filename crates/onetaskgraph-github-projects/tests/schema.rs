@@ -1748,6 +1748,171 @@ fn a_stopped_server_is_replaced() {
     assert_ne!(replaced_by, pid, "a new server answered");
 }
 
+/// The check's server stops by itself once no client has held a connection to it for its idle
+/// period, and not while one does: a connection open across several such periods keeps it
+/// serving, a connection opened inside one cancels the stop it was counting down to, and once
+/// the last connection closes it stops and removes its rendezvous endpoint. The next request is
+/// answered by a server started in its place. Driven against a server of this test's own, idling
+/// for half a second rather than the shared server's ten.
+#[test]
+fn a_schema_check_server_stops_once_idle_and_never_while_a_client_is_connected() {
+    within(
+        std::time::Duration::from_secs(60),
+        "watching a schema check server stop once idle",
+        an_idle_server_stops,
+    );
+}
+
+/// The check's server answers a client greeting it `stale`, naming what changed, once a file it
+/// was built from has changed since it started — here the schema, a copy in the test's own
+/// directory — and stops; the next request is answered, over the connection this process held
+/// to the one that stopped, by a server built from the file as it now stands.
+#[test]
+fn a_schema_check_server_whose_schema_changed_is_replaced_by_the_next_request() {
+    within(
+        std::time::Duration::from_secs(60),
+        "replacing a schema check server whose schema changed",
+        a_changed_server_is_replaced,
+    );
+}
+
+/// Connects to the server at `port` and greets it with the protocol it speaks, answering the
+/// connection and the server's first line.
+fn greeted(port: u16) -> (std::net::TcpStream, serde_json::Value) {
+    use std::io::{BufRead, BufReader, Write};
+
+    let mut stream =
+        std::net::TcpStream::connect(("127.0.0.1", port)).expect("the server accepts a client");
+    stream
+        .write_all(b"{\"hello\":1}\n")
+        .expect("the hello is sent");
+    let mut answer = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut answer)
+        .expect("the server answers the hello");
+    (
+        stream,
+        serde_json::from_str(&answer).expect("the answer is JSON"),
+    )
+}
+
+/// Waits, without connecting, until the server that wrote `endpoint` has removed it — which it
+/// does as it stops — and then that nothing listens on `port`. Connecting to poll would itself
+/// be the connection that keeps an idle server running.
+fn wait_until_stopped(endpoint: &std::path::Path, port: u16) {
+    let asked = std::time::Instant::now();
+    while endpoint.exists() {
+        assert!(
+            asked.elapsed() < std::time::Duration::from_secs(30),
+            "the server stopped and removed {}",
+            endpoint.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        assert!(
+            asked.elapsed() < std::time::Duration::from_secs(30),
+            "the stopped server stopped listening"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// The answer to a field `User` does not have, named `field`, so each request is one no other
+/// test sends and no process has an answer to kept.
+fn unknown_user_field(server: &github_schema::PrivateServer, field: &str) {
+    use serde_json::json;
+
+    let query = format!("query{{viewer{{{field}}}}}");
+    let answered = server.refuse(&json!({ "query": query }));
+    let message = answered
+        .as_ref()
+        .and_then(|answered| answered["errors"][0]["message"].as_str());
+    assert_eq!(
+        message,
+        Some(format!("Cannot query field \"{field}\" on type \"User\".").as_str()),
+        "{answered:?}"
+    );
+}
+
+fn an_idle_server_stops() {
+    use std::io::{BufRead, BufReader, Write};
+
+    let idle = std::time::Duration::from_millis(500);
+    let server = github_schema::serve_privately_from_a_copy(idle);
+    let endpoint = server
+        .schema()
+        .parent()
+        .expect("the copy sits in the rendezvous directory")
+        .join("endpoint.json");
+    // `server()` holds this process's connection open, across four idle periods.
+    let (port, pid) = server.server();
+    std::thread::sleep(idle * 4);
+    unknown_user_field(&server, "heldAcrossIdlePeriods");
+    assert_eq!(
+        server.server(),
+        (port, pid),
+        "a connection held open keeps it serving"
+    );
+
+    // Every connection closed starts the count; one opened inside it cancels it.
+    server.disconnect();
+    std::thread::sleep(idle / 2);
+    let (mut stream, ready) = greeted(port);
+    assert_eq!(ready["ready"], true, "{ready}");
+    std::thread::sleep(idle * 4);
+    stream
+        .write_all(b"{\"query\":\"query{viewer{openedInsideTheCount}}\",\"operationName\":null,\"variables\":null,\"coerce\":false}\n")
+        .expect("the request is sent");
+    let mut answer = String::new();
+    BufReader::new(&stream)
+        .read_line(&mut answer)
+        .expect("a server whose stop was cancelled answers");
+    assert!(answer.contains("openedInsideTheCount"), "{answer}");
+    assert!(
+        endpoint.exists(),
+        "a server serving a client keeps its endpoint"
+    );
+
+    // The last connection closed, it stops by itself.
+    drop(stream);
+    wait_until_stopped(&endpoint, port);
+
+    unknown_user_field(&server, "askedAfterTheIdleStop");
+    let (_, replaced_by) = server.server();
+    assert_ne!(replaced_by, pid, "a new server answered");
+}
+
+fn a_changed_server_is_replaced() {
+    let server = github_schema::serve_privately_from_a_copy(std::time::Duration::from_secs(30));
+    let endpoint = server
+        .schema()
+        .parent()
+        .expect("the copy sits in the rendezvous directory")
+        .join("endpoint.json");
+    let (port, pid) = server.server();
+    unknown_user_field(&server, "beforeTheSchemaChanged");
+
+    // A comment changes the file and not the schema it describes.
+    let mut schema = std::fs::read(server.schema()).expect("the copy is read");
+    schema.extend_from_slice(b"\n# changed after the server started\n");
+    std::fs::write(server.schema(), schema).expect("the copy is changed");
+
+    let (_, stale) = greeted(port);
+    assert!(
+        stale["stale"]
+            .as_str()
+            .is_some_and(|why| why.contains(&server.schema().display().to_string())
+                && why.ends_with("changed since it started")),
+        "{stale}"
+    );
+    wait_until_stopped(&endpoint, port);
+
+    unknown_user_field(&server, "afterTheSchemaChanged");
+    let (_, replaced_by) = server.server();
+    assert_ne!(replaced_by, pid, "a new server answered");
+}
+
 /// A request line that is not the protocol's shape — not an object, a query that is not a
 /// string, an `operationName` that is neither a string nor null, a `coerce` missing or not a
 /// boolean — is answered `internal`, naming what is wrong, rather than read with defaults: a

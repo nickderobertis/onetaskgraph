@@ -161,6 +161,10 @@ impl Connection {
 /// stops by itself once idle, so nothing is left running after the tests.
 struct Validators {
     rendezvous: PathBuf,
+    /// The schema a server this starts builds from, and how long it idles before it stops when
+    /// not its own default.
+    schema: PathBuf,
+    idle_for: Option<Duration>,
     idle: Mutex<Vec<Connection>>,
     schema_sha256: OnceLock<String>,
     answers: Mutex<HashMap<String, Vec<Value>>>,
@@ -170,6 +174,8 @@ impl Validators {
     fn new(rendezvous: PathBuf) -> Self {
         Self {
             rendezvous,
+            schema: here().join("../fixtures/github-schema.docs.graphql"),
+            idle_for: None,
             idle: Mutex::new(Vec::new()),
             schema_sha256: OnceLock::new(),
             answers: Mutex::new(HashMap::new()),
@@ -299,7 +305,7 @@ impl Validators {
         let mut command = Command::new("bun");
         command
             .arg(here.join("validate.mjs"))
-            .arg(here.join("../fixtures/github-schema.docs.graphql"))
+            .arg(&self.schema)
             .arg("--serve")
             .arg(directory)
             // Outside the clone, so a server still idling holds no directory a test removes.
@@ -310,6 +316,9 @@ impl Validators {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(log);
+        if let Some(idle_for) = self.idle_for {
+            command.env("GITHUB_SCHEMA_IDLE_MS", idle_for.as_millis().to_string());
+        }
         detach(&mut command);
         let mut child = spawn(&mut command).unwrap_or_else(|error| {
             panic!(
@@ -474,6 +483,18 @@ pub fn serve_privately() -> PrivateServer {
     ))))
 }
 
+/// A server of the calling test's own, built from a copy of the committed schema in its own
+/// rendezvous directory — so the test can change a file the server watches without touching the
+/// crate — that stops once it has had no connection for `idle_for`. See [`PrivateServer`].
+pub fn serve_privately_from_a_copy(idle_for: Duration) -> PrivateServer {
+    let mut server = serve_privately();
+    let copy = server.0.rendezvous().join("github-schema.docs.graphql");
+    std::fs::copy(&server.0.schema, &copy).expect("the schema is copied for a private server");
+    server.0.schema = copy;
+    server.0.idle_for = Some(idle_for);
+    server
+}
+
 impl PrivateServer {
     /// [`refuse`], answered by this server.
     #[must_use]
@@ -484,6 +505,17 @@ impl PrivateServer {
     /// [`server`] of this server.
     pub fn server(&self) -> (u16, u64) {
         self.0.endpoint()
+    }
+
+    /// The schema file this server was built from.
+    pub fn schema(&self) -> &std::path::Path {
+        &self.0.schema
+    }
+
+    /// Closes every connection this process holds open to the server, as a test process does
+    /// when it ends.
+    pub fn disconnect(&self) {
+        self.0.idle().clear();
     }
 }
 

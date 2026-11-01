@@ -282,8 +282,9 @@ function answerLine(line) {
 // different revisions of the two files cannot answer each other.
 const PROTOCOL = 1;
 // How long a server with no open connection waits before it stops: long enough to carry one test
-// process's work to the next, short enough that nothing lingers once the tests are done.
-const IDLE_MS = 10_000;
+// process's work to the next, short enough that nothing lingers once the tests are done. A test
+// watching a server of its own stop sets `GITHUB_SCHEMA_IDLE_MS` shorter, so it waits for less.
+const IDLE_MS = Number(process.env.GITHUB_SCHEMA_IDLE_MS) || 10_000;
 
 function serve(directory) {
   const endpoint = join(directory, "endpoint.json");
