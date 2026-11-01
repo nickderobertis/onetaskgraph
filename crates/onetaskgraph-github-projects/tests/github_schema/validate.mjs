@@ -46,6 +46,31 @@ const fail = (internal) => {
   process.exit(1);
 };
 
+// The command line is one of the two shapes the usage above names, and anything else is refused
+// rather than read as the standard-input mode, which would answer nothing a caller asked for.
+const USAGE = "usage: bun validate.mjs <schema.graphql> [--serve <directory>]";
+const args = process.argv.slice(2);
+const serving = args.length === 3 && args[1] === "--serve" && args[2] !== "";
+if (!(args.length === 1 || serving) || args[0] === "") {
+  fail(`${USAGE}; it was run with ${JSON.stringify(args)}`);
+}
+
+// How long a server with no open connection waits before it stops: long enough to carry one test
+// process's work to the next, short enough that nothing lingers once the tests are done. A test
+// watching a server of its own stop sets `GITHUB_SCHEMA_IDLE_MS` shorter, so it waits for less;
+// a value that is not a whole number of milliseconds a timer can hold is refused, not defaulted.
+const IDLE_MS = (() => {
+  const given = process.env.GITHUB_SCHEMA_IDLE_MS;
+  if (given === undefined) return 10_000;
+  const idle = /^[0-9]+$/.test(given) ? Number(given) : Number.NaN;
+  if (!(idle >= 1 && idle <= 2_147_483_647)) {
+    fail(
+      `GITHUB_SCHEMA_IDLE_MS is ${JSON.stringify(given)}, not a whole number from 1 to 2147483647`,
+    );
+  }
+  return idle;
+})();
+
 // Each regular file of an npm tarball, by its path under `package/`. An npm tarball is a gzipped
 // ustar archive of regular files alone; any other entry, or a path leaving the package, is
 // refused rather than guessed at, which the pinned integrity makes unreachable.
@@ -161,7 +186,7 @@ const TOLERATED_SCHEMA_ERROR =
 // largest batched document.
 const MAX_TOKENS = 200_000;
 
-const schemaPath = process.argv[2];
+const schemaPath = args[0];
 let schema;
 let schemaSha256;
 try {
@@ -281,11 +306,6 @@ function answerLine(line) {
 // The protocol `mod.rs` speaks; it sends this in its hello, so a client and a server built from
 // different revisions of the two files cannot answer each other.
 const PROTOCOL = 1;
-// How long a server with no open connection waits before it stops: long enough to carry one test
-// process's work to the next, short enough that nothing lingers once the tests are done. A test
-// watching a server of its own stop sets `GITHUB_SCHEMA_IDLE_MS` shorter, so it waits for less.
-const IDLE_MS = Number(process.env.GITHUB_SCHEMA_IDLE_MS) || 10_000;
-
 function serve(directory) {
   const endpoint = join(directory, "endpoint.json");
   // What this server was built from. A change to any of them makes it stale.
@@ -364,8 +384,8 @@ function serve(directory) {
   });
 }
 
-if (process.argv[3] === "--serve") {
-  serve(process.argv[4]);
+if (serving) {
+  serve(args[2]);
 } else {
   write({ ready: true, schema_sha256: schemaSha256 });
   for await (const line of createInterface({ input: process.stdin, crlfDelay: Infinity })) {

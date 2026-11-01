@@ -2035,6 +2035,89 @@ fn the_schema_check_refuses_a_schema_breaking_any_rule_but_the_tolerated_one() {
     );
 }
 
+/// The check refuses a command line in neither shape its usage names, and an idle period that
+/// is not a whole number of milliseconds a timer holds, answering `internal` and exiting
+/// non-zero before it builds anything or serves — never read as the standard-input mode, nor an
+/// idle period silently replaced by its default.
+#[test]
+fn the_schema_check_refuses_a_malformed_command_line_or_idle_period() {
+    use serde_json::Value;
+
+    let schema = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/github-schema.docs.graphql"
+    );
+    let scratch = tempfile::tempdir().expect("a scratch directory");
+    let directory = scratch.path().to_str().expect("a UTF-8 scratch path");
+    let run = |args: &[&str], idle: Option<&str>| -> (bool, Value) {
+        let mut command = std::process::Command::new("bun");
+        command
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/github_schema/validate.mjs"
+            ))
+            .args(args)
+            .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+            .env(
+                "GITHUB_SCHEMA_MODULES",
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../target/github-schema/node_modules"
+                ),
+            )
+            .env_remove("GITHUB_SCHEMA_IDLE_MS")
+            .stdin(std::process::Stdio::null());
+        if let Some(idle) = idle {
+            command.env("GITHUB_SCHEMA_IDLE_MS", idle);
+        }
+        let output = command.output().expect("bun runs the schema check");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        (
+            output.status.success(),
+            serde_json::from_str(stdout.lines().next().unwrap_or_default())
+                .unwrap_or_else(|_| panic!("the schema check answered {stdout:?}")),
+        )
+    };
+    let refused = |args: &[&str], idle: Option<&str>, naming: &str| {
+        let (succeeded, answer) = run(args, idle);
+        assert!(
+            !succeeded,
+            "{args:?} with idle {idle:?} exited zero: {answer}"
+        );
+        assert!(
+            answer["internal"]
+                .as_str()
+                .is_some_and(|message| message.contains(naming)),
+            "{args:?} with idle {idle:?} answered {answer}, not naming {naming:?}"
+        );
+    };
+
+    for args in [
+        &[][..],
+        &[schema, "--server", directory],
+        &[schema, "--serve"],
+        &[schema, "--serve", ""],
+        &[schema, "--serve", directory, "extra"],
+        &["", "--serve", directory],
+    ] {
+        refused(
+            args,
+            None,
+            "usage: bun validate.mjs <schema.graphql> [--serve <directory>]",
+        );
+    }
+    for idle in ["", "0", "-5", "1.5", "Infinity", "2147483648", "ten"] {
+        refused(
+            &[schema, "--serve", directory],
+            Some(idle),
+            "GITHUB_SCHEMA_IDLE_MS is",
+        );
+    }
+    // Both shapes, with an idle period in range, still start.
+    let (succeeded, ready) = run(&[schema], Some("2147483647"));
+    assert!(succeeded && ready["ready"] == true, "{ready}");
+}
+
 /// The check writes nothing inside the crate it tests: graphql-js is unpacked, and the shared
 /// server records where it listens, under the workspace's `target`. A release records the digest
 /// of each crate's directory when it builds and refuses to publish one that has moved since, and
