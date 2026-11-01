@@ -2,8 +2,12 @@
 // committed fixture. It runs by hand, never in a gate — it reaches GitHub, and what GitHub answers
 // moves — and says, for each recording, whether GitHub still answers what was recorded:
 //
-//   node .github/policy/tests/fixtures/release-tail/reconcile.mjs
+//   node .github/policy/tests/fixtures/release-tail/reconcile.mjs [recordings-v0.13.0]
 //
+// Each release's recordings are a directory of their own beside this script — `recordings`, the
+// default, for v0.12.13, and `recordings-v0.13.0` — reconciled one directory per run, because two
+// releases record the same paths (the releases listing, the closed pull requests) as GitHub
+// answered them at different moments.
 // Needs `gh` signed in with read access to this repository. The recorded 401 is re-fetched under
 // an invalid token, as it was recorded. Ignored, and only these, because GitHub rewrites them on
 // every answer or with no change to the record: the response's date, etag, last-modified,
@@ -12,7 +16,7 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 
-const RECORDINGS = new URL("./recordings/", import.meta.url);
+const RECORDINGS = new URL(`./${process.argv[2] ?? "recordings"}/`, import.meta.url);
 const IGNORED_HEADERS = /^(date|etag|last-modified|x-ratelimit-.*|x-github-request-id)$/;
 const IGNORED_FIELDS = new Set(["download_count", "updated_at"]);
 const INVALID_TOKEN = "ghp_invalidreplaytoken000000000000000000000";

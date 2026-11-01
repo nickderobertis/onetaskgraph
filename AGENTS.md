@@ -1677,9 +1677,11 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   `onetaskgraph-cd-job-time`, `onetaskgraph-cd-job-count` and
   `onetaskgraph-release-read-requests` pass `--exclude-workflow "rust cache warm"` — that
   workflow's `name:`, and no other — because the warmer builds and delivers nothing, and its
-  run at the release commit would otherwise count as CD and read its jobs.
+  run at the release commit would otherwise count as CD and read its jobs. A run concluded
+  `skipped` is left out by the script itself and costs no read: v0.13.0's skipped "Visual docs"
+  push run once made its release reads 7 against 6.
   `.github/policy/tests/release-tail.test.mjs` runs `publish`'s two tail steps as written over
-  GitHub answers recorded from this repository's own v0.12.13
+  GitHub answers recorded from this repository's own v0.12.13 and v0.13.0
   (`.github/policy/tests/fixtures/release-tail/`), GitHub the one boundary doubled.
 - **Registry lag alone never proposes a release.** `scripts/select-release-version.sh`
   recovers a partly failed publish only when `release-plz.toml`'s own `release_commits`
