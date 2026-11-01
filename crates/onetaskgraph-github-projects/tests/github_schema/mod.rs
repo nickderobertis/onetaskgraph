@@ -25,7 +25,9 @@
 //! One `bun` process per clone serves every test process on the machine (see [`Validators`]):
 //! building GitHub's schema takes a fifth of a second and a quarter of a gigabyte, and once per
 //! test process — nextest runs each test in a process of its own — that added about a fifth to
-//! the wall time of the suites these doubles serve.
+//! the wall time of the suites these doubles serve. A test that would hold that server up for
+//! the others — stopping it, or sending documents that take seconds to refuse — takes one of its
+//! own instead ([`serve_privately`]).
 //! A request nested past what it can recurse through is refused rather than crashing it —
 //! JavaScript reports an exhausted stack as an exception — and the variables' nesting is bounded
 //! here before they are sent.
@@ -87,9 +89,13 @@ fn here() -> PathBuf {
 }
 
 /// Where this clone's server records its port and its starters take their lock: inside the
-/// ignored `node_modules` the check already unpacks graphql-js into.
+/// ignored `node_modules` the check already unpacks graphql-js into — or, in a process that has
+/// asked for a server of its own ([`serve_privately`]), that server's scratch directory.
 fn rendezvous() -> PathBuf {
-    let directory = here().join("node_modules").join(".github-schema-server");
+    let directory = PRIVATE.get().map_or_else(
+        || here().join("node_modules").join(".github-schema-server"),
+        |private| private.path().to_path_buf(),
+    );
     std::fs::create_dir_all(&directory).unwrap_or_else(|error| {
         panic!(
             "the GitHub schema check could not create {} ({error})",
@@ -366,8 +372,85 @@ fn errors(document: &str, operation_name: Option<&str>, variables: Option<&Value
 const ANSWERS_KEPT: usize = 16_384;
 
 /// This process's way to the server, connected on first use.
+static VALIDATORS: OnceLock<Validators> = OnceLock::new();
+
+/// The scratch directory of this process's own server, once it has asked for one.
+static PRIVATE: OnceLock<tempfile::TempDir> = OnceLock::new();
+
+/// A server of this process's own, in place of the one every test process shares, until it is
+/// dropped: for a test whose requests would hold the shared one up for every other process —
+/// one that stops a server, or that sends documents each taking seconds to refuse. The server
+/// is single-threaded, so either would add those seconds to whatever another test's double is
+/// answering at the time, and a test timing its answers on the real clock would count them.
+///
+/// Taken before the process's first request, and once per process; nextest runs each test in a
+/// process of its own. Dropping it stops the server and removes its directory.
+#[must_use]
+pub struct PrivateServer(());
+
+/// Gives this process a server of its own; see [`PrivateServer`].
+pub fn serve_privately() -> PrivateServer {
+    let directory = tempfile::Builder::new()
+        .prefix("onetaskgraph-github-schema-")
+        .tempdir()
+        .expect("a scratch directory for a private GitHub schema check");
+    assert!(
+        VALIDATORS.get().is_none() && PRIVATE.set(directory).is_ok(),
+        "a private GitHub schema check is asked for before this process's first request, once"
+    );
+    PrivateServer(())
+}
+
+impl Drop for PrivateServer {
+    fn drop(&mut self) {
+        stop();
+        // Removed here rather than by the `TempDir`, which a static never drops; the server has
+        // stopped listening, and on Windows its log stays open until it has exited too.
+        let directory = rendezvous();
+        let stopped = std::time::Instant::now();
+        while std::fs::remove_dir_all(&directory).is_err() && directory.exists() {
+            if stopped.elapsed() > Duration::from_secs(10) {
+                eprintln!(
+                    "the private GitHub schema check's directory {} could not be removed",
+                    directory.display()
+                );
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+/// Stops the server this process's checks use, if one is running, and waits until it no longer
+/// listens: a client greeting it with a protocol it does not speak is answered `stale`, and the
+/// server stops.
+pub fn stop() {
+    validators().idle().clear();
+    let Ok(endpoint) = std::fs::read(rendezvous().join("endpoint.json")) else {
+        return;
+    };
+    let Some(port) = serde_json::from_slice::<Value>(&endpoint)
+        .ok()
+        .and_then(|endpoint| endpoint["port"].as_u64())
+        .and_then(|port| u16::try_from(port).ok())
+    else {
+        return;
+    };
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    if let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_secs(5)) {
+        let _ = stream.write_all(b"{\"hello\":0}\n");
+        let _ = stream.set_read_timeout(Some(ANSWER_WITHIN));
+        let _ = BufReader::new(stream).read_line(&mut String::new());
+    }
+    let asked = std::time::Instant::now();
+    while TcpStream::connect_timeout(&address, Duration::from_secs(1)).is_ok()
+        && asked.elapsed() < ANSWER_WITHIN
+    {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn validators() -> &'static Validators {
-    static VALIDATORS: OnceLock<Validators> = OnceLock::new();
     VALIDATORS.get_or_init(|| {
         let validators = Validators {
             idle: Mutex::new(Vec::new()),

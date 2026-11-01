@@ -1582,6 +1582,9 @@ fn the_schema_check_refuses_a_request_breaking_each_validation_rule() {
 fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
     use serde_json::json;
 
+    // Each of these takes the server seconds, which would be every other test's wait too.
+    let _server = github_schema::serve_privately();
+
     let refused = |document: &str, variables: serde_json::Value| {
         github_schema::refuse(&json!({"query": document, "variables": variables}))
             .unwrap_or_else(|| panic!("{} was not refused", &document[..document.len().min(80)]))
@@ -1662,16 +1665,18 @@ fn a_malformed_or_adversarial_request_is_refused_rather_than_crashing() {
     );
 }
 
-/// The check's server, shared by every test process, stops when a client greets it with another
-/// protocol — as it does when its files change or it has been idle — and the next request after
-/// it stops is still answered, by a server started in its place, over connections this process
-/// held open to the one that stopped. A protocol it does not speak is answered `stale`, never
-/// served.
+/// The check's server stops when a client greets it with another protocol — as it does when its
+/// files change or it has been idle — and the next request after it stops is still answered, by
+/// a server started in its place, over connections this process held open to the one that
+/// stopped. A protocol it does not speak is answered `stale`, never served. Driven against a
+/// server of this test's own, through the same rendezvous every test process shares one by, so
+/// stopping it holds up no other test.
 #[test]
 fn a_stopped_schema_check_server_is_replaced_by_the_next_request() {
     use serde_json::{Value, json};
     use std::io::{BufRead, BufReader, Write};
 
+    let _server = github_schema::serve_privately();
     let (port, pid) = github_schema::server();
     let mut stream =
         std::net::TcpStream::connect(("127.0.0.1", port)).expect("the server accepts a client");
