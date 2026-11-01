@@ -1,0 +1,18 @@
+{
+  "path": "repos/nickderobertis/onetaskgraph/actions/runs/41252214397/jobs?per_page=100&filter=latest",
+  "fetched_from": {
+    "release": "v0.13.0",
+    "run": 41252214397,
+    "workflow": "Visual docs",
+    "event": "push",
+    "read": "the jobs of a run at the release commit concluded skipped"
+  },
+  "repository": "nickderobertis/onetaskgraph",
+  "recorded": {
+    "at": "Sun, 01 Nov 2026 01:23:44 GMT",
+    "with": "gh api --include --method GET 'repos/nickderobertis/onetaskgraph/actions/runs/41252214397/jobs?per_page=100&filter=latest'",
+    "read_only": true,
+    "as": "exactly what gh printed: the status line, every response header and the body, unedited"
+  },
+  "why": "A push-triggered run at the release commit that concluded skipped. The figures read no jobs of it; it is served so that a script which does read them is caught counting the read rather than failing on a missing recording."
+}

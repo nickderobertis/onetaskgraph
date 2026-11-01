@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Copied from dero-skills' create-repo skill and edited only there, never in a copy.
 # source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/budgets/actions-budget-figures.sh
-# version: 9
-# sha256: a29faecd791ba75ea38eb9a9940686416205ab0a4bb6c0edeba479e8129b7aaf
+# version: 10
+# sha256: 13ac7d79aaa3902dc7cfe87449283a05ba397fbc0612701e9b788ed59daf438d
 #
 # The GitHub Actions budget figures, measured from onevcs's read-only host answers
 # and reported to `onebudgetspec check` (a `measure: reported` budget's command).
@@ -18,7 +18,9 @@
 #   scripts/actions-budget-figures.sh pr-read-requests          [--release TAG] [--repo OWNER/NAME]
 #
 # This script names no workflow of its own: which push workflows deliver nothing is
-# each repository's to say, with --exclude-workflow in its CD budgets' commands.
+# each repository's to say, with --exclude-workflow in its CD budgets' commands. A
+# run that concluded skipped ran nothing, whatever its workflow, so no CD figure
+# counts it or reads its jobs.
 #
 # Needs bash, jq and `onevcs` (or the binary `ONEVCS` names). Exit 0 wrote the
 # figure to ONEBUDGETSPEC_RESULT; 1 is missing data or a failed read, with the
@@ -178,14 +180,22 @@ cd_selection() {
   # must carry one: a run without it would be counted however it was named.
   [ "$excluded" = '[]' ] || jq -e '.runs | all(.workflow_name | type == "string" and . != "")' "$cr" >/dev/null ||
     die "onevcs host commit-runs answered a run with no workflow name, so --exclude-workflow cannot be applied: install an onevcs release whose \`onevcs host commit-runs\` names each run's workflow, or name one in ONEVCS"
+  # A run is left out as skipped by its conclusion, so every run must carry one: a
+  # string once it completed, null while it runs. A run without it would be read and
+  # counted however it concluded.
+  jq -e '.runs | all(has("conclusion") and (.conclusion | type == "string" or type == "null"))' "$cr" >/dev/null ||
+    die "onevcs host commit-runs answered a run with no conclusion, so a run concluded skipped cannot be left out: install an onevcs release whose \`onevcs host commit-runs\` reports each run's conclusion, or name one in ONEVCS"
   # Delivery: every push or release run at the commit, except the runs of a workflow
-  # --exclude-workflow names, which count toward no CD figure and whose jobs are not
-  # read (`seen` holds them, so neither GITHUB_RUN_ID nor a payload adds one back).
-  # The runs counted, then the run GITHUB_RUN_ID names, then the one a workflow_run
-  # payload names, one per line.
-  jq -r --argjson out "$excluded" '.runs[] | select(.workflow_name | IN($out[]) | not) | .id' "$cr" >"$work/runs" ||
+  # --exclude-workflow names and the runs the listing reports concluded `skipped`
+  # (every job skipped by its condition, so the run ran nothing). Neither counts
+  # toward any CD figure and neither's jobs are read, so a skipped run costs no
+  # release read (`seen` holds both, so neither GITHUB_RUN_ID nor a payload adds one
+  # back). A run that concluded any other way, cancelled or failed among them, is
+  # read and counted. The runs counted, then the run GITHUB_RUN_ID names, then the
+  # one a workflow_run payload names, one per line.
+  jq -r --argjson out "$excluded" '.runs[] | select((.workflow_name | IN($out[])) or .conclusion == "skipped" | not) | .id' "$cr" >"$work/runs" ||
     die "onevcs host commit-runs answered no run ids"
-  seen=" $(jq -r --argjson out "$excluded" '[.runs[] | select(.workflow_name | IN($out[])) | .id] | join(" ")' "$cr") "
+  seen=" $(jq -r --argjson out "$excluded" '[.runs[] | select((.workflow_name | IN($out[])) or .conclusion == "skipped") | .id] | join(" ")' "$cr") "
   [ -z "${GITHUB_RUN_ID:-}" ] || printf '%s\n' "$GITHUB_RUN_ID" >>"$work/runs"
   if [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
     payload_run=$(jq -r '.workflow_run.id // empty' "$GITHUB_EVENT_PATH") ||
@@ -200,9 +210,13 @@ cd_selection() {
     ids+=("$id")
   done <"$work/runs"
   # Judged after exclusion and deduplication, before any job is read.
-  [ "${#ids[@]}" -gt 0 ] ||
+  if [ "${#ids[@]}" -eq 0 ]; then
+    jq -e '[.runs[] | select(.conclusion == "skipped")] | length > 0' "$cr" >/dev/null &&
+      missing "every push or release run at $release's commit $commit concluded skipped or is a workflow --exclude-workflow names" \
+        "check on GitHub that the workflows making and publishing $release ran at that commit rather than skipping every job, and name with --exclude-workflow only the push workflows that deliver nothing"
     missing "every push or release run at $release's commit $commit is a workflow --exclude-workflow names" \
       "name with --exclude-workflow only the push workflows that deliver nothing, never the ones that make or publish the release"
+  fi
   for id in "${ids[@]}"; do
     answers+=("$(fetch "run-jobs-$id" run-jobs --run "$id")") || exit 1
   done
@@ -210,7 +224,9 @@ cd_selection() {
     [inputs] as $jobs
     | ($cr[0].runs | map({key: (.id | tostring), value: .}) | from_entries) as $at
     | {blocks: [{label: null, runs: [$jobs[] | ($at[.run_id | tostring] // {id: .run_id, workflow_name: null, event: null}) + {jobs}],
-                 excluded: [$cr[0].runs[] | select(.workflow_name | IN($out[])) | {id, workflow_name, event}]}],
+                 excluded: [$cr[0].runs[] | select(.workflow_name | IN($out[])) | {id, workflow_name, event}],
+                 skipped: [$cr[0].runs[] | select((.workflow_name | IN($out[]) | not) and .conclusion == "skipped")
+                           | {id, workflow_name, event}]}],
        answers: ([{query: "release-changes --tag \($rc[0].tag)", cost: $rc[0].cost},
                   {query: "commit-runs --commit \($cr[0].commit) --event push --event release", cost: $cr[0].cost}]
                  + [$jobs[] | {query: "run-jobs --run \(.run_id)", cost}])}' "${answers[@]}"
@@ -270,8 +286,10 @@ def os: .runner_os // "no runner OS";
 def line: "\(.workflow_name) / \(.name): \(.secs)s";
 def head: if .label then ["\(.label):"] else [] end;
 def indent: if .label then "  " else "" end;
-# A run --exclude-workflow left out, one line each, after the counted jobs.
-def left_out: indent as $i | [(.excluded // [])[] | "\($i)left out by --exclude-workflow: \(.workflow_name) (run \(.id), \(.event))"];
+# A run --exclude-workflow left out, then a run left out as concluded skipped, one
+# line each, after the counted jobs.
+def left_out: indent as $i | [(.excluded // [])[] | "\($i)left out by --exclude-workflow: \(.workflow_name) (run \(.id), \(.event))"]
+  + [(.skipped // [])[] | "\($i)left out as concluded skipped: \(.workflow_name) (run \(.id), \(.event))"];
 def blocks: [.blocks[] | . + {all: [.runs[].jobs[]], jobs: ([.runs[].jobs[] | counted] | sort_by(-.secs))}];
 
 def longest_job:
