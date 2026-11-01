@@ -273,7 +273,7 @@ jobs:
   test-linux:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     # No concurrency group: this run's live sessions touch only resources of its own
     # namespace, so any number of runs may execute them at once.
     env:
@@ -444,7 +444,7 @@ jobs:
   test-windows:
     if: github.event_name == 'pull_request'
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"
@@ -579,7 +579,7 @@ jobs:
   test-macos:
     if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-'))
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"

@@ -1558,7 +1558,8 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   jobs of `.github/workflows/ci.yml` — and they are the only thing that can refuse a merge
   here.** A pull request's last commit runs exactly those four and nothing else (`lint`
   carries the PR title, llmlint, notignored's comment, the supply chain and the visual docs
-  capture as steps), each held to `timeout-minutes: 30`. Re-apply or verify the whole
+  capture as steps), `lint` held to `timeout-minutes: 30` and the three test jobs to 40, by the
+  user's decision of 2026-10-31, because passing runs reached 29.8 minutes. Re-apply or verify the whole
   arrangement with the create-repo skill's `setup_github_governance.py`, which is its source
   of truth. Two values in it are load-bearing rather than conventional: **zero required
   approvals**, because nobody reviews these pull requests and any other value makes
@@ -1688,7 +1689,8 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   onevcs and onebudgetspec, under a token granted `actions`, `contents` and `pull-requests`
   read — and are **reporting only**: over turns that step red with each figure's breakdown in
   its log, and nothing reads its result, so it never blocks, demotes or reverts a release. At
-  pull-request time each job's `timeout-minutes: 30` is what fails a check that runs over.
+  pull-request time each job's `timeout-minutes` (30 for `lint`, 40 for the test jobs) is what
+  fails a check that runs over.
   The eighth, `onetaskgraph-gate-time` (1800 s), is `host-variable`: `just gate` runs its whole
   body inside `scripts/gate-time.sh`, which records its start and end to the gitignored
   `.gate-time.json` and checks it, **warning** when over and failing only when the
