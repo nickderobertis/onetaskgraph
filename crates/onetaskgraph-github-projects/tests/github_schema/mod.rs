@@ -94,7 +94,7 @@ fn here() -> PathBuf {
 fn rendezvous() -> PathBuf {
     let directory = PRIVATE.get().map_or_else(
         || here().join("node_modules").join(".github-schema-server"),
-        |private| private.path().to_path_buf(),
+        Clone::clone,
     );
     std::fs::create_dir_all(&directory).unwrap_or_else(|error| {
         panic!(
@@ -375,7 +375,7 @@ const ANSWERS_KEPT: usize = 16_384;
 static VALIDATORS: OnceLock<Validators> = OnceLock::new();
 
 /// The scratch directory of this process's own server, once it has asked for one.
-static PRIVATE: OnceLock<tempfile::TempDir> = OnceLock::new();
+static PRIVATE: OnceLock<PathBuf> = OnceLock::new();
 
 /// A server of this process's own, in place of the one every test process shares, until it is
 /// dropped: for a test whose requests would hold the shared one up for every other process —
@@ -390,10 +390,13 @@ pub struct PrivateServer(());
 
 /// Gives this process a server of its own; see [`PrivateServer`].
 pub fn serve_privately() -> PrivateServer {
-    let directory = tempfile::Builder::new()
-        .prefix("onetaskgraph-github-schema-")
-        .tempdir()
-        .expect("a scratch directory for a private GitHub schema check");
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let directory = std::env::temp_dir().join(format!(
+        "onetaskgraph-github-schema-{}-{nanos}",
+        std::process::id()
+    ));
     assert!(
         VALIDATORS.get().is_none() && PRIVATE.set(directory).is_ok(),
         "a private GitHub schema check is asked for before this process's first request, once"
@@ -404,8 +407,7 @@ pub fn serve_privately() -> PrivateServer {
 impl Drop for PrivateServer {
     fn drop(&mut self) {
         stop();
-        // Removed here rather than by the `TempDir`, which a static never drops; the server has
-        // stopped listening, and on Windows its log stays open until it has exited too.
+        // The server has stopped listening; on Windows its log stays open until it has exited.
         let directory = rendezvous();
         let stopped = std::time::Instant::now();
         while std::fs::remove_dir_all(&directory).is_err() && directory.exists() {
