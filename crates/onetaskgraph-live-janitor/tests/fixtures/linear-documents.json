@@ -5,6 +5,7 @@
         {
           "id": "stale-machine",
           "title": "onetaskgraph live cleanup 1-2-1",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
           "team": {
             "key": "TEST"
           },
@@ -13,6 +14,7 @@
         {
           "id": "fresh",
           "title": "onetaskgraph live cleanup 1-2-9999999999999999",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
           "team": {
             "key": "TEST"
           },
@@ -21,6 +23,7 @@
         {
           "id": "unstamped",
           "title": "Customer specification",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
           "team": {
             "key": "TEST"
           },
@@ -29,6 +32,7 @@
         {
           "id": "legacy-asset",
           "title": "onetaskgraph disposable asset document 1793211615000000",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
           "team": {
             "key": "TEST"
           },
@@ -37,6 +41,7 @@
         {
           "id": "other-team",
           "title": "onetaskgraph live cleanup 1-2-1",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
           "team": {
             "key": "ENG"
           },
@@ -45,6 +50,7 @@
         {
           "id": "stale-ci",
           "title": "onetaskgraph live cleanup ci-40741930571-1-1",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
           "team": {
             "key": "TEST"
           },
@@ -53,6 +59,7 @@
         {
           "id": "stale-project",
           "title": "onetaskgraph live cleanup 1-2-1",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
           "team": null,
           "project": {
             "teams": {
@@ -70,6 +77,7 @@
         {
           "id": "shared-project",
           "title": "onetaskgraph live cleanup 1-2-1",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
           "team": null,
           "project": {
             "teams": {
@@ -90,12 +98,14 @@
         {
           "id": "unknown-team",
           "title": "onetaskgraph live cleanup 1-2-1",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
           "team": null,
           "project": null
         },
         {
           "id": "malformed-stamp",
           "title": "onetaskgraph live cleanup 1-2-3-extra",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
           "team": {
             "key": "TEST"
           },
@@ -104,6 +114,7 @@
         {
           "id": "unvouched",
           "title": "onetaskgraph live cleanup 0-2-1",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
           "team": {
             "key": "TEST"
           },
@@ -112,6 +123,7 @@
         {
           "id": "incomplete-project",
           "title": "onetaskgraph live cleanup 1-2-1",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
           "team": null,
           "project": {
             "teams": {

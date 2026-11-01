@@ -68,15 +68,9 @@ pub(crate) struct Workspace {
 }
 
 impl Workspace {
-    /// The storage, over a team already holding `documents`.
-    fn holding(sandbox: &Sandbox, clients: usize, documents: Value) -> (Value, Self) {
-        let (mut config, held) = linear_workspace(
-            sandbox,
-            json!({
-                "tasks": [], "projects": [], "documents": documents, "labels": [],
-                "task_dependencies": [], "project_dependencies": []
-            }),
-        );
+    /// The storage, over a team already holding everything `held` names.
+    fn holding(sandbox: &Sandbox, clients: usize, held: Value) -> (Value, Self) {
+        let (mut config, held) = linear_workspace(sandbox, held);
         let backend = config["endpoint"]
             .as_str()
             .unwrap()
@@ -617,6 +611,17 @@ impl Journey {
 
     /// A journey over a team already holding `documents`.
     fn holding(clients: usize, documents: Value) -> Self {
+        Self::holding_all(
+            clients,
+            json!({
+                "tasks": [], "projects": [], "documents": documents, "labels": [],
+                "task_dependencies": [], "project_dependencies": []
+            }),
+        )
+    }
+
+    /// A journey over a team already holding everything `held` names.
+    fn holding_all(clients: usize, held: Value) -> Self {
         let sandbox = Sandbox::new();
         let root = sandbox.subdirectory("notes");
         std::fs::create_dir_all(root.join("projects")).unwrap();
@@ -625,7 +630,7 @@ impl Journey {
             "---\ntitle: Launch\nstatus: todo\n---\nLaunch.\n",
         )
         .unwrap();
-        let (config, workspace) = Workspace::holding(&sandbox, clients, documents);
+        let (config, workspace) = Workspace::holding(&sandbox, clients, held);
         let mut sources = json!({
             "notes":{"plugin":"local-md","config":{"root":root}},
             "dest":{"plugin":"linear","config":config}
@@ -2916,6 +2921,188 @@ fn document_modes_replay_the_live_binary_asset_entry_over_http() {
             .is_some(),
     ));
     journal.finish().unwrap();
+}
+
+/// One protected record as the workspace holds it: its id and the long form it stores, absent
+/// once it is gone.
+type Held = Option<(String, Option<String>)>;
+
+/// What the workspace holds of each protected record, by kind and title. A record changed,
+/// retitled or removed reads otherwise.
+fn standing_snapshot(
+    workspace: &onetaskgraph_e2e_support::fixtures::LinearWorkspace,
+    records: &[(&'static str, String)],
+) -> Vec<(String, Held)> {
+    records
+        .iter()
+        .map(|(kind, title)| {
+            let id = match *kind {
+                "documents" => workspace.document_titled(title),
+                "tasks" => workspace.issue_titled(title),
+                _ => Some(title.clone()),
+            };
+            (
+                format!("{kind} {title}"),
+                id.map(|id| {
+                    let stored = workspace.long_form(kind, &id);
+                    (id, stored)
+                }),
+            )
+        })
+        .collect()
+}
+
+/// The asset live journey itself — its lane guard, the reset of its standing slot, and the
+/// copy and recopy of every asset-carrying kind through the binary — run for one pool member
+/// over a workspace another manager's history left standing identities in: the pre-pool CI set
+/// (four documents and their parent project, titled without `pool-N`), retained titles no
+/// current scheme parses, another pool member's slot and the lease another run holds on it,
+/// and a local invocation's own set. The journey passes, and every one of those is exactly as
+/// it was and never named in a request.
+#[test]
+fn the_asset_journey_passes_over_standing_identities_no_current_scheme_owns() {
+    use document_lifecycle::journal::Journal;
+    use onetaskgraph_linear::live_artifact::{
+        HolderStamp, Lease, LeaseHolder, lease_title, retained_title,
+    };
+    let ci = Scope::ci("ENG").unwrap();
+    let title = |scope, slot| retained_title(scope, slot).unwrap();
+    let mine = title(Scope::pooled("ENG", 1).unwrap(), Slot::Assets);
+    let parent = title(ci, Slot::Parent);
+    let mut documents = vec![
+        // The pre-pool CI set: its filed slot under its parent project, the rest team-owned.
+        (title(ci, Slot::Filed), Some("P-superseded")),
+        (title(ci, Slot::Loose), None),
+        (title(ci, Slot::FollowUp), None),
+        (title(ci, Slot::Assets), None),
+        // Another run's pool member, and a local invocation's own set.
+        (title(Scope::pooled("ENG", 2).unwrap(), Slot::Assets), None),
+        (
+            title(Scope::local("ENG", "123-456-500").unwrap(), Slot::Assets),
+            None,
+        ),
+    ];
+    // Titles carrying the retained prefix that no current scheme parses, the last a near-copy
+    // of the member this run is about to lease, in another case.
+    for stray in [
+        "onetaskgraph live cleanup retained-v2 ci ENG assets pool-1".to_owned(),
+        "onetaskgraph live cleanup retained-v1 ci ENG assets pool-x".to_owned(),
+        "onetaskgraph live cleanup retained-v1 ci ENG unknown pool-1".to_owned(),
+        mine.to_uppercase(),
+    ] {
+        documents.push((stray, None));
+    }
+    let held = lease_title(
+        Lease::new(
+            Scope::pooled("ENG", 2).unwrap(),
+            LeaseLane::Assets,
+            std::num::NonZeroU32::new(1).unwrap(),
+            LeaseHolder::Held(HolderStamp::new("9-2-1700000000000000").unwrap()),
+        )
+        .unwrap(),
+    );
+    let journey = Journey::holding_all(
+        0,
+        json!({
+            "documents": documents.iter().enumerate().map(|(index, (title, project))| json!({
+                "id": format!("D-protected-{index}"), "title": title,
+                "content": format!("standing content {index}"), "project": project, "labels": []
+            })).collect::<Vec<_>>(),
+            "projects": [{"id": "P-superseded", "title": parent, "content": "Pre-pool parent.",
+                          "status": {"category": "todo", "name": "Planned"}, "labels": []}],
+            "tasks": [{"id": "I-lease", "title": held,
+                       "status": {"category": "todo", "name": "Todo"}, "labels": []}],
+            "labels": [], "task_dependencies": [], "project_dependencies": []
+        }),
+    );
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let endpoint = format!("{}/0/graphql", journey.workspace.endpoint);
+    let mut records: Vec<(&'static str, String)> = documents
+        .iter()
+        .map(|(title, _)| ("documents", title.clone()))
+        .collect();
+    records.push(("projects", "P-superseded".to_owned()));
+    records.push(("tasks", held.clone()));
+    let protected = standing_snapshot(&journey.workspace.held, &records);
+    assert!(
+        protected
+            .iter()
+            .all(|(_, held)| held.as_ref().is_some_and(|(_, stored)| stored.is_some())),
+        "{protected:?}"
+    );
+    let ids: std::collections::BTreeSet<String> = protected
+        .iter()
+        .filter_map(|(_, held)| held.as_ref().map(|(id, _)| id.clone()))
+        .collect();
+    assert_eq!(ids.len(), records.len());
+    let mark = journey.workspace.held.served_count();
+    // This run's journey, over pool member 1: the cold rebuild of its slot, its reset, and the
+    // copy and recopy of every kind.
+    // Kept in the sandbox, so this pass is not written over the suite's own telemetry.
+    let journal = Journal::new("assets", "ordinary")
+        .durable(journey.sandbox.subdirectory("journal"))
+        .unwrap();
+    journey.workspace.state.lock().unwrap().document_journal = Some(journal.clone());
+    journal.begin("ordinary");
+    let scope = Scope::pooled("ENG", 1).unwrap();
+    let mut ran = false;
+    guard_asset_invocation(
+        &runtime,
+        &endpoint,
+        "fixture-key",
+        "ENG",
+        "team",
+        scope,
+        Mode::Ordinary,
+        &journal,
+        &document_lifecycle::Created::default(),
+        |standing| {
+            assert_eq!(standing.titles["assets"], mine);
+            reset_asset_slot(&runtime, &endpoint, "fixture-key", standing, "ordinary", 21);
+            let origins = asset_origins(&journey, |kind| {
+                if kind == "document" {
+                    standing.titles["assets"].clone()
+                } else {
+                    format!(
+                        "{}123-456-4000",
+                        onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX
+                    )
+                }
+            });
+            drive_asset_copy_recopy(
+                &journey,
+                &origins,
+                Mode::Ordinary,
+                |_, url| {
+                    let response = runtime
+                        .block_on(
+                            reqwest::Client::new()
+                                .get(url)
+                                .header("Authorization", "fixture-key")
+                                .send(),
+                        )
+                        .unwrap();
+                    assert!(response.status().is_success());
+                },
+                || journey.workspace.counts().0,
+            );
+            ran = true;
+        },
+    );
+    journal.finish().unwrap();
+    assert!(ran, "the asset journey did not run");
+    // Member 1's own slot is the one the journey rebuilt, and every protected record is as it was.
+    assert!(journey.workspace.held.document_titled(&mine).is_some());
+    assert_eq!(
+        standing_snapshot(&journey.workspace.held, &records),
+        protected
+    );
+    for (query, variables) in journey.workspace.held.served_since(mark) {
+        let mut named = Vec::new();
+        document_lifecycle::namespace::ids_named(&variables, &mut named);
+        let touched: Vec<_> = named.iter().filter(|id| ids.contains(*id)).collect();
+        assert!(touched.is_empty(), "{query} named {touched:?}");
+    }
 }
 
 #[test]

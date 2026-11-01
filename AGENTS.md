@@ -564,6 +564,20 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   Every live document, including the asset journey's, carries that stamp and still has its
   journey's own cleanup. The 24-hour expiry is a document-specific recovery policy; the
   existing local lock sweep and GitHub run-status ownership rules do not change.
+  **Standing identities: the one set it retires, and everything it never touches.** The same
+  pass retires the pre-pool CI set the 16-member pool superseded on 2026-10-31 —
+  `onetaskgraph live cleanup retained-v1 ci <TEAM> <slot>` with no `pool-N`, four documents
+  and their `parent` project, of the nominated team alone — documents before the project,
+  each once Linear's `updatedAt` says it is a day untouched (an unreadable time is never
+  old), the project only when no such document stays, so a run still on a pre-pool branch
+  keeps its set while it may be using it. It never touches a current pool member's slots, a
+  lease issue (it lists no issues), a local invocation's set, another team's set, or any
+  `retained-`/`lease-` title no current scheme parses. A lane's standing discovery passes over
+  every title that is not the exact identity it asks for, an unparsed one included, so no
+  stray in the shared workspace can fail a live run
+  (`pool::every_linear_lane_passes_over_standing_identities_no_current_scheme_owns` for the
+  plugin lane, and `the_asset_journey_passes_over_standing_identities_no_current_scheme_owns`
+  in `onetaskgraph-linear-e2e`, which drives the real asset journey).
   **A cancelled run cleans up after itself, and a pre-flight never refuses a finished run's
   residue.** Each credentialed `ci.yml` job — `check`'s Linux leg and `test-linux` — runs
   the janitor on cancellation: `--cancelled-run`, which removes exactly that run attempt's

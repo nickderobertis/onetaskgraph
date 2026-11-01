@@ -252,9 +252,9 @@ mod complexity;
 /// with HTTP 400.
 #[test]
 fn linear_documents_stay_under_linears_complexity_cap() {
-    use onetaskgraph_live_janitor::linear::{DELETE_DOCUMENT, DOCUMENTS};
+    use onetaskgraph_live_janitor::linear::{DELETE_DOCUMENT, DELETE_PROJECT, DOCUMENTS, PROJECTS};
     let variables = serde_json::json!({"after":null,"filter":{},"id":"d"});
-    for document in [DOCUMENTS, DELETE_DOCUMENT] {
+    for document in [DOCUMENTS, DELETE_DOCUMENT, PROJECTS, DELETE_PROJECT] {
         assert_eq!(
             complexity::refusal(document, &variables),
             None,
@@ -266,7 +266,7 @@ fn linear_documents_stay_under_linears_complexity_cap() {
 #[test]
 fn linear_documents_match_the_pinned_upstream_schema() {
     use onetaskgraph_live_janitor::linear::{
-        DELETE_DOCUMENT, DOCUMENTS, LEASE_READ, LEASE_RELEASE,
+        DELETE_DOCUMENT, DELETE_PROJECT, DOCUMENTS, LEASE_READ, LEASE_RELEASE, PROJECTS,
     };
     let upstream = std::process::Command::new("python3")
         .args([
@@ -281,7 +281,14 @@ fn linear_documents_match_the_pinned_upstream_schema() {
         .expect("read the pinned upstream schema");
     assert!(upstream.status.success());
     let pinned = String::from_utf8(upstream.stdout).expect("upstream schema is UTF-8");
-    for document in [DOCUMENTS, DELETE_DOCUMENT, LEASE_READ, LEASE_RELEASE] {
+    for document in [
+        DOCUMENTS,
+        DELETE_DOCUMENT,
+        PROJECTS,
+        DELETE_PROJECT,
+        LEASE_READ,
+        LEASE_RELEASE,
+    ] {
         validate_against(document, &pinned);
     }
     let input_schema = schema::parse_schema::<String>(&pinned).expect("upstream parses");
@@ -302,6 +309,11 @@ fn linear_documents_match_the_pinned_upstream_schema() {
         &inputs,
         "DocumentFilter",
         &serde_json::to_value(onetaskgraph_live_janitor::linear::document_filter()).unwrap(),
+    );
+    validate_input(
+        &inputs,
+        "ProjectFilter",
+        &serde_json::to_value(onetaskgraph_live_janitor::linear::project_filter()).unwrap(),
     );
     let parsed = schema::parse_schema::<String>(&pinned).expect("upstream parses");
     let schema = Schema::new(&parsed);
@@ -333,6 +345,26 @@ fn linear_documents_match_the_pinned_upstream_schema() {
         &operation.selection_set,
         &response["data"],
     );
+    for (document, fixture) in [
+        (PROJECTS, include_str!("fixtures/linear-projects.json")),
+        (
+            DELETE_PROJECT,
+            include_str!("fixtures/linear-project-delete.json"),
+        ),
+    ] {
+        let parsed = query::parse_query::<String>(document).unwrap();
+        let (parent, selection) = match &parsed.definitions[0] {
+            query::Definition::Operation(query::OperationDefinition::Query(operation)) => {
+                ("Query", &operation.selection_set)
+            }
+            query::Definition::Operation(query::OperationDefinition::Mutation(operation)) => {
+                ("Mutation", &operation.selection_set)
+            }
+            _ => panic!("a project operation is a query or a mutation"),
+        };
+        let response: serde_json::Value = serde_json::from_str(fixture).unwrap();
+        validate_response(&schema, parent, selection, &response["data"]);
+    }
 }
 
 fn validate_response(
@@ -385,7 +417,7 @@ fn validate_value(
             validate_response(schema, name, selection, value)
         }
         schema::Type::NamedType(name) => match name.as_str() {
-            "String" | "ID" => assert!(value.is_string()),
+            "String" | "ID" | "DateTime" => assert!(value.is_string()),
             "Boolean" => assert!(value.is_boolean()),
             other => panic!("unexpected scalar {other}"),
         },

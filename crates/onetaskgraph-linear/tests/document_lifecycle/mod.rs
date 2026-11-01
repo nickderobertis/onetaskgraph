@@ -125,6 +125,7 @@ async fn discover(
     let root = if project { "projects" } else { "documents" };
     let name = if project { "name" } else { "title" };
     let query = if project { PROJECTS } else { DOCUMENTS };
+    let expected = classify_retained(title).ok_or("invalid requested standing identity")?;
     let mut after = Value::Null;
     let mut found = Vec::new();
     for _ in 0..50 {
@@ -138,9 +139,14 @@ async fn discover(
             let actual_title = node[name]
                 .as_str()
                 .ok_or("standing discovery omitted title")?;
-            let actual = classify_retained(actual_title)
-                .ok_or("unknown standing ownership; discovery required before initialization")?;
-            let expected = classify_retained(title).ok_or("invalid requested standing identity")?;
+            // Discovery looks for one exact identity, so a title no current scheme parses —
+            // a future version, a malformed suffix, the filter's case-insensitive near miss —
+            // is not that identity and is nobody's this lane may touch: it is passed over, as
+            // a parsed identity of another scope is. Refusing on it let one stray record in a
+            // shared workspace fail every live run there.
+            let Some(actual) = classify_retained(actual_title) else {
+                continue;
+            };
             if actual.scope != expected.scope {
                 continue;
             }

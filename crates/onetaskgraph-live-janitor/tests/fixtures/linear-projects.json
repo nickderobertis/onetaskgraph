@@ -1,0 +1,90 @@
+{
+  "data": {
+    "projects": {
+      "nodes": [
+        {
+          "id": "superseded-parent",
+          "name": "onetaskgraph live cleanup retained-v1 ci TEST parent",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "teams": {
+            "nodes": [
+              {
+                "key": "TEST"
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        },
+        {
+          "id": "pool-parent",
+          "name": "onetaskgraph live cleanup retained-v1 ci TEST parent pool-3",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "teams": {
+            "nodes": [
+              {
+                "key": "TEST"
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        },
+        {
+          "id": "local-parent",
+          "name": "onetaskgraph live cleanup retained-v1 local TEST parent 1-2-3",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "teams": {
+            "nodes": [
+              {
+                "key": "TEST"
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        },
+        {
+          "id": "other-team-parent",
+          "name": "onetaskgraph live cleanup retained-v1 ci OTHER parent",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "teams": {
+            "nodes": [
+              {
+                "key": "OTHER"
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        },
+        {
+          "id": "shared-parent",
+          "name": "onetaskgraph live cleanup retained-v1 ci TEST parent",
+          "updatedAt": "2026-10-01T00:00:00.000Z",
+          "teams": {
+            "nodes": [
+              {
+                "key": "TEST"
+              },
+              {
+                "key": "OTHER"
+              }
+            ],
+            "pageInfo": {
+              "hasNextPage": false
+            }
+          }
+        }
+      ],
+      "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": null
+      }
+    }
+  }
+}

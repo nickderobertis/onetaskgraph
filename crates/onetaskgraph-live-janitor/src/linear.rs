@@ -3,10 +3,17 @@
 //! Unlike the local lock sweep, this scheduled sweep deliberately expires documents after
 //! 24 hours. Only the exact test title grammar and the nominated team's ownership authorize
 //! deletion. Live journeys normally delete their own documents long before this deadline.
+//!
+//! It also retires the one standing set the current scheme superseded: the pre-pool CI set
+//! (`retained-v1 ci <TEAM> <slot>`, with no `pool-N`), four documents and their parent
+//! project, which no lane creates, reads or owns since the pool replaced it. Every other
+//! retained or lease title — a pool member's, a local invocation's, or one no scheme parses —
+//! is never touched here.
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use onetaskgraph_linear::live_artifact::{Slot, classify_retained, lease_created_micros};
 use onetaskgraph_live::Credential;
 use onetaskgraph_live::artifact::{CiStamp, Stamp, now_micros};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -16,8 +23,11 @@ use crate::{Clock, GRAPHQL_READ_LIMIT, RealClock, Report, WRITE_INTERVAL, WRITE_
 
 pub use onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX as DOCUMENT_PREFIX;
 pub const DOCUMENT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
-pub const DOCUMENTS: &str = "query($after:String,$filter:DocumentFilter!){documents(first:100,after:$after,filter:$filter){nodes{id title team{key} project{teams(first:2){nodes{key} pageInfo{hasNextPage}}}} pageInfo{hasNextPage endCursor}}}";
+pub const DOCUMENTS: &str = "query($after:String,$filter:DocumentFilter!){documents(first:100,after:$after,filter:$filter){nodes{id title updatedAt team{key} project{teams(first:2){nodes{key} pageInfo{hasNextPage}}}} pageInfo{hasNextPage endCursor}}}";
 pub const DELETE_DOCUMENT: &str = "mutation($id:String!){documentDelete(id:$id){success}}";
+/// Lists the projects whose name begins with the test prefix, for the superseded parent.
+pub const PROJECTS: &str = "query($after:String,$filter:ProjectFilter!){projects(first:100,after:$after,filter:$filter){nodes{id name updatedAt teams(first:2){nodes{key} pageInfo{hasNextPage}}} pageInfo{hasNextPage endCursor}}}";
+pub const DELETE_PROJECT: &str = "mutation($id:String!){projectDelete(id:$id){success}}";
 
 fn valid_text(value: String) -> Result<String, String> {
     if value.trim().is_empty() || value.chars().any(char::is_control) {
@@ -111,14 +121,44 @@ struct Team {
 struct Project {
     teams: Teams,
 }
+impl Teams {
+    /// Every team is the nomination, and the page holds them all.
+    fn only(&self, nomination: &TeamKey) -> bool {
+        !self.page_info.has_next_page
+            && !self.nodes.is_empty()
+            && self.nodes.iter().all(|team| team.key.matches(nomination))
+    }
+}
 #[derive(Deserialize)]
 #[serde(transparent)]
 struct Nullable<T>(Option<T>);
+
+/// When Linear last changed a record, in microseconds since the epoch, or `None` for a time
+/// that does not read — which is never taken for an old one.
+#[derive(Deserialize)]
+#[serde(from = "String")]
+struct UpdatedAt(Option<u64>);
+impl From<String> for UpdatedAt {
+    fn from(value: String) -> Self {
+        Self(lease_created_micros(&value))
+    }
+}
+impl UpdatedAt {
+    /// Whether Linear last changed it longer than [`DOCUMENT_MAX_AGE`] ago. A run still on a
+    /// branch from before the pool writes its set every pass, so this keeps that set in place
+    /// while such a run may be using it.
+    fn untouched(&self, now: u64) -> bool {
+        self.0
+            .is_some_and(|micros| now.saturating_sub(micros) > DOCUMENT_MAX_AGE.as_micros() as u64)
+    }
+}
 
 #[derive(Deserialize)]
 struct Document {
     id: DocumentId,
     title: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: UpdatedAt,
     #[serde(deserialize_with = "Nullable::deserialize")]
     team: Nullable<Team>,
     #[serde(deserialize_with = "Nullable::deserialize")]
@@ -129,20 +169,27 @@ impl Document {
         if let Some(team) = &self.team.0 {
             return team.key.matches(nomination);
         }
-        self.project.0.as_ref().is_some_and(|project| {
-            !project.teams.page_info.has_next_page
-                && !project.teams.nodes.is_empty()
-                && project
-                    .teams
-                    .nodes
-                    .iter()
-                    .all(|team| team.key.matches(nomination))
-        })
+        self.project
+            .0
+            .as_ref()
+            .is_some_and(|project| project.teams.only(nomination))
     }
 }
 #[derive(Deserialize)]
 struct Documents {
     documents: Connection<Document>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListedProject {
+    id: DocumentId,
+    name: String,
+    updated_at: UpdatedAt,
+    teams: Teams,
+}
+#[derive(Deserialize)]
+struct Projects {
+    projects: Connection<ListedProject>,
 }
 #[derive(Deserialize)]
 struct Confirmation {
@@ -152,6 +199,11 @@ struct Confirmation {
 #[serde(rename_all = "camelCase")]
 struct Deleted {
     document_delete: Confirmation,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectDeleted {
+    project_delete: Confirmation,
 }
 #[derive(Deserialize)]
 struct GraphqlError {
@@ -172,6 +224,24 @@ struct Request<V> {
 struct DocumentVariables {
     after: Option<Cursor>,
     filter: DocumentFilter,
+}
+#[derive(Serialize)]
+struct ProjectVariables {
+    after: Option<Cursor>,
+    filter: ProjectFilter,
+}
+/// The typed predicate sent when listing stamped Linear projects.
+#[derive(Serialize)]
+pub struct ProjectFilter {
+    name: TitleFilter,
+}
+/// The listing predicate serialized on every Linear project request.
+pub fn project_filter() -> ProjectFilter {
+    ProjectFilter {
+        name: TitleFilter {
+            starts_with: DOCUMENT_PREFIX,
+        },
+    }
 }
 /// The typed predicate sent when listing stamped Linear documents.
 #[derive(Serialize)]
@@ -246,8 +316,9 @@ async fn request<V: Serialize, T: DeserializeOwned>(
 }
 
 fn old_test_title(title: &str, now: u64) -> bool {
-    // Retained sets retire only through their invocation registration, never by age.
-    // So do pool leases and any malformed or future version of either, which confer nothing.
+    // Retained sets never expire by a stamp's age: a local set retires through its invocation
+    // registration and the superseded pre-pool set by `superseded_slot`. Pool members, leases
+    // and any malformed or future version of either, which confer nothing, are never removed.
     if onetaskgraph_linear::live_artifact::is_reserved_title(title) {
         return false;
     }
@@ -261,6 +332,23 @@ fn old_test_title(title: &str, now: u64) -> bool {
     micros.is_some_and(|micros| {
         micros > 0 && now.saturating_sub(micros) > DOCUMENT_MAX_AGE.as_micros() as u64
     })
+}
+
+/// The slot `title` names when it is the nominated team's pre-pool standing CI set, which the
+/// pool superseded and nothing owns; `None` for every other title, pool members, local sets
+/// and unparsed retained titles included.
+fn superseded_slot(title: &str, nomination: &TeamKey) -> Option<Slot> {
+    let retained = classify_retained(title)?;
+    let scope = retained.scope;
+    (scope.is_ci()
+        && scope.pool_index().is_none()
+        && scope.team().eq_ignore_ascii_case(&nomination.0))
+    .then_some(retained.slot)
+}
+
+enum Retire {
+    Document(DocumentId),
+    Project(DocumentId),
 }
 
 pub async fn run_linear(config: LinearConfig) -> Result<Report, String> {
@@ -282,6 +370,8 @@ pub async fn run_linear_with_clock(
     let mut cursors = BTreeSet::new();
     let mut ids = BTreeSet::new();
     let mut listed = Vec::new();
+    // Whether a superseded document stays, which keeps its parent project too.
+    let mut superseded_kept = false;
     // Finish enumeration before deleting: a failed or cyclic listing authorizes no writes.
     loop {
         if report.graphql_queries == GRAPHQL_READ_LIMIT {
@@ -302,8 +392,17 @@ pub async fn run_linear_with_clock(
             if !ids.insert(document.id.clone()) {
                 return Err("Linear document listing repeated an id".into());
             }
-            if old_test_title(&document.title, now) && document.in_team(&config.team) {
-                listed.push(document.id)
+            // A document titled as the parent is nothing a lane made, and is left alone.
+            let superseded = superseded_slot(&document.title, &config.team)
+                .is_some_and(|slot| slot != Slot::Parent);
+            if superseded {
+                if document.in_team(&config.team) && document.updated_at.untouched(now) {
+                    listed.push(Retire::Document(document.id))
+                } else {
+                    superseded_kept = true;
+                }
+            } else if old_test_title(&document.title, now) && document.in_team(&config.team) {
+                listed.push(Retire::Document(document.id))
             }
         }
         let next = match data.documents.page_info {
@@ -315,7 +414,51 @@ pub async fn run_linear_with_clock(
         }
         after = Some(next);
     }
-    for id in listed.into_iter().take(WRITE_LIMIT) {
+    // The superseded parent project, listed whole before any write too.
+    let mut after = None;
+    let mut cursors = BTreeSet::new();
+    let mut projects = Vec::new();
+    loop {
+        if report.graphql_queries == GRAPHQL_READ_LIMIT {
+            return Err("Linear project listing exceeded its read limit".into());
+        }
+        report.graphql_queries += 1;
+        let data: Projects = request(
+            &client,
+            &config,
+            PROJECTS,
+            ProjectVariables {
+                after,
+                filter: project_filter(),
+            },
+        )
+        .await?;
+        for project in data.projects.nodes {
+            if !ids.insert(project.id.clone()) {
+                return Err("Linear project listing repeated an id".into());
+            }
+            if superseded_slot(&project.name, &config.team) == Some(Slot::Parent)
+                && project.teams.only(&config.team)
+                && project.updated_at.untouched(now)
+            {
+                projects.push(Retire::Project(project.id))
+            }
+        }
+        let next = match data.projects.page_info {
+            PageInfo::Complete => break,
+            PageInfo::More(next) => next,
+        };
+        if !cursors.insert(next.clone()) {
+            return Err("Linear project cursor did not advance".into());
+        }
+        after = Some(next);
+    }
+    // Documents first, so a project goes only after the documents filed under it; and none
+    // while a superseded document stays.
+    if !superseded_kept {
+        listed.extend(projects);
+    }
+    for target in listed.into_iter().take(WRITE_LIMIT) {
         if report.writes > 0 {
             clock.wait(WRITE_INTERVAL).await
         }
@@ -323,10 +466,21 @@ pub async fn run_linear_with_clock(
             .write_times
             .push(clock.monotonic().as_micros() as u64);
         report.writes += 1;
-        let deleted: Deleted =
-            request(&client, &config, DELETE_DOCUMENT, DeleteVariables { id }).await?;
-        if !deleted.document_delete.success {
-            return Err("Linear did not confirm document deletion".into());
+        match target {
+            Retire::Document(id) => {
+                let deleted: Deleted =
+                    request(&client, &config, DELETE_DOCUMENT, DeleteVariables { id }).await?;
+                if !deleted.document_delete.success {
+                    return Err("Linear did not confirm document deletion".into());
+                }
+            }
+            Retire::Project(id) => {
+                let deleted: ProjectDeleted =
+                    request(&client, &config, DELETE_PROJECT, DeleteVariables { id }).await?;
+                if !deleted.project_delete.success {
+                    return Err("Linear did not confirm project deletion".into());
+                }
+            }
         }
     }
     Ok(report)
