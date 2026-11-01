@@ -659,7 +659,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   fields, `Status` options and draft items — under `onetaskgraph live board <stamp>`, runs on
   the copy, and deletes it however it ends (`journey::run_board`), so a session's items,
   fields, origin field and counts are its own; board #1 is a template no session writes to,
-  filled once by `just github-live-template`. **Each Linear session leases one member of a
+  filled once by `just github-live-template`. A copy carries its **drafts** alone, and the copy is what
+  the preflight counts, so the template must hold 51 to 90 drafts (60 are filled); its issue items
+  never reach a copy, and a template emptied by hand fails every session's preflight until refilled. **Each Linear session leases one member of a
   16-set standing slot pool** (`tests/document_lifecycle/lease.rs`): the team's document
   limit counts trash, so documents are reused rather than made per run, and a lease is the
   atomic create of an issue under an id derived from the member and its generation, released
