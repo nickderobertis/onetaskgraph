@@ -48,8 +48,8 @@ pub const POOL_SIZE: u8 = 16;
 /// CI identities are stable; local identities belong to one registered invocation.
 ///
 /// A CI identity is one member of the standing pool (`pool` is `Some`), or the single
-/// pre-pool standing set (`pool` is `None`), which is still recognized so nothing retires
-/// it, and which no lane uses any more.
+/// pre-pool standing set (`pool` is `None`), which no lane uses any more and which is still
+/// recognized so the scheduled janitor can tell it apart and retire it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Scope<'a> {
     team: &'a str,

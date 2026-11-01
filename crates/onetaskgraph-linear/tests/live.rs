@@ -2301,16 +2301,14 @@ async fn document_lifecycle_replay_refuses_unsafe_ownership_and_recovers_partial
     replay_drive(&replay, recovered, Mode::Ordinary, now_micros())
         .await
         .unwrap();
-    for defect in ["wrong-team", "unverifiable-team", "ambiguous", "unknown"] {
+    // A title no current scheme parses is passed over rather than refused:
+    // `pool::every_linear_lane_passes_over_standing_identities_no_current_scheme_owns`.
+    for defect in ["wrong-team", "unverifiable-team", "ambiguous"] {
         let before = {
             let mut state = replay.state.lock().unwrap();
             state.wrong_team = defect == "wrong-team";
             state.unverifiable_team = defect == "unverifiable-team";
             state.ambiguous = defect == "ambiguous";
-            if defect == "unknown" {
-                state.documents.values_mut().next().unwrap()["title"] =
-                    json!("onetaskgraph live cleanup retained-v2 ci ENG filed");
-            }
             state.requests.len()
         };
         let error = replay_prepare(&replay, scope, Mode::Ordinary)
@@ -3622,6 +3620,163 @@ mod pool {
             documents, created,
             "every created document is a standing member's"
         );
+    }
+
+    /// Titles carrying the retained prefix that no current scheme parses: a future version, a
+    /// pool member spelled out of grammar, an unknown slot, and a near-copy of a real member's
+    /// title in another case, which `containsIgnoreCase` discovery still lists.
+    const UNPARSED_RETAINED: [&str; 4] = [
+        "onetaskgraph live cleanup retained-v2 ci ENG filed pool-1",
+        "onetaskgraph live cleanup retained-v1 ci ENG filed pool-x",
+        "onetaskgraph live cleanup retained-v1 ci ENG unknown pool-1",
+        "Onetaskgraph Live Cleanup retained-v1 ci ENG filed pool-1",
+    ];
+
+    /// Projects named with the retained prefix that no current scheme parses, which the plugin
+    /// lane's discovery of its parent project lists beside its own.
+    const UNPARSED_RETAINED_PROJECTS: [&str; 3] = [
+        "onetaskgraph live cleanup retained-v2 ci ENG parent pool-1",
+        "onetaskgraph live cleanup retained-v1 ci ENG parent pool-x",
+        "Onetaskgraph Live Cleanup retained-v1 ci ENG parent pool-1",
+    ];
+
+    /// Seeds the workspace another manager's history left behind: the pre-pool standing CI set
+    /// — four documents and their parent project, titled without `pool-N` — one document under
+    /// every unparsed retained title, and one project under every unparsed retained name.
+    /// Returns each seeded record's id and content.
+    async fn seed_stray_retained(replay: &document_replay::Replay) -> BTreeMap<String, Value> {
+        document_lifecycle::prepare(
+            &replay.endpoint,
+            "synthetic",
+            "ENG",
+            "team",
+            Scope::ci("ENG").unwrap(),
+            Mode::Initialize,
+            &[Slot::Filed, Slot::Loose, Slot::FollowUp, Slot::Assets],
+        )
+        .await
+        .unwrap();
+        for title in UNPARSED_RETAINED {
+            document_lifecycle::send(
+                &replay.endpoint,
+                "synthetic",
+                "mutation($input:DocumentCreateInput!){documentCreate(input:$input){success document{id}}}",
+                json!({"input":{"title":title,"content":"stray","teamId":"team"}}),
+            )
+            .await
+            .unwrap();
+        }
+        for name in UNPARSED_RETAINED_PROJECTS {
+            document_lifecycle::send(
+                &replay.endpoint,
+                "synthetic",
+                "mutation($input:ProjectCreateInput!){projectCreate(input:$input){success project{id}}}",
+                json!({"input":{"name":name,"teamIds":["team"]}}),
+            )
+            .await
+            .unwrap();
+        }
+        let state = replay.state.lock().unwrap();
+        let strays: BTreeMap<String, Value> = state
+            .documents
+            .iter()
+            .chain(state.projects.iter())
+            .map(|(id, row)| (id.clone(), row.clone()))
+            .collect();
+        assert_eq!(
+            strays.len(),
+            4 + 1 + UNPARSED_RETAINED.len() + UNPARSED_RETAINED_PROJECTS.len()
+        );
+        strays
+    }
+
+    #[tokio::test]
+    async fn every_linear_lane_passes_over_standing_identities_no_current_scheme_owns() {
+        let replay = replay();
+        let strays = seed_stray_retained(&replay).await;
+        // Beside them, what the lanes must also leave as it is: a local invocation's own set,
+        // and a pool member's lease another run holds for the whole of the sessions below.
+        let local = Scope::local("ENG", "1-2-900").unwrap();
+        let created = document_lifecycle::Created::default();
+        document_lifecycle::prepare_owned(
+            &replay.endpoint,
+            "synthetic",
+            "ENG",
+            "team",
+            local,
+            Mode::Initialize,
+            &[Slot::Filed, Slot::Loose, Slot::FollowUp],
+            &created,
+        )
+        .await
+        .unwrap();
+        let held = claim(&replay, LeaseLane::Plugin, &holder(run(9)))
+            .await
+            .unwrap();
+        let untouched: BTreeMap<String, Value> = {
+            let state = replay.state.lock().unwrap();
+            state
+                .documents
+                .iter()
+                .chain(state.projects.iter())
+                .chain(state.issues.iter())
+                .map(|(id, row)| (id.clone(), row.clone()))
+                .collect()
+        };
+        assert!(untouched.contains_key(&held.id));
+        let from = replay.state.lock().unwrap().keyed.len();
+        // Each lane's CI session, two of each at once, over a pool member of its own. The plugin
+        // sessions drive that lane's real document paths; an assets session here is only its
+        // lease, preparation and reset, and the real asset journey is driven over the same
+        // identities by `onetaskgraph-linear-e2e`'s
+        // `the_asset_journey_passes_over_standing_identities_no_current_scheme_owns`.
+        let sessions = {
+            let (a, b, c, d) = tokio::join!(
+                ci_session(&replay, LeaseLane::Plugin, "plugin-a", run(1)),
+                ci_session(&replay, LeaseLane::Plugin, "plugin-b", run(2)),
+                ci_session(&replay, LeaseLane::Assets, "assets-a", run(3)),
+                ci_session(&replay, LeaseLane::Assets, "assets-b", run(4)),
+            );
+            vec![a, b, c, d]
+        };
+        assert_isolated(&replay, &sessions);
+        assert!(
+            sessions
+                .iter()
+                .all(|s| s.lease.index != held.index || s.lease.lane != LeaseLane::Plugin)
+        );
+        {
+            // Nobody's identities, the local set and the held lease are passed over, never
+            // written to or named: each is exactly as it was before the sessions.
+            let state = replay.state.lock().unwrap();
+            for (id, row) in &untouched {
+                let now = state
+                    .documents
+                    .get(id)
+                    .or_else(|| state.projects.get(id))
+                    .or_else(|| state.issues.get(id));
+                assert_eq!(now, Some(row), "{id} was changed or removed by a lane");
+            }
+            for (_, request) in &state.keyed[from..] {
+                let mut named = Vec::new();
+                document_lifecycle::namespace::ids_named(&request["variables"], &mut named);
+                assert!(
+                    named.iter().all(|id| !strays.contains_key(id)),
+                    "a lane named a stray in {request}"
+                );
+            }
+        }
+        // The local invocation still finds its own set and retires exactly it.
+        replay_prepare(&replay, local, Mode::Ordinary)
+            .await
+            .unwrap();
+        assert_eq!(
+            document_lifecycle::retire(&replay.endpoint, "synthetic", local, &created)
+                .await
+                .unwrap(),
+            4
+        );
+        held.release(&replay.endpoint, "synthetic").await.unwrap();
     }
 
     #[tokio::test]

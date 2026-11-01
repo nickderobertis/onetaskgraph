@@ -24,9 +24,18 @@ class DocumentFilter(TypedDict):
     title: TitleFilter
 
 
+class ProjectFilter(TypedDict):
+    name: TitleFilter
+
+
 class ListingVariables(TypedDict):
     after: Cursor | None
     filter: DocumentFilter
+
+
+class ProjectListingVariables(TypedDict):
+    after: Cursor | None
+    filter: ProjectFilter
 
 
 class DeleteVariables(TypedDict):
@@ -35,20 +44,38 @@ class DeleteVariables(TypedDict):
 
 class Request(TypedDict):
     query: str
-    variables: ListingVariables | DeleteVariables
+    variables: ListingVariables | ProjectListingVariables | DeleteVariables
+
+
+class Operation(StrEnum):
+    """Which of the janitor's four Linear operations a request is, read once off its query."""
+    DOCUMENTS = auto()
+    PROJECTS = auto()
+    DELETE_DOCUMENT = auto()
+    DELETE_PROJECT = auto()
+
+    @classmethod
+    def of(cls, query: str) -> 'Operation':
+        for root, operation in [('documentDelete(', cls.DELETE_DOCUMENT), ('projectDelete(', cls.DELETE_PROJECT),
+                                ('documents(', cls.DOCUMENTS), ('projects(', cls.PROJECTS)]:
+            if root in query:
+                return operation
+        raise AssertionError(f'not an operation the janitor sends: {query}')
 
 
 def read_request(value: object) -> Request:
     assert isinstance(value, dict) and isinstance(value.get('query'), str)
     variables = value.get('variables')
     assert isinstance(variables, dict)
-    if 'documentDelete(' in value['query']:
-        assert set(variables) == {'id'}
-        assert isinstance(variables['id'], str) and variables['id'].strip()
-    else:
-        assert set(variables) == {'after', 'filter'}
-        assert variables['after'] is None or (isinstance(variables['after'], str) and variables['after'].strip())
-        assert variables['filter'] == {'title': {'startsWith': 'onetaskgraph live cleanup '}}
+    match Operation.of(value['query']):
+        case Operation.DELETE_DOCUMENT | Operation.DELETE_PROJECT:
+            assert set(variables) == {'id'}
+            assert isinstance(variables['id'], str) and variables['id'].strip()
+        case listing:
+            assert set(variables) == {'after', 'filter'}
+            assert variables['after'] is None or (isinstance(variables['after'], str) and variables['after'].strip())
+            field = 'name' if listing is Operation.PROJECTS else 'title'
+            assert variables['filter'] == {field: {'startsWith': 'onetaskgraph live cleanup '}}
     # Runtime checks above establish the union shape; Python cannot infer a TypedDict from dictionary checks.
     return cast(Request, value)
 
@@ -84,6 +111,7 @@ class Project:
 class Document:
     id: DocumentId
     title: str
+    updatedAt: str
     team: Team | None
     project: Project | None
 
@@ -91,7 +119,7 @@ class Document:
     def recorded(cls, record: dict[str, Any]) -> 'Document':
         # Any is confined to nested JSON fixture decoding; schema.rs validates this recorded shape.
         project = record['project']
-        return cls(DocumentId(record['id']), record['title'],
+        return cls(DocumentId(record['id']), record['title'], record['updatedAt'],
                    Team(**record['team']) if record['team'] else None,
                    Project(Teams([Team(**node) for node in project['teams']['nodes']],
                                  TeamPageInfo(**project['teams']['pageInfo']))) if project else None)
@@ -120,7 +148,53 @@ class Response:
                                              PageInfo(**page['pageInfo']))))
 
 
+@dataclass
+class ListedProject:
+    id: DocumentId
+    name: str
+    updatedAt: str
+    teams: Teams
+
+    @classmethod
+    def recorded(cls, record: dict[str, Any]) -> 'ListedProject':
+        # Any is confined to nested JSON fixture decoding; schema.rs validates this recorded shape.
+        teams = record['teams']
+        return cls(DocumentId(record['id']), record['name'], record['updatedAt'],
+                   Teams([Team(**node) for node in teams['nodes']], TeamPageInfo(**teams['pageInfo'])))
+
+
+@dataclass
+class ProjectPage:
+    nodes: list[ListedProject]
+    pageInfo: PageInfo
+
+
+@dataclass
+class ProjectData:
+    projects: ProjectPage
+
+
+@dataclass
+class ProjectResponse:
+    data: ProjectData
+
+
+def recorded_projects() -> list[ListedProject]:
+    record = json.loads((Path(__file__).parent / 'fixtures/linear-projects.json').read_text())
+    return [ListedProject.recorded(node) for node in record['data']['projects']['nodes']]
+
+
+def updated(seconds_ago: int) -> str:
+    """An `updatedAt` as Linear spells one, this long before now."""
+    return time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(time.time() - seconds_ago))
+
+
 class FailureMode(StrEnum):
+    PROJECT_LISTING = auto()
+    PROJECT_CURSOR = auto()
+    PROJECT_READ_LIMIT = auto()
+    MALFORMED_PROJECT_DELETE = auto()
+    PROJECT_DELETE = auto()
     DELETE = auto()
     SECOND_DELETE = auto()
     LISTING = auto()
@@ -139,9 +213,20 @@ class Malformation(StrEnum):
     NO_ID = auto()
     EMPTY_ID = auto()
     NO_TITLE = auto()
+    NO_UPDATED_AT = auto()
     DUPLICATE_ID = auto()
     NO_CURSOR = auto()
     EMPTY_CURSOR = auto()
+    NO_PAGE_INFO = auto()
+
+
+class ProjectMalformation(StrEnum):
+    NO_ID = auto()
+    NO_NAME = auto()
+    NO_UPDATED_AT = auto()
+    NO_TEAMS = auto()
+    NO_TEAM_PAGE_INFO = auto()
+    NO_CURSOR = auto()
     NO_PAGE_INFO = auto()
 
 
@@ -159,6 +244,10 @@ class Workspace:
         nodes = response.data.documents.nodes
         self.pages = [Response(DocumentData(DocumentPage(nodes[:5], PageInfo(True, Cursor('page-two'))))),
                       Response(DocumentData(DocumentPage(nodes[5:], PageInfo(False, None))))]
+        # No project unless a journey seeds one: `linear-projects.json` is what one seeds.
+        self.projects: list[ListedProject] = []
+        self.project_page_size = 100
+        self.project_malformed: ProjectMalformation | None = None
         self.deleted: list[DocumentId] = []
         self.requests: list[Request] = []
         self.failure = failure
@@ -167,18 +256,78 @@ class Workspace:
     def answer(self, request: Request) -> dict[str, Any]:
         # Any admits deliberately malformed wire payloads as well as schema-checked success records.
         self.requests.append(request)
-        if 'documentDelete(' in request['query']:
-            # read_request validated delete variables before this operation discriminator.
-            identifier = cast(DeleteVariables, request['variables'])['id']
-            match self.failure:
-                case FailureMode.DELETE:
-                    return {'data': {'documentDelete': {'success': False}}}
-                case FailureMode.SECOND_DELETE if len(self.deleted) == 1:
-                    return {'data': {'documentDelete': {'success': False}}}
-                case FailureMode.MALFORMED_DELETE:
-                    return {'data': {'documentDelete': {}}}
-            self.deleted.append(identifier)
-            return json.loads((Path(__file__).parent / 'fixtures/linear-document-delete.json').read_text())
+        match Operation.of(request['query']):
+            case Operation.DELETE_PROJECT:
+                return self.delete_project(cast(DeleteVariables, request['variables'])['id'])
+            case Operation.PROJECTS:
+                assert 'teams(first:2){nodes{key} pageInfo{hasNextPage}}' in request['query']
+                return self.project_page(cast(ProjectListingVariables, request['variables'])['after'])
+            case Operation.DELETE_DOCUMENT:
+                # read_request validated delete variables before this operation discriminator.
+                return self.delete_document(cast(DeleteVariables, request['variables'])['id'])
+            case Operation.DOCUMENTS:
+                return self.document_page(request)
+
+    def delete_project(self, identifier: DocumentId) -> dict[str, Any]:
+        # Any admits deliberately malformed wire payloads as well as schema-checked success records.
+        match self.failure:
+            case FailureMode.PROJECT_DELETE:
+                return {'data': {'projectDelete': {'success': False}}}
+            case FailureMode.MALFORMED_PROJECT_DELETE:
+                return {'data': {'projectDelete': {}}}
+        self.deleted.append(identifier)
+        return json.loads((Path(__file__).parent / 'fixtures/linear-project-delete.json').read_text())
+
+    def project_page(self, after: Cursor | None) -> dict[str, Any]:
+        # Any admits deliberately malformed wire payloads as well as schema-checked success records.
+        start = int(after.removeprefix('project-')) if after else 0
+        match self.failure:
+            case FailureMode.PROJECT_LISTING:
+                return {'errors': [{'message': 'recorded listing refusal'}]}
+            case FailureMode.PROJECT_CURSOR:
+                return asdict(ProjectResponse(ProjectData(ProjectPage([], PageInfo(True, Cursor('project-0'))))))
+            case FailureMode.PROJECT_READ_LIMIT:
+                return asdict(ProjectResponse(ProjectData(ProjectPage(
+                    [], PageInfo(True, Cursor(f'project-{start + 1}'))))))
+        # A deleted record is gone from the next listing, as it is from Linear's.
+        live = [project for project in self.projects if project.id not in self.deleted]
+        end = start + self.project_page_size
+        more = end < len(live)
+        answer = asdict(ProjectResponse(ProjectData(ProjectPage(
+            live[start:end], PageInfo(more, Cursor(f'project-{end}') if more else None)))))
+        # Deliberately corrupt wire records, never construct invalid domain models.
+        page = answer['data']['projects']
+        match self.project_malformed:
+            case ProjectMalformation.NO_ID:
+                page['nodes'][0].pop('id')
+            case ProjectMalformation.NO_NAME:
+                page['nodes'][0].pop('name')
+            case ProjectMalformation.NO_UPDATED_AT:
+                page['nodes'][0].pop('updatedAt')
+            case ProjectMalformation.NO_TEAMS:
+                page['nodes'][0].pop('teams')
+            case ProjectMalformation.NO_TEAM_PAGE_INFO:
+                page['nodes'][0]['teams'].pop('pageInfo')
+            case ProjectMalformation.NO_CURSOR:
+                page['pageInfo'] = {'hasNextPage': True}
+            case ProjectMalformation.NO_PAGE_INFO:
+                page.pop('pageInfo')
+        return answer
+
+    def delete_document(self, identifier: DocumentId) -> dict[str, Any]:
+        # Any admits deliberately malformed wire payloads as well as schema-checked success records.
+        match self.failure:
+            case FailureMode.DELETE:
+                return {'data': {'documentDelete': {'success': False}}}
+            case FailureMode.SECOND_DELETE if len(self.deleted) == 1:
+                return {'data': {'documentDelete': {'success': False}}}
+            case FailureMode.MALFORMED_DELETE:
+                return {'data': {'documentDelete': {}}}
+        self.deleted.append(identifier)
+        return json.loads((Path(__file__).parent / 'fixtures/linear-document-delete.json').read_text())
+
+    def document_page(self, request: Request) -> dict[str, Any]:
+        # Any admits deliberately malformed wire payloads as well as schema-checked success records.
         assert 'team{key}' in request['query']
         assert 'project{teams(first:2)' in request['query']
         # read_request validated the listing shape; Python cannot narrow a TypedDict union by query text.
@@ -198,9 +347,9 @@ class Workspace:
                     return {'errors': [{'message': 'recorded listing refusal'}]}
                 case FailureMode.CURSOR:
                     return asdict(Response(DocumentData(DocumentPage([], PageInfo(True, Cursor('page-two'))))))
-            return asdict(self.pages[1])
+            return self.listed(self.pages[1])
         # Deliberately corrupt wire records, never construct invalid domain models.
-        answer = asdict(self.pages[0])
+        answer = self.listed(self.pages[0])
         page = answer['data']['documents']
         match self.malformed:
             case Malformation.NO_TEAM:
@@ -213,6 +362,8 @@ class Workspace:
                 page['nodes'][0]['id'] = ''
             case Malformation.NO_TITLE:
                 page['nodes'][0].pop('title')
+            case Malformation.NO_UPDATED_AT:
+                page['nodes'][0].pop('updatedAt')
             case Malformation.DUPLICATE_ID:
                 page['nodes'].append(page['nodes'][0])
             case Malformation.NO_CURSOR:
@@ -222,6 +373,27 @@ class Workspace:
             case Malformation.NO_PAGE_INFO:
                 page.pop('pageInfo')
         return answer
+
+    def listed(self, page: Response) -> dict[str, Any]:
+        # Any admits the recorded JSON tree. A deleted record is gone from the next listing.
+        answer = asdict(page)
+        nodes = answer['data']['documents']['nodes']
+        answer['data']['documents']['nodes'] = [node for node in nodes if node['id'] not in self.deleted]
+        return answer
+
+
+RETAINED = 'onetaskgraph live cleanup retained-v1 '
+SUPERSEDED = [RETAINED + 'ci TEST ' + slot for slot in ['filed', 'loose', 'follow-up', 'assets']]
+# Every standing identity the janitor never touches, however old: a current pool member's
+# slots, a local invocation's set, another team's, and titles no current scheme parses.
+KEPT = [RETAINED + 'ci TEST ' + slot + ' pool-3' for slot in ['filed', 'loose', 'follow-up', 'assets']]
+KEPT += [RETAINED + 'local TEST ' + slot + ' 1-2-3' for slot in ['filed', 'loose', 'follow-up']]
+KEPT += [RETAINED + 'ci OTHER filed', RETAINED + 'ci TEST unknown', RETAINED + 'ci TEST parent',
+         RETAINED + 'ci TEST filed pool-x', RETAINED + 'ci TEST filed pool-17',
+         'onetaskgraph live cleanup retained-v2 ci TEST filed',
+         'onetaskgraph live cleanup retained-v1 ci TEST filed extra',
+         'onetaskgraph live cleanup lease-v1 TEST plugin pool-3 gen-2 7-42-1700000000000000']
+
 
 
 class LinearJourneys(unittest.TestCase):
@@ -319,23 +491,164 @@ class LinearJourneys(unittest.TestCase):
         self.assertEqual(all_ids - set(workspace.deleted), {
             'fresh', 'unstamped', 'legacy-asset', 'other-team', 'shared-project',
             'unknown-team', 'malformed-stamp', 'unvouched', 'incomplete-project'})
-        self.assertEqual(len(workspace.requests), 5)
-        self.assertIn('0 REST reads, 2 GraphQL queries, 3 content writes', result.stdout)
+        # Two document pages and the one project page, then the three deletes.
+        self.assertEqual(len(workspace.requests), 6)
+        self.assertIn('0 REST reads, 3 GraphQL queries, 3 content writes', result.stdout)
         self.assertIn('[0, 1000000, 2000000]', result.stdout)
 
-    def test_retained_sets_never_expire_by_age(self) -> None:
-        workspace = Workspace()
+    def standing(self, workspace: Workspace, recent: set[str] | None = None) -> None:
+        """Seeds every standing document, a month untouched unless `recent` names its title."""
         sample = workspace.pages[0].data.documents.nodes[0]
-        prefix = 'onetaskgraph live cleanup retained-v1 '
-        titles = [prefix + 'ci TEST ' + slot for slot in ['filed', 'loose', 'follow-up', 'assets']]
-        titles += [prefix + 'local TEST filed 1-2-3',
-                   prefix + 'ci TEST unknown', prefix + 'ci OTHER filed']
         workspace.pages[0].data.documents.nodes = [
-            replace(sample, id=DocumentId(str(index)), title=title)
-            for index, title in enumerate(titles)]
+            replace(sample, id=DocumentId(title), title=title,
+                    updatedAt=updated(60) if title in (recent or set()) else sample.updatedAt)
+            for title in SUPERSEDED + KEPT]
         workspace.pages[1].data.documents.nodes = []
+        workspace.projects = recorded_projects()
+
+    def test_the_superseded_pre_pool_set_is_retired_and_every_other_standing_identity_kept(self) -> None:
+        workspace = Workspace()
+        self.standing(workspace)
         result = self.run_janitor(workspace)
         self.assertEqual(result.returncode, 0, result.stderr)
+        # Its four documents, then the parent project they were filed under; never a parent
+        # shared with another team, nor any project of a pool member, a local set or another team.
+        self.assertEqual(workspace.deleted, [*SUPERSEDED, 'superseded-parent'])
+        self.assertIn('3 GraphQL queries, 5 content writes', result.stdout)
+        # The next scheduled pass finds no such set left, and writes nothing.
+        again = self.run_janitor(workspace)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(workspace.deleted, [*SUPERSEDED, 'superseded-parent'])
+        self.assertIn('0 content writes', again.stdout)
+
+    def test_a_superseded_set_written_within_a_day_is_kept_with_its_parent(self) -> None:
+        # A run on a branch from before the pool still writes the set each pass.
+        workspace = Workspace()
+        self.standing(workspace, recent={SUPERSEDED[1]})
+        result = self.run_janitor(workspace)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(workspace.deleted, [SUPERSEDED[0], *SUPERSEDED[2:]])
+        self.assertNotIn('superseded-parent', workspace.deleted)
+        # Nor is a parent written within a day, or one whose time does not read.
+        for name, stamp in [('recent', updated(60)), ('unreadable', 'yesterday')]:
+            with self.subTest(parent=name):
+                workspace = Workspace()
+                self.standing(workspace)
+                workspace.projects = [replace(project, updatedAt=stamp) for project in workspace.projects]
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(workspace.deleted, SUPERSEDED)
+
+    def test_a_superseded_document_expires_a_day_after_linear_last_changed_it(self) -> None:
+        day = 24 * 3600
+        for name, stamp, retired in [('just-past', updated(day + 60), True),
+                                     ('just-short', updated(day - 60), False),
+                                     ('unreadable', 'yesterday', False)]:
+            with self.subTest(updated=name):
+                workspace = Workspace()
+                self.standing(workspace)
+                nodes = workspace.pages[0].data.documents.nodes
+                nodes[0] = replace(nodes[0], updatedAt=stamp)
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                # One the janitor keeps holds its parent back with it.
+                self.assertEqual(workspace.deleted,
+                                 [*SUPERSEDED, 'superseded-parent'] if retired else SUPERSEDED[1:])
+
+    def test_a_project_listing_that_does_not_complete_writes_nothing(self) -> None:
+        for failure in [FailureMode.PROJECT_LISTING, FailureMode.PROJECT_CURSOR]:
+            with self.subTest(failure=failure):
+                workspace = Workspace(failure)
+                self.standing(workspace)
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(workspace.deleted, [])
+
+    def test_a_malformed_project_listing_writes_nothing(self) -> None:
+        for malformed in ProjectMalformation:
+            with self.subTest(malformed=malformed):
+                workspace = Workspace()
+                self.standing(workspace)
+                workspace.project_malformed = malformed
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(workspace.deleted, [])
+
+    def test_an_unconfirmed_or_malformed_project_delete_fails_after_its_documents(self) -> None:
+        for failure, said in [(FailureMode.PROJECT_DELETE, 'did not confirm project deletion'),
+                              (FailureMode.MALFORMED_PROJECT_DELETE, 'invalid or malformed JSON')]:
+            with self.subTest(failure=failure):
+                workspace = Workspace(failure)
+                self.standing(workspace)
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertEqual(workspace.deleted, SUPERSEDED)
+
+    def test_a_superseded_document_it_cannot_vouch_for_is_kept_with_its_parent(self) -> None:
+        sample_project = Project(Teams([Team('TEST')], TeamPageInfo(False)))
+        for name, change in [
+            ('other-team', {'team': Team('OTHER')}),
+            ('shared-project', {'team': None, 'project': Project(Teams([Team('TEST'), Team('OTHER')], TeamPageInfo(False)))}),
+            ('incomplete-project', {'team': None, 'project': Project(Teams([Team('TEST')], TeamPageInfo(True)))}),
+            ('filed', {'team': None, 'project': sample_project}),
+        ]:
+            with self.subTest(document=name):
+                workspace = Workspace()
+                self.standing(workspace)
+                nodes = workspace.pages[0].data.documents.nodes
+                nodes[0] = replace(nodes[0], **change)
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                if name == 'filed':
+                    # Filed under a project of the nomination alone, it is vouched for.
+                    self.assertEqual(workspace.deleted, [*SUPERSEDED, 'superseded-parent'])
+                else:
+                    self.assertEqual(workspace.deleted, SUPERSEDED[1:])
+
+    def test_a_parent_whose_teams_do_not_read_as_the_nomination_alone_is_kept(self) -> None:
+        for name, teams in [('no-team', Teams([], TeamPageInfo(False))),
+                            ('incomplete', Teams([Team('TEST')], TeamPageInfo(True)))]:
+            with self.subTest(teams=name):
+                workspace = Workspace()
+                self.standing(workspace)
+                workspace.projects = [replace(project, teams=teams) if project.id == 'superseded-parent' else project
+                                      for project in workspace.projects]
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(workspace.deleted, SUPERSEDED)
+
+    def test_the_parent_is_found_on_a_later_project_page(self) -> None:
+        workspace = Workspace()
+        self.standing(workspace)
+        workspace.projects = [*workspace.projects[1:], workspace.projects[0]]
+        workspace.project_page_size = 2
+        result = self.run_janitor(workspace)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(workspace.deleted, [*SUPERSEDED, 'superseded-parent'])
+        # Two document pages and three project pages.
+        self.assertIn('5 GraphQL queries, 5 content writes', result.stdout)
+
+    def test_a_repeated_project_id_writes_nothing(self) -> None:
+        for name in ['repeated-project', 'project-named-as-a-document']:
+            with self.subTest(case=name):
+                workspace = Workspace()
+                self.standing(workspace)
+                parent = workspace.projects[0]
+                twin = parent if name == 'repeated-project' else replace(parent, id=DocumentId(SUPERSEDED[0]))
+                workspace.projects = [*workspace.projects, twin]
+                result = self.run_janitor(workspace)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn('repeated an id', result.stderr)
+                self.assertEqual(workspace.deleted, [])
+
+    def test_the_project_listing_shares_the_read_cap_and_writes_nothing_past_it(self) -> None:
+        workspace = Workspace(FailureMode.PROJECT_READ_LIMIT)
+        self.standing(workspace)
+        result = self.run_janitor(workspace)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('project listing exceeded its read limit', result.stderr)
+        self.assertEqual(len(workspace.requests), 50)
         self.assertEqual(workspace.deleted, [])
 
     def test_direct_team_precedes_project_and_unvouched_documents_survive(self) -> None:
@@ -399,7 +712,7 @@ class LinearJourneys(unittest.TestCase):
         result = self.run_janitor(workspace)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(workspace.deleted, [f'residue-{index}' for index in range(150)])
-        self.assertEqual(len(workspace.requests), 152)
+        self.assertEqual(len(workspace.requests), 153)
 
     def test_later_delete_failure_keeps_prior_removal_and_stops(self) -> None:
         workspace = Workspace(FailureMode.SECOND_DELETE)
@@ -418,7 +731,7 @@ class LinearJourneys(unittest.TestCase):
                 workspace = Workspace(failure)
                 result = self.run_janitor(workspace)
                 self.assertEqual(result.returncode, 1, result.stderr)
-                self.assertEqual(len(workspace.requests), 3)
+                self.assertEqual(len(workspace.requests), 4)
                 self.assertEqual(workspace.deleted, [])
 
 
