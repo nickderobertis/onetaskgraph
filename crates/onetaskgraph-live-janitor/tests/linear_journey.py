@@ -213,6 +213,7 @@ class Malformation(StrEnum):
     NO_ID = auto()
     EMPTY_ID = auto()
     NO_TITLE = auto()
+    NO_UPDATED_AT = auto()
     DUPLICATE_ID = auto()
     NO_CURSOR = auto()
     EMPTY_CURSOR = auto()
@@ -361,6 +362,8 @@ class Workspace:
                 page['nodes'][0]['id'] = ''
             case Malformation.NO_TITLE:
                 page['nodes'][0].pop('title')
+            case Malformation.NO_UPDATED_AT:
+                page['nodes'][0].pop('updatedAt')
             case Malformation.DUPLICATE_ID:
                 page['nodes'].append(page['nodes'][0])
             case Malformation.NO_CURSOR:
