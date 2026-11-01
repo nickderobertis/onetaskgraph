@@ -661,7 +661,6 @@ test("over release v0.13.0 the CD figures count release-plz and Release, and nei
   assertFigures(V13, run, served);
   assert.equal(new Set(served).size, served.length, `a read was made twice: ${served.join("\n")}`);
 
-  // release-plz and the Release workflow are the runs counted, and both have their jobs read.
   assert.deepEqual(
     V13.deliveryRuns()
       .map((r) => r.name)
@@ -679,7 +678,6 @@ test("over release v0.13.0 the CD figures count release-plz and Release, and nei
   );
   assert.equal(run.results["onetaskgraph-cd-job-count"].value, 6, run.output);
 
-  // The warmer counts toward no CD figure: its jobs are never read, and leaving it out is said.
   const [warmer] = V13.excludedRuns().filter((r) => r.event === "push");
   assert.ok(warmer, "v0.13.0's release commit carries a warmer push run");
   assert.ok(!served.includes(jobsPath(warmer.id)), "the warmer's jobs were read");
@@ -693,7 +691,6 @@ test("over release v0.13.0 the CD figures count release-plz and Release, and nei
   // value at the step's start and end, computed from release-plz's and Release's jobs only.
   assert.equal(run.results["onetaskgraph-cd-job-count"].value, cdJobs.length, run.output);
 
-  // The skipped run costs no jobs request, and leaving it out is said.
   const skipped = V13.skippedRuns();
   assert.deepEqual(
     skipped.map((r) => [r.name, r.event]),
@@ -852,8 +849,6 @@ process.stdout.write(text);
     );
   const same = reconcile("same");
   assert.equal(same.status, 0, same.stderr);
-  // v0.13.0's recordings, named by their directory, against GitHub answering them; and a GitHub
-  // that has moved on from one of them is named, the release's own paths read under its name.
   const v13Same = reconcile("same", "recordings-v0.13.0");
   assert.equal(v13Same.status, 0, v13Same.stderr);
   const v13Drift = reconcile("v13-changed", "recordings-v0.13.0");
