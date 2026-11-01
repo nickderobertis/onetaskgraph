@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.13.0...onetaskgraph-github-projects-v0.13.1) - 2026-11-01
+
+### Fixed
+
+- set up GitHub project fields with the inputs GitHub accepts ([#3842](https://github.com/nickderobertis/onetaskgraph/pull/3842))
+
 ## [0.12.14](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.12.13...onetaskgraph-github-projects-v0.12.14) - 2026-10-31
 
 ### Added
