@@ -26,6 +26,7 @@ mod issue;
 mod metadata;
 mod metering;
 mod query;
+mod section;
 mod source;
 mod status_mapping;
 mod update;
@@ -60,6 +61,7 @@ pub use query::{
     Cursor, DocumentQuery, LabelFilter, MetadataMatch, Page, PageRequest, ProjectFilter,
     ProjectQuery, TaskQuery, TextFields, TextQuery,
 };
+pub use section::{BodyMarkup, SharedBodyMarkup, StoredHeading};
 pub use source::{Health, SecretResolver, SourcePlugin, TaskSource};
 pub use status_mapping::{StatusMapping, StatusName, StatusNames, UnmappedStatus};
 pub use update::{TaskUpdate, TaskUpdateOutcome, UpdatedField};

@@ -41,6 +41,7 @@ mod registry;
 mod resolve;
 mod schema;
 mod secrets;
+pub mod section_links;
 pub mod subprocess;
 pub mod task_projection;
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The task that introduced templates fixes their API at this crate's root; the head of `template/mod.rs` states why.
