@@ -168,6 +168,10 @@ type Issue {
   identifier: String!
   title: String!
   description: String
+  # [Internal] in Linear's published schema: the description's editor state, base64 of a Yjs
+  # update, whose heading nodes carry the ids Linear's own heading links name. Introspected
+  # on 2026-11-02 and observed in every issueCreate/issueUpdate answer that selects it.
+  descriptionState: String
   url: String
   createdAt: DateTime
   updatedAt: DateTime
@@ -186,6 +190,8 @@ type Project {
   name: String!
   description: String
   content: String
+  # The content's editor state, as `Issue.descriptionState` is the description's.
+  contentState: String
   url: String
   createdAt: DateTime
   updatedAt: DateTime
@@ -204,6 +210,9 @@ type Document {
   id: ID!
   title: String!
   content: String
+  # The content's editor state, as `Issue.descriptionState` is the description's; observed
+  # in every documentCreate/documentUpdate answer that selects it on 2026-11-02.
+  contentState: String
   url: String!
   createdAt: DateTime!
   updatedAt: DateTime!

@@ -1280,11 +1280,12 @@ pub(super) fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(us
         );
     }
     expected = expected.replace("](./diagram.png)", &format!("]({url})"));
-    assert_eq!(
-        content,
-        expected.trim_end(),
-        "the document's rewritten body"
-    );
+    // With the anchor the GitHub section form writes before each of its headings.
+    let expected = onetaskgraph_core::section_links::SectionForm::GithubProjects
+        .markup()
+        .expect("the GitHub form carries anchors")
+        .written(expected.trim_end());
+    assert_eq!(content, expected, "the document's rewritten body");
 }
 
 /// For a private home, hold its two boards to holding exactly the plan and its views: every

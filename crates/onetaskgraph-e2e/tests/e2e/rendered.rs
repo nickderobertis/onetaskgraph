@@ -893,7 +893,12 @@ fn a_board_task_from_a_template_holds_its_content_and_provenance_and_no_answer()
     let body = plan.board().body(native(&id));
     let body = body.as_str().expect("an issue body");
     let (visible, slot) = slot(body);
-    assert_eq!(visible, content, "the issue body is the rendered content");
+    assert_eq!(
+        visible,
+        github_anchored(&content),
+        "the issue body is the rendered content, with the anchor the GitHub form writes before \
+         each of its headings"
+    );
     assert_eq!(
         slot.as_object()
             .unwrap()
@@ -957,7 +962,10 @@ fn a_copy_carries_provenance_and_never_answers_and_a_regenerate_updates_the_same
     // llmlint: ignore-block[tests_mirror_real_usage] The criterion is a property of the bytes the board stores for the issue — its body is the rendered content plus a metadata slot holding only the caller's keys and the provenance, and no answer is written anywhere else in it. The binary deliberately never shows that body: `task show` reads the slot back merged with keys the board derives, so no user-facing read can tell what the slot holds or whether an answer landed outside the content. The loopback board is the stand-in for GitHub's own store, read here as a person would read the issue on GitHub.
     let body = plan.board().body(native(&issue));
     let (visible, slot) = slot(body.as_str().unwrap());
-    assert_eq!(visible, authored["content"].as_str().unwrap());
+    assert_eq!(
+        visible,
+        github_anchored(authored["content"].as_str().unwrap())
+    );
     assert_eq!(
         slot["onetaskgraph.template"],
         authored["metadata"]["onetaskgraph.template"]
@@ -2817,4 +2825,13 @@ fn a_rendering_copied_into_a_folder_of_markdown_lands_as_it_was_read() {
             "{kind}: {written}"
         );
     }
+}
+
+/// `content` as a GitHub issue body holds it: with the `<a id="<slug>"></a>` line the GitHub
+/// section form writes before each heading, which a read through the store strips again.
+fn github_anchored(content: &str) -> String {
+    onetaskgraph_core::section_links::SectionForm::GithubProjects
+        .markup()
+        .expect("the GitHub form carries anchors")
+        .written(content)
 }

@@ -47,10 +47,13 @@ mod locate;
 mod projections;
 mod query;
 mod record;
+mod sections;
 mod snapshot;
+use crate::section_links::{LinearSectionForm, SectionForm};
 pub use locate::{
     CreatesIn, LocateLookup, LocateReport, LocateRequest, Located, LocatedCounterpart, NotATask,
 };
+use onetaskgraph_plugin_api::StoredHeading;
 pub use projections::{MirrorTarget, PublicProjection, PublicProjections};
 pub(super) use snapshot::single as single_detail;
 
@@ -474,6 +477,41 @@ fn nothing_to_report(figure: &u64) -> bool {
     *figure == 0
 }
 
+/// What a copy did to one record's section links — links to one heading of a record — that it
+/// could not write in the destination's form, and what finishing them cost: README "Section
+/// links". Each figure is left out when zero, so an item whose links all landed, or that holds
+/// none, reads exactly as it did before these figures existed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SectionLinks {
+    /// Section links whose fragment names no heading of the record they point at, carried
+    /// byte for byte rather than guessed at.
+    #[serde(default, skip_serializing_if = "nothing_to_report")]
+    #[schemars(!skip_serializing_if)]
+    pub section_links_unresolved: u64,
+    /// Section links to a heading the destination's form cannot address — a Linear record
+    /// whose stored state holds no heading of that text at that position, or no state at all —
+    /// written as the record's own link with no fragment.
+    #[serde(default, skip_serializing_if = "nothing_to_report")]
+    #[schemars(!skip_serializing_if)]
+    pub section_links_unaddressable: u64,
+    /// Writes the copy added to this record to finish its section links, once the records they
+    /// name — or the record itself — had landed and their headings could be addressed.
+    #[serde(default, skip_serializing_if = "nothing_to_report")]
+    #[schemars(!skip_serializing_if)]
+    pub section_link_updates: u64,
+}
+
+impl SectionLinks {
+    /// The figures of one rendering, and the updates already counted.
+    fn of(counts: sections::SectionCounts, updates: u64) -> Self {
+        Self {
+            section_links_unresolved: counts.unresolved,
+            section_links_unaddressable: counts.unaddressable,
+            section_link_updates: updates,
+        }
+    }
+}
+
 /// What one command spent, summed over the sources in it that meter their own requests.
 ///
 /// **Source-owned.** Every figure is what a source said it sent and spent while the command
@@ -566,6 +604,9 @@ pub struct CopyOutcome {
     /// only on an item the copy refused after that read, such as `destination-status`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<WriteResult>,
+    /// What the copy could not do for its section links, and what finishing them cost.
+    #[serde(flatten)]
+    pub sections: SectionLinks,
 }
 
 /// What a `--comments` copy did to one task's comments at the destination.
@@ -1213,6 +1254,13 @@ type Intended = (
 struct Journal {
     /// One entry per destination item this copy first touched, in that order.
     entries: Vec<Undo>,
+    /// Every item this copy landed, by interface and source id, and the id it landed under —
+    /// which a later body's link to it names.
+    landed: HashMap<(Level, String), NativeId>,
+    /// Each item written with links not addressable yet, its latest write alone.
+    sections_pending: Vec<SectionsPending>,
+    /// Each copied item's section-link figures, as its last rendering left them.
+    sections: HashMap<GlobalId, SectionLinks>,
     /// One entry per copied item whose `onetaskgraph.copies` link this copy wrote, in that
     /// order.
     ///
@@ -1719,6 +1767,15 @@ struct Planned {
     /// Whether the destination is listed again by the create's key once the create is sent,
     /// to report a duplicate another attempt's create left beside it.
     relist: bool,
+    /// Its content's references and section links, as its source spelled them, when it holds
+    /// any a destination writes otherwise: rendered again at every write of it.
+    links: Option<sections::BodyLinks>,
+    /// The links of its content not addressable when it was planned, as [`Self::links`]
+    /// wrote them.
+    pending: Vec<sections::Pending>,
+    /// Each carried comment whose links were not all addressable when it was planned, by its
+    /// id at the source: finished once the task has landed.
+    comment_links: Vec<(NativeId, sections::BodyLinks, Vec<sections::Pending>)>,
 }
 
 impl Planned {
@@ -1796,7 +1853,7 @@ impl Item {
 ///
 /// Ordered so it can key a map of what a destination holds, per interface: an id alone
 /// does not identify a destination item, for the reason [`Undo::kind`] records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum Level {
     /// `get_task`, `write_task`, `delete_task`.
     Task,
@@ -1842,6 +1899,10 @@ struct Referent {
     /// Where each of those counterparts is, by its own `onetaskgraph.copy_locations`, for the
     /// links that entry still stands beside.
     located: BTreeMap<SourceName, Location>,
+    /// Its content at the source, whose headings a section link to it names.
+    content: Option<String>,
+    /// The ids its source stored those headings under, where it stores any.
+    stored: Option<Vec<onetaskgraph_plugin_api::StoredHeading>>,
 }
 
 impl Referent {
@@ -1896,8 +1957,9 @@ impl Referent {
 /// working and the other says the destination or the source holds something a re-run will
 /// never fix. A bool would let a reader of this type read them as the same outcome.
 enum Resolution {
-    /// The destination's own location string for the counterpart.
-    Rewrite(String),
+    /// The counterpart's id at the destination, and the destination's own location string for
+    /// it.
+    Rewrite(NativeId, String),
     /// The destination holds no counterpart, or holds one it reports no location for, so
     /// the occurrence is left byte-for-byte. Ordinary and expected under the bound this
     /// design works to.
@@ -1986,9 +2048,11 @@ impl Counterparts {
             [] => Resolution::NoCounterpart,
             // A counterpart the destination reports no location for names nowhere a reader
             // could go, so the source's own string is left standing rather than removed.
-            [(_, location)] => location
+            [(id, location)] => location
                 .clone()
-                .map_or(Resolution::NoCounterpart, Resolution::Rewrite),
+                .map_or(Resolution::NoCounterpart, |location| {
+                    Resolution::Rewrite(id.clone(), location)
+                }),
             _ => Resolution::Ambiguous,
         }
     }
@@ -2413,8 +2477,14 @@ impl Engine {
         // Each item whose destination stores other content than it was sent is written once
         // more, now that its source's link is written and so its change token is final; one the
         // destination then stores otherwise again is reported `failed` with why.
+        self.finish_sections(journal)?;
         let diverged = self.follow_up(journal).await?;
         self.written_results(&mut items, &levels).await;
+        for outcome in &mut items {
+            if let Some(figures) = journal.sections.get(&outcome.source) {
+                outcome.sections = *figures;
+            }
+        }
         for (source, error) in &diverged {
             for outcome in items.iter_mut().filter(|outcome| &outcome.source == source) {
                 outcome.action = CopyAction::Failed {
@@ -4255,21 +4325,48 @@ impl Engine {
     async fn rewrite_references(
         &self,
         planned: &mut [Planned],
+        copied: &[GlobalId],
         counts: &mut Counted,
     ) -> Result<(), EngineError> {
-        // Read at the source, once per project rather than once per document: several
-        // documents of one project is the ordinary case.
+        // Read at the source, once per project rather than once per body: several bodies of
+        // one project is the ordinary case.
         let mut by_project: BTreeMap<String, Vec<Referent>> = BTreeMap::new();
         let mut named: Vec<Vec<Referent>> = Vec::new();
         for item in planned.iter() {
             named.push(self.named_referents(item, &mut by_project).await?);
         }
-        // The destination is walked only for a copy that really names something, and only
-        // for the interfaces those referents are read from — in each source a document of
-        // this call lands in, which a routed copy decides per document.
+        // What this very call writes is found by the copy's own target rather than by asking
+        // the destination, which on a first copy holds nothing of it yet: an update's
+        // counterpart is where the read that found it says, and a create's is known once
+        // it has landed.
+        let written: HashMap<WrittenKey, Option<(NativeId, Option<String>)>> = planned
+            .iter()
+            .map(|item| {
+                let at = match &item.target {
+                    Target::Update { id, .. } => Some((
+                        id.clone(),
+                        item.held
+                            .as_ref()
+                            .and_then(|held| located(location_of(&held.item))),
+                    )),
+                    Target::Create => None,
+                };
+                (
+                    (item.to.clone(), item.item.level(), item.source.to_string()),
+                    at,
+                )
+            })
+            .collect();
+        // The destination is walked only for what a body really names and this call does not
+        // write, and only for the interfaces those referents are read from — in each source a
+        // body of this call lands in, which a routed copy decides per item.
         let mut wanted: BTreeMap<SourceName, Vec<&Referent>> = BTreeMap::new();
         for (item, referents) in planned.iter().zip(&named) {
             for referent in referents {
+                if written.contains_key(&(item.to.clone(), referent.level, referent.id.to_string()))
+                {
+                    continue;
+                }
                 let at = wanted.entry(item.to.clone()).or_default();
                 if !at
                     .iter()
@@ -4279,76 +4376,220 @@ impl Engine {
                 }
             }
         }
-        if wanted.is_empty() {
-            return Ok(());
-        }
         let mut walked: BTreeMap<SourceName, Counterparts> = BTreeMap::new();
         for (to, referents) in wanted {
             let destination = self.writable(&to)?;
             walked.insert(to, self.counterparts(destination, &referents).await?);
         }
+        let none = Counterparts::default();
+        let mut read_for_headings: BTreeSet<(SourceName, Level, NativeId)> = BTreeSet::new();
         for (item, referents) in planned.iter_mut().zip(named) {
-            let Some(counterparts) = walked.get(&item.to) else {
+            let content = content_of(&item.item).unwrap_or_default().to_owned();
+            if content.is_empty() && item.carried.as_ref().is_none_or(Vec::is_empty) {
                 continue;
+            }
+            let source = self.readable(&item.source.source)?;
+            let destination = self.writable(&item.to)?;
+            let from = SectionForm::for_kind(source.kind());
+            let to = SectionForm::for_kind(destination.kind());
+            let counterparts = walked.get(&item.to).unwrap_or(&none);
+            let linked = referents
+                .iter()
+                .map(|referent| {
+                    let mut linked = sections::Linked::new(
+                        referent.level,
+                        referent.id.clone(),
+                        referent.location.clone(),
+                        from,
+                        referent.content.as_deref(),
+                        referent.stored.clone(),
+                    );
+                    linked.counterpart = match written.get(&(
+                        item.to.clone(),
+                        referent.level,
+                        referent.id.to_string(),
+                    )) {
+                        Some(Some((id, Some(location)))) => sections::Counterpart::At {
+                            id: id.clone(),
+                            location: location.clone(),
+                        },
+                        Some(_) => sections::Counterpart::InCopy,
+                        None => match counterparts.resolve(referent) {
+                            Resolution::Rewrite(id, location) => {
+                                sections::Counterpart::At { id, location }
+                            }
+                            // A member of the copied set planned in another part of this copy —
+                            // as a project is planned apart from its tasks — that the destination
+                            // does not hold yet: it is known once it has landed.
+                            Resolution::NoCounterpart
+                                if referent.level != Level::Document
+                                    && copied.contains(&referent.id) =>
+                            {
+                                sections::Counterpart::InCopy
+                            }
+                            Resolution::NoCounterpart => sections::Counterpart::None,
+                            Resolution::Ambiguous => sections::Counterpart::Ambiguous,
+                        },
+                    };
+                    linked
+                })
+                .collect::<Vec<_>>();
+            // Two referents reporting one location string: an occurrence of it cannot be
+            // attributed to either, and a rewrite would be *confidently wrong* rather than
+            // merely unhelpful. So neither is chosen and every occurrence is counted.
+            let linked: Vec<sections::Linked> =
+                linked
+                    .into_iter()
+                    .fold(Vec::new(), |mut kept: Vec<sections::Linked>, referent| {
+                        match kept
+                            .iter_mut()
+                            .find(|held| held.location == referent.location)
+                        {
+                            Some(held) => held.counterpart = sections::Counterpart::Ambiguous,
+                            None => kept.push(referent),
+                        }
+                        kept
+                    });
+            let level = item.item.level();
+            let links = sections::BodyLinks::new(
+                content.clone(),
+                from,
+                to,
+                level,
+                located(location_of(&item.item)),
+                source
+                    .source()
+                    .stored_headings(level.record(), &item.source.native),
+                linked,
+            );
+            let own = match &item.target {
+                Target::Update { id, .. } => item
+                    .held
+                    .as_ref()
+                    .and_then(|held| located(location_of(&held.item)))
+                    .map(|location| (id.clone(), location)),
+                Target::Create => None,
             };
-            let Item::Document(document) = &mut item.item else {
+            // Each carried comment's links, read as the task's own: a fragment alone in one
+            // names a heading of the task it is a comment on.
+            if let Some(carried) = item.carried.as_mut() {
+                let planning = Planning {
+                    destination,
+                    own: own.clone(),
+                    missed: std::cell::RefCell::new(Vec::new()),
+                };
+                for comment in carried.iter_mut() {
+                    let links = links.for_comment(comment.body.clone());
+                    if !could_name(&comment.body) || !links.matters() {
+                        continue;
+                    }
+                    let rendered = links.render(&planning, false);
+                    comment.body = rendered.content;
+                    if !rendered.pending.is_empty() {
+                        item.comment_links
+                            .push((comment.id.clone(), links, rendered.pending));
+                    }
+                }
+            }
+            if content.is_empty() || !links.matters() {
                 continue;
+            }
+            let mut planning = Planning {
+                destination,
+                own: own.clone(),
+                missed: std::cell::RefCell::new(Vec::new()),
             };
-            let Some(content) = &document.content else {
-                continue;
-            };
-            let (rewritten, made) = substitute(content, &table_for(&referents, counterparts));
-            if made.rewritten > 0
+            let mut rendered = links.render(&planning, false);
+            // A Linear record the copy does not write is read once, for the ids its headings
+            // are stored under: a record it writes is answered by its own write.
+            if matches!(
+                to,
+                Some(SectionForm::Linear(LinearSectionForm::HeadingLink))
+            ) {
+                let missed = planning.missed.take();
+                let mut read = false;
+                for (level, id) in missed {
+                    if read_for_headings.insert((item.to.clone(), level, id.clone())) {
+                        read_destination(destination, level, &id).await?;
+                        read = true;
+                    }
+                }
+                if read {
+                    planning = Planning {
+                        destination,
+                        own,
+                        missed: std::cell::RefCell::new(Vec::new()),
+                    };
+                    rendered = links.render(&planning, false);
+                }
+            }
+            if rendered.content != content
                 && let Some(provenance) =
-                    stored::restamped(&document.metadata, &[content], &rewritten)
+                    stored::restamped(metadata_ref(&item.item), &[&content], &rendered.content)
             {
-                document
-                    .metadata
+                metadata_of(&mut item.item)
                     .insert(TemplateProvenance::KEY.to_owned(), provenance.to_value());
             }
-            document.content = Some(rewritten);
-            counts.add(made);
+            set_content(&mut item.item, rendered.content);
+            counts.add(rendered.counts);
+            item.links = Some(links);
+            item.pending = rendered.pending;
         }
         Ok(())
     }
 
-    /// The records of one document's own project whose location string its content really
-    /// holds, as a whole reference.
+    /// The records of one body's own project whose location its content really names, in the
+    /// source kind's own form: as a whole reference, or — from a folder of Markdown — as a
+    /// Markdown link to a path relative to the body's own file.
     ///
-    /// A document with no content, or with no project at the source, names nothing: the
-    /// referent set is the document's own project, its tasks and its other documents, and
-    /// there is no such set without a project.
+    /// A body with no content, or one of no project at the source, names nothing: the
+    /// referent set is the body's own project, its tasks and its documents, and there is no
+    /// such set without a project. Neither does a body that holds nothing a link could be,
+    /// whose project is then never read for it.
     async fn named_referents(
         &self,
         item: &Planned,
         by_project: &mut BTreeMap<String, Vec<Referent>>,
     ) -> Result<Vec<Referent>, EngineError> {
-        let Item::Document(document) = &item.item else {
+        let Some(project) = project_of(&item.item) else {
             return Ok(Vec::new());
         };
-        let (Some(content), Some(project)) =
-            (document.content.as_deref(), document.project.as_ref())
-        else {
-            return Ok(Vec::new());
-        };
-        if content.is_empty() {
+        // Its own content, and the comments a `--comments` copy carries with it, which name
+        // the records of the same project.
+        let bodies: Vec<&str> = content_of(&item.item)
+            .into_iter()
+            .chain(
+                item.carried
+                    .iter()
+                    .flatten()
+                    .map(|comment| comment.body.as_str()),
+            )
+            .filter(|body| could_name(body))
+            .collect();
+        if bodies.is_empty() {
             return Ok(Vec::new());
         }
-        let project = GlobalId::new(item.source.source.clone(), project.clone());
+        let from = SectionForm::for_kind(self.readable(&item.source.source)?.kind());
+        let own = located(location_of(&item.item));
+        let project = GlobalId::new(item.source.source.clone(), project);
         let key = project.to_string();
         if !by_project.contains_key(&key) {
             let read = self.referents(&project).await?;
             by_project.insert(key.clone(), read);
         }
+        let level = item.item.level();
         Ok(by_project[&key]
             .iter()
-            // A document does not name itself: the referent set is every *other* record
-            // filed under the project. Told by the interface as well as the id, because an
-            // id alone does not identify a record — a folder of Markdown filing `A.md`
-            // under both `tasks/` and `documents/` is the ordinary case rather than the
-            // contrived one, and excluding by id alone would drop that task from the set.
-            .filter(|referent| referent.level != Level::Document || referent.id != item.source)
-            .filter(|referent| holds(content, &referent.location))
+            // A body does not name itself as another record: its own links are same-record
+            // links. Told by the interface as well as the id, because an id alone does not
+            // identify a record — a folder of Markdown filing `A.md` under both `tasks/` and
+            // `documents/` is the ordinary case rather than the contrived one.
+            .filter(|referent| referent.level != level || referent.id != item.source)
+            .filter(|referent| {
+                bodies.iter().any(|content| {
+                    sections::BodyLinks::names(from, content, own.as_deref(), &referent.location)
+                })
+            })
             .cloned()
             .collect())
     }
@@ -4369,28 +4610,34 @@ impl Engine {
         {
             note(
                 &mut referents,
+                source,
                 project.clone(),
                 Level::Project,
                 held.location.as_ref(),
                 &held.metadata,
+                held.content.as_deref(),
             );
         }
         for task in self.project_member_tasks(project, FOR_A_COPY).await? {
             note(
                 &mut referents,
+                source,
                 task.id,
                 Level::Task,
                 task.item.location.as_ref(),
                 &task.item.metadata,
+                task.item.content.as_deref(),
             );
         }
         for document in self.project_documents(project).await? {
             note(
                 &mut referents,
+                source,
                 document.id,
                 Level::Document,
                 document.item.location.as_ref(),
                 &document.item.metadata,
+                document.item.content.as_deref(),
             );
         }
         Ok(referents)
@@ -4749,6 +4996,7 @@ impl Engine {
                     continue;
                 }
                 orphans.push(CopyOutcome {
+                    sections: SectionLinks::default(),
                     status_condition: None,
                     priority_condition: None,
                     held: None,
@@ -4823,13 +5071,8 @@ impl Engine {
         // of this call has been read: the destination is walked once for all of them, and
         // the content the rest of this call lands is the rewritten one — which is what
         // makes a repeat copy of an already-rewritten document report `unchanged`.
-        if planned
-            .iter()
-            .any(|item| item.item.level() == Level::Document)
-        {
-            self.rewrite_references(&mut planned, &mut running.references)
-                .await?;
-        }
+        self.rewrite_references(&mut planned, &running.resolvable, &mut running.references)
+            .await?;
         // Once a document's references point where they land, and before anything is compared
         // with the destination or written to it: every status is what its destination will
         // store, so an unchanged item reads as unchanged.
@@ -5389,6 +5632,10 @@ impl Engine {
                     running.counterparts.insert(
                         planned[*index].source.to_string(),
                         GlobalId::new(destination.name().clone(), id.clone()),
+                    );
+                    journal.landed.insert(
+                        (Level::Task, planned[*index].source.to_string()),
+                        id.clone(),
                     );
                     created.insert(*index, id);
                 }
@@ -6650,6 +6897,9 @@ impl Engine {
             priority_condition: None,
             intent: None,
             relist: false,
+            links: None,
+            pending: Vec::new(),
+            comment_links: Vec::new(),
         })
     }
 
@@ -7231,6 +7481,7 @@ impl Engine {
             },
         };
         let outcome = |action: CopyAction| CopyOutcome {
+            sections: SectionLinks::default(),
             source: item.source.clone(),
             action,
             placed: item.placed.clone(),
@@ -7376,12 +7627,57 @@ impl Engine {
             }
         }
         if let Some(plan) = &item.comment_plan {
-            self.write_comments(destination, &item.source, &written.native, plan, journal)
+            let plan = self.finished_comments(destination, item, &written.native, plan, journal);
+            self.write_comments(destination, &item.source, &written.native, &plan, journal)
                 .await?;
         }
         let mut landed = outcome(reached(Some(written), changed));
         landed.expected = expected;
         Ok((with_result(landed, sent), prior))
+    }
+
+    /// `plan` with each comment it writes whose links were not addressable when it was planned
+    /// finished, now that its task `task` has landed.
+    fn finished_comments(
+        &self,
+        destination: &ResolvedSource,
+        item: &Planned,
+        task: &NativeId,
+        plan: &comments::CommentPlan,
+        journal: &Journal,
+    ) -> comments::CommentPlan {
+        let mut plan = plan.clone();
+        if item.comment_links.is_empty() {
+            return plan;
+        }
+        let knows = Writing {
+            destination,
+            landed: &journal.landed,
+            own: located(
+                destination
+                    .source()
+                    .written_location(MetadataRecord::Task, task)
+                    .as_ref(),
+            )
+            .map(|location| (task.clone(), location)),
+        };
+        for step in &mut plan.steps {
+            let (comments::Step::Add(copy) | comments::Step::Edit { copy, .. }) = step else {
+                continue;
+            };
+            let Some((_, links, pending)) = item
+                .comment_links
+                .iter()
+                .find(|(id, _, _)| *id == copy.origin.id)
+            else {
+                continue;
+            };
+            let (finished, _) = links.finished(copy.body.as_str(), pending, &knows, true);
+            if let Ok(body) = onetaskgraph_plugin_api::CommentBody::new(finished) {
+                copy.body = body;
+            }
+        }
+        plan
     }
 
     /// Make one destination task's comments what `plan` decided, recording how to take each
@@ -8513,6 +8809,31 @@ impl Engine {
                 prior.as_ref(),
             ),
         );
+        // Its content's links, rendered once more against everything this copy has landed
+        // before it: a record written earlier in the copy is addressable now.
+        let prior_location = prior
+            .as_ref()
+            .and_then(|prior| located(location_of(&prior.item)));
+        let mut pending = Vec::new();
+        if let Some(links) = &item.links {
+            let knows = Writing {
+                destination,
+                landed: &journal.landed,
+                own: target.clone().zip(prior_location.clone()),
+            };
+            if let Some(content) = content_of(&landing).map(str::to_owned) {
+                let (finished, still) = links.finished(&content, &item.pending, &knows, false);
+                if finished != content {
+                    stored::restamp(metadata_of(&mut landing), &[&content], &finished);
+                    set_content(&mut landing, finished);
+                }
+                pending = still;
+            }
+            journal.sections.insert(
+                item.source.clone(),
+                SectionLinks::of(links.render(&knows, true).sections, 0),
+            );
+        }
         // A task lands with the record of this copy — the source's token it read, whether it
         // carried the comments, and the digest of what it leaves here — when `stamping` says
         // this write records it; otherwise with whatever record the destination already holds,
@@ -8719,6 +9040,36 @@ impl Engine {
         journal
             .follow_ups
             .retain(|follow| !(&follow.at == destination.name() && follow.id == landed));
+        journal
+            .landed
+            .insert((created_kind, item.source.to_string()), landed.clone());
+        journal
+            .sections_pending
+            .retain(|held| !(&held.at == destination.name() && held.id == landed));
+        if let Some(links) = &item.links
+            && !pending.is_empty()
+        {
+            let own = located(
+                destination
+                    .source()
+                    .written_location(created_kind.record(), &landed)
+                    .as_ref(),
+            )
+            .or(prior_location)
+            .map(|location| (landed.clone(), location));
+            journal.sections_pending.push(SectionsPending {
+                at: destination.name().clone(),
+                id: landed.clone(),
+                source: item.source.clone(),
+                links: links.clone(),
+                pending,
+                own,
+                item: composed.clone(),
+                edges: edges.to_vec(),
+                record: record.clone(),
+                comments: record_comments(item),
+            });
+        }
         if let Some(stored) =
             stored::rewritten(destination, created_kind.record(), &landed, sent.as_deref())
             && let Some(follow) = follow_up_of(
@@ -8745,6 +9096,60 @@ impl Engine {
     /// tokens its whole item moves it when the link lands — and a later copy of an unchanged
     /// source finds it unchanged. A follow-up that fails fails the copy, which then undoes every
     /// write it made; one answered with other content is landed and reported `failed`.
+    fn finish_sections(&self, journal: &mut Journal) -> Result<(), EngineError> {
+        for held in std::mem::take(&mut journal.sections_pending) {
+            let destination = self.writable(&held.at)?;
+            let knows = Writing {
+                destination,
+                landed: &journal.landed,
+                own: held.own.clone(),
+            };
+            let figures = held.links.render(&knows, true).sections;
+            // A destination that stores other content than it was sent is already written once
+            // more with what it stored: its links are finished in that write.
+            if let Some(follow) = journal
+                .follow_ups
+                .iter_mut()
+                .find(|follow| follow.at == held.at && follow.id == held.id)
+            {
+                let stored = content_of(&follow.item).unwrap_or_default().to_owned();
+                let (finished, _) = held.links.finished(&stored, &held.pending, &knows, true);
+                if finished != stored {
+                    stored::restamp(metadata_of(&mut follow.item), &[&stored], &finished);
+                    set_content(&mut follow.item, finished.clone());
+                    follow.stored = finished;
+                }
+                journal
+                    .sections
+                    .insert(held.source.clone(), SectionLinks::of(figures, 0));
+                continue;
+            }
+            let sent = content_of(&held.item).unwrap_or_default().to_owned();
+            let (finished, _) = held.links.finished(&sent, &held.pending, &knows, true);
+            let updates = u64::from(finished != sent);
+            journal
+                .sections
+                .insert(held.source.clone(), SectionLinks::of(figures, updates));
+            if updates == 0 {
+                continue;
+            }
+            let mut item = held.item;
+            stored::restamp(metadata_of(&mut item), &[&sent], &finished);
+            set_content(&mut item, finished.clone());
+            journal.follow_ups.push(FollowUp {
+                at: held.at,
+                id: held.id,
+                source: held.source,
+                item,
+                edges: held.edges,
+                record: held.record,
+                comments: held.comments,
+                stored: finished,
+            });
+        }
+        Ok(())
+    }
+
     async fn follow_up(
         &self,
         journal: &mut Journal,
@@ -9482,51 +9887,26 @@ type HeldRecord = (NativeId, Option<Location>, BTreeMap<String, Value>);
 /// Record one candidate referent, when its source said where it is.
 fn note(
     into: &mut Vec<Referent>,
+    source: &ResolvedSource,
     id: GlobalId,
     level: Level,
     location: Option<&Location>,
     metadata: &BTreeMap<String, Value>,
+    content: Option<&str>,
 ) {
     if let Some(location) = located(location) {
         let links = counterparts_linked(metadata.get(MetadataKey::COPIES_KEY));
         into.push(Referent {
+            stored: source.source().stored_headings(level.record(), &id.native),
             id,
             origin: origin_of(metadata),
             level,
             location,
             located: locations_linked(metadata, &links),
             links,
+            content: content.map(str::to_owned),
         });
     }
-}
-
-/// What every location string this document names becomes, longest first.
-///
-/// Longest first because a shorter location may start where a longer one does — a
-/// project's directory and a task's file under it — and the longer of the two is the
-/// record that occurrence names.
-fn table_for(referents: &[Referent], counterparts: &Counterparts) -> Vec<(String, Resolution)> {
-    let mut table: Vec<(String, Resolution)> = Vec::new();
-    for referent in referents {
-        // Two referents reporting one location string: an occurrence of it cannot be
-        // attributed to either, and a rewrite would be *confidently wrong* rather than
-        // merely unhelpful. So neither is chosen and both occurrences are counted.
-        if let Some(held) = table
-            .iter_mut()
-            .find(|(location, _)| location == &referent.location)
-        {
-            held.1 = Resolution::Ambiguous;
-            continue;
-        }
-        table.push((referent.location.clone(), counterparts.resolve(referent)));
-    }
-    table.sort_by_key(|(location, _)| std::cmp::Reverse(location.len()));
-    table
-}
-
-/// Whether `content` holds `location` at least once, stopped on both sides.
-fn holds(content: &str, location: &str) -> bool {
-    (0..content.len()).any(|at| delimited_at(content, at, location))
 }
 
 /// Whether `location` occurs at `at` **stopped on both sides** — by
@@ -9583,50 +9963,6 @@ fn stops_a_location(character: Option<char>) -> bool {
         None => true,
         Some(character) => character.is_whitespace() || "`\"'()[]{}<>|,;".contains(character),
     }
-}
-
-/// One document's content with every whole reference rewritten, and what that took.
-///
-/// A location string with no confident counterpart is left **byte-for-byte** as it was
-/// rather than removed or guessed at, and so is every character of the content that is not
-/// a rewritten reference. Nothing is added and nothing is reformatted.
-fn substitute(content: &str, table: &[(String, Resolution)]) -> (String, Counted) {
-    let mut written = String::with_capacity(content.len());
-    let mut counts = Counted::default();
-    let mut at = 0;
-    while at < content.len() {
-        if let Some((location, resolution)) = table
-            .iter()
-            .find(|(location, _)| delimited_at(content, at, location))
-        {
-            match resolution {
-                Resolution::Rewrite(there) => {
-                    written.push_str(there);
-                    counts.rewritten += 1;
-                }
-                // Both left-alone outcomes count as unresolved on the branch that counts
-                // them, which is what really holds `ambiguous` at or below `unresolved`.
-                Resolution::NoCounterpart => {
-                    written.push_str(location);
-                    counts.unresolved += 1;
-                }
-                Resolution::Ambiguous => {
-                    written.push_str(location);
-                    counts.unresolved += 1;
-                    counts.ambiguous += 1;
-                }
-            }
-            at += location.len();
-            continue;
-        }
-        let character = content[at..]
-            .chars()
-            .next()
-            .expect("a character at a boundary this walk only ever lands on");
-        written.push(character);
-        at += character.len_utf8();
-    }
-    (written, counts)
 }
 
 /// The origin one item records, when it records a usable one.
@@ -10364,6 +10700,162 @@ fn content_of(item: &Item) -> Option<&str> {
         Item::Project(project) => project.content.as_deref(),
         Item::Document(document) => document.content.as_deref(),
     }
+}
+
+/// `item` holding `content`.
+fn set_content(item: &mut Item, content: String) {
+    match item {
+        Item::Task(task) => task.content = Some(content),
+        Item::Project(project) => project.content = Some(content),
+        Item::Document(document) => document.content = Some(content),
+    }
+}
+
+/// The metadata `item` holds.
+fn metadata_ref(item: &Item) -> &BTreeMap<String, Value> {
+    match item {
+        Item::Task(task) => &task.metadata,
+        Item::Project(project) => &project.metadata,
+        Item::Document(document) => &document.metadata,
+    }
+}
+
+/// Where the source says `item` is.
+fn location_of(item: &Item) -> Option<&Location> {
+    match item {
+        Item::Task(task) => task.location.as_ref(),
+        Item::Project(project) => project.location.as_ref(),
+        Item::Document(document) => document.location.as_ref(),
+    }
+}
+
+/// The project whose records `item`'s content may name: its own project, and a project's
+/// own self.
+fn project_of(item: &Item) -> Option<NativeId> {
+    match item {
+        Item::Task(task) => task.project.clone(),
+        Item::Project(project) => Some(project.id.clone()),
+        Item::Document(document) => document.project.clone(),
+    }
+}
+
+/// Whether `content` holds anything a reference or a section link could be — a Markdown
+/// link, an address, or a path — so a body that holds none never has its project read.
+fn could_name(content: &str) -> bool {
+    content.contains("](") || content.contains("://") || content.contains('/')
+}
+
+/// Read the record `id` of `destination` through `level`, for what its answer says its
+/// headings are stored under: see [`TaskSource::stored_headings`].
+async fn read_destination(
+    destination: &ResolvedSource,
+    level: Level,
+    id: &NativeId,
+) -> Result<(), EngineError> {
+    let source = destination.source();
+    match level {
+        Level::Task => source.get_task(id).await.map(|_| ()),
+        Level::Project => source.get_project(id).await.map(|_| ()),
+        Level::Document => source.get_document(id).await.map(|_| ()),
+    }
+    .map_err(|error| refused(destination, error))
+}
+
+/// One item a copy call writes: the source it lands in, its interface and its source id.
+type WrittenKey = (SourceName, Level, String);
+
+/// What a body's rendering knows while the copy is planned: where the item's own counterpart
+/// is when it is updated, and the heading ids the destination's reads so far answered.
+struct Planning<'a> {
+    /// The destination.
+    destination: &'a ResolvedSource,
+    /// The item's own counterpart, when the copy updates one.
+    own: Option<(NativeId, String)>,
+    /// Every record whose heading ids were asked for and not known.
+    missed: std::cell::RefCell<Vec<(Level, NativeId)>>,
+}
+
+impl sections::Knows for Planning<'_> {
+    fn landed(&self, _referent: &sections::Linked) -> Option<(NativeId, String)> {
+        None
+    }
+
+    fn stored(&self, level: Level, id: &NativeId) -> Option<Vec<StoredHeading>> {
+        let stored = self
+            .destination
+            .source()
+            .stored_headings(level.record(), id);
+        if stored.is_none() {
+            self.missed.borrow_mut().push((level, id.clone()));
+        }
+        stored
+    }
+
+    fn own(&self) -> Option<(NativeId, String)> {
+        self.own.clone()
+    }
+}
+
+/// What a body's rendering knows while the copy writes: every record this copy has landed so
+/// far and where its destination says it is, and the heading ids its writes were answered
+/// with.
+struct Writing<'a> {
+    /// The destination.
+    destination: &'a ResolvedSource,
+    /// What this copy has landed so far, by interface and source id.
+    landed: &'a HashMap<(Level, String), NativeId>,
+    /// The item's own counterpart, once known.
+    own: Option<(NativeId, String)>,
+}
+
+impl sections::Knows for Writing<'_> {
+    fn landed(&self, referent: &sections::Linked) -> Option<(NativeId, String)> {
+        let id = self
+            .landed
+            .get(&(referent.level, referent.id.to_string()))?;
+        let location = located(
+            self.destination
+                .source()
+                .written_location(referent.level.record(), id)
+                .as_ref(),
+        )?;
+        Some((id.clone(), location))
+    }
+
+    fn stored(&self, level: Level, id: &NativeId) -> Option<Vec<StoredHeading>> {
+        self.destination
+            .source()
+            .stored_headings(level.record(), id)
+    }
+
+    fn own(&self) -> Option<(NativeId, String)> {
+        self.own.clone()
+    }
+}
+
+/// One item whose content was written with links not addressable yet, finished once every
+/// write of the copy has landed: see [`Engine::finish_sections`].
+struct SectionsPending {
+    /// The source the destination item is in.
+    at: SourceName,
+    /// The destination item.
+    id: NativeId,
+    /// The item copied, at its source.
+    source: GlobalId,
+    /// Its content's links.
+    links: sections::BodyLinks,
+    /// The placeholders the write sent.
+    pending: Vec<sections::Pending>,
+    /// The item as that write sent it.
+    item: Item,
+    /// Its forward edges, as that write sent them.
+    edges: Vec<DependencyEdge>,
+    /// The record of the copy that write landed with.
+    record: Option<record::Record>,
+    /// The comments its record digests.
+    comments: Option<Vec<Value>>,
+    /// The item's own counterpart and where its destination says it is.
+    own: Option<(NativeId, String)>,
 }
 
 /// `content` with each of `assets` pointed where `recorded` says the destination serves it, when

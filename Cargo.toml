@@ -107,6 +107,8 @@ windows-sys = { version = "0.61.2", features = [
 # rendezvous, which only completes if they were consulted at once, under a timeout so a
 # sequential engine fails the test rather than hanging the suite.
 tokio = { version = "1.54.1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+# Linear stores each record as a Yjs document; a heading's id is read out of it.
+yrs = "0.28.0"
 
 assert_cmd = "2.2.2"
 # The prompting journeys' pseudo-terminal: already in this lockfile through tempfile, so

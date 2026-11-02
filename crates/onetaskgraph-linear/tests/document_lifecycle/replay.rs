@@ -204,6 +204,7 @@ impl Replay {
                     continue;
                 }
                 let mut body = respond(&mut state, &request);
+                stateless(request["query"].as_str().unwrap_or_default(), &mut body);
                 if body.get("errors").is_none()
                     && body.get("__http_status").is_none()
                     && body
@@ -596,4 +597,40 @@ fn respond(state: &mut State, request: &Value) -> Value {
         }
     }
     panic!("unhandled synthetic replay query: {q}")
+}
+
+/// `body` answering every issue, project and document node it holds with no editor state,
+/// where `query` selects one: the recorded sessions this replay answers from predate the
+/// selection, and `null` is what Linear answers for a record it holds no state for.
+fn stateless(query: &str, body: &mut Value) {
+    fn fill(value: &mut Value, issue: bool, content: bool) {
+        match value {
+            Value::Object(object) => {
+                if object.contains_key("id") {
+                    if issue && object.contains_key("description") {
+                        object.entry("descriptionState").or_insert(Value::Null);
+                    }
+                    if content && object.contains_key("content") {
+                        object.entry("contentState").or_insert(Value::Null);
+                    }
+                }
+                for inner in object.values_mut() {
+                    fill(inner, issue, content);
+                }
+            }
+            Value::Array(items) => {
+                for inner in items {
+                    fill(inner, issue, content);
+                }
+            }
+            _ => {}
+        }
+    }
+    let (issue, content) = (
+        query.contains("descriptionState"),
+        query.contains("contentState"),
+    );
+    if issue || content {
+        fill(body, issue, content);
+    }
 }

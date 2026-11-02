@@ -7350,3 +7350,38 @@ async fn recorded_document_content_is_returned_as_stored_including_rewrites() {
         assert!(requests.recv().unwrap().contains("document(id:$id)"));
     }
 }
+
+/// Every heading id Linear stored for a captured record is read back out of the editor state
+/// its answer carried, in order, with its plain text — the attribution marks Linear wraps the
+/// text in left out — for both captured samples: issue `TES2-773`'s `descriptionState` and the
+/// spike's plain document's `contentState`. What the engine writes for each heading is held by
+/// the engine's own journeys over the same samples.
+#[test]
+fn heading_ids_are_read_out_of_the_editor_state_linear_stored() {
+    for raw in [
+        include_str!("fixtures/editor-state/tes2-773.json"),
+        include_str!("fixtures/editor-state/spike-plain-document.json"),
+    ] {
+        let sample: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let decoded = onetaskgraph_linear::headings::decoded(sample["state"].as_str().unwrap())
+            .expect("a captured state decodes");
+        let expected: Vec<(String, String)> = sample["headings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|heading| {
+                (
+                    heading["text"].as_str().unwrap().to_owned(),
+                    heading["id"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        let read: Vec<(String, String)> = decoded
+            .into_iter()
+            .map(|heading| (heading.text, heading.id))
+            .collect();
+        assert_eq!(read, expected, "{}", sample["record"]);
+        assert_eq!(read.len(), 5, "the spike's five headings");
+    }
+    assert_eq!(onetaskgraph_linear::headings::decoded("not base64!"), None);
+}

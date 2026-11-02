@@ -1879,7 +1879,16 @@ impl Drop for VisibilityHold<'_> {
 
 /// `source`, sent nothing between a rate limit it answers and the reset that limit names, on
 /// `clock`.
+///
+/// It is also where a source is handed the markup its kind's section form needs its bodies to
+/// carry, so a source built anywhere gets it on the way in: see
+/// [`SectionForm::markup`](crate::section_links::SectionForm::markup).
 fn held_off(source: ResolvedSource, clock: &SharedClock) -> ResolvedSource {
+    if let Some(markup) =
+        crate::section_links::SectionForm::for_kind(source.kind()).and_then(|form| form.markup())
+    {
+        source.source().attach_body_markup(markup);
+    }
     let name = source.name().clone();
     source.wrapped(|inner| Box::new(held_off::HeldOff::new(name, inner, clock.clone())))
 }

@@ -3824,6 +3824,10 @@ pub struct GitHubProjectsSource {
     client: std::sync::OnceLock<Client>,
     /// Built on the first attachment request, as [`Self::asset_client`] says.
     asset_client: std::sync::OnceLock<Client>,
+    /// The markup the engine handed this source for its bodies' headings, applied to every
+    /// visible body it composes and stripped from every one it reads back: see
+    /// [`TaskSource::attach_body_markup`].
+    body_markup: std::sync::OnceLock<onetaskgraph_plugin_api::SharedBodyMarkup>,
     /// Every item this source has created in this command, in the order it created them —
     /// dropped by [`TaskSource::end_command`].
     ///
@@ -4379,6 +4383,32 @@ impl BoardSnapshot {
 }
 
 impl GitHubProjectsSource {
+    /// `content` as this source sends it, with the markup the engine handed it applied.
+    fn marked(&self, content: &str) -> String {
+        match self.body_markup.get() {
+            Some(markup) if !content.is_empty() => markup.written(content),
+            _ => content.to_owned(),
+        }
+    }
+
+    /// The visible body and the metadata slot of `body` as [`metadata_body`] splits them,
+    /// the visible body without the markup [`Self::marked`] applies.
+    fn visible(
+        &self,
+        body: Option<String>,
+    ) -> Result<(Option<String>, BTreeMap<String, Value>), SourceError> {
+        let (visible, slot) = metadata_body(body)?;
+        Ok((
+            match (visible, self.body_markup.get()) {
+                (Some(visible), Some(markup)) => {
+                    Some(markup.read(&visible)).filter(|read| !read.is_empty())
+                }
+                (visible, _) => visible,
+            },
+            slot,
+        ))
+    }
+
     /// Report missing configured Status options and, when `apply` is true, add them with
     /// a whole-list mutation that preserves every existing id and verifies the result.
     ///
@@ -5120,6 +5150,7 @@ impl GitHubProjectsSource {
             repository,
             creation_owners: config.creation_owners,
             asset_client: std::sync::OnceLock::new(),
+            body_markup: std::sync::OnceLock::new(),
             endpoint,
             token,
             credential_name: config.token_env,
@@ -7488,7 +7519,7 @@ impl GitHubProjectsSource {
             complete_connection(labels, "content labels", NESTED_PAGE_SIZE)?;
         }
         let raw_body = optional_str(content, "body")?.map(str::to_owned);
-        let (body, slot) = metadata_body(raw_body.clone())?;
+        let (body, slot) = self.visible(raw_body.clone())?;
         let parent = optional_str(content.get("parent").unwrap_or(&Value::Null), "id")?
             .map(|id| NativeId(id.to_owned()));
         // A draft has no sub-issues to summarise, and GitHub's schema gives it no field
@@ -8027,7 +8058,7 @@ impl GitHubProjectsSource {
             self.update_content(item.content_kind, &item.id, json!({"body": body}))
                 .await?;
         }
-        let (visible, slot) = metadata_body(Some(body.clone()))?;
+        let (visible, slot) = self.visible(Some(body.clone()))?;
         item.body = visible.filter(|value| !value.is_empty());
         item.raw_body = Some(body);
         item.slot = slot;
@@ -8381,10 +8412,10 @@ impl GitHubProjectsSource {
             return Ok(None);
         };
         let held = item.raw_body.clone().unwrap_or_default();
-        let body = with_content(&held, content)?;
+        let body = with_content(&held, &self.marked(content))?;
         // Checked before anything is sent: content ending in what this source reads as its own
         // metadata slot would read back as metadata rather than as the content it was.
-        let (visible, slot) = metadata_body(Some(body.clone()))?;
+        let (visible, slot) = self.visible(Some(body.clone()))?;
         if visible.as_deref().unwrap_or_default() != content || slot != item.slot {
             return Err(SourceError::Refused {
                 message: format!(
@@ -8618,7 +8649,7 @@ impl GitHubProjectsSource {
                     read.raw_body
                 }
             };
-            let (visible, read_slot) = metadata_body(live.clone())?;
+            let (visible, read_slot) = self.visible(live.clone())?;
             self.mark_read(id);
             item.raw_body = live;
             item.body = visible;
@@ -8640,7 +8671,7 @@ impl GitHubProjectsSource {
         }
         let held = item.raw_body.clone().unwrap_or_default();
         let content = match &update.content {
-            Some(content) => with_content(&held, content)?,
+            Some(content) => with_content(&held, &self.marked(content))?,
             None => held.clone(),
         };
         // A slot holding what it held is kept byte for byte, compared as JSON rather than as
@@ -8653,7 +8684,7 @@ impl GitHubProjectsSource {
         };
         // Checked before anything is sent, as a content write checks it: content ending in
         // what this source reads as its own slot would read back as metadata.
-        let (visible, read) = metadata_body(Some(body.clone()))?;
+        let (visible, read) = self.visible(Some(body.clone()))?;
         let wanted = update.content.as_deref().or(item.body.as_deref());
         if visible.as_deref().unwrap_or_default() != wanted.unwrap_or_default() || read != slot {
             return Err(SourceError::Refused {
@@ -8826,9 +8857,9 @@ impl GitHubProjectsSource {
         } else {
             content
         };
-        let body = with_slot(&with_content(&held, content)?, &slot)?;
+        let body = with_slot(&with_content(&held, &self.marked(content))?, &slot)?;
         // Checked before anything is sent, as a content write checks it.
-        let (visible, read) = metadata_body(Some(body.clone()))?;
+        let (visible, read) = self.visible(Some(body.clone()))?;
         if visible.as_deref().unwrap_or_default() != content || read != slot {
             return Err(SourceError::Refused {
                 message: format!(
@@ -9648,7 +9679,8 @@ impl GitHubProjectsSource {
             }
             None => incoming.content.map(str::to_owned),
         };
-        let body = compose_body(content.as_deref(), &slot)?;
+        let marked = content.as_deref().map(|content| self.marked(content));
+        let body = compose_body(marked.as_deref(), &slot)?;
         // Read before anything is created, for the reason the field below is: a value
         // this destination cannot store has to refuse, and refusing after `createIssue`
         // would leave an issue behind that nothing asked for. The engine writes a
@@ -9915,7 +9947,7 @@ impl GitHubProjectsSource {
             // way a read splits it — so what this record reports is what a read of the
             // same issue reports, rather than the person's text with the metadata slot
             // still on the end of it.
-            body: metadata_body(body.clone())?.0,
+            body: self.visible(body.clone())?.0,
             raw_body: body.clone(),
             // A document has no status of its own; what it reads back as is whatever
             // the issue's own state says, which is what a re-read reports.
@@ -13341,6 +13373,9 @@ impl GitHubProjectsSource {
 impl TaskSource for GitHubProjectsSource {
     fn kind(&self) -> &'static str {
         KIND
+    }
+    fn attach_body_markup(&self, markup: onetaskgraph_plugin_api::SharedBodyMarkup) {
+        let _ = self.body_markup.set(markup);
     }
     fn order_versions(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
         change_token::order(a, b)

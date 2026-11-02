@@ -314,6 +314,9 @@ impl Engine {
                     priority_condition: None,
                     intent: None,
                     relist: false,
+                    links: None,
+                    pending: Vec::new(),
+                    comment_links: Vec::new(),
                 };
                 // A dry run's filing lookup, so it creates no member project; what it would have
                 // written is nothing, and the journal is dropped with nothing in it to undo.
