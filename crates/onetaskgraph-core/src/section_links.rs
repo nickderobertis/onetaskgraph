@@ -450,21 +450,6 @@ impl SectionForm {
             Self::LocalMd | Self::Linear(_) => None,
         }
     }
-
-    /// Whether a link to a record of this kind whose fragment names no heading is read as a
-    /// link at all: a Linear fragment with no `heading-…-<id8>` shape is not this form's.
-    fn reads(self, fragment: &str) -> bool {
-        match self {
-            Self::Linear(_) => linear_id8(fragment).is_some(),
-            Self::LocalMd | Self::GithubProjects => true,
-        }
-    }
-
-    /// Whether `fragment` is in this kind's form at all — see [`Self::reads`].
-    #[must_use]
-    pub fn reads_fragment(self, fragment: &str) -> bool {
-        self.reads(fragment)
-    }
 }
 
 /// The 8 hex characters ending a Linear heading fragment `heading-<slug>-<id8>`.

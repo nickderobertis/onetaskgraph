@@ -491,9 +491,7 @@ impl BodyLinks {
             from.heading_of(fragment, &self.own_headings, self.own_stored.as_deref())
         };
         let Some(heading) = heading else {
-            if from.reads_fragment(fragment) {
-                rendered.sections.unresolved += 1;
-            }
+            rendered.sections.unresolved += 1;
             return Some(verbatim.to_owned());
         };
         let own = knows.own();
@@ -550,13 +548,15 @@ impl BodyLinks {
             from.heading_of(fragment, &referent.headings, referent.stored.as_deref())
         });
         let (Some(to), Some(heading)) = (self.to, heading) else {
-            if self.to.is_some() && self.from.is_some_and(|from| from.reads_fragment(fragment)) {
+            if self.to.is_some() && self.from.is_some() {
                 rendered.sections.unresolved += 1;
             }
             // A fragment naming no heading, or a destination with no form: the record's link,
-            // its fragment carried byte for byte.
+            // its fragment carried byte for byte — into a folder of Markdown as the path relative
+            // to the linking file a section link there is.
+            let relative = occurrence.relative || self.to == Some(SectionForm::LocalMd);
             return self
-                .plain(&location, occurrence.relative, knows)
+                .plain(&location, relative, knows)
                 .or_else(|| last.then(|| location.clone()))
                 .map(|link| format!("{link}#{fragment}"));
         };

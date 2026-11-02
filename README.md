@@ -1345,6 +1345,97 @@ project the destination no longer holds is refused as a stale link, writing noth
 found. An unchanged repeat copy writes nothing at all. `linear-requests-per-plan-copy` in
 `crates/onetaskgraph-linear-e2e/budgets.yaml` holds the figure.
 
+### Section links
+
+A copy points every reference between the records of one project at the destination's own
+records, in the content of every task, project and document it writes, and in the comments a
+`--comments` copy carries. A public view of a private plan's task has its links to its own
+headings written in the destination's form too; a view holds no link to another record, which
+the copy refuses as it always has. A **section link** is
+a reference that names one heading of its record as well, and each destination addresses a
+heading its own way, so a copy writes every section link in the destination's form.
+
+**The authored form.** In a folder of Markdown, a section link is a Markdown link whose
+destination is `<path>#<slug>`:
+
+- `<path>` is the linked record's file, written relative to the directory of the linking
+  record's own file — `../tasks/budget-quota.md` from `documents/design.md`. The linked
+  record's absolute path is recognised too.
+- `<slug>` is the target heading's **slug**: its text lowercased, every character that is not a
+  letter, a digit, a space, `-` or `_` removed, and each space replaced by `-`. The n-th
+  repeat of a slug in one record is suffixed `-<n>`, so the second `## Budgets` is
+  `budgets-1`. `### Step 2.b: retry (once)` is `step-2b-retry-once`, and
+  `### Budget <id>` is `budget-<id>`. GitHub's file view and VS Code's preview read the same
+  rule.
+- A link to a heading of the same record is `#<slug>` alone.
+- The authored form carries no anchor markup (`<a id>`, `<a name>`). A destination that needs
+  some is the copy's to write.
+
+**Each destination's form.** Each form is one entry of `SectionForm` in
+`onetaskgraph-core`'s `section_links` module. That entry is the one place a destination's form is
+decided: it writes the form, parses it back and supplies its markup.
+
+| Destination | Link to another record's heading | Link to its own heading |
+| --- | --- | --- |
+| A folder of Markdown | `<path relative to the linking file>#<slug>` | `#<slug>` |
+| A GitHub Projects issue | `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` | `#user-content-<slug>` |
+| A Linear issue, project or document | `<record URL>#heading-<Linear slug>-<id8>` | the record's own URL with that fragment |
+
+- **GitHub.** An issue page gives a heading no `id`. So the GitHub source writes
+  `<a id="<slug>"></a>` on its own line before every heading of every body it writes, which
+  GitHub stores as `id="user-content-<slug>"`. It strips exactly that line again when it reads a
+  body, so a body read back through the store is the body as it was authored. A link on
+  GitHub's canonical `github.com` host, clicked inside another issue, opens its target at the
+  top, because GitHub's in-page navigation drops the fragment. The `www.github.com` host is
+  answered with a redirect that keeps it. The link then lands both when opened directly and
+  when clicked inside an issue. **That rests on undocumented GitHub behaviour**, which the
+  credentialed live journey re-observes in a real browser.
+- **Linear.** Linear keeps each record's content as an editor state beside its Markdown
+  (`descriptionState`, `contentState`). There every heading carries an id Linear assigns when
+  the record is written and keeps across an update that leaves the heading's text alone. Its
+  own "Copy link" on a heading gives
+  `#heading-<slug>-<first 8 hex characters of that id>`. The heading is found in the
+  counterpart's stored state by its position among the headings of the same text, so the two
+  `## Budgets` carry different ids.
+  - Linear's slug is the text lowercased, `&` read as `and`, `_` as `-`, every other character
+    that is not a letter, a digit, a space or `-` removed, and each run of spaces and `-` one
+    `-`. A repeat is not suffixed.
+  - A recognised Linear link is read by its id alone, so a wrong slug beside the right id still
+    names its heading.
+  - The ids are read off each write's own answer, so a record this copy writes costs no read. A
+    record it does not write, linked from one it rewrites, is read once per copy.
+  - A link whose target is written later in the same copy is finished in the follow-up write the
+    copy already sends when Linear rewrote the linking record, and otherwise in one added
+    update.
+  - No anchor markup is written into a Linear body, where Linear would show it as text.
+  - **The form rests on Linear's undocumented editor-state heading ids and "Copy link" form**,
+    which the credentialed live journey re-observes against Linear itself.
+  - `linear_section_form` is one named decision. Setting `ONETASKGRAPH_LINEAR_SECTION_FORM` to
+    `record-url` writes the record's URL alone, for a measurement.
+- Any other destination, a stdio plugin among them, receives every fragment byte for byte on
+  the rewritten link, as before section forms existed.
+
+**Reading a tracker's own form.** A body copied out of a GitHub board or a Linear workspace holds
+its section links in that tracker's form, written by an earlier copy or by hand. Each one is
+recognised as naming its record and its heading, and written in the next destination's form.
+That covers both GitHub hosts, with or without `user-content-`, and Linear's heading links. A
+heading travels as its text and its position among the headings of that text, never as a slug,
+because the slug rules differ. A link to a record outside the copied project is a real URL that
+works from anywhere, and is left as it is. A chain of copies that carries the whole project at
+each hop ends, in a folder of Markdown, with every link in the authored form. Each points
+at the counterpart of the record the authored link named, with a byte-equal `#<slug>`. The path
+names the last hop's file, because a folder of Markdown names a created file after its
+source's id.
+
+**What a copy reports.** A fragment naming no heading of its record is carried as it is, never
+guessed, and counted in that record's `section_links_unresolved`. A Linear heading the
+counterpart's stored state does not hold is written as the record's URL alone and counted in
+`section_links_unaddressable`. An update a copy added only to finish a record's section links is
+counted in `section_link_updates`. All three figures are left out when zero. A rewritten
+rendering's `body_digest` is restamped exactly as a copied document's is, so a regenerate from
+its answers still reproduces the pre-copy content. A repeat copy of an unchanged project writes
+nothing, because what it compares is the translated body.
+
 ### Image assets
 
 A task or a document carries pictures — a before-and-after screenshot in a design document,

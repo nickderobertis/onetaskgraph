@@ -1491,7 +1491,38 @@ impl Engine {
             });
         }
         let id = held.as_ref().map_or(opaque, |(view, _)| view.id.clone());
-        let view = task.view(id.clone(), Some(landing.project.clone()));
+        let mut view = task.view(id.clone(), Some(landing.project.clone()));
+        // A view's links to its own headings, in the destination's section form: a view holds
+        // no other link to a record, which the preflight refused.
+        if let Some(content) = view.content.clone() {
+            let from = crate::section_links::SectionForm::for_kind(
+                self.readable(&task.source.source)?.kind(),
+            );
+            let links = super::sections::BodyLinks::new(
+                content.clone(),
+                from,
+                crate::section_links::SectionForm::for_kind(destination.kind()),
+                Level::Task,
+                None,
+                self.readable(&task.source.source)?
+                    .source()
+                    .stored_headings(
+                        onetaskgraph_plugin_api::MetadataRecord::Task,
+                        &task.source.native,
+                    ),
+                Vec::new(),
+            );
+            if links.matters() {
+                let own = held.as_ref().and_then(|(held, _)| {
+                    held.location
+                        .as_ref()
+                        .and_then(|location| super::located(Some(location)))
+                        .map(|location| (held.id.clone(), location))
+                });
+                let knows = ViewKnows { destination, own };
+                view.content = Some(links.render(&knows, true).content);
+            }
+        }
         let edges: Vec<DependencyEdge> = task
             .depends_on
             .iter()
@@ -1994,5 +2025,34 @@ mod tests {
                 "{html}"
             );
         }
+    }
+}
+
+/// What a public view's rendering knows: the view's own counterpart, when it is updated, and
+/// the heading ids the destination's read of it answered.
+struct ViewKnows<'a> {
+    /// The public destination.
+    destination: &'a ResolvedSource,
+    /// The view already there, and where its destination says it is.
+    own: Option<(NativeId, String)>,
+}
+
+impl super::sections::Knows for ViewKnows<'_> {
+    fn landed(&self, _referent: &super::sections::Linked) -> Option<(NativeId, String)> {
+        None
+    }
+
+    fn stored(
+        &self,
+        level: Level,
+        id: &NativeId,
+    ) -> Option<Vec<onetaskgraph_plugin_api::StoredHeading>> {
+        self.destination
+            .source()
+            .stored_headings(level.record(), id)
+    }
+
+    fn own(&self) -> Option<(NativeId, String)> {
+        self.own.clone()
     }
 }

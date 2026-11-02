@@ -24,12 +24,17 @@ use crate::fixtures::{
     linear_empty_workspace_held,
 };
 
-/// The repository every issue of the loopback board lives in.
-const REPOSITORY: &str = "nickderobertis/onetaskgraph";
+/// The repository a second board's issues live in, beside the first board's.
+const SECOND_REPOSITORY: &str = "nickderobertis/onetaskgraph-second";
 
-/// The headings of the target task, in order: their text, GitHub's (and the authored form's)
-/// slug, and Linear's.
-const HEADINGS: [(&str, &str, &str); 5] = [
+/// Every kind a section link is copied between.
+const KINDS: [&str; 3] = ["local-md", "github-projects", "linear"];
+
+/// One heading: its text, GitHub's (and the authored form's) slug, and Linear's.
+type HeadingForms = (&'static str, &'static str, &'static str);
+
+/// The headings of the target task, in order.
+const HEADINGS: [HeadingForms; 5] = [
     ("What", "what", "what"),
     ("Budgets", "budgets", "budgets"),
     (
@@ -46,7 +51,7 @@ const HEADINGS: [(&str, &str, &str); 5] = [
 ];
 
 /// The design document's own heading.
-const OVERVIEW: (&str, &str, &str) = ("Overview", "overview", "overview");
+const OVERVIEW: HeadingForms = ("Overview", "overview", "overview");
 
 /// The target task's content.
 fn target_body() -> String {
@@ -77,15 +82,15 @@ fn design_body(target: &str) -> String {
     )
 }
 
-/// Write the authored project into a folder named `name` of the sandbox, answering its root.
-fn authored(sandbox: &Sandbox, name: &str) -> PathBuf {
-    let root = sandbox.subdirectory(name);
+/// Write the authored project into a folder named `name` of the sandbox, answering the
+/// source configuration naming it and the absolute path of its target task.
+fn authored(sandbox: &Sandbox, name: &str) -> (Value, String) {
+    let config = empty_folder(sandbox, name);
+    let root = std::fs::canonicalize(sandbox.subdirectory(name)).expect("the root");
     for folder in ["projects", "tasks", "documents"] {
         std::fs::create_dir_all(root.join(folder)).expect("a folder");
     }
-    let root = std::fs::canonicalize(&root).expect("the root");
-    let target = root.join("tasks/T.md");
-    let target = target.to_str().expect("a UTF-8 path");
+    let target = root.join("tasks/T.md").display().to_string();
     let files = [
         (
             "projects/P.md",
@@ -100,77 +105,103 @@ fn authored(sandbox: &Sandbox, name: &str) -> PathBuf {
         (
             "tasks/U.md",
             "title: Referrer\nstatus: todo\nproject: P",
-            referrer_body(target),
+            referrer_body(&target),
         ),
         (
             "documents/D.md",
             "title: Design\nproject: P",
-            design_body(target),
+            design_body(&target),
         ),
     ];
     for (path, front, body) in files {
         std::fs::write(root.join(path), format!("---\n{front}\n---\n{body}")).expect("a record");
     }
-    root
+    (json!({"plugin": "local-md", "config": config}), target)
 }
 
-/// One destination kind a journey copies into, and what reads it back.
-pub(crate) enum Destination {
-    /// A folder of Markdown, at its root.
-    Local(PathBuf),
+/// One store a journey copies into or out of, and what reads it back.
+pub(crate) enum Store {
+    /// A folder of Markdown.
+    Local,
     /// The loopback board.
     Github(GitHubBoardFields),
     /// The loopback Linear workspace.
     Linear(LinearWorkspace),
 }
 
-impl Destination {
-    /// A destination of `kind` in `sandbox`, and the source configuration naming it.
-    pub(crate) fn new(sandbox: &Sandbox, kind: &str, folder: &str) -> (Self, Value) {
-        match kind {
-            "local-md" => {
-                let config = empty_folder(sandbox, folder);
-                let root = std::fs::canonicalize(sandbox.subdirectory(folder)).expect("a root");
-                (
-                    Self::Local(root),
-                    json!({"plugin": "local-md", "config": config}),
-                )
-            }
-            "github-projects" => {
-                let (config, board) = github_projects_with_board(sandbox);
-                board.use_canonical_issue_urls();
-                sandbox.secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n");
-                (
-                    Self::Github(board),
-                    json!({"plugin": "github-projects", "config": config}),
-                )
-            }
-            _ => {
-                let (config, workspace) = linear_empty_workspace_held(sandbox);
-                (
-                    Self::Linear(workspace),
-                    json!({"plugin": "linear", "config": config}),
-                )
-            }
+/// A store of `kind` in `sandbox` — a folder of Markdown under `folder`, a board, or a Linear
+/// workspace of its own — and the source configuration naming it. A board beside `beside`'s
+/// holds its issues in [`SECOND_REPOSITORY`], so two boards never spell one issue twice.
+pub(crate) fn store(
+    sandbox: &Sandbox,
+    kind: &str,
+    folder: &str,
+    beside: Option<&Store>,
+) -> (Store, Value) {
+    match (kind, beside) {
+        ("local-md", _) => (
+            Store::Local,
+            json!({"plugin": "local-md", "config": empty_folder(sandbox, folder)}),
+        ),
+        ("github-projects", Some(Store::Github(_))) => {
+            let (mut config, board) = github_projects_with_board(sandbox);
+            board.use_canonical_issue_urls();
+            board.use_repository(SECOND_REPOSITORY);
+            config["repository"] = json!(SECOND_REPOSITORY);
+            (
+                Store::Github(board),
+                json!({"plugin": "github-projects", "config": config}),
+            )
+        }
+        ("github-projects", _) => {
+            let (config, board) = github_projects_with_board(sandbox);
+            board.use_canonical_issue_urls();
+            (
+                Store::Github(board),
+                json!({"plugin": "github-projects", "config": config}),
+            )
+        }
+        _ => {
+            let (config, workspace) = linear_empty_workspace_held(sandbox);
+            (
+                Store::Linear(workspace),
+                json!({"plugin": "linear", "config": config}),
+            )
         }
     }
+}
 
-    /// What this destination has been sent so far: every request a hosted one served, or every
-    /// file of a folder and its bytes.
-    fn mark(&self) -> Mark {
+/// Configure `sources` in `sandbox`, with both credentials the loopback board server answers and
+/// the one the loopback Linear workspace does.
+pub(crate) fn configure(sandbox: &Sandbox, sources: &[(&str, &Value)]) {
+    let mut held = serde_json::Map::new();
+    for (name, config) in sources {
+        held.insert((*name).to_owned(), (*config).clone());
+    }
+    sandbox.project_document(&document(&Value::Object(held)));
+    sandbox.secrets_file(
+        "GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nGITHUB_PROJECTS_FIXTURE_TOKEN_B=test-token-b\n\
+         LINEAR_API_KEY=fixture-key\n",
+    );
+}
+
+impl Store {
+    /// What this store has been sent so far: every request a hosted one served, or every file
+    /// of the folder at `root` and its bytes.
+    fn mark(&self, root: Option<&Path>) -> Mark {
         match self {
-            Self::Local(root) => Mark::Files(files_under(root)),
+            Self::Local => Mark::Files(files_under(root.expect("a folder's root"))),
             Self::Github(board) => Mark::Served(board.served_count()),
             Self::Linear(workspace) => Mark::Served(workspace.served_count()),
         }
     }
 
-    /// Every write this destination was sent since `mark`: each mutation a hosted one served,
-    /// or each file of a folder created, changed or removed.
-    fn writes_since(&self, mark: &Mark) -> Vec<String> {
+    /// Every write this store was sent since `mark`: each mutation a hosted one served, or each
+    /// file of the folder at `root` created, changed or removed.
+    fn writes_since(&self, mark: &Mark, root: Option<&Path>) -> Vec<String> {
         match (self, mark) {
-            (Self::Local(root), Mark::Files(before)) => {
-                let after = files_under(root);
+            (Self::Local, Mark::Files(before)) => {
+                let after = files_under(root.expect("a folder's root"));
                 let mut changed: Vec<String> = after
                     .iter()
                     .filter(|(path, bytes)| before.get(*path) != Some(bytes))
@@ -186,60 +217,49 @@ impl Destination {
             }
             (Self::Github(board), Mark::Served(at)) => mutations(board.served_since(*at)),
             (Self::Linear(workspace), Mark::Served(at)) => mutations(workspace.served_since(*at)),
-            _ => unreachable!("a mark of this destination"),
+            _ => unreachable!("a mark of this store"),
         }
     }
 
-    /// The link a record landed at `from` writes to `heading` of the record landed at `to` —
-    /// `None` for its own — by this destination kind's contract.
+    /// The link a record landed at `from` writes to the `ordinal`th heading of its text,
+    /// `heading`, of the record landed at `to` — `None` for its own — by this store kind's
+    /// contract.
     fn link(
         &self,
         sandbox: &Sandbox,
         from: &Landed,
         to: Option<&Landed>,
-        heading: (&str, &str, &str),
+        heading: HeadingForms,
         ordinal: usize,
     ) -> String {
         let (text, github, linear) = heading;
         match self {
-            Self::Local(_) => {
-                let slug = github;
-                match to {
-                    None => format!("#{slug}"),
-                    Some(to) => format!(
-                        "{}#{slug}",
-                        relative(&from.location(sandbox), &to.location(sandbox))
-                    ),
-                }
-            }
+            Self::Local => match to {
+                None => format!("#{github}"),
+                Some(to) => format!(
+                    "{}#{github}",
+                    relative(&from.location(sandbox), &to.location(sandbox))
+                ),
+            },
             Self::Github(_) => match to {
                 None => format!("#user-content-{github}"),
                 Some(to) => format!("{}#user-content-{github}", www(&to.location(sandbox))),
             },
             Self::Linear(workspace) => {
                 let at = to.unwrap_or(from);
-                let ids = linear_editor::stored(
-                    &workspace
-                        .editor_state(at.collection(), at.native())
-                        .unwrap_or_else(|| panic!("{} holds an editor state", at.id)),
-                );
-                let id = ids
-                    .iter()
-                    .filter(|(held, _)| held == text)
-                    .nth(ordinal)
-                    .map(|(_, id)| id.replace('-', ""))
-                    .unwrap_or_else(|| {
-                        panic!("{} stores heading {text} #{ordinal}: {ids:?}", at.id)
-                    });
-                format!("{}#heading-{linear}-{}", at.location(sandbox), &id[..8])
+                format!(
+                    "{}#heading-{linear}-{}",
+                    at.location(sandbox),
+                    stored_id8(workspace, at, text, ordinal)
+                )
             }
         }
     }
 
-    /// The record's body as this destination itself stores it, the metadata slot left out.
+    /// The record's body as this store itself holds it, the metadata slot left out.
     fn raw(&self, landed: &Landed) -> String {
         let raw = match self {
-            Self::Local(_) => return String::new(),
+            Self::Local => return String::new(),
             Self::Github(board) => board
                 .body(landed.native())
                 .as_str()
@@ -256,11 +276,28 @@ impl Destination {
     }
 }
 
-/// What a destination held before a command.
+/// The first 8 hex characters of the id the workspace stored the `ordinal`th heading of text
+/// `text` of `at` under.
+fn stored_id8(workspace: &LinearWorkspace, at: &Landed, text: &str, ordinal: usize) -> String {
+    let ids = linear_editor::stored(
+        &workspace
+            .editor_state(at.collection(), at.native())
+            .unwrap_or_else(|| panic!("{} holds an editor state", at.id)),
+    );
+    let id = ids
+        .iter()
+        .filter(|(held, _)| held == text)
+        .nth(ordinal)
+        .map(|(_, id)| id.replace('-', ""))
+        .unwrap_or_else(|| panic!("{} stores heading {text} #{ordinal}: {ids:?}", at.id));
+    id[..8].to_owned()
+}
+
+/// What a store held before a command.
 enum Mark {
     /// Each file under a folder, and its bytes.
     Files(BTreeMap<String, Vec<u8>>),
-    /// How many requests a hosted destination had served.
+    /// How many requests a hosted store had served.
     Served(usize),
 }
 
@@ -301,10 +338,7 @@ fn www(location: &str) -> String {
     let rest = location
         .strip_prefix("https://github.com/")
         .unwrap_or_else(|| panic!("a canonical GitHub issue link: {location}"));
-    assert!(
-        rest.starts_with(&format!("{REPOSITORY}/issues/")),
-        "{location}"
-    );
+    assert!(rest.contains("/issues/"), "{location}");
     format!("https://www.github.com/{rest}")
 }
 
@@ -324,11 +358,12 @@ fn relative(from: &str, to: &str) -> String {
     parts.join("/")
 }
 
-/// One record a copy landed.
+/// One record of a store, by its qualified id.
+#[derive(Clone)]
 pub(crate) struct Landed {
     /// `task`, `project` or `document`.
     verb: &'static str,
-    /// Its qualified id at the destination.
+    /// Its qualified id.
     id: String,
 }
 
@@ -345,7 +380,7 @@ impl Landed {
         }
     }
 
-    /// Where its destination says it is.
+    /// Where its store says it is.
     fn location(&self, sandbox: &Sandbox) -> String {
         let shown = shown(sandbox, self.verb, &self.id);
         shown["location"]["path"]
@@ -400,219 +435,543 @@ fn outcomes(rendered: &str) -> BTreeMap<String, Value> {
         .collect()
 }
 
-/// Copy the project `P` of `from`, its tasks, and then its document `D`, into `to`, answering
-/// where each landed and the document copy's outcomes.
-pub(crate) fn copy_plan(
-    sandbox: &Sandbox,
-    from: &str,
-    to: &str,
-) -> (BTreeMap<&'static str, Landed>, BTreeMap<String, Value>) {
-    let project = outcomes(&ok(
-        sandbox,
-        &[
-            "project",
-            "copy",
-            &format!("{from}:P"),
-            "--to",
-            to,
-            "--json",
-        ],
-    ));
-    let documents = outcomes(&ok(
-        sandbox,
-        &[
-            "document",
-            "copy",
-            &format!("{from}:D"),
-            "--to",
-            to,
-            "--json",
-        ],
-    ));
-    let at = |held: &BTreeMap<String, Value>, id: &str| {
-        held[&format!("{from}:{id}")]["destination"]
-            .as_str()
-            .unwrap_or_else(|| panic!("{from}:{id} landed: {held:#?}"))
-            .to_owned()
-    };
-    let mut landed = BTreeMap::new();
-    for (key, verb) in [("P", "project"), ("T", "task"), ("U", "task")] {
-        landed.insert(
+/// The authored records of the folder `name`, by their keys.
+fn authored_ids(name: &str) -> BTreeMap<&'static str, Landed> {
+    [
+        ("P", "project"),
+        ("T", "task"),
+        ("U", "task"),
+        ("D", "document"),
+    ]
+    .into_iter()
+    .map(|(key, verb)| {
+        (
             key,
             Landed {
                 verb,
-                id: at(&project, key),
+                id: format!("{name}:{key}"),
             },
-        );
-    }
-    landed.insert(
-        "D",
-        Landed {
-            verb: "document",
-            id: at(&documents, "D"),
-        },
-    );
-    (landed, documents)
+        )
+    })
+    .collect()
 }
 
-/// What every authored body reads as once copied into `destination`: the authored text with
-/// each section link — and nothing else — written in that destination's form.
+/// Copy the project `from["P"]`, its tasks, and then its document `from["D"]`, into `to`,
+/// answering where each landed, keyed as `from` is, and every outcome by those keys.
+fn copy_plan(
+    sandbox: &Sandbox,
+    from: &BTreeMap<&'static str, Landed>,
+    to: &str,
+) -> (
+    BTreeMap<&'static str, Landed>,
+    BTreeMap<&'static str, Value>,
+) {
+    let project = outcomes(&ok(
+        sandbox,
+        &["project", "copy", &from["P"].id, "--to", to, "--json"],
+    ));
+    let documents = outcomes(&ok(
+        sandbox,
+        &["document", "copy", &from["D"].id, "--to", to, "--json"],
+    ));
+    let mut landed = BTreeMap::new();
+    let mut reported = BTreeMap::new();
+    for (key, source) in from {
+        let report = if source.verb == "document" {
+            &documents
+        } else {
+            &project
+        };
+        let outcome = report
+            .get(&source.id)
+            .unwrap_or_else(|| panic!("{} was copied: {report:#?}", source.id))
+            .clone();
+        let id = outcome["destination"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{} landed: {outcome:#}", source.id))
+            .to_owned();
+        landed.insert(
+            *key,
+            Landed {
+                verb: source.verb,
+                id,
+            },
+        );
+        reported.insert(*key, outcome);
+    }
+    (landed, reported)
+}
+
+/// What every authored body reads as once copied into `store` and landed as `landed`: the
+/// authored text with each section link — and nothing else — written in that store's form.
 fn expected_bodies(
     sandbox: &Sandbox,
-    destination: &Destination,
+    store: &Store,
     landed: &BTreeMap<&'static str, Landed>,
     authored_target: &str,
 ) -> BTreeMap<&'static str, String> {
     let link = |from: &str, to: Option<&str>, index: usize| {
-        let heading = HEADINGS[index];
-        let ordinal = usize::from(index == 4);
-        destination.link(
+        store.link(
             sandbox,
             &landed[from],
             to.map(|to| &landed[to]),
-            heading,
-            ordinal,
+            HEADINGS[index],
+            usize::from(index == 4),
         )
     };
-    let own = |from: &str, heading| destination.link(sandbox, &landed[from], None, heading, 0);
     let target_there = landed["T"].location(sandbox);
-    let target_link = match destination {
-        // A link to a heading the target does not hold keeps its fragment as it is, on the
-        // link to the target itself — relative, as it was spelled, into a folder of Markdown.
-        Destination::Local(_) => relative(&landed["D"].location(sandbox), &target_there),
-        _ => target_there.clone(),
+    // A link to a heading the target does not hold keeps its fragment as it is, on the link
+    // to the target — relative to the linking file, into a folder of Markdown.
+    let missing = match store {
+        Store::Local => relative(&landed["D"].location(sandbox), &target_there),
+        _ => target_there,
+    };
+    let linked = |body: String, pairs: Vec<(String, String)>| {
+        pairs.into_iter().fold(body, |body, (from, to)| {
+            body.replace(&format!("]({from})"), &format!("]({to})"))
+        })
     };
     let mut bodies = BTreeMap::new();
     bodies.insert(
         "T",
-        target_body().replace("](#budgets-1)", &format!("]({})", link("T", None, 4))),
+        linked(
+            target_body(),
+            vec![("#budgets-1".into(), link("T", None, 4))],
+        ),
     );
     bodies.insert(
         "U",
-        referrer_body(authored_target)
-            .replace(
-                "](T.md#budget-demo-quota-seconds)",
-                &format!("]({})", link("U", Some("T"), 2)),
-            )
-            .replace(
-                &format!("]({authored_target}#budgets)"),
-                &format!("]({})", link("U", Some("T"), 1)),
-            ),
+        linked(
+            referrer_body(authored_target),
+            vec![
+                (
+                    "T.md#budget-demo-quota-seconds".into(),
+                    link("U", Some("T"), 2),
+                ),
+                (
+                    format!("{authored_target}#budgets"),
+                    link("U", Some("T"), 1),
+                ),
+            ],
+        ),
     );
     bodies.insert(
         "P",
-        project_body()
-            .replace(
-                "](../tasks/T.md#what)",
-                &format!("]({})", link("P", Some("T"), 0)),
-            )
-            .replace(
-                "](../tasks/T.md#step-2b-retry-once)",
-                &format!("]({})", link("P", Some("T"), 3)),
-            ),
+        linked(
+            project_body(),
+            vec![
+                ("../tasks/T.md#what".into(), link("P", Some("T"), 0)),
+                (
+                    "../tasks/T.md#step-2b-retry-once".into(),
+                    link("P", Some("T"), 3),
+                ),
+            ],
+        ),
     );
     bodies.insert(
         "D",
-        design_body(authored_target)
-            .replace(
-                "](../tasks/T.md#budgets)",
-                &format!("]({})", link("D", Some("T"), 1)),
-            )
-            .replace(
-                "](../tasks/T.md#budgets-1)",
-                &format!("]({})", link("D", Some("T"), 4)),
-            )
-            .replace(
-                &format!("]({authored_target}#step-2b-retry-once)"),
-                &format!("]({})", link("D", Some("T"), 3)),
-            )
-            .replace("](#overview)", &format!("]({})", own("D", OVERVIEW)))
-            .replace(
-                "](../tasks/T.md#nowhere)",
-                &format!("]({target_link}#nowhere)"),
-            ),
+        linked(
+            design_body(authored_target),
+            vec![
+                ("../tasks/T.md#budgets".into(), link("D", Some("T"), 1)),
+                ("../tasks/T.md#budgets-1".into(), link("D", Some("T"), 4)),
+                (
+                    format!("{authored_target}#step-2b-retry-once"),
+                    link("D", Some("T"), 3),
+                ),
+                (
+                    "#overview".into(),
+                    store.link(sandbox, &landed["D"], None, OVERVIEW, 0),
+                ),
+                ("../tasks/T.md#nowhere".into(), format!("{missing}#nowhere")),
+            ],
+        ),
     );
     bodies
+}
+
+/// Hold every body `landed` names in `store` to the authored ones in that store's form, its
+/// raw bodies to the store's own markup, and its report to the one fragment naming no heading.
+fn holds_the_form(
+    sandbox: &Sandbox,
+    what: &str,
+    store: &Store,
+    landed: &BTreeMap<&'static str, Landed>,
+    authored_target: &str,
+) {
+    let expected = expected_bodies(sandbox, store, landed, authored_target);
+    for (key, body) in &expected {
+        assert_eq!(
+            landed[key].content(sandbox).lines().collect::<Vec<_>>(),
+            body.lines().collect::<Vec<_>>(),
+            "{what}: {key} reads back as authored, its section links in the destination's form"
+        );
+    }
+    match store {
+        Store::Github(_) => {
+            // The issue page gives a heading no id: the body carries one before each.
+            let raw = store.raw(&landed["T"]);
+            for (text, slug) in [
+                ("## What", "what"),
+                ("## Budgets\n\nFirst", "budgets"),
+                ("### Budget demo-quota-seconds", "budget-demo-quota-seconds"),
+                ("### Step 2.b: retry (once)", "step-2b-retry-once"),
+                ("## Budgets\n\nSecond", "budgets-1"),
+            ] {
+                assert!(
+                    raw.contains(&format!("<a id=\"{slug}\"></a>\n{text}")),
+                    "{what}: the anchor before {text}: {raw}"
+                );
+            }
+            assert!(
+                store
+                    .raw(&landed["D"])
+                    .contains("<a id=\"overview\"></a>\n## Overview"),
+                "{what}"
+            );
+        }
+        Store::Linear(workspace) => {
+            for key in ["P", "T", "U", "D"] {
+                let raw = store.raw(&landed[key]);
+                assert!(
+                    !raw.contains("<a "),
+                    "{what}: {key} holds no anchor markup: {raw}"
+                );
+            }
+            // The two `## Budgets` are told apart by the ids Linear stored them under.
+            assert_ne!(
+                stored_id8(workspace, &landed["T"], "Budgets", 0),
+                stored_id8(workspace, &landed["T"], "Budgets", 1),
+                "{what}"
+            );
+        }
+        Store::Local => {
+            for key in ["P", "T", "U", "D"] {
+                let path = landed[key].location(sandbox);
+                let file = std::fs::read_to_string(&path).expect("the record's file");
+                assert!(
+                    !file.contains("<a "),
+                    "{what}: {path} holds no anchor markup"
+                );
+            }
+        }
+    }
+}
+
+/// Repeat the copy of `from` into `to`, holding `store` to receiving no write — `root` the
+/// folder's, for a folder of Markdown — and every record to landing where it did.
+fn repeats_writing_nothing(
+    sandbox: &Sandbox,
+    what: &str,
+    from: &BTreeMap<&'static str, Landed>,
+    to: &str,
+    store: &Store,
+    root: Option<&Path>,
+    landed: &BTreeMap<&'static str, Landed>,
+) {
+    let mark = store.mark(root);
+    let (again, _) = copy_plan(sandbox, from, to);
+    assert_eq!(
+        store.writes_since(&mark, root),
+        Vec::<String>::new(),
+        "{what}: a repeat copy of the unchanged project writes nothing"
+    );
+    for (key, record) in landed {
+        assert_eq!(again[key].id, record.id, "{what}: {key} landed once");
+    }
+}
+
+/// The folder a local store named `name` keeps its records in.
+fn root_of(sandbox: &Sandbox, name: &str) -> PathBuf {
+    std::fs::canonicalize(sandbox.subdirectory(name)).expect("a root")
+}
+
+/// A source of `kind` named `src` holding the authored project in that kind's own form: the
+/// authored folder itself, or a tracker an earlier copy wrote it into, seeded here through
+/// that copy and held to the tracker's form before anything is copied out of it. Answers the
+/// store, its configuration, the authored target's path, the source's records and its root.
+#[allow(clippy::type_complexity)]
+fn source_of(
+    sandbox: &Sandbox,
+    kind: &str,
+) -> (
+    Store,
+    Vec<(&'static str, Value)>,
+    String,
+    BTreeMap<&'static str, Landed>,
+    Option<PathBuf>,
+) {
+    let (authored_config, target) = authored(sandbox, "authored");
+    if kind == "local-md" {
+        return (
+            Store::Local,
+            vec![("authored", authored_config)],
+            target,
+            authored_ids("authored"),
+            Some(root_of(sandbox, "authored")),
+        );
+    }
+    let (store, config) = store(sandbox, kind, "src", None);
+    (
+        store,
+        vec![("authored", authored_config), ("src", config)],
+        target,
+        BTreeMap::new(),
+        None,
+    )
 }
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback stand-ins this suite already drives for both hosted destinations. AGENTS.md puts a journey crossing more than one plugin in this suite.
 #[test]
 fn authored_section_links_land_in_each_destinations_form_and_a_repeat_copy_writes_nothing() {
-    for kind in ["local-md", "github-projects", "linear"] {
+    for kind in KINDS {
         let sandbox = Sandbox::new();
-        let source = authored(&sandbox, "plans");
-        let (destination, config) = Destination::new(&sandbox, kind, "dest");
-        sandbox.project_document(&document(&json!({
-            "plans": {"plugin": "local-md", "config": empty_folder(&sandbox, "plans")},
-            "dest": config,
-        })));
-        let authored_target = source.join("tasks/T.md").display().to_string();
+        let (authored_config, authored_target) = authored(&sandbox, "plans");
+        let (destination, config) = store(&sandbox, kind, "dest", None);
+        configure(&sandbox, &[("plans", &authored_config), ("dest", &config)]);
+        let from = authored_ids("plans");
 
-        let (landed, documents) = copy_plan(&sandbox, "plans", "dest");
-        let expected = expected_bodies(&sandbox, &destination, &landed, &authored_target);
-        for (key, body) in &expected {
-            assert_eq!(
-                landed[key].content(&sandbox).lines().collect::<Vec<_>>(),
-                body.lines().collect::<Vec<_>>(),
-                "{kind}: {key} reads back as authored, its section links in the destination's \
-                 form"
-            );
-        }
+        let (landed, reported) = copy_plan(&sandbox, &from, "dest");
+        holds_the_form(&sandbox, kind, &destination, &landed, &authored_target);
         // The fragment naming no heading of the target is carried and counted, not guessed.
         assert_eq!(
-            documents["plans:D"]["section_links_unresolved"],
+            reported["D"]["section_links_unresolved"],
             json!(1),
             "{kind}: {:#}",
-            documents["plans:D"]
+            reported["D"]
         );
+        let root = (kind == "local-md").then(|| root_of(&sandbox, "dest"));
+        repeats_writing_nothing(
+            &sandbox,
+            kind,
+            &from,
+            "dest",
+            &destination,
+            root.as_deref(),
+            &landed,
+        );
+    }
+}
 
-        match &destination {
-            Destination::Github(_) => {
-                // The issue page gives a heading no id: the body carries one before each.
-                let raw = destination.raw(&landed["T"]);
-                for (text, slug) in [
-                    ("## What", "what"),
-                    ("## Budgets\n\nFirst", "budgets"),
-                    ("### Budget demo-quota-seconds", "budget-demo-quota-seconds"),
-                    ("### Step 2.b: retry (once)", "step-2b-retry-once"),
-                    ("## Budgets\n\nSecond", "budgets-1"),
-                ] {
-                    assert!(
-                        raw.contains(&format!("<a id=\"{slug}\"></a>\n{text}")),
-                        "the anchor before {text}: {raw}"
-                    );
-                }
-                assert!(
-                    destination
-                        .raw(&landed["D"])
-                        .contains("<a id=\"overview\"></a>\n## Overview")
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: folders of Markdown and the loopback stand-ins this suite already drives, two boards of one loopback server and two loopback Linear workspaces among them.
+#[test]
+fn every_pair_of_kinds_writes_the_others_section_links_in_its_own_form_and_repeats_write_nothing() {
+    for from in KINDS {
+        for to in KINDS {
+            let what = format!("{from} -> {to}");
+            let sandbox = Sandbox::new();
+            let (source, mut sources, authored_target, mut ids, _) = source_of(&sandbox, from);
+            let (destination, config) = store(&sandbox, to, "dst", Some(&source));
+            sources.push(("dst", config));
+            let named: Vec<(&str, &Value)> = sources
+                .iter()
+                .map(|(name, config)| (*name, config))
+                .collect();
+            configure(&sandbox, &named);
+            if from != "local-md" {
+                // The source holds the project as a copy from a folder of Markdown wrote it.
+                let (seeded, _) = copy_plan(&sandbox, &authored_ids("authored"), "src");
+                holds_the_form(
+                    &sandbox,
+                    &format!("{what} (seeded)"),
+                    &source,
+                    &seeded,
+                    &authored_target,
                 );
+                ids = seeded;
             }
-            Destination::Linear(_) => {
-                for key in ["P", "T", "U", "D"] {
-                    let raw = destination.raw(&landed[key]);
-                    assert!(!raw.contains("<a "), "{key} holds no anchor markup: {raw}");
-                }
-                // The two `## Budgets` are told apart by the ids Linear stored them under.
-                let first =
-                    destination.link(&sandbox, &landed["D"], Some(&landed["T"]), HEADINGS[1], 0);
-                let second =
-                    destination.link(&sandbox, &landed["D"], Some(&landed["T"]), HEADINGS[4], 1);
-                assert_ne!(first, second);
-            }
-            Destination::Local(_) => {}
-        }
 
-        // Nothing changed at the source, so nothing is written at the destination.
-        let mark = destination.mark();
-        let (again, _) = copy_plan(&sandbox, "plans", "dest");
-        assert_eq!(
-            destination.writes_since(&mark),
-            Vec::<String>::new(),
-            "{kind}: a repeat copy of the unchanged project writes nothing"
-        );
-        for key in ["P", "T", "U", "D"] {
-            assert_eq!(again[key].id, landed[key].id, "{kind}: {key} landed once");
+            let (landed, reported) = copy_plan(&sandbox, &ids, "dst");
+            holds_the_form(&sandbox, &what, &destination, &landed, &authored_target);
+            assert_eq!(
+                reported["D"]["section_links_unresolved"],
+                json!(1),
+                "{what}: {:#}",
+                reported["D"]
+            );
+            let root = (to == "local-md").then(|| root_of(&sandbox, "dst"));
+            repeats_writing_nothing(
+                &sandbox,
+                &what,
+                &ids,
+                "dst",
+                &destination,
+                root.as_deref(),
+                &landed,
+            );
         }
     }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: two folders of Markdown, one loopback board and one loopback Linear workspace.
+#[test]
+fn a_chain_of_whole_project_copies_ends_with_the_authored_links_and_every_repeat_writes_nothing() {
+    let sandbox = Sandbox::new();
+    let (authored_config, authored_target) = authored(&sandbox, "authored");
+    let (board, board_config) = store(&sandbox, "github-projects", "board", None);
+    let (linear, linear_config) = store(&sandbox, "linear", "linear", None);
+    let (_, last_config) = store(&sandbox, "local-md", "last", None);
+    configure(
+        &sandbox,
+        &[
+            ("authored", &authored_config),
+            ("board", &board_config),
+            ("linear", &linear_config),
+            ("last", &last_config),
+        ],
+    );
+    let authored = authored_ids("authored");
+    let (on_board, _) = copy_plan(&sandbox, &authored, "board");
+    holds_the_form(&sandbox, "first hop", &board, &on_board, &authored_target);
+    let (in_linear, _) = copy_plan(&sandbox, &on_board, "linear");
+    holds_the_form(
+        &sandbox,
+        "second hop",
+        &linear,
+        &in_linear,
+        &authored_target,
+    );
+    let (at_last, _) = copy_plan(&sandbox, &in_linear, "last");
+    // The authored form again: each link resolves, relative to its record's file, to the
+    // counterpart of the record the authored link named, its `#<slug>` byte-equal to the
+    // authored one. The path names the last hop's file, by the manager's ruling.
+    holds_the_form(
+        &sandbox,
+        "third hop",
+        &Store::Local,
+        &at_last,
+        &authored_target,
+    );
+    for (key, body) in expected_bodies(&sandbox, &Store::Local, &at_last, &authored_target) {
+        let fragments = |text: &str| -> Vec<String> {
+            text.match_indices("](")
+                .filter_map(|(at, _)| {
+                    let rest = &text[at + 2..];
+                    let end = rest.find(')')?;
+                    rest[..end].split_once('#').map(|(_, slug)| slug.to_owned())
+                })
+                .collect()
+        };
+        let authored_body = match key {
+            "T" => target_body(),
+            "U" => referrer_body(&authored_target),
+            "P" => project_body(),
+            _ => design_body(&authored_target),
+        };
+        assert_eq!(
+            fragments(&body),
+            fragments(&authored_body),
+            "{key}: every fragment is the authored one"
+        );
+    }
+
+    let root = root_of(&sandbox, "last");
+    repeats_writing_nothing(
+        &sandbox,
+        "first hop",
+        &authored,
+        "board",
+        &board,
+        None,
+        &on_board,
+    );
+    repeats_writing_nothing(
+        &sandbox,
+        "second hop",
+        &on_board,
+        "linear",
+        &linear,
+        None,
+        &in_linear,
+    );
+    repeats_writing_nothing(
+        &sandbox,
+        "third hop",
+        &in_linear,
+        "last",
+        &Store::Local,
+        Some(&root),
+        &at_last,
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: one loopback board, one loopback Linear workspace and a folder of Markdown.
+#[test]
+fn hand_written_tracker_links_are_read_by_what_they_name_and_one_outside_the_project_is_left() {
+    // A board whose bodies a person edited by hand: a link on GitHub's canonical host, and one
+    // to an issue the copied project does not hold.
+    let sandbox = Sandbox::new();
+    let (authored_config, _) = authored(&sandbox, "authored");
+    let (board, board_config) = store(&sandbox, "github-projects", "board", None);
+    let (linear, linear_config) = store(&sandbox, "linear", "linear", None);
+    let (_, last_config) = store(&sandbox, "local-md", "last", None);
+    configure(
+        &sandbox,
+        &[
+            ("authored", &authored_config),
+            ("board", &board_config),
+            ("linear", &linear_config),
+            ("last", &last_config),
+        ],
+    );
+    let (on_board, _) = copy_plan(&sandbox, &authored_ids("authored"), "board");
+    let Store::Github(fields) = &board else {
+        unreachable!("a board")
+    };
+    let target = on_board["T"].location(&sandbox);
+    let outside =
+        "https://github.com/nickderobertis/onetaskgraph/issues/999999#user-content-budgets";
+    let referrer = on_board["U"].native().to_owned();
+    let held = fields.body(&referrer).as_str().unwrap().to_owned();
+    let edited = held.replacen(
+        "See ",
+        &format!(
+            "By hand: [canonical]({target}#user-content-budgets-1), [elsewhere]({outside}).\n\nSee "
+        ),
+        1,
+    );
+    fields.edit_body(&referrer, &edited);
+
+    let (into_last, _) = copy_plan(&sandbox, &on_board, "last");
+    let copied = into_last["U"].content(&sandbox);
+    let local_target = relative(
+        &into_last["U"].location(&sandbox),
+        &into_last["T"].location(&sandbox),
+    );
+    assert!(
+        copied.contains(&format!("[canonical]({local_target}#budgets-1)")),
+        "the canonical-host link names the second budgets: {copied}"
+    );
+    assert!(
+        copied.contains(&format!("[elsewhere]({outside})")),
+        "a link to an issue outside the project is left as it is: {copied}"
+    );
+
+    // A Linear workspace whose link a person wrote with the right id and a wrong slug.
+    let (in_linear, _) = copy_plan(&sandbox, &on_board, "linear");
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    let id8 = stored_id8(workspace, &in_linear["T"], "Budgets", 1);
+    let linear_target = in_linear["T"].location(&sandbox);
+    let issue = in_linear["U"].native().to_owned();
+    let long_form = workspace.long_form("tasks", &issue).unwrap();
+    workspace.edit_description(
+        &issue,
+        &long_form.replacen(
+            "See ",
+            &format!("By hand: [wrong slug]({linear_target}#heading-not-its-slug-{id8}).\n\nSee "),
+            1,
+        ),
+    );
+    let (from_linear, _) = copy_plan(&sandbox, &in_linear, "last");
+    let copied = from_linear["U"].content(&sandbox);
+    let local_target = relative(
+        &from_linear["U"].location(&sandbox),
+        &from_linear["T"].location(&sandbox),
+    );
+    assert!(
+        copied.contains(&format!("[wrong slug]({local_target}#budgets-1)")),
+        "a Linear link is read by its id, whatever its slug says: {copied}"
+    );
 }
