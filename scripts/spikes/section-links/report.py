@@ -292,9 +292,9 @@ def findings(m: dict, o: dict) -> list[str]:
         f"([target]({t['anchor-id']})), and `<a name=\"what\">` as `<a name=\"user-content-what\">` "
         f"([target]({t['anchor-name']})). Of all the combinations, only **`<a id=\"<slug>\">` in the target plus a "
         f"`#user-content-<slug>` link** lands. Each of its five links lands, the repeated heading included "
-        f"([GI-I-U5]({t['anchor-id']}#user-content-budgets-1)). The `<a name>` anchor does not land in either form, "
-        "because the issue body is rendered by script after load, and GitHub then scrolls only to an element whose "
-        "`id` is the fragment. A plain `#<slug>` lands on nothing, even beside an `<a id>`, because GitHub does not "
+        f"([GI-I-U5]({t['anchor-id']}#user-content-budgets-1)). The `<a name>` anchor does not land in either form. The live page holds "
+        "`<a name=\"user-content-<slug>\">`, yet opening `#user-content-<slug>` leaves the issue at its top, so the "
+        "issue page scrolls to an element whose `id` is the fragment, not to one whose `name` is. A plain `#<slug>` lands on nothing, even beside an `<a id>`, because GitHub does not "
         "map it to the prefixed id on issues (it does in the file view)."
     )
     out.append(
