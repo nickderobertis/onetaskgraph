@@ -33,6 +33,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -432,16 +433,36 @@ def write_local() -> list[dict]:
     return links
 
 
+def bootstrap_files_branch(stamp: str) -> None:
+    """Create the spike's branch in the scratch repository, which may hold no commit at all.
+
+    The scratch repository exists for the live lane's issues and is empty, and GitHub's
+    contents and git-data APIs refuse an empty repository (409), so the branch is made by
+    pushing one orphan commit holding only a note. Nothing else of the repository is touched.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        work = pathlib.Path(tmp)
+        (work / "section-links-spike").mkdir()
+        (work / "section-links-spike" / "README.md").write_text(
+            "Demonstration files of onetaskgraph's section-links spike, uploaded by "
+            "`scripts/spikes/section-links/harness.py`. One folder per run.\n")
+        git = ["git", "-C", str(work), "-c", "user.name=section-links spike", "-c", "user.email=noreply@github.com",
+               "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
+        run([*git, "init", "-q", "-b", FILES_BRANCH])
+        run([*git, "add", "-A"])
+        run([*git, "commit", "-q", "-m", f"section-links spike {stamp}: branch for demonstration files"])
+        run([*git, "push", "-q", f"https://github.com/{REPO}.git", f"HEAD:refs/heads/{FILES_BRANCH}"])
+
+
 def build_local(m: Manifest, stamp: str) -> None:
     links = write_local()
     print("Local Markdown (committed):")
     for name in ("target.md", "target-anchor-id.md", "target-anchor-name.md", "source.md"):
         say(name, str(LOCAL / name))
     # The upload: the same four files on a branch of the scratch repository, one folder per run.
-    main_sha = json.loads(gh("api", f"repos/{REPO}/git/ref/heads/main"))["object"]["sha"]
     exists = subprocess.run(["gh", "api", f"repos/{REPO}/git/ref/heads/{FILES_BRANCH}"], capture_output=True).returncode == 0
     if not exists:
-        gh("api", "-X", "POST", f"repos/{REPO}/git/refs", "-f", f"ref=refs/heads/{FILES_BRANCH}", "-f", f"sha={main_sha}")
+        bootstrap_files_branch(stamp)
     folder = f"section-links-spike/{stamp}"
     uploaded = {}
     for name in ("target.md", "target-anchor-id.md", "target-anchor-name.md", "source.md"):
