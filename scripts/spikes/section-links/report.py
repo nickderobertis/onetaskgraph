@@ -144,8 +144,9 @@ def method_text(m: dict, o: dict, out: pathlib.Path) -> str:
     ]
     if "linear" in m:
         lines += [
-            "**An incident on the Linear key, stated so nobody has to discover it.** While this set was being read back, "
-            "the first version of the step that reads Linear's editor state called itself after every pass. It sent "
+            "**An incident on the Linear key, stated so nobody has to discover it.** While an earlier run of this "
+            "harness (`20261102-145020`, built step by step before this one-command run; its items are left in place) "
+            "was being read back, the first version of the step that reads Linear's editor state called itself after every pass. It sent "
             "about 460 read-only requests on the TES2 key before Linear answered 429, which left the key's hourly "
             "allowance at 8 of 2,500 requests until about 17:34Z on 2026-11-02. Nothing was written by those requests. "
             "The step now reads each of the six targets once, and `test_harness.py` holds it to that against a "
