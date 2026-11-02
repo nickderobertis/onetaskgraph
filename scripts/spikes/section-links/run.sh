@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The section-links spike's one command: build every demonstration, then observe every link
-# a browser can reach. Prints each item's URL or path; writes manifest.json and
-# observations.json into the output directory (default: $ONEPIPELINE_NODE_SCRATCH_DIR, else a
+# a browser can reach, then write the report's answers. Prints each item's URL or path; writes
+# manifest.json, observations.json and answers.json into the output directory (default: $ONEPIPELINE_NODE_SCRATCH_DIR, else a
 # fresh temporary directory), never into the repository.
 #
 #   scripts/spikes/section-links/run.sh [--out DIR]
@@ -29,4 +29,5 @@ fi
 
 python3 "$here/harness.py" all --out "$out"
 uv run --quiet --no-project --with playwright==1.64.1 python "$here/observe.py" --out "$out"
+python3 "$here/report.py" --out "$out"
 echo "output: $out"
