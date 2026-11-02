@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import json
+import re
 import pathlib
 import subprocess
 import sys
@@ -99,6 +101,48 @@ def github_section(title: str, intro: list[str], links: list[dict], observed: di
                 f"opened directly: {short(seen['direct']['verdict'])}; clicked in the source: {short(seen['click']['verdict'])}",
             ))
         lines += table(rows, ("Link (click it)", "Must land on", "Observed in Chromium")) + [""]
+    return lines
+
+
+def fence_for(text: str) -> str:
+    """A backtick fence longer than any backtick run in `text`, so the body cannot close it."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    return "`" * max(4, longest + 1)
+
+
+def stored_bodies(linear: dict) -> list[str]:
+    """Every Linear item's body exactly as the API returned it after the create, whole."""
+    lines = [
+        "### Linear: complete stored bodies", "",
+        "Each block below is the whole `description` (issues) or `content` (documents) that Linear's API returned "
+        "when the harness read the item back after creating it: not an excerpt, and not what was sent. Its size and "
+        "SHA-256 are of that returned text, UTF-8 encoded. With them you can check each candidate link form and each "
+        "raw anchor line as Linear holds it. Open a block to read it.", "",
+    ]
+    for kind, field in (("issues", "description"), ("documents", "content")):
+        label = "issue" if kind == "issues" else "document"
+        part = linear[kind]
+        items = [(f"{label} target ({variant})", target) for variant, target in part["targets"].items()]
+        items.append((f"{label} source", part["source"]))
+        for name, item in items:
+            body = item.get(field)
+            if body is None:
+                sys.exit(f"Linear {name}: the manifest holds no stored {field}")
+            raw = body.encode()
+            fence = fence_for(body)
+            same = "identical to" if body == item.get("sent") else "different from"
+            lines += [
+                f"#### Linear {name}: [{item['url']}]({item['url']})", "",
+                f"Stored `{field}`: {len(raw)} bytes, SHA-256 `{hashlib.sha256(raw).hexdigest()}`, {same} the Markdown "
+                "the harness sent.", "",
+                "<details>", f"<summary>Complete stored {field} of the {name}</summary>", "",
+                fence + "markdown", body, fence, "", "</details>", "",
+            ]
+    text = "\n".join(lines)
+    for kind, field in (("issues", "description"), ("documents", "content")):
+        for item in list(linear[kind]["targets"].values()) + [linear[kind]["source"]]:
+            if "\n" + item[field] + "\n" not in text:
+                sys.exit(f"the stored {field} of {item['url']} is not reproduced whole in the report")
     return lines
 
 
@@ -227,15 +271,15 @@ def method_text(m: dict, o: dict, out: pathlib.Path) -> str:
                             if l.get("stored_href") else "**no link at all**"))
                         for l in variant_links]
                 lines += table(rows, ("Link (click it)", "Must land on", "Result")) + [""]
+                held = target.get("anchor_held_as")
                 if variant != "plain":
-                    stored = target.get(field) or ""
-                    start = stored.find("<a ")
-                    held = target.get("anchor_held_as")
-                    lines += [f"What Linear stored around the first heading of this target, read back as `{field}`"
-                              + (f". Linear's editor state holds the anchor as {held}" if held else "") + ":",
-                              "", "```markdown", stored[max(0, start - 2):start + 160].strip(), "```", ""]
-            lines += [f"The source {label} as Linear stored its first lines, read back as `{field}`:", "", "```markdown",
-                      (part["source"].get(field) or "")[:700].strip(), "```", ""]
+                    lines += [f"Linear's editor state holds this target's anchor line as {held}." if held else
+                              "How Linear's editor holds this target's anchor line was not read on this run.", ""]
+                lines += [f"The complete `{field}` Linear stored for this target is under *Linear: complete stored "
+                          f"bodies* below, as `{label} target ({variant})`.", ""]
+            lines += [f"The complete `{field}` Linear stored for the source {label}, holding every link above as stored, "
+                      f"is under *Linear: complete stored bodies* below, as `{label} source`.", ""]
+        lines += stored_bodies(m["linear"])
 
     # Local: GitHub file view
     up = local["uploaded"]
