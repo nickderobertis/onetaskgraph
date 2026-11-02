@@ -142,6 +142,16 @@ def method_text(m: dict, o: dict, out: pathlib.Path) -> str:
         "`harness.py <step>` re-runs one destination; `report.py` writes these answers from a run.",
         "",
     ]
+    if "linear" in m:
+        lines += [
+            "**An incident on the Linear key, stated so nobody has to discover it.** While this set was being read back, "
+            "the first version of the step that reads Linear's editor state called itself after every pass. It sent "
+            "about 460 read-only requests on the TES2 key before Linear answered 429, which left the key's hourly "
+            "allowance at 8 of 2,500 requests until about 17:34Z on 2026-11-02. Nothing was written by those requests. "
+            "The step now reads each of the six targets once, and `test_harness.py` holds it to that against a "
+            "loopback server.",
+            "",
+        ]
 
     # GitHub issues
     lines += github_section(
@@ -185,33 +195,46 @@ def method_text(m: dict, o: dict, out: pathlib.Path) -> str:
     )
 
     # Linear
-    lines += ["### Linear issue and Linear document", ""]
     if "linear" not in m:
         lines += [
+            "### Linear issue and Linear document", "",
             "**Pending: not built yet.** The TES2 scratch key (`LINEAR_API_KEY`, `LINEAR_WRITE_TEAM=TES2`) has not "
             "been supplied to this dispatch. The organization's production key is out of bounds and was not used. "
             "Once the key is set, `scripts/spikes/section-links/harness.py linear --out <dir>` builds the issue and "
-            "document set in TES2 (`run.sh` builds it with everything else). It reads every body back, and this "
-            "section is re-rendered with each link, the body Linear stored, and **awaiting your click** beside each.",
+            "document set in TES2 (`run.sh` builds it with everything else).",
             "",
         ]
     else:
         for kind in ("issues", "documents"):
             part = m["linear"][kind]
             label = "issue" if kind == "issues" else "document"
-            lines += [f"#### Linear {label}", "",
-                      f"Source {label}: [{part['source']['url']}]({part['source']['url']}). Linear's web app needs a "
-                      "logged-in session, which the dispatch does not hold, so **every result here awaits your click**.",
+            field = "description" if kind == "issues" else "content"
+            lines += [f"### Linear {label}", "",
+                      f"Three target {label}s and a source {label} in team TES2, created through Linear's GraphQL API "
+                      f"(`{'issueCreate' if kind == 'issues' else 'documentCreate'}`, the Markdown sent as `{field}`). "
+                      f"Each body was then read back as `{field}`. Source {label}: "
+                      f"[{part['source']['url']}]({part['source']['url']}). Linear's web app needs a logged-in session, "
+                      "which this dispatch does not hold, so **every result here awaits your click**. Each row gives the "
+                      "link exactly as Linear stored it.",
                       ""]
             for variant, variant_links in by_variant(part["links"]).items():
-                target = part["targets"][variant]["url"]
-                lines += [f"##### Links to the {VARIANT_TITLE[variant]}: [{target}]({target})", ""]
+                target = part["targets"][variant]
+                lines += [f"#### Links to the {VARIANT_TITLE[variant]}: [{target['url']}]({target['url']})", ""]
                 rows = [(f"[{l['code']}]({l['href']}) `{l['form']}`", f"`{l['heading']}`",
-                         "awaiting your click; Linear stored the link as " + (f"`{l['stored_href']}`" if l.get("stored_href") else "**no link at all**"))
+                         "**awaiting your click**; stored as "
+                         + (f"`{l['stored_href']}`" + (" (unchanged)" if l["stored_href"] == l["href"] else " (changed)")
+                            if l.get("stored_href") else "**no link at all**"))
                         for l in variant_links]
                 lines += table(rows, ("Link (click it)", "Must land on", "Result")) + [""]
-            stored = part["targets"]["anchor-id"].get("description") or part["targets"]["anchor-id"].get("content") or ""
-            lines += ["What Linear stored for the opening of the `<a id>` target (sent as Markdown, read back through the API):", "", "```markdown", stored[:900], "```", ""]
+                if variant != "plain":
+                    stored = target.get(field) or ""
+                    start = stored.find("<a ")
+                    held = target.get("anchor_held_as")
+                    lines += [f"What Linear stored around the first heading of this target, read back as `{field}`"
+                              + (f". Linear's editor state holds the anchor as {held}" if held else "") + ":",
+                              "", "```markdown", stored[max(0, start - 2):start + 160].strip(), "```", ""]
+            lines += [f"The source {label} as Linear stored its first lines, read back as `{field}`:", "", "```markdown",
+                      (part["source"].get(field) or "")[:700].strip(), "```", ""]
 
     # Local: GitHub file view
     up = local["uploaded"]
@@ -404,7 +427,8 @@ def findings(m: dict, o: dict) -> list[str]:
         "(harmless locally: VS Code and the file view resolve it too). Locally authored links are relative paths with "
         "`#<slug>`. A copy to a GitHub destination rewrites each such link to the target's issue URL on "
         "the `www.github.com` host with `#user-content-<slug>`. A slug that "
-        "is not unique within its record must take the `-1`, `-2` suffix, and both viewers agree on that suffix."
+        "is not unique within its record must take the `-1`, `-2` suffix, and both viewers agree on that suffix. Linear is not part of this conclusion: whether a "
+        "Linear link lands is open until you click its links (see the Linear findings)."
     )
     if "linear" not in m:
         out.append(
@@ -424,31 +448,52 @@ def findings(m: dict, o: dict) -> list[str]:
 
 def linear_findings(m: dict) -> list[str]:
     out = []
-    nd, nc = group(o["github_nav"]["results"], "direct"), group(o["github_nav"]["results"], "click")
-    for key in nd:
-        only(nd, *key, lands, "every navigation form lands when opened directly")
-    for form in ("www.github.com host, #user-content-<slug>", "owner in upper case, #user-content-<slug>"):
-        only(nc, "anchor-id", form, lands, f"{form} lands when clicked")
-    for form in ("#user-content-<slug>", "http:// scheme, #user-content-<slug>", "query ?a=1, #user-content-<slug>",
-                 "query ?plain=1, #user-content-<slug>", "trailing slash, #user-content-<slug>"):
-        only(nc, "anchor-id", form, not_lands, f"{form} does not land when clicked")
     for kind in ("issues", "documents"):
         part = m["linear"][kind]
         label = "issue" if kind == "issues" else "document"
-        kept = collections.Counter()
-        for link in part["links"]:
-            stored = link.get("stored_href")
-            kept["fragment kept" if stored and stored == link["href"] else ("changed" if stored else "dropped")] += 1
-        id_body = part["targets"]["anchor-id"].get("description") or part["targets"]["anchor-id"].get("content") or ""
-        name_body = part["targets"]["anchor-name"].get("description") or part["targets"]["anchor-name"].get("content") or ""
-        out.append(
-            f"**Linear {label}: what Linear stored.** Of {len(part['links'])} links sent, "
-            + ", ".join(f"{n} {k}" for k, n in sorted(kept.items()))
-            + f". The raw `<a id>` anchor {'survived' if '<a id=' in id_body else 'did not survive'} and the raw "
-            f"`<a name>` anchor {'survived' if '<a name=' in name_body else 'did not survive'} the round trip "
-            f"([`<a id>` target]({part['targets']['anchor-id']['url']}), [`<a name>` target]({part['targets']['anchor-name']['url']})). "
-            "Whether a stored link lands is left open, as the question the user answers by clicking the links listed above."
+        field = "description" if kind == "issues" else "content"
+        links = part["links"]
+        kept = sum(1 for l in links if l.get("stored_href") == l["href"])
+        if kept != len(links):
+            sys.exit(f"Linear {label}: {len(links) - kept} links were not stored as sent; the findings must say so")
+        source = part["source"].get(field) or ""
+        if f"]({links[0]['href']})" in source or f"](<{links[0]['href']}>)" not in source:
+            sys.exit(f"Linear {label}: the source does not store links in the <…> form the finding states")
+        ids = {v: part["targets"][v] for v in ("anchor-id", "anchor-name")}
+        for variant, marker in (("anchor-id", '<a id="what"></a>'), ("anchor-name", '<a name="what"></a>')):
+            if marker not in (ids[variant].get(field) or ""):
+                sys.exit(f"Linear {label}: {marker} is not in the stored {field} as the finding states")
+        held = {v: t.get("anchor_held_as") for v, t in ids.items()}
+        held_text = (
+            f" Linear's editor state (`{'descriptionState' if kind == 'issues' else 'contentState'}`) holds the `<a id>` "
+            f"line as {held['anchor-id']} and the `<a name>` line as {held['anchor-name']}."
+            + (" So the editor shows the anchor as visible text and creates no element a fragment could address."
+               if all(h and h.startswith("literal text") for h in held.values()) else "")
+            if all(held.values()) else
+            " How Linear's editor holds the anchor line is read from its editor state by `harness.py linear-state`, "
+            "which had not yet run on this set when this was written."
         )
+        out.append(
+            f"**Linear {label}: what Linear stored.** Every one of the {len(links)} links came back with its fragment "
+            f"byte for byte, `#<slug>` and `#user-content-<slug>` alike. Linear rewrote only the Markdown around "
+            f"them: each link is stored as `[text](<url#fragment>)` and each `-` bullet as `*` "
+            f"([source {label}]({part['source']['url']})). Both raw anchors come back in `{field}` as sent, "
+            f"`<a id=\"what\"></a>` and `<a name=\"what\"></a>`, each on its own line before its heading "
+            f"([`<a id>` target]({ids['anchor-id']['url']}), [`<a name>` target]({ids['anchor-name']['url']}))."
+            + held_text
+        )
+    out.append(
+        "**Linear: what it says about addressing a heading, and what is left to your click.** Nothing this spike "
+        "read from Linear's API names a heading or an anchor: an issue's `description` and a document's `content` "
+        "are Markdown, and the editor state holds each heading as a `heading` node. Linear's own editor documentation (https://linear.app/docs/editor) says nothing about linking to a "
+        "heading or about HTML anchors, and no changelog entry read (late August to October 22, 2026) mentions one. "
+        "The one claim found is a third-party tutorial "
+        "(https://www.guideflow.com/et-ee/tutorial/how-to-copy-a-link-to-header-on-linear): a heading shows a link "
+        "icon on hover that copies \"the header's URL\". It gives no URL shape, so the fragment Linear itself uses "
+        "is unknown. **Whether any Linear link lands is open.** Click the TES2 links in the Linear issue and Linear "
+        "document tables above. If a heading's own copy-link icon exists, the fragment it copies is the form to "
+        "compare with `#<slug>`."
+    )
     return out
 
 
