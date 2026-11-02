@@ -249,8 +249,9 @@ pub enum LinearSectionForm {
 
 /// The variable a test or a diagnostic sets to `record-url` to have Linear section links
 /// written as the record's URL alone; anything else, or nothing, is
-/// [`LINEAR_SECTION_FORM`].
-pub const LINEAR_SECTION_FORM_VARIABLE: &str = "ONETASKGRAPH_LINEAR_SECTION_FORM";
+/// [`LINEAR_SECTION_FORM`]. Outside the `ONETASKGRAPH_` prefix on purpose: every variable under
+/// it is read as a setting of the configuration's environment layer.
+pub const LINEAR_SECTION_FORM_VARIABLE: &str = "OTG_LINEAR_SECTION_FORM";
 
 /// `linear_section_form`: the form Linear section links are written in.
 pub const LINEAR_SECTION_FORM: LinearSectionForm = LinearSectionForm::HeadingLink;

@@ -3197,6 +3197,27 @@ export const runtimeSchemas = {
         ],
         "description": "What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
       },
+      "section_link_updates": {
+        "default": 0,
+        "description": "Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "section_links_unaddressable": {
+        "default": 0,
+        "description": "Section links to a heading the destination's form cannot address — a Linear record\nwhose stored state holds no heading of that text at that position, or no state at all —\nwritten as the record's own link with no fragment.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "section_links_unresolved": {
+        "default": 0,
+        "description": "Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
       "source": {
         "$ref": "#/$defs/GlobalId",
         "description": "The qualified id the item was read from."
@@ -3582,6 +3603,27 @@ export const runtimeSchemas = {
               }
             ],
             "description": "What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
+          },
+          "section_link_updates": {
+            "default": 0,
+            "description": "Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "section_links_unaddressable": {
+            "default": 0,
+            "description": "Section links to a heading the destination's form cannot address — a Linear record\nwhose stored state holds no heading of that text at that position, or no state at all —\nwritten as the record's own link with no fragment.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "section_links_unresolved": {
+            "default": 0,
+            "description": "Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           },
           "source": {
             "$ref": "#/$defs/GlobalId",

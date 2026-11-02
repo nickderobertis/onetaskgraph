@@ -3220,3 +3220,48 @@ fn a_private_linear_home_that_linear_rewrites_keeps_every_key_the_copy_recorded_
     assert_eq!(&again["plan:rollout"], home);
     assert_eq!(shown(&store, "project", home)["metadata"], *metadata);
 }
+
+#[test]
+fn a_views_link_to_its_own_heading_lands_in_the_boards_section_form() {
+    // A public task of the private plan links one of its own headings: its view on the board
+    // carries that link in GitHub's form, against the anchor the board's body holds before the
+    // heading, and a repeat copy writes the board nothing.
+    let (store, board) = board_store();
+    store.record(
+        "plan",
+        "tasks",
+        "sectioned",
+        &format!(
+            "title: Retry the widget once\nstatus: todo\nproject: rollout\n\
+             repositories: [{BOARD_REPOSITORY}]"
+        ),
+        "See [the retry](#step-2b-retry-once) below.\n\n### Step 2.b: retry (once)\n\nOnce.",
+    );
+    let landed = copy_rollout(&store);
+    let view = view_of(&store, &landed, &landed["plan:sectioned"]);
+    let content = shown(&store, "task", &view)["content"]
+        .as_str()
+        .expect("the view's content")
+        .to_owned();
+    assert!(
+        content.contains("[the retry](#user-content-step-2b-retry-once)"),
+        "the view's link to its own heading is in the board's form:\n{content}"
+    );
+    let native = view.split_once(':').expect("a qualified id").1;
+    let raw = board.body(native);
+    assert!(
+        raw.as_str()
+            .unwrap_or_default()
+            .contains("<a id=\"step-2b-retry-once\"></a>\n### Step 2.b: retry (once)"),
+        "{raw}"
+    );
+    let mark = board.served_count();
+    copy_rollout(&store);
+    assert!(
+        board
+            .served_since(mark)
+            .iter()
+            .all(|(document, _)| !document.trim_start().starts_with("mutation")),
+        "a repeat copy writes the board nothing"
+    );
+}

@@ -975,3 +975,467 @@ fn hand_written_tracker_links_are_read_by_what_they_name_and_one_outside_the_pro
         "a Linear link is read by its id, whatever its slug says: {copied}"
     );
 }
+
+/// One folder of Markdown named `name` holding the project `P`, `target` filed under it at
+/// `path` with `content`, and a design document `D` linking each of `slugs` there.
+fn linking_folder(
+    sandbox: &Sandbox,
+    name: &str,
+    target: (&str, &str),
+    content: &str,
+    slugs: &[&str],
+) -> Value {
+    let config = empty_folder(sandbox, name);
+    let root = root_of(sandbox, name);
+    let (folder, file) = target;
+    for each in ["projects", "tasks", "documents"] {
+        std::fs::create_dir_all(root.join(each)).expect("a folder");
+    }
+    let front = if folder == "tasks" {
+        "title: Target\nstatus: todo\nproject: P"
+    } else {
+        "title: Target\nproject: P"
+    };
+    std::fs::write(
+        root.join("projects/P.md"),
+        "---\ntitle: Section plan\nstatus: todo\n---\nThe plan.\n",
+    )
+    .expect("the project");
+    std::fs::write(
+        root.join(folder).join(format!("{file}.md")),
+        format!("---\n{front}\n---\n{content}"),
+    )
+    .expect("the target");
+    let links: String = slugs
+        .iter()
+        .enumerate()
+        .map(|(index, slug)| format!("- [heading {index}](../{folder}/{file}.md#{slug})\n"))
+        .collect();
+    std::fs::write(
+        root.join("documents/D.md"),
+        format!("---\ntitle: Design\nproject: P\n---\n## Links\n\n{links}"),
+    )
+    .expect("the design document");
+    json!({"plugin": "local-md", "config": config})
+}
+
+/// The `fragment` of each `[heading <n>](…)` link of `content`, in order.
+fn heading_links(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .filter_map(|line| line.strip_prefix("- [heading "))
+        .filter_map(|rest| rest.split_once("](").map(|(_, link)| link))
+        .map(|link| link.trim_end_matches(')').to_owned())
+        .collect()
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace, serving editor states captured from real Linear records.
+#[test]
+fn every_captured_linear_heading_is_linked_by_the_fragment_its_stored_id_gives_it() {
+    for (sample, folder) in [
+        ("TES2-773", "tasks"),
+        ("section-links-spike-plain-document", "documents"),
+    ] {
+        let captured = linear_editor::captured(sample);
+        let markdown = captured["markdown"]
+            .as_str()
+            .expect("the captured Markdown");
+        let state = captured["state"].as_str().expect("the captured state");
+        assert!(
+            linear_editor::holds(state, markdown),
+            "{sample}: the captured state holds the captured Markdown's headings"
+        );
+        let expected: Vec<String> = captured["headings"]
+            .as_array()
+            .expect("headings")
+            .iter()
+            .map(|heading| {
+                let fragment = heading["fragment"].as_str().expect("a fragment");
+                assert!(
+                    ["copied", "derived"].contains(&heading["source"].as_str().unwrap()),
+                    "{sample}: each fragment says where it came from"
+                );
+                assert!(!fragment.is_empty() && !heading["id"].as_str().unwrap().is_empty());
+                fragment.to_owned()
+            })
+            .collect();
+        assert_eq!(expected.len(), 5, "{sample}: the spike's five headings");
+        let slugs: Vec<&str> = HEADINGS.iter().map(|(_, github, _)| *github).collect();
+
+        let sandbox = Sandbox::new();
+        let plans = linking_folder(&sandbox, "plans", (folder, "X"), markdown, &slugs);
+        let (linear, config) = store(&sandbox, "linear", "linear", None);
+        configure(&sandbox, &[("plans", &plans), ("linear", &config)]);
+        let Store::Linear(workspace) = &linear else {
+            unreachable!("a workspace")
+        };
+        ok(&sandbox, &["project", "copy", "plans:P", "--to", "linear"]);
+        if folder == "documents" {
+            ok(&sandbox, &["document", "copy", "plans:X", "--to", "linear"]);
+        }
+        let verb = if folder == "tasks" {
+            "task"
+        } else {
+            "document"
+        };
+        let target = shown(&sandbox, verb, "plans:X");
+        let copied = target["metadata"]["onetaskgraph.copies"]["linear"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{sample}: the target records its copy: {target:#}"))
+            .to_owned();
+        let target = Landed { verb, id: copied };
+        // The record as a person's edit in Linear's editor leaves it: holding the ids Linear
+        // gave the captured record's headings.
+        workspace.set_editor_state(folder, target.native(), state);
+
+        let rendered = ok(
+            &sandbox,
+            &["document", "copy", "plans:D", "--to", "linear", "--json"],
+        );
+        let design = outcomes(&rendered)["plans:D"]["destination"]
+            .as_str()
+            .expect("the document landed")
+            .to_owned();
+        let design = Landed {
+            verb: "document",
+            id: design,
+        };
+        let url = target.location(&sandbox);
+        assert_eq!(
+            heading_links(&design.content(&sandbox)),
+            expected
+                .iter()
+                .map(|fragment| format!("{url}#{fragment}"))
+                .collect::<Vec<_>>(),
+            "{sample}: each heading is linked by the fragment its fixture states"
+        );
+    }
+}
+
+/// A sandbox holding the authored project and an empty loopback Linear workspace, the latter
+/// told `prepare` first.
+fn into_linear(prepare: impl FnOnce(&LinearWorkspace)) -> (Sandbox, LinearWorkspace, String) {
+    let sandbox = Sandbox::new();
+    let (authored_config, target) = authored(&sandbox, "plans");
+    let (linear, config) = store(&sandbox, "linear", "linear", None);
+    configure(
+        &sandbox,
+        &[("plans", &authored_config), ("linear", &config)],
+    );
+    let Store::Linear(workspace) = linear else {
+        unreachable!("a workspace")
+    };
+    prepare(&workspace);
+    (sandbox, workspace, target)
+}
+
+/// Run `arguments` with `variables` set, answering standard output.
+fn ok_with(sandbox: &Sandbox, variables: &[(&str, &str)], arguments: &[&str]) -> String {
+    let mut command = sandbox.command();
+    for (name, value) in variables {
+        command.env(name, value);
+    }
+    let output = command.args(arguments).output().expect("the binary runs");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    stdout(&output)
+}
+
+/// Whether `document` reads the record whose id `variables` names, at the interface whose
+/// root field is `root`.
+fn reads(document: &str, variables: &Value, root: &str, id: &str) -> bool {
+    document.trim_start().starts_with("query")
+        && document.contains(&format!("{root}(id:$id)"))
+        && variables["id"] == json!(id)
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace, whose request log is what is held.
+#[test]
+fn linear_heading_ids_come_from_each_writes_own_answer_and_cost_no_request() {
+    // A project whose every link points at a record written earlier in the copy: the project
+    // record links to nothing and the referring task follows the task it names.
+    let backwards = |sandbox: &Sandbox| {
+        let root = root_of(sandbox, "plans");
+        std::fs::write(
+            root.join("projects/P.md"),
+            "---\ntitle: Section plan\nstatus: todo\n---\nThe plan.\n",
+        )
+        .expect("the project");
+        std::fs::write(
+            root.join("tasks/T.md"),
+            format!(
+                "---\ntitle: Target\nstatus: todo\nproject: P\n---\n{}",
+                target_body().replace(" Jump to [the second budgets](#budgets-1).", "")
+            ),
+        )
+        .expect("the target");
+    };
+    let mut counts = Vec::new();
+    for form in ["heading-link", "record-url"] {
+        let (sandbox, workspace, _) = into_linear(|_| {});
+        backwards(&sandbox);
+        let variables = [(
+            onetaskgraph_core::section_links::LINEAR_SECTION_FORM_VARIABLE,
+            form,
+        )];
+        let rendered = ok_with(
+            &sandbox,
+            &variables,
+            &["project", "copy", "plans:P", "--to", "linear", "--json"],
+        );
+        let served = workspace.served();
+        let first_write = served
+            .iter()
+            .position(|(document, _)| document.trim_start().starts_with("mutation"))
+            .expect("the copy writes");
+        let read_after = served[first_write..]
+            .iter()
+            .filter(|(document, _)| !document.trim_start().starts_with("mutation"))
+            .map(|(document, _)| document.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            read_after,
+            Vec::<String>::new(),
+            "{form}: no read follows a write: every heading id is the write's own answer"
+        );
+        let referrer = outcomes(&rendered)["plans:U"]["destination"]
+            .as_str()
+            .expect("the referrer landed")
+            .to_owned();
+        let content = Landed {
+            verb: "task",
+            id: referrer,
+        }
+        .content(&sandbox);
+        assert_eq!(
+            content.contains("#heading-budget-demo-quota-seconds-"),
+            form == "heading-link",
+            "{form}: {content}"
+        );
+        counts.push(served.len());
+    }
+    assert_eq!(
+        counts[0], counts[1],
+        "Linear's heading link costs exactly the requests the record URL alone does"
+    );
+
+    // A same-record link, and a project linking a task written after it: finished once each
+    // target has landed, in one update each, which the report counts.
+    let (sandbox, workspace, _) = into_linear(|_| {});
+    let reported = outcomes(&ok(
+        &sandbox,
+        &["project", "copy", "plans:P", "--to", "linear", "--json"],
+    ));
+    for key in ["plans:P", "plans:T"] {
+        assert_eq!(
+            reported[key]["section_link_updates"],
+            json!(1),
+            "{key}: {:#}",
+            reported[key]
+        );
+    }
+    assert_eq!(reported["plans:U"].get("section_link_updates"), None);
+    let target = reported["plans:T"]["destination"].as_str().unwrap();
+    let target = Landed {
+        verb: "task",
+        id: target.to_owned(),
+    };
+    let id8 = stored_id8(&workspace, &target, "Budgets", 1);
+    assert!(
+        target.content(&sandbox).contains(&format!(
+            "{}#heading-budgets-{id8}",
+            target.location(&sandbox)
+        )),
+        "the same-record link names the second budgets' stored id"
+    );
+
+    // Where Linear rewrote the record, the link is finished in the follow-up the copy already
+    // sends for it, and no update is added.
+    let (sandbox, workspace, _) = into_linear(|workspace| {
+        workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::Measured);
+    });
+    // A bullet Linear stores as `* `, so it rewrites the target and its follow-up is sent.
+    let file = root_of(&sandbox, "plans").join("tasks/T.md");
+    let held = std::fs::read_to_string(&file).expect("the target");
+    std::fs::write(
+        &file,
+        format!("{held}\n- A bullet Linear stores otherwise.\n"),
+    )
+    .expect("the target");
+    let reported = outcomes(&ok(
+        &sandbox,
+        &["project", "copy", "plans:P", "--to", "linear", "--json"],
+    ));
+    let target = Landed {
+        verb: "task",
+        id: reported["plans:T"]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    assert_eq!(reported["plans:T"].get("section_link_updates"), None);
+    let id8 = stored_id8(&workspace, &target, "Budgets", 1);
+    assert!(
+        target
+            .content(&sandbox)
+            .contains(&format!("#heading-budgets-{id8}")),
+        "{}",
+        target.content(&sandbox)
+    );
+
+    // A later copy that rewrites only the referring document reads each target once.
+    let mark = workspace.served_count();
+    ok(&sandbox, &["document", "copy", "plans:D", "--to", "linear"]);
+    let native = target.native().to_owned();
+    let read = workspace
+        .served_since(mark)
+        .iter()
+        .filter(|(document, variables)| reads(document, variables, "issue", &native))
+        .count();
+    assert_eq!(read, 1, "the target the design document links is read once");
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn a_linear_heading_its_record_does_not_store_is_linked_by_the_record_alone_and_counted() {
+    // The served state holds no heading of that text at that position.
+    let (sandbox, workspace, _) = into_linear(|_| {});
+    let landed = outcomes(&ok(
+        &sandbox,
+        &["project", "copy", "plans:P", "--to", "linear", "--json"],
+    ));
+    let target = Landed {
+        verb: "task",
+        id: landed["plans:T"]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    workspace.set_editor_state(
+        "tasks",
+        target.native(),
+        &linear_editor::restated(None, "## What\n", "only-what"),
+    );
+    let reported = outcomes(&ok(
+        &sandbox,
+        &["document", "copy", "plans:D", "--to", "linear", "--json"],
+    ));
+    let url = target.location(&sandbox);
+    let design = Landed {
+        verb: "document",
+        id: reported["plans:D"]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    let content = design.content(&sandbox);
+    assert!(
+        content.contains(&format!("[first]({url})"))
+            && content.contains(&format!("[second]({url})")),
+        "{content}"
+    );
+    assert_eq!(
+        reported["plans:D"]["section_links_unaddressable"],
+        json!(3),
+        "{:#}",
+        reported["plans:D"]
+    );
+
+    // A write whose answer carries no state at all.
+    let (sandbox, _, _) = into_linear(LinearWorkspace::answer_no_editor_state);
+    let reported = outcomes(&ok(
+        &sandbox,
+        &["project", "copy", "plans:P", "--to", "linear", "--json"],
+    ));
+    let target = Landed {
+        verb: "task",
+        id: reported["plans:T"]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    let content = target.content(&sandbox);
+    assert!(
+        content.contains(&format!(
+            "[the second budgets]({})",
+            target.location(&sandbox)
+        )),
+        "{content}"
+    );
+    assert_eq!(
+        reported["plans:T"]["section_links_unaddressable"],
+        json!(1),
+        "{:#}",
+        reported["plans:T"]
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback stand-ins this suite already drives for both hosted destinations.
+#[test]
+fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_form() {
+    for kind in KINDS {
+        let sandbox = Sandbox::new();
+        let (authored_config, _) = authored(&sandbox, "plans");
+        let referrer = root_of(&sandbox, "plans").join("tasks/U.md");
+        let held = std::fs::read_to_string(&referrer).expect("the referrer");
+        std::fs::write(
+            &referrer,
+            format!(
+                "{held}\n## Comments\n\n<!-- onetaskgraph:comment id=\"c1\" \
+                 created_at=\"2026-11-02T12:00:00Z\" updated_at=\"2026-11-02T12:00:00Z\" -->\n\
+                 ### comment — 2026-11-02T12:00:00Z\n\nThe bar is [the second \
+                 budgets](T.md#budgets-1).\n\n<!-- /onetaskgraph:comment -->\n"
+            ),
+        )
+        .expect("the comment");
+        let (destination, config) = store(&sandbox, kind, "dest", None);
+        configure(&sandbox, &[("plans", &authored_config), ("dest", &config)]);
+        let copy = [
+            "project",
+            "copy",
+            "plans:P",
+            "--to",
+            "dest",
+            "--comments",
+            "--json",
+        ];
+        let reported = outcomes(&ok(&sandbox, &copy));
+        let landed = |key: &str| Landed {
+            verb: "task",
+            id: reported[&format!("plans:{key}")]["destination"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        };
+        let (target, comments_on) = (landed("T"), landed("U"));
+        let expected = destination.link(&sandbox, &comments_on, Some(&target), HEADINGS[4], 1);
+        let listed: Value = serde_json::from_str(&ok(
+            &sandbox,
+            &["task", "comment", "list", &comments_on.id, "--json"],
+        ))
+        .expect("comments as JSON");
+        let bodies: Vec<&str> = listed["comments"]
+            .as_array()
+            .expect("comments")
+            .iter()
+            .filter_map(|comment| comment["body"].as_str())
+            .collect();
+        assert!(
+            bodies
+                .iter()
+                .any(|body| body.contains(&format!("[the second budgets]({expected})"))),
+            "{kind}: the carried comment names the destination's heading: {bodies:#?}"
+        );
+        let root = (kind == "local-md").then(|| root_of(&sandbox, "dest"));
+        // A `--comments` copy out of a folder of Markdown brings each copy record up to date once
+        // — the copy's own link write moved the source file's token after it was recorded — with
+        // or without section links; from then on a repeat writes nothing.
+        ok(&sandbox, &copy);
+        let mark = destination.mark(root.as_deref());
+        ok(&sandbox, &copy);
+        assert_eq!(
+            destination.writes_since(&mark, root.as_deref()),
+            Vec::<String>::new(),
+            "{kind}: a repeat copy writes nothing"
+        );
+    }
+}

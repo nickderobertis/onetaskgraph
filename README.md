@@ -1410,7 +1410,7 @@ decided: it writes the form, parses it back and supplies its markup.
   - No anchor markup is written into a Linear body, where Linear would show it as text.
   - **The form rests on Linear's undocumented editor-state heading ids and "Copy link" form**,
     which the credentialed live journey re-observes against Linear itself.
-  - `linear_section_form` is one named decision. Setting `ONETASKGRAPH_LINEAR_SECTION_FORM` to
+  - `linear_section_form` is one named decision. Setting `OTG_LINEAR_SECTION_FORM` to
     `record-url` writes the record's URL alone, for a measurement.
 - Any other destination, a stdio plugin among them, receives every fragment byte for byte on
   the rewritten link, as before section forms existed.

@@ -2835,3 +2835,120 @@ fn github_anchored(content: &str) -> String {
         .expect("the GitHub form carries anchors")
         .written(content)
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Offline and sub-second; the reason `mod rendered;` states.
+#[test]
+fn a_rendered_task_whose_section_link_a_copy_rewrites_is_restamped_and_regenerates_as_authored() {
+    // A task rendered from a template whose goal is a section link to another task's heading,
+    // copied with its project: the link lands in the destination's form, the rendering's
+    // `body_digest` is the rewritten content's, and its answers still regenerate the content
+    // as it was authored.
+    let plan = Plan::new();
+    std::fs::create_dir_all(plan.notes.join("projects")).unwrap();
+    std::fs::write(
+        plan.notes.join("projects/P-1.md"),
+        "---\ntitle: Plan\nstatus: todo\n---\nWhy.\n",
+    )
+    .unwrap();
+    let body = plan.file("done.md", "## Done when\n\nIt ships.");
+    let target = stdout(&plan.exits(
+        &[
+            "task",
+            "create",
+            "notes",
+            "--project",
+            "P-1",
+            "--title",
+            "Ship",
+            "--body-file",
+            &body,
+        ],
+        0,
+    ))
+    .trim()
+    .to_owned();
+    let here = plan.task(&target)["location"]["path"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let answer = format!("goal=[the bar]({here}#done-when)");
+    let created = plan.json(&[
+        "task",
+        "create",
+        "notes",
+        "--project",
+        "P-1",
+        "--title",
+        "Step",
+        "--template",
+        &plan.template(),
+        "--search-path",
+        &plan.search_path(),
+        "--var",
+        &answer,
+        "--no-interactive",
+    ]);
+    let rendered = created["items"][0]["id"].as_str().unwrap().to_owned();
+    let authored = plan.task(&rendered);
+    let provenance = authored["metadata"]["onetaskgraph.template"].clone();
+
+    let project = plan.json(&["project", "copy", "notes:P-1", "--to", "back"]);
+    let landed = |source: &str| {
+        project["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["source"] == json!(source))
+            .unwrap_or_else(|| panic!("{source} was copied: {project:#}"))["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let copied = plan.task(&landed(&rendered));
+    let there = plan.task(&landed(&target))["location"]["path"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let content = copied["content"].as_str().unwrap();
+    let from = std::path::Path::new(copied["location"]["path"].as_str().unwrap())
+        .parent()
+        .unwrap()
+        .to_owned();
+    let relative = std::path::Path::new(&there)
+        .strip_prefix(&from)
+        .map(|rest| rest.display().to_string())
+        .unwrap_or_else(|_| panic!("both tasks sit in one folder: {there}"));
+    assert!(
+        content.contains(&format!("Goal: [the bar]({relative}#done-when)")),
+        "the link names the destination's task, relative to the linking file:\n{content}"
+    );
+    let entry = &copied["metadata"]["onetaskgraph.template"];
+    assert_eq!(
+        entry["body_digest"],
+        json!(sha256(content)),
+        "the recorded body_digest is the rewritten content's"
+    );
+    for field in ["template", "digest", "answers_digest"] {
+        assert_eq!(entry[field], provenance[field], "`{field}` is carried");
+    }
+
+    // The answers still hold the authored link: rendered again at the source, they give the
+    // content exactly as it was authored, and nothing is written.
+    let before = std::fs::read_to_string(authored["location"]["path"].as_str().unwrap()).unwrap();
+    plan.json(&[
+        "task",
+        "render",
+        &rendered,
+        "--search-path",
+        &plan.search_path(),
+    ]);
+    assert_eq!(
+        plan.task(&rendered)["content"],
+        authored["content"],
+        "a regenerate from the answers reproduces the pre-copy content"
+    );
+    assert_eq!(
+        std::fs::read_to_string(authored["location"]["path"].as_str().unwrap()).unwrap(),
+        before
+    );
+}

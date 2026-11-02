@@ -5073,6 +5073,9 @@ impl Engine {
         // makes a repeat copy of an already-rewritten document report `unchanged`.
         self.rewrite_references(&mut planned, &running.resolvable, &mut running.references)
             .await?;
+        // Each record a body links to is written before the body, so a link is addressable when
+        // its body is first written rather than finished by a write of its own.
+        let mut planned = targets_first(planned);
         // Once a document's references point where they land, and before anything is compared
         // with the destination or written to it: every status is what its destination will
         // store, so an unchanged item reads as unchanged.
@@ -10759,6 +10762,50 @@ async fn read_destination(
         Level::Document => source.get_document(id).await.map(|_| ()),
     }
     .map_err(|error| refused(destination, error))
+}
+
+/// `planned` with every item a planned body links to ahead of that body, and otherwise in the
+/// order it came in: an item is taken once every item of `planned` it links to has been,
+/// and where links run in a cycle, the earliest item left is taken as it stands.
+fn targets_first(planned: Vec<Planned>) -> Vec<Planned> {
+    let links: Vec<Vec<usize>> = planned
+        .iter()
+        .map(|item| {
+            let Some(links) = &item.links else {
+                return Vec::new();
+            };
+            planned
+                .iter()
+                .enumerate()
+                .filter(|(_, other)| {
+                    other.to == item.to
+                        && !std::ptr::eq(*other, item)
+                        && links.referents.iter().any(|referent| {
+                            referent.level == other.item.level() && referent.id == other.source
+                        })
+                })
+                .map(|(index, _)| index)
+                .collect()
+        })
+        .collect();
+    if links.iter().all(Vec::is_empty) {
+        return planned;
+    }
+    let mut taken = vec![false; planned.len()];
+    let mut order = Vec::with_capacity(planned.len());
+    while order.len() < planned.len() {
+        let next = (0..planned.len())
+            .find(|&index| !taken[index] && links[index].iter().all(|&target| taken[target]))
+            .or_else(|| (0..planned.len()).find(|&index| !taken[index]))
+            .expect("an item not yet taken");
+        taken[next] = true;
+        order.push(next);
+    }
+    let mut slots: Vec<Option<Planned>> = planned.into_iter().map(Some).collect();
+    order
+        .into_iter()
+        .map(|index| slots[index].take().expect("each item taken once"))
+        .collect()
 }
 
 /// One item a copy call writes: the source it lands in, its interface and its source id.

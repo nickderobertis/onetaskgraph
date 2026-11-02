@@ -367,6 +367,27 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
             description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's form cannot address — a Linear record\nwhose stored state holds no heading of that text at that position, or no state at all —\nwritten as the record's own link with no fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     spent: Annotated[
         Spent | None,
@@ -438,6 +459,27 @@ class CopyOutcomeUpdated(BaseModel):
             description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's form cannot address — a Linear record\nwhose stored state holds no heading of that text at that position, or no state at all —\nwritten as the record's own link with no fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     spent: Annotated[
         Spent | None,
@@ -497,6 +539,27 @@ class CopyOutcomeUnchanged(BaseModel):
             description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's form cannot address — a Linear record\nwhose stored state holds no heading of that text at that position, or no state at all —\nwritten as the record's own link with no fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     spent: Annotated[
         Spent | None,
@@ -562,6 +625,27 @@ class CopyOutcomeOrphaned(BaseModel):
             description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's form cannot address — a Linear record\nwhose stored state holds no heading of that text at that position, or no state at all —\nwritten as the record's own link with no fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     spent: Annotated[
         Spent | None,
@@ -610,6 +694,27 @@ class CopyOutcomeFailed(BaseModel):
             description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's form cannot address — a Linear record\nwhose stored state holds no heading of that text at that position, or no state at all —\nwritten as the record's own link with no fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     spent: Annotated[
         Spent | None,
@@ -661,6 +766,27 @@ class CopyOutcomeSkipped(BaseModel):
             description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's form cannot address — a Linear record\nwhose stored state holds no heading of that text at that position, or no state at all —\nwritten as the record's own link with no fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     spent: Annotated[
         Spent | None,
