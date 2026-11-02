@@ -6,7 +6,8 @@ Reads `manifest.json` and `observations.json` from the harness's output director
 acceptance document (every demonstration link, the heading it must land on, and what was
 observed), and `findings` are the conclusions. Every finding is checked against the
 observations before it is written: when the data says otherwise this script stops naming the
-finding, rather than writing a claim the run does not back.
+finding, rather than writing a claim the run does not back. `condense.py` then condenses the
+method so the report fits in a GitHub issue.
 
     python3 scripts/spikes/section-links/report.py --out <harness output directory>
 """
@@ -21,6 +22,8 @@ import re
 import pathlib
 import subprocess
 import sys
+
+from condense import condense
 
 HERE = pathlib.Path(__file__).resolve().parent
 BRANCH = "nick/section-links/spike-section-links"
@@ -564,7 +567,8 @@ def main() -> None:
         "candidates": [],
         "findings": findings(m, o),
     }
-    (out / "answers.json").write_text(json.dumps(answers, indent=2) + "\n")
+    # Composed whole, the report is ~226,000 characters, past a GitHub issue's 65,536; see condense.py.
+    (out / "answers.json").write_text(json.dumps(condense(answers), indent=2) + "\n")
     print(f"answers: {out / 'answers.json'}")
 
 
