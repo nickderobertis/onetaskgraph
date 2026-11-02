@@ -5,7 +5,9 @@ Reads `manifest.json` from the harness's output directory and writes `observatio
 beside it. Each link is observed twice where it lives on GitHub:
 
   direct  a fresh tab loads the link's URL, as a click from the report (or a pasted link) does
-  click   the source page is loaded and the link clicked in it, as a reader of the source does
+  click   the source page is loaded and the link clicked in it, as a reader of the source does;
+          when the page navigates in place and keeps the source page's scroll offset, that is
+          recorded as such, so a heading that happens to sit there is not counted as landing
 
 A link *lands* when, a few seconds after the page settles, the heading it names (by position,
 so the repeated `## Budgets` is told from the first) sits at the top of the viewport. Anything
@@ -49,6 +51,11 @@ NAMES = ["What", "Budgets", "Budget demo-quota-seconds", "Step 2.b: retry (once)
 
 
 def verdict(link: dict, seen: dict) -> str:
+    if seen.get("keptSourceScroll"):
+        # GitHub's in-app (client-side) navigation between issues keeps the source page's
+        # scroll offset and never scrolls to the fragment; whatever sits at the top then is
+        # where the link sat in the source, not where the link points.
+        return f"stays at the source page's scroll offset (y={seen['scrollY']}): in-app navigation, no scroll to the fragment"
     if seen.get("notOpened"):
         return f"opens nothing: {seen['notOpened']}"
     if "Page not found" in (seen.get("title") or "") or "404" in (seen.get("title") or ""):
@@ -56,14 +63,15 @@ def verdict(link: dict, seen: dict) -> str:
     heads = seen["headings"]
     if len(heads) != 5:
         return f"not a target page ({len(heads)} of the 5 headings found; title {seen.get('title')!r})"
+    if seen["scrollY"] < 40:
+        # Not scrolled: a heading near the top of an unscrolled page is not a landing.
+        return "stays at the top of the page"
     at_top = [i for i, h in enumerate(heads) if -60 <= h["top"] <= 200]
     if at_top:
         landed = at_top[0]
         if landed == link["heading_index"]:
             return "LANDS on the named heading"
         return f"lands on the wrong heading: heading {landed + 1} instead of {link['heading_index'] + 1}"
-    if seen["scrollY"] < 40:
-        return "stays at the top of the page"
     return f"scrolled to y={seen['scrollY']} with no heading at the top"
 
 
@@ -95,6 +103,8 @@ def observe_click(context, source_url: str, link: dict) -> dict:
         anchor = page.locator("a", has_text=link["code"] + " ").first
         anchor.scroll_into_view_if_needed(timeout=15000)
         href = anchor.evaluate("a => a.href")
+        source_path = page.evaluate("location.pathname")
+        source_scroll = page.evaluate("Math.round(scrollY)")
         before = set(context.pages)
         anchor.click()
         time.sleep(1)
@@ -103,6 +113,13 @@ def observe_click(context, source_url: str, link: dict) -> dict:
         settle(target)
         seen = target.evaluate(MEASURE, NAMES)
         seen["clicked_href"] = href
+        seen["sourceScrollY"] = source_scroll
+        seen["keptSourceScroll"] = (
+            target is page
+            and source_scroll > 0
+            and seen["scrollY"] == source_scroll
+            and page.evaluate("location.pathname") != source_path
+        )
         if target is not page:
             target.close()
     finally:
@@ -114,11 +131,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", required=True)
     parser.add_argument("--only", nargs="*", help="surfaces to observe: github board fileview vscode")
+    parser.add_argument("--reclassify", action="store_true", help="recompute every verdict from the recorded measurements, opening no browser")
     args = parser.parse_args()
     out = pathlib.Path(args.out).resolve()
     manifest = json.loads((out / "manifest.json").read_text())
     obs_path = out / "observations.json"
     observations = json.loads(obs_path.read_text()) if obs_path.exists() else {}
+    if args.reclassify:
+        for surface in observations.values():
+            for entry in surface["results"]:
+                for mode in ("direct", "click"):
+                    seen = entry.get(mode)
+                    if seen and "headings" in seen:
+                        seen["verdict"] = verdict({"heading_index": int(entry["code"][-1]) - 1}, seen)
+        obs_path.write_text(json.dumps(observations, indent=2) + "\n")
+        print(f"observations: {obs_path}")
+        return
 
     surfaces = []
     if "github" in manifest:
