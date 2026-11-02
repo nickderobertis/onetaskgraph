@@ -10,6 +10,7 @@ the output directory for `observe.py` and the report.
 
 Destinations, each a subcommand so a person can re-run one:
   github   issues in nickderobertis/onetaskgraph-live-scratch, through `gh`
+  github-nav  a second source issue linking the `<a id>` target in each navigation form
   board    a scratch local-md project copied by the installed CLI's real `project copy` and
            `document copy` onto board #1 (GH_PROJECTS_OWNER / GH_PROJECTS_NUMBER)
   linear   issues and documents in team TES2 (LINEAR_WRITE_TEAM), through Linear's GraphQL API
@@ -88,9 +89,23 @@ def heading_label(index: int) -> str:
     return label
 
 
+# Navigation forms: the `#user-content-<slug>` link to the `<a id>` target, spelled so that a
+# click inside GitHub might make a full page load instead of GitHub's in-app navigation (which
+# never scrolls to a fragment). Each is `(code, label, transform of the target issue URL)`.
+NAV_FORMS = [
+    ("W", "www.github.com host", lambda url: url.replace("https://github.com/", "https://www.github.com/", 1)),
+    ("H", "http:// scheme", lambda url: url.replace("https://", "http://", 1)),
+    ("Q", "query ?a=1", lambda url: url + "?a=1"),
+    ("R", "query ?plain=1", lambda url: url + "?plain=1"),
+    ("T", "trailing slash", lambda url: url + "/"),
+    ("C", "owner in upper case", lambda url: url.replace(f"/{REPO.split('/')[0]}/", f"/{REPO.split('/')[0].upper()}/", 1)),
+]
+USER_CONTENT_FORMS = {"U", "B"} | {code for code, _, _ in NAV_FORMS}
+
+
 def fragment(form: str, slug: str) -> str:
-    """`S` and `A` are `#<slug>`; `U` and `B` are `#user-content-<slug>`."""
-    return f"user-content-{slug}" if form in ("U", "B") else slug
+    """`S` and `A` are `#<slug>`; `U`, `B` and every navigation form are `#user-content-<slug>`."""
+    return f"user-content-{slug}" if form in USER_CONTENT_FORMS else slug
 
 
 def target_body(variant: str, intro: str) -> str:
@@ -125,14 +140,14 @@ def link_code(dest: str, variant: str, form: str, index: int) -> str:
     return f"{dest}-{variant}-{form}{index + 1}"
 
 
-def source_section(dest: str, variant: str, target_ref: str, target_display: str, extra: list[tuple[str, str, str]] = ()) -> tuple[list[str], list[dict]]:
+def source_section(dest: str, variant: str, target_ref: str, target_display: str, extra: list[tuple[str, str, str]] = (), base: dict[str, str] = FORMS) -> tuple[list[str], list[dict]]:
     """One section of a source: every heading of one target, in every form.
 
     The forms are `S` and `U` against `target_ref`, then each `(code, label, ref)` of `extra`.
     """
     lines = [f"## Links to the {VARIANTS[variant][0]} target", "", f"Target: {target_display}", ""]
     links = []
-    forms = [(code, label, target_ref) for code, label in FORMS.items()] + list(extra)
+    forms = [(code, label, target_ref) for code, label in base.items()] + list(extra)
     for form, form_label, ref in forms:
         lines.append(f"Form `{form_label}`:")
         lines.append("")
@@ -234,6 +249,24 @@ def build_github(m: Manifest, stamp: str, scratch: pathlib.Path) -> None:
 
 # --------------------------------------------------------------------------------------------
 # GitHub Projects copy through the installed CLI
+
+
+def build_github_nav(m: Manifest, stamp: str, scratch: pathlib.Path) -> None:
+    """A second source issue: the working form, and the same link spelled in each navigation form."""
+    target = m.data["github"]["targets"]["anchor-id"]["url"]
+    extra = [(code, f"{label}, #user-content-<slug>", make(target)) for code, label, make in NAV_FORMS]
+    section = source_section("GN", "I", target, target, extra=extra, base={"U": FORMS["U"]})
+    body, links = source_body(
+        f"Run `{stamp}`. Navigation forms: each links the `<a id>` target issue of this run with "
+        "`#user-content-<slug>`, spelled so that a click inside GitHub might load the page in full rather than "
+        "navigate in place. Form `U` is the ordinary issue URL, for comparison; `W` www.github.com, `H` http://, "
+        "`Q` `?a=1`, `R` `?plain=1`, `T` a trailing slash, `C` the owner in upper case.",
+        [section],
+    )
+    source = github_issue(f"Section-links spike {stamp}: source (navigation forms)", body, scratch)
+    print("GitHub issues, navigation forms:")
+    say("source", source["url"])
+    m.put("github_nav", {"target": target, "source": source, "links": links})
 
 
 def ot_env(scratch: pathlib.Path) -> dict:
@@ -493,7 +526,7 @@ def build_vscode(m: Manifest, out: pathlib.Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("step", choices=["github", "board", "linear", "local", "vscode", "all"])
+    parser.add_argument("step", choices=["github", "github-nav", "board", "linear", "local", "vscode", "all"])
     parser.add_argument("--out", required=True, help="directory for manifest.json and scratch files (outside the repository)")
     parser.add_argument("--onetaskgraph", default=os.environ.get("ONETASKGRAPH", "onetaskgraph"), help="the installed CLI the board copy runs")
     parser.add_argument("--stamp", default=datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S"))
@@ -504,10 +537,12 @@ def main() -> None:
     m = Manifest(out)
     m.put("stamp", m.data.get("stamp", args.stamp))
     stamp = m.data["stamp"]
-    steps = ["github", "board", "linear", "local", "vscode"] if args.step == "all" else [args.step]
+    steps = ["github", "github-nav", "board", "linear", "local", "vscode"] if args.step == "all" else [args.step]
     for step in steps:
         if step == "github":
             build_github(m, stamp, scratch)
+        elif step == "github-nav":
+            build_github_nav(m, stamp, scratch)
         elif step == "board":
             build_board(m, stamp, scratch, args.onetaskgraph)
         elif step == "linear":

@@ -153,6 +153,21 @@ def method_text(m: dict, o: dict, out: pathlib.Path) -> str:
         gh["links"], o["github"], {v: t["url"] for v, t in gh["targets"].items()},
     )
 
+    # GitHub issue: navigation forms
+    nav = m["github_nav"]
+    lines += github_section(
+        "GitHub issue: navigation forms (a click inside GitHub)",
+        [
+            "A click from one issue to another is handled by GitHub's in-app navigation, which never scrolls to the "
+            "fragment (see the table above). This second source issue links the `<a id>` target with the one "
+            "fragment that lands, `#user-content-<slug>`, spelled in forms that might make GitHub load the page in "
+            "full instead: `U` the ordinary URL for comparison, `W` the `www.github.com` host, `H` `http://`, `Q` "
+            "`?a=1`, `R` `?plain=1`, `T` a trailing slash, and `C` the owner in upper case. "
+            f"Source: [{nav['source']['url']}]({nav['source']['url']}).",
+        ],
+        nav["links"], o["github_nav"], {"anchor-id": nav["target"]},
+    )
+
     # Board copy
     tasks = board["tasks"]
     lines += github_section(
@@ -247,6 +262,10 @@ def method_text(m: dict, o: dict, out: pathlib.Path) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def nav_href(m: dict, code: str) -> str:
+    return next(link["href"] for link in m["github_nav"]["links"] if link["code"] == code)
+
+
 def kept_summary(o: dict) -> str:
     """How the in-app clicks whose fragment names an element compare with the source offset."""
     diffs = [abs(r["click"]["scrollY"] - r["click"]["sourceScrollY"])
@@ -268,6 +287,14 @@ def findings(m: dict, o: dict) -> list[str]:
     t = {v: x["url"] for v, x in gh["targets"].items()}
     bt = {v: x["url"] for v, x in m["board"]["tasks"].items()}
     out = []
+    nd, nc = group(o["github_nav"]["results"], "direct"), group(o["github_nav"]["results"], "click")
+    for key in nd:
+        only(nd, *key, lands, "every navigation form lands when opened directly")
+    for form in ("www.github.com host, #user-content-<slug>", "owner in upper case, #user-content-<slug>"):
+        only(nc, "anchor-id", form, lands, f"{form} lands when clicked")
+    for form in ("#user-content-<slug>", "http:// scheme, #user-content-<slug>", "query ?a=1, #user-content-<slug>",
+                 "query ?plain=1, #user-content-<slug>", "trailing slash, #user-content-<slug>"):
+        only(nc, "anchor-id", form, not_lands, f"{form} does not land when clicked")
 
     for g in (gd, bd):
         only(g, "anchor-id", "#user-content-<slug>", lands, "the <a id> target with #user-content- lands when opened directly")
@@ -298,16 +325,22 @@ def findings(m: dict, o: dict) -> list[str]:
         "map it to the prefixed id on issues (it does in the file view)."
     )
     out.append(
-        "**GitHub issue: a link clicked inside GitHub never lands, whatever its form.** Clicking a link from one issue "
-        "to another is GitHub's in-app navigation. It never scrolls to the fragment. Where the fragment names an "
-        "element of the target (the `#user-content-` forms against the anchored targets), the page keeps the source "
-        "issue's scroll offset: " + kept_summary(o) + ", none with the heading at the top. "
-        "Every other click opens the target at its top. `probe_click.py` showed no wait (up to 12 s) and no reload "
-        "moving the kept offset. "
-        "So the working form lands for a reader who opens the link in a new tab, pastes it or follows it from outside "
-        "GitHub (a Linear page, a local file, this report), but not one who clicks it inside another GitHub issue. "
-        "That is GitHub's behaviour, not something a link's form can fix, and the plan should state it rather than "
-        "promise a landing."
+        "**GitHub issue: the ordinary URL never lands when clicked inside GitHub, and two spellings of it do.** "
+        "Clicking a link from one issue to another is GitHub's in-app navigation, which never scrolls to the "
+        "fragment. Where the fragment names an element of the target (the `#user-content-` forms against the "
+        "anchored targets), the page keeps the source issue's scroll offset: " + kept_summary(o) + ", none with the "
+        "heading at the top. Every other click opens the target at its top. `probe_click.py` showed no wait (up to "
+        "12 s) and no reload moving the kept offset. Spelled so that GitHub loads the page in full, the same "
+        "`#user-content-<slug>` link to the `<a id>` target **lands when clicked inside an issue**, in "
+        f"[the navigation-forms source]({m['github_nav']['source']['url']}). With the `www.github.com` host "
+        f"([GN-I-W2]({nav_href(m, 'GN-I-W2')})), GitHub answers 301 to `github.com` and the browser carries the "
+        "fragment across the redirect. With the owner in upper case "
+        f"([GN-I-C2]({nav_href(m, 'GN-I-C2')})), GitHub serves the page as it is (200) and its in-app navigation "
+        "does not take the click. `http://` does not help, because GitHub stores the link rewritten to "
+        "`https://github.com/…`. A query string (`?a=1`, `?plain=1`) and a trailing slash are still navigated in "
+        "place. Both working spellings rely on undocumented GitHub behaviour (a redirect, and in-app navigation passing over an "
+        "upper-case path), so a contract adopting one should keep a journey that re-observes it. `www.github.com` is "
+        "the less surprising of the two, because the URL a reader ends on is the canonical one."
     )
     only(bd, "anchor-id", "#user-content-<slug>", lands, "board copy direct")
     first = m["board"]["links"][0]
@@ -363,11 +396,14 @@ def findings(m: dict, o: dict) -> list[str]:
     )
     out.append(
         "**No single form lands everywhere.** In a GitHub issue (and so on the board) only `#user-content-<slug>`, "
-        "against a target carrying `<a id=\"<slug>\"></a>`, lands. In the VS Code preview only `#<slug>` lands. In "
+        "against a target carrying `<a id=\"<slug>\"></a>`, lands, and it lands when clicked inside GitHub only "
+        "when the link is spelled `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` (or with "
+        "the owner in upper case). In the VS Code preview only `#<slug>` lands. In "
         "GitHub's file view both land. Every local viewer needs a relative path. So the contract has to differ by "
         "destination. The target record carries `<a id=\"<slug>\"></a>` before each linked heading wherever it lands "
         "(harmless locally: VS Code and the file view resolve it too). Locally authored links are relative paths with "
-        "`#<slug>`. A copy to a GitHub destination rewrites each such fragment to `#user-content-<slug>`. A slug that "
+        "`#<slug>`. A copy to a GitHub destination rewrites each such link to the target's issue URL on "
+        "the `www.github.com` host with `#user-content-<slug>`. A slug that "
         "is not unique within its record must take the `-1`, `-2` suffix, and both viewers agree on that suffix."
     )
     if "linear" not in m:
@@ -388,6 +424,14 @@ def findings(m: dict, o: dict) -> list[str]:
 
 def linear_findings(m: dict) -> list[str]:
     out = []
+    nd, nc = group(o["github_nav"]["results"], "direct"), group(o["github_nav"]["results"], "click")
+    for key in nd:
+        only(nd, *key, lands, "every navigation form lands when opened directly")
+    for form in ("www.github.com host, #user-content-<slug>", "owner in upper case, #user-content-<slug>"):
+        only(nc, "anchor-id", form, lands, f"{form} lands when clicked")
+    for form in ("#user-content-<slug>", "http:// scheme, #user-content-<slug>", "query ?a=1, #user-content-<slug>",
+                 "query ?plain=1, #user-content-<slug>", "trailing slash, #user-content-<slug>"):
+        only(nc, "anchor-id", form, not_lands, f"{form} does not land when clicked")
     for kind in ("issues", "documents"):
         part = m["linear"][kind]
         label = "issue" if kind == "issues" else "document"

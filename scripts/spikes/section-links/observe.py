@@ -130,7 +130,7 @@ def observe_click(context, source_url: str, link: dict) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", required=True)
-    parser.add_argument("--only", nargs="*", help="surfaces to observe: github board fileview vscode")
+    parser.add_argument("--only", nargs="*", help="surfaces to observe: github github_nav board fileview vscode")
     parser.add_argument("--reclassify", action="store_true", help="recompute every verdict from the recorded measurements, opening no browser")
     args = parser.parse_args()
     out = pathlib.Path(args.out).resolve()
@@ -151,6 +151,8 @@ def main() -> None:
     surfaces = []
     if "github" in manifest:
         surfaces.append(("github", manifest["github"]["source"]["url"], manifest["github"]["links"], ("direct", "click")))
+    if "github_nav" in manifest:
+        surfaces.append(("github_nav", manifest["github_nav"]["source"]["url"], manifest["github_nav"]["links"], ("direct", "click")))
     if "board" in manifest:
         surfaces.append(("board", manifest["board"]["document"]["url"], manifest["board"]["links"], ("direct", "click")))
     if "local" in manifest:
