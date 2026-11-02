@@ -7,7 +7,8 @@ acceptance document (every demonstration link, the heading it must land on, and 
 observed), and `findings` are the conclusions. Every finding is checked against the
 observations before it is written: when the data says otherwise this script stops naming the
 finding, rather than writing a claim the run does not back. `condense.py` then condenses the
-method so the report fits in a GitHub issue.
+method so the report fits in a GitHub issue, and `name_linear.py` names each Linear item instead
+of linking it, because a Linear URL names the private workspace.
 
     python3 scripts/spikes/section-links/report.py --out <harness output directory>
 """
@@ -24,6 +25,7 @@ import subprocess
 import sys
 
 from condense import condense
+from name_linear import name_linear
 
 HERE = pathlib.Path(__file__).resolve().parent
 BRANCH = "nick/section-links/spike-section-links"
@@ -568,7 +570,8 @@ def main() -> None:
         "findings": findings(m, o),
     }
     # Composed whole, the report is ~226,000 characters, past a GitHub issue's 65,536; see condense.py.
-    (out / "answers.json").write_text(json.dumps(condense(answers), indent=2) + "\n")
+    # The public board refuses a Linear URL, which names the private workspace; see name_linear.py.
+    (out / "answers.json").write_text(json.dumps(name_linear(condense(answers)), indent=2) + "\n")
     print(f"answers: {out / 'answers.json'}")
 
 
