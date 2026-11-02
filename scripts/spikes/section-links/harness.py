@@ -14,6 +14,7 @@ Destinations, each a subcommand so a person can re-run one:
   board    a scratch local-md project copied by the installed CLI's real `project copy` and
            `document copy` onto board #1 (GH_PROJECTS_OWNER / GH_PROJECTS_NUMBER)
   linear   issues and documents in team TES2 (LINEAR_WRITE_TEAM), through Linear's GraphQL API
+  linear-state  re-read how Linear's editor holds each target's raw anchors (part of `linear`)
   local    the committed Markdown under local/, and its upload to the scratch repository
   vscode   a VS Code-style preview of local/, rendered by vscode-preview/render.mjs
   all      every one of the above, in that order
@@ -386,7 +387,7 @@ def build_board(m: Manifest, stamp: str, scratch: pathlib.Path, onetaskgraph: st
 
 def linear(query: str, variables: dict) -> dict:
     request = urllib.request.Request(
-        "https://api.linear.app/graphql",
+        os.environ.get("SECTION_LINKS_LINEAR_URL", "https://api.linear.app/graphql"),
         data=json.dumps({"query": query, "variables": variables}).encode(),
         headers={"Content-Type": "application/json", "Authorization": os.environ["LINEAR_API_KEY"]},
     )
@@ -442,6 +443,37 @@ def build_linear(m: Manifest, stamp: str) -> None:
             "source": source,
             "links": links,
         }
+    m.put("linear", out)
+    record_linear_state(m)
+
+
+def anchor_held_as(state_b64: str, marker: str) -> str | None:
+    """How Linear's editor holds a raw anchor: the node type its text sits in, or None if absent.
+
+    `descriptionState`/`contentState` is the editor's Yjs update, base64. A node's type name
+    is written as a length-prefixed string before its content, so the last known type name
+    before the marker's bytes is the node the marker is held in. Text inside a `paragraph` is
+    literal text the reader sees, not an element a fragment could address.
+    """
+    raw = base64.b64decode(state_b64)
+    at = raw.find(marker.encode())
+    if at < 0:
+        return None
+    types = [b"paragraph", b"heading", b"html", b"htmlBlock", b"code_block", b"codeBlock", b"anchor"]
+    best = max(types, key=lambda t: raw.rfind(bytes([len(t)]) + t, 0, at))
+    if raw.rfind(bytes([len(best)]) + best, 0, at) < 0:
+        return "unknown"
+    return f"literal text in a `{best.decode()}` node" if best == b"paragraph" else f"a `{best.decode()}` node"
+
+
+def record_linear_state(m: Manifest) -> None:
+    """Record, for every Linear target, how its editor holds each kind of raw anchor."""
+    out = m.data["linear"]
+    for kind, query, field in (("issues", "issue", "descriptionState"), ("documents", "document", "contentState")):
+        for variant, marker in (("anchor-id", '<a id="what"></a>'), ("anchor-name", '<a name="what"></a>'), ("plain", "<a ")):
+            target = out[kind]["targets"][variant]
+            state = linear(f"query($id:String!){{{query}(id:$id){{{field}}}}}", {"id": target["id"]})[query][field]
+            target["anchor_held_as"] = anchor_held_as(state, marker)
     m.put("linear", out)
 
 
@@ -526,7 +558,7 @@ def build_vscode(m: Manifest, out: pathlib.Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("step", choices=["github", "github-nav", "board", "linear", "local", "vscode", "all"])
+    parser.add_argument("step", choices=["github", "github-nav", "board", "linear", "linear-state", "local", "vscode", "all"])
     parser.add_argument("--out", required=True, help="directory for manifest.json and scratch files (outside the repository)")
     parser.add_argument("--onetaskgraph", default=os.environ.get("ONETASKGRAPH", "onetaskgraph"), help="the installed CLI the board copy runs")
     parser.add_argument("--stamp", default=datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S"))
@@ -547,6 +579,8 @@ def main() -> None:
             build_board(m, stamp, scratch, args.onetaskgraph)
         elif step == "linear":
             build_linear(m, stamp)
+        elif step == "linear-state":
+            record_linear_state(m)
         elif step == "local":
             build_local(m, stamp)
         elif step == "vscode":
