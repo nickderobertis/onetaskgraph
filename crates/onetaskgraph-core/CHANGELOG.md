@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.13.2...onetaskgraph-core-v0.13.3) - 2026-11-03
+
+### Added
+
+- *(copy)* land section links on each destination's own heading anchors ([#3868](https://github.com/nickderobertis/onetaskgraph/pull/3868))
+
 ## [0.12.14](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.12.13...onetaskgraph-core-v0.12.14) - 2026-10-31
 
 ### Added
