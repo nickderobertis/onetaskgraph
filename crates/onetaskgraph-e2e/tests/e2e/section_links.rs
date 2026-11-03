@@ -91,7 +91,9 @@ fn authored(sandbox: &Sandbox, name: &str) -> (Value, String) {
     for folder in ["projects", "tasks", "documents"] {
         std::fs::create_dir_all(root.join(folder)).expect("a folder");
     }
-    let target = root.join("tasks/T.md").display().to_string();
+    // Joined part by part: `join("tasks/T.md")` would spell `…\\tasks/T.md` on Windows, which is
+    // not the location the folder reports for the file.
+    let target = root.join("tasks").join("T.md").display().to_string();
     let files = [
         (
             "projects/P.md",
@@ -343,19 +345,22 @@ fn www(location: &str) -> String {
     format!("https://www.github.com/{rest}")
 }
 
-/// `to` written relative to the directory of `from`, with `/` between its parts.
+/// `to` written relative to the directory of `from`, with `/` between its parts — the
+/// authored form on every platform, so the two paths are compared by their parts rather than
+/// split on `/`, which a Windows location (`\\?\C:\…\tasks\T.md`) holds none of.
 fn relative(from: &str, to: &str) -> String {
-    let from: Vec<&str> = Path::new(from)
+    let part =
+        |component: std::path::Component<'_>| component.as_os_str().to_str().unwrap().to_owned();
+    let from: Vec<String> = Path::new(from)
         .parent()
         .expect("a file in a folder")
-        .to_str()
-        .unwrap()
-        .split('/')
+        .components()
+        .map(part)
         .collect();
-    let to: Vec<&str> = to.split('/').collect();
+    let to: Vec<String> = Path::new(to).components().map(part).collect();
     let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
-    let mut parts: Vec<&str> = vec![".."; from.len() - common];
-    parts.extend(&to[common..]);
+    let mut parts: Vec<String> = vec!["..".to_owned(); from.len() - common];
+    parts.extend(to[common..].iter().cloned());
     parts.join("/")
 }
 
@@ -1711,7 +1716,8 @@ fn links_linear_stores_in_angle_brackets_are_finished_and_a_fan_out_names_its_ow
 /// The absolute path of the authored target task of the folder `authored`.
 fn authored_target_of(sandbox: &Sandbox) -> String {
     root_of(sandbox, "authored")
-        .join("tasks/T.md")
+        .join("tasks")
+        .join("T.md")
         .display()
         .to_string()
 }

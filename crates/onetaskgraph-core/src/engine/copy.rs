@@ -11068,9 +11068,11 @@ fn project_of(item: &Item) -> Option<NativeId> {
 }
 
 /// Whether `content` holds anything a reference or a section link could be — a Markdown
-/// link, an address, or a path — so a body that holds none never has its project read.
+/// link, an address, or a path — so a body that holds none never has its project read. A
+/// path is either separator's: a folder of Markdown on Windows reports `C:\…\t.md`, which
+/// holds no `/`.
 fn could_name(content: &str) -> bool {
-    content.contains("](") || content.contains("://") || content.contains('/')
+    content.contains("](") || content.contains("://") || content.contains(['/', '\\'])
 }
 
 /// Read the record `id` of `destination` through `level`, for what its answer says its
