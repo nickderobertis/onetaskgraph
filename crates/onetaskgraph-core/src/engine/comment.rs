@@ -533,7 +533,7 @@ impl Engine {
             )
             .await?;
         let comment = &NewComment {
-            body: rewritten_body(&rewrite, &comment.body),
+            body: rewritten_body(source, &rewrite, &comment.body)?,
             author: comment.author.clone(),
         };
         match source.source().add_comment(&task.native, comment).await {
@@ -565,7 +565,7 @@ impl Engine {
                 &Exposure::text(body.as_str()),
             )
             .await?;
-        let body = &rewritten_body(&rewrite, body);
+        let body = &rewritten_body(source, &rewrite, body)?;
         match source
             .source()
             .edit_comment(&task.native, comment, body)
@@ -851,9 +851,12 @@ fn failed(source: &ResolvedSource, error: SourceError) -> EngineError {
     }
 }
 
-/// `body` as a sanitisation passed it: rewritten where it was, and as it was otherwise — a
-/// replacement never empties a body the policy passed, so the fallback is never reached in
-/// practice.
-fn rewritten_body(rewrite: &super::boundary::Rewrite, body: &CommentBody) -> CommentBody {
-    CommentBody::new(rewrite.text(body.as_str())).unwrap_or_else(|_| body.clone())
+/// `body` as a sanitisation passed it, refused — nothing written — when the replacement left
+/// it empty, which no source takes as a comment.
+fn rewritten_body(
+    source: &ResolvedSource,
+    rewrite: &super::boundary::Rewrite,
+    body: &CommentBody,
+) -> Result<CommentBody, EngineError> {
+    CommentBody::new(rewrite.text(body.as_str())).map_err(|error| failed(source, error))
 }

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Annotated, Any
 
 from pydantic import BaseModel, Field
@@ -17,19 +18,57 @@ class SweepRequests(BaseModel):
             ge=0,
         ),
     ]
-    searches: Annotated[int, Field(description="Search or listing pages.", ge=0)]
-    reads: Annotated[int, Field(description="Reads of an item and its comments.", ge=0)]
-    writes: Annotated[int, Field(description="Writes of an item or a comment.", ge=0)]
+    searches: Annotated[
+        int,
+        Field(
+            description="Search or listing pages the sweep asked its source for — each one call of the plugin\ncontract, which a source may answer with more than one request.",
+            ge=0,
+        ),
+    ]
+    reads: Annotated[
+        int,
+        Field(
+            description="Batched reads of items with their comments, and further comment reads, the sweep made.",
+            ge=0,
+        ),
+    ]
+    writes: Annotated[
+        int,
+        Field(
+            description="Items the sweep wrote back, each with every comment of it that changed.",
+            ge=0,
+        ),
+    ]
+
+
+class Uncovered(StrEnum):
+    UncoveredMetadata = "metadata"
+    UncoveredComments = "comments"
+    UncoveredNormalizedSpellings = "normalized-spellings"
+
+
+class SweepKind(StrEnum):
+    SweepKindTask = "task"
+
+
+class ItemOutcome(StrEnum):
+    ItemOutcomeRewritten = "rewritten"
+    ItemOutcomeWouldRewrite = "would-rewrite"
+    ItemOutcomeUnchanged = "unchanged"
+    ItemOutcomeUnfixable = "unfixable"
+    ItemOutcomeConflict = "conflict"
+    ItemOutcomeNotAMatch = "not-a-match"
+
+
+class FieldOutcome(StrEnum):
+    FieldOutcomeRewritten = "rewritten"
+    FieldOutcomeWouldRewrite = "would-rewrite"
+    FieldOutcomeUnfixable = "unfixable"
 
 
 class SweepCoverage(BaseModel):
     complete: Annotated[bool, Field(description="Whether it covered every class.")]
-    uncovered: Annotated[
-        list[str],
-        Field(
-            description="`metadata`, `comments`, `normalized-spellings`: each class it did not cover."
-        ),
-    ]
+    uncovered: Annotated[list[Uncovered], Field(description="Each class it did not cover.")]
 
 
 class SweepField(BaseModel):
@@ -39,7 +78,7 @@ class SweepField(BaseModel):
             description="`content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its\nkey or id as screened."
         ),
     ]
-    outcome: Annotated[str, Field(description="`rewritten`, `would-rewrite` or `unfixable`.")]
+    outcome: Annotated[FieldOutcome, Field(description="What the sweep did with it.")]
     why: Annotated[
         str | None,
         Field(description="Why a field is unfixable, in neutral words; absent otherwise."),
@@ -48,13 +87,8 @@ class SweepField(BaseModel):
 
 class SweepItem(BaseModel):
     id: Annotated[Any, Field(description="The item's qualified id, as screened.")]
-    kind: Annotated[str, Field(description="`task`.")]
-    outcome: Annotated[
-        str,
-        Field(
-            description="`rewritten`, `would-rewrite`, `unchanged`, `unfixable`, `conflict` or `not-a-match`."
-        ),
-    ]
+    kind: Annotated[SweepKind, Field(description="What kind of record it is.")]
+    outcome: Annotated[ItemOutcome, Field(description="What the sweep did with it.")]
     fields: Annotated[
         list[SweepField],
         Field(description="What it did with each field it changed or could not."),

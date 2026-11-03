@@ -230,8 +230,10 @@ fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
                 &done,
             ),
         };
-        let _ = emit(&mut io::stdout().lock(), rendered.trim_end(), "the dry run");
-        return ExitCode::from(EXIT_OK);
+        return match emit(&mut io::stdout().lock(), rendered.trim_end(), "the dry run") {
+            Ok(()) => ExitCode::from(EXIT_OK),
+            Err(failure) => fail(failure.message(), EXIT_FAILURE),
+        };
     }
     let code = fail(failure.message(), EXIT_FAILURE);
     if output == OutputFormat::Json {
@@ -246,9 +248,7 @@ fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take(),
-            predates_write: FAILED_PREDATES
-                .load(std::sync::atomic::Ordering::SeqCst)
-                .then_some(true),
+            predates_write: FAILED_PREDATES.load(std::sync::atomic::Ordering::SeqCst),
         };
         // Best effort, and deliberately silent: the stderr line above already said why the
         // command failed, and a reader that has gone away cannot be told anything more.

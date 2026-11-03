@@ -1311,3 +1311,95 @@ fn a_sweep_without_a_terms_command_is_refused_naming_it() {
     assert_eq!(code, Some(1), "{out}{err}");
     assert!(err.contains("terms_command"), "{err}");
 }
+
+#[test]
+fn replacement_flags_and_settings_are_read_in_order_and_refused_by_name_when_malformed() {
+    let (store, record) = sanitizing(json!([]));
+    let home = store.onevcs.as_ref().expect("a home").path().to_path_buf();
+    let create = |flags: &[&str], environment: &[(&str, &str)]| {
+        let mut command = store.sandbox.command();
+        command
+            .args([
+                "task",
+                "create",
+                "site",
+                "--project",
+                "p",
+                "--title",
+                "Flags",
+                "--body-file",
+                &store.body(PLAIN),
+            ])
+            .args(flags)
+            .env("ONEVCS_HOME", &home);
+        for (name, value) in environment {
+            command.env(name, value);
+        }
+        command.assert().get_output().clone()
+    };
+    // A `--replace` with no `=`, or naming no term, is a usage error naming the flag.
+    for flags in [
+        &["--replace", "emberline"][..],
+        &["--replace", "=x"],
+        &["--reject", ""],
+    ] {
+        let output = create(flags, &[]);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{flags:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("--replace") || stderr(&output).contains("--reject"),
+            "{}",
+            stderr(&output)
+        );
+    }
+    // Interleaved, the entries reach the policy in the order typed, split at the first `=`.
+    let before = record.calls().len();
+    let output = create(
+        &[
+            "--reject",
+            "emberline",
+            "--replace",
+            "duskfield=dusk=x",
+            "--replace",
+            "emberline=ember-x",
+        ],
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let calls = record.calls();
+    let sent = &calls[before..]
+        .iter()
+        .find(|call| call.command == BoundaryCommand::Sanitize)
+        .expect("one sanitisation")
+        .input;
+    assert_eq!(
+        sent["replacements"],
+        json!([
+            {"term": "emberline", "reject": true},
+            {"term": "duskfield", "with": "dusk=x"},
+            {"term": "emberline", "with": "ember-x"},
+        ]),
+        "{sent}"
+    );
+    // An environment entry that skips an index is refused at load, naming the gap.
+    let output = create(
+        &[],
+        &[
+            (
+                "ONETASKGRAPH_WRITE_POLICY__REPLACEMENTS__1__TERM",
+                "emberline",
+            ),
+            ("ONETASKGRAPH_WRITE_POLICY__REPLACEMENTS__1__REJECT", "true"),
+        ],
+    );
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("write_policy") && stderr(&output).contains("entry 0"),
+        "{}",
+        stderr(&output)
+    );
+}

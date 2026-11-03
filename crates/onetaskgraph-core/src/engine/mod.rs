@@ -60,7 +60,10 @@ use crate::plan::{
 };
 use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available_with_clock};
 
-pub use sweep::{SweepCoverage, SweepField, SweepItem, SweepReport, SweepRequests};
+pub use sweep::{
+    FieldOutcome, ItemOutcome, SweepCoverage, SweepField, SweepItem, SweepKind, SweepReport,
+    SweepRequests, Uncovered,
+};
 
 use fetch::{Fetched, Stream, fits, merge, unrepeated, walk};
 use join::join_all;

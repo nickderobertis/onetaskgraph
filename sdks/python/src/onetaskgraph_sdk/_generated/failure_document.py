@@ -234,8 +234,8 @@ class FailureDocument(BaseModel):
         ),
     ] = None
     predates_write: Annotated[
-        bool | None,
+        bool,
         Field(
             description="`true` when the write was refused for something already on its item before it — a\nprivate repository among its `repositories`, or a term sanitising it could not fix —\nand absent otherwise."
         ),
-    ] = None
+    ] = False

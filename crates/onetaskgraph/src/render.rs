@@ -1295,7 +1295,13 @@ pub fn sweep(report: &onetaskgraph_core::SweepReport) -> String {
     if !report.coverage.complete {
         out.push_str(&format!(
             "\nnot covered: {}",
-            report.coverage.uncovered.join(", ")
+            report
+                .coverage
+                .uncovered
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     for item in &report.items {

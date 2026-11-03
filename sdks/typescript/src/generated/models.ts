@@ -4285,7 +4285,7 @@ held?: (WriteResult | null)
  * private repository among its `repositories`, or a term sanitising it could not fix —
  * and absent otherwise.
  */
-predates_write?: (boolean | null)
+predates_write?: boolean
 [k: string]: any
 }
 /**
@@ -11755,6 +11755,11 @@ retry_after_seconds: (number | null)
 export type StatusesReconciled = GeneratedStatusesReconciled.StatusesReconciled;
 export namespace GeneratedSweepReport {
 /**
+ * A class of record a search cannot establish.
+ */
+export type Uncovered = ("metadata" | "comments" | "normalized-spellings")
+
+/**
  * What one `sources sanitize` did, naming every record by its screened locator and never by
  * what it said.
  */
@@ -11788,15 +11793,16 @@ export interface SweepRequests {
  */
 total: number
 /**
- * Search or listing pages.
+ * Search or listing pages the sweep asked its source for — each one call of the plugin
+ * contract, which a source may answer with more than one request.
  */
 searches: number
 /**
- * Reads of an item and its comments.
+ * Batched reads of items with their comments, and further comment reads, the sweep made.
  */
 reads: number
 /**
- * Writes of an item or a comment.
+ * Items the sweep wrote back, each with every comment of it that changed.
  */
 writes: number
 [k: string]: any
@@ -11810,9 +11816,9 @@ export interface SweepCoverage {
  */
 complete: boolean
 /**
- * `metadata`, `comments`, `normalized-spellings`: each class it did not cover.
+ * Each class it did not cover.
  */
-uncovered: string[]
+uncovered: Uncovered[]
 [k: string]: any
 }
 /**
@@ -11824,13 +11830,13 @@ export interface SweepItem {
  */
 id: unknown
 /**
- * `task`.
+ * What kind of record it is.
  */
-kind: string
+kind: "task"
 /**
- * `rewritten`, `would-rewrite`, `unchanged`, `unfixable`, `conflict` or `not-a-match`.
+ * What the sweep did with it.
  */
-outcome: string
+outcome: ("rewritten" | "would-rewrite" | "unchanged" | "unfixable" | "conflict" | "not-a-match")
 /**
  * What it did with each field it changed or could not.
  */
@@ -11847,9 +11853,9 @@ export interface SweepField {
  */
 field: unknown
 /**
- * `rewritten`, `would-rewrite` or `unfixable`.
+ * What the sweep did with it.
  */
-outcome: string
+outcome: ("rewritten" | "would-rewrite" | "unfixable")
 /**
  * Why a field is unfixable, in neutral words; absent otherwise.
  */

@@ -75,8 +75,9 @@ pub struct FailureDocument {
     /// `true` when the write was refused for something already on its item before it — a
     /// private repository among its `repositories`, or a term sanitising it could not fix —
     /// and absent otherwise.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub predates_write: Option<bool>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[schemars(!skip_serializing_if)]
+    pub predates_write: bool,
 }
 
 /// Why one command failed.

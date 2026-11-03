@@ -3498,7 +3498,7 @@ impl Engine {
             .await?;
         for (project, tasks, _, _) in &mut plans {
             for item in std::iter::once(project).chain(tasks.iter_mut()) {
-                rewritten(item, &rewrite);
+                rewritten(item, &rewrite)?;
             }
         }
         // Every public view too, before anything of any plan is written.
@@ -5321,7 +5321,7 @@ impl Engine {
                 )
                 .await?;
             for item in &mut planned {
-                rewritten(item, &rewrite);
+                rewritten(item, &rewrite)?;
             }
         }
 
@@ -10764,9 +10764,14 @@ fn exposure_of(item: &Planned, withheld: impl Fn(&GlobalId) -> bool) -> Exposure
 
 /// `item` as the sanitisation that admitted its copy passed it: its own rewritable fields, the
 /// source spelling its links are rendered from, and the body of every comment it carries.
-fn rewritten(item: &mut Planned, rewrite: &Rewrite) {
+///
+/// # Errors
+///
+/// [`EngineError::BoundaryRefused`] when a replacement left a carried comment empty, which no
+/// destination takes as a comment: the copy is refused before anything is written.
+fn rewritten(item: &mut Planned, rewrite: &Rewrite) -> Result<(), EngineError> {
     if rewrite.is_identity() {
-        return;
+        return Ok(());
     }
     match &mut item.item {
         Item::Task(task) => rewrite.task(task),
@@ -10779,6 +10784,12 @@ fn rewritten(item: &mut Planned, rewrite: &Rewrite) {
     for comment in item.carried.iter_mut().flatten() {
         comment.body = rewrite.text(&comment.body);
     }
+    let emptied = || EngineError::BoundaryRefused {
+        item: item.source.to_string(),
+        destination: item.to.to_string(),
+        reason: "a replacement leaves a comment it carries empty".to_owned(),
+    };
+    let mut refused = None;
     for step in item
         .comment_plan
         .iter_mut()
@@ -10786,20 +10797,18 @@ fn rewritten(item: &mut Planned, rewrite: &Rewrite) {
     {
         match step {
             comments::Step::Add(copy) | comments::Step::Edit { copy, .. } => {
-                copy.body = rewritten_body(rewrite, &copy.body);
+                match onetaskgraph_plugin_api::CommentBody::new(rewrite.text(copy.body.as_str())) {
+                    Ok(body) => copy.body = body,
+                    Err(_) => refused = Some(()),
+                }
             }
             comments::Step::Delete(_) => {}
         }
     }
-}
-
-/// A comment's body as a sanitisation passed it; a passed replacement never empties one.
-fn rewritten_body(
-    rewrite: &Rewrite,
-    body: &onetaskgraph_plugin_api::CommentBody,
-) -> onetaskgraph_plugin_api::CommentBody {
-    onetaskgraph_plugin_api::CommentBody::new(rewrite.text(body.as_str()))
-        .unwrap_or_else(|_| body.clone())
+    match refused {
+        Some(()) => Err(emptied()),
+        None => Ok(()),
+    }
 }
 
 /// The id a created item is offered to the destination under.

@@ -691,9 +691,16 @@ struct TermWire {
     term: String,
     mode: privateterms::TermMode,
     case_sensitive: bool,
-    action: String,
-    #[serde(default)]
-    with: Option<String>,
+    #[serde(flatten)]
+    action: ActionWire,
+}
+
+/// What a term's hits get, as `boundary terms` spells it: replaced by its `with`, or refused.
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+enum ActionWire {
+    Replace { with: String },
+    Reject,
 }
 
 impl TermWire {
@@ -704,13 +711,61 @@ impl TermWire {
                 mode: self.mode,
                 case_sensitive: self.case_sensitive,
             },
-            action: match (self.action.as_str(), self.with) {
-                ("replace", Some(with)) => privateterms::Action::Replace(with),
-                _ => privateterms::Action::Reject,
+            action: match self.action {
+                ActionWire::Replace { with } => privateterms::Action::Replace(with),
+                ActionWire::Reject => privateterms::Action::Reject,
             },
             origin: "policy".to_owned(),
         }
     }
+}
+
+/// What is wrong with `answer` as an answer to `input`, whichever policy gave it — `None` when
+/// nothing is: a decided answer holds one rewritten entry per entry sent and one screened
+/// locator per locator sent, each plain locator the very value sent, each `unfixed` entry
+/// naming an entry that exists, and a pass leaves none unfixed. An undecided answer is taken
+/// as it is.
+fn answer_problem(input: &PublicSanitizeInput, answer: &SanitizeVerdict) -> Option<&'static str> {
+    if let WriteVerdict::Unavailable { .. } = answer.verdict {
+        return None;
+    }
+    if answer.text.len() != input.text.len()
+        || answer.paths.len() != input.paths.len()
+        || answer.metadata.len() != input.metadata.len()
+    {
+        return Some("the policy answered entries that do not match those sent");
+    }
+    if answer.locators.len() != input.locators.len()
+        || answer
+            .locators
+            .iter()
+            .zip(&input.locators)
+            .any(|(answered, sent)| match answered {
+                Locator::Plain(value) => value != &sent.value,
+                Locator::Redacted { kind, .. } => *kind != sent.kind,
+            })
+    {
+        return Some("the policy answered locators that do not match those sent");
+    }
+    if answer.verdict == WriteVerdict::Pass && !answer.unfixed.is_empty() {
+        return Some("the policy passed a write it says still carries a term");
+    }
+    let within = |unfixed: &Unfixed| {
+        let length = match (unfixed.surface, unfixed.fixed) {
+            (SanitizeSurface::Text, false) => input.text.len(),
+            (SanitizeSurface::Path, false) => input.paths.len(),
+            (SanitizeSurface::Metadata, false) => input.metadata.len(),
+            (SanitizeSurface::Text, true) => input.fixed.text.len(),
+            (SanitizeSurface::Path, true) => input.fixed.paths.len(),
+            (SanitizeSurface::Metadata, true) => input.fixed.metadata.len(),
+            (SanitizeSurface::Locators, _) => input.locators.len(),
+        };
+        usize::try_from(unfixed.index).is_ok_and(|index| index < length)
+    };
+    if !answer.unfixed.iter().all(within) {
+        return Some("the policy named an unfixed entry that was never sent");
+    }
+    None
 }
 
 /// A sanitisation that could not decide: nothing may be written, and no locator is answered.
@@ -2100,11 +2155,16 @@ impl Engine {
     /// What the caller's policy says of `exposure`, one it could not be asked unavailable.
     pub(crate) async fn screen(&self, exposure: &Exposure) -> SanitizeVerdict {
         let input = exposure.input(self.boundary.scope.clone(), &self.boundary.replacements);
-        self.boundary
+        let answer = self
+            .boundary
             .policy
             .sanitize_public_write(&input)
             .await
-            .unwrap_or_else(|error| unavailable(error.message))
+            .unwrap_or_else(|error| unavailable(error.message));
+        match answer_problem(&input, &answer) {
+            Some(problem) => unavailable(problem),
+            None => answer,
+        }
     }
 
     /// `classification`, held against the project `project` of `source` it is filed under —
@@ -2417,10 +2477,18 @@ pub(super) fn refusal(
 }
 
 /// Every comment of `id` its source holds, every page, oldest first — none for a source whose
-/// tasks hold none, and none when they cannot be read, which then leaves them unsanitised.
-pub(super) async fn every_comment(destination: &ResolvedSource, id: &NativeId) -> Vec<Comment> {
+/// tasks hold none.
+///
+/// # Errors
+///
+/// [`EngineError::SourceRefused`] when any page cannot be read: a sanitisation never decides
+/// on part of an item's comments.
+pub(super) async fn every_comment(
+    destination: &ResolvedSource,
+    id: &NativeId,
+) -> Result<Vec<Comment>, EngineError> {
     if !destination.source().capabilities().comments.is_native() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut comments = Vec::new();
     let mut cursor = None;
@@ -2435,13 +2503,18 @@ pub(super) async fn every_comment(destination: &ResolvedSource, id: &NativeId) -
                 },
             )
             .await;
-        let Ok(Some(page)) = page else {
-            return comments;
+        let page = page.map_err(|error| EngineError::SourceRefused {
+            name: destination.name().to_string(),
+            error,
+        })?;
+        // A task gone between its read and its comments' has none left to sanitise.
+        let Some(page) = page else {
+            return Ok(comments);
         };
         comments.extend(page.items);
         match page.next {
             Some(next) => cursor = Some(next),
-            None => return comments,
+            None => return Ok(comments),
         }
     }
 }
@@ -2608,7 +2681,7 @@ impl Engine {
                 declared: self.declared(destination.name()),
             });
         }
-        let comments = every_comment(destination, id).await;
+        let comments = every_comment(destination, id).await?;
         let stored = StoredTask::of(destination, item, &task, &comments);
         let write = located(destination, item, exposure.clone());
         let whole = write.clone().and(stored.exposure.clone());
@@ -2794,9 +2867,12 @@ impl Engine {
             let fresh = self.read_held_task(destination, id).await?;
             if fresh.version != task.version {
                 // Moved once: sanitise the record as it now stands, keeping what changed.
-                let comments = every_comment(destination, id).await;
+                let comments = every_comment(destination, id).await?;
                 let stored = StoredTask::of(destination, item, &fresh, &comments);
                 let answer = self.screen(&stored.exposure).await;
+                if answer.verdict != WriteVerdict::Pass {
+                    return Err(refusal(destination, item, &stored.exposure, &answer));
+                }
                 let rewrite = Rewrite::of(&stored.exposure, &answer);
                 let Some(again) = sanitised_task(&fresh, &comments, &rewrite) else {
                     return Ok(Vec::new());
@@ -2882,9 +2958,7 @@ impl Engine {
             .await
             .map_err(refused)?;
         for (comment, body) in comments {
-            let Ok(body) = CommentBody::new(body.clone()) else {
-                continue;
-            };
+            let body = CommentBody::new(body.clone()).map_err(refused)?;
             destination
                 .source()
                 .edit_comment(id, &comment.id, &body)

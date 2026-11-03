@@ -80,7 +80,10 @@ pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,
     RenderedRecord, TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,
 };
-pub use engine::{SweepCoverage, SweepField, SweepItem, SweepReport, SweepRequests};
+pub use engine::{
+    FieldOutcome, ItemOutcome, SweepCoverage, SweepField, SweepItem, SweepKind, SweepReport,
+    SweepRequests, Uncovered,
+};
 pub use environment::Environment;
 pub use failure::{Failure, FailureClass, FailureDocument, classify};
 pub use global_id::GlobalId;

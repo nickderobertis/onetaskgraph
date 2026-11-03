@@ -6984,10 +6984,8 @@ export const runtimeSchemas = {
       },
       "predates_write": {
         "description": "`true` when the write was refused for something already on its item before it — a\nprivate repository among its `repositories`, or a term sanitising it could not fix —\nand absent otherwise.",
-        "type": [
-          "boolean",
-          "null"
-        ]
+        "type": "boolean",
+        "default": false
       }
     },
     "required": [
@@ -20400,19 +20398,19 @@ export const runtimeSchemas = {
             "minimum": 0
           },
           "searches": {
-            "description": "Search or listing pages.",
+            "description": "Search or listing pages the sweep asked its source for — each one call of the plugin\ncontract, which a source may answer with more than one request.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
           "reads": {
-            "description": "Reads of an item and its comments.",
+            "description": "Batched reads of items with their comments, and further comment reads, the sweep made.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
           "writes": {
-            "description": "Writes of an item or a comment.",
+            "description": "Items the sweep wrote back, each with every comment of it that changed.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
@@ -20434,16 +20432,36 @@ export const runtimeSchemas = {
             "type": "boolean"
           },
           "uncovered": {
-            "description": "`metadata`, `comments`, `normalized-spellings`: each class it did not cover.",
+            "description": "Each class it did not cover.",
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/$defs/Uncovered"
             }
           }
         },
         "required": [
           "complete",
           "uncovered"
+        ]
+      },
+      "Uncovered": {
+        "description": "A class of record a search cannot establish.",
+        "oneOf": [
+          {
+            "description": "A hit only in stored metadata, which no search of the plugin contract reaches.",
+            "type": "string",
+            "const": "metadata"
+          },
+          {
+            "description": "A hit only in a comment, which no search of the plugin contract reaches.",
+            "type": "string",
+            "const": "comments"
+          },
+          {
+            "description": "A spelling the policy matches and a backend's index does not.",
+            "type": "string",
+            "const": "normalized-spellings"
+          }
         ]
       },
       "SweepItem": {
@@ -20454,12 +20472,12 @@ export const runtimeSchemas = {
             "description": "The item's qualified id, as screened."
           },
           "kind": {
-            "description": "`task`.",
-            "type": "string"
+            "description": "What kind of record it is.",
+            "$ref": "#/$defs/SweepKind"
           },
           "outcome": {
-            "description": "`rewritten`, `would-rewrite`, `unchanged`, `unfixable`, `conflict` or `not-a-match`.",
-            "type": "string"
+            "description": "What the sweep did with it.",
+            "$ref": "#/$defs/ItemOutcome"
           },
           "fields": {
             "description": "What it did with each field it changed or could not.",
@@ -20476,6 +20494,51 @@ export const runtimeSchemas = {
           "fields"
         ]
       },
+      "SweepKind": {
+        "description": "What kind of record a sweep entry is about: a task, the one kind a sweep reads.",
+        "oneOf": [
+          {
+            "description": "A task.",
+            "type": "string",
+            "const": "task"
+          }
+        ]
+      },
+      "ItemOutcome": {
+        "description": "What a sweep did with one item.",
+        "oneOf": [
+          {
+            "description": "Every field it carried a term in was rewritten.",
+            "type": "string",
+            "const": "rewritten"
+          },
+          {
+            "description": "A dry run: every field it carries a term in would be rewritten.",
+            "type": "string",
+            "const": "would-rewrite"
+          },
+          {
+            "description": "Nothing in it needed rewriting.",
+            "type": "string",
+            "const": "unchanged"
+          },
+          {
+            "description": "Something in it replacement cannot fix.",
+            "type": "string",
+            "const": "unfixable"
+          },
+          {
+            "description": "It moved twice under the sweep, and nothing was overwritten.",
+            "type": "string",
+            "const": "conflict"
+          },
+          {
+            "description": "A search returned it, and the policy finds no term in it.",
+            "type": "string",
+            "const": "not-a-match"
+          }
+        ]
+      },
       "SweepField": {
         "description": "What a sweep did with one field of an item.",
         "type": "object",
@@ -20484,8 +20547,8 @@ export const runtimeSchemas = {
             "description": "`content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its\nkey or id as screened."
           },
           "outcome": {
-            "description": "`rewritten`, `would-rewrite` or `unfixable`.",
-            "type": "string"
+            "description": "What the sweep did with it.",
+            "$ref": "#/$defs/FieldOutcome"
           },
           "why": {
             "description": "Why a field is unfixable, in neutral words; absent otherwise.",
@@ -20498,6 +20561,26 @@ export const runtimeSchemas = {
         "required": [
           "field",
           "outcome"
+        ]
+      },
+      "FieldOutcome": {
+        "description": "What a sweep did with one field.",
+        "oneOf": [
+          {
+            "description": "It was rewritten.",
+            "type": "string",
+            "const": "rewritten"
+          },
+          {
+            "description": "A dry run: it would be rewritten.",
+            "type": "string",
+            "const": "would-rewrite"
+          },
+          {
+            "description": "Replacement cannot fix it.",
+            "type": "string",
+            "const": "unfixable"
+          }
         ]
       }
     }

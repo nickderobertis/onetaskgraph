@@ -31,8 +31,62 @@ use super::boundary::{
 use super::{Engine, EngineError};
 use crate::resolve::ResolvedSource;
 
-/// The classes of record a search-only sweep cannot establish, as the report names them.
-const UNCOVERED: [&str; 3] = ["metadata", "comments", "normalized-spellings"];
+/// A class of record a search cannot establish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum Uncovered {
+    /// A hit only in stored metadata, which no search of the plugin contract reaches.
+    Metadata,
+    /// A hit only in a comment, which no search of the plugin contract reaches.
+    Comments,
+    /// A spelling the policy matches and a backend's index does not.
+    NormalizedSpellings,
+}
+
+/// The classes of record a search-only sweep cannot establish.
+const UNCOVERED: [Uncovered; 3] = [
+    Uncovered::Metadata,
+    Uncovered::Comments,
+    Uncovered::NormalizedSpellings,
+];
+
+/// What kind of record a sweep entry is about: a task, the one kind a sweep reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SweepKind {
+    /// A task.
+    Task,
+}
+
+/// What a sweep did with one item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ItemOutcome {
+    /// Every field it carried a term in was rewritten.
+    Rewritten,
+    /// A dry run: every field it carries a term in would be rewritten.
+    WouldRewrite,
+    /// Nothing in it needed rewriting.
+    Unchanged,
+    /// Something in it replacement cannot fix.
+    Unfixable,
+    /// It moved twice under the sweep, and nothing was overwritten.
+    Conflict,
+    /// A search returned it, and the policy finds no term in it.
+    NotAMatch,
+}
+
+/// What a sweep did with one field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum FieldOutcome {
+    /// It was rewritten.
+    Rewritten,
+    /// A dry run: it would be rewritten.
+    WouldRewrite,
+    /// Replacement cannot fix it.
+    Unfixable,
+}
 
 /// What one `sources sanitize` did, naming every record by its screened locator and never by
 /// what it said.
@@ -58,11 +112,12 @@ pub struct SweepReport {
 pub struct SweepRequests {
     /// Every request the source counted, `0` for one that counts none.
     pub total: u64,
-    /// Search or listing pages.
+    /// Search or listing pages the sweep asked its source for — each one call of the plugin
+    /// contract, which a source may answer with more than one request.
     pub searches: u64,
-    /// Reads of an item and its comments.
+    /// Batched reads of items with their comments, and further comment reads, the sweep made.
     pub reads: u64,
-    /// Writes of an item or a comment.
+    /// Items the sweep wrote back, each with every comment of it that changed.
     pub writes: u64,
 }
 
@@ -71,8 +126,8 @@ pub struct SweepRequests {
 pub struct SweepCoverage {
     /// Whether it covered every class.
     pub complete: bool,
-    /// `metadata`, `comments`, `normalized-spellings`: each class it did not cover.
-    pub uncovered: Vec<String>,
+    /// Each class it did not cover.
+    pub uncovered: Vec<Uncovered>,
 }
 
 /// What a sweep did with one item.
@@ -81,10 +136,10 @@ pub struct SweepItem {
     /// The item's qualified id, as screened.
     #[schemars(with = "serde_json::Value")]
     pub id: Locator,
-    /// `task`.
-    pub kind: String,
-    /// `rewritten`, `would-rewrite`, `unchanged`, `unfixable`, `conflict` or `not-a-match`.
-    pub outcome: String,
+    /// What kind of record it is.
+    pub kind: SweepKind,
+    /// What the sweep did with it.
+    pub outcome: ItemOutcome,
     /// What it did with each field it changed or could not.
     pub fields: Vec<SweepField>,
 }
@@ -96,8 +151,8 @@ pub struct SweepField {
     /// key or id as screened.
     #[schemars(with = "serde_json::Value")]
     pub field: Locator,
-    /// `rewritten`, `would-rewrite` or `unfixable`.
-    pub outcome: String,
+    /// What the sweep did with it.
+    pub outcome: FieldOutcome,
     /// Why a field is unfixable, in neutral words; absent otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
@@ -113,7 +168,7 @@ impl SweepReport {
         if self
             .items
             .iter()
-            .any(|item| matches!(item.outcome.as_str(), "unfixable" | "conflict"))
+            .any(|item| matches!(item.outcome, ItemOutcome::Unfixable | ItemOutcome::Conflict))
         {
             1
         } else if !self.coverage.complete {
@@ -282,7 +337,7 @@ impl Engine {
                 uncovered: if whole {
                     Vec::new()
                 } else {
-                    UNCOVERED.iter().map(|class| (*class).to_owned()).collect()
+                    UNCOVERED.to_vec()
                 },
             },
             items: sweep.items,
@@ -328,14 +383,18 @@ impl Engine {
                 continue;
             };
             let mut comments = Vec::new();
-            if let Some(Ok(Some(page))) = read.comments {
-                comments.extend(page.items);
-                if page.next.is_some() {
-                    // Every page of one revision, read again from the start rather than
-                    // resumed, so no comment is counted twice.
-                    comments = every_comment(destination, &id).await;
-                    sweep.requests.reads += 1;
+            match read.comments {
+                Some(Err(error)) => return Err(refused(destination, error)),
+                Some(Ok(Some(page))) => {
+                    comments.extend(page.items);
+                    if page.next.is_some() {
+                        // Every page of one revision, read again from the start rather than
+                        // resumed, so no comment is counted twice.
+                        comments = every_comment(destination, &id).await?;
+                        sweep.requests.reads += 1;
+                    }
                 }
+                Some(Ok(None)) | None => {}
             }
             self.sweep_item(
                 destination,
@@ -393,7 +452,7 @@ impl Engine {
             unfixable = true;
             fields.push(SweepField {
                 field: Locator::Plain("repositories".to_owned()),
-                outcome: "unfixable".to_owned(),
+                outcome: FieldOutcome::Unfixable,
                 why: Some("names a private repository".to_owned()),
             });
         }
@@ -407,11 +466,11 @@ impl Engine {
             {
                 sweep.items.push(SweepItem {
                     id: shown_item,
-                    kind: "task".to_owned(),
-                    outcome: "unfixable".to_owned(),
+                    kind: SweepKind::Task,
+                    outcome: ItemOutcome::Unfixable,
                     fields: vec![SweepField {
                         field: Locator::Plain("id".to_owned()),
-                        outcome: "unfixable".to_owned(),
+                        outcome: FieldOutcome::Unfixable,
                         why: Some(IDENTIFIER.to_owned()),
                     }],
                 });
@@ -420,7 +479,7 @@ impl Engine {
             if fields.is_empty() {
                 fields.push(SweepField {
                     field: Locator::Plain("content".to_owned()),
-                    outcome: "unfixable".to_owned(),
+                    outcome: FieldOutcome::Unfixable,
                     why: Some("carries a term no replacement is declared for".to_owned()),
                 });
             }
@@ -429,8 +488,8 @@ impl Engine {
             if unfixable {
                 sweep.items.push(SweepItem {
                     id: shown_item,
-                    kind: "task".to_owned(),
-                    outcome: "unfixable".to_owned(),
+                    kind: SweepKind::Task,
+                    outcome: ItemOutcome::Unfixable,
                     fields,
                 });
             } else if searched {
@@ -445,8 +504,12 @@ impl Engine {
                 });
                 sweep.items.push(SweepItem {
                     id: shown_item,
-                    kind: "task".to_owned(),
-                    outcome: if replaced { "unchanged" } else { "not-a-match" }.to_owned(),
+                    kind: SweepKind::Task,
+                    outcome: if replaced {
+                        ItemOutcome::Unchanged
+                    } else {
+                        ItemOutcome::NotAMatch
+                    },
                     fields: Vec::new(),
                 });
             }
@@ -460,8 +523,8 @@ impl Engine {
             Err(EngineError::SanitizeConflict { .. }) => {
                 sweep.items.push(SweepItem {
                     id: shown_item,
-                    kind: "task".to_owned(),
-                    outcome: "conflict".to_owned(),
+                    kind: SweepKind::Task,
+                    outcome: ItemOutcome::Conflict,
                     fields,
                 });
                 return Ok(());
@@ -471,29 +534,29 @@ impl Engine {
         if !dry_run {
             sweep.requests.writes += 1;
         }
-        let word = if dry_run {
-            "would-rewrite"
+        let (word, whole) = if dry_run {
+            (FieldOutcome::WouldRewrite, ItemOutcome::WouldRewrite)
         } else {
-            "rewritten"
+            (FieldOutcome::Rewritten, ItemOutcome::Rewritten)
         };
         let outcome = if written.is_empty() {
-            "unchanged"
+            ItemOutcome::Unchanged
         } else if unfixable {
-            "unfixable"
+            ItemOutcome::Unfixable
         } else {
-            word
+            whole
         };
         for field in &written {
             fields.push(SweepField {
                 field: screened_field(field, &stored.exposure, &answer.locators),
-                outcome: word.to_owned(),
+                outcome: word,
                 why: None,
             });
         }
         sweep.items.push(SweepItem {
             id: shown_item,
-            kind: "task".to_owned(),
-            outcome: outcome.to_owned(),
+            kind: SweepKind::Task,
+            outcome,
             fields,
         });
         Ok(())
@@ -532,3 +595,21 @@ fn carries(task: &Task, comments: &[onetaskgraph_plugin_api::Comment], text: &st
             .any(|value| value.to_string().contains(text))
         || comments.iter().any(|comment| comment.body.contains(text))
 }
+
+/// Each vocabulary's word, as the report spells it.
+macro_rules! spelled {
+    ($kind:ty) => {
+        impl std::fmt::Display for $kind {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match serde_json::to_value(self) {
+                    Ok(serde_json::Value::String(word)) => formatter.write_str(&word),
+                    _ => Err(std::fmt::Error),
+                }
+            }
+        }
+    };
+}
+
+spelled!(Uncovered);
+spelled!(ItemOutcome);
+spelled!(FieldOutcome);
