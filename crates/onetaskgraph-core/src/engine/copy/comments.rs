@@ -59,14 +59,18 @@ pub(super) struct CommentPlan {
     pub(super) after: Vec<Value>,
 }
 
-/// The identity a carried comment is matched on: the qualified task its origin names, and
-/// that comment's id there. Two named fields rather than a pair of strings, so the task and
-/// the comment cannot be passed the wrong way round.
+/// The task a carried comment's origin names, exactly as `CommentOrigin::task` spells it —
+/// opaque and unvalidated, so a malformed spelling is matched verbatim like any other rather
+/// than parsed, and never confused with the comment's own id beside it in [`OriginKey`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct OriginTask(String);
+
+/// The identity a carried comment is matched on: the task its origin names, and that
+/// comment's id there.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct OriginKey {
-    /// The qualified id of the task the comment was first written on.
-    // llmlint: ignore[invalid_states_unrepresentable] This is `CommentOrigin::task` exactly as the plugin contract carries it — a `String`, because `GlobalId` is deliberately not in the api crate — and a comment's origin is matched on it verbatim; parsing it into a `GlobalId` here would make an origin a person mistyped at a destination unmatchable, so the copy would add a duplicate beside it instead of keeping it in step.
-    task: String,
+    /// The task the comment was first written on.
+    task: OriginTask,
     /// The comment's id in that task's source.
     comment: NativeId,
 }
@@ -87,7 +91,7 @@ pub(super) fn origin_of(source: &GlobalId, comment: &Comment) -> CommentOrigin {
 /// The identity a copy is matched on: its origin's task and id.
 pub(super) fn key(origin: &CommentOrigin) -> OriginKey {
     OriginKey {
-        task: origin.task.clone(),
+        task: OriginTask(origin.task.clone()),
         comment: origin.id.clone(),
     }
 }
