@@ -680,11 +680,24 @@ impl Engine {
                     },
                     exposure: &Exposure::of_task(&write.item)
                         .assets(&carried)
-                        .answers(answers),
+                        .answers(answers)
+                        .and(Exposure::metadata(
+                            write.depends_on.iter().map(|edge| edge.to.id().to_owned()),
+                        )),
                 },
             )
             .await?;
         rewrite.task(&mut write.item);
+        // An id this create made up from the title is made up from the title as written.
+        if !rewrite.is_identity() {
+            let made = NativeId::from(slug(&write.item.title, "task").as_str());
+            for edge in &mut write.depends_on {
+                if edge.from.id() == write.item.id.as_str() {
+                    edge.from = DependencyEndpoint::from_native(made.clone(), ItemKind::Task);
+                }
+            }
+            write.item.id = made;
+        }
         let rewritten_answers = answers.map(|answers| {
             let mut answers = answers.clone();
             rewrite.answers(&mut answers);
@@ -923,6 +936,9 @@ impl Engine {
             .await?;
         let mut write = write;
         rewrite.document(&mut write.item);
+        if request.id.is_none() && !rewrite.is_identity() {
+            write.item.id = NativeId::from(slug(&write.item.title, "document").as_str());
+        }
         let rewritten_answers = answers.map(|answers| {
             let mut answers = answers.clone();
             rewrite.answers(&mut answers);
@@ -1120,7 +1136,11 @@ impl Engine {
                             project: None,
                         },
                     },
-                    exposure: &Exposure::of_project(&write.item).answers(answers),
+                    exposure: &Exposure::of_project(&write.item).answers(answers).and(
+                        Exposure::metadata(
+                            write.depends_on.iter().map(|edge| edge.to.id().to_owned()),
+                        ),
+                    ),
                 },
             )
             .await?;

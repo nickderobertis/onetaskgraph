@@ -143,6 +143,61 @@ impl OnevcsHome {
         })
     }
 
+    /// [`Self::write_policy`], with this release's sanitise and terms commands, and
+    /// `replacements` as the store's own replacement layer.
+    #[must_use]
+    pub fn sanitizing_write_policy(&self, replacements: Value) -> Value {
+        let onevcs = onevcs().to_string_lossy().into_owned();
+        let mut policy = self.write_policy();
+        policy["sanitize_command"] = json!([onevcs, "boundary", "sanitize", "--input", "-"]);
+        policy["terms_command"] = json!([onevcs, "boundary", "terms", "--input", "-"]);
+        if replacements
+            .as_array()
+            .is_some_and(|entries| !entries.is_empty())
+        {
+            policy["replacements"] = replacements;
+        }
+        policy
+    }
+
+    /// Commit `declaration`, a private-terms TOML document, as the repository-level
+    /// declaration of the registered identity `owner/name`.
+    pub fn declare_repository_terms(&self, owner: &str, name: &str, declaration: &str) {
+        let checkout = self.checkouts.join(format!("{owner}-{name}"));
+        std::fs::write(checkout.join("private-terms.toml"), declaration).expect("a declaration");
+        for arguments in [
+            vec!["add", "--all"],
+            vec![
+                "-c",
+                "user.name=Synthetic",
+                "-c",
+                "user.email=synthetic@example.invalid",
+                "commit",
+                "--quiet",
+                "--message",
+                "declare terms",
+            ],
+        ] {
+            let status = Command::new("git")
+                .args(&arguments)
+                .current_dir(&checkout)
+                .status()
+                .expect("git runs");
+            assert!(status.success(), "git {arguments:?}");
+        }
+    }
+
+    /// Write `declaration` as the directory level every registered checkout sits under.
+    pub fn declare_directory_terms(&self, declaration: &str) {
+        std::fs::write(self.checkouts.join("private-terms.toml"), declaration)
+            .expect("a declaration");
+    }
+
+    /// Write `declaration` as the `$ONEVCS_HOME` fallback level.
+    pub fn declare_fallback_terms(&self, declaration: &str) {
+        std::fs::write(self.home.join("private-terms.toml"), declaration).expect("a declaration");
+    }
+
     fn register(
         &mut self,
         owner: &str,
@@ -243,6 +298,10 @@ pub enum BoundaryCommand {
     Inspect,
     /// `boundary check`: one write's exposure.
     Check,
+    /// `boundary sanitize`: one write's exposure, rewritten.
+    Sanitize,
+    /// `boundary terms`: a scope's resolved terms.
+    Terms,
 }
 
 /// One boundary command a store ran.
@@ -320,6 +379,35 @@ impl OnevcsHome {
     }
 }
 
+impl OnevcsHome {
+    /// [`Self::sanitizing_write_policy`], every command run through a recorder writing to
+    /// `sandbox`.
+    #[must_use]
+    pub fn recorded_sanitizing(&self, sandbox: &Sandbox, replacements: Value) -> BoundaryRecord {
+        let mut record = self.recorded(sandbox);
+        let wrap = |words: &[&str]| -> Value {
+            let base = record.policy["check_command"]
+                .as_array()
+                .expect("a recorded command")[..4]
+                .to_vec();
+            let mut argv = base;
+            argv.extend(words.iter().map(|word| json!(word)));
+            Value::Array(argv)
+        };
+        let sanitize = wrap(&["boundary", "sanitize", "--input", "-"]);
+        let terms = wrap(&["boundary", "terms", "--input", "-"]);
+        record.policy["sanitize_command"] = sanitize;
+        record.policy["terms_command"] = terms;
+        if replacements
+            .as_array()
+            .is_some_and(|entries| !entries.is_empty())
+        {
+            record.policy["replacements"] = replacements;
+        }
+        record
+    }
+}
+
 impl BoundaryRecord {
     /// The `write_policy` block to configure.
     #[must_use]
@@ -340,6 +428,8 @@ impl BoundaryRecord {
                     command: match call["command"].as_str() {
                         Some("inspect") => BoundaryCommand::Inspect,
                         Some("check") => BoundaryCommand::Check,
+                        Some("sanitize") => BoundaryCommand::Sanitize,
+                        Some("terms") => BoundaryCommand::Terms,
                         other => panic!("the recorder ran a command it never runs: {other:?}"),
                     },
                     input: call["input"].clone(),

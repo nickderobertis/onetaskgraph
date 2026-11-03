@@ -2417,6 +2417,21 @@ pub struct Overrides {
     #[arg(long = "no-interactive", global = true)]
     no_interactive: bool,
     // llmlint: ignore-end[invalid_states_unrepresentable]
+    /// Replace a private term with a string in what this invocation writes: TERM=WITH, split
+    /// at the first `=`. Repeatable; appended, with --reject, after `write_policy.replacements`,
+    /// a later entry winning.
+    #[arg(long = "replace", value_name = "TERM=WITH", global = true)]
+    pub replace: Vec<String>,
+
+    /// Refuse what this invocation writes when it carries a private term, rather than
+    /// replacing it. Repeatable; ordered with --replace as typed.
+    #[arg(long = "reject", value_name = "TERM", global = true)]
+    pub reject: Vec<String>,
+
+    /// When a write is refused for a term already on its item, write nothing, and answer what
+    /// sanitising that item would change and whether the write would then pass.
+    #[arg(long = "sanitize-dry-run", global = true)]
+    pub sanitize_dry_run: bool,
 }
 
 impl Overrides {

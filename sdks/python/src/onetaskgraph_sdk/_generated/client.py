@@ -234,6 +234,9 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> CacheCleared:
         """Run ``onetaskgraph cache clear``."""
@@ -243,6 +246,9 @@ class GeneratedClient:
             source=source,
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -251,6 +257,9 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> EffectiveConfig:
         """Run ``onetaskgraph config show``."""
@@ -259,6 +268,9 @@ class GeneratedClient:
             _models.EffectiveConfig,
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -268,6 +280,9 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> TemplateAnswers:
         """Run ``onetaskgraph document answers``."""
@@ -277,6 +292,9 @@ class GeneratedClient:
             id=id,
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -290,6 +308,9 @@ class GeneratedClient:
         no_link: bool | None = None,
         page_size: int | None = None,
         recreate: bool | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
@@ -305,6 +326,9 @@ class GeneratedClient:
             no_link=no_link,
             page_size=page_size,
             recreate=recreate,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             term_scope=_strings("document_copy", "term_scope", term_scope),
             to=to,
@@ -324,7 +348,10 @@ class GeneratedClient:
         label: list[str] | tuple[str, ...] | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
         repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         template: str | None = None,
@@ -349,7 +376,10 @@ class GeneratedClient:
             label=label,
             metadata=_strings("document_create", "metadata", metadata),
             page_size=page_size,
+            reject=reject,
+            replace=replace,
             repository=_strings("document_create", "repository", repository),
+            sanitize_dry_run=sanitize_dry_run,
             search_path=_strings("document_create", "search_path", search_path),
             set=set,
             template=template,
@@ -379,6 +409,9 @@ class GeneratedClient:
         page: str | None = None,
         page_size: int | None = None,
         project: str | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         search: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
@@ -398,6 +431,9 @@ class GeneratedClient:
             page=page,
             page_size=page_size,
             project=project,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             search=search,
             set=set,
             source=source,
@@ -412,6 +448,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> MetadataSet:
@@ -425,6 +464,9 @@ class GeneratedClient:
             default_sources=default_sources,
             expect=expect,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             term_scope=_strings("document_metadata_set", "term_scope", term_scope),
         )
@@ -437,6 +479,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         template: str | None = None,
@@ -455,6 +500,9 @@ class GeneratedClient:
             default_sources=default_sources,
             dry_run=dry_run,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             search_path=_strings("document_render", "search_path", search_path),
             set=set,
             template=template,
@@ -475,6 +523,9 @@ class GeneratedClient:
         explain: bool | None = None,
         page_size: int | None = None,
         pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> DocumentDetail:
         """Run ``onetaskgraph document show``."""
@@ -487,6 +538,9 @@ class GeneratedClient:
             explain=explain,
             page_size=page_size,
             pin=pin,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -499,6 +553,9 @@ class GeneratedClient:
         limit: int | None = None,
         page: str | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedLabel:
@@ -512,6 +569,9 @@ class GeneratedClient:
             limit=limit,
             page=page,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             source=source,
         )
@@ -522,6 +582,9 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> TemplateAnswers:
         """Run ``onetaskgraph project answers``."""
@@ -531,6 +594,9 @@ class GeneratedClient:
             id=id,
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -548,6 +614,9 @@ class GeneratedClient:
         no_tasks: bool | None = None,
         page_size: int | None = None,
         recreate: bool | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status_policy: Literal["source", "preserve-destination"] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -568,6 +637,9 @@ class GeneratedClient:
             no_tasks=no_tasks,
             page_size=page_size,
             recreate=recreate,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             status_policy=status_policy,
             term_scope=_strings("project_copy", "term_scope", term_scope),
@@ -586,7 +658,10 @@ class GeneratedClient:
         label: list[str] | tuple[str, ...] | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
         repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
@@ -613,7 +688,10 @@ class GeneratedClient:
             label=label,
             metadata=_strings("project_create", "metadata", metadata),
             page_size=page_size,
+            reject=reject,
+            replace=replace,
             repository=_strings("project_create", "repository", repository),
+            sanitize_dry_run=sanitize_dry_run,
             search_path=_strings("project_create", "search_path", search_path),
             set=set,
             status=status,
@@ -642,6 +720,9 @@ class GeneratedClient:
         page: str | None = None,
         page_size: int | None = None,
         pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedEdge:
         """Run ``onetaskgraph project deps``."""
@@ -657,6 +738,9 @@ class GeneratedClient:
             page=page,
             page_size=page_size,
             pin=pin,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -669,6 +753,9 @@ class GeneratedClient:
         direction: Literal["auto", "td", "lr"] | None = None,
         group_by: str | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> ProjectGraph:
         """Run ``onetaskgraph project graph``."""
@@ -681,6 +768,9 @@ class GeneratedClient:
             direction=direction,
             group_by=group_by,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             format="json",
         )
@@ -698,6 +788,9 @@ class GeneratedClient:
         origin: GlobalId | str | None = None,
         page: str | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         search: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
@@ -728,6 +821,9 @@ class GeneratedClient:
             origin=origin,
             page=page,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             search=search,
             set=set,
             source=source,
@@ -743,6 +839,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> MetadataSet:
@@ -756,6 +855,9 @@ class GeneratedClient:
             default_sources=default_sources,
             expect=expect,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             term_scope=_strings("project_metadata_set", "term_scope", term_scope),
         )
@@ -767,6 +869,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         template: str | None = None,
@@ -784,6 +889,9 @@ class GeneratedClient:
             default_sources=default_sources,
             dry_run=dry_run,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             search_path=_strings("project_render", "search_path", search_path),
             set=set,
             template=template,
@@ -804,6 +912,9 @@ class GeneratedClient:
         explain: bool | None = None,
         page_size: int | None = None,
         pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedProject:
         """Run ``onetaskgraph project show``."""
@@ -816,6 +927,9 @@ class GeneratedClient:
             explain=explain,
             page_size=page_size,
             pin=pin,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -826,6 +940,9 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> ProjectStatusSet:
@@ -837,6 +954,9 @@ class GeneratedClient:
             category=category,
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             term_scope=_strings("project_status_set", "term_scope", term_scope),
         )
@@ -853,6 +973,9 @@ class GeneratedClient:
         limit: int | None = None,
         page: str | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfSearchHit:
@@ -869,6 +992,9 @@ class GeneratedClient:
             limit=limit,
             page=page,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             source=source,
         )
@@ -880,6 +1006,9 @@ class GeneratedClient:
         apply: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> FieldsReport | StatusNamesReport:
         """Run ``onetaskgraph sources fields``."""
@@ -890,6 +1019,9 @@ class GeneratedClient:
             apply=apply,
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -898,6 +1030,9 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> list[SourceListing]:
         """Run ``onetaskgraph sources list``."""
@@ -906,6 +1041,9 @@ class GeneratedClient:
             list[_models.SourceListing],
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -916,7 +1054,10 @@ class GeneratedClient:
         classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
         repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> SourceRoute:
         """Run ``onetaskgraph sources route``."""
@@ -927,7 +1068,10 @@ class GeneratedClient:
             classification=classification,
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
             repository=_strings("sources_route", "repository", repository),
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -938,6 +1082,9 @@ class GeneratedClient:
         apply: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> StatusOptionsReport:
         """Run ``onetaskgraph sources status-options``."""
@@ -948,6 +1095,9 @@ class GeneratedClient:
             apply=apply,
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -957,6 +1107,9 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> TemplateAnswers:
         """Run ``onetaskgraph task answers``."""
@@ -966,6 +1119,9 @@ class GeneratedClient:
             id=id,
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -976,6 +1132,9 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> TaskAssetNames:
         """Run ``onetaskgraph task assets``."""
@@ -986,6 +1145,9 @@ class GeneratedClient:
             output_dir=output_dir,
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -998,6 +1160,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
@@ -1012,6 +1177,9 @@ class GeneratedClient:
             default_sources=default_sources,
             expect=expect,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             term_scope=_strings("task_comment_add", "term_scope", term_scope),
             stdin=body,
@@ -1025,6 +1193,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> DeletedComment:
         """Run ``onetaskgraph task comment delete``."""
@@ -1036,6 +1207,9 @@ class GeneratedClient:
             default_sources=default_sources,
             expect=expect,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -1048,6 +1222,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
@@ -1062,6 +1239,9 @@ class GeneratedClient:
             default_sources=default_sources,
             expect=expect,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             term_scope=_strings("task_comment_edit", "term_scope", term_scope),
             stdin=body,
@@ -1074,6 +1254,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
         pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> CommentList:
         """Run ``onetaskgraph task comment list``."""
@@ -1084,6 +1267,9 @@ class GeneratedClient:
             default_sources=default_sources,
             page_size=page_size,
             pin=pin,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -1095,6 +1281,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> TaskContentSet:
@@ -1107,6 +1296,9 @@ class GeneratedClient:
             default_sources=default_sources,
             expect=expect,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             term_scope=_strings("task_content_set", "term_scope", term_scope),
         )
@@ -1127,6 +1319,9 @@ class GeneratedClient:
         otherwise: Literal["refuse", "preserve-destination"] | None = None,
         page_size: int | None = None,
         recreate: bool | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
@@ -1178,6 +1373,9 @@ class GeneratedClient:
             otherwise=otherwise,
             page_size=page_size,
             recreate=recreate,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             source=source,
             status=status,
@@ -1204,7 +1402,10 @@ class GeneratedClient:
         label: list[str] | tuple[str, ...] | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
         repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
@@ -1234,7 +1435,10 @@ class GeneratedClient:
             label=label,
             metadata=_strings("task_create", "metadata", metadata),
             page_size=page_size,
+            reject=reject,
+            replace=replace,
             repository=_strings("task_create", "repository", repository),
+            sanitize_dry_run=sanitize_dry_run,
             search_path=_strings("task_create", "search_path", search_path),
             set=set,
             status=status,
@@ -1264,6 +1468,9 @@ class GeneratedClient:
         page: str | None = None,
         page_size: int | None = None,
         pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> QueryResponseOfQualifiedEdge:
         """Run ``onetaskgraph task deps``."""
@@ -1280,6 +1487,9 @@ class GeneratedClient:
             page=page,
             page_size=page_size,
             pin=pin,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -1304,6 +1514,9 @@ class GeneratedClient:
         | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
         | None = None,
         project: str | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         search: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
@@ -1340,6 +1553,9 @@ class GeneratedClient:
             page_size=page_size,
             priority=priority,
             project=project,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             search=search,
             set=set,
             source=source,
@@ -1354,6 +1570,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         no_counterpart: bool | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         target_native: str | None = None,
     ) -> LocateReport:
@@ -1366,6 +1585,9 @@ class GeneratedClient:
             default_sources=default_sources,
             no_counterpart=no_counterpart,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             target_native=target_native,
         )
@@ -1379,6 +1601,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> MetadataSet:
@@ -1392,6 +1617,9 @@ class GeneratedClient:
             default_sources=default_sources,
             expect=expect,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             term_scope=_strings("task_metadata_set", "term_scope", term_scope),
         )
@@ -1404,6 +1632,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> TaskPrioritySet:
@@ -1416,6 +1647,9 @@ class GeneratedClient:
             default_sources=default_sources,
             expect=expect,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             term_scope=_strings("task_priority_set", "term_scope", term_scope),
         )
@@ -1426,6 +1660,9 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> HumanTaskProjected:
         """Run ``onetaskgraph task project-human``."""
@@ -1435,6 +1672,9 @@ class GeneratedClient:
             input=input,
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -1446,6 +1686,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         template: str | None = None,
@@ -1464,6 +1707,9 @@ class GeneratedClient:
             default_sources=default_sources,
             dry_run=dry_run,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             search_path=_strings("task_render", "search_path", search_path),
             set=set,
             template=template,
@@ -1485,6 +1731,9 @@ class GeneratedClient:
         no_comments: bool | None = None,
         page_size: int | None = None,
         pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> TaskDetail:
         """Run ``onetaskgraph task show``."""
@@ -1498,6 +1747,9 @@ class GeneratedClient:
             no_comments=no_comments,
             page_size=page_size,
             pin=pin,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -1509,6 +1761,9 @@ class GeneratedClient:
         no_comments: bool | None = None,
         page_size: int | None = None,
         pin: list[str] | tuple[str, ...] | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
     ) -> TaskDetails:
         """Run ``onetaskgraph task show-many``."""
@@ -1520,6 +1775,9 @@ class GeneratedClient:
             no_comments=no_comments,
             page_size=page_size,
             pin=pin,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
 
@@ -1530,6 +1788,9 @@ class GeneratedClient:
         dry_run: bool | None = None,
         issue: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
@@ -1542,6 +1803,9 @@ class GeneratedClient:
             dry_run=dry_run,
             issue=issue,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             source=source,
             term_scope=_strings("task_status_complete", "term_scope", term_scope),
@@ -1554,6 +1818,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> StatusesReconciled:
@@ -1565,6 +1832,9 @@ class GeneratedClient:
             default_sources=default_sources,
             dry_run=dry_run,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             term_scope=_strings("task_status_reconcile", "term_scope", term_scope),
         )
@@ -1577,6 +1847,9 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
     ) -> TaskStatusSet:
@@ -1589,6 +1862,9 @@ class GeneratedClient:
             default_sources=default_sources,
             expect=expect,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             term_scope=_strings("task_status_set", "term_scope", term_scope),
         )
@@ -1607,7 +1883,10 @@ class GeneratedClient:
         no_depends_on: bool | None = None,
         page_size: int | None = None,
         priority: Literal["none", "urgent", "high", "medium", "low"] | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
         remove_metadata: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
             "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
@@ -1632,7 +1911,10 @@ class GeneratedClient:
             no_depends_on=no_depends_on,
             page_size=page_size,
             priority=priority,
+            reject=reject,
             remove_metadata=_strings("task_update", "remove_metadata", remove_metadata),
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             set=set,
             status=status,
             status_name=status_name,
@@ -1646,6 +1928,9 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         template_loader: str | None = None,
@@ -1659,6 +1944,9 @@ class GeneratedClient:
             file=_template_file("template_render", file),
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             search_path=_strings("template_render", "search_path", search_path),
             set=set,
             template_loader=template_loader,
@@ -1673,6 +1961,9 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         template_loader: str | None = None,
@@ -1684,6 +1975,9 @@ class GeneratedClient:
             file=_template_file("template_variables", file),
             default_sources=default_sources,
             page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
             search_path=_strings("template_variables", "search_path", search_path),
             set=set,
             template_loader=template_loader,

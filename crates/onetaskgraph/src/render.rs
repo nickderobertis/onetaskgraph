@@ -1252,6 +1252,29 @@ fn predicate_list(predicates: &[Predicate]) -> String {
     predicates.iter().map(wire).collect::<Vec<_>>().join(", ")
 }
 
+/// A write's human answer, then one line per field or comment its sanitisation changed beyond
+/// the write itself, naming each by its screened locator and never what it said.
+pub fn sanitised(rendered: String, done: &onetaskgraph_core::boundary::Sanitization) -> String {
+    if done.side_effect.is_empty() {
+        return rendered;
+    }
+    let mut out = rendered.trim_end().to_owned();
+    for effect in &done.side_effect {
+        out.push('\n');
+        out.push_str(&format!(
+            "{} {} {}",
+            if done.dry_run {
+                "would sanitise"
+            } else {
+                "sanitised"
+            },
+            effect.item,
+            effect.field
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use onetaskgraph_plugin_api::{Asset, AssetName};

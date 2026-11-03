@@ -2526,6 +2526,45 @@ references among `paths` — and **passes it only by exiting 0 with `{"verdict":
 refusal names where the check stopped and never what it found; no command, a failure, or any
 other answer is unavailable, which never passes.
 
+**Replacing a declared term instead of refusing it.** With a `sanitize_command`, every write
+the boundary screens is put to it **in place of** `check_command` — the same one call, no second
+process — and what it answers is what is written:
+
+```yaml
+write_policy:
+  visibility_command: [onevcs, boundary, inspect, --input, "-"]
+  check_command: [onevcs, boundary, check, --destination, public, --input, "-"]
+  sanitize_command: [onevcs, boundary, sanitize, --input, "-"]
+  terms_command: [onevcs, boundary, terms, --input, "-"]
+  replacements:
+    - {term: old-name, with: a private repository}
+    - {term: other-name, reject: true}
+```
+
+The command is handed the write split into what may be rewritten — content and bodies, titles,
+label names, comment bodies, metadata string values and rendering answers' string values — and,
+under `fixed`, what is checked and never rewritten: `repositories`, status, priority, every id
+(a project, a parent, `delivers`, `delivered_by`, a dependency's far end), metadata keys and
+asset names. A term left in a fixed entry refuses the write, nothing written; a destination
+declared private receives the original text. An id a create makes up from a title is made up
+from the title as written. The store matches no term itself: onevcs folds the caller's layer
+over every declaration level it reads.
+
+`replacements` is the store's own replacement layer, sent with every sanitisation above every
+declaration level, a later entry winning. It takes every layer — the document,
+`ONETASKGRAPH_WRITE_POLICY__REPLACEMENTS__<n>__TERM` / `__WITH` / `__REJECT`, and `--set` — and
+`config show` names each entry's layer. Two global flags append entries after it for one
+invocation: `--replace TERM=WITH`, split at the first `=`, and `--reject TERM`, each repeatable
+and kept in the order typed. `replacements`, `--replace` or `--reject` with no
+`sanitize_command` is refused at load, naming the key, so nobody believes replacement is on
+when it is not; with no `sanitize_command` every write is screened exactly as before, through
+`check_command`.
+
+A write that replaced anything answers, under `--json`, a `sanitization` member beside what it
+already answered — `{"replaced": <spans>, "side_effect": [], "dry_run": false}` — absent when
+nothing was replaced, so every other answer is byte for byte what it was. `--sanitize-dry-run`
+writes nothing for a sanitisation a refusal would set off and answers what it would change.
+
 **A task owns its classification.** Who may read a task is its own declaration and every
 repository it names, and nothing else: all-public repositories leave it public unless it says
 `private`, and any private or unknown one makes it private. The project it is filed under never

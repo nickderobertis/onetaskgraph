@@ -859,6 +859,8 @@ pub(crate) struct Boundary {
     /// The caller's replacement layer every sanitisation carries: the configuration's, then the
     /// command line's for one invocation.
     replacements: Vec<Replacement>,
+    /// Whether sanitise-on-refusal writes nothing and only answers what it would change.
+    sanitize_dry_run: bool,
     /// What the screened writes of this command replaced, until [`Engine::take_sanitization`].
     sanitized: Arc<std::sync::Mutex<Sanitization>>,
     /// What the policy has answered in this command, until [`Engine::end_command`].
@@ -956,6 +958,21 @@ impl Sanitization {
     }
 }
 
+/// What one engine's screened writes replaced and sanitised, shared with the engine.
+#[derive(Debug, Clone)]
+pub struct SanitizationLog(Arc<std::sync::Mutex<Sanitization>>);
+
+impl SanitizationLog {
+    /// Take everything recorded so far, leaving nothing.
+    #[must_use]
+    pub fn take(&self) -> Sanitization {
+        self.0
+            .lock()
+            .map(|mut sanitized| std::mem::take(&mut *sanitized))
+            .unwrap_or_default()
+    }
+}
+
 /// One field or comment of an item a sanitisation changed, named by screened locators.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SideEffect {
@@ -972,6 +989,7 @@ impl Default for Boundary {
             policy: Arc::new(MissingWritePolicy),
             scope: None,
             replacements: Vec::new(),
+            sanitize_dry_run: false,
             sanitized: Arc::default(),
             screened: Arc::default(),
             withheld: Arc::default(),
@@ -998,6 +1016,7 @@ impl Boundary {
             replacements: write_policy
                 .map(|config| config.replacements.clone())
                 .unwrap_or_default(),
+            sanitize_dry_run: false,
             sanitized: Arc::default(),
             screened: Arc::default(),
             withheld: Arc::default(),
@@ -1238,6 +1257,14 @@ impl Exposure {
         exposure
             .metadata
             .extend(labels.iter().map(|label| label.name.clone()));
+        // A label's id is written beside its name: one that spells the name is rewritten with
+        // it, and any other is an id, which is never rewritten.
+        for label in labels
+            .iter()
+            .filter(|label| label.id.as_str() != label.name)
+        {
+            exposure.fixed.metadata.push(label.id.as_str().to_owned());
+        }
         exposure.fixed.metadata.extend(
             repositories
                 .iter()
@@ -1370,6 +1397,9 @@ impl Rewrite {
             *content = self.text(content);
         }
         for label in labels {
+            if label.id.as_str() == label.name {
+                label.id = NativeId::from(self.short(label.id.as_str()).as_str());
+            }
             label.name = self.short(&label.name);
         }
         self.metadata_values(metadata);
@@ -1482,6 +1512,14 @@ impl Engine {
         self
     }
 
+    /// The same engine, writing nothing when a write is refused for a term already on its
+    /// item, and answering what sanitising that item would change instead.
+    #[must_use]
+    pub fn with_sanitize_dry_run(mut self, dry_run: bool) -> Self {
+        self.boundary.sanitize_dry_run = dry_run;
+        self
+    }
+
     /// The caller's replacement layer every sanitisation carries, in order.
     #[must_use]
     pub fn replacements(&self) -> &[Replacement] {
@@ -1492,11 +1530,14 @@ impl Engine {
     /// command answers as its `sanitization` member, left out when [`Sanitization::is_empty`].
     #[must_use]
     pub fn take_sanitization(&self) -> Sanitization {
-        self.boundary
-            .sanitized
-            .lock()
-            .map(|mut sanitized| std::mem::take(&mut *sanitized))
-            .unwrap_or_default()
+        self.sanitization_log().take()
+    }
+
+    /// A handle on what this engine's screened writes replaced and sanitised, which outlives a
+    /// borrow of the engine: what the command line reads once a verb has answered.
+    #[must_use]
+    pub fn sanitization_log(&self) -> SanitizationLog {
+        SanitizationLog(Arc::clone(&self.boundary.sanitized))
     }
 
     /// Take the edges a copy left out of what it wrote because each names something private —

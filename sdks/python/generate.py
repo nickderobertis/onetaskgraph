@@ -226,6 +226,11 @@ OPTION_TYPES = {
     "search": "str",
     "search_path": "list[str] | tuple[str, ...]",
     "set": "list[str] | tuple[str, ...]",
+    # The caller's replacement layer for one invocation: `TERM=WITH` entries and terms to
+    # refuse, appended after the store's own `write_policy.replacements`.
+    "replace": "list[str] | tuple[str, ...]",
+    "reject": "list[str] | tuple[str, ...]",
+    "sanitize_dry_run": "bool",
     "source": "list[str] | tuple[str, ...]",
     "status": "choice_list",
     "status_name": "str",
@@ -302,6 +307,9 @@ OPTION_PLACEHOLDERS = {
     "search": "TEXT",
     "search_path": "DIR",
     "set": "PATH=VALUE",
+    "replace": "TERM=WITH",
+    "reject": "TERM",
+    "sanitize_dry_run": None,
     "source": "S",
     "status": "S",
     "status_name": "NAME",

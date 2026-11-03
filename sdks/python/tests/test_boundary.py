@@ -242,3 +242,84 @@ def test_a_project_copy_records_its_public_projections_in_the_shape_the_sdk_mode
         PublicProjections.model_validate({"schema_version": 1, "tasks": [], "extra": True})
     with pytest.raises(ValueError):
         PublicProjections.model_validate({"schema_version": 2, "tasks": []})
+
+
+SANITIZE = """
+import json, os, sys
+received = json.loads(sys.stdin.read())
+with open(os.environ["BOUNDARY_RECORD"], "a", encoding="utf-8") as record:
+    record.write(json.dumps(received) + "\\n")
+replaced = 0
+def rewrite(value):
+    global replaced
+    for entry in received.get("replacements", []):
+        if "with" in entry and entry["term"] in value:
+            replaced += value.count(entry["term"])
+            value = value.replace(entry["term"], entry["with"])
+    return value
+answer = {surface: [rewrite(value) for value in received.get(surface, [])]
+          for surface in ("text", "paths", "metadata")}
+answer.update(verdict="pass", replaced=replaced, unfixed=[])
+if received.get("locators"):
+    answer["locators"] = [locator["value"] for locator in received["locators"]]
+print(json.dumps(answer))
+"""
+
+
+def sanitizing_store(binary: Path, tmp_path: Path) -> tuple[Client, Path]:
+    """A client over a public folder `site` whose policy replaces `emberline` with `ember-x`."""
+    (tmp_path / "site" / "projects").mkdir(parents=True)
+    (tmp_path / "site" / "projects" / "p.md").write_text(
+        "---\ntitle: P\nstatus: todo\n---\n", encoding="utf-8"
+    )
+    (tmp_path / "onetaskgraph.yaml").write_text(
+        json.dumps(
+            {
+                "write_policy": {
+                    "check_command": [sys.executable, "-c", CHECK],
+                    "sanitize_command": [sys.executable, "-c", SANITIZE],
+                    "replacements": [{"term": "emberline", "with": "ember-x"}],
+                },
+                "sources": {
+                    "site": {
+                        "plugin": "local-md",
+                        "config": {"root": "site"},
+                        "visibility": "public",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    record = tmp_path / "sanitized.jsonl"
+    environment = dict(os.environ)
+    environment["BOUNDARY_RECORD"] = str(record)
+    return Client(binary, cwd=tmp_path, environment=environment), record
+
+
+def test_a_write_through_the_sdk_stores_what_its_one_sanitisation_answered(
+    binary: Path, tmp_path: Path
+) -> None:
+    """A create and an update each make one sanitise call, and store exactly its answer."""
+    client, record = sanitizing_store(binary, tmp_path)
+    created = run(
+        client.task_create("site", "p", "Port emberline", body="Retry as emberline does.")
+    )
+    task = created.items[0]
+    assert task.item.title == "Port ember-x"
+    assert task.item.content == "Retry as ember-x does."
+    run(client.task_update(task.id.root, title="duskfield too", replace=["duskfield=dusk-x"]))
+    calls = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
+    assert len(calls) == 2, calls
+    # The store's own layer, then the call's: a later entry wins.
+    assert calls[1]["replacements"] == [
+        {"term": "emberline", "with": "ember-x"},
+        {"term": "duskfield", "with": "dusk-x"},
+    ]
+    assert {"kind": "source", "value": "site"} in calls[1]["locators"]
+    shown = run(client.task_show(task.id.root))
+    assert shown.items[0].item.title == "dusk-x too"
+    stored = "".join(
+        path.read_text(encoding="utf-8") for path in (tmp_path / "site" / "tasks").rglob("*.md")
+    )
+    assert "emberline" not in stored and "duskfield" not in stored

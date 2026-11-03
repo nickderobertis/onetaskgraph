@@ -16,7 +16,7 @@ use std::process::ExitCode;
 use std::str::FromStr as _;
 use std::sync::OnceLock;
 
-use clap::{CommandFactory as _, Parser};
+use clap::CommandFactory as _;
 use onetaskgraph_core::config::{self, Layer};
 use onetaskgraph_core::{
     CommentWritten, Completeness, CopyAction, CopyItems, CopyReport, CopyRequest, CopyScope,
@@ -114,7 +114,17 @@ fn main() -> ExitCode {
 }
 
 async fn command() -> ExitCode {
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let cli = match <Cli as clap::FromArgMatches>::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    };
+    let replacements = match replacements(&cli.overrides, &matches) {
+        Ok(replacements) => replacements,
+        Err(message) => return fail(&message, EXIT_USAGE),
+    };
+    let _ = REPLACEMENTS.set(replacements);
+    let _ = SANITIZE_DRY_RUN.set(cli.overrides.sanitize_dry_run);
     if let Command::PluginServe { source } = &cli.command {
         let input = io::BufReader::new(io::stdin().lock());
         return match onetaskgraph_core::serve_plugin(input, io::stdout().lock(), *source).await {
@@ -147,6 +157,22 @@ async fn command() -> ExitCode {
     // written, and a verb that answered anyway would drop them in silence — which is the
     // one outcome this configuration layer is not allowed to have.
     let loaded = match load(&flags, &environment) {
+        Ok(loaded)
+            if REPLACEMENTS.get().is_some_and(|given| !given.is_empty())
+                && loaded
+                    .config
+                    .write_policy()
+                    .and_then(|policy| policy.sanitize_command.as_ref())
+                    .is_none() =>
+        {
+            return fail(
+                "--replace and --reject were given, but no write_policy.sanitize_command is \
+                 configured to apply them, so no replacement would ever be made\n\
+                 next: configure write_policy.sanitize_command — for example \
+                 [onevcs, boundary, sanitize, --input, \"-\"] — or leave the flags out.",
+                EXIT_USAGE,
+            );
+        }
         Ok(loaded) => loaded,
         Err(failure) => {
             let asked = config::requested_output(
@@ -1010,6 +1036,103 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
 /// The process's one clock, settled in `main` before any source is built.
 static CLOCK: OnceLock<SharedClock> = OnceLock::new();
 
+/// The replacement entries `--replace` and `--reject` gave, in the order they were typed.
+static REPLACEMENTS: OnceLock<Vec<onetaskgraph_core::boundary::Replacement>> = OnceLock::new();
+
+/// Whether `--sanitize-dry-run` was given.
+static SANITIZE_DRY_RUN: OnceLock<bool> = OnceLock::new();
+
+/// What every engine this process built replaced and sanitised, read once a verb answers.
+static SANITIZATION: std::sync::Mutex<Vec<onetaskgraph_core::boundary::SanitizationLog>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// `--replace` and `--reject`, as one replacement list in the order they were typed.
+fn replacements(
+    overrides: &cli::Overrides,
+    matches: &clap::ArgMatches,
+) -> Result<Vec<onetaskgraph_core::boundary::Replacement>, String> {
+    use onetaskgraph_core::boundary::Replacement;
+    let at = |id: &str| -> Vec<usize> {
+        matches
+            .indices_of(id)
+            .map(Iterator::collect)
+            .unwrap_or_default()
+    };
+    let mut entries = Vec::new();
+    for (given, index) in overrides.replace.iter().zip(at("replace")) {
+        let Some((term, with)) = given.split_once('=') else {
+            return Err(
+                "--replace takes TERM=WITH, split at the first `=`, and this has no `=`\n\
+                 next: write --replace <term>=<replacement>, or --reject <term> to refuse it."
+                    .to_owned(),
+            );
+        };
+        if term.is_empty() {
+            return Err("--replace names no term before its `=`\n\
+                 next: write --replace <term>=<replacement>."
+                .to_owned());
+        }
+        entries.push((
+            index,
+            Replacement::Replace {
+                term: term.to_owned(),
+                with: with.to_owned(),
+            },
+        ));
+    }
+    for (term, index) in overrides.reject.iter().zip(at("reject")) {
+        if term.is_empty() {
+            return Err("--reject names no term\nnext: write --reject <term>.".to_owned());
+        }
+        entries.push((index, Replacement::Reject { term: term.clone() }));
+    }
+    entries.sort_by_key(|(index, _)| *index);
+    Ok(entries.into_iter().map(|(_, entry)| entry).collect())
+}
+
+/// What every engine of this process replaced and sanitised since it was last asked.
+fn sanitization() -> onetaskgraph_core::boundary::Sanitization {
+    let mut whole = onetaskgraph_core::boundary::Sanitization {
+        dry_run: SANITIZE_DRY_RUN.get().copied().unwrap_or(false),
+        ..Default::default()
+    };
+    for log in SANITIZATION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+    {
+        let taken = log.take();
+        whole.replaced = whole.replaced.saturating_add(taken.replaced);
+        whole.side_effect.extend(taken.side_effect);
+        whole.dry_run |= taken.dry_run;
+    }
+    whole
+}
+
+/// `rendered`, a write's answer as `format` renders it, with what its sanitisation did: the
+/// `sanitization` member of a JSON answer, and one `sanitised` line per changed field or
+/// comment after a human one. Nothing is added when nothing was replaced or sanitised, so the
+/// answer is byte for byte what it was.
+pub(crate) fn sanitized(rendered: String, format: OutputFormat) -> Result<String, Failure> {
+    let done = sanitization();
+    if done.is_empty() {
+        return Ok(rendered);
+    }
+    match format {
+        OutputFormat::Json => {
+            let mut value: serde_json::Value =
+                serde_json::from_str(&rendered).map_err(|error| {
+                    Failure::decided("render", format!("could not render the answer: {error}"))
+                })?;
+            if let Some(object) = value.as_object_mut() {
+                object.insert("sanitization".to_owned(), done.to_json());
+            }
+            json(&value, "the answer")
+        }
+        OutputFormat::Text => Ok(render::sanitised(rendered, &done)),
+    }
+}
+
 /// The term scope the one writing verb this process runs named, settled before it is
 /// dispatched: one command line is one process, so it is that command's, and every engine
 /// the command builds checks its writes against it.
@@ -1067,12 +1190,19 @@ fn pinned(pin: &str) -> Result<(GlobalId, String), Failure> {
 }
 
 fn engine(loaded: &Loaded) -> Engine {
-    Engine::build_with_clock(
+    let engine = Engine::build_with_clock(
         &loaded.config,
         &loaded.secrets,
         CLOCK.get_or_init(system_clock),
     )
     .with_term_scope(TERM_SCOPE.get().cloned().flatten())
+    .with_replacements(REPLACEMENTS.get().cloned().unwrap_or_default())
+    .with_sanitize_dry_run(SANITIZE_DRY_RUN.get().copied().unwrap_or(false));
+    SANITIZATION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(engine.sanitization_log());
+    engine
 }
 
 /// A `--source` this command was given, as a configured source's name — or `None`, having
@@ -1471,10 +1601,12 @@ fn rendering<T: Serialize>(
     text: impl FnOnce(&T) -> String,
     what: &str,
 ) -> Result<String, Failure> {
-    match loaded.config.output() {
-        OutputFormat::Text => Ok(text(value)),
-        OutputFormat::Json => json(value, what),
-    }
+    let format = loaded.config.output();
+    let rendered = match format {
+        OutputFormat::Text => text(value),
+        OutputFormat::Json => json(value, what)?,
+    };
+    sanitized(rendered, format)
 }
 
 /// A comment's body, read byte for byte from `path`, or from standard input without one.
@@ -1580,6 +1712,7 @@ async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> R
         OutputFormat::Text => render::copied(&report),
         OutputFormat::Json => json(&report, "the copy")?,
     };
+    let rendered = sanitized(rendered, loaded.config.output())?;
     emit(out, rendered.trim_end(), "the copy")?;
     Ok(delivery_exit(&report.delivered).max(failed_exit(&report)))
 }

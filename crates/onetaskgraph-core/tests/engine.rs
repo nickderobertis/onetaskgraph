@@ -6057,6 +6057,6 @@ const FIFTY_THIRD_BUNDLE_SHAPE: [(&str, u64); 137] = [
     ("TextFields", 0x7240bd05f9beff93),
     ("UpdatedField", 0xd9491e609db7475c),
     ("VariableType", 0x4310e29eba96791c),
-    ("WritePolicyConfig", 0xb819a86f1613885e),
+    ("WritePolicyConfig", 0xe1d1dae9c3e4486f),
     ("WriteVerdict", 0xfe9f3b7541b8efb0),
 ];
