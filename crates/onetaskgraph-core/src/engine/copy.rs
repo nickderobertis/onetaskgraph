@@ -4405,6 +4405,11 @@ impl Engine {
             let destination = self.writable(&to)?;
             walked.insert(to, self.counterparts(destination, &referents).await?);
         }
+        // The copied set names records by qualified id alone, and an id alone does not identify a
+        // record: a document copy's set is its documents, never a task or project sharing an id.
+        let copies_work = planned
+            .iter()
+            .any(|item| item.item.level() != Level::Document);
         let none = Counterparts::default();
         let mut read_for_headings: BTreeSet<(SourceName, Level, NativeId)> = BTreeSet::new();
         for (item, referents) in planned.iter_mut().zip(named) {
@@ -4442,6 +4447,7 @@ impl Engine {
                         // records names an ancestor, whose other copies — a fan-out landed here
                         // before — are not the counterpart this copy writes it to.
                         None => match if referent.level != Level::Document
+                            && copies_work
                             && copied.contains(&referent.id)
                         {
                             counterparts.resolve_own(referent)
@@ -4456,6 +4462,7 @@ impl Engine {
                             // does not hold yet: it is known once it has landed.
                             Resolution::NoCounterpart
                                 if referent.level != Level::Document
+                                    && copies_work
                                     && copied.contains(&referent.id) =>
                             {
                                 sections::Counterpart::InCopy
