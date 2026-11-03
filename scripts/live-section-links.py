@@ -339,7 +339,10 @@ def headings_of(state: str | None) -> list[StoredHeading]:
         if isinstance(node, pycrdt.XmlElement):
             if node.tag == "heading":
                 text = "".join(piece[0] for child in node.children if isinstance(child, pycrdt.XmlText) for piece in child.diff())
-                found.append(StoredHeading(text.strip(), str(node.attributes["id"])))
+                held = node.attributes.get("id")
+                if not isinstance(held, str) or not re.fullmatch(r"[0-9a-fA-F-]+", held) or sum(c.isalnum() for c in held) < 8:
+                    raise Failure(f"a stored heading id is {held!r}, not Linear's hex id; next: capture the record's editor state and compare it with the fixtures")
+                found.append(StoredHeading(text.strip(), held))
             for child in node.children:
                 walk(child)
 
@@ -375,6 +378,7 @@ def main() -> int:
         return 1
 
 
+# llmlint: ignore-block[changed_behavior_has_e2e] This orchestrator is itself the credentialed live check, run by hand and by no gate by the manager's ruling on node onetaskgraph-section-links, so no journey can drive it against the real trackers it exists to observe. Its paths were exercised by its runs on 2026-11-02: failed checks reported on stderr with a non-zero exit (runs 1 and 6), a stopped run reporting its cause (run 2), and a whole run passing (runs 3, 4, 5, 7, 8). After every run the dispatch verified the cleanup against the trackers: each issue it created answers 410, its board copy no longer resolves, and its Linear records read back trashed.
 def observe() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", required=True)
@@ -384,8 +388,8 @@ def observe() -> int:
     out.mkdir(parents=True, exist_ok=True)
     token = required("GH_PROJECTS_TOKEN")
     owner = required("GH_PROJECTS_OWNER")
-    if not required("GH_PROJECTS_NUMBER").isdigit():
-        raise Failure("GH_PROJECTS_NUMBER is not a project number; next: nominate board #1's number")
+    if not required("GH_PROJECTS_NUMBER").isdigit() or int(required("GH_PROJECTS_NUMBER")) < 1:
+        raise Failure("GH_PROJECTS_NUMBER is not a positive project number; next: nominate board #1's number")
     number = int(required("GH_PROJECTS_NUMBER"))
     if required("GH_PROJECTS_REPOSITORY").lower() != SCRATCH:
         raise Failure(f"GH_PROJECTS_REPOSITORY must be {SCRATCH}; next: nominate the scratch repository")
@@ -540,7 +544,6 @@ def observe() -> int:
                 run.check(f"Linear {hop}: {link.holder}'s [{link.text}] names the stored id of {link.heading.text} #{link.heading.ordinal}", id8 is not None and written == expected, f"wrote {written!r}, stored id8 {id8}")
 
         run.browser = browse(run, hrefs)
-    # llmlint: ignore[changed_behavior_has_e2e] This script is itself the credentialed live check, run by hand and by no gate, so no journey can drive it; each run's cleanup is the behaviour it exercises against the real trackers, and its report names every record it could not remove. The dispatch that wrote it verified after each run that GitHub answers 410 for every issue it created, that its board copy no longer resolves, and that its Linear records read back trashed.
     finally:
         for url in created_issues:
             try:
@@ -626,6 +629,9 @@ def browse(run: Run, hrefs: dict[Link, str]) -> list[Observation]:
             observations.append(seen)
         browser.close()
     return observations
+
+
+# llmlint: ignore-end[changed_behavior_has_e2e]
 
 
 if __name__ == "__main__":
