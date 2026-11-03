@@ -2273,6 +2273,12 @@ impl Engine {
             .unwrap_or_else(|error| unavailable(error.message));
         match answer_problem(&input, &answer) {
             Some(problem) => unavailable(problem),
+            // An undecided answer screened nothing: whatever locators it carries are never
+            // printed, and a refusal of it redacts them all.
+            None if matches!(answer.verdict, WriteVerdict::Unavailable { .. }) => SanitizeVerdict {
+                locators: Vec::new(),
+                ..answer
+            },
             None => answer,
         }
     }
@@ -2917,7 +2923,6 @@ impl Engine {
         match &answer.verdict {
             WriteVerdict::Pass => {
                 let rewrite = Rewrite::of(&whole, &answer);
-                self.boundary.pass(&whole, &rewrite);
                 if let Some((sanitised, edited, fields)) =
                     sanitised_task(&task, &comments, &rewrite)
                 {
@@ -2935,6 +2940,11 @@ impl Engine {
                         self.settle_after_sanitising(destination, item, id, &written, &write)
                             .await?;
                     }
+                    // Held as passed only now the item stands sanitised: a write whose
+                    // sanitisation failed is screened afresh, and sanitised again, next time.
+                    if !self.boundary.sanitize_dry_run {
+                        self.boundary.pass(&whole, &rewrite);
+                    }
                     if self.boundary.sanitize_dry_run {
                         return Err(EngineError::SanitizeDryRun {
                             item: screened_locator(
@@ -2947,6 +2957,8 @@ impl Engine {
                             would_pass: true,
                         });
                     }
+                } else {
+                    self.boundary.pass(&whole, &rewrite);
                 }
                 Ok(rewrite)
             }

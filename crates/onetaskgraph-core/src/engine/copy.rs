@@ -3499,9 +3499,13 @@ impl Engine {
                 running,
             )
             .await?;
+        // Only what lands somewhere screened is written as the policy passed it: a destination
+        // declared private takes the original, as it always did.
         for (project, tasks, _, _) in &mut plans {
             for item in std::iter::once(project).chain(tasks.iter_mut()) {
-                rewritten(item, &rewrite)?;
+                if self.declared(&item.to) != crate::config::SourceVisibility::Private {
+                    rewritten(item, &rewrite)?;
+                }
             }
         }
         // Every public view too, before anything of any plan is written.
@@ -5324,7 +5328,9 @@ impl Engine {
                 )
                 .await?;
             for item in &mut planned {
-                rewritten(item, &rewrite)?;
+                if self.declared(&item.to) != crate::config::SourceVisibility::Private {
+                    rewritten(item, &rewrite)?;
+                }
             }
         }
 

@@ -94,8 +94,8 @@ def _shown(state: State, task: Task) -> dict[str, Any]:
 
 
 def _move(state: State, task: Task) -> None:
-    """Another writer's edit, as the fixture names it for this task: a label added, or the
-    content's last paragraph replaced — and the version moved."""
+    """Another writer's edit, as the fixture names it for this task — a label added, the
+    content replaced, a paragraph appended to it, or a comment added — and the version moved."""
     edit = state["edits"].get(task["id"], {})
     if "label" in edit:
         task["labels"] = [*task["labels"], {"id": edit["label"], "name": edit["label"], "color": None}]
@@ -187,6 +187,8 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             return {"result": {"items": held, "next": None}}
         case "labels":
             return {"result": {"items": [], "next": None}}
+        case "write_task" if state.get("refuse_writes"):
+            return {"error": {"kind": "unavailable", "message": "the write could not be made"}}
         case "write_task":
             match params.get("write"):
                 case {"item": {"id": str(), "title": str(), "status": dict()} as item, **write}:

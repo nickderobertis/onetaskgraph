@@ -3044,3 +3044,153 @@ fn a_replacement_setting_addressed_by_no_index_or_of_no_list_shape_is_refused_at
         );
     }
 }
+
+#[test]
+fn a_copy_split_between_a_private_and_a_public_destination_replaces_only_what_lands_in_public() {
+    let store = Store::laid(
+        Some(registered),
+        |_| json!({"vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "site"}]}}),
+    );
+    let home = store.onevcs.as_ref().expect("a home");
+    let policy = home.sanitizing_write_policy(replaced());
+    repolicy(&store, |configured| *configured = policy);
+    let body = format!("Retry the way {TERM} does.");
+    store.record(
+        "plan",
+        "tasks",
+        "public",
+        "title: Public\nstatus: todo\nrepositories: [github.com/openco/openwidget]",
+        &body,
+    );
+    store.record("plan", "tasks", "kept", "title: Kept\nstatus: todo", &body);
+    store.ok(&["task", "copy", "plan:public", "plan:kept", "--to", "vault"]);
+    let public = text_of(&store, "site");
+    assert!(
+        public.contains(&format!("Retry the way {WITH} does.")) && !public.contains(TERM),
+        "{public}"
+    );
+    let private = text_of(&store, "vault");
+    assert!(
+        private.contains(&body),
+        "the private destination takes the original: {private}"
+    );
+}
+
+#[tokio::test]
+async fn a_retry_on_one_engine_after_a_failed_sanitising_write_sanitises_again_rather_than_passing()
+{
+    // Every write fails without landing, so the task still carries the term at the retry.
+    let shared = Shared::new(&[("t1", &with_term())], json!({}), json!({}));
+    let mut state = shared.state();
+    state["refuse_writes"] = json!(true);
+    std::fs::write(&shared.state, state.to_string()).expect("the state");
+    let home = shared
+        .store
+        .onevcs
+        .as_ref()
+        .expect("a home")
+        .path()
+        .to_path_buf();
+    let engine = super::linked_engine(&shared.store)
+        .with_write_policy(std::sync::Arc::new(Sanitizing {
+            home,
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        }))
+        .with_replacements(vec![onetaskgraph_core::boundary::Replacement::Replace {
+            term: TERM.to_owned(),
+            with: WITH.to_owned(),
+        }]);
+    let id: onetaskgraph_core::GlobalId = "shared:t1".parse().expect("an id");
+    for attempt in 1..=2 {
+        let refused = engine
+            .set_task_priority(&id, onetaskgraph_plugin_api::Priority::High)
+            .await
+            .expect_err("the sanitising write fails");
+        assert!(
+            refused.to_string().contains("could not be made"),
+            "{attempt}: {refused}"
+        );
+    }
+    assert_eq!(
+        shared.task("t1")["priority"],
+        json!("none"),
+        "the write it was for was never made"
+    );
+    assert_eq!(shared.writes(), 2, "each attempt sanitised again");
+}
+
+/// A linking caller's policy that cannot decide, and answers locators anyway.
+struct UndecidedWithLocators;
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for UndecidedWithLocators {
+    async fn repository_visibility(
+        &self,
+        _repository: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        Ok(onetaskgraph_core::boundary::RepositoryVisibility::Public)
+    }
+
+    async fn check_public_write(
+        &self,
+        _input: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        panic!("this policy sanitises")
+    }
+
+    async fn sanitize_public_write(
+        &self,
+        input: &onetaskgraph_core::boundary::PublicSanitizeInput,
+    ) -> Result<
+        onetaskgraph_core::boundary::SanitizeVerdict,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        Ok(onetaskgraph_core::boundary::SanitizeVerdict {
+            verdict: onetaskgraph_core::boundary::WriteVerdict::Unavailable {
+                reason: "registry".to_owned(),
+            },
+            text: input.text.clone(),
+            paths: input.paths.clone(),
+            metadata: input.metadata.clone(),
+            replaced: 0,
+            unfixed: Vec::new(),
+            // Plain, and so a value a diagnostic would print — which an undecided call never
+            // screened.
+            locators: input
+                .locators
+                .iter()
+                .map(|locator| onetaskgraph_core::boundary::Locator::Plain(locator.value.clone()))
+                .collect(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn an_undecided_linking_policy_s_locators_are_never_printed() {
+    let store = Store::new(Some(registered), json!({}));
+    store.public_project_p();
+    store.record(
+        "site",
+        "tasks",
+        &format!("{TERM}-note"),
+        "title: Note\nstatus: todo\nproject: p",
+        PLAIN,
+    );
+    let engine =
+        super::linked_engine(&store).with_write_policy(std::sync::Arc::new(UndecidedWithLocators));
+    let id: onetaskgraph_core::GlobalId = format!("site:{TERM}-note").parse().expect("an id");
+    let refused = engine
+        .set_task_priority(&id, onetaskgraph_plugin_api::Priority::High)
+        .await
+        .expect_err("an undecided policy never passes");
+    let said = refused.to_string();
+    assert_eq!(super::kind_of(&refused), "boundary-unavailable", "{said}");
+    assert!(
+        said.contains("<redacted item") && !said.contains(TERM),
+        "{said}"
+    );
+}
