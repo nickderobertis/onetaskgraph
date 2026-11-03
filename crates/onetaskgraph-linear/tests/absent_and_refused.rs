@@ -114,6 +114,15 @@ fn spelled_not_found(kind: &str, spelling: Spelling) -> Value {
     json!({"errors":[error],"data":null})
 }
 
+/// Linear's refusal of a create under an id a record already holds — a deleted one's included —
+/// as the live project-create journey observed it on 2026-11-03, under HTTP 200.
+fn id_conflict(kind: &str, id: &str) -> Value {
+    json!({"data":null,"errors":[{"message":format!("conflict on insert of {kind}"),
+        "path":[format!("{}Create", kind.to_ascii_lowercase())],
+        "extensions":{"code":"INPUT_ERROR","statusCode":400,"type":"invalid input","userError":true,
+            "userPresentableMessage":format!("Entity {kind} with id {id} already exists.")}}]})
+}
+
 /// The two statuses Linear sends an errored answer under.
 const STATUSES: [u16; 2] = [400, 200];
 
@@ -480,8 +489,7 @@ async fn a_keyed_create_whose_id_another_record_holds_lands_under_the_next() {
                     .to_owned();
                 record.lock().unwrap().push(id.clone());
                 if id == burnt {
-                    let refused = json!({"errors":[{"message":"Entity with this id already exists"}],"data":null});
-                    return (status, refused);
+                    return (status, id_conflict("Project", &id));
                 }
                 *held.lock().unwrap() = Some(id.clone());
                 let project = json!({"id":id,"name":"Harbor rollout","content":variables["input"]["content"],
@@ -606,8 +614,11 @@ async fn a_keyed_create_refused_under_an_id_its_earlier_attempt_holds_finishes_t
             .push((query.to_owned(), variables.clone()));
         match query {
             graphql::PROJECT_CREATE => (
-                400,
-                json!({"errors":[{"message":"Entity with this id already exists"}]}),
+                200,
+                id_conflict(
+                    "Project",
+                    variables["input"]["id"].as_str().unwrap_or_default(),
+                ),
             ),
             graphql::RESOLUTION => (200, resolution()),
             graphql::PROJECT if variables["id"] == held.as_str() => {
@@ -661,8 +672,11 @@ async fn a_create_whose_hold_passed_to_another_attempt_is_not_sent_under_another
                     .to_owned(),
             );
             (
-                400,
-                json!({"errors":[{"message":"Entity with this id already exists"}]}),
+                200,
+                id_conflict(
+                    "Project",
+                    variables["input"]["id"].as_str().unwrap_or_default(),
+                ),
             )
         }
         graphql::RESOLUTION => (200, resolution()),
@@ -757,9 +771,7 @@ async fn an_issue_and_a_document_land_under_the_next_id_or_finish_their_earlier_
                         .to_owned();
                     record_creates.lock().unwrap().push(id.clone());
                     if id == burnt || holding.as_deref() == Some(id.as_str()) {
-                        let refused =
-                            json!({"errors":[{"message":"Entity with this id already exists"}]});
-                        return (400, refused);
+                        return (200, id_conflict(kind, &id));
                     }
                     *holding = Some(id.clone());
                     return (

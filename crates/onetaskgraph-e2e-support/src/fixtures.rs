@@ -7000,6 +7000,24 @@ fn linear_serve(
                             ("200 OK", json!({"data":body}))
                         }
                     }
+                    // A create under an id a record already holds is answered under HTTP 200, as
+                    // Linear answers it, naming the id in its presentable sentence.
+                    Err(message) if message.starts_with(LINEAR_ID_CONFLICT_PREFIX) => {
+                        let kind = &message[LINEAR_ID_CONFLICT_PREFIX.len()..];
+                        let id = request["variables"]["input"]["id"]
+                            .as_str()
+                            .unwrap_or_default();
+                        (
+                            "200 OK",
+                            json!({"data": null, "errors": [{
+                                "message": message,
+                                "path": [request["query"].as_str().and_then(linear_create_root)],
+                                "extensions": {"code": "INPUT_ERROR", "statusCode": 400,
+                                    "type": "invalid input", "userError": true,
+                                    "userPresentableMessage":
+                                        format!("Entity {kind} with id {id} already exists.")}}]}),
+                        )
+                    }
                     Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
                 };
             answers.lock().unwrap().push(response.clone());
@@ -8270,7 +8288,11 @@ fn linear_write_item(
                 if rows.iter().any(|row| row["id"] == chosen)
                     || burnt.iter().any(|held| held == chosen) =>
             {
-                return Err("Entity with this id already exists");
+                return Err(if project {
+                    LINEAR_PROJECT_ID_CONFLICT
+                } else {
+                    LINEAR_ISSUE_ID_CONFLICT
+                });
             }
             Some(chosen) => chosen.to_owned(),
             None => format!("{}-W{}", if project { "P" } else { "T" }, rows.len() + 1),
@@ -8403,7 +8425,7 @@ fn linear_write_document(
                 if rows.iter().any(|row| row["id"] == chosen)
                     || burnt.iter().any(|held| held == chosen) =>
             {
-                return Err("Entity with this id already exists");
+                return Err(LINEAR_DOCUMENT_ID_CONFLICT);
             }
             Some(chosen) => chosen.to_owned(),
             None => format!("D-W{}", rows.len() + 1),
@@ -8951,6 +8973,28 @@ fn linear_burn(data: &mut Value, id: &str) {
     }
 }
 // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
+/// The `message` of Linear's refusal of a create under an id a record already holds — a deleted
+/// one's included — as the live project-create journey observed it on 2026-11-03, answered under
+/// HTTP 200 beside `Entity <Kind> with id <id> already exists.` as its presentable sentence.
+pub const LINEAR_ID_CONFLICT_PREFIX: &str = "conflict on insert of ";
+/// [`LINEAR_ID_CONFLICT_PREFIX`] for a project.
+pub const LINEAR_PROJECT_ID_CONFLICT: &str = "conflict on insert of Project";
+/// [`LINEAR_ID_CONFLICT_PREFIX`] for an issue.
+pub const LINEAR_ISSUE_ID_CONFLICT: &str = "conflict on insert of Issue";
+/// [`LINEAR_ID_CONFLICT_PREFIX`] for a document.
+pub const LINEAR_DOCUMENT_ID_CONFLICT: &str = "conflict on insert of Document";
+
+/// The root field a create `query` writes, for the `path` of its refusal.
+fn linear_create_root(query: &str) -> Option<&'static str> {
+    use onetaskgraph_linear::graphql;
+    match query {
+        graphql::ISSUE_CREATE => Some("issueCreate"),
+        graphql::PROJECT_CREATE => Some("projectCreate"),
+        graphql::DOCUMENT_CREATE => Some("documentCreate"),
+        _ => None,
+    }
+}
 
 /// What Linear answers a mutation addressing an id it does not hold with: an errored
 /// response, `Entity not found: Issue`, rather than a null payload.
