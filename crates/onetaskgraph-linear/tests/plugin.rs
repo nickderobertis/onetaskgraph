@@ -7386,6 +7386,30 @@ fn heading_ids_are_read_out_of_the_editor_state_linear_stored() {
     assert_eq!(onetaskgraph_linear::headings::decoded("not base64!"), None);
 }
 
+/// A state that is valid base64 but not a Yjs update answers no headings, rather than a
+/// guess or a panic: bytes that were never an update, and a captured state cut short, as an
+/// answer truncated in transit would leave it.
+#[test]
+fn a_base64_state_that_is_not_a_yjs_update_answers_no_headings() {
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let sample: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/editor-state/tes2-773.json")).unwrap();
+    let whole = engine.decode(sample["state"].as_str().unwrap()).unwrap();
+    for (case, bytes) in [
+        ("bytes that were never an update", vec![0xff; 24]),
+        ("a captured state cut short", whole[..whole.len() / 2].to_vec()),
+    ] {
+        let state = engine.encode(&bytes);
+        assert!(engine.decode(&state).is_ok(), "{case}: the base64 itself is valid");
+        assert_eq!(
+            onetaskgraph_linear::headings::decoded(&state),
+            None,
+            "{case}: no headings are answered"
+        );
+    }
+}
+
 /// A later answer whose editor state is `null`, or does not decode, says the record's headings
 /// are no longer known: nothing an earlier answer carried is answered for it.
 #[test]
