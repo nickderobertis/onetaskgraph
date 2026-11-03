@@ -1198,6 +1198,11 @@ impl Exposure {
         self
     }
 
+    /// The identifiers a diagnostic of this write would print, in the order they are sent.
+    pub(crate) fn locators(&self) -> &[LocatorEntry] {
+        &self.locators
+    }
+
     /// One identifier a diagnostic of this write would print, screened with it.
     pub(crate) fn locate(mut self, kind: LocatorKind, value: impl Into<String>) -> Self {
         let locator = LocatorEntry {
@@ -2793,9 +2798,15 @@ impl Engine {
                 if !predates {
                     return Err(refusal(destination, item, &whole, &answer));
                 }
-                // What replacement can fix is fixed, once; what it cannot is named.
+                // What replacement can fix is fixed, once; what it cannot is named. A record
+                // one of whose own identifiers carries a term is written nothing, as a sweep
+                // writes it nothing: no write of it could be named without printing the term.
                 let rewrite = Rewrite::of(&whole, &answer);
-                if let Some(sanitised) = sanitised_task(&task, &comments, &rewrite) {
+                let named = answer
+                    .unfixed
+                    .iter()
+                    .any(|unfixed| unfixed.surface == SanitizeSurface::Locators);
+                if !named && let Some(sanitised) = sanitised_task(&task, &comments, &rewrite) {
                     self.sanitise_task(
                         destination,
                         item,

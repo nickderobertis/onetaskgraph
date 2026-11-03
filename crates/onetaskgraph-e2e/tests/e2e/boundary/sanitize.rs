@@ -1062,6 +1062,8 @@ fn spelled_nowhere(store: &Store, said: &[&str]) {
             "onevcs-",
             "body-",
             "onetaskgraph.yaml",
+            // The peer's own store: the source being swept, whose work the term is in.
+            "edit-source.json",
         ]
         .iter()
         .any(|part| path.contains(part));
@@ -1205,7 +1207,10 @@ fn a_sweep_of_a_folder_reads_it_whole_and_rewrites_every_hit_class_reporting_loc
     let human = store.run(&["sources", "sanitize", "site"]);
     let said = stdout(&human);
     assert_eq!(human.status.code(), Some(1), "{said}");
-    assert!(said.contains("<redacted item 1>"), "{said}");
+    assert!(
+        said.contains("<redacted metadata-key 1>") && said.contains("<redacted item 2>"),
+        "{said}"
+    );
     spelled_nowhere(&store, &[&said, &stderr(&human)]);
 
     // A rerun writes nothing to what is already sanitised: only the unfixable records remain.
@@ -1413,6 +1418,11 @@ struct Shared {
 
 impl Shared {
     fn new(tasks: &[(&str, &str)], moves: Value, edits: Value) -> Self {
+        Self::named("shared", tasks, moves, edits)
+    }
+
+    /// [`Shared::new`], the peer configured under `name`.
+    fn named(name: &str, tasks: &[(&str, &str)], moves: Value, edits: Value) -> Self {
         let (store, _record) = sanitizing(replaced());
         let state = store.sandbox.config_home().join("edit-source.json");
         let held: Vec<Value> = tasks
@@ -1440,7 +1450,7 @@ impl Shared {
                 .expect("the project document"),
         )
         .expect("JSON");
-        document["sources"]["shared"] = json!({
+        document["sources"][name] = json!({
             "plugin": "subprocess",
             "visibility": "public",
             "config": {
@@ -1470,6 +1480,27 @@ impl Shared {
             .find(|task| task["id"] == json!(id))
             .cloned()
             .unwrap_or_else(|| panic!("{id} is held"))
+    }
+
+    /// Lay `fields` over the held task `id`, as another store could have written it.
+    fn patch(&self, id: &str, fields: Value) {
+        let mut state = self.state();
+        for task in state["tasks"].as_array_mut().expect("tasks") {
+            if task["id"] == json!(id) {
+                for (key, value) in fields.as_object().expect("fields") {
+                    task[key] = value.clone();
+                }
+            }
+        }
+        std::fs::write(&self.state, state.to_string()).expect("the state");
+    }
+
+    /// Put a comment `comment` saying `body` on the held task `task`.
+    fn comment(&self, task: &str, comment: &str, body: &str) {
+        let mut state = self.state();
+        state["comments"][task] = json!([{"id": comment, "author": "ada", "created_at": null,
+            "updated_at": null, "body": body, "url": null, "origin": null}]);
+        std::fs::write(&self.state, state.to_string()).expect("the state");
     }
 
     fn writes(&self) -> usize {
@@ -1747,4 +1778,132 @@ fn a_recopy_of_an_item_whose_id_carries_a_replaced_term_updates_the_item_it_copi
     assert_eq!(second["items"][0]["destination"], json!(landed), "{second}");
     assert_eq!(files_under(&store, "mirror"), before, "no second item");
     assert!(text_of(&store, "mirror").contains("Retry again"));
+}
+
+#[test]
+fn a_sweep_reports_a_term_carrying_identifier_redacted_and_numbered_beside_records_that_pass() {
+    let named = format!("{TERM}-x");
+    let shared = Shared::new(
+        &[
+            ("PVTI_x", &with_term()),
+            ("t2", &with_term()),
+            (&named, "Plain."),
+            ("t3", &with_term()),
+        ],
+        // Each dry run reads t2 once; the sweep that writes reads it at 3, again before its
+        // write at 4 — moved — and once more at 5 — moved again: a conflict.
+        json!({"t2": [4, 5]}),
+        json!({"t2": {"label": "person-label"}}),
+    );
+    shared.comment("t3", &format!("{TERM}-c1"), "Plain.");
+    let redacted_in = |report: &Value| -> Vec<(String, u64)> {
+        let mut found = Vec::new();
+        for item in report["items"].as_array().expect("items") {
+            for locator in std::iter::once(&item["id"]).chain(
+                item["fields"]
+                    .as_array()
+                    .expect("fields")
+                    .iter()
+                    .map(|field| &field["field"]),
+            ) {
+                if locator["redacted"] == json!(true) {
+                    found.push((
+                        locator["kind"].as_str().expect("a kind").to_owned(),
+                        locator["ordinal"].as_u64().expect("an ordinal"),
+                    ));
+                }
+            }
+        }
+        found
+    };
+    for flags in [&["--dry-run"][..], &["--complete", "--dry-run"], &[]] {
+        let (code, report, out, err) = sweep(&shared.store, "shared", flags);
+        assert_eq!(code, Some(1), "{flags:?}: {out}{err}");
+        assert_eq!(
+            redacted_in(&report),
+            [("item".to_owned(), 1), ("comment".to_owned(), 2)],
+            "{flags:?}: ordinals count from 1 in the order the report emits them: {report}"
+        );
+        // A passing locator prints as it is.
+        let passing = entry(&report, "shared:PVTI_x");
+        assert!(
+            ["would-rewrite", "rewritten"]
+                .contains(&passing["outcome"].as_str().expect("an outcome")),
+            "{flags:?}: {report}"
+        );
+        for item in report["items"].as_array().expect("items") {
+            if item["id"]["redacted"] == json!(true)
+                || item["fields"][0]["field"]["redacted"] == json!(true)
+            {
+                assert_eq!(item["outcome"], json!("unfixable"), "{report}");
+                assert_eq!(
+                    item["fields"][0]["why"],
+                    json!("identifier carries a private term")
+                );
+            }
+        }
+        if flags.is_empty() {
+            assert_eq!(
+                entry(&report, "shared:t2")["outcome"],
+                json!("conflict"),
+                "{report}"
+            );
+        }
+        spelled_nowhere(&shared.store, &[&out, &err]);
+    }
+    // The human rendering prints the same records by the same screened locators.
+    let human = shared
+        .store
+        .run(&["sources", "sanitize", "shared", "--dry-run"]);
+    let said = stdout(&human);
+    assert!(
+        said.contains("<redacted item 1>") && said.contains("<redacted comment 2>"),
+        "{said}"
+    );
+    spelled_nowhere(&shared.store, &[&said, &stderr(&human)]);
+}
+
+#[test]
+fn both_predates_refusals_name_a_source_whose_name_carries_a_term_only_redacted() {
+    let source = format!("{TERM}-shared");
+    let shared = Shared::named(
+        &source,
+        &[
+            ("t1", "Plain."),
+            ("t2", "Mirror hiddenco/quietharbor here."),
+        ],
+        json!({}),
+        json!({}),
+    );
+    shared.patch(
+        "t1",
+        json!({"repositories": ["github.com/hiddenco/quietharbor"]}),
+    );
+    for (task, kind) in [
+        ("t1", "not-private-destination"),
+        ("t2", "boundary-refused"),
+    ] {
+        let before = shared.state()["tasks"].clone();
+        let output = shared.store.run(&[
+            "task",
+            "priority",
+            "set",
+            &format!("{source}:{task}"),
+            "high",
+            "--json",
+        ]);
+        assert_eq!(output.status.code(), Some(1), "{task}: {}", stderr(&output));
+        let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+        assert_eq!(failure["failure"]["kind"], json!(kind), "{task}: {failure}");
+        assert_eq!(failure["predates_write"], json!(true), "{task}: {failure}");
+        let said = stderr(&output);
+        assert!(said.contains("<redacted source 1>"), "{task}: {said}");
+        assert!(said.contains("before this write"), "{task}: {said}");
+        spelled_nowhere(&shared.store, &[&said, &stdout(&output)]);
+        assert_eq!(
+            shared.state()["tasks"],
+            before,
+            "{task}: nothing was written"
+        );
+    }
 }

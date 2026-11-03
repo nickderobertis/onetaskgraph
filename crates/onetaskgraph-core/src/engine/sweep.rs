@@ -466,15 +466,42 @@ impl Engine {
                 .any(|unfixed| unfixed.surface == SanitizeSurface::Locators)
                 || matches!(shown_item, Locator::Redacted { .. })
             {
+                // Each identifier the policy names, by its redacted form — the item's own id as
+                // `id`, since the entry already names it — and the item's id alone when the
+                // policy named none.
+                let mut named: Vec<SweepField> = answer
+                    .unfixed
+                    .iter()
+                    .filter(|unfixed| unfixed.surface == SanitizeSurface::Locators)
+                    .filter_map(|unfixed| usize::try_from(unfixed.index).ok())
+                    .filter_map(|index| {
+                        let locator = stored.exposure.locators().get(index)?;
+                        let field = match locator.kind {
+                            LocatorKind::Item | LocatorKind::Source => {
+                                Locator::Plain("id".to_owned())
+                            }
+                            _ => answer.locators.get(index)?.clone(),
+                        };
+                        Some(SweepField {
+                            field,
+                            outcome: FieldOutcome::Unfixable,
+                            why: Some(IDENTIFIER.to_owned()),
+                        })
+                    })
+                    .collect();
+                named.dedup();
+                if named.is_empty() {
+                    named.push(SweepField {
+                        field: Locator::Plain("id".to_owned()),
+                        outcome: FieldOutcome::Unfixable,
+                        why: Some(IDENTIFIER.to_owned()),
+                    });
+                }
                 sweep.items.push(SweepItem {
                     id: shown_item,
                     kind: SweepKind::Task,
                     outcome: ItemOutcome::Unfixable,
-                    fields: vec![SweepField {
-                        field: Locator::Plain("id".to_owned()),
-                        outcome: FieldOutcome::Unfixable,
-                        why: Some(IDENTIFIER.to_owned()),
-                    }],
+                    fields: named,
                 });
                 return Ok(());
             }
