@@ -604,6 +604,13 @@ pub mod graphql {
     pub const PROJECT_NOT_FOUND_MESSAGE: &str = "Entity not found: Project";
     /// Its user-facing alternative, on the terms of [`ISSUE_NOT_FOUND_PRESENTABLE`].
     pub const PROJECT_NOT_FOUND_PRESENTABLE: &str = "Could not find referenced Project.";
+    /// The same error for a document a read addresses, on the terms of
+    /// [`PROJECT_NOT_FOUND_MESSAGE`]. Reconciled with the service by the live project-create
+    /// journey of `onetaskgraph-linear-e2e`, which reads a document id Linear does not hold and
+    /// requires it absent; the loopback fixture shares this contract.
+    pub const DOCUMENT_NOT_FOUND_MESSAGE: &str = "Entity not found: Document";
+    /// Its user-facing alternative, on the terms of [`ISSUE_NOT_FOUND_PRESENTABLE`].
+    pub const DOCUMENT_NOT_FOUND_PRESENTABLE: &str = "Could not find referenced Document.";
 
     /// Check the authenticated viewer.
     pub const VIEWER: &str = "query { viewer { id } }";
@@ -1839,6 +1846,15 @@ impl Refusal {
         )
     }
 
+    /// Whether Linear refused because the document the request addressed is not there, on the
+    /// terms of [`Self::entity_missing`].
+    fn document_missing(&self) -> bool {
+        self.missing(
+            graphql::DOCUMENT_NOT_FOUND_MESSAGE,
+            graphql::DOCUMENT_NOT_FOUND_PRESENTABLE,
+        )
+    }
+
     /// Whether this refusal is Linear's `message` — or its `presentable` alternative — for the
     /// one entity the request addressed.
     fn missing(&self, message: &str, presentable: &str) -> bool {
@@ -1924,6 +1940,27 @@ impl LinearSource {
         match self.answer(query, variables).await? {
             Ok(data) => Ok(Some(data)),
             Err(refusal) if refusal.entity_missing() => Ok(None),
+            Err(refusal) => Err(refusal.into_error()),
+        }
+    }
+
+    /// Send a read of one item by id, answering `None` when Linear refuses it because the item
+    /// of the kind `missing` recognises is not there.
+    ///
+    /// Linear answers `issue(id:)`, `project(id:)` and `document(id:)` naming nothing with an
+    /// errored response — `Entity not found: <type>` — rather than a null, whatever HTTP status
+    /// it sends it under, so a read by an id this workspace does not hold is told apart here
+    /// from every other refusal. A not-found naming an entity of another kind is a refusal: it
+    /// is about something the read did not address.
+    async fn send_to_read(
+        &self,
+        query: &str,
+        variables: Value,
+        missing: fn(&Refusal) -> bool,
+    ) -> Result<Option<Value>, SourceError> {
+        match self.answer(query, variables).await? {
+            Ok(data) => Ok(Some(data)),
+            Err(refusal) if missing(&refusal) => Ok(None),
             Err(refusal) => Err(refusal.into_error()),
         }
     }
@@ -2021,7 +2058,11 @@ impl LinearSource {
                 .ok()
                 .and_then(|body| body.errors.into_iter().next())
                 .map(Refusal)
-                .filter(|refusal| refusal.entity_missing() || refusal.project_missing())
+                .filter(|refusal| {
+                    refusal.entity_missing()
+                        || refusal.project_missing()
+                        || refusal.document_missing()
+                })
             {
                 return Ok(Err(missing));
             }
@@ -3653,11 +3694,13 @@ impl TaskSource for LinearSource {
         let data = match self.send(query, variables).await {
             Ok(data) => data,
             // Answered as an id another request already holds: that request's issue is this
-            // create's, so it is read by the id and written whole, finishing what it left.
+            // create's, so it is read by the id and written whole, finishing what it left. When
+            // that read finds nothing — or itself fails — the create's own refusal is the answer:
+            // it says why Linear would not take this create, and the read's says nothing of it.
             Err(error) => {
                 self.forget_vocabulary();
                 if let Some(key) = &create_key
-                    && let Some(held) = self.get_task(&NativeId(linear_id_of_key(key)?)).await?
+                    && let Ok(Some(held)) = self.get_task(&NativeId(linear_id_of_key(key)?)).await
                 {
                     let item = write.item.clone();
                     return self
@@ -3751,11 +3794,13 @@ impl TaskSource for LinearSource {
         let data = match self.send(query, variables).await {
             Ok(data) => data,
             // Answered as an id another request already holds: that request's project is this
-            // create's, so it is read by the id and written whole, as an issue's is.
+            // create's, so it is read by the id and written whole, as an issue's is — and
+            // otherwise answered with the create's own refusal, as an issue's is.
             Err(error) => {
                 self.forget_vocabulary();
                 if let Some(key) = &create_key
-                    && let Some(held) = self.get_project(&NativeId(linear_id_of_key(key)?)).await?
+                    && let Ok(Some(held)) =
+                        self.get_project(&NativeId(linear_id_of_key(key)?)).await
                 {
                     return self
                         .write_project(&ItemWrite {
@@ -4001,10 +4046,12 @@ impl TaskSource for LinearSource {
         let data = match self.send(query, variables).await {
             Ok(data) => data,
             // Answered as an id another request already holds: that request's document is this
-            // create's, so it is read by the id and written whole, as an issue's is.
+            // create's, so it is read by the id and written whole, as an issue's is — and
+            // otherwise answered with the create's own refusal, as an issue's is.
             Err(error) => {
                 if let Some(key) = &create_key
-                    && let Some(held) = self.get_document(&NativeId(linear_id_of_key(key)?)).await?
+                    && let Ok(Some(held)) =
+                        self.get_document(&NativeId(linear_id_of_key(key)?)).await
                 {
                     return self
                         .write_document(&ItemWrite {
@@ -5070,7 +5117,12 @@ impl LinearSource {
                 ISSUE
             }
         };
-        let data = self.send(document, json!({"id":id.0})).await?;
+        let Some(data) = self
+            .send_to_read(document, json!({"id":id.0}), Refusal::entity_missing)
+            .await?
+        else {
+            return Ok(None);
+        };
         Ok(optional(&data, "issue", |v| {
             Ok((
                 map_task(v, &self.name, &self.statuses, self.spelling())?,
@@ -5091,9 +5143,16 @@ impl LinearSource {
         let Some(team) = self.team.as_ref() else {
             return self.issue_held(id, Read::ForWrite).await;
         };
-        let data = self
-            .send(graphql::ISSUE_RESOLVED, json!({"id":id.0,"key":team.0}))
-            .await?;
+        let Some(data) = self
+            .send_to_read(
+                graphql::ISSUE_RESOLVED,
+                json!({"id":id.0,"key":team.0}),
+                Refusal::entity_missing,
+            )
+            .await?
+        else {
+            return Ok(None);
+        };
         let read = std::sync::Arc::new(Vocabulary::read(&data, &self.name, &team.0)?);
         *self
             .vocabulary
@@ -5120,12 +5179,16 @@ impl LinearSource {
                 message: "a page limit of 0 is not a page; ask for at least 1 comment".to_owned(),
             });
         }
-        let data = self
-            .send(
+        let Some(data) = self
+            .send_to_read(
                 self.read_document(graphql::ISSUE_DETAIL),
                 json!({"id":id.0,"last":page.limit.min(MAX_PAGE_SIZE),"before":page.cursor.as_ref().map(|c|&c.0)}),
+                Refusal::entity_missing,
             )
-            .await?;
+            .await?
+        else {
+            return Ok(None);
+        };
         Ok(optional(&data, "issue", |v| {
             let mut task = map_task(v, &self.name, &self.statuses, self.spelling())?;
             // A page resumed from a cursor is not the whole of the comments, so with the cache
@@ -5162,7 +5225,12 @@ impl LinearSource {
                 PROJECT
             }
         };
-        let data = self.send(document, json!({"id":id.0})).await?;
+        let Some(data) = self
+            .send_to_read(document, json!({"id":id.0}), Refusal::project_missing)
+            .await?
+        else {
+            return Ok(None);
+        };
         Ok(optional(&data, "project", |v| {
             Ok((
                 map_project(v, &self.statuses, self.spelling())?,
@@ -5188,7 +5256,12 @@ impl LinearSource {
             ))
             .filter(|(document, _)| self.in_scope(document.project.as_ref())));
         }
-        let data = self.send(DOCUMENT, json!({"id":id.0})).await?;
+        let Some(data) = self
+            .send_to_read(DOCUMENT, json!({"id":id.0}), Refusal::document_missing)
+            .await?
+        else {
+            return Ok(None);
+        };
         Ok(optional(&data, "document", |v| {
             Ok((map_document(v)?, optional_string(v, "content")?))
         })?
