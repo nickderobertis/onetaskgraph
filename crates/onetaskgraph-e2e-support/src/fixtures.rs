@@ -6491,6 +6491,13 @@ impl LinearWorkspace {
         });
     }
 
+    /// Have `id` held by a record this workspace does not answer for — a deleted one, or one of
+    /// another workspace — so a create sent under it is refused, as Linear refuses one.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's private state, which only its request loop here answers from: like `refuse_unknown_projects` beside it, it can only be a method of this handle.
+    pub fn burn_id(&self, id: &str) {
+        linear_burn(&mut self.state.lock().unwrap(), id);
+    }
+
     /// Refuse, from now on, a document filed under a project this workspace does not hold, as
     /// Linear does — `Entity not found: Project`.
     pub fn refuse_unknown_projects(&self) {
@@ -7034,32 +7041,56 @@ fn linear_serve(
                 );
                 continue;
             }
-            let (status, response) =
-                match linear_response(&request, recorded.as_ref(), &mut state.lock().unwrap()) {
-                    Ok(mut body) => {
-                        let operation = request["query"].as_str().unwrap_or_default();
-                        let variables = request.get("variables").cloned().unwrap_or(Value::Null);
-                        let mut bends = workspace.bends.lock().unwrap();
-                        if let Some(bend) = bends
-                            .iter_mut()
-                            .find(|bend| bend.times > 0 && (bend.matches)(operation, &variables))
-                        {
-                            bend.times -= 1;
-                            (bend.bend)(&variables, &mut body);
-                        }
-                        let mut lost = workspace.lost.lock().unwrap();
-                        if let Some(at) = lost.iter().position(|lost| *lost == operation) {
-                            lost.remove(at);
-                            (
-                                "502 Bad Gateway",
-                                json!({"errors":[{"message":"the answer was lost"}]}),
-                            )
-                        } else {
-                            ("200 OK", json!({"data":body}))
-                        }
+            let (status, response) = match linear_response(
+                &request,
+                recorded.as_ref(),
+                &mut state.lock().unwrap(),
+            ) {
+                Ok(mut body) => {
+                    let operation = request["query"].as_str().unwrap_or_default();
+                    let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+                    let mut bends = workspace.bends.lock().unwrap();
+                    if let Some(bend) = bends
+                        .iter_mut()
+                        .find(|bend| bend.times > 0 && (bend.matches)(operation, &variables))
+                    {
+                        bend.times -= 1;
+                        (bend.bend)(&variables, &mut body);
                     }
-                    Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
-                };
+                    let mut lost = workspace.lost.lock().unwrap();
+                    if let Some(at) = lost.iter().position(|lost| *lost == operation) {
+                        lost.remove(at);
+                        (
+                            "502 Bad Gateway",
+                            json!({"errors":[{"message":"the answer was lost"}]}),
+                        )
+                    } else {
+                        ("200 OK", json!({"data":body}))
+                    }
+                }
+                // A create under an id a record already holds is answered under HTTP 200, as
+                // Linear answers it, naming the id in its presentable sentence.
+                Err(message)
+                    if let Some(record) = LINEAR_ID_CONFLICTS.into_iter().find(|record| {
+                        onetaskgraph_linear::graphql::id_conflict_message(*record) == message
+                    }) =>
+                {
+                    let id = request["variables"]["input"]["id"]
+                        .as_str()
+                        .unwrap_or_default();
+                    (
+                        "200 OK",
+                        json!({"data": null, "errors": [{
+                                "message": message,
+                                "path": [request["query"].as_str().and_then(linear_create_root)],
+                                "extensions": {"code": "INPUT_ERROR", "statusCode": 400,
+                                    "type": "invalid input", "userError": true,
+                                    "userPresentableMessage":
+                                        onetaskgraph_linear::graphql::id_conflict_presentable(record, id)}}]}),
+                    )
+                }
+                Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
+            };
             answers.lock().unwrap().push(response.clone());
             // Answered, and not yet sent: a change made here is one the next request sees and
             // this one did not.
@@ -7919,6 +7950,7 @@ fn linear_response(
     }
     if operation == graphql::DOCUMENT_DELETE {
         let id = vars["id"].as_str().ok_or("delete id must be a string")?;
+        linear_burn(data, id);
         data["documents"]
             .as_array_mut()
             .ok_or("fixture collection is not an array")?
@@ -7942,7 +7974,11 @@ fn linear_response(
             .unwrap()
             .iter()
             .find(|v| v["id"] == id);
-        return Ok(json!({"document":item.map(linear_document)}));
+        // An id naming nothing is an errored answer, as Linear gives it, never a null.
+        let Some(item) = item else {
+            return Err(graphql::DOCUMENT_NOT_FOUND_MESSAGE);
+        };
+        return Ok(json!({ "document": linear_document(item) }));
     }
     if matches!(
         operation,
@@ -7953,6 +7989,7 @@ fn linear_response(
     if matches!(operation, graphql::ISSUE_DELETE | graphql::PROJECT_DELETE) {
         let project = operation == graphql::PROJECT_DELETE;
         let id = vars["id"].as_str().ok_or("delete id must be a string")?;
+        linear_burn(data, id);
         let rows = data[if project { "projects" } else { "tasks" }]
             .as_array_mut()
             .ok_or("fixture collection is not an array")?;
@@ -8029,7 +8066,11 @@ fn linear_response(
                 &vars,
             )}));
         }
-        return Ok(json!({"issue":item.map(|v|linear_task(v,data))}));
+        // An id naming nothing is an errored answer, as Linear gives it, never a null.
+        let Some(item) = item else {
+            return Err(graphql::ISSUE_NOT_FOUND_MESSAGE);
+        };
+        return Ok(json!({ "issue": linear_task(item, data) }));
     }
     if matches!(operation, graphql::PROJECT | graphql::PROJECT_RELATIONS) {
         let id = vars["id"].as_str().unwrap_or("");
@@ -8044,7 +8085,11 @@ fn linear_response(
                 &vars,
             )}));
         }
-        return Ok(json!({"project":item.map(|v|linear_project(v,data))}));
+        // An id naming nothing is an errored answer, as Linear gives it, never a null.
+        let Some(item) = item else {
+            return Err(graphql::PROJECT_NOT_FOUND_MESSAGE);
+        };
+        return Ok(json!({ "project": linear_project(item, data) }));
     }
     Ok(json!({"viewer":{"id":"fixture-user"}}))
 }
@@ -8303,14 +8348,23 @@ fn linear_write_item(
         "_linear_project_statuses": data["_linear_project_statuses"].clone()});
     let vocabulary_markdown = json!({"_linear_markdown": data["_linear_markdown"].clone()});
     let stateless = data["_linear_stateless"] == true;
+    let burnt = linear_burnt(data);
     let rows = data[collection]
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
     let id = if create {
-        // A caller-chosen `id` is the item's own, and Linear lets only one item hold an id.
+        // A caller-chosen `id` is the item's own, and Linear lets only one item hold an id —
+        // a deleted one's, and one another workspace holds, included.
         match input.get("id").and_then(Value::as_str) {
-            Some(chosen) if rows.iter().any(|row| row["id"] == chosen) => {
-                return Err("Entity with this id already exists");
+            Some(chosen)
+                if rows.iter().any(|row| row["id"] == chosen)
+                    || burnt.iter().any(|held| held == chosen) =>
+            {
+                return Err(if project {
+                    onetaskgraph_linear::graphql::PROJECT_ID_CONFLICT_MESSAGE
+                } else {
+                    onetaskgraph_linear::graphql::ISSUE_ID_CONFLICT_MESSAGE
+                });
             }
             Some(chosen) => chosen.to_owned(),
             None => format!("{}-W{}", if project { "P" } else { "T" }, rows.len() + 1),
@@ -8440,15 +8494,19 @@ fn linear_write_document(
     let stateless = data["_linear_stateless"] == true;
     // Seeded without moving the workspace's clock: a document's write moves no time here.
     let stamp = format!("d{}", data["documents"].as_array().map_or(0, Vec::len));
+    let burnt = linear_burnt(data);
     let rows = data["documents"]
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
     let id = if create {
         // A caller-chosen `id` is the document's own, held by one document at most, as an
-        // issue's is.
+        // issue's is — a deleted one's included.
         match input.get("id").and_then(Value::as_str) {
-            Some(chosen) if rows.iter().any(|row| row["id"] == chosen) => {
-                return Err("Entity with this id already exists");
+            Some(chosen)
+                if rows.iter().any(|row| row["id"] == chosen)
+                    || burnt.iter().any(|held| held == chosen) =>
+            {
+                return Err(onetaskgraph_linear::graphql::DOCUMENT_ID_CONFLICT_MESSAGE);
             }
             Some(chosen) => chosen.to_owned(),
             None => format!("D-W{}", rows.len() + 1),
@@ -8979,6 +9037,48 @@ fn linear_held_status(data: &Value, id: &str) -> Option<Value> {
         .find(|status| status["id"] == id)
         .map(|status| json!({"name":status["name"],"type":status["type"]}))
 }
+
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The loopback Linear lives in the shared e2e harness because the engine's suite and the Linear suite both drive it, by the agreed e2e layout; these helpers are its own request loop's record of which ids a create may not take and of how it refuses one, which `linear_write_item`, `linear_write_document`, the delete handlers and the serve loop here read and write, so no suite could hold them from outside.
+/// Every id a record of this workspace once held, or a record of another workspace holds: an id
+/// no create may take, as Linear lets one id name one record ever.
+fn linear_burnt(data: &Value) -> Vec<String> {
+    data["_linear_burnt"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|id| id.as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Record that `id` is held by a record this workspace no longer answers for.
+fn linear_burn(data: &mut Value, id: &str) {
+    if !data["_linear_burnt"].is_array() {
+        data["_linear_burnt"] = json!([]);
+    }
+    if let Some(burnt) = data["_linear_burnt"].as_array_mut() {
+        burnt.push(json!(id));
+    }
+}
+
+/// Linear's refusal of a create under an id a record already holds, by the kind it names: the
+/// plugin's own contract constants, which the live project-create journey checks against Linear.
+const LINEAR_ID_CONFLICTS: [onetaskgraph_plugin_api::MetadataRecord; 3] = [
+    onetaskgraph_plugin_api::MetadataRecord::Project,
+    onetaskgraph_plugin_api::MetadataRecord::Task,
+    onetaskgraph_plugin_api::MetadataRecord::Document,
+];
+
+/// The root field a create `query` writes, for the `path` of its refusal.
+fn linear_create_root(query: &str) -> Option<&'static str> {
+    use onetaskgraph_linear::graphql;
+    match query {
+        graphql::ISSUE_CREATE => Some("issueCreate"),
+        graphql::PROJECT_CREATE => Some("projectCreate"),
+        graphql::DOCUMENT_CREATE => Some("documentCreate"),
+        _ => None,
+    }
+}
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 /// What Linear answers a mutation addressing an id it does not hold with: an errored
 /// response, `Entity not found: Issue`, rather than a null payload.

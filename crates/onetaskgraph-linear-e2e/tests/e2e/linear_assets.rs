@@ -1833,6 +1833,18 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
     if let Some(lease) = &lease {
         namespace.leased(lease.index);
     }
+    // A new project copied into the team, and a copy retried after its create's answer was
+    // lost: in this session, which holds the one Linear seat, and removed again however it ends.
+    // Its failure is reported after the asset journey has run, so neither hides the other.
+    let project_create = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::live_project_create::live_project_create(
+            &runtime,
+            &key,
+            &team,
+            &response,
+            std::sync::Arc::clone(&namespace),
+        );
+    }));
     let lifecycle_endpoint = document_lifecycle::observer::guarded(
         "https://api.linear.app/graphql",
         &key,
@@ -1899,6 +1911,9 @@ fn live_disposable_issue_and_document_assets_copy_and_recopy() {
         refused.is_empty(),
         "the Linear asset lane named records outside its run's namespace: {refused:?}"
     );
+    if let Err(panic) = project_create {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 /// Prepares the lane's standing slot and runs `drive` over it, so that from the first
