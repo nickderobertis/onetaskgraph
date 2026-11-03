@@ -10,26 +10,11 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, RootModel
 
 
-class FailureClass(StrEnum):
-    FailureClassRefused = "refused"
-    FailureClassTransient = "transient"
-
-
 class GlobalId(RootModel[str]):
     root: Annotated[
         str,
         Field(
             description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
-        ),
-    ]
-
-
-class SourceName(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="The name a configuration document gives one configured source.",
-            pattern="^[a-z0-9][a-z0-9-]*$",
         ),
     ]
 
@@ -45,7 +30,23 @@ class StatusCategory(StrEnum):
     StatusCategoryUnknown = "unknown"
 
 
+class FailureClass(StrEnum):
+    FailureClassRefused = "refused"
+    FailureClassTransient = "transient"
+
+
+class SourceName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
+        ),
+    ]
+
+
 class DeliveredWritten(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     deliverer: Annotated[
         GlobalId,
         Field(
@@ -59,13 +60,13 @@ class DeliveredWritten(BaseModel):
             validate_default=True,
         ),
     ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
-    outcome: Literal["written"]
     to: Annotated[StatusCategory, Field(description="The category written.")]
+    outcome: Literal["written"]
 
 
 class DeliveredUnchanged(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     deliverer: Annotated[
         GlobalId,
         Field(
@@ -79,12 +80,12 @@ class DeliveredUnchanged(BaseModel):
             validate_default=True,
         ),
     ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
     outcome: Literal["unchanged"]
 
 
 class DeliveredLeft(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     deliverer: Annotated[
         GlobalId,
         Field(
@@ -98,7 +99,6 @@ class DeliveredLeft(BaseModel):
             validate_default=True,
         ),
     ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
     outcome: Literal["left"]
 
@@ -117,6 +117,10 @@ class Failure(BaseModel):
             description="What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`."
         ),
     ]
+    source: Annotated[
+        SourceName | None,
+        Field(description="The configured source the failure came from, or `null` when none did."),
+    ]
     message: Annotated[
         str,
         Field(
@@ -130,13 +134,10 @@ class Failure(BaseModel):
             ge=0,
         ),
     ]
-    source: Annotated[
-        SourceName | None,
-        Field(description="The configured source the failure came from, or `null` when none did."),
-    ]
 
 
 class DeliveredFailed(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     deliverer: Annotated[
         GlobalId,
         Field(
@@ -150,17 +151,16 @@ class DeliveredFailed(BaseModel):
             validate_default=True,
         ),
     ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    from_: Annotated[
+        StatusCategory | None,
+        Field(alias="from", description="The category it read, when it could be read."),
+    ] = None
     failure: Annotated[
         Failure,
         Field(
             description="Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
         ),
     ]
-    from_: Annotated[
-        StatusCategory | None,
-        Field(alias="from", description="The category it read, when it could be read."),
-    ] = None
     outcome: Literal["failed"]
 
 

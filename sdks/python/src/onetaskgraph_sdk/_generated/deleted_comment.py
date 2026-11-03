@@ -10,21 +10,6 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, JsonValue, RootModel
 
 
-class BudgetSpent(BaseModel):
-    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
-    budget: Annotated[
-        str,
-        Field(description="The budget, as the source names it — `graphql`, `rest`."),
-    ]
-    lower_bound: Annotated[
-        bool,
-        Field(
-            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
-        ),
-    ]
-    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
-
-
 class NativeId(RootModel[str]):
     root: Annotated[
         str,
@@ -34,27 +19,60 @@ class NativeId(RootModel[str]):
     ]
 
 
-class Priority(StrEnum):
-    PriorityNone = "none"
-    PriorityUrgent = "urgent"
-    PriorityHigh = "high"
-    PriorityMedium = "medium"
-    PriorityLow = "low"
-
-
-class Spent(BaseModel):
-    budgets: Annotated[
-        list[BudgetSpent],
+class WritePartLanded(BaseModel):
+    part: Annotated[
+        str,
         Field(
-            description="What those requests spent, one entry per budget and unit, ordered by budget name."
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
         ),
     ]
-    requests: Annotated[
-        int,
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    outcome: Literal["landed"]
+
+
+class WritePartRejected(BaseModel):
+    part: Annotated[
+        str,
         Field(
-            description="How many HTTP requests those sources sent for this command.",
-            ge=0,
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
         ),
+    ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    error: Annotated[str, Field(description="What the backend said.")]
+    stale: Annotated[
+        bool,
+        Field(
+            description="Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read."
+        ),
+    ] = False
+    outcome: Literal["rejected"]
+
+
+class WritePartUnknown(BaseModel):
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    error: Annotated[str, Field(description="What went wrong.")]
+    outcome: Literal["unknown"]
+
+
+class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown]):
+    root: Annotated[
+        WritePartLanded | WritePartRejected | WritePartUnknown,
+        Field(description="One mutation of an expected write."),
     ]
 
 
@@ -69,6 +87,14 @@ class StatusCategory(StrEnum):
     StatusCategoryUnknown = "unknown"
 
 
+class Priority(StrEnum):
+    PriorityNone = "none"
+    PriorityUrgent = "urgent"
+    PriorityHigh = "high"
+    PriorityMedium = "medium"
+    PriorityLow = "low"
+
+
 class WriteFallback(BaseModel):
     read: Annotated[bool, Field(description="Always `true`: the write made one read.")]
     reason: Annotated[
@@ -76,60 +102,18 @@ class WriteFallback(BaseModel):
     ]
 
 
-class WritePartLanded(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
-    part: Annotated[
+class BudgetSpent(BaseModel):
+    budget: Annotated[
         str,
-        Field(
-            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
-        ),
+        Field(description="The budget, as the source names it — `graphql`, `rest`."),
     ]
-    outcome: Literal["landed"]
-
-
-class WritePartRejected(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
-    part: Annotated[
-        str,
-        Field(
-            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
-        ),
-    ]
-    error: Annotated[str, Field(description="What the backend said.")]
-    outcome: Literal["rejected"]
-    stale: Annotated[
+    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
+    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
+    lower_bound: Annotated[
         bool,
         Field(
-            description="Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read."
+            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
         ),
-    ] = False
-
-
-class WritePartUnknown(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
-    part: Annotated[
-        str,
-        Field(
-            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
-        ),
-    ]
-    error: Annotated[str, Field(description="What went wrong.")]
-    outcome: Literal["unknown"]
-
-
-class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown]):
-    root: Annotated[
-        WritePartLanded | WritePartRejected | WritePartUnknown,
-        Field(description="One mutation of an expected write."),
     ]
 
 
@@ -141,17 +125,33 @@ class Status(BaseModel):
     name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
+class Spent(BaseModel):
+    requests: Annotated[
+        int,
+        Field(
+            description="How many HTTP requests those sources sent for this command.",
+            ge=0,
+        ),
+    ]
+    budgets: Annotated[
+        list[BudgetSpent],
+        Field(
+            description="What those requests spent, one entry per budget and unit, ordered by budget name."
+        ),
+    ]
+
+
 class WriteResult(BaseModel):
+    version: Annotated[
+        str | None,
+        Field(
+            description="The item's version after the write, where the write's responses determine it."
+        ),
+    ] = None
     parts: Annotated[
         list[WritePart] | None,
         Field(
             description="One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`."
-        ),
-    ] = None
-    priority: Annotated[
-        Priority | None,
-        Field(
-            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
         ),
     ] = None
     status: Annotated[
@@ -160,10 +160,10 @@ class WriteResult(BaseModel):
             description="The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
         ),
     ] = None
-    version: Annotated[
-        str | None,
+    priority: Annotated[
+        Priority | None,
         Field(
-            description="The item's version after the write, where the write's responses determine it."
+            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
         ),
     ] = None
 
@@ -173,16 +173,16 @@ class DeletedComment(BaseModel):
         NativeId,
         Field(description="The id the comment was removed under, exactly as `list` reported it."),
     ]
-    fallback: Annotated[
-        WriteFallback | None,
-        Field(
-            description="That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
-        ),
-    ] = None
     result: Annotated[
         WriteResult | None,
         Field(
             description="What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
+        ),
+    ] = None
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
         ),
     ] = None
     spent: Annotated[

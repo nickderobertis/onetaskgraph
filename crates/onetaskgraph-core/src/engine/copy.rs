@@ -80,7 +80,7 @@ use crate::template::TemplateProvenance;
 use crate::{Failure, GlobalId};
 
 use super::assets;
-use super::boundary::{Exposure, Outbound};
+use super::boundary::{Exposure, Outbound, Rewrite};
 use super::delivery::{Delivered, targets};
 use super::dependents::{self, Dependents};
 use super::fetch::{fits, unrepeated};
@@ -3486,15 +3486,21 @@ impl Engine {
         }
         // Every item of every project held to the public boundary before any is written, so
         // a refusal leaves nothing anywhere — not even a project its tasks never reached.
-        self.preflight_copy(
-            plans
-                .iter()
-                .flat_map(|(project, tasks, _, _)| std::iter::once(project).chain(tasks))
-                .filter(|item| !item.skipped)
-                .collect(),
-            running,
-        )
-        .await?;
+        let rewrite = self
+            .preflight_copy(
+                plans
+                    .iter()
+                    .flat_map(|(project, tasks, _, _)| std::iter::once(project).chain(tasks))
+                    .filter(|item| !item.skipped)
+                    .collect(),
+                running,
+            )
+            .await?;
+        for (project, tasks, _, _) in &mut plans {
+            for item in std::iter::once(project).chain(tasks.iter_mut()) {
+                rewritten(item, &rewrite);
+            }
+        }
         // Every public view too, before anything of any plan is written.
         for (_, _, _, projecting) in &plans {
             self.preflight_projections(projecting).await?;
@@ -5308,11 +5314,15 @@ impl Engine {
         // Once the content that lands is settled, and before anything — a member project
         // included — is written. A task skipped writes nothing, so it has nothing to hold.
         if !running.preflighted {
-            self.preflight_copy(
-                planned.iter().filter(|item| !item.skipped).collect(),
-                running,
-            )
-            .await?;
+            let rewrite = self
+                .preflight_copy(
+                    planned.iter().filter(|item| !item.skipped).collect(),
+                    running,
+                )
+                .await?;
+            for item in &mut planned {
+                rewritten(item, &rewrite);
+            }
         }
 
         // Every create this call makes is recorded as an intent on the item it copies before
@@ -6151,7 +6161,7 @@ impl Engine {
         &self,
         planned: Vec<&Planned>,
         running: &mut Running,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Rewrite, EngineError> {
         for item in &planned {
             note_private(running, item);
         }
@@ -8493,7 +8503,7 @@ impl Engine {
             ),
             None => format!("the member project of {home}"),
         };
-        let member = Project {
+        let mut member = Project {
             version: None,
             id: home.native.clone(),
             title: held.title.clone(),
@@ -8508,19 +8518,21 @@ impl Engine {
             repositories: Vec::new(),
             classification,
         };
-        self.admit(
-            there,
-            &Outbound {
-                item,
-                classification: member.classification,
-                target: WriteTarget::New {
-                    repositories: &[],
-                    project: None,
+        let rewrite = self
+            .admit(
+                there,
+                &Outbound {
+                    item,
+                    classification: member.classification,
+                    target: WriteTarget::New {
+                        repositories: &[],
+                        project: None,
+                    },
+                    exposure: &Exposure::of_project(&member),
                 },
-                exposure: &Exposure::of_project(&member),
-            },
-        )
-        .await?;
+            )
+            .await?;
+        rewrite.project(&mut member);
         let created = there
             .source()
             .write_project(&ItemWrite {
@@ -10725,6 +10737,11 @@ fn exposure_of(item: &Planned, withheld: impl Fn(&GlobalId) -> bool) -> Exposure
         Item::Document(document) => Exposure::of_document(document),
     }
     .assets(&item.assets)
+    // The source spelling its links are rendered from at each write, so the rendering is
+    // rewritten exactly as the content it becomes.
+    .and(item.links.as_ref().map_or_else(Exposure::default, |links| {
+        Exposure::text(links.original.clone())
+    }))
     // The comments a `--comments` copy carries land beside the item, so they are held to the
     // boundary with it — every one of them, before any is written.
     .and(
@@ -10743,6 +10760,46 @@ fn exposure_of(item: &Planned, withheld: impl Fn(&GlobalId) -> bool) -> Exposure
             .filter(|edge| far_end(&edge.to, origin).is_none_or(|far| !withheld(&far)))
             .map(|edge| edge.to.id().to_owned()),
     ))
+}
+
+/// `item` as the sanitisation that admitted its copy passed it: its own rewritable fields, the
+/// source spelling its links are rendered from, and the body of every comment it carries.
+fn rewritten(item: &mut Planned, rewrite: &Rewrite) {
+    if rewrite.is_identity() {
+        return;
+    }
+    match &mut item.item {
+        Item::Task(task) => rewrite.task(task),
+        Item::Project(project) => rewrite.project(project),
+        Item::Document(document) => rewrite.document(document),
+    }
+    if let Some(links) = &mut item.links {
+        links.original = rewrite.text(&links.original);
+    }
+    for comment in item.carried.iter_mut().flatten() {
+        comment.body = rewrite.text(&comment.body);
+    }
+    for step in item
+        .comment_plan
+        .iter_mut()
+        .flat_map(|plan| plan.steps.iter_mut())
+    {
+        match step {
+            comments::Step::Add(copy) | comments::Step::Edit { copy, .. } => {
+                copy.body = rewritten_body(rewrite, &copy.body);
+            }
+            comments::Step::Delete(_) => {}
+        }
+    }
+}
+
+/// A comment's body as a sanitisation passed it; a passed replacement never empties one.
+fn rewritten_body(
+    rewrite: &Rewrite,
+    body: &onetaskgraph_plugin_api::CommentBody,
+) -> onetaskgraph_plugin_api::CommentBody {
+    onetaskgraph_plugin_api::CommentBody::new(rewrite.text(body.as_str()))
+        .unwrap_or_else(|_| body.clone())
 }
 
 /// The id a created item is offered to the destination under.

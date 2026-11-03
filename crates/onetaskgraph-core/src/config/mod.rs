@@ -425,6 +425,15 @@ impl std::fmt::Display for SourceVisibility {
 /// and passes a write only by exiting 0 with `{"verdict": "pass"}`. Either may be left out:
 /// without a visibility command every repository is `unknown`, which is private, and without
 /// a check command no write to a public destination passes.
+///
+/// `sanitize_command` is handed a whole
+/// [`PublicSanitizeInput`](crate::boundary::PublicSanitizeInput) and answers the write's
+/// rewritable entries with every declared replacement applied, and its verdict; with it, every
+/// screened write is put to it **in place of** `check_command`, and what it answers is what is
+/// written. `terms_command` answers a scope's resolved terms, which only `sources sanitize`
+/// asks for. `replacements` is the caller's replacement layer, sent with every sanitisation
+/// and above every declaration level the policy reads, a later entry winning; it is refused
+/// at load without a `sanitize_command`, because nothing would apply it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WritePolicyConfig {
@@ -434,6 +443,95 @@ pub struct WritePolicyConfig {
     /// The command that decides whether a write may reach a public destination.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_command: Option<PolicyCommand>,
+    /// The command that rewrites a write's declared terms and decides the result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sanitize_command: Option<PolicyCommand>,
+    /// The command that answers a scope's resolved terms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terms_command: Option<PolicyCommand>,
+    /// The caller's replacement layer: `{term, with}` or `{term, reject: true}`, in order.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "replacements"
+    )]
+    #[schemars(with = "Vec<Value>", !skip_serializing_if)]
+    pub replacements: Vec<privateterms::Replacement>,
+}
+
+/// `write_policy.replacements` as a document, an environment variable or `--set` spells it: a
+/// list, or a mapping keyed by each entry's index — what
+/// `ONETASKGRAPH_WRITE_POLICY__REPLACEMENTS__0__TERM` produces, since neither the environment
+/// nor `--set` can spell a list of objects. A term or a replacement the environment read as a
+/// number or a list is read back as the text it was given.
+fn replacements<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<privateterms::Replacement>, D::Error> {
+    use serde::de::Error as _;
+    fn text(value: Value) -> Value {
+        match value {
+            Value::Number(number) => Value::String(number.to_string()),
+            Value::Array(parts) => Value::String(
+                parts
+                    .into_iter()
+                    .map(|part| match text(part) {
+                        Value::String(part) => part,
+                        other => other.to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+            other => other,
+        }
+    }
+    fn entry(value: Value) -> Value {
+        match value {
+            Value::Object(fields) => Value::Object(
+                fields
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let value = if key == "reject" { value } else { text(value) };
+                        (key, value)
+                    })
+                    .collect(),
+            ),
+            other => other,
+        }
+    }
+    let entries: Vec<Value> = match Value::deserialize(deserializer)? {
+        Value::Null => Vec::new(),
+        Value::Array(entries) => entries,
+        Value::Object(entries) => {
+            let mut indexed = Vec::new();
+            for (key, entry) in entries {
+                let index = key.parse::<usize>().map_err(|_| {
+                    D::Error::custom(format!(
+                        "a replacement is addressed by its index in the list, and {key:?} is not one"
+                    ))
+                })?;
+                indexed.push((index, entry));
+            }
+            indexed.sort_by_key(|(index, _)| *index);
+            for (position, (index, _)) in indexed.iter().enumerate() {
+                if *index != position {
+                    return Err(D::Error::custom(format!(
+                        "the replacements are numbered from 0 with no gaps, and entry {position} \
+                         is missing"
+                    )));
+                }
+            }
+            indexed.into_iter().map(|(_, entry)| entry).collect()
+        }
+        _ => {
+            return Err(D::Error::custom(
+                "replacements is a list of `{term, with}` or `{term, reject: true}` entries",
+            ));
+        }
+    };
+    entries
+        .into_iter()
+        .map(|value| serde_json::from_value(entry(value)).map_err(D::Error::custom))
+        .collect()
 }
 
 /// One command line: the program, then its arguments, never empty.
@@ -650,6 +748,19 @@ impl Config {
             .map(|names| resolve_default_sources(&names, &sources, &incomplete))
             .transpose()?;
 
+        if let Some(policy) = &shape.write_policy
+            && !policy.replacements.is_empty()
+            && policy.sanitize_command.is_none()
+        {
+            return Err(ConfigError::setting(
+                "write_policy.sanitize_command",
+                "write_policy.replacements is set, but no write_policy.sanitize_command is \
+                 configured to apply it, so no replacement would ever be made",
+                "configure write_policy.sanitize_command — for example \
+                 [onevcs, boundary, sanitize, --input, \"-\"] — or remove \
+                 write_policy.replacements.",
+            ));
+        }
         let config = Self {
             default_sources,
             page_size: shape.page_size,

@@ -29,7 +29,8 @@ class Sha256Digest(RootModel[str]):
 
 
 class Regenerated(BaseModel):
-    body: Annotated[str, Field(description="The rendered content.")]
+    id: Annotated[GlobalId, Field(description="The item regenerated.")]
+    digest: Annotated[Sha256Digest, Field(description="The chain digest it rendered with.")]
     body_digest: Annotated[
         Sha256Digest,
         Field(description="The SHA-256 of the rendered content: what its provenance now records."),
@@ -40,5 +41,4 @@ class Regenerated(BaseModel):
             description="Whether its content, its provenance or its stored answers differ from what it held —\nwhat a write changed, or for a dry run what one would change."
         ),
     ]
-    digest: Annotated[Sha256Digest, Field(description="The chain digest it rendered with.")]
-    id: Annotated[GlobalId, Field(description="The item regenerated.")]
+    body: Annotated[str, Field(description="The rendered content.")]

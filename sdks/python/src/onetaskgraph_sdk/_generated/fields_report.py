@@ -10,19 +10,24 @@ from typing import Annotated
 from pydantic import BaseModel, Field, RootModel
 
 
+class SourceName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
+        ),
+    ]
+
+
 class BoardField(StrEnum):
     BoardFieldStatus = "Status"
     BoardFieldPriority = "Priority"
 
 
-class ColumnName(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="The name of a `Status` single-select option on the board.\n\nValidated on the way in rather than checked later, so a blank option name — which\nnothing on a board can be — is a state this type cannot hold.",
-            min_length=1,
-        ),
-    ]
+class ItemKind(StrEnum):
+    ItemKindTask = "task"
+    ItemKindProject = "project"
 
 
 class FieldOutcome(StrEnum):
@@ -32,37 +37,22 @@ class FieldOutcome(StrEnum):
     FieldOutcomeCreated = "created"
 
 
-class ItemKind(StrEnum):
-    ItemKindTask = "task"
-    ItemKindProject = "project"
-
-
-class KindMissing(BaseModel):
-    kind: Annotated[ItemKind, Field(description="The kind these names are configured for.")]
-    missing: Annotated[
-        list[str],
+class StatusOptionId(RootModel[str]):
+    root: Annotated[
+        str,
         Field(
-            description="The names that kind maps a category to and the field lacked, in category order."
+            description="A GitHub single-select option's opaque GraphQL node identifier.",
+            min_length=1,
         ),
     ]
 
 
-class NonTextFieldType(RootModel[str]):
+class ColumnName(RootModel[str]):
     root: Annotated[
         str,
         Field(
-            description="The type of a board field that is not a text field, as GitHub names it — its `dataType`, or\nits GraphQL type when it has none — which is what a projected field's conflict reports.\n\nNever empty, never beginning with whitespace, and never `TEXT`: a text field of that name is\nno conflict.",
-            pattern="^(?:[^T\\s]|T(?:[^E]|$)|TE(?:[^X]|$)|TEX(?:[^T]|$)|TEXT[\\s\\S])",
-        ),
-    ]
-
-
-class SourceName(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="The name a configuration document gives one configured source.",
-            pattern="^[a-z0-9][a-z0-9-]*$",
+            description="The name of a `Status` single-select option on the board.\n\nValidated on the way in rather than checked later, so a blank option name — which\nnothing on a board can be — is a state this type cannot hold.",
+            min_length=1,
         ),
     ]
 
@@ -78,63 +68,73 @@ class StatusOptionColor(StrEnum):
     StatusOptionColorPink = "PINK"
 
 
-class StatusOptionId(RootModel[str]):
+class NonTextFieldType(RootModel[str]):
     root: Annotated[
         str,
         Field(
-            description="A GitHub single-select option's opaque GraphQL node identifier.",
-            min_length=1,
+            description="The type of a board field that is not a text field, as GitHub names it — its `dataType`, or\nits GraphQL type when it has none — which is what a projected field's conflict reports.\n\nNever empty, never beginning with whitespace, and never `TEXT`: a text field of that name is\nno conflict.",
+            pattern="^(?:[^T\\s]|T(?:[^E]|$)|TE(?:[^X]|$)|TEX(?:[^T]|$)|TEXT[\\s\\S])",
         ),
+    ]
+
+
+class KindMissing(BaseModel):
+    kind: Annotated[ItemKind, Field(description="The kind these names are configured for.")]
+    missing: Annotated[
+        list[str],
+        Field(
+            description="The names that kind maps a category to and the field lacked, in category order."
+        ),
+    ]
+
+
+class StatusOption(BaseModel):
+    id: Annotated[StatusOptionId, Field(description="GitHub's stable id.")]
+    name: Annotated[ColumnName, Field(description="The visible option name.")]
+    color: Annotated[StatusOptionColor, Field(description="GitHub's single-select color token.")]
+    description: Annotated[
+        str, Field(description="The option description, including an empty one.")
     ]
 
 
 class MetadataFieldReport(BaseModel):
-    conflict: Annotated[
-        NonTextFieldType | None,
-        Field(
-            description="The type of a field of that name that is not a text field, which the setup leaves as\nit is; absent — and left out of the JSON — when there is none."
-        ),
-    ] = None
-    exists: Annotated[
-        bool,
-        Field(description="Whether the board had a text field of that name before the operation."),
-    ]
     field: Annotated[str, Field(description="The board field's name.")]
     key: Annotated[str, Field(description="The metadata key the value is read from.")]
-    outcome: Annotated[
-        FieldOutcome,
-        Field(
-            description="What the requested operation did: `planned`; `created` for a field that was not\nthere; `unchanged` for one that was, and for a conflict, which is never changed."
-        ),
-    ]
     path: Annotated[
         list[str],
         Field(
             description="The object keys walked inside that key's value; empty for the key's own value."
         ),
     ]
-
-
-class StatusOption(BaseModel):
-    color: Annotated[StatusOptionColor, Field(description="GitHub's single-select color token.")]
-    description: Annotated[
-        str, Field(description="The option description, including an empty one.")
+    exists: Annotated[
+        bool,
+        Field(description="Whether the board had a text field of that name before the operation."),
     ]
-    id: Annotated[StatusOptionId, Field(description="GitHub's stable id.")]
-    name: Annotated[ColumnName, Field(description="The visible option name.")]
+    conflict: Annotated[
+        NonTextFieldType | None,
+        Field(
+            description="The type of a field of that name that is not a text field, which the setup leaves as\nit is; absent — and left out of the JSON — when there is none."
+        ),
+    ] = None
+    outcome: Annotated[
+        FieldOutcome,
+        Field(
+            description="What the requested operation did: `planned`; `created` for a field that was not\nthere; `unchanged` for one that was, and for a conflict, which is never changed."
+        ),
+    ]
 
 
 class FieldReport(BaseModel):
-    existing: Annotated[
-        list[StatusOption],
-        Field(
-            description="The field's complete option list observed before any mutation; empty when the field\nwas not there."
-        ),
-    ]
+    field: Annotated[BoardField, Field(description="Which field.")]
     exists: Annotated[
         bool, Field(description="Whether the board had the field before the operation.")
     ]
-    field: Annotated[BoardField, Field(description="Which field.")]
+    missing: Annotated[
+        list[str],
+        Field(
+            description="Configured option names the field lacked before the operation — every one of them,\nin the order a new field lists them, when the field was not there at all."
+        ),
+    ]
     kinds: Annotated[
         list[KindMissing],
         Field(
@@ -142,16 +142,17 @@ class FieldReport(BaseModel):
             validate_default=True,
         ),
     ] = []
-    missing: Annotated[
-        list[str],
+    outcome: Annotated[FieldOutcome, Field(description="What the requested operation did.")]
+    existing: Annotated[
+        list[StatusOption],
         Field(
-            description="Configured option names the field lacked before the operation — every one of them,\nin the order a new field lists them, when the field was not there at all."
+            description="The field's complete option list observed before any mutation; empty when the field\nwas not there."
         ),
     ]
-    outcome: Annotated[FieldOutcome, Field(description="What the requested operation did.")]
 
 
 class FieldsReport(BaseModel):
+    source: Annotated[SourceName, Field(description="The configured source name.")]
     fields: Annotated[
         list[FieldReport],
         Field(
@@ -165,4 +166,3 @@ class FieldsReport(BaseModel):
             validate_default=True,
         ),
     ] = []
-    source: Annotated[SourceName, Field(description="The configured source name.")]

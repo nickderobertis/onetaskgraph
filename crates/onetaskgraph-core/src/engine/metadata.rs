@@ -66,14 +66,18 @@ impl Engine {
         value: &Value,
     ) -> Result<MetadataSet, EngineError> {
         let source = self.metadata_writable(id, MetadataRecord::Task)?;
-        self.admit_existing(
-            source,
-            &id.to_string(),
-            &id.native,
-            Held::Task,
-            &Exposure::of_entry(key.as_str(), value),
-        )
-        .await?;
+        let rewrite = self
+            .admit_existing(
+                source,
+                &id.to_string(),
+                &id.native,
+                Held::Task,
+                &Exposure::of_entry(key.as_str(), value),
+            )
+            .await?;
+        let mut value = value.clone();
+        rewrite.value(&mut value);
+        let value = &value;
         let task = source
             .source()
             .set_task_metadata(&id.native, key, value)
@@ -99,14 +103,18 @@ impl Engine {
         value: &Value,
     ) -> Result<MetadataSet, EngineError> {
         let source = self.metadata_writable(id, MetadataRecord::Project)?;
-        self.admit_existing(
-            source,
-            &id.to_string(),
-            &id.native,
-            Held::Project,
-            &Exposure::of_entry(key.as_str(), value),
-        )
-        .await?;
+        let rewrite = self
+            .admit_existing(
+                source,
+                &id.to_string(),
+                &id.native,
+                Held::Project,
+                &Exposure::of_entry(key.as_str(), value),
+            )
+            .await?;
+        let mut value = value.clone();
+        rewrite.value(&mut value);
+        let value = &value;
         let project = source
             .source()
             .set_project_metadata(&id.native, key, value)
@@ -187,7 +195,7 @@ impl Engine {
             stored = Some((read.classification, read.repositories, read.project));
         }
         let exposure = Exposure::of_entry(key.as_str(), value);
-        match stored {
+        let rewrite = match stored {
             Some(stored) => {
                 self.admit_read(
                     source,
@@ -197,7 +205,7 @@ impl Engine {
                     stored,
                     &exposure,
                 )
-                .await?;
+                .await?
             }
             None => {
                 self.admit_existing(
@@ -207,9 +215,12 @@ impl Engine {
                     Held::Document,
                     &exposure,
                 )
-                .await?;
+                .await?
             }
-        }
+        };
+        let mut value = value.clone();
+        rewrite.value(&mut value);
+        let value = &value;
         // The write takes what the read above left, rather than reading the document again.
         let primed = version.is_some()
             && source

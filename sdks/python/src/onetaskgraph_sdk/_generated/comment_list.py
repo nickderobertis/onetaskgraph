@@ -19,22 +19,14 @@ class NativeId(RootModel[str]):
     ]
 
 
-class Served(StrEnum):
-    ServedCache = "cache"
-    ServedRemote = "remote"
-
-
-class CacheUse(BaseModel):
-    bypassed: Annotated[
-        str | None,
-        Field(
-            description="Why the cache could not be used at all for it — a part the source's change token does\nnot cover, or a task that carries no token — or `null` when nothing kept it from being."
-        ),
-    ] = None
-    served: Annotated[Served, Field(description="Where it was answered from.")]
-
-
 class CommentOrigin(BaseModel):
+    task: Annotated[
+        str,
+        Field(
+            description="The task the comment is on at its origin, qualified: `<source>:<native task id>`."
+        ),
+    ]
+    id: Annotated[NativeId, Field(description="The comment's own id at its origin.")]
     author: Annotated[
         str | None,
         Field(description="Who wrote it there, in that source's spelling of a person."),
@@ -42,13 +34,6 @@ class CommentOrigin(BaseModel):
     created_at: Annotated[
         AwareDatetime | None, Field(description="When the origin says it was written.")
     ] = None
-    id: Annotated[NativeId, Field(description="The comment's own id at its origin.")]
-    task: Annotated[
-        str,
-        Field(
-            description="The task the comment is on at its origin, qualified: `<source>:<native task id>`."
-        ),
-    ]
     updated_at: Annotated[
         AwareDatetime | None, Field(description="When the origin says it last changed.")
     ] = None
@@ -57,10 +42,27 @@ class CommentOrigin(BaseModel):
     )
 
 
+class Served(StrEnum):
+    ServedCache = "cache"
+    ServedRemote = "remote"
+
+
 class Comment(BaseModel):
+    id: Annotated[
+        NativeId,
+        Field(
+            description="The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
+        ),
+    ]
     author: Annotated[
         str | None,
         Field(description="Who wrote it, in the source's own spelling of a person."),
+    ] = None
+    created_at: Annotated[
+        AwareDatetime | None, Field(description="When the source says it was written.")
+    ] = None
+    updated_at: Annotated[
+        AwareDatetime | None, Field(description="When the source says it last changed.")
     ] = None
     body: Annotated[
         str,
@@ -68,37 +70,35 @@ class Comment(BaseModel):
             description="What it says, byte for byte as it was written — a trailing newline included."
         ),
     ]
-    created_at: Annotated[
-        AwareDatetime | None, Field(description="When the source says it was written.")
-    ] = None
-    id: Annotated[
-        NativeId,
-        Field(
-            description="The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
-        ),
-    ]
+    url: Annotated[str | None, Field(description="Where a person can open it.")] = None
     origin: Annotated[
         CommentOrigin | None,
         Field(
             description="The comment this one is a copy of, at its origin — present only on a comment a copy\nwrote, and absent on every comment a person wrote where it is.\n\nOn the second hop of a chained copy it still names the *first* origin, never the\nsource the copy read it from. Left out of the wire when absent, so a reader written\nbefore it existed reads exactly what it read before."
         ),
     ] = None
-    updated_at: Annotated[
-        AwareDatetime | None, Field(description="When the source says it last changed.")
+
+
+class CacheUse(BaseModel):
+    served: Annotated[Served, Field(description="Where it was answered from.")]
+    bypassed: Annotated[
+        str | None,
+        Field(
+            description="Why the cache could not be used at all for it — a part the source's change token does\nnot cover, or a task that carries no token — or `null` when nothing kept it from being."
+        ),
     ] = None
-    url: Annotated[str | None, Field(description="Where a person can open it.")] = None
 
 
 class CommentList(BaseModel):
-    cache: Annotated[
-        CacheUse | None,
-        Field(
-            description="How the read used its source's local cache — absent for a source keeping none."
-        ),
-    ] = None
     comments: Annotated[
         list[Comment],
         Field(
             description="The task's comments in the order they were written. Empty when it has none."
         ),
     ]
+    cache: Annotated[
+        CacheUse | None,
+        Field(
+            description="How the read used its source's local cache — absent for a source keeping none."
+        ),
+    ] = None

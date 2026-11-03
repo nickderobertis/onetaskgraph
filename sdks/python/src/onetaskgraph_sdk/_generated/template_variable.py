@@ -10,11 +10,6 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field
 
 
-class ItemType(StrEnum):
-    ItemTypeString = "string"
-    ItemTypeObject = "object"
-
-
 class VariableType(StrEnum):
     VariableTypeString = "string"
     VariableTypeText = "text"
@@ -24,11 +19,23 @@ class VariableType(StrEnum):
     VariableTypeObject = "object"
 
 
+class ItemType(StrEnum):
+    ItemTypeString = "string"
+    ItemTypeObject = "object"
+
+
 class TemplateVariable(BaseModel):
-    declared_in: Annotated[
-        str,
+    name: Annotated[str, Field(description="The variable's name, as the template body uses it.")]
+    description: Annotated[str, Field(description="What the variable is for; what a prompt shows.")]
+    type: Annotated[VariableType, Field(description="What the variable holds.")]
+    items: Annotated[
+        ItemType | None,
+        Field(description="What each entry holds, for a `list` variable and no other."),
+    ] = None
+    required: Annotated[
+        bool,
         Field(
-            description="The chain file whose declaration this is: the one nearest the rendered template."
+            description="Whether rendering without an answer is refused. An optional variable with no answer\nand no default renders as `none`."
         ),
     ]
     # A default is arbitrary JSON by the emitted wire contract: a value of the
@@ -36,16 +43,9 @@ class TemplateVariable(BaseModel):
     default: Annotated[Any | None, Field(description="The value used when no answer is given.")] = (
         None
     )
-    description: Annotated[str, Field(description="What the variable is for; what a prompt shows.")]
-    items: Annotated[
-        ItemType | None,
-        Field(description="What each entry holds, for a `list` variable and no other."),
-    ] = None
-    name: Annotated[str, Field(description="The variable's name, as the template body uses it.")]
-    required: Annotated[
-        bool,
+    declared_in: Annotated[
+        str,
         Field(
-            description="Whether rendering without an answer is refused. An optional variable with no answer\nand no default renders as `none`."
+            description="The chain file whose declaration this is: the one nearest the rendered template."
         ),
     ]
-    type: Annotated[VariableType, Field(description="What the variable holds.")]

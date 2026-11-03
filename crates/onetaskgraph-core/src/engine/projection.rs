@@ -144,23 +144,25 @@ impl Engine {
         // destination is not declared private — to the caller's check, before the intent can
         // authorize anything.
         let task = projected_task(request, &project, classification, None);
-        self.admit(
-            source,
-            &Outbound {
-                item: item.clone(),
-                classification,
-                target: WriteTarget::New {
-                    repositories: &request.repositories,
-                    project: Some(&native_project),
+        let rewrite = self
+            .admit(
+                source,
+                &Outbound {
+                    item: item.clone(),
+                    classification,
+                    target: WriteTarget::New {
+                        repositories: &request.repositories,
+                        project: Some(&native_project),
+                    },
+                    exposure: &Exposure::of_task(&task),
                 },
-                exposure: &Exposure::of_task(&task),
-            },
-        )
-        .await?;
+            )
+            .await?;
         let mut claim = store
             .claim(request, &placement)
             .map_err(|error| projection_refused(request, &error))?;
-        let task = projected_task(request, &project, classification, Some(&claim));
+        let mut task = projected_task(request, &project, classification, Some(&claim));
+        rewrite.task(&mut task);
         match claim.phase() {
             IntentPhase::Bound => {}
             IntentPhase::Creating => {
@@ -341,8 +343,9 @@ impl Engine {
             .cloned()
             .ok_or_else(|| refused_by(request, "no task is bound".to_owned(), "project it."))?;
         let id = binding.task().global_id().native;
-        let update = terminal_update(request);
-        self.admit_update(source, item, &id, &update).await?;
+        let mut update = terminal_update(request);
+        let rewrite = self.admit_update(source, item, &id, &update).await?;
+        rewrite.update(&mut update);
         // A terminal write whose answer was lost may have landed whole, in part or not at all:
         // the update then reads the task as it stands and writes only what still differs.
         if !resumed && let Some(context) = claim.written_context() {
@@ -379,7 +382,7 @@ impl Engine {
         item: &str,
         id: &NativeId,
         update: &TaskUpdate,
-    ) -> Result<(), EngineError> {
+    ) -> Result<super::boundary::Rewrite, EngineError> {
         let exposure = Exposure::of_update(update);
         self.preflight(
             source,

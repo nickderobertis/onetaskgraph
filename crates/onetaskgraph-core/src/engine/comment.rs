@@ -522,15 +522,20 @@ impl Engine {
         comment: &NewComment,
     ) -> Result<Comment, EngineError> {
         let source = self.writable_comments(&task.source)?;
-        self.admit_existing(
-            source,
-            &task.to_string(),
-            &task.native,
-            Held::Task,
-            &Exposure::text(comment.body.as_str())
-                .and(Exposure::metadata(comment.author.iter().cloned())),
-        )
-        .await?;
+        let rewrite = self
+            .admit_existing(
+                source,
+                &task.to_string(),
+                &task.native,
+                Held::Task,
+                &Exposure::text(comment.body.as_str())
+                    .and(Exposure::metadata(comment.author.iter().cloned())),
+            )
+            .await?;
+        let comment = &NewComment {
+            body: rewritten_body(&rewrite, &comment.body),
+            author: comment.author.clone(),
+        };
         match source.source().add_comment(&task.native, comment).await {
             Ok(Some(added)) => Ok(added),
             Ok(None) => Err(no_such_task(task)),
@@ -551,14 +556,16 @@ impl Engine {
         body: &CommentBody,
     ) -> Result<Comment, EngineError> {
         let source = self.writable_comments(&task.source)?;
-        self.admit_existing(
-            source,
-            &task.to_string(),
-            &task.native,
-            Held::Task,
-            &Exposure::text(body.as_str()),
-        )
-        .await?;
+        let rewrite = self
+            .admit_existing(
+                source,
+                &task.to_string(),
+                &task.native,
+                Held::Task,
+                &Exposure::text(body.as_str()),
+            )
+            .await?;
+        let body = &rewritten_body(&rewrite, body);
         match source
             .source()
             .edit_comment(&task.native, comment, body)
@@ -842,4 +849,11 @@ fn failed(source: &ResolvedSource, error: SourceError) -> EngineError {
         name: source.name().to_string(),
         error,
     }
+}
+
+/// `body` as a sanitisation passed it: rewritten where it was, and as it was otherwise — a
+/// replacement never empties a body the policy passed, so the fallback is never reached in
+/// practice.
+fn rewritten_body(rewrite: &super::boundary::Rewrite, body: &CommentBody) -> CommentBody {
+    CommentBody::new(rewrite.text(body.as_str())).unwrap_or_else(|_| body.clone())
 }

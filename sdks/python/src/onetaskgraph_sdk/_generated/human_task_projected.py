@@ -23,7 +23,7 @@ class HumanTaskProjected(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    project: Annotated[str, Field(description="The resolved destination project.")]
-    source: Annotated[SourceName, Field(description="The resolved configured source.")]
     task: Annotated[str, Field(description="The qualified task identity.")]
     url: Annotated[str, Field(description="The canonical tracker issue URL.")]
+    project: Annotated[str, Field(description="The resolved destination project.")]
+    source: Annotated[SourceName, Field(description="The resolved configured source.")]

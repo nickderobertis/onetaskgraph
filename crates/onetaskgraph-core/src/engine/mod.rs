@@ -1126,8 +1126,8 @@ pub enum EngineError {
         task: GlobalId,
         /// The `--group-by` key.
         key: graph::GroupKey,
-        /// The value it holds.
-        value: serde_json::Value,
+        /// The value it holds, boxed so this one variant does not widen every error.
+        value: Box<serde_json::Value>,
     },
 
     /// `project graph` met tasks of the project that depend on each other in a cycle, which

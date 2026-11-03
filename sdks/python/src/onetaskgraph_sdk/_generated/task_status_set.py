@@ -10,65 +10,11 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, JsonValue, RootModel
 
 
-class BudgetSpent(BaseModel):
-    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
-    budget: Annotated[
-        str,
-        Field(description="The budget, as the source names it — `graphql`, `rest`."),
-    ]
-    lower_bound: Annotated[
-        bool,
-        Field(
-            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
-        ),
-    ]
-    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
-
-
-class FailureClass(StrEnum):
-    FailureClassRefused = "refused"
-    FailureClassTransient = "transient"
-
-
 class GlobalId(RootModel[str]):
     root: Annotated[
         str,
         Field(
             description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
-        ),
-    ]
-
-
-class Priority(StrEnum):
-    PriorityNone = "none"
-    PriorityUrgent = "urgent"
-    PriorityHigh = "high"
-    PriorityMedium = "medium"
-    PriorityLow = "low"
-
-
-class SourceName(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="The name a configuration document gives one configured source.",
-            pattern="^[a-z0-9][a-z0-9-]*$",
-        ),
-    ]
-
-
-class Spent(BaseModel):
-    budgets: Annotated[
-        list[BudgetSpent],
-        Field(
-            description="What those requests spent, one entry per budget and unit, ordered by budget name."
-        ),
-    ]
-    requests: Annotated[
-        int,
-        Field(
-            description="How many HTTP requests those sources sent for this command.",
-            ge=0,
         ),
     ]
 
@@ -84,58 +30,124 @@ class StatusCategory(StrEnum):
     StatusCategoryUnknown = "unknown"
 
 
-class WriteFallback(BaseModel):
-    read: Annotated[bool, Field(description="Always `true`: the write made one read.")]
-    reason: Annotated[
-        str, Field(description="Why it could not take what it needed from the cache.")
+class DeliveredWritten(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    deliverer: Annotated[
+        GlobalId,
+        Field(
+            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+        ),
+    ]
+    pruned: Annotated[
+        list[GlobalId],
+        Field(
+            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            validate_default=True,
+        ),
+    ] = []
+    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
+    to: Annotated[StatusCategory, Field(description="The category written.")]
+    outcome: Literal["written"]
+
+
+class DeliveredUnchanged(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    deliverer: Annotated[
+        GlobalId,
+        Field(
+            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+        ),
+    ]
+    pruned: Annotated[
+        list[GlobalId],
+        Field(
+            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            validate_default=True,
+        ),
+    ] = []
+    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
+    outcome: Literal["unchanged"]
+
+
+class DeliveredLeft(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    deliverer: Annotated[
+        GlobalId,
+        Field(
+            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+        ),
+    ]
+    pruned: Annotated[
+        list[GlobalId],
+        Field(
+            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            validate_default=True,
+        ),
+    ] = []
+    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
+    outcome: Literal["left"]
+
+
+class FailureClass(StrEnum):
+    FailureClassRefused = "refused"
+    FailureClassTransient = "transient"
+
+
+class SourceName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
+        ),
     ]
 
 
 class WritePartLanded(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
     part: Annotated[
         str,
         Field(
             description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
         ),
+    ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
     ]
     outcome: Literal["landed"]
 
 
 class WritePartRejected(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
     part: Annotated[
         str,
         Field(
             description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
         ),
     ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
     error: Annotated[str, Field(description="What the backend said.")]
-    outcome: Literal["rejected"]
     stale: Annotated[
         bool,
         Field(
             description="Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read."
         ),
     ] = False
+    outcome: Literal["rejected"]
 
 
 class WritePartUnknown(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
     part: Annotated[
         str,
         Field(
             description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
         ),
+    ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
     ]
     error: Annotated[str, Field(description="What went wrong.")]
     outcome: Literal["unknown"]
@@ -148,62 +160,42 @@ class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown
     ]
 
 
-class DeliveredWritten(BaseModel):
-    deliverer: Annotated[
-        GlobalId,
+class Priority(StrEnum):
+    PriorityNone = "none"
+    PriorityUrgent = "urgent"
+    PriorityHigh = "high"
+    PriorityMedium = "medium"
+    PriorityLow = "low"
+
+
+class WriteFallback(BaseModel):
+    read: Annotated[bool, Field(description="Always `true`: the write made one read.")]
+    reason: Annotated[
+        str, Field(description="Why it could not take what it needed from the cache.")
+    ]
+
+
+class BudgetSpent(BaseModel):
+    budget: Annotated[
+        str,
+        Field(description="The budget, as the source names it — `graphql`, `rest`."),
+    ]
+    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
+    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
+    lower_bound: Annotated[
+        bool,
         Field(
-            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
         ),
     ]
-    pruned: Annotated[
-        list[GlobalId],
-        Field(
-            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
-            validate_default=True,
-        ),
-    ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
-    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
-    outcome: Literal["written"]
-    to: Annotated[StatusCategory, Field(description="The category written.")]
 
 
-class DeliveredUnchanged(BaseModel):
-    deliverer: Annotated[
-        GlobalId,
-        Field(
-            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
-        ),
+class Status(BaseModel):
+    category: Annotated[
+        StatusCategory,
+        Field(description="The normalised value filters compare against."),
     ]
-    pruned: Annotated[
-        list[GlobalId],
-        Field(
-            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
-            validate_default=True,
-        ),
-    ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
-    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
-    outcome: Literal["unchanged"]
-
-
-class DeliveredLeft(BaseModel):
-    deliverer: Annotated[
-        GlobalId,
-        Field(
-            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
-        ),
-    ]
-    pruned: Annotated[
-        list[GlobalId],
-        Field(
-            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
-            validate_default=True,
-        ),
-    ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
-    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
-    outcome: Literal["left"]
+    name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
 class Failure(BaseModel):
@@ -220,6 +212,10 @@ class Failure(BaseModel):
             description="What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`."
         ),
     ]
+    source: Annotated[
+        SourceName | None,
+        Field(description="The configured source the failure came from, or `null` when none did."),
+    ]
     message: Annotated[
         str,
         Field(
@@ -233,31 +229,19 @@ class Failure(BaseModel):
             ge=0,
         ),
     ]
-    source: Annotated[
-        SourceName | None,
-        Field(description="The configured source the failure came from, or `null` when none did."),
-    ]
-
-
-class Status(BaseModel):
-    category: Annotated[
-        StatusCategory,
-        Field(description="The normalised value filters compare against."),
-    ]
-    name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
 class WriteResult(BaseModel):
+    version: Annotated[
+        str | None,
+        Field(
+            description="The item's version after the write, where the write's responses determine it."
+        ),
+    ] = None
     parts: Annotated[
         list[WritePart] | None,
         Field(
             description="One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`."
-        ),
-    ] = None
-    priority: Annotated[
-        Priority | None,
-        Field(
-            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
         ),
     ] = None
     status: Annotated[
@@ -266,15 +250,32 @@ class WriteResult(BaseModel):
             description="The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
         ),
     ] = None
-    version: Annotated[
-        str | None,
+    priority: Annotated[
+        Priority | None,
         Field(
-            description="The item's version after the write, where the write's responses determine it."
+            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
         ),
     ] = None
 
 
+class Spent(BaseModel):
+    requests: Annotated[
+        int,
+        Field(
+            description="How many HTTP requests those sources sent for this command.",
+            ge=0,
+        ),
+    ]
+    budgets: Annotated[
+        list[BudgetSpent],
+        Field(
+            description="What those requests spent, one entry per budget and unit, ordered by budget name."
+        ),
+    ]
+
+
 class DeliveredFailed(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     deliverer: Annotated[
         GlobalId,
         Field(
@@ -288,17 +289,16 @@ class DeliveredFailed(BaseModel):
             validate_default=True,
         ),
     ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    from_: Annotated[
+        StatusCategory | None,
+        Field(alias="from", description="The category it read, when it could be read."),
+    ] = None
     failure: Annotated[
         Failure,
         Field(
             description="Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
         ),
     ]
-    from_: Annotated[
-        StatusCategory | None,
-        Field(alias="from", description="The category it read, when it could be read."),
-    ] = None
     outcome: Literal["failed"]
 
 
@@ -310,29 +310,24 @@ class Delivered(RootModel[DeliveredWritten | DeliveredUnchanged | DeliveredLeft 
 
 
 class TaskStatusSet(BaseModel):
+    id: Annotated[GlobalId, Field(description="The task whose status was set.")]
+    status: Annotated[Status, Field(description="Its status as its source reads it back.")]
     delivered: Annotated[
         list[Delivered],
         Field(
             description="One entry per task it delivers, or dropped, that this write re-evaluated. Empty when\nit delivers nothing."
         ),
     ]
-    fallback: Annotated[
-        WriteFallback | None,
-        Field(
-            description="That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
-        ),
-    ] = None
-    id: Annotated[GlobalId, Field(description="The task whose status was set.")]
-    projection: Annotated[
-        GlobalId | None,
-        Field(
-            description="The public projection the new status category was mirrored to — absent for a task\nwith none."
-        ),
-    ] = None
     result: Annotated[
         WriteResult | None,
         Field(
             description="What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
+        ),
+    ] = None
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
         ),
     ] = None
     spent: Annotated[
@@ -341,4 +336,9 @@ class TaskStatusSet(BaseModel):
             description="What an expected write spent at the sources that meter their own requests, its\nfallback read included — absent for a write made without `--expect`."
         ),
     ] = None
-    status: Annotated[Status, Field(description="Its status as its source reads it back.")]
+    projection: Annotated[
+        GlobalId | None,
+        Field(
+            description="The public projection the new status category was mirrored to — absent for a task\nwith none."
+        ),
+    ] = None

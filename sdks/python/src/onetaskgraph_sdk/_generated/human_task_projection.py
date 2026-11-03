@@ -10,31 +10,25 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
-class Priority(StrEnum):
-    PriorityNone = "none"
-    PriorityUrgent = "urgent"
-    PriorityHigh = "high"
-    PriorityMedium = "medium"
-    PriorityLow = "low"
+class ProjectionVersion(RootModel[Literal[1]]):
+    root: Literal[1]
 
 
 class ProjectionOwner(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    plan: Annotated[str | None, Field(description="The owning plan, when applicable.")]
-    run: Annotated[str | None, Field(description="The owning run, when applicable.")]
     session: Annotated[str, Field(description="The owning session.")]
+    run: Annotated[str | None, Field(description="The owning run, when applicable.")]
+    plan: Annotated[str | None, Field(description="The owning plan, when applicable.")]
 
 
-class ProjectionState(StrEnum):
-    ProjectionStateOpen = "open"
-    ProjectionStateCompleted = "completed"
-    ProjectionStateDismissed = "dismissed"
-
-
-class ProjectionVersion(RootModel[Literal[1]]):
-    root: Literal[1]
+class Priority(StrEnum):
+    PriorityNone = "none"
+    PriorityUrgent = "urgent"
+    PriorityHigh = "high"
+    PriorityMedium = "medium"
+    PriorityLow = "low"
 
 
 class Repository(RootModel[str]):
@@ -56,19 +50,33 @@ class SourceName(RootModel[str]):
     ]
 
 
+class ProjectionState(StrEnum):
+    ProjectionStateOpen = "open"
+    ProjectionStateCompleted = "completed"
+    ProjectionStateDismissed = "dismissed"
+
+
 class HumanTaskProjection(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    body: Annotated[str, Field(description="The visible task content.")]
+    schema_version: Annotated[
+        ProjectionVersion, Field(description="The wire contract version, always 1.")
+    ]
     item_id: Annotated[
         str,
         Field(description="The external idempotency identity, stable across producer retries."),
     ]
     owner: Annotated[ProjectionOwner, Field(description="The producer that owns the intent.")]
+    title: Annotated[str, Field(description="The visible task title.")]
+    body: Annotated[str, Field(description="The visible task content.")]
     priority: Annotated[
         Priority,
         Field(description="Its priority, using the existing plugin API serialization."),
+    ]
+    repositories: Annotated[
+        list[Repository],
+        Field(description="Normalized repository origins whose work this item concerns."),
     ]
     project: Annotated[
         str | None,
@@ -76,20 +84,12 @@ class HumanTaskProjection(BaseModel):
             description="The plan's resolved destination project, or null for a configured human project."
         ),
     ]
-    reason: Annotated[
-        str | None,
-        Field(description="An optional dismissal reason. Omission and null both preserve absence."),
-    ] = None
-    repositories: Annotated[
-        list[Repository],
-        Field(description="Normalized repository origins whose work this item concerns."),
-    ]
-    schema_version: Annotated[
-        ProjectionVersion, Field(description="The wire contract version, always 1.")
-    ]
     source: Annotated[
         SourceName,
         Field(description="The configured source through which placement is resolved."),
     ]
     state: Annotated[ProjectionState, Field(description="The desired lifecycle.")]
-    title: Annotated[str, Field(description="The visible task title.")]
+    reason: Annotated[
+        str | None,
+        Field(description="An optional dismissal reason. Omission and null both preserve absence."),
+    ] = None

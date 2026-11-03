@@ -378,7 +378,7 @@ fn group_of(task: &Qualified<Task>, key: &GroupKey) -> Result<Option<String>, En
         Some(other) => Err(EngineError::GraphGroupNotText {
             task: task.id.clone(),
             key: key.clone(),
-            value: other.clone(),
+            value: Box::new(other.clone()),
         }),
     }
 }

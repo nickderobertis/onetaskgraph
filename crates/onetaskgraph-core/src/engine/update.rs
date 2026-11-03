@@ -151,14 +151,17 @@ impl Engine {
         }
         self.refuse_private_references(&id.source, &id.to_string(), &references)
             .await?;
-        self.admit_existing(
-            source,
-            &id.to_string(),
-            &id.native,
-            Held::Task,
-            &Exposure::of_update(&update),
-        )
-        .await?;
+        let rewrite = self
+            .admit_existing(
+                source,
+                &id.to_string(),
+                &id.native,
+                Held::Task,
+                &Exposure::of_update(&update),
+            )
+            .await?;
+        let mut update = update;
+        rewrite.update(&mut update);
         let before = readings(&[source]).await;
         let outcome = source
             .source()

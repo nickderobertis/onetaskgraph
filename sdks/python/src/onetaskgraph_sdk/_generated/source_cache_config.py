@@ -13,10 +13,10 @@ class SourceCacheConfig(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
+    enabled: Annotated[bool, Field(description="Whether the cache is on. Off unless set.")] = False
     dir: Annotated[
         str | None,
         Field(
             description="The directory the cache lives in. By default\n`${XDG_CACHE_HOME:-$HOME/.cache}/onetaskgraph/<digest of the source's remote>`; a\nrelative path a configuration document supplies is measured from that document's\ndirectory. Ignored by a source with no remote."
         ),
     ] = None
-    enabled: Annotated[bool, Field(description="Whether the cache is on. Off unless set.")] = False

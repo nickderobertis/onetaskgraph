@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
@@ -20,13 +20,29 @@ class WritePolicyConfig(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
+    visibility_command: Annotated[
+        PolicyCommand | None,
+        Field(description="The command that answers a repository's visibility."),
+    ] = None
     check_command: Annotated[
         PolicyCommand | None,
         Field(
             description="The command that decides whether a write may reach a public destination."
         ),
     ] = None
-    visibility_command: Annotated[
+    sanitize_command: Annotated[
         PolicyCommand | None,
-        Field(description="The command that answers a repository's visibility."),
+        Field(
+            description="The command that rewrites a write's declared terms and decides the result."
+        ),
     ] = None
+    terms_command: Annotated[
+        PolicyCommand | None,
+        Field(description="The command that answers a scope's resolved terms."),
+    ] = None
+    replacements: Annotated[
+        list[Any],
+        Field(
+            description="The caller's replacement layer: `{term, with}` or `{term, reject: true}`, in order."
+        ),
+    ] = []

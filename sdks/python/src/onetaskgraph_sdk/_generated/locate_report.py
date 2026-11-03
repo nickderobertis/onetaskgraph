@@ -10,35 +10,6 @@ from typing import Annotated
 from pydantic import BaseModel, Field, RootModel
 
 
-class BudgetSpent(BaseModel):
-    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
-    budget: Annotated[
-        str,
-        Field(description="The budget, as the source names it — `graphql`, `rest`."),
-    ]
-    lower_bound: Annotated[
-        bool,
-        Field(
-            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
-        ),
-    ]
-    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
-
-
-class Classification(StrEnum):
-    ClassificationPublic = "public"
-    ClassificationPrivate = "private"
-
-
-class CopyVia(StrEnum):
-    CopyViaTargetTask = "target-task"
-    CopyViaLink = "link"
-    CopyViaOrigin = "origin"
-    CopyViaScan = "scan"
-    CopyViaMatch = "match"
-    CopyViaIntent = "intent"
-
-
 class GlobalId(RootModel[str]):
     root: Annotated[
         str,
@@ -48,21 +19,9 @@ class GlobalId(RootModel[str]):
     ]
 
 
-class LocatedCounterpart(BaseModel):
-    id: Annotated[
-        GlobalId,
-        Field(description="Its qualified id at the destination the task is placed in."),
-    ]
-    via: Annotated[CopyVia, Field(description="Which rule found it, as a copy's report spells it.")]
-
-
-class Repository(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="A repository identified by its normalized origin, without a URL scheme or `.git` suffix."
-        ),
-    ]
+class Classification(StrEnum):
+    ClassificationPublic = "public"
+    ClassificationPrivate = "private"
 
 
 class SourceName(RootModel[str]):
@@ -75,13 +34,61 @@ class SourceName(RootModel[str]):
     ]
 
 
-class Spent(BaseModel):
-    budgets: Annotated[
-        list[BudgetSpent],
+class CopyVia(StrEnum):
+    CopyViaTargetTask = "target-task"
+    CopyViaLink = "link"
+    CopyViaOrigin = "origin"
+    CopyViaScan = "scan"
+    CopyViaMatch = "match"
+    CopyViaIntent = "intent"
+
+
+class Repository(RootModel[str]):
+    root: Annotated[
+        str,
         Field(
-            description="What those requests spent, one entry per budget and unit, ordered by budget name."
+            description="A repository identified by its normalized origin, without a URL scheme or `.git` suffix."
         ),
     ]
+
+
+class BudgetSpent(BaseModel):
+    budget: Annotated[
+        str,
+        Field(description="The budget, as the source names it — `graphql`, `rest`."),
+    ]
+    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
+    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
+    lower_bound: Annotated[
+        bool,
+        Field(
+            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
+        ),
+    ]
+
+
+class LocatedCounterpart(BaseModel):
+    id: Annotated[
+        GlobalId,
+        Field(description="Its qualified id at the destination the task is placed in."),
+    ]
+    via: Annotated[CopyVia, Field(description="Which rule found it, as a copy's report spells it.")]
+
+
+class CreatesIn(BaseModel):
+    repository: Annotated[
+        Repository,
+        Field(description="The repository, as a normalized origin `host/owner/name`."),
+    ]
+    refused: Annotated[
+        str | None,
+        Field(
+            description="Why the destination's own policy on where it creates — a GitHub Projects source's\n`creation_owners` — would refuse a create there, as the copy's refusal says it; absent\nwhen it would not. The locate itself never fails for it."
+        ),
+    ] = None
+
+
+class Spent(BaseModel):
     requests: Annotated[
         int,
         Field(
@@ -89,46 +96,22 @@ class Spent(BaseModel):
             ge=0,
         ),
     ]
-
-
-class CreatesIn(BaseModel):
-    refused: Annotated[
-        str | None,
+    budgets: Annotated[
+        list[BudgetSpent],
         Field(
-            description="Why the destination's own policy on where it creates — a GitHub Projects source's\n`creation_owners` — would refuse a create there, as the copy's refusal says it; absent\nwhen it would not. The locate itself never fails for it."
+            description="What those requests spent, one entry per budget and unit, ordered by budget name."
         ),
-    ] = None
-    repository: Annotated[
-        Repository,
-        Field(description="The repository, as a normalized origin `host/owner/name`."),
     ]
 
 
 class Located(BaseModel):
-    carriers: Annotated[
-        list[GlobalId] | None,
-        Field(
-            description="Every destination item the origin query found carrying this task's origin, in listing\norder — `[]` when the query did not run, and absent under `--no-counterpart`. When it ran,\n`counterpart` is the first."
-        ),
-    ] = None
+    source: Annotated[GlobalId, Field(description="The qualified id the task was read from.")]
     classification: Annotated[
         Classification,
         Field(
             description="The class it was placed as, as a copy classifies it: its own declaration and, while the\nstore's boundary is active, its repositories' visibility. A source declared private does\nnot by itself make it private; it withholds the task's provenance instead."
         ),
     ]
-    counterpart: Annotated[
-        LocatedCounterpart | None,
-        Field(
-            description="The item a copy would update, and the rule that found it — `null` when a copy would\ncreate one, and absent under `--no-counterpart`, which looks for none."
-        ),
-    ] = None
-    creates_in: Annotated[
-        CreatesIn | None,
-        Field(
-            description="The repository a create there would file the task's issue in, or `null` where the\ndestination files no issue in a repository. Where a create would file, whether or not a\ncounterpart exists: an existing issue is never moved."
-        ),
-    ] = None
     destination: Annotated[
         SourceName,
         Field(description="The source the item lands in: the routed one, or the source itself."),
@@ -140,7 +123,24 @@ class Located(BaseModel):
             ge=0,
         ),
     ] = None
-    source: Annotated[GlobalId, Field(description="The qualified id the task was read from.")]
+    counterpart: Annotated[
+        LocatedCounterpart | None,
+        Field(
+            description="The item a copy would update, and the rule that found it — `null` when a copy would\ncreate one, and absent under `--no-counterpart`, which looks for none."
+        ),
+    ] = None
+    carriers: Annotated[
+        list[GlobalId] | None,
+        Field(
+            description="Every destination item the origin query found carrying this task's origin, in listing\norder — `[]` when the query did not run, and absent under `--no-counterpart`. When it ran,\n`counterpart` is the first."
+        ),
+    ] = None
+    creates_in: Annotated[
+        CreatesIn | None,
+        Field(
+            description="The repository a create there would file the task's issue in, or `null` where the\ndestination files no issue in a repository. Where a create would file, whether or not a\ncounterpart exists: an existing issue is never moved."
+        ),
+    ] = None
 
 
 class LocateReport(BaseModel):

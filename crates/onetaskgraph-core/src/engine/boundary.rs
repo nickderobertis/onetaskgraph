@@ -125,6 +125,165 @@ impl PolicyError {
     }
 }
 
+/// One replacement entry of the caller's layer: `{term, with}` or `{term, reject: true}`.
+///
+/// The private-terms specification's own shape, never a copy of it.
+pub use privateterms::Replacement;
+
+/// One resolved term, as [`WritePolicy::declared_terms`] answers it: private output, held in
+/// memory and never written anywhere.
+pub type DeclaredTerm = privateterms::ResolvedRule;
+
+pub use privateterms::{Locator, LocatorKind};
+
+/// Entries a sanitisation checks and never rewrites: every id, a metadata key, a status, a
+/// priority, a repository and an asset's name.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FixedEntries {
+    /// Prose checked as it stands.
+    #[serde(default)]
+    pub text: Vec<String>,
+    /// Paths checked as they stand.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Short fields checked as they stand.
+    #[serde(default)]
+    pub metadata: Vec<String>,
+}
+
+impl FixedEntries {
+    fn is_empty(&self) -> bool {
+        self.text.is_empty() && self.paths.is_empty() && self.metadata.is_empty()
+    }
+}
+
+/// One identifier a diagnostic of this write would print, screened in the write's own call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LocatorEntry {
+    /// What it names.
+    pub kind: LocatorKind,
+    /// The identifier itself.
+    pub value: String,
+}
+
+/// What one write is about to put somewhere, put to [`WritePolicy::sanitize_public_write`].
+///
+/// Serialized exactly as onevcs's `SanitizeInput` reads it, held to the pinned schema: the
+/// rewritable entries, the `fixed` ones, the caller's `replacements` layer and the `locators`
+/// its diagnostics would print. An empty member is left out, which the schema reads as empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PublicSanitizeInput {
+    /// Where it is going.
+    pub destination: RepositoryVisibility,
+    /// Prose that may be rewritten.
+    #[serde(default)]
+    pub text: Vec<String>,
+    /// Paths that may be rewritten.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Short fields that may be rewritten.
+    #[serde(default)]
+    pub metadata: Vec<String>,
+    /// Entries checked and never rewritten.
+    #[serde(default, skip_serializing_if = "FixedEntries::is_empty")]
+    pub fixed: FixedEntries,
+    /// Which repositories' private terms are derived, as the caller scoped it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Vec<String>>,
+    /// The caller's replacement layer, over every declaration level: a later entry wins.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(with = "Vec<Value>")]
+    pub replacements: Vec<Replacement>,
+    /// The identifiers this write's diagnostics would print.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locators: Vec<LocatorEntry>,
+}
+
+/// Which list an entry still carrying a term after replacement is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SanitizeSurface {
+    /// A `text` entry.
+    Text,
+    /// A `paths` entry.
+    Path,
+    /// A `metadata` entry.
+    Metadata,
+    /// A `locators` entry.
+    Locators,
+}
+
+impl SanitizeSurface {
+    /// The word a neutral reason names it by.
+    fn word(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Path => "path",
+            Self::Metadata => "metadata",
+            Self::Locators => "identifiers",
+        }
+    }
+}
+
+/// One entry still carrying a term after replacement: where it is, never what.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Unfixed {
+    /// Which list.
+    pub surface: SanitizeSurface,
+    /// Its index in that list — in `fixed`'s list where `fixed` is true.
+    pub index: u64,
+    /// Whether it is an entry nothing rewrites: a `fixed` one, or a locator.
+    pub fixed: bool,
+}
+
+/// What a sanitisation decided, and the entries as they may be written.
+///
+/// `text`, `paths` and `metadata` are the input's rewritable entries after replacement, the
+/// same length and order; `locators` the input's locators screened, the same length and order,
+/// and empty when the policy could not decide.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SanitizeVerdict {
+    /// Whether what is answered may be written.
+    #[serde(flatten)]
+    pub verdict: WriteVerdict,
+    /// The `text` entries after replacement.
+    #[serde(default)]
+    pub text: Vec<String>,
+    /// The `paths` entries after replacement.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// The `metadata` entries after replacement.
+    #[serde(default)]
+    pub metadata: Vec<String>,
+    /// How many spans were rewritten.
+    #[serde(default)]
+    pub replaced: u32,
+    /// Every entry still carrying a term.
+    #[serde(default)]
+    pub unfixed: Vec<Unfixed>,
+    /// The locators screened.
+    #[serde(default)]
+    pub locators: Vec<Locator>,
+}
+
+/// What [`WritePolicy::declared_terms`] is asked: a scope and the caller's replacement layer,
+/// serialized exactly as onevcs's `TermsRequest`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TermsRequest {
+    /// Which private repositories the terms come from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<Vec<String>>,
+    /// The caller's replacement layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(with = "Vec<Value>")]
+    pub replacements: Vec<Replacement>,
+}
+
 /// The caller's half of the public boundary: which repositories are public, and whether a
 /// write may reach a public destination.
 ///
@@ -154,6 +313,89 @@ pub trait WritePolicy: Send + Sync {
         &self,
         input: &PublicWriteInput,
     ) -> Result<WriteVerdict, PolicyError>;
+
+    /// Rewrite `input`'s rewritable entries with the declared replacements and decide the
+    /// result.
+    ///
+    /// The default makes one [`check_public_write`](Self::check_public_write) over every entry,
+    /// rewritable and fixed, and every locator's value as fixed metadata, and answers the
+    /// entries unchanged: the locators all plain on a pass, all redacted on a refusal or an
+    /// unavailable check, since it cannot say which entry the check stopped at.
+    ///
+    /// # Errors
+    ///
+    /// [`PolicyError`] when it cannot be asked; the store treats that as unavailable.
+    async fn sanitize_public_write(
+        &self,
+        input: &PublicSanitizeInput,
+    ) -> Result<SanitizeVerdict, PolicyError> {
+        let check = PublicWriteInput {
+            destination: input.destination,
+            text: input
+                .text
+                .iter()
+                .chain(&input.fixed.text)
+                .cloned()
+                .collect(),
+            paths: input
+                .paths
+                .iter()
+                .chain(&input.fixed.paths)
+                .cloned()
+                .collect(),
+            metadata: input
+                .metadata
+                .iter()
+                .chain(&input.fixed.metadata)
+                .cloned()
+                .chain(input.locators.iter().map(|locator| locator.value.clone()))
+                .collect(),
+            scope: input.scope.clone(),
+        };
+        let verdict = self.check_public_write(&check).await?;
+        let locators = match verdict {
+            WriteVerdict::Pass => input
+                .locators
+                .iter()
+                .map(|locator| Locator::Plain(locator.value.clone()))
+                .collect(),
+            WriteVerdict::Refuse { .. } => redacted(&input.locators),
+            WriteVerdict::Unavailable { .. } => Vec::new(),
+        };
+        Ok(SanitizeVerdict {
+            verdict,
+            text: input.text.clone(),
+            paths: input.paths.clone(),
+            metadata: input.metadata.clone(),
+            replaced: 0,
+            unfixed: Vec::new(),
+            locators,
+        })
+    }
+
+    /// The resolved terms of `request`'s scope, or `None` when this policy cannot list them.
+    ///
+    /// The terms are private output: the store holds them in memory for one sweep and never
+    /// writes one anywhere. The default cannot list them.
+    ///
+    /// # Errors
+    ///
+    /// [`PolicyError`] when it cannot be asked.
+    async fn declared_terms(
+        &self,
+        _request: &TermsRequest,
+    ) -> Result<Option<Vec<DeclaredTerm>>, PolicyError> {
+        Ok(None)
+    }
+}
+
+/// Every locator of `locators`, redacted and numbered from 1 in order.
+fn redacted(locators: &[LocatorEntry]) -> Vec<Locator> {
+    let kinds: Vec<(LocatorKind, &str)> = locators
+        .iter()
+        .map(|locator| (locator.kind, locator.value.as_str()))
+        .collect();
+    privateterms::redact_all(&kinds, 1)
 }
 
 /// The policy a store with no `write_policy` asks: every repository unknown, every check
@@ -195,6 +437,10 @@ struct Validators {
     inspect_output: jsonschema::Validator,
     check_input: jsonschema::Validator,
     check_output: jsonschema::Validator,
+    sanitize_input: jsonschema::Validator,
+    sanitize_output: jsonschema::Validator,
+    terms_input: jsonschema::Validator,
+    terms_output: jsonschema::Validator,
 }
 
 static VALIDATORS: LazyLock<Validators> = LazyLock::new(|| {
@@ -214,6 +460,10 @@ static VALIDATORS: LazyLock<Validators> = LazyLock::new(|| {
         inspect_output: compile("/inspect/output"),
         check_input: compile("/check/input"),
         check_output: compile("/check/output"),
+        sanitize_input: compile("/sanitize/input"),
+        sanitize_output: compile("/sanitize/output"),
+        terms_input: compile("/terms/input"),
+        terms_output: compile("/terms/output"),
     }
 });
 
@@ -233,6 +483,8 @@ static VALIDATORS: LazyLock<Validators> = LazyLock::new(|| {
 pub struct CommandWritePolicy {
     visibility_command: Option<PolicyCommand>,
     check_command: Option<PolicyCommand>,
+    sanitize_command: Option<PolicyCommand>,
+    terms_command: Option<PolicyCommand>,
 }
 
 impl CommandWritePolicy {
@@ -242,6 +494,8 @@ impl CommandWritePolicy {
         Self {
             visibility_command: config.visibility_command.clone(),
             check_command: config.check_command.clone(),
+            sanitize_command: config.sanitize_command.clone(),
+            terms_command: config.terms_command.clone(),
         }
     }
 }
@@ -347,6 +601,213 @@ impl WritePolicy for CommandWritePolicy {
         let (code, stdout) = run(command, &document).await?;
         Ok(check_verdict(code, &stdout))
     }
+
+    /// Without a `sanitize_command`, the default: one check through `check_command`, exactly as
+    /// before. With one, `boundary sanitize`'s answer, held to the pinned schema.
+    async fn sanitize_public_write(
+        &self,
+        input: &PublicSanitizeInput,
+    ) -> Result<SanitizeVerdict, PolicyError> {
+        let Some(command) = &self.sanitize_command else {
+            return default_sanitize(self, input).await;
+        };
+        let document = serde_json::to_value(input).expect("a sanitise input serializes");
+        if !VALIDATORS.sanitize_input.is_valid(&document) {
+            return Ok(unavailable(
+                "the write could not be put in the shape the boundary schema reads",
+            ));
+        }
+        let (code, stdout) = run(command, &document).await?;
+        Ok(sanitize_verdict(input, code, &stdout))
+    }
+
+    async fn declared_terms(
+        &self,
+        request: &TermsRequest,
+    ) -> Result<Option<Vec<DeclaredTerm>>, PolicyError> {
+        let Some(command) = &self.terms_command else {
+            return Ok(None);
+        };
+        let document = serde_json::to_value(request).expect("a terms request serializes");
+        if !VALIDATORS.terms_input.is_valid(&document) {
+            return Err(PolicyError::new(
+                "the terms request could not be put in the shape the boundary schema reads",
+            ));
+        }
+        let (code, stdout) = run(command, &document).await?;
+        let answer = validated(&stdout, &VALIDATORS.terms_output);
+        let terms = match (code, answer) {
+            (Some(0), Some(answer)) if answer.get("terms").is_some() => answer["terms"].clone(),
+            (_, Some(answer)) if answer.get("verdict").is_some() => {
+                return Err(PolicyError::new(format!(
+                    "the terms command could not decide ({})",
+                    answer["reason"].as_str().unwrap_or("no reason given")
+                )));
+            }
+            (code, _) => {
+                return Err(PolicyError::new(format!(
+                    "the terms command {} {} without terms this store believes",
+                    command.program(),
+                    code.map_or_else(|| "was stopped".to_owned(), |code| format!("exited {code}"))
+                )));
+            }
+        };
+        let terms: Vec<TermWire> = serde_json::from_value(terms).map_err(|_| {
+            PolicyError::new("the terms command answered terms this store cannot read")
+        })?;
+        Ok(Some(terms.into_iter().map(TermWire::resolved).collect()))
+    }
+}
+
+/// [`WritePolicy::sanitize_public_write`]'s default body, callable from an implementation that
+/// overrides it only some of the time.
+async fn default_sanitize<P: WritePolicy + ?Sized>(
+    policy: &P,
+    input: &PublicSanitizeInput,
+) -> Result<SanitizeVerdict, PolicyError> {
+    struct Defaulted<'a, P: ?Sized>(&'a P);
+    #[async_trait::async_trait]
+    impl<P: WritePolicy + ?Sized> WritePolicy for Defaulted<'_, P> {
+        async fn repository_visibility(
+            &self,
+            repository: &Repository,
+        ) -> Result<RepositoryVisibility, PolicyError> {
+            self.0.repository_visibility(repository).await
+        }
+        async fn check_public_write(
+            &self,
+            input: &PublicWriteInput,
+        ) -> Result<WriteVerdict, PolicyError> {
+            self.0.check_public_write(input).await
+        }
+    }
+    Defaulted(policy).sanitize_public_write(input).await
+}
+
+/// One term as `boundary terms` answers it, read into the specification's own resolved rule.
+#[derive(Deserialize)]
+struct TermWire {
+    term: String,
+    mode: privateterms::TermMode,
+    case_sensitive: bool,
+    action: String,
+    #[serde(default)]
+    with: Option<String>,
+}
+
+impl TermWire {
+    fn resolved(self) -> DeclaredTerm {
+        privateterms::ResolvedRule {
+            rule: privateterms::TermRule {
+                term: self.term,
+                mode: self.mode,
+                case_sensitive: self.case_sensitive,
+            },
+            action: match (self.action.as_str(), self.with) {
+                ("replace", Some(with)) => privateterms::Action::Replace(with),
+                _ => privateterms::Action::Reject,
+            },
+            origin: "policy".to_owned(),
+        }
+    }
+}
+
+/// A sanitisation that could not decide: nothing may be written, and no locator is answered.
+fn unavailable(reason: impl Into<String>) -> SanitizeVerdict {
+    SanitizeVerdict {
+        verdict: WriteVerdict::Unavailable {
+            reason: reason.into(),
+        },
+        text: Vec::new(),
+        paths: Vec::new(),
+        metadata: Vec::new(),
+        replaced: 0,
+        unfixed: Vec::new(),
+        locators: Vec::new(),
+    }
+}
+
+/// What a sanitise command's exit `code` and standard output amount to for `input` — the one
+/// reading of a `boundary sanitize` answer, held to the pinned schema.
+///
+/// **Only an explicit pass passes**: exit 0 with `{"verdict": "pass"}` whose entries and
+/// locators are as many as were sent. Exit 1 with a refusal is a refusal naming where the
+/// first term left is and never what it is; anything else is unavailable.
+#[must_use]
+pub fn sanitize_verdict(
+    input: &PublicSanitizeInput,
+    code: Option<i32>,
+    stdout: &[u8],
+) -> SanitizeVerdict {
+    let Some(answer) = validated(stdout, &VALIDATORS.sanitize_output) else {
+        return unavailable(format!(
+            "the sanitise command {} without a verdict this store believes",
+            code.map_or_else(|| "was stopped".to_owned(), |code| format!("exited {code}"))
+        ));
+    };
+    let verdict = answer["verdict"].as_str().unwrap_or_default();
+    if verdict == "unavailable"
+        || !matches!((code, verdict), (Some(0), "pass") | (Some(1), "refuse"))
+    {
+        return unavailable(format!(
+            "the check could not decide ({})",
+            answer["reason"].as_str().unwrap_or("no reason given")
+        ));
+    }
+    let strings = |name: &str| -> Vec<String> {
+        answer[name]
+            .as_array()
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let (text, paths, metadata) = (strings("text"), strings("paths"), strings("metadata"));
+    let locators: Vec<Locator> = answer
+        .get("locators")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    if text.len() != input.text.len()
+        || paths.len() != input.paths.len()
+        || metadata.len() != input.metadata.len()
+        || locators.len() != input.locators.len()
+    {
+        return unavailable("the sanitise command answered entries that do not match those sent");
+    }
+    let unfixed: Vec<Unfixed> =
+        serde_json::from_value(answer["unfixed"].clone()).unwrap_or_default();
+    let verdict = if verdict == "pass" {
+        WriteVerdict::Pass
+    } else {
+        let surface: Option<SanitizeSurface> =
+            serde_json::from_value(answer["surface"].clone()).ok();
+        WriteVerdict::Refuse {
+            reason: format!(
+                "it carries a term of a private repository in its {}",
+                surface.map_or("content", SanitizeSurface::word)
+            ),
+        }
+    };
+    SanitizeVerdict {
+        verdict,
+        text,
+        paths,
+        metadata,
+        replaced: answer["replaced"]
+            .as_u64()
+            .and_then(|replaced| u32::try_from(replaced).ok())
+            .unwrap_or_default(),
+        unfixed,
+        locators,
+    }
 }
 
 /// What a check command's exit `code` and standard output amount to — the one reading of a
@@ -395,6 +856,11 @@ pub(crate) struct Boundary {
     active: bool,
     policy: Arc<dyn WritePolicy>,
     scope: Option<Vec<String>>,
+    /// The caller's replacement layer every sanitisation carries: the configuration's, then the
+    /// command line's for one invocation.
+    replacements: Vec<Replacement>,
+    /// What the screened writes of this command replaced, until [`Engine::take_sanitization`].
+    sanitized: Arc<std::sync::Mutex<Sanitization>>,
     /// What the policy has answered in this command, until [`Engine::end_command`].
     screened: Arc<std::sync::Mutex<Screened>>,
     /// One line per dependency edge a write left out because it names something private,
@@ -417,34 +883,86 @@ struct Screened {
     passed: Vec<PassedInput>,
 }
 
-/// The values of one input a check passed, by surface.
+/// The values of one input a check passed, by surface and by whether it was rewritable — the
+/// input as sent, the caller's replacements included, since those are the store's for the
+/// whole command — and what it rewrote.
 #[derive(Default)]
 struct PassedInput {
-    text: std::collections::HashSet<String>,
-    paths: std::collections::HashSet<String>,
-    metadata: std::collections::HashSet<String>,
+    surfaces: [std::collections::HashSet<String>; 7],
+    rewrite: Rewrite,
 }
 
 impl PassedInput {
-    fn of(exposure: &Exposure) -> Self {
+    fn lists(exposure: &Exposure) -> [Vec<String>; 7] {
+        [
+            exposure.text.clone(),
+            exposure.paths.clone(),
+            exposure.metadata.clone(),
+            exposure.fixed.text.clone(),
+            exposure.fixed.paths.clone(),
+            exposure.fixed.metadata.clone(),
+            exposure
+                .locators
+                .iter()
+                .map(|locator| format!("{}\u{0}{}", locator.kind.name(), locator.value))
+                .collect(),
+        ]
+    }
+
+    fn of(exposure: &Exposure, rewrite: Rewrite) -> Self {
         Self {
-            text: exposure.text.iter().cloned().collect(),
-            paths: exposure.paths.iter().cloned().collect(),
-            metadata: exposure.metadata.iter().cloned().collect(),
+            surfaces: Self::lists(exposure).map(|list| list.into_iter().collect()),
+            rewrite,
         }
     }
 
     fn covers(&self, exposure: &Exposure) -> bool {
-        exposure.text.iter().all(|value| self.text.contains(value))
-            && exposure
-                .paths
-                .iter()
-                .all(|value| self.paths.contains(value))
-            && exposure
-                .metadata
-                .iter()
-                .all(|value| self.metadata.contains(value))
+        Self::lists(exposure)
+            .iter()
+            .zip(&self.surfaces)
+            .all(|(values, passed)| values.iter().all(|value| passed.contains(value)))
     }
+}
+
+/// What the screened writes of one command replaced, and what sanitise-on-refusal changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Sanitization {
+    /// Spans the writes' own sanitisations rewrote.
+    pub replaced: u32,
+    /// Each field or comment of an item sanitisation changed beyond the write itself.
+    pub side_effect: Vec<SideEffect>,
+    /// Whether nothing was written, the changes only reported.
+    pub dry_run: bool,
+}
+
+impl Sanitization {
+    /// Whether there is nothing to report, which leaves a write's answer as it was.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.replaced == 0 && self.side_effect.is_empty()
+    }
+
+    /// The `sanitization` member of a write's answer.
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({
+            "replaced": self.replaced,
+            "side_effect": self.side_effect.iter().map(|effect| serde_json::json!({
+                "item": effect.item,
+                "field": effect.field,
+            })).collect::<Vec<_>>(),
+            "dry_run": self.dry_run,
+        })
+    }
+}
+
+/// One field or comment of an item a sanitisation changed, named by screened locators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SideEffect {
+    /// The item, by its qualified id as screened.
+    pub item: Locator,
+    /// The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.
+    pub field: Locator,
 }
 
 impl Default for Boundary {
@@ -453,6 +971,8 @@ impl Default for Boundary {
             active: false,
             policy: Arc::new(MissingWritePolicy),
             scope: None,
+            replacements: Vec::new(),
+            sanitized: Arc::default(),
             screened: Arc::default(),
             withheld: Arc::default(),
         }
@@ -475,6 +995,10 @@ impl Boundary {
                 None => Arc::new(MissingWritePolicy),
             },
             scope: None,
+            replacements: write_policy
+                .map(|config| config.replacements.clone())
+                .unwrap_or_default(),
+            sanitized: Arc::default(),
             screened: Arc::default(),
             withheld: Arc::default(),
         }
@@ -497,31 +1021,48 @@ impl Boundary {
         }
     }
 
-    /// Whether one input a check of this scope passed in this command held every value of
-    /// `exposure`.
-    fn passed(&self, exposure: &Exposure) -> bool {
-        self.screened
-            .lock()
-            .is_ok_and(|screened| screened.passed.iter().any(|input| input.covers(exposure)))
+    /// What one input a check of this scope passed in this command rewrote, when it held every
+    /// value of `exposure`.
+    fn passed(&self, exposure: &Exposure) -> Option<Rewrite> {
+        self.screened.lock().ok().and_then(|screened| {
+            screened
+                .passed
+                .iter()
+                .find(|input| input.covers(exposure))
+                .map(|input| Rewrite {
+                    replaced: 0,
+                    ..input.rewrite.clone()
+                })
+        })
     }
 
-    fn pass(&self, exposure: &Exposure) {
+    fn pass(&self, exposure: &Exposure, rewrite: &Rewrite) {
         if let Ok(mut screened) = self.screened.lock() {
-            screened.passed.push(PassedInput::of(exposure));
+            screened
+                .passed
+                .push(PassedInput::of(exposure, rewrite.clone()));
+        }
+        if rewrite.replaced > 0
+            && let Ok(mut sanitized) = self.sanitized.lock()
+        {
+            sanitized.replaced = sanitized.replaced.saturating_add(rewrite.replaced);
         }
     }
 }
 
-/// What one write puts in front of a reader, by the surfaces a check reads.
+/// What one write puts in front of a reader, by the surfaces a check reads: what replacement
+/// may rewrite, what it never rewrites, and the identifiers a diagnostic of it would print.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Exposure {
     text: Vec<String>,
     paths: Vec<String>,
     metadata: Vec<String>,
+    fixed: FixedEntries,
+    locators: Vec<LocatorEntry>,
 }
 
 impl Exposure {
-    /// Prose a write carries — a comment's body, a rendering.
+    /// Prose a write carries — a comment's body, a rendering — which replacement rewrites.
     pub(crate) fn text(text: impl Into<String>) -> Self {
         Self {
             text: vec![text.into()],
@@ -529,10 +1070,14 @@ impl Exposure {
         }
     }
 
-    /// A short field a write carries — a key, a value, a status name.
+    /// Short fields a write carries that replacement never rewrites — an id, a status, a
+    /// priority, a key.
     pub(crate) fn metadata(values: impl IntoIterator<Item = String>) -> Self {
         Self {
-            metadata: values.into_iter().collect(),
+            fixed: FixedEntries {
+                metadata: values.into_iter().collect(),
+                ..FixedEntries::default()
+            },
             ..Self::default()
         }
     }
@@ -541,12 +1086,32 @@ impl Exposure {
         self.text.extend(other.text);
         self.paths.extend(other.paths);
         self.metadata.extend(other.metadata);
+        self.fixed.text.extend(other.fixed.text);
+        self.fixed.paths.extend(other.fixed.paths);
+        self.fixed.metadata.extend(other.fixed.metadata);
+        for locator in other.locators {
+            if !self.locators.contains(&locator) {
+                self.locators.push(locator);
+            }
+        }
         self
     }
 
-    /// Paths a write names — an image asset's name.
+    /// Paths a write names that replacement never rewrites — an image asset's name.
     pub(crate) fn paths(mut self, paths: impl IntoIterator<Item = String>) -> Self {
-        self.paths.extend(paths);
+        self.fixed.paths.extend(paths);
+        self
+    }
+
+    /// One identifier a diagnostic of this write would print, screened with it.
+    pub(crate) fn locate(mut self, kind: LocatorKind, value: impl Into<String>) -> Self {
+        let locator = LocatorEntry {
+            kind,
+            value: value.into(),
+        };
+        if !self.locators.contains(&locator) {
+            self.locators.push(locator);
+        }
         self
     }
 
@@ -555,16 +1120,17 @@ impl Exposure {
         self.paths(assets.iter().map(|asset| asset.name.as_str().to_owned()))
     }
 
-    /// The answers a rendering stores beside its content, where its source keeps them.
+    /// The answers a rendering stores beside its content, where its source keeps them: each
+    /// name fixed, each string of its value rewritable.
     pub(crate) fn answers(mut self, answers: Option<&BTreeMap<String, Value>>) -> Self {
         for (key, value) in answers.into_iter().flatten() {
-            self.metadata.push(key.clone());
+            self.fixed.metadata.push(key.clone());
             strings(value, &mut self);
         }
         self
     }
 
-    /// One metadata entry a write sets: its key and every string in its value.
+    /// One metadata entry a write sets: its key, fixed, and every string in its value.
     pub(crate) fn of_entry(key: &str, value: &Value) -> Self {
         let mut exposure = Self::metadata([key.to_owned()]);
         strings(value, &mut exposure);
@@ -579,9 +1145,10 @@ impl Exposure {
         };
         exposure.metadata.extend(update.title.iter().cloned());
         exposure
+            .fixed
             .metadata
             .extend(update.status.iter().map(|status| status.name.clone()));
-        exposure.metadata.extend(
+        exposure.fixed.metadata.extend(
             update
                 .priority
                 .iter()
@@ -591,9 +1158,10 @@ impl Exposure {
             exposure = exposure.and(Self::of_entry(key.as_str(), value));
         }
         exposure
+            .fixed
             .metadata
             .extend(update.delivers.iter().flatten().map(ToString::to_string));
-        exposure.metadata.extend(
+        exposure.fixed.metadata.extend(
             update
                 .depends_on
                 .iter()
@@ -612,11 +1180,12 @@ impl Exposure {
             &task.metadata,
             &task.repositories,
         );
-        exposure.metadata.push(task.status.name.clone());
+        exposure.fixed.metadata.push(task.status.name.clone());
         exposure
+            .fixed
             .metadata
             .extend(task.project.iter().map(|id| id.0.clone()));
-        exposure.metadata.extend(
+        exposure.fixed.metadata.extend(
             task.delivers
                 .iter()
                 .chain(&task.delivered_by)
@@ -634,7 +1203,7 @@ impl Exposure {
             &project.metadata,
             &project.repositories,
         );
-        exposure.metadata.push(project.status.name.clone());
+        exposure.fixed.metadata.push(project.status.name.clone());
         exposure
     }
 
@@ -648,6 +1217,7 @@ impl Exposure {
             &document.repositories,
         );
         exposure
+            .fixed
             .metadata
             .extend(document.project.iter().map(|id| id.0.clone()));
         exposure
@@ -668,22 +1238,40 @@ impl Exposure {
         exposure
             .metadata
             .extend(labels.iter().map(|label| label.name.clone()));
-        exposure.metadata.extend(
+        exposure.fixed.metadata.extend(
             repositories
                 .iter()
                 .map(|repository| repository.as_str().to_owned()),
         );
         for (key, value) in metadata {
-            exposure.metadata.push(key.clone());
+            exposure.fixed.metadata.push(key.clone());
             strings(value, &mut exposure);
         }
         exposure
     }
+
+    /// The document a sanitisation of this exposure sends.
+    fn input(
+        &self,
+        scope: Option<Vec<String>>,
+        replacements: &[Replacement],
+    ) -> PublicSanitizeInput {
+        PublicSanitizeInput {
+            destination: RepositoryVisibility::Public,
+            text: self.text.clone(),
+            paths: self.paths.clone(),
+            metadata: self.metadata.clone(),
+            fixed: self.fixed.clone(),
+            scope,
+            replacements: replacements.to_vec(),
+            locators: self.locators.clone(),
+        }
+    }
 }
 
-/// Every string inside `value`, keys included. A string that reads as a path — the template
-/// reference a rendering records, an asset's place — is a path as well, so a check reading
-/// paths reads it there too.
+/// Every string inside `value`, which replacement rewrites, and every key and number, which it
+/// never does. A string that reads as a path — the template reference a rendering records, an
+/// asset's place — is a path as well, so a check reading paths reads it there too.
 fn strings(value: &Value, exposure: &mut Exposure) {
     match value {
         Value::String(text) => {
@@ -695,12 +1283,157 @@ fn strings(value: &Value, exposure: &mut Exposure) {
         Value::Array(values) => values.iter().for_each(|value| strings(value, exposure)),
         Value::Object(fields) => {
             for (key, value) in fields {
-                exposure.metadata.push(key.clone());
+                exposure.fixed.metadata.push(key.clone());
                 strings(value, exposure);
             }
         }
-        Value::Number(number) => exposure.metadata.push(number.to_string()),
+        Value::Number(number) => exposure.fixed.metadata.push(number.to_string()),
         Value::Bool(_) | Value::Null => {}
+    }
+}
+
+/// What a passing sanitisation rewrote: each rewritable value it changed, by the surface it was
+/// sent on, and how many spans. Applied to what a write sends, so what is written is exactly
+/// what the policy passed; an identity rewrite changes nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Rewrite {
+    text: std::collections::HashMap<String, String>,
+    paths: std::collections::HashMap<String, String>,
+    metadata: std::collections::HashMap<String, String>,
+    replaced: u32,
+}
+
+impl Rewrite {
+    fn of(exposure: &Exposure, answer: &SanitizeVerdict) -> Self {
+        let changed = |sent: &[String], answered: &[String]| {
+            sent.iter()
+                .zip(answered)
+                .filter(|(sent, answered)| sent != answered)
+                .map(|(sent, answered)| (sent.clone(), answered.clone()))
+                .collect()
+        };
+        Self {
+            text: changed(&exposure.text, &answer.text),
+            paths: changed(&exposure.paths, &answer.paths),
+            metadata: changed(&exposure.metadata, &answer.metadata),
+            replaced: answer.replaced,
+        }
+    }
+
+    /// Whether it rewrites nothing.
+    pub(crate) fn is_identity(&self) -> bool {
+        self.text.is_empty() && self.paths.is_empty() && self.metadata.is_empty()
+    }
+
+    /// Prose as it is written.
+    pub(crate) fn text(&self, value: &str) -> String {
+        self.text
+            .get(value)
+            .cloned()
+            .unwrap_or_else(|| value.to_owned())
+    }
+
+    /// A short field as it is written: as rewritten among the short fields, or — for one that
+    /// reads as a path and was rewritten only there — as rewritten among the paths.
+    pub(crate) fn short(&self, value: &str) -> String {
+        self.metadata
+            .get(value)
+            .or_else(|| self.paths.get(value))
+            .cloned()
+            .unwrap_or_else(|| value.to_owned())
+    }
+
+    /// Every string inside `value` as it is written; keys and numbers as they were.
+    pub(crate) fn value(&self, value: &mut Value) {
+        match value {
+            Value::String(text) => *text = self.short(text),
+            Value::Array(values) => values.iter_mut().for_each(|value| self.value(value)),
+            Value::Object(fields) => fields.values_mut().for_each(|value| self.value(value)),
+            Value::Number(_) | Value::Bool(_) | Value::Null => {}
+        }
+    }
+
+    /// Every metadata value as it is written.
+    pub(crate) fn metadata_values(&self, metadata: &mut BTreeMap<String, Value>) {
+        metadata.values_mut().for_each(|value| self.value(value));
+    }
+
+    fn record(
+        &self,
+        title: &mut String,
+        content: &mut Option<String>,
+        labels: &mut [Label],
+        metadata: &mut BTreeMap<String, Value>,
+    ) {
+        *title = self.short(title);
+        if let Some(content) = content {
+            *content = self.text(content);
+        }
+        for label in labels {
+            label.name = self.short(&label.name);
+        }
+        self.metadata_values(metadata);
+    }
+
+    /// A task as it is written.
+    pub(crate) fn task(&self, task: &mut Task) {
+        if self.is_identity() {
+            return;
+        }
+        self.record(
+            &mut task.title,
+            &mut task.content,
+            &mut task.labels,
+            &mut task.metadata,
+        );
+    }
+
+    /// A project as it is written.
+    pub(crate) fn project(&self, project: &mut Project) {
+        if self.is_identity() {
+            return;
+        }
+        self.record(
+            &mut project.title,
+            &mut project.content,
+            &mut project.labels,
+            &mut project.metadata,
+        );
+    }
+
+    /// A document as it is written.
+    pub(crate) fn document(&self, document: &mut Document) {
+        if self.is_identity() {
+            return;
+        }
+        self.record(
+            &mut document.title,
+            &mut document.content,
+            &mut document.labels,
+            &mut document.metadata,
+        );
+    }
+
+    /// A targeted update as it is written.
+    pub(crate) fn update(&self, update: &mut onetaskgraph_plugin_api::TaskUpdate) {
+        if self.is_identity() {
+            return;
+        }
+        if let Some(title) = &mut update.title {
+            *title = self.short(title);
+        }
+        if let Some(content) = &mut update.content {
+            *content = self.text(content);
+        }
+        update
+            .metadata_set
+            .values_mut()
+            .for_each(|value| self.value(value));
+    }
+
+    /// A rendering's answers as they are written.
+    pub(crate) fn answers(&self, answers: &mut BTreeMap<String, Value>) {
+        answers.values_mut().for_each(|value| self.value(value));
     }
 }
 
@@ -737,6 +1470,33 @@ impl Engine {
         self.boundary.scope = scope;
         self.boundary.forget();
         self
+    }
+
+    /// The same engine, sending `replacements` after the configuration's own with every
+    /// sanitisation — the command line's `--replace` and `--reject` for one invocation. A later
+    /// entry wins. What was passed under the earlier list is forgotten.
+    #[must_use]
+    pub fn with_replacements(mut self, replacements: Vec<Replacement>) -> Self {
+        self.boundary.replacements.extend(replacements);
+        self.boundary.forget();
+        self
+    }
+
+    /// The caller's replacement layer every sanitisation carries, in order.
+    #[must_use]
+    pub fn replacements(&self) -> &[Replacement] {
+        &self.boundary.replacements
+    }
+
+    /// Take what the screened writes since the last take replaced and sanitised — what a write
+    /// command answers as its `sanitization` member, left out when [`Sanitization::is_empty`].
+    #[must_use]
+    pub fn take_sanitization(&self) -> Sanitization {
+        self.boundary
+            .sanitized
+            .lock()
+            .map(|mut sanitized| std::mem::take(&mut *sanitized))
+            .unwrap_or_default()
     }
 
     /// Take the edges a copy left out of what it wrote because each names something private —
@@ -1071,10 +1831,11 @@ impl Engine {
         &self,
         destination: &ResolvedSource,
         outbound: &Outbound<'_>,
-    ) -> Result<(), EngineError> {
-        self.preflight(destination, outbound).await?;
+    ) -> Result<Rewrite, EngineError> {
+        let rewrite = self.preflight(destination, outbound).await?;
         self.at_write(destination, &outbound.item, &outbound.target)
-            .await
+            .await?;
+        Ok(rewrite)
     }
 
     /// Everything about one write that can be settled before anything is written: a private
@@ -1088,12 +1849,13 @@ impl Engine {
         &self,
         destination: &ResolvedSource,
         outbound: &Outbound<'_>,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Rewrite, EngineError> {
         if self.placed(destination, outbound)? {
-            self.check(destination, &outbound.item, outbound.exposure)
-                .await?;
+            return self
+                .check(destination, &outbound.item, outbound.exposure)
+                .await;
         }
-        Ok(())
+        Ok(Rewrite::default())
     }
 
     /// [`preflight`](Self::preflight)'s half that asks nothing: a private item refused where it
@@ -1129,71 +1891,66 @@ impl Engine {
     }
 
     /// Put every write of `writes` — each its destination, how it names its item, and what it
-    /// exposes — to the caller's check before any of them is made: one check of all of them
-    /// together, every check's arrays concatenated element by element under the one scope they
-    /// share. A union one earlier check of this command passed whole is not checked again.
+    /// exposes — to the caller's policy before any of them is made: one sanitisation of all of
+    /// them together, every list concatenated element by element under the one scope they
+    /// share, answering what each value is written as. A union one earlier sanitisation of this
+    /// command passed whole is not sent again.
     ///
-    /// Only a union the check refuses is checked again write by write, so the refusal names the
-    /// write it is about — and those checks pass nothing, since a write passing alone says nothing
-    /// of the union; a union the check cannot decide is the first write's own unavailability. A
-    /// union it passes passes every write of it.
+    /// Only a union the policy refuses is sent again write by write, so the refusal names the
+    /// write it is about — and those calls pass nothing, since a write passing alone says nothing
+    /// of the union; a union the policy cannot decide is the first write's own unavailability.
     pub(crate) async fn check_all(
         &self,
         writes: &[(&ResolvedSource, String, Exposure)],
-    ) -> Result<(), EngineError> {
+    ) -> Result<Rewrite, EngineError> {
         let Some((first, first_item, _)) = writes.first() else {
-            return Ok(());
+            return Ok(Rewrite::default());
         };
         if let [(destination, item, exposure)] = writes {
             return self.check(destination, item, exposure).await;
         }
         let mut union = Exposure::default();
-        for (_, _, exposure) in writes {
-            union = union.and(exposure.clone());
+        for (destination, item, exposure) in writes {
+            union = union.and(located(destination, item, exposure.clone()));
         }
-        // Passed already only when one check passed all of it together.
-        if self.boundary.passed(&union) {
-            return Ok(());
+        if let Some(rewrite) = self.boundary.passed(&union) {
+            return Ok(rewrite);
         }
-        match self.verdict(&union).await {
+        let answer = self.screen(&union).await;
+        match &answer.verdict {
             WriteVerdict::Pass => {
-                self.boundary.pass(&union);
-                Ok(())
+                let rewrite = Rewrite::of(&union, &answer);
+                self.boundary.pass(&union, &rewrite);
+                Ok(rewrite)
             }
             WriteVerdict::Refuse { reason } => {
-                // Asked only to name the write refused: a write passing here passed alone, which
-                // says nothing of the union, so nothing of it is kept as passed.
                 for (destination, item, exposure) in writes {
-                    match self.verdict(exposure).await {
-                        WriteVerdict::Pass => {}
-                        WriteVerdict::Refuse { reason } => {
-                            return Err(EngineError::BoundaryRefused {
-                                item: item.clone(),
-                                destination: destination.name().to_string(),
-                                reason,
-                            });
-                        }
-                        WriteVerdict::Unavailable { reason } => {
-                            return Err(EngineError::BoundaryUnavailable {
-                                item: item.clone(),
-                                destination: destination.name().to_string(),
-                                reason,
-                            });
-                        }
+                    let exposure = located(destination, item, exposure.clone());
+                    let alone = self.screen(&exposure).await;
+                    if alone.verdict != WriteVerdict::Pass {
+                        return Err(refusal(destination, item, &exposure, &alone));
                     }
                 }
-                // Each passed alone: the union is still refused, and it is the first write's.
-                Err(EngineError::BoundaryRefused {
-                    item: first_item.clone(),
-                    destination: first.name().to_string(),
-                    reason,
-                })
+                let exposure = located(first, first_item, Exposure::default());
+                Err(refusal(
+                    first,
+                    first_item,
+                    &exposure,
+                    &SanitizeVerdict {
+                        verdict: WriteVerdict::Refuse {
+                            reason: reason.clone(),
+                        },
+                        locators: Vec::new(),
+                        ..answer.clone()
+                    },
+                ))
             }
-            WriteVerdict::Unavailable { reason } => Err(EngineError::BoundaryUnavailable {
-                item: first_item.clone(),
-                destination: first.name().to_string(),
-                reason,
-            }),
+            WriteVerdict::Unavailable { .. } => Err(refusal(
+                first,
+                first_item,
+                &located(first, first_item, Exposure::default()),
+                &answer,
+            )),
         }
     }
 
@@ -1259,53 +2016,38 @@ impl Engine {
         }
     }
 
-    /// Put one write to a destination not verified private to the caller's check.
+    /// Put one write to a destination not verified private to the caller's policy, answering
+    /// what each value it exposes is written as.
     ///
-    /// A write every value of whose exposure a check already passed in this command is not put
-    /// to it again.
+    /// A write every value of whose exposure a sanitisation already passed in this command is
+    /// not sent again.
     pub(crate) async fn check(
         &self,
         destination: &ResolvedSource,
         item: &str,
         exposure: &Exposure,
-    ) -> Result<(), EngineError> {
-        if self.boundary.passed(exposure) {
-            return Ok(());
+    ) -> Result<Rewrite, EngineError> {
+        let exposure = located(destination, item, exposure.clone());
+        if let Some(rewrite) = self.boundary.passed(&exposure) {
+            return Ok(rewrite);
         }
-        match self.verdict(exposure).await {
-            WriteVerdict::Pass => {
-                self.boundary.pass(exposure);
-                Ok(())
-            }
-            WriteVerdict::Refuse { reason } => Err(EngineError::BoundaryRefused {
-                item: item.to_owned(),
-                destination: destination.name().to_string(),
-                reason,
-            }),
-            WriteVerdict::Unavailable { reason } => Err(EngineError::BoundaryUnavailable {
-                item: item.to_owned(),
-                destination: destination.name().to_string(),
-                reason,
-            }),
+        let answer = self.screen(&exposure).await;
+        if answer.verdict == WriteVerdict::Pass {
+            let rewrite = Rewrite::of(&exposure, &answer);
+            self.boundary.pass(&exposure, &rewrite);
+            return Ok(rewrite);
         }
+        Err(refusal(destination, item, &exposure, &answer))
     }
 
-    /// What the caller's check says of `exposure`, a check that could not be asked unavailable.
-    async fn verdict(&self, exposure: &Exposure) -> WriteVerdict {
-        let input = PublicWriteInput {
-            destination: RepositoryVisibility::Public,
-            text: exposure.text.clone(),
-            paths: exposure.paths.clone(),
-            metadata: exposure.metadata.clone(),
-            scope: self.boundary.scope.clone(),
-        };
+    /// What the caller's policy says of `exposure`, one it could not be asked unavailable.
+    pub(crate) async fn screen(&self, exposure: &Exposure) -> SanitizeVerdict {
+        let input = exposure.input(self.boundary.scope.clone(), &self.boundary.replacements);
         self.boundary
             .policy
-            .check_public_write(&input)
+            .sanitize_public_write(&input)
             .await
-            .unwrap_or_else(|error| WriteVerdict::Unavailable {
-                reason: error.message,
-            })
+            .unwrap_or_else(|error| unavailable(error.message))
     }
 
     /// `classification`, held against the project `project` of `source` it is filed under —
@@ -1407,13 +2149,14 @@ impl Engine {
         id: &NativeId,
         held: Held,
         exposure: &Exposure,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Rewrite, EngineError> {
         let target = WriteTarget::Existing(id);
         if self.declared(destination.name()) == SourceVisibility::Private {
-            return self.verify_private(destination, item, &target).await;
+            self.verify_private(destination, item, &target).await?;
+            return Ok(Rewrite::default());
         }
         if !self.boundary.active {
-            return Ok(());
+            return Ok(Rewrite::default());
         }
         let stored = match held {
             Held::Task => destination.source().get_task(id).await.map(|task| {
@@ -1451,14 +2194,14 @@ impl Engine {
         held: Held,
         stored: (Classification, Vec<Repository>, Option<NativeId>),
         exposure: &Exposure,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Rewrite, EngineError> {
         if self.declared(destination.name()) == SourceVisibility::Private {
-            return self
-                .verify_private(destination, item, &WriteTarget::Existing(id))
-                .await;
+            self.verify_private(destination, item, &WriteTarget::Existing(id))
+                .await?;
+            return Ok(Rewrite::default());
         }
         if !self.boundary.active {
-            return Ok(());
+            return Ok(Rewrite::default());
         }
         self.admit_stored(destination, item, id, held, Some(stored), exposure)
             .await
@@ -1472,11 +2215,11 @@ impl Engine {
         held: Held,
         stored: Option<(Classification, Vec<Repository>, Option<NativeId>)>,
         exposure: &Exposure,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Rewrite, EngineError> {
         // An item the source does not hold is the write's own refusal to make, in its own
         // words; nothing of it can be private.
         let Some((declared, repositories, filed)) = stored else {
-            return Ok(());
+            return Ok(Rewrite::default());
         };
         // What it inherits tightens it too: a document's project, and a project's own tasks
         // and documents. A task inherits nothing: it is as private as its own record says.
@@ -1521,7 +2264,7 @@ impl Engine {
         declared: Classification,
         repositories: &[Repository],
         exposure: &Exposure,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Rewrite, EngineError> {
         let classification = self.classify(declared, repositories).await;
         self.admit(
             destination,
@@ -1533,6 +2276,71 @@ impl Engine {
             },
         )
         .await
+    }
+}
+
+/// `exposure`, with the identifiers a refusal of it prints: the destination's name, and the
+/// item's qualified id when it is one of that destination's — a copy names its item by its
+/// source's id, which the write does not put anywhere.
+fn located(destination: &ResolvedSource, item: &str, exposure: Exposure) -> Exposure {
+    let exposure = exposure.locate(LocatorKind::Source, destination.name().as_str());
+    match item.parse::<crate::GlobalId>() {
+        Ok(id) if &id.source == destination.name() => exposure.locate(LocatorKind::Item, item),
+        _ => exposure,
+    }
+}
+
+/// The refusal of a write `answer` did not pass, naming its item and destination only as the
+/// policy screened them: verbatim where they passed, redacted where they carry a term or the
+/// policy could not decide.
+fn refusal(
+    destination: &ResolvedSource,
+    item: &str,
+    exposure: &Exposure,
+    answer: &SanitizeVerdict,
+) -> EngineError {
+    let screened = if answer.locators.len() == exposure.locators.len() {
+        answer.locators.clone()
+    } else {
+        redacted(&exposure.locators)
+    };
+    let shown = |kind: LocatorKind, value: &str| {
+        exposure
+            .locators
+            .iter()
+            .position(|locator| locator.kind == kind && locator.value == value)
+            .and_then(|index| screened.get(index))
+            .map(ToString::to_string)
+    };
+    let destination_shown = shown(LocatorKind::Source, destination.name().as_str())
+        .unwrap_or_else(|| destination.name().to_string());
+    let item_shown = shown(LocatorKind::Item, item).unwrap_or_else(|| item.to_owned());
+    // Only a policy that says which entry it stopped at can say an identifier carries a term:
+    // the default body redacts every locator of a refusal, naming none.
+    let identifier = answer
+        .unfixed
+        .iter()
+        .any(|unfixed| unfixed.surface == SanitizeSurface::Locators);
+    match &answer.verdict {
+        WriteVerdict::Unavailable { reason } => EngineError::BoundaryUnavailable {
+            item: item_shown,
+            destination: destination_shown,
+            reason: reason.clone(),
+        },
+        WriteVerdict::Refuse { reason } => EngineError::BoundaryRefused {
+            item: item_shown,
+            destination: destination_shown,
+            reason: if identifier {
+                privateterms::LOCATOR_UNFIXABLE_REASON.to_owned()
+            } else {
+                reason.clone()
+            },
+        },
+        WriteVerdict::Pass => EngineError::BoundaryUnavailable {
+            item: item_shown,
+            destination: destination_shown,
+            reason: "the check passed nothing it was asked about".to_owned(),
+        },
     }
 }
 

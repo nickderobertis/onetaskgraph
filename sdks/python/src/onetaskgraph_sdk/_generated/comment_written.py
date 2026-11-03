@@ -10,19 +10,36 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, BaseModel, Field, JsonValue, RootModel
 
 
-class BudgetSpent(BaseModel):
-    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
-    budget: Annotated[
+class NativeId(RootModel[str]):
+    root: Annotated[
         str,
-        Field(description="The budget, as the source names it — `graphql`, `rest`."),
-    ]
-    lower_bound: Annotated[
-        bool,
         Field(
-            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
+            description="A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true."
         ),
     ]
-    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
+
+
+class CommentOrigin(BaseModel):
+    task: Annotated[
+        str,
+        Field(
+            description="The task the comment is on at its origin, qualified: `<source>:<native task id>`."
+        ),
+    ]
+    id: Annotated[NativeId, Field(description="The comment's own id at its origin.")]
+    author: Annotated[
+        str | None,
+        Field(description="Who wrote it there, in that source's spelling of a person."),
+    ] = None
+    created_at: Annotated[
+        AwareDatetime | None, Field(description="When the origin says it was written.")
+    ] = None
+    updated_at: Annotated[
+        AwareDatetime | None, Field(description="When the origin says it last changed.")
+    ] = None
+    url: Annotated[str | None, Field(description="Where a person can open it at its origin.")] = (
+        None
+    )
 
 
 class GlobalId(RootModel[str]):
@@ -34,36 +51,60 @@ class GlobalId(RootModel[str]):
     ]
 
 
-class NativeId(RootModel[str]):
-    root: Annotated[
+class WritePartLanded(BaseModel):
+    part: Annotated[
         str,
         Field(
-            description="A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true."
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
         ),
     ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    outcome: Literal["landed"]
 
 
-class Priority(StrEnum):
-    PriorityNone = "none"
-    PriorityUrgent = "urgent"
-    PriorityHigh = "high"
-    PriorityMedium = "medium"
-    PriorityLow = "low"
-
-
-class Spent(BaseModel):
-    budgets: Annotated[
-        list[BudgetSpent],
+class WritePartRejected(BaseModel):
+    part: Annotated[
+        str,
         Field(
-            description="What those requests spent, one entry per budget and unit, ordered by budget name."
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
         ),
     ]
-    requests: Annotated[
-        int,
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    error: Annotated[str, Field(description="What the backend said.")]
+    stale: Annotated[
+        bool,
         Field(
-            description="How many HTTP requests those sources sent for this command.",
-            ge=0,
+            description="Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read."
         ),
+    ] = False
+    outcome: Literal["rejected"]
+
+
+class WritePartUnknown(BaseModel):
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    error: Annotated[str, Field(description="What went wrong.")]
+    outcome: Literal["unknown"]
+
+
+class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown]):
+    root: Annotated[
+        WritePartLanded | WritePartRejected | WritePartUnknown,
+        Field(description="One mutation of an expected write."),
     ]
 
 
@@ -78,6 +119,14 @@ class StatusCategory(StrEnum):
     StatusCategoryUnknown = "unknown"
 
 
+class Priority(StrEnum):
+    PriorityNone = "none"
+    PriorityUrgent = "urgent"
+    PriorityHigh = "high"
+    PriorityMedium = "medium"
+    PriorityLow = "low"
+
+
 class WriteFallback(BaseModel):
     read: Annotated[bool, Field(description="Always `true`: the write made one read.")]
     reason: Annotated[
@@ -85,84 +134,19 @@ class WriteFallback(BaseModel):
     ]
 
 
-class WritePartLanded(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
-    part: Annotated[
+class BudgetSpent(BaseModel):
+    budget: Annotated[
         str,
-        Field(
-            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
-        ),
+        Field(description="The budget, as the source names it — `graphql`, `rest`."),
     ]
-    outcome: Literal["landed"]
-
-
-class WritePartRejected(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
-    part: Annotated[
-        str,
-        Field(
-            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
-        ),
-    ]
-    error: Annotated[str, Field(description="What the backend said.")]
-    outcome: Literal["rejected"]
-    stale: Annotated[
+    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
+    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
+    lower_bound: Annotated[
         bool,
         Field(
-            description="Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read."
-        ),
-    ] = False
-
-
-class WritePartUnknown(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
-    part: Annotated[
-        str,
-        Field(
-            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
         ),
     ]
-    error: Annotated[str, Field(description="What went wrong.")]
-    outcome: Literal["unknown"]
-
-
-class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown]):
-    root: Annotated[
-        WritePartLanded | WritePartRejected | WritePartUnknown,
-        Field(description="One mutation of an expected write."),
-    ]
-
-
-class CommentOrigin(BaseModel):
-    author: Annotated[
-        str | None,
-        Field(description="Who wrote it there, in that source's spelling of a person."),
-    ] = None
-    created_at: Annotated[
-        AwareDatetime | None, Field(description="When the origin says it was written.")
-    ] = None
-    id: Annotated[NativeId, Field(description="The comment's own id at its origin.")]
-    task: Annotated[
-        str,
-        Field(
-            description="The task the comment is on at its origin, qualified: `<source>:<native task id>`."
-        ),
-    ]
-    updated_at: Annotated[
-        AwareDatetime | None, Field(description="When the origin says it last changed.")
-    ] = None
-    url: Annotated[str | None, Field(description="Where a person can open it at its origin.")] = (
-        None
-    )
 
 
 class Status(BaseModel):
@@ -173,17 +157,33 @@ class Status(BaseModel):
     name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
+class Spent(BaseModel):
+    requests: Annotated[
+        int,
+        Field(
+            description="How many HTTP requests those sources sent for this command.",
+            ge=0,
+        ),
+    ]
+    budgets: Annotated[
+        list[BudgetSpent],
+        Field(
+            description="What those requests spent, one entry per budget and unit, ordered by budget name."
+        ),
+    ]
+
+
 class WriteResult(BaseModel):
+    version: Annotated[
+        str | None,
+        Field(
+            description="The item's version after the write, where the write's responses determine it."
+        ),
+    ] = None
     parts: Annotated[
         list[WritePart] | None,
         Field(
             description="One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`."
-        ),
-    ] = None
-    priority: Annotated[
-        Priority | None,
-        Field(
-            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
         ),
     ] = None
     status: Annotated[
@@ -192,18 +192,30 @@ class WriteResult(BaseModel):
             description="The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
         ),
     ] = None
-    version: Annotated[
-        str | None,
+    priority: Annotated[
+        Priority | None,
         Field(
-            description="The item's version after the write, where the write's responses determine it."
+            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
         ),
     ] = None
 
 
 class CommentWritten(BaseModel):
+    id: Annotated[
+        NativeId,
+        Field(
+            description="The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
+        ),
+    ]
     author: Annotated[
         str | None,
         Field(description="Who wrote it, in the source's own spelling of a person."),
+    ] = None
+    created_at: Annotated[
+        AwareDatetime | None, Field(description="When the source says it was written.")
+    ] = None
+    updated_at: Annotated[
+        AwareDatetime | None, Field(description="When the source says it last changed.")
     ] = None
     body: Annotated[
         str,
@@ -211,31 +223,17 @@ class CommentWritten(BaseModel):
             description="What it says, byte for byte as it was written — a trailing newline included."
         ),
     ]
-    created_at: Annotated[
-        AwareDatetime | None, Field(description="When the source says it was written.")
-    ] = None
-    fallback: Annotated[
-        WriteFallback | None,
-        Field(
-            description="That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
-        ),
-    ] = None
-    id: Annotated[
-        NativeId,
-        Field(
-            description="The comment's own id, exactly as its source issued it.\n\nOpaque, as every [`NativeId`] is, and never qualified: a comment is addressed through\nthe qualified id of the task it is on, so its own id needs no source of its own."
-        ),
-    ]
-    item: Annotated[
-        GlobalId | None,
-        Field(
-            description="The qualified id of the task the comment was added to — present on `task comment add`'s\nanswer, so a caller records what it commented on from the answer alone."
-        ),
-    ] = None
+    url: Annotated[str | None, Field(description="Where a person can open it.")] = None
     origin: Annotated[
         CommentOrigin | None,
         Field(
             description="The comment this one is a copy of, at its origin — present only on a comment a copy\nwrote, and absent on every comment a person wrote where it is.\n\nOn the second hop of a chained copy it still names the *first* origin, never the\nsource the copy read it from. Left out of the wire when absent, so a reader written\nbefore it existed reads exactly what it read before."
+        ),
+    ] = None
+    item: Annotated[
+        GlobalId | None,
+        Field(
+            description="The qualified id of the task the comment was added to — present on `task comment add`'s\nanswer, so a caller records what it commented on from the answer alone."
         ),
     ] = None
     result: Annotated[
@@ -244,13 +242,15 @@ class CommentWritten(BaseModel):
             description="What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
         ),
     ] = None
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
+        ),
+    ] = None
     spent: Annotated[
         Spent | None,
         Field(
             description="What an expected write spent at the sources that meter their own requests, its\nfallback read included — absent for a write made without `--expect`."
         ),
     ] = None
-    updated_at: Annotated[
-        AwareDatetime | None, Field(description="When the source says it last changed.")
-    ] = None
-    url: Annotated[str | None, Field(description="Where a person can open it.")] = None

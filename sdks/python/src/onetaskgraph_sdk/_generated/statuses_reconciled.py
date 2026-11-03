@@ -10,11 +10,6 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, RootModel
 
 
-class FailureClass(StrEnum):
-    FailureClassRefused = "refused"
-    FailureClassTransient = "transient"
-
-
 class GlobalId(RootModel[str]):
     root: Annotated[
         str,
@@ -29,6 +24,22 @@ class ItemKind(StrEnum):
     ItemKindProject = "project"
 
 
+class StatusCategory(StrEnum):
+    StatusCategoryDraft = "draft"
+    StatusCategoryBacklog = "backlog"
+    StatusCategoryTodo = "todo"
+    StatusCategoryQueued = "queued"
+    StatusCategoryInProgress = "in-progress"
+    StatusCategoryDone = "done"
+    StatusCategoryCancelled = "cancelled"
+    StatusCategoryUnknown = "unknown"
+
+
+class FailureClass(StrEnum):
+    FailureClassRefused = "refused"
+    FailureClassTransient = "transient"
+
+
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -39,15 +50,12 @@ class SourceName(RootModel[str]):
     ]
 
 
-class StatusCategory(StrEnum):
-    StatusCategoryDraft = "draft"
-    StatusCategoryBacklog = "backlog"
-    StatusCategoryTodo = "todo"
-    StatusCategoryQueued = "queued"
-    StatusCategoryInProgress = "in-progress"
-    StatusCategoryDone = "done"
-    StatusCategoryCancelled = "cancelled"
-    StatusCategoryUnknown = "unknown"
+class Status(BaseModel):
+    category: Annotated[
+        StatusCategory,
+        Field(description="The normalised value filters compare against."),
+    ]
+    name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
 class Failure(BaseModel):
@@ -64,6 +72,10 @@ class Failure(BaseModel):
             description="What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`."
         ),
     ]
+    source: Annotated[
+        SourceName | None,
+        Field(description="The configured source the failure came from, or `null` when none did."),
+    ]
     message: Annotated[
         str,
         Field(
@@ -77,21 +89,16 @@ class Failure(BaseModel):
             ge=0,
         ),
     ]
-    source: Annotated[
-        SourceName | None,
-        Field(description="The configured source the failure came from, or `null` when none did."),
-    ]
-
-
-class Status(BaseModel):
-    category: Annotated[
-        StatusCategory,
-        Field(description="The normalised value filters compare against."),
-    ]
-    name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
 class StatusReconciledUpdated(BaseModel):
+    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
+    kind: Annotated[
+        ItemKind,
+        Field(
+            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
+        ),
+    ]
     from_: Annotated[
         str | None,
         Field(
@@ -99,13 +106,6 @@ class StatusReconciledUpdated(BaseModel):
             description="The option its card sat at, or `null` for a card with none.",
         ),
     ] = None
-    kind: Annotated[
-        ItemKind,
-        Field(
-            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
-        ),
-    ]
-    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
     to: Annotated[
         Status,
         Field(description="The status its closure implies, which its card was moved to."),
@@ -114,6 +114,13 @@ class StatusReconciledUpdated(BaseModel):
 
 
 class StatusReconciledWouldUpdate(BaseModel):
+    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
+    kind: Annotated[
+        ItemKind,
+        Field(
+            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
+        ),
+    ]
     from_: Annotated[
         str | None,
         Field(
@@ -121,13 +128,6 @@ class StatusReconciledWouldUpdate(BaseModel):
             description="The option its card sat at, or `null` for a card with none.",
         ),
     ] = None
-    kind: Annotated[
-        ItemKind,
-        Field(
-            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
-        ),
-    ]
-    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
     to: Annotated[
         Status,
         Field(description="The status its closure implies, which its card was moved to."),
@@ -136,6 +136,13 @@ class StatusReconciledWouldUpdate(BaseModel):
 
 
 class StatusReconciledFailed(BaseModel):
+    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
+    kind: Annotated[
+        ItemKind,
+        Field(
+            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
+        ),
+    ]
     from_: Annotated[
         str | None,
         Field(
@@ -143,22 +150,15 @@ class StatusReconciledFailed(BaseModel):
             description="The option its card sat at, or `null` for a card with none.",
         ),
     ] = None
-    kind: Annotated[
-        ItemKind,
-        Field(
-            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
-        ),
-    ]
-    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
     to: Annotated[
         Status,
         Field(description="The status its closure implies, which its card was moved to."),
     ]
-    action: Literal["failed"]
     error: Annotated[
         Failure,
         Field(description="Why — the failure object a failure document carries."),
     ]
+    action: Literal["failed"]
 
 
 class StatusReconciled(

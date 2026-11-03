@@ -10,48 +10,53 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, RootModel
 
 
-class FailureClass(StrEnum):
-    FailureClassRefused = "refused"
-    FailureClassTransient = "transient"
+class SourceName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
+        ),
+    ]
 
 
 class SourceErrorConfig(BaseModel):
-    kind: Literal["config"]
     message: Annotated[str, Field(description="What is wrong, in a form a user can act on.")]
+    kind: Literal["config"]
 
 
 class SourceErrorAuth(BaseModel):
-    kind: Literal["auth"]
     message: Annotated[str, Field(description="What failed. Never contains the credential itself.")]
+    kind: Literal["auth"]
 
 
 class SourceErrorRefused(BaseModel):
-    kind: Literal["refused"]
     message: Annotated[str, Field(description="The source's own reason.")]
+    kind: Literal["refused"]
 
 
 class SourceErrorRateLimited(BaseModel):
-    kind: Literal["rate-limited"]
+    retry_after_seconds: Annotated[
+        int | None,
+        Field(description="How long the source asked us to wait, when it said.", ge=0),
+    ] = None
     message: Annotated[
         str | None,
         Field(
             description="What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential."
         ),
     ] = None
-    retry_after_seconds: Annotated[
-        int | None,
-        Field(description="How long the source asked us to wait, when it said.", ge=0),
-    ] = None
+    kind: Literal["rate-limited"]
 
 
 class SourceErrorUnavailable(BaseModel):
-    kind: Literal["unavailable"]
     message: Annotated[str, Field(description="What went wrong reaching it.")]
+    kind: Literal["unavailable"]
 
 
 class SourceErrorMalformed(BaseModel):
-    kind: Literal["malformed"]
     message: Annotated[str, Field(description="What could not be represented.")]
+    kind: Literal["malformed"]
 
 
 class SourceError(
@@ -77,17 +82,14 @@ class SourceError(
     ]
 
 
-class SourceName(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="The name a configuration document gives one configured source.",
-            pattern="^[a-z0-9][a-z0-9-]*$",
-        ),
-    ]
+class FailureClass(StrEnum):
+    FailureClassRefused = "refused"
+    FailureClassTransient = "transient"
 
 
 class SourceFailure(BaseModel):
+    source: Annotated[SourceName, Field(description="The source that failed.")]
+    error: Annotated[SourceError, Field(description="Why.")]
     class_: Annotated[
         FailureClass,
         Field(
@@ -95,5 +97,3 @@ class SourceFailure(BaseModel):
             description="Whether repeating the request unchanged could change this source's answer.",
         ),
     ]
-    error: Annotated[SourceError, Field(description="Why.")]
-    source: Annotated[SourceName, Field(description="The source that failed.")]
