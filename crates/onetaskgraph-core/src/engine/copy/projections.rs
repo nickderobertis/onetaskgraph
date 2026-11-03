@@ -1491,7 +1491,45 @@ impl Engine {
             });
         }
         let id = held.as_ref().map_or(opaque, |(view, _)| view.id.clone());
-        let view = task.view(id.clone(), Some(landing.project.clone()));
+        let mut view = task.view(id.clone(), Some(landing.project.clone()));
+        // A view's links to its own headings, in the destination's section form: a view holds
+        // no other link to a record, which the preflight refused.
+        // llmlint: ignore-block[changed_behavior_has_e2e] A public view's section links are held by `a_views_link_to_its_own_heading_lands_in_the_boards_section_form`, `a_new_linear_views_link_to_its_own_heading_names_the_id_its_create_was_answered_with` and the two rollback journeys beside them in `crates/onetaskgraph-e2e/tests/e2e/boundary/projections.rs`; the projection fixture plans are authored in a folder of Markdown, and a plan held in a tracker reaches a view through the same rendering, whose tracker-form reading the section-link matrix journeys in `section_links.rs` hold for every source kind.
+        let mut view_links = None;
+        if let Some(content) = view.content.clone() {
+            let from = crate::section_links::SectionForm::for_kind(
+                self.readable(&task.source.source)?.kind(),
+            );
+            let links = super::sections::BodyLinks::new(
+                content.clone(),
+                from,
+                crate::section_links::SectionForm::for_kind(destination.kind()),
+                Level::Task,
+                // Where the canonical task is, so a link to its own heading spelled with its own
+                // address — as a view copied out of a tracker holds one — is read as one. A local
+                // path in a view is refused before this, by the preflight.
+                super::located(task.task.location.as_ref()),
+                self.readable(&task.source.source)?
+                    .source()
+                    .stored_headings(
+                        onetaskgraph_plugin_api::MetadataRecord::Task,
+                        &task.source.native,
+                    ),
+                Vec::new(),
+            );
+            if links.matters() {
+                let own = held.as_ref().and_then(|(held, _)| {
+                    held.location
+                        .as_ref()
+                        .and_then(|location| super::located(Some(location)))
+                        .map(|location| (held.id.clone(), location))
+                });
+                let knows = ViewKnows { destination, own };
+                view.content = Some(links.render(&knows, super::sections::Pass::Final).content);
+                view_links = Some(links);
+            }
+        }
+        // llmlint: ignore-end[changed_behavior_has_e2e]
         let edges: Vec<DependencyEdge> = task
             .depends_on
             .iter()
@@ -1567,6 +1605,8 @@ impl Engine {
             item: view,
             depends_on: edges,
         };
+        // What an asset write said it stored, from which the assets it uploaded are read.
+        let mut stored = None;
         let landed = if !carrying {
             destination.source().write_task(&write).await
         } else {
@@ -1578,7 +1618,10 @@ impl Engine {
                     &assets::write_of(task.assets.clone(), recorded),
                 )
                 .await
-                .map(|written| written.id)
+                .map(|written| {
+                    stored = written.content;
+                    written.id
+                })
         }
         .and_then(|landed| answered_id(landed, "write_task"))
         .map_err(|error| match target {
@@ -1591,6 +1634,63 @@ impl Engine {
                 kind: Level::Task,
                 id: landed.clone(),
             });
+            // A view's links to its own headings name its own address and, on Linear, the ids
+            // its create was answered with, so a new view is written once more with them: an
+            // update of what this copy created, which the create's undo takes back with it.
+            if let Some(links) = &view_links {
+                let own = super::located(
+                    destination
+                        .source()
+                        .written_location(onetaskgraph_plugin_api::MetadataRecord::Task, &landed)
+                        .as_ref(),
+                )
+                .map(|location| (landed.clone(), location));
+                let knows = ViewKnows { destination, own };
+                let finished = links.render(&knows, super::sections::Pass::Final).content;
+                if write.item.content.as_deref() != Some(finished.as_str()) {
+                    let mut item = write.item.clone();
+                    item.content = Some(finished);
+                    let again = ItemWrite {
+                        target: Some(landed.clone()),
+                        item,
+                        depends_on: write.depends_on.clone(),
+                    };
+                    let finished = if carrying {
+                        // Its assets go with it, each the create uploaded reused rather than sent
+                        // again.
+                        let uploaded = super::super::stored::served(
+                            write.item.content.as_deref().unwrap_or_default(),
+                            stored.as_deref().unwrap_or_default(),
+                            &task.assets,
+                        );
+                        destination
+                            .source()
+                            .write_task_with_assets(
+                                &again,
+                                None,
+                                &assets::write_of(task.assets.clone(), uploaded),
+                            )
+                            .await
+                            .map(|written| written.id)
+                    } else {
+                        destination.source().write_task(&again).await
+                    }
+                    .and_then(|answered| answered_id(answered, "write_task"))
+                    .map_err(|error| refused(destination, error))?;
+                    // An update of the view it names, and an answer naming another is one this copy
+                    // cannot say what was written to.
+                    if finished != landed {
+                        return Err(refused(
+                            destination,
+                            SourceError::Malformed {
+                                message: format!(
+                                    "the write finishing view {landed} answered with the item {finished}"
+                                ),
+                            },
+                        ));
+                    }
+                }
+            }
         }
         Ok(landed)
     }
@@ -1749,6 +1849,35 @@ impl Engine {
             .await
             .map_err(|error| not_mirrored(view.clone(), error.to_string()))?;
         Ok(Some(projection))
+    }
+}
+
+/// What a public view's rendering knows: the view's own counterpart, when it is updated, and
+/// the heading ids the destination's read of it answered.
+struct ViewKnows<'a> {
+    /// The public destination.
+    destination: &'a ResolvedSource,
+    /// The view already there, and where its destination says it is.
+    own: Option<(NativeId, String)>,
+}
+
+impl super::sections::Knows for ViewKnows<'_> {
+    fn landed(&self, _referent: &super::sections::Linked) -> Option<(NativeId, String)> {
+        None
+    }
+
+    fn stored(
+        &self,
+        level: Level,
+        id: &NativeId,
+    ) -> Option<Vec<onetaskgraph_plugin_api::StoredHeading>> {
+        self.destination
+            .source()
+            .stored_headings(level.record(), id)
+    }
+
+    fn own(&self) -> Option<(NativeId, String)> {
+        self.own.clone()
     }
 }
 

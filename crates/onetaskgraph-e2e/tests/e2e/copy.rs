@@ -4130,17 +4130,33 @@ fn a_reference_carrying_a_fragment_lands_on_the_copied_tasks_destination_locatio
             "{authored}"
         );
         // The copy sends the content as composed, predicting nothing of what a destination
-        // stores, and this loopback Linear stores it as it is sent.
-        let expected = authored.replace(&here, &there);
+        // stores, and this loopback Linear stores it as it is sent. The section link is in the
+        // destination's own section form (README "Section links"): a folder of Markdown's path
+        // relative to the linking file, GitHub's `user-content-` anchor, Linear's heading link
+        // naming the id its editor stored the heading under.
+        let landed_body = body(&sandbox, landed);
+        let link = match plugin {
+            "local-md" => "../tasks/A.md#budgets".to_owned(),
+            "github-projects" => format!("{there}#user-content-budgets"),
+            _ => {
+                let start = landed_body
+                    .find(&format!("[t1]({there}#heading-budgets-"))
+                    .unwrap_or_else(|| panic!("a Linear heading link: {landed_body}"));
+                let id8 = &landed_body[start..]
+                    .split_once("#heading-budgets-")
+                    .unwrap()
+                    .1[..8];
+                assert!(id8.chars().all(|c| c.is_ascii_hexdigit()), "{landed_body}");
+                format!("{there}#heading-budgets-{id8}")
+            }
+        };
+        let expected = authored
+            .replace(&format!("{here}#budgets"), &link)
+            .replace(&here, &there);
         assert_eq!(
-            body(&sandbox, landed),
-            expected,
-            "{plugin}: the link names the destination's task with its fragment kept, and \
-             nothing else moved"
-        );
-        assert!(
-            body(&sandbox, landed).contains(&format!("[t1]({there}#budgets)")),
-            "{plugin}"
+            landed_body, expected,
+            "{plugin}: the link names the destination's task, its heading in the destination's \
+             form, and nothing else moved"
         );
     }
 }

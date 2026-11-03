@@ -80,7 +80,7 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `MetadataKey`, `MetadataRecord` and `WriteGuard`; the targeted-update types `TaskUpdate`,
   `TaskUpdateOutcome` and `UpdatedField`; the
   comment types `Comment`, `CommentBody`, `NewComment`, `CommentOrigin`, `CommentCopy` and
-  `TaskDetailRead`; the
+  `TaskDetailRead`; the section types `StoredHeading`, `BodyMarkup` and `SharedBodyMarkup`; the
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
@@ -1417,6 +1417,33 @@ them do; this is the inventory of what is owed, not a status board.
 132. Every task copy and task write verb sends the board and Linear exactly the requests the v0.12.13
      binary sent for the same commands, but the one relist a board create from a hosted source
      owes.
+133. A section link copied from a folder of Markdown — by a path relative to the linking file or
+     by the referent's absolute location, and to a heading of the same record — lands in a
+     folder of Markdown, on a GitHub board and in Linear in that destination's form: the
+     relative path and `#<slug>`; `https://www.github.com/…/issues/<n>#user-content-<slug>`
+     against the `<a id>` anchor written before every heading, which a read strips; and
+     `<record URL>#heading-<slug>-<id8>` naming the id the heading is stored under, the two
+     `## Budgets` told apart. A fragment naming no heading is carried and counted, and a
+     repeat copy writes nothing.
+134. Every ordered pair of local-md, github-projects and linear, same kind included, writes the
+     section links its source holds in that source's own form in its own; the chain local-md →
+     github → linear → local-md ends with every link resolving to the authored record's
+     counterpart with a byte-equal `#<slug>`; a canonical-host GitHub link and a Linear link
+     with a wrong slug and the right id are read by what they name, and one outside the
+     project is left; and every repeat writes nothing.
+135. Each heading of the captured `TES2` editor states is linked by the fragment its fixture
+     states; Linear's heading ids cost no request and no read after a write, as many requests
+     as the record-URL form; a link to a record written later, or to the same record, is
+     finished in the follow-up the copy already sends or in one counted update; a later copy
+     reads each target once; and a heading the stored state lacks, or a write answered with no
+     state, leaves the record's URL alone, counted unaddressable.
+136. A carried comment's section links, and a public view's links to its own headings, land in
+     the destination's form; a rewritten task's provenance is restamped and its answers still
+     regenerate the content as authored.
+137. The credentialed live lane copies such a project to board #1's scratch repository and to
+     Linear team `TES2`, and onward from the board to a second `TES2` project, and holds the
+     stored bodies and editor-state ids to those forms; in a real Chromium each GitHub section
+     link lands on its heading opened directly and clicked inside the copied issue.
 
 ## The public boundary
 
@@ -1448,21 +1475,33 @@ store opts in.
   verified once per instance, by the manager's ruling, because a Linear workspace cannot become
   readable by anybody but its members.
 
-## What a copied document's references are pointed at
+## What a copied body's references are pointed at
 
-<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys numbered 37 above, which the sentence below summarises rather than restates. -->
-Only a **document** is rewritten, and only its `content` — together with the
-`body_digest` of its `onetaskgraph.template` entry when the rewrite changed a rendering that
-still matched it, so that entry stays true of what landed (the stored answers and
-`answers_digest` still name the pre-copy locations, so the copy is not a fresh rendering of
-them).
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys numbered 37 and 133 to 137 below, which the sentences here summarise rather than restate; the section forms themselves are stated once, in `section_links` and README "Section links". -->
+Every body a copy writes is rewritten — a task's, a project's and a document's `content`, and
+each comment a `--comments` copy carries — together with the `body_digest` of its
+`onetaskgraph.template` entry when the rewrite changed a rendering that still matched it, so
+that entry stays true of what landed (the stored answers and `answers_digest` still name the
+pre-copy locations, so the copy is not a fresh rendering of them). A public view has only its
+links to its own headings rewritten; it may hold no other link to a record.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 A reference is a literal
 occurrence in it of the exact location string a source reports for a related record — the
-`String` inside `Location::Path` or `Location::Url` — and it becomes the location string
-the *destination* reports for that record's counterpart. A reference may carry a fragment
-— a `#` straight after the location, as in `[budgets](<location>#budgets)` — and the
-fragment is carried through the rewrite unchanged, appended to the destination's location;
+`String` inside `Location::Path` or `Location::Url` — or, read in a folder of Markdown, a
+Markdown link to a path relative to the body's own file that resolves to one; and it becomes the
+location string the *destination* reports for that record's counterpart. A reference may carry
+a fragment — a `#` straight after the location, as in `[budgets](<location>#budgets)`. **A
+fragment naming a heading is a section link, and is written in the destination's own section
+form**: one `SectionForm` entry per destination kind in `onetaskgraph-core`'s `section_links`
+decides every spelling, every parse back of a tracker's own form, and GitHub's anchor markup,
+which the engine hands the GitHub plugin through `TaskSource::attach_body_markup` because no
+plugin may depend on the engine. A heading travels as its text and its position among headings
+of that text, never as a slug. Linear's form names the id its editor stored the heading under,
+read off each write's own answer through `TaskSource::stored_headings`; so a copy writes each
+record a body links to before the body, and finishes a link it still cannot address in the
+follow-up it already sends or in one update its report counts. A fragment naming no heading —
+or bound for a destination kind with no form, a stdio plugin among them — is carried through
+the rewrite unchanged, appended to the destination's location;
 a location followed directly by any other character that can continue a path or a link, a
 full stop included, is still not recognised at all. Both ends come from the plugins'
 own reported `Location`; nothing composes an address from a name, an id or a root. It is

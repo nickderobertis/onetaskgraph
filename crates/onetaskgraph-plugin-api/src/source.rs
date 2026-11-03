@@ -613,6 +613,32 @@ pub trait TaskSource: Send + Sync {
         None
     }
 
+    /// The headings of the `record` `id` as this source's backend stores them — each one's
+    /// text and the id the backend gave it, in order — from the latest answer this source
+    /// read or wrote it with in the current command.
+    ///
+    /// Answered without a request: a backend that assigns its headings ids reports them out
+    /// of the responses its reads and writes already received, so a caller may ask after
+    /// every read and every write for free. `None` is not knowing — the record was not read
+    /// or written here, or its answer carried no headings — and a caller that needs them
+    /// reads the record. Defaulted to `None`: a backend whose headings have no ids of their
+    /// own has nothing to say.
+    fn stored_headings(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+    ) -> Option<Vec<crate::StoredHeading>> {
+        let _ = (record, id);
+        None
+    }
+
+    /// Hand this source the markup its bodies carry for a reader to address their headings:
+    /// see [`crate::BodyMarkup`]. Called once, by the engine, as it builds the source.
+    /// Defaulted to ignoring it, which a source whose backend needs no such markup does.
+    fn attach_body_markup(&self, markup: crate::SharedBodyMarkup) {
+        let _ = markup;
+    }
+
     /// Create or update one task, answering with the native id the destination holds it
     /// under.
     ///

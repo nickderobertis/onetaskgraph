@@ -3220,3 +3220,211 @@ fn a_private_linear_home_that_linear_rewrites_keeps_every_key_the_copy_recorded_
     assert_eq!(&again["plan:rollout"], home);
     assert_eq!(shown(&store, "project", home)["metadata"], *metadata);
 }
+
+#[test]
+fn a_views_link_to_its_own_heading_lands_in_the_boards_section_form() {
+    // A public task of the private plan links one of its own headings: its view on the board
+    // carries that link in GitHub's form, against the anchor the board's body holds before the
+    // heading, and a repeat copy writes the board nothing.
+    let (store, board) = board_store();
+    store.record(
+        "plan",
+        "tasks",
+        "sectioned",
+        &format!(
+            "title: Retry the widget once\nstatus: todo\nproject: rollout\n\
+             repositories: [{BOARD_REPOSITORY}]"
+        ),
+        "See [the retry](#step-2b-retry-once) below.\n\n### Step 2.b: retry (once)\n\nOnce.",
+    );
+    let landed = copy_rollout(&store);
+    let view = view_of(&store, &landed, &landed["plan:sectioned"]);
+    let content = shown(&store, "task", &view)["content"]
+        .as_str()
+        .expect("the view's content")
+        .to_owned();
+    assert!(
+        content.contains("[the retry](#user-content-step-2b-retry-once)"),
+        "the view's link to its own heading is in the board's form:\n{content}"
+    );
+    let native = view.split_once(':').expect("a qualified id").1;
+    let raw = board.body(native);
+    assert!(
+        raw.as_str()
+            .unwrap_or_default()
+            .contains("<a id=\"step-2b-retry-once\"></a>\n### Step 2.b: retry (once)"),
+        "{raw}"
+    );
+    let mark = board.served_count();
+    copy_rollout(&store);
+    assert!(
+        board
+            .served_since(mark)
+            .iter()
+            .all(|(document, _)| !document.trim_start().starts_with("mutation")),
+        "a repeat copy writes the board nothing"
+    );
+}
+
+#[test]
+fn a_new_linear_views_link_to_its_own_heading_names_the_id_its_create_was_answered_with() {
+    // A view Linear creates has no address, and its headings no ids, until its create is
+    // answered: its link to its own heading is written in Linear's form once they exist, and a
+    // repeat copy writes nothing.
+    let mut handle = None;
+    let store = Store::laid(Some(registered), |sandbox| {
+        let (mut config, workspace) =
+            crate::fixtures::linear_workspace(sandbox, crate::fixtures::dataset());
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        handle = Some(workspace);
+        sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+        json!({
+            "tracker": {"plugin": "linear", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "tracker"}]},
+        })
+    });
+    let workspace = handle.expect("the workspace");
+    private_rollout(&store);
+    store.record(
+        "plan",
+        "tasks",
+        "sectioned",
+        &format!(
+            "title: Retry the widget once\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"
+        ),
+        "See [the retry](#step-2b-retry-once) below.\n\n### Step 2.b: retry (once)\n\nOnce.",
+    );
+    let landed = copy_rollout(&store);
+    let view = view_of(&store, &landed, &landed["plan:sectioned"]);
+    let native = view.split_once(':').expect("a qualified id").1.to_owned();
+    let shown_view = shown(&store, "task", &view);
+    let url = shown_view["location"]["url"]
+        .as_str()
+        .expect("a Linear address")
+        .to_owned();
+    let ids = onetaskgraph_e2e_support::linear_editor::stored(
+        &workspace
+            .editor_state(
+                onetaskgraph_e2e_support::fixtures::LinearRecord::Task,
+                &native,
+            )
+            .expect("an editor state"),
+    );
+    let id8: String = ids
+        .iter()
+        .find(|(text, _)| text == "Step 2.b: retry (once)")
+        .map(|(_, id)| id.replace('-', "")[..8].to_owned())
+        .expect("the heading's stored id");
+    let content = shown_view["content"].as_str().expect("the view's content");
+    assert!(
+        content.contains(&format!(
+            "[the retry]({url}#heading-step-2b-retry-once-{id8})"
+        )),
+        "{content}"
+    );
+    let mark = workspace.served_count();
+    copy_rollout(&store);
+    assert!(
+        workspace
+            .served_since(mark)
+            .iter()
+            .all(|(document, _)| !document.trim_start().starts_with("mutation")),
+        "a repeat copy writes Linear nothing"
+    );
+}
+
+#[test]
+fn a_refused_update_finishing_a_new_views_link_takes_the_whole_copy_back() {
+    // Linear refuses the write that finishes a new view's link to its own heading: the copy
+    // fails, and no view it created is left behind.
+    let mut handle = None;
+    let store = Store::laid(Some(registered), |sandbox| {
+        let (mut config, workspace) = crate::fixtures::linear_workspace_failing(
+            sandbox,
+            crate::fixtures::dataset(),
+            &[onetaskgraph_linear::graphql::ISSUE_REWRITE],
+        );
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        handle = Some(workspace);
+        sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+        json!({
+            "tracker": {"plugin": "linear", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "tracker"}]},
+        })
+    });
+    let workspace = handle.expect("the workspace");
+    private_rollout(&store);
+    store.record(
+        "plan",
+        "tasks",
+        "sectioned",
+        &format!(
+            "title: Retry the widget once\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"
+        ),
+        "See [the retry](#step-2b-retry-once) below.\n\n### Step 2.b: retry (once)\n\nOnce.",
+    );
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        workspace.issue_titled("Retry the widget once"),
+        None,
+        "the view the copy created is taken back: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_write_finishing_a_new_view_answered_with_another_item_takes_the_whole_copy_back() {
+    // Linear answers the write that finishes a new view's link with another issue: the copy cannot
+    // say what it wrote, so it fails, and the view it created is taken back.
+    let mut handle = None;
+    let store = Store::laid(Some(registered), |sandbox| {
+        let (mut config, workspace) =
+            crate::fixtures::linear_workspace(sandbox, crate::fixtures::dataset());
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        handle = Some(workspace);
+        sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+        json!({
+            "tracker": {"plugin": "linear", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "tracker"}]},
+        })
+    });
+    let workspace = handle.expect("the workspace");
+    workspace.bend_answers(
+        |document, _| document == onetaskgraph_linear::graphql::ISSUE_REWRITE,
+        1,
+        |_, data| {
+            if let Some(issue) = data.pointer_mut("/issueUpdate/issue") {
+                issue["id"] = json!("another-issue");
+            }
+        },
+    );
+    private_rollout(&store);
+    store.record(
+        "plan",
+        "tasks",
+        "sectioned",
+        &format!(
+            "title: Retry the widget once\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"
+        ),
+        "See [the retry](#step-2b-retry-once) below.\n\n### Step 2.b: retry (once)\n\nOnce.",
+    );
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        workspace.issue_titled("Retry the widget once"),
+        None,
+        "the view the copy created is taken back: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

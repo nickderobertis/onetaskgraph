@@ -32,6 +32,7 @@ pub mod fixtures;
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Its one caller is the loopback GitHub board, which lives in this harness for the reason `GitHubBoard` in fixtures.rs records; the check a board applies to each request has to compile where that board's request loop does, and the implementation itself stays in the GitHub Projects plugin's tests.
 mod github_schema;
 pub mod images;
+pub mod linear_editor;
 pub mod linear_markdown;
 pub mod linear_vocabulary;
 pub mod loopback;

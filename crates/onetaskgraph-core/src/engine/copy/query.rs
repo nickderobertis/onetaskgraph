@@ -38,6 +38,7 @@ pub(super) enum Slot {
 /// The outcome of an item the copy left unwritten because of `error`.
 pub(super) fn failed(source: GlobalId, error: &EngineError) -> CopyOutcome {
     CopyOutcome {
+        sections: super::SectionLinks::default(),
         status_condition: None,
         priority_condition: None,
         held: None,
@@ -89,6 +90,7 @@ impl Engine {
                 continue;
             }
             slots.push(Slot::Done(Box::new(CopyOutcome {
+                sections: super::SectionLinks::default(),
                 expected: crate::cache::ExpectedWrite::default(),
                 status_condition: None,
                 priority_condition: None,
@@ -241,6 +243,7 @@ impl Engine {
             )
         });
         Ok(Some(CopyOutcome {
+            sections: super::SectionLinks::default(),
             expected: crate::cache::ExpectedWrite::default(),
             status_condition: None,
             priority_condition: None,

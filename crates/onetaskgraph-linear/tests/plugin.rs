@@ -7350,3 +7350,206 @@ async fn recorded_document_content_is_returned_as_stored_including_rewrites() {
         assert!(requests.recv().unwrap().contains("document(id:$id)"));
     }
 }
+
+/// Every heading id Linear stored for a captured record is read back out of the editor state
+/// its answer carried, in order, with its plain text — the attribution marks Linear wraps the
+/// text in left out — for both captured samples: issue `TES2-773`'s `descriptionState` and the
+/// spike's plain document's `contentState`. What the engine writes for each heading is held by
+/// the engine's own journeys over the same samples.
+#[test]
+fn heading_ids_are_read_out_of_the_editor_state_linear_stored() {
+    for raw in [
+        include_str!("fixtures/editor-state/tes2-773.json"),
+        include_str!("fixtures/editor-state/spike-plain-document.json"),
+    ] {
+        let sample: serde_json::Value = serde_json::from_str(raw).unwrap();
+        let decoded = onetaskgraph_linear::headings::decoded(sample["state"].as_str().unwrap())
+            .expect("a captured state decodes");
+        let expected: Vec<(String, String)> = sample["headings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|heading| {
+                (
+                    heading["text"].as_str().unwrap().to_owned(),
+                    heading["id"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        let read: Vec<(String, String)> = decoded
+            .into_iter()
+            .map(|heading| (heading.text, heading.id))
+            .collect();
+        assert_eq!(read, expected, "{}", sample["record"]);
+        assert_eq!(read.len(), 5, "the spike's five headings");
+    }
+    assert_eq!(onetaskgraph_linear::headings::decoded("not base64!"), None);
+}
+
+/// A state that is valid base64 but not a Yjs update answers no headings, rather than a
+/// guess or a panic: bytes that were never an update, and a captured state cut short, as an
+/// answer truncated in transit would leave it.
+#[test]
+fn a_base64_state_that_is_not_a_yjs_update_answers_no_headings() {
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let sample: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/editor-state/tes2-773.json")).unwrap();
+    let whole = engine.decode(sample["state"].as_str().unwrap()).unwrap();
+    for (case, bytes) in [
+        ("bytes that were never an update", vec![0xff; 24]),
+        (
+            "a captured state cut short",
+            whole[..whole.len() / 2].to_vec(),
+        ),
+    ] {
+        let state = engine.encode(&bytes);
+        assert!(
+            engine.decode(&state).is_ok(),
+            "{case}: the base64 itself is valid"
+        );
+        assert_eq!(
+            onetaskgraph_linear::headings::decoded(&state),
+            None,
+            "{case}: no headings are answered"
+        );
+    }
+}
+
+/// A heading whose stored id is absent, not a string, not hex or too short to name the 8 hex
+/// characters Linear's heading link carries names no heading a link could address: it is left
+/// out, and every heading beside it with a well-formed id is still read, in order.
+#[test]
+fn a_heading_with_a_malformed_id_is_left_out_and_its_neighbours_are_read() {
+    use base64::Engine as _;
+    use yrs::types::xml::{XmlElementPrelim, XmlTextPrelim};
+    use yrs::{Doc, ReadTxn, Transact, Xml, XmlFragment};
+
+    enum Id {
+        Absent,
+        Number(f64),
+        Text(&'static str),
+    }
+    let headings = [
+        ("Before", Id::Text("cf430ed3-0000-4000-8000-000000000001")),
+        ("No id", Id::Absent),
+        ("Numbered", Id::Number(12_345_678.0)),
+        ("Not hex", Id::Text("zzzzzzzz-zzzz")),
+        ("Too short", Id::Text("e154-4ca")),
+        ("After", Id::Text("e1544ca7")),
+    ];
+    let doc = Doc::new();
+    let fragment = doc.get_or_insert_xml_fragment("prosemirror");
+    {
+        let mut txn = doc.transact_mut();
+        for (index, (text, id)) in headings.iter().enumerate() {
+            let heading = fragment.insert(
+                &mut txn,
+                u32::try_from(index).unwrap(),
+                XmlElementPrelim::empty("heading"),
+            );
+            match id {
+                Id::Absent => {}
+                Id::Number(number) => {
+                    heading.insert_attribute(&mut txn, "id", *number);
+                }
+                Id::Text(id) => {
+                    heading.insert_attribute(&mut txn, "id", *id);
+                }
+            }
+            heading.insert(&mut txn, 0, XmlTextPrelim::new(*text));
+        }
+    }
+    let state = base64::engine::general_purpose::STANDARD.encode(
+        doc.transact()
+            .encode_state_as_update_v1(&yrs::StateVector::default()),
+    );
+    let read: Vec<(String, String)> = onetaskgraph_linear::headings::decoded(&state)
+        .expect("a well-formed state decodes")
+        .into_iter()
+        .map(|heading| (heading.text, heading.id))
+        .collect();
+    assert_eq!(
+        read,
+        vec![
+            (
+                "Before".to_owned(),
+                "cf430ed3-0000-4000-8000-000000000001".to_owned()
+            ),
+            ("After".to_owned(), "e1544ca7".to_owned()),
+        ]
+    );
+}
+
+/// A later answer whose editor state is `null`, or does not decode, says the record's headings
+/// are no longer known: nothing an earlier answer carried is answered for it.
+#[test]
+fn a_null_or_undecodable_editor_state_answers_no_headings() {
+    use onetaskgraph_plugin_api::MetadataRecord;
+    let sample: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/editor-state/tes2-773.json")).unwrap();
+    let answer = |state: serde_json::Value| {
+        onetaskgraph_linear::headings::carried(&serde_json::json!({
+            "issue": {"id": "i1", "description": "x", "descriptionState": state},
+            "document": {"id": "d1", "title": "D", "contentState": "not base64!"},
+            "project": {"id": "p1", "name": "P", "contentState": null},
+        }))
+    };
+    let held = answer(sample["state"].clone());
+    let issue = held
+        .iter()
+        .find(|((record, id), _)| *record == MetadataRecord::Task && id.0 == "i1")
+        .expect("the issue is answered");
+    assert_eq!(issue.1.as_ref().map(Vec::len), Some(5));
+    for (record, id) in [
+        (MetadataRecord::Document, "d1"),
+        (MetadataRecord::Project, "p1"),
+    ] {
+        let entry = held
+            .iter()
+            .find(|((held_record, held_id), _)| *held_record == record && held_id.0 == id)
+            .unwrap_or_else(|| panic!("{id} is answered"));
+        assert_eq!(entry.1, None, "{id}: no headings known");
+    }
+    let cleared = answer(serde_json::Value::Null);
+    let issue = cleared
+        .iter()
+        .find(|((record, id), _)| *record == MetadataRecord::Task && id.0 == "i1")
+        .expect("the issue is answered");
+    assert_eq!(issue.1, None, "a null state answers no headings");
+}
+
+/// A source that read a record's headings forgets them when a later answer about that record
+/// carries no state, so it never answers ids the record may no longer hold — over real HTTP.
+#[tokio::test]
+async fn a_later_answer_with_no_editor_state_forgets_the_headings_an_earlier_one_carried() {
+    use onetaskgraph_plugin_api::MetadataRecord;
+    let sample: serde_json::Value = serde_json::from_str(include_str!(
+        "fixtures/editor-state/spike-plain-document.json"
+    ))
+    .unwrap();
+    let document = |state: serde_json::Value| {
+        serde_json::json!({"document":{"id":"D","title":"Design","content":"## What",
+            "contentState":state,"url":"https://linear.app/acme/document/d","createdAt":null,
+            "updatedAt":null,"archivedAt":null,"project":null}})
+    };
+    let (endpoint, _) = response_server(vec![
+        document(sample["state"].clone()),
+        document(serde_json::Value::Null),
+    ]);
+    let source = source(&endpoint);
+    source.get_document(&"D".into()).await.unwrap();
+    assert_eq!(
+        source
+            .stored_headings(MetadataRecord::Document, &"D".into())
+            .map(|headings| headings.len()),
+        Some(5),
+        "the first answer's headings"
+    );
+    source.get_document(&"D".into()).await.unwrap();
+    assert_eq!(
+        source.stored_headings(MetadataRecord::Document, &"D".into()),
+        None,
+        "forgotten once an answer carries no state"
+    );
+}

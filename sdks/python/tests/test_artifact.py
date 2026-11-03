@@ -293,7 +293,16 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 51
+    assert emitted_bundle["version"] == 52
+    # Version 52 reports, on each copied item, what its copy could not do for the record's
+    # section links and what finishing them cost — every figure left out when zero.
+    outcome = emitted_bundle["roots"]["CopyReport"]["$defs"]["CopyOutcome"]
+    for figure in (
+        "section_links_unresolved",
+        "section_links_unaddressable",
+        "section_link_updates",
+    ):
+        assert figure in json.dumps(outcome), figure
     assert "LocateReport" in bundle["roots"]
     assert "reachable" in emitted_bundle["roots"]["SourceRoute"]["required"]
     assert "task locate" in emitted_bundle["commands"]

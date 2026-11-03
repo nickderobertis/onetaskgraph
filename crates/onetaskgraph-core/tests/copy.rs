@@ -3706,6 +3706,42 @@ async fn a_document_arrives_naming_the_destinations_own_records_across_a_one_lev
 }
 
 #[tokio::test]
+async fn a_reference_spelled_with_windows_separators_alone_is_rewritten() {
+    // A folder of Markdown on Windows reports `C:\…\A.md`, which holds no `/`: a body naming
+    // its records only that way is still a body that names them, and its project is read.
+    let mut from = authoring_store(Some(("root:P-1", "root:A", "root:B")));
+    from["projects"][0]["location"] = json!({"path": r"C:\from\plans\P-1"});
+    from["tasks"][0]["location"] = json!({"path": r"C:\from\plans\P-1\A.md"});
+    from["tasks"][1]["location"] = json!({"path": r"C:\from\plans\P-1\B.md"});
+    from["documents"][0]["location"] = json!({"path": r"C:\from\plans\P-1\D-1.md"});
+    from["documents"][0]["content"] = json!(
+        "| Alpha | `C:\\from\\plans\\P-1\\A.md` |\n| Beta | `C:\\from\\plans\\P-1\\B.md` |\n"
+    );
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": from},
+        "into": {"plugin": "in-memory", "config": {
+            "capabilities": {"documents": "native"},
+            "projects": [located_project(r"C:\into\board", Some("root:P-1"))],
+            "tasks": [
+                located("A", "Alpha", r"C:\into\board\A.md", Some("root:A")),
+                located("B", "Beta", r"C:\into\board\B.md", Some("root:B")),
+            ],
+        }},
+    }));
+
+    let report = copy_document(&engine, "from:D-1").await;
+    assert_eq!(figures(&report), (2, 0, 0), "both rows are rewritten");
+    let landed = report.items[0]
+        .destination()
+        .expect("the document landed")
+        .to_string();
+    assert_eq!(
+        body(&engine, &landed).await,
+        "| Alpha | `C:\\into\\board\\A.md` |\n| Beta | `C:\\into\\board\\B.md` |\n"
+    );
+}
+
+#[tokio::test]
 async fn a_history_the_two_keys_cannot_prove_is_left_byte_for_byte_and_counted_unresolved() {
     // The chain the rule cannot reach: the records travelled `from` → an intermediate store
     // → `into`, so `into` keys them by that intermediate, while the document is copied to

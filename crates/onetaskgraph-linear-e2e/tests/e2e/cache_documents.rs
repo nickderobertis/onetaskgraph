@@ -2,7 +2,8 @@
 //! what 0.6.0 sent.
 //!
 //! `fixtures/documents-0.6.0.json` is every document of the plugin's `graphql` module at the tag
-//! `v0.6.0`, extracted verbatim. With the cache off — `attach_cache` never having run — every
+//! `v0.6.0`, extracted verbatim, and [`released`] states the one selection this build adds to
+//! each — a long form's editor state beside it. With the cache off — `attach_cache` never having run — every
 //! document the read and write verbs below send is one of those, byte for byte. With it on, the
 //! only documents that differ are the eight the cache sends in place of `ISSUES`, `ISSUE`,
 //! `ISSUE_DETAIL`, `ISSUE_RELATIONS`, `PROJECTS`, `PROJECT`, `PROJECT_RELATIONS` and `COUNTERPART_LOOKUPS`, each the one it stands in for with exactly the selections the cache's
@@ -26,11 +27,29 @@ use serde_json::Value;
 
 use crate::cache::{Cached, dataset};
 
-/// Every document 0.6.0's Linear plugin could send, by its constant's name.
+/// Every document 0.6.0's Linear plugin could send, by its constant's name, with the one
+/// selection this build adds to each: beside every long form an issue, a project or a document
+/// is read or written with, its editor state — `descriptionState`, `contentState` — whose
+/// heading ids a copy's Linear section links name (README "Section links"). The project
+/// listing is the exception, and is 0.6.0's byte for byte: no copy reads a heading id from it,
+/// and every node it selects would cost a page of it complexity.
 fn released() -> BTreeMap<String, String> {
     let fixture: Value =
         serde_json::from_str(include_str!("fixtures/documents-0.6.0.json")).expect("the fixture");
-    serde_json::from_value(fixture["documents"].clone()).expect("documents by name")
+    let documents: BTreeMap<String, String> =
+        serde_json::from_value(fixture["documents"].clone()).expect("documents by name");
+    documents
+        .into_iter()
+        .map(|(name, document)| {
+            let mut stated = document
+                .replace(" description url", " description descriptionState url")
+                .replace("title content url", "title content contentState url");
+            if name != "PROJECTS" {
+                stated = stated.replace("name content url", "name content contentState url");
+            }
+            (name, stated)
+        })
+        .collect()
 }
 
 /// Each mutation that writes a long form, by its 0.6.0 name, as this build sends it, and the read

@@ -1332,6 +1332,18 @@ impl TaskSource for CachedSource {
         self.inner.stored_content(record, id)
     }
 
+    fn stored_headings(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+    ) -> Option<Vec<onetaskgraph_plugin_api::StoredHeading>> {
+        self.inner.stored_headings(record, id)
+    }
+
+    fn attach_body_markup(&self, markup: onetaskgraph_plugin_api::SharedBodyMarkup) {
+        self.inner.attach_body_markup(markup);
+    }
+
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.relating(
             EdgeKind::TaskReverse,

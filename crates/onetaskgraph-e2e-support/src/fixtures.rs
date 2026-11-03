@@ -6108,6 +6108,12 @@ pub fn linear_empty_workspace(sandbox: &Sandbox) -> Value {
     linear_server_over(sandbox, empty_dataset(), None, &[])
 }
 
+/// An empty Linear workspace, and the handle that reads what it holds and every request it was
+/// sent.
+pub fn linear_empty_workspace_held(sandbox: &Sandbox) -> (Value, LinearWorkspace) {
+    linear_workspace(sandbox, empty_dataset())
+}
+
 /// An empty Linear workspace refusing each operation `failing` names, once.
 pub fn linear_empty_workspace_failing(sandbox: &Sandbox, failing: &[&str]) -> Value {
     linear_server_over(sandbox, empty_dataset(), None, failing)
@@ -6175,6 +6181,10 @@ pub enum LinearMarkdown {
     /// line into `+ ` and every `+ ` into `* `: a backend that does not hold its own stored
     /// content stable, so a follow-up write of what it stored is stored otherwise again.
     Unstable,
+    /// Stores every Markdown link destination in angle brackets — `[text](<target>)` — as the
+    /// section-links live check observed TES2 storing every link of an issue, a project and a
+    /// document on 2026-11-02, and stores what it stored as it was sent.
+    Angled,
 }
 
 /// `written` as the workspace `data` stores a long form, by what it was told with
@@ -6201,8 +6211,32 @@ fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
                 .join("\n");
             json!(stored)
         }
+        Some("angled") => json!(linear_angled(text)),
         _ => json!(text),
     }
+}
+
+/// `text` with every Markdown link destination not in angle brackets put in them.
+fn linear_angled(text: &str) -> String {
+    let mut stored = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("](") {
+        let (before, after) = rest.split_at(at + 2);
+        stored.push_str(before);
+        if after.starts_with('<') {
+            rest = after;
+            continue;
+        }
+        let end = after
+            .find(|c: char| c == ')' || c.is_whitespace())
+            .unwrap_or(after.len());
+        stored.push('<');
+        stored.push_str(&after[..end]);
+        stored.push('>');
+        rest = &after[end..];
+    }
+    stored.push_str(rest);
+    stored
 }
 // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
@@ -6648,6 +6682,7 @@ impl LinearWorkspace {
             LinearMarkdown::Verbatim => "verbatim",
             LinearMarkdown::Measured => "measured",
             LinearMarkdown::Unstable => "unstable",
+            LinearMarkdown::Angled => "angled",
         });
     }
 
@@ -6689,6 +6724,36 @@ impl LinearWorkspace {
             "projects" => linear_description(row, "project_dependencies", &data),
             _ => linear_description(row, "task_dependencies", &data),
         })
+    }
+
+    /// The editor state this workspace answers one held record of `kind` with, as
+    /// `descriptionState` or `contentState`: `None` for a record it answers with none.
+    #[must_use]
+    pub fn editor_state(&self, kind: LinearRecord, id: &str) -> Option<String> {
+        let data = self.state.lock().unwrap();
+        let row = data[kind.collection()]
+            .as_array()?
+            .iter()
+            .find(|row| row["id"] == id)?;
+        linear_editor_state(row).as_str().map(str::to_owned)
+    }
+
+    /// Answer every write from here on with no editor state, as a Linear write whose answer
+    /// carries none.
+    pub fn answer_no_editor_state(&self) {
+        self.state.lock().unwrap()["_linear_stateless"] = json!(true);
+    }
+
+    /// Hold one record's editor state as `state` — a captured sample — as a person's edit in
+    /// Linear's editor leaves it.
+    pub fn set_editor_state(&self, kind: LinearRecord, id: &str, state: &str) {
+        let mut data = self.state.lock().unwrap();
+        if let Some(row) = data[kind.collection()]
+            .as_array_mut()
+            .and_then(|rows| rows.iter_mut().find(|row| row["id"] == id))
+        {
+            row["_editor_state"] = json!(state);
+        }
     }
 
     /// The name of the workflow state one held issue is at.
@@ -8282,6 +8347,7 @@ fn linear_write_item(
     let vocabulary = json!({"_linear_states": data["_linear_states"].clone(),
         "_linear_project_statuses": data["_linear_project_statuses"].clone()});
     let vocabulary_markdown = json!({"_linear_markdown": data["_linear_markdown"].clone()});
+    let stateless = data["_linear_stateless"] == true;
     let burnt = linear_burnt(data);
     let rows = data[collection]
         .as_array_mut()
@@ -8366,6 +8432,12 @@ fn linear_write_item(
         row["priority"] = linear_priority_name(priority);
     }
     row["_updated"] = json!(stamp);
+    linear_restate(
+        &mut row,
+        existing.map(|index| &rows[index]),
+        stateless,
+        &stamp,
+    );
     if let Some(index) = existing {
         rows[index] = row;
     } else {
@@ -8419,6 +8491,9 @@ fn linear_write_document(
         return Err(onetaskgraph_linear::graphql::PROJECT_NOT_FOUND_MESSAGE);
     }
     let stored = linear_stored(data, input.get("content"));
+    let stateless = data["_linear_stateless"] == true;
+    // Seeded without moving the workspace's clock: a document's write moves no time here.
+    let stamp = format!("d{}", data["documents"].as_array().map_or(0, Vec::len));
     let burnt = linear_burnt(data);
     let rows = data["documents"]
         .as_array_mut()
@@ -8460,6 +8535,12 @@ fn linear_write_document(
     if let Some(updated) = existing.and_then(|index| rows[index].get("_updated").cloned()) {
         row["_updated"] = updated;
     }
+    linear_restate(
+        &mut row,
+        existing.map(|index| &rows[index]),
+        stateless,
+        &stamp,
+    );
     if let Some(index) = existing {
         rows[index] = row;
     } else {
@@ -9195,10 +9276,10 @@ fn linear_task(v: &Value, data: &Value) -> Value {
         .filter(|identifier| identifier.is_string())
         .cloned()
         .unwrap_or_else(|| json!(linear_identifier(v["id"].as_str().expect("an issue id"))));
-    json!({"id":v["id"],"priority":linear_priority(&v["priority"]),"identifier":identifier,"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(v),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":linear_updated(v),"archivedAt":v.get("_trashed").cloned().unwrap_or(Value::Null)})
+    json!({"id":v["id"],"priority":linear_priority(&v["priority"]),"identifier":identifier,"title":v["title"],"description":linear_description(v,"task_dependencies",data),"state":linear_state(v),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"project":v.get("project").map(|id|json!({"id":id})),"descriptionState":linear_editor_state(v),"url":linear_web_address(v,"issue"),"createdAt":null,"updatedAt":linear_updated(v),"archivedAt":v.get("_trashed").cloned().unwrap_or(Value::Null)})
 }
 fn linear_project(v: &Value, data: &Value) -> Value {
-    json!({"id":v["id"],"name":v["title"],"content":linear_description(v,"project_dependencies",data),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":linear_updated(v),"archivedAt":null})
+    json!({"id":v["id"],"name":v["title"],"content":linear_description(v,"project_dependencies",data),"contentState":linear_editor_state(v),"status":linear_project_status(&v["status"]),"labels":{"nodes":v["labels"].as_array().unwrap().iter().map(linear_label).collect::<Vec<_>>()},"url":linear_web_address(v,"project"),"createdAt":null,"updatedAt":linear_updated(v),"archivedAt":null})
 }
 
 // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, `linear_workspace` above among them, so no suite copies one: the engine's own suite and the Linear suite both drive this loopback Linear, so its answers are its own: the `updatedAt` every answer above carries is part of answering a request.
@@ -9220,7 +9301,7 @@ const LINEAR_EPOCH: &str = "2026-08-24T00:00:00Z";
 /// published `Document` has neither — which is what the `linear` row of the table above
 /// declares and what the shared document journeys drive.
 fn linear_document(v: &Value) -> Value {
-    json!({"id":v["id"],"title":v["title"],"content":linear_long_form(v,Vec::new()),"project":v.get("project").filter(|project|project.is_string()).map(|id|json!({"id":id})),"url":linear_web_address(v,"document"),"createdAt":null,"updatedAt":linear_updated(v),"archivedAt":null})
+    json!({"id":v["id"],"title":v["title"],"content":linear_long_form(v,Vec::new()),"contentState":linear_editor_state(v),"project":v.get("project").filter(|project|project.is_string()).map(|id|json!({"id":id})),"url":linear_web_address(v,"document"),"createdAt":null,"updatedAt":linear_updated(v),"archivedAt":null})
 }
 
 /// The Linear web address this workspace holds one item at.
@@ -9234,6 +9315,55 @@ fn linear_web_address(v: &Value, kind: &str) -> Value {
         .filter(|url| url.is_string())
         .cloned()
         .unwrap_or_else(|| json!(linear_address(kind, v["id"].as_str().unwrap_or_default())))
+}
+
+/// The editor state this workspace answers one record with, as Linear answers
+/// `descriptionState` and `contentState`: the state its latest write left it, the one a
+/// journey seeded it with under `_editor_state`, or — for a record nothing wrote here — one
+/// made from its content; `null` for a record written while the workspace answered none.
+fn linear_editor_state(v: &Value) -> Value {
+    if v.get("_no_editor_state") == Some(&Value::Bool(true)) {
+        return Value::Null;
+    }
+    json!(linear_row_state(v))
+}
+
+/// The state a row holds, by [`linear_editor_state`]'s rule.
+fn linear_row_state(v: &Value) -> String {
+    if let Some(state) = v.get("_editor_state").and_then(Value::as_str) {
+        return state.to_owned();
+    }
+    let content = v
+        .get("_linear_description")
+        .and_then(Value::as_str)
+        .or_else(|| v.get("content").and_then(Value::as_str))
+        .unwrap_or_default();
+    crate::linear_editor::restated(None, content, v["id"].as_str().unwrap_or_default())
+}
+
+/// Give a row just written the state Linear stores it with: every heading keeps the id it had
+/// in `before`'s state where its text and its position among headings of that text are
+/// unchanged — observed of Linear on 2026-11-02 — and a new one gets a fresh id. A workspace
+/// answering no state leaves it none.
+fn linear_restate(row: &mut Value, before: Option<&Value>, stateless: bool, stamp: &str) {
+    if stateless {
+        row["_no_editor_state"] = json!(true);
+        return;
+    }
+    let held = before
+        .filter(|before| before.get("_no_editor_state") != Some(&Value::Bool(true)))
+        .map(linear_row_state);
+    let content = row
+        .get("_linear_description")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let seed = format!("{}/{stamp}", row["id"].as_str().unwrap_or_default());
+    row["_editor_state"] = json!(crate::linear_editor::restated(
+        held.as_deref(),
+        &content,
+        &seed
+    ));
 }
 
 fn linear_address(kind: &str, id: &str) -> String {
@@ -9783,6 +9913,29 @@ pub fn dataset() -> Value {
              "to": {"id": "elsewhere:T-9", "kind": "task"}, "kind": "blocks"}
         ]
     })
+}
+
+/// The kinds of record a Linear workspace holds an editor state for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinearRecord {
+    /// An issue, whose state is its `descriptionState`.
+    Task,
+    /// A project, whose state is its `contentState`.
+    Project,
+    /// A document, whose state is its `contentState`.
+    Document,
+}
+
+impl LinearRecord {
+    /// The collection the workspace double holds this kind of record in.
+    #[must_use]
+    pub fn collection(self) -> &'static str {
+        match self {
+            Self::Task => "tasks",
+            Self::Project => "projects",
+            Self::Document => "documents",
+        }
+    }
 }
 
 #[cfg(test)]

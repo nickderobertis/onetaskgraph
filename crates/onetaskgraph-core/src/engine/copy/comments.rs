@@ -59,9 +59,25 @@ pub(super) struct CommentPlan {
     pub(super) after: Vec<Value>,
 }
 
+/// The task a carried comment's origin names, exactly as `CommentOrigin::task` spells it —
+/// opaque and unvalidated, so a malformed spelling is matched verbatim like any other rather
+/// than parsed, and never confused with the comment's own id beside it in [`OriginKey`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct OriginTask(String);
+
+/// The identity a carried comment is matched on: the task its origin names, and that
+/// comment's id there.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct OriginKey {
+    /// The task the comment was first written on.
+    task: OriginTask,
+    /// The comment's id in that task's source.
+    comment: NativeId,
+}
+
 /// The origin one source comment's copy carries: the origin it was itself copied from, or —
 /// for a comment written at the source — the comment there.
-fn origin_of(source: &GlobalId, comment: &Comment) -> CommentOrigin {
+pub(super) fn origin_of(source: &GlobalId, comment: &Comment) -> CommentOrigin {
     comment.origin.clone().unwrap_or_else(|| CommentOrigin {
         task: source.to_string(),
         id: comment.id.clone(),
@@ -73,8 +89,11 @@ fn origin_of(source: &GlobalId, comment: &Comment) -> CommentOrigin {
 }
 
 /// The identity a copy is matched on: its origin's task and id.
-fn key(origin: &CommentOrigin) -> (String, String) {
-    (origin.task.clone(), origin.id.0.clone())
+pub(super) fn key(origin: &CommentOrigin) -> OriginKey {
+    OriginKey {
+        task: OriginTask(origin.task.clone()),
+        comment: origin.id.clone(),
+    }
 }
 
 /// Decide what makes `held` — the destination task's comments, `destination` its qualified id
@@ -111,14 +130,14 @@ pub(super) fn plan(
     vouched.extend(recorded.map(ToString::to_string));
     vouched.extend(wanted.iter().map(|copy| copy.origin.task.clone()));
 
-    let mut copies: BTreeMap<(String, String), &Comment> = BTreeMap::new();
+    let mut copies: BTreeMap<OriginKey, &Comment> = BTreeMap::new();
     for comment in held {
         if let Some(origin) = &comment.origin {
             copies.entry(key(origin)).or_insert(comment);
         }
     }
     let mut plan = CommentPlan::default();
-    let wanted_keys: Vec<(String, String)> = wanted.iter().map(|copy| key(&copy.origin)).collect();
+    let wanted_keys: Vec<OriginKey> = wanted.iter().map(|copy| key(&copy.origin)).collect();
     // What the destination reads as afterwards: everything it holds that this plan keeps, in
     // the order it holds it, then the copies this plan adds.
     for comment in held {
@@ -164,6 +183,17 @@ pub(super) fn plan(
         }
     }
     plan
+}
+
+/// `after` — a destination's comments as [`digest_entries`] gives them — with the copy of
+/// `origin` saying `body`, as a copy finished its section links after it was planned.
+pub(super) fn reword(after: &mut [Value], origin: &CommentOrigin, body: &str) {
+    let entry = copy_entry(origin, body);
+    for held in after.iter_mut() {
+        if held.get("origin") == entry.get("origin") {
+            held.clone_from(&entry);
+        }
+    }
 }
 
 /// One copy as the destination digest counts it: its origin's identity and what it says.
