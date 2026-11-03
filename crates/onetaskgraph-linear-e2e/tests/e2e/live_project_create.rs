@@ -31,8 +31,11 @@ const READS: u32 = 20;
 struct Relay {
     /// Lose the answer to the next `projectCreate`, after Linear applied it.
     lose_create: bool,
-    /// Fail the next read of one project by id, without sending it to Linear.
+    /// Fail the next read of one project by id, without sending it to Linear: armed by the lost
+    /// create alone, so it is the read the plugin makes for what that create left.
     fail_project_read: bool,
+    /// The root field of every request relayed, in order, for the log.
+    sent: Vec<String>,
     /// Every create Linear answered with an id: its kind and the id.
     created: Vec<(&'static str, String)>,
     /// What Linear answered each create with, for the log.
@@ -106,8 +109,19 @@ fn relay(key: String, namespace: Arc<Namespace>) -> (String, Arc<Mutex<Relay>>) 
                 continue;
             }
             let query = request["query"].as_str().unwrap_or_default().to_owned();
+            let root = query
+                .split_once('{')
+                .map(|(_, rest)| {
+                    rest.trim_start()
+                        .split(['(', ' ', '{'])
+                        .next()
+                        .unwrap_or("")
+                })
+                .unwrap_or("")
+                .to_owned();
+            lock(&held).sent.push(root);
             if query == onetaskgraph_linear::graphql::PROJECT
-                && std::mem::take(&mut held.lock().unwrap().fail_project_read)
+                && std::mem::take(&mut lock(&held).fail_project_read)
             {
                 respond(
                     &mut stream,
@@ -136,7 +150,7 @@ fn relay(key: String, namespace: Arc<Namespace>) -> (String, Arc<Mutex<Relay>>) 
             };
             let answer: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
             namespace.learn(&answer);
-            let mut relay = held.lock().unwrap();
+            let mut relay = lock(&held);
             for (create, root, field, kind) in [
                 (
                     onetaskgraph_linear::graphql::ISSUE_CREATE,
@@ -171,6 +185,7 @@ fn relay(key: String, namespace: Arc<Namespace>) -> (String, Arc<Mutex<Relay>>) 
             if query == onetaskgraph_linear::graphql::PROJECT_CREATE
                 && std::mem::take(&mut relay.lose_create)
             {
+                relay.fail_project_read = true;
                 drop(relay);
                 respond(
                     &mut stream,
@@ -184,6 +199,19 @@ fn relay(key: String, namespace: Arc<Namespace>) -> (String, Arc<Mutex<Relay>>) 
         }
     });
     (endpoint, state)
+}
+
+/// The relay's state, whether or not a journey assertion panicked while reading it.
+fn lock(relay: &Mutex<Relay>) -> std::sync::MutexGuard<'_, Relay> {
+    relay
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// What the relay saw, for a failure's message.
+fn seen(relay: &Mutex<Relay>) -> String {
+    let relay = lock(relay);
+    format!("creates: {:#?}\nsent: {:?}", relay.observations, relay.sent)
 }
 
 /// One request to Linear, answered whole — its `errors` included, so a refusal can be read.
@@ -423,10 +451,8 @@ pub(crate) fn live_project_create(
             runtime, key, team, &team_id, &mapping, &stamp, &endpoint, &relayed,
         );
     }));
-    for observation in &relayed.lock().unwrap().observations {
-        eprintln!("live project create: {observation}");
-    }
-    let created = relayed.lock().unwrap().created.clone();
+    eprintln!("live project create: {}", seen(&relayed));
+    let created = lock(&relayed).created.clone();
     let cleaned = cleanup(runtime, key, &team_id, &stamp, &created);
     if let Err(panic) = journey {
         std::panic::resume_unwind(panic);
@@ -501,10 +527,10 @@ fn drive(
     assert_eq!(
         output.status.code(),
         Some(0),
-        "`project copy` of a new project into Linear: {}{}\n{:#?}",
+        "`project copy` of a new project into Linear: {}{}\n{}",
         stdout(&output),
         stderr(&output),
-        relayed.lock().unwrap().observations
+        seen(relayed)
     );
     let report = succeeded(&copy, &output);
     let landed = outcome(&report, "plan:harbor");
@@ -530,15 +556,9 @@ fn drive(
     // read the plugin makes at once for it — so the copy fails, and a second one has to find it.
     let title = format!("{prefix}{stamp} retry");
     let second = sandbox(key, endpoint, team, mapping, &title);
-    {
-        let mut relay = relayed.lock().unwrap();
-        relay.lose_create = true;
-        relay.fail_project_read = true;
-    }
+    lock(relayed).lose_create = true;
     let output = second.command().args(copy).output().unwrap();
-    let lost = relayed
-        .lock()
-        .unwrap()
+    let lost = lock(relayed)
         .created
         .iter()
         .filter(|(kind, _)| *kind == "project")
@@ -552,17 +572,21 @@ fn drive(
     assert_eq!(
         lost,
         2,
-        "the lost create reached Linear and Linear made the project: {}\n{:#?}",
+        "the lost create reached Linear and Linear made the project: {}\n{}",
         stderr(&output),
-        relayed.lock().unwrap().observations
+        seen(relayed)
+    );
+    let disarmed = !lock(relayed).fail_project_read;
+    assert!(
+        disarmed,
+        "the plugin read the project its lost create made: {}",
+        seen(relayed)
     );
     let output = second.command().args(copy).output().unwrap();
     let report = succeeded(&copy, &output);
     let landed = outcome(&report, "plan:harbor");
     let linked = landed["destination"].as_str().expect("where it landed");
-    let made = relayed
-        .lock()
-        .unwrap()
+    let made = lock(relayed)
         .created
         .iter()
         .filter(|(kind, _)| *kind == "project")

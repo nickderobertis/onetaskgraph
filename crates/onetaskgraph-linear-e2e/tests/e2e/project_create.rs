@@ -12,7 +12,7 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{LinearWorkspace, document, linear_workspace};
+use crate::fixtures::{LINEAR_REFUSED_WRITE, LinearWorkspace, document, linear_workspace_failing};
 
 /// A folder `plan` holding the project `harbor` with `tasks` tasks under it and the project
 /// `lighthouse` holding none, and a Linear source `linear` holding nothing.
@@ -23,11 +23,17 @@ pub(crate) struct Setup {
 
 impl Setup {
     fn new(tasks: usize) -> Self {
+        Self::refusing(tasks, &[])
+    }
+
+    /// [`Setup::new`], over a Linear refusing once each operation `failing` names.
+    fn refusing(tasks: usize, failing: &[&str]) -> Self {
         let sandbox = Sandbox::new();
-        let (config, workspace) = linear_workspace(
+        let (config, workspace) = linear_workspace_failing(
             &sandbox,
             json!({"tasks": [], "projects": [], "documents": [], "labels": [],
                    "task_dependencies": [], "project_dependencies": []}),
+            failing,
         );
         let plan = plan(&sandbox, "Harbor rollout", "Lighthouse survey", tasks);
         sandbox.project_document(&document(&json!({
@@ -261,9 +267,11 @@ fn a_project_create_whose_answer_was_lost_is_linked_by_the_retry_and_made_once()
     setup
         .workspace
         .lose_answer_once(onetaskgraph_linear::graphql::PROJECT_CREATE);
-    setup
-        .workspace
-        .lose_answer_once(onetaskgraph_linear::graphql::PROJECT);
+    setup.workspace.after_request(
+        |query, _| query == onetaskgraph_linear::graphql::PROJECT_CREATE,
+        0,
+        |workspace| workspace.lose_answer_once(onetaskgraph_linear::graphql::PROJECT),
+    );
     let (output, served) = setup.run(&copy);
     assert_ne!(
         output.status.code(),
@@ -318,5 +326,48 @@ fn a_project_create_whose_answer_was_lost_is_linked_by_the_retry_and_made_once()
         listed["items"].as_array().map(Vec::len),
         Some(2),
         "{listed:#}"
+    );
+}
+
+#[test]
+fn a_project_create_linear_refuses_fails_naming_linears_refusal_and_writes_no_task() {
+    // Linear refuses the create; nothing was made, so the read for an earlier attempt's project
+    // is answered `Entity not found: Project` — and that is not what the copy reports.
+    let setup = Setup::refusing(2, &[onetaskgraph_linear::graphql::PROJECT_CREATE]);
+    let copy = ["--json", "project", "copy", "plan:harbor", "--to", "linear"];
+    let (output, served) = setup.run(&copy);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let said = stderr(&output);
+    assert!(
+        said.contains(LINEAR_REFUSED_WRITE),
+        "the copy names Linear's refusal of the create: {said}"
+    );
+    assert!(
+        !said.contains("Entity not found"),
+        "the read for an earlier attempt's project does not stand in for it: {said}"
+    );
+    assert!(
+        served
+            .iter()
+            .any(|(query, _)| query == onetaskgraph_linear::graphql::PROJECT),
+        "the read for an earlier attempt's project was made: {served:#?}"
+    );
+    assert!(
+        !mutations(&served).contains(&onetaskgraph_linear::graphql::ISSUE_CREATE),
+        "no task is filed under a project that was never made: {:#?}",
+        mutations(&served)
+    );
+    assert!(projects_titled(&setup.sandbox, "linear", "Harbor rollout").is_empty());
+
+    // Refused once: the next copy creates it, under the id the refused attempt was sent with.
+    let (report, _) = setup.ok(&copy);
+    assert_eq!(
+        outcome(&report, "plan:harbor")["action"],
+        "created",
+        "{report:#}"
+    );
+    assert_eq!(
+        projects_titled(&setup.sandbox, "linear", "Harbor rollout").len(),
+        1
     );
 }
