@@ -2367,3 +2367,100 @@ fn a_record_another_writer_cleaned_before_the_sanitising_write_is_left_as_they_l
         "{answer}"
     );
 }
+
+#[test]
+fn a_comment_another_writer_adds_before_the_sanitising_write_is_sanitised_and_named_by_its_id() {
+    let shared = Shared::new(
+        &[("t1", &with_term())],
+        json!({"t1": [2]}),
+        json!({"t1": {"comment": format!("Ask {TERM} too.")}}),
+    );
+    let answer: Value = serde_json::from_str(&shared.store.ok(&[
+        "task",
+        "priority",
+        "set",
+        "shared:t1",
+        "high",
+        "--json",
+    ]))
+    .expect("the answer");
+    let fields: Vec<&str> = answer["sanitization"]["side_effect"]
+        .as_array()
+        .expect("side effects")
+        .iter()
+        .map(|effect| effect["field"].as_str().expect("a plain field"))
+        .collect();
+    assert_eq!(fields, ["content", "comment:by-person-1"], "{answer}");
+    let comments = shared.state()["comments"]["t1"].clone();
+    assert_eq!(
+        comments[0]["body"],
+        json!(format!("Ask {WITH} too.")),
+        "{comments}"
+    );
+}
+
+#[test]
+fn a_terms_command_that_fails_or_answers_out_of_shape_refuses_the_sweep_by_name() {
+    let (store, _record) = sanitizing(replaced());
+    let python = crate::document_store::interpreter();
+    for (what, script, said) in [
+        (
+            "an undecided answer",
+            "import sys; sys.stdin.read(); print('{\"verdict\": \"unavailable\", \"reason\": \"registry\"}'); sys.exit(2)",
+            "could not decide (registry)",
+        ),
+        (
+            "a failure",
+            "import sys; sys.exit(1)",
+            "without terms this store believes",
+        ),
+        (
+            "an answer out of shape",
+            "import sys; sys.stdin.read(); print('{\"terms\": [{\"term\": 7}]}')",
+            "without terms this store believes",
+        ),
+    ] {
+        repolicy(&store, |policy| {
+            policy["terms_command"] = json!([python.to_string_lossy(), "-c", script]);
+        });
+        let (code, _, out, err) = sweep(&store, "site", &[]);
+        assert_eq!(code, Some(1), "{what}: {out}{err}");
+        assert!(
+            err.contains("cannot be swept") && err.contains(said),
+            "{what}: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_replacement_the_environment_spells_as_a_number_or_a_list_is_read_as_the_text_it_was_given() {
+    let (store, _record) = sanitizing(json!([]));
+    let home = store.onevcs.as_ref().expect("a home").path().to_path_buf();
+    for (with, written) in [("2024", "2024"), ("harbor,x", "harbor,x")] {
+        let mut command = store.sandbox.command();
+        command
+            .args([
+                "task",
+                "create",
+                "site",
+                "--project",
+                "p",
+                "--title",
+                &format!("From {TERM}"),
+                "--body-file",
+                &store.body(PLAIN),
+                "--json",
+            ])
+            .env("ONEVCS_HOME", &home)
+            .env("ONETASKGRAPH_WRITE_POLICY__REPLACEMENTS__0__TERM", TERM)
+            .env("ONETASKGRAPH_WRITE_POLICY__REPLACEMENTS__0__WITH", with);
+        let output = command.assert().get_output().clone();
+        assert_eq!(output.status.code(), Some(0), "{with}: {}", stderr(&output));
+        let created: Value = serde_json::from_str(&stdout(&output)).expect("a task");
+        assert_eq!(
+            created["items"][0]["item"]["title"],
+            json!(format!("From {written}")),
+            "{with}"
+        );
+    }
+}

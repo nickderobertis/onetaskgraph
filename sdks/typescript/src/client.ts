@@ -457,9 +457,7 @@ function searchPathFlags(options: TemplateOptions): string[] {
 function safeParse(text: string): Record<string, unknown> | undefined {
   try {
     const value: unknown = JSON.parse(text);
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined;
+    return isPlainObject(value) ? value : undefined;
   } catch {
     return undefined;
   }

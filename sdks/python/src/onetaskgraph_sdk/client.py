@@ -118,6 +118,8 @@ class Client(GeneratedClient):
             and completed.returncode in REPORTING_EXITS[tuple(command)]
         ):
             try:
+                # As below: TypeAdapter validates `model`; its dynamic constructor cannot
+                # preserve T.
                 return cast(T, TypeAdapter(model).validate_json(completed.stdout))
             except ValidationError:
                 pass

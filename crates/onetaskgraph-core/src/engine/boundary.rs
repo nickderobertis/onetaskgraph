@@ -921,10 +921,8 @@ pub(crate) struct Boundary {
     replacements: Vec<Replacement>,
     /// Whether sanitise-on-refusal writes nothing and only answers what it would change.
     sanitize_dry_run: bool,
-    /// Whether a narrow write to an existing task is screened with the task as it stands.
-    whole_item: bool,
-    /// Whether the configuration names a `sanitize_command`, the one policy known to rewrite.
-    replaces_by_command: bool,
+    /// What the policy can do with a write, which decides what is screened beside it.
+    mode: PolicyMode,
     /// What the screened writes of this command replaced, until [`Engine::take_sanitization`].
     sanitized: Arc<std::sync::Mutex<Sanitization>>,
     /// What the policy has answered in this command, until [`Engine::end_command`].
@@ -932,6 +930,20 @@ pub(crate) struct Boundary {
     /// One line per dependency edge a write left out because it names something private,
     /// until [`Engine::take_withheld_edges`] takes them.
     withheld: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+/// What a store's policy can do with a write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PolicyMode {
+    /// The configured commands check and rewrite nothing: every write is screened as before.
+    Checks,
+    /// The configuration names a `sanitize_command`, the one policy known to rewrite: a narrow
+    /// write is screened with its item as stored, and a re-copy's origin search may ask it for
+    /// a replaced spelling.
+    SanitizeCommand,
+    /// A linking caller's own policy, which may rewrite: a narrow write is screened with its
+    /// item as stored, and nothing beyond a write's own call is asked of it.
+    Linked,
 }
 
 /// What one command has learned from the policy, so it asks nothing twice: each repository's
@@ -1054,8 +1066,7 @@ impl Default for Boundary {
             scope: None,
             replacements: Vec::new(),
             sanitize_dry_run: false,
-            whole_item: false,
-            replaces_by_command: false,
+            mode: PolicyMode::Checks,
             sanitized: Arc::default(),
             screened: Arc::default(),
             withheld: Arc::default(),
@@ -1083,9 +1094,11 @@ impl Boundary {
                 .map(|config| config.replacements.clone())
                 .unwrap_or_default(),
             sanitize_dry_run: false,
-            whole_item: write_policy.is_some_and(|config| config.sanitize_command.is_some()),
-            replaces_by_command: write_policy
-                .is_some_and(|config| config.sanitize_command.is_some()),
+            mode: if write_policy.is_some_and(|config| config.sanitize_command.is_some()) {
+                PolicyMode::SanitizeCommand
+            } else {
+                PolicyMode::Checks
+            },
             sanitized: Arc::default(),
             screened: Arc::default(),
             withheld: Arc::default(),
@@ -1571,8 +1584,7 @@ impl Engine {
     pub fn with_write_policy(mut self, policy: Arc<dyn WritePolicy>) -> Self {
         self.boundary.active = true;
         self.boundary.policy = policy;
-        self.boundary.whole_item = true;
-        self.boundary.replaces_by_command = false;
+        self.boundary.mode = PolicyMode::Linked;
         self.boundary.forget();
         self
     }
@@ -1615,7 +1627,7 @@ impl Engine {
         origin: &crate::GlobalId,
     ) -> Option<String> {
         if !self.boundary.active
-            || !self.boundary.replaces_by_command
+            || self.boundary.mode != PolicyMode::SanitizeCommand
             || self.declared(destination.name()) == SourceVisibility::Private
             || self.declared(&origin.source) == SourceVisibility::Private
         {
@@ -2750,7 +2762,7 @@ impl Engine {
     /// term already on it is sanitised rather than written past: on whenever the policy can
     /// rewrite — a `sanitize_command`, or a linking caller's own policy.
     fn sanitizes_whole_items(&self) -> bool {
-        self.boundary.whole_item
+        self.boundary.mode != PolicyMode::Checks
     }
 
     /// Admit one narrow write to the task `task`, as `destination` holds it, by one sanitisation

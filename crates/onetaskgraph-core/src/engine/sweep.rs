@@ -120,7 +120,8 @@ pub struct SweepRequests {
     /// more than one request.
     // llmlint: ignore[names_match_behavior] The member's name is the task's stated report contract, `"requests": {"total", "searches", "reads", "writes"}`, which both SDKs are generated from; a whole read's listing pages are the pages a search sweep sends as searches, and the doc comment above says which a report's figure counts.
     pub searches: u64,
-    /// Batched reads of items with their comments, and further comment reads, the sweep made.
+    /// Batched reads of items with their first comment page, each one call, and each walk of
+    /// an item's further comment pages, counted once however many pages it took.
     pub reads: u64,
     /// Items the sweep wrote back, each with every comment of it that changed.
     pub writes: u64,

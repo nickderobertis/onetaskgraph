@@ -50,6 +50,7 @@ class Task(TypedDict):
     status: dict[str, str]
     priority: str
     labels: list[dict[str, str | None]]
+    # Caller-defined metadata holds any JSON value under each key (§4.4): `Any` is JSON here.
     metadata: dict[str, Any]
     version: str
 
@@ -87,11 +88,21 @@ def _move(state: State, task: Task) -> None:
         task["labels"] = [*task["labels"], {"id": edit["label"], "name": edit["label"], "color": None}]
     if "content" in edit:
         task["content"] = edit["content"]
+    if "comment" in edit:
+        state["comments"].setdefault(task["id"], []).append(
+            {"id": f"by-person-{task['version']}", "body": edit["comment"]}
+        )
     if "paragraph" in edit:
         task["content"] = (task.get("content") or "").rstrip("\n") + "\n\n" + edit["paragraph"]
     task["version"] = str(int(task["version"]) + 1)
 
 
+def _malformed(message: str) -> dict[str, Any]:
+    return {"error": {"kind": "malformed", "message": message}}
+
+
+# A request's params and a response are JSON objects whose members each method names (§2), so
+# `Any` stands for a decoded JSON value; every member a method reads is checked where it is.
 def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]:
     match method:
         case "initialize":
@@ -130,11 +141,16 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             if held is None:
                 return {"result": {"page": None}}
             page = params.get("page", {})
-            start = int(page.get("cursor") or 0)
-            end = start + int(page.get("limit") or 100)
+            cursor, limit = page.get("cursor"), page.get("limit", 100)
+            if not (cursor is None or str(cursor).isdigit()) or not isinstance(limit, int):
+                return _malformed("task_comments pages by this peer's own cursor and a limit")
+            start = int(cursor or 0)
+            end = start + limit
             following = str(end) if end < len(held) else None
             return {"result": {"page": {"items": held[start:end], "next": following}}}
         case "edit_comment":
+            if not isinstance(params.get("body"), str):
+                return _malformed("edit_comment carries the comment's new body as a string")
             for comment in state["comments"].get(params.get("task"), []):
                 if comment["id"] == params.get("comment"):
                     comment["body"] = params["body"]
@@ -146,8 +162,11 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
         case "labels" | "task_dependencies":
             return {"result": {"items": [], "next": None}}
         case "write_task":
-            item = params["write"]["item"]
-            target = params["write"].get("target") or item["id"]
+            match params.get("write"):
+                case {"item": {"id": str(), "title": str(), "status": dict()} as item, **write}:
+                    target = write.get("target") or item["id"]
+                case _:
+                    return _malformed("write_task carries a write of a task with an id and title")
             held = _task(state, target)
             item["id"] = target
             item["version"] = str(int(held["version"]) + 1) if held else "1"
@@ -157,6 +176,8 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             task = _task(state, params.get("id"))
             if task is None:
                 return {"result": {"priority": None}}
+            if not isinstance(params.get("priority"), str):
+                return _malformed("set_task_priority carries a priority word")
             task["priority"] = params["priority"]
             task["version"] = str(int(task["version"]) + 1)
             return {"result": {"priority": task["priority"]}}
@@ -179,6 +200,8 @@ def _state(store: Path) -> State:
     if not isinstance(held, dict) or not STATE_MEMBERS <= held.keys():
         missing = sorted(STATE_MEMBERS - set(held)) if isinstance(held, dict) else "every member"
         sys.exit(f"{KIND}: {store} is not this peer's state; it lacks {missing}")
+    # Its members are this peer's own writing, checked present above: the cast names the shape
+    # `_main` itself wrote last time.
     return cast(State, held)
 
 

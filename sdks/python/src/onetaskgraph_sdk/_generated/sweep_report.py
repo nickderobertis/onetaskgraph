@@ -28,7 +28,7 @@ class SweepRequests(BaseModel):
     reads: Annotated[
         int,
         Field(
-            description="Batched reads of items with their comments, and further comment reads, the sweep made.",
+            description="Batched reads of items with their first comment page, each one call, and each walk of\nan item's further comment pages, counted once however many pages it took.",
             ge=0,
         ),
     ]

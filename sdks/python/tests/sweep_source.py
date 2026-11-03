@@ -72,11 +72,14 @@ def _held(store: Path) -> Held:
         case {"requests": int(), "tasks": list(tasks)} if all(
             isinstance(task, dict) and {"id", "title", "content"} <= task.keys() for task in tasks
         ):
+            # Checked member by member above for what the peer reads; the rest of each task is
+            # passed through as the engine sent it.
             return cast(Held, held)
         case _:
             sys.exit(f"{KIND}: {store} is not this peer's state")
 
 
+# A query is a JSON object (§4.5) of which only `text` is read here, checked where it is read.
 def _matches(task: Task, query: dict[str, Any]) -> bool:
     text = query.get("text")
     if not isinstance(text, dict):
@@ -131,13 +134,39 @@ def _answer(store: Path, method: str, params: dict[str, object]) -> dict[str, ob
         case "labels" | "task_dependencies":
             return {"result": {"items": [], "next": None}}
         case "write_task":
-            write = params.get("write")
-            if not isinstance(write, dict) or not isinstance(write.get("item"), dict):
-                return {"error": {"kind": "malformed", "message": "write_task carries a write"}}
-            item = write["item"]
-            target = write.get("target") or item["id"]
-            item["id"] = target
-            held["tasks"] = [task for task in tasks if task["id"] != target] + [item]
+            match params.get("write"):
+                case {
+                    "item": {
+                        "id": str(identifier),
+                        "title": str(title),
+                        "content": str() | None as content,
+                        "status": {"category": str(category), "name": str(name)},
+                        "labels": list(labels),
+                    },
+                    **write,
+                }:
+                    pass
+                case _:
+                    return {
+                        "error": {
+                            "kind": "malformed",
+                            "message": "write_task carries a write of a whole task",
+                        }
+                    }
+            target = str(write.get("target") or identifier)
+            written: Task = {
+                "id": target,
+                "title": title,
+                "content": content,
+                "status": {"category": category, "name": name},
+                "labels": [label for label in labels if isinstance(label, dict)],
+                "project": None,
+                "url": None,
+                "location": None,
+                "created_at": None,
+                "updated_at": None,
+            }
+            held["tasks"] = [task for task in tasks if task["id"] != target] + [written]
             store.write_text(json.dumps(held), encoding="utf-8")
             return {"result": {"id": target}}
         case _:

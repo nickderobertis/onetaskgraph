@@ -11824,7 +11824,8 @@ total: number
  */
 searches: number
 /**
- * Batched reads of items with their comments, and further comment reads, the sweep made.
+ * Batched reads of items with their first comment page, each one call, and each walk of
+ * an item's further comment pages, counted once however many pages it took.
  */
 reads: number
 /**
