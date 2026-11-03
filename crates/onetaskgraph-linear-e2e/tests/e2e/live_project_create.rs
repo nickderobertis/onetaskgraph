@@ -50,6 +50,9 @@ struct Relay {
     /// Fail the next read of one project by id, without sending it to Linear: armed by the lost
     /// create alone, so it is the read the plugin makes for what that create left.
     fail_project_read: bool,
+    /// Each create Linear refused: its root field, the id it was sent under and Linear's first
+    /// error, held to the plugin's contract constants by the journey.
+    refusals: Vec<(&'static str, String, Value)>,
     /// The root field of every request relayed, in order, for the log.
     sent: Vec<String>,
     /// Every create Linear answered with an id: its kind and the id.
@@ -209,6 +212,13 @@ fn relay(key: String, namespace: Arc<Namespace>) -> (String, Arc<Mutex<Relay>>) 
                 ));
                 if let Some(id) = answer["data"][root][field]["id"].as_str() {
                     relay.created.push((kind, id.to_owned()));
+                }
+                if let Some(error) = answer["errors"].get(0) {
+                    let sent = request["variables"]["input"]["id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned();
+                    relay.refusals.push((root, sent, error.clone()));
                 }
             }
             if query == onetaskgraph_linear::graphql::PROJECT_CREATE
@@ -797,6 +807,30 @@ fn drive(
         .position(|id| linked == format!("dest:{id}"))
         .unwrap_or_else(|| panic!("{linked} is one of the key's ids: {generations:?}"));
     evidence!("the re-copy landed under generation {generation}");
+    // Linear refused the re-copy's create under the deleted project's id in the words the plugin's
+    // contract — and both loopback fixtures — spell: this is the drift gate on that spelling.
+    let refusal = lock(relayed)
+        .refusals
+        .iter()
+        .find(|(root, sent, _)| *root == "projectCreate" && *sent == undone[0])
+        .map(|(_, _, error)| error.clone())
+        .unwrap_or_else(|| {
+            panic!(
+                "Linear refused the create under the deleted project's id: {}",
+                seen(relayed)
+            )
+        });
+    assert_eq!(
+        refusal["message"],
+        onetaskgraph_linear::graphql::PROJECT_ID_CONFLICT_MESSAGE,
+        "{refusal}"
+    );
+    assert_eq!(
+        refusal["extensions"]["userPresentableMessage"],
+        onetaskgraph_linear::graphql::id_conflict_presentable("Project", &undone[0]),
+        "{refusal}"
+    );
+    evidence!("Linear refused the create under the deleted project's id: {refusal}");
     let expected = vec![task_title(&title, 0), task_title(&title, 1)];
     assert_eq!(
         titles(&tasks_of(&third, &linked, &expected)),

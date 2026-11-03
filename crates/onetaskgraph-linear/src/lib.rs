@@ -611,6 +611,22 @@ pub mod graphql {
     pub const DOCUMENT_NOT_FOUND_MESSAGE: &str = "Entity not found: Document";
     /// Its user-facing alternative, on the terms of [`ISSUE_NOT_FOUND_PRESENTABLE`].
     pub const DOCUMENT_NOT_FOUND_PRESENTABLE: &str = "Could not find referenced Document.";
+    /// Linear's refusal of a `projectCreate` under an id a record already holds — a deleted
+    /// one's included — answered under HTTP 200, as the live project-create journey of
+    /// `onetaskgraph-linear-e2e` observed it on 2026-11-03 and checks on every credentialed run.
+    /// The loopback fixtures share this contract.
+    pub const PROJECT_ID_CONFLICT_MESSAGE: &str = "conflict on insert of Project";
+    /// [`PROJECT_ID_CONFLICT_MESSAGE`] for an `issueCreate`.
+    pub const ISSUE_ID_CONFLICT_MESSAGE: &str = "conflict on insert of Issue";
+    /// [`PROJECT_ID_CONFLICT_MESSAGE`] for a `documentCreate`.
+    pub const DOCUMENT_ID_CONFLICT_MESSAGE: &str = "conflict on insert of Document";
+
+    /// The `userPresentableMessage` beside an id-conflict message, for the `kind` — `Project`,
+    /// `Issue` or `Document` — and the `id` the create was sent under.
+    #[must_use]
+    pub fn id_conflict_presentable(kind: &str, id: &str) -> String {
+        format!("Entity {kind} with id {id} already exists.")
+    }
 
     /// Check the authenticated viewer.
     pub const VIEWER: &str = "query { viewer { id } }";

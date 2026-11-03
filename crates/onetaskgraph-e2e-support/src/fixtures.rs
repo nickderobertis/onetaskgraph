@@ -6976,50 +6976,56 @@ fn linear_serve(
                 );
                 continue;
             }
-            let (status, response) =
-                match linear_response(&request, recorded.as_ref(), &mut state.lock().unwrap()) {
-                    Ok(mut body) => {
-                        let operation = request["query"].as_str().unwrap_or_default();
-                        let variables = request.get("variables").cloned().unwrap_or(Value::Null);
-                        let mut bends = workspace.bends.lock().unwrap();
-                        if let Some(bend) = bends
-                            .iter_mut()
-                            .find(|bend| bend.times > 0 && (bend.matches)(operation, &variables))
-                        {
-                            bend.times -= 1;
-                            (bend.bend)(&variables, &mut body);
-                        }
-                        let mut lost = workspace.lost.lock().unwrap();
-                        if let Some(at) = lost.iter().position(|lost| *lost == operation) {
-                            lost.remove(at);
-                            (
-                                "502 Bad Gateway",
-                                json!({"errors":[{"message":"the answer was lost"}]}),
-                            )
-                        } else {
-                            ("200 OK", json!({"data":body}))
-                        }
+            let (status, response) = match linear_response(
+                &request,
+                recorded.as_ref(),
+                &mut state.lock().unwrap(),
+            ) {
+                Ok(mut body) => {
+                    let operation = request["query"].as_str().unwrap_or_default();
+                    let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+                    let mut bends = workspace.bends.lock().unwrap();
+                    if let Some(bend) = bends
+                        .iter_mut()
+                        .find(|bend| bend.times > 0 && (bend.matches)(operation, &variables))
+                    {
+                        bend.times -= 1;
+                        (bend.bend)(&variables, &mut body);
                     }
-                    // A create under an id a record already holds is answered under HTTP 200, as
-                    // Linear answers it, naming the id in its presentable sentence.
-                    Err(message) if message.starts_with(LINEAR_ID_CONFLICT_PREFIX) => {
-                        let kind = &message[LINEAR_ID_CONFLICT_PREFIX.len()..];
-                        let id = request["variables"]["input"]["id"]
-                            .as_str()
-                            .unwrap_or_default();
+                    let mut lost = workspace.lost.lock().unwrap();
+                    if let Some(at) = lost.iter().position(|lost| *lost == operation) {
+                        lost.remove(at);
                         (
-                            "200 OK",
-                            json!({"data": null, "errors": [{
+                            "502 Bad Gateway",
+                            json!({"errors":[{"message":"the answer was lost"}]}),
+                        )
+                    } else {
+                        ("200 OK", json!({"data":body}))
+                    }
+                }
+                // A create under an id a record already holds is answered under HTTP 200, as
+                // Linear answers it, naming the id in its presentable sentence.
+                Err(message)
+                    if let Some((_, kind)) = LINEAR_ID_CONFLICTS
+                        .iter()
+                        .find(|(said, _)| *said == message) =>
+                {
+                    let id = request["variables"]["input"]["id"]
+                        .as_str()
+                        .unwrap_or_default();
+                    (
+                        "200 OK",
+                        json!({"data": null, "errors": [{
                                 "message": message,
                                 "path": [request["query"].as_str().and_then(linear_create_root)],
                                 "extensions": {"code": "INPUT_ERROR", "statusCode": 400,
                                     "type": "invalid input", "userError": true,
                                     "userPresentableMessage":
-                                        format!("Entity {kind} with id {id} already exists.")}}]}),
-                        )
-                    }
-                    Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
-                };
+                                        onetaskgraph_linear::graphql::id_conflict_presentable(kind, id)}}]}),
+                    )
+                }
+                Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
+            };
             answers.lock().unwrap().push(response.clone());
             // Answered, and not yet sent: a change made here is one the next request sees and
             // this one did not.
@@ -8289,9 +8295,9 @@ fn linear_write_item(
                     || burnt.iter().any(|held| held == chosen) =>
             {
                 return Err(if project {
-                    LINEAR_PROJECT_ID_CONFLICT
+                    onetaskgraph_linear::graphql::PROJECT_ID_CONFLICT_MESSAGE
                 } else {
-                    LINEAR_ISSUE_ID_CONFLICT
+                    onetaskgraph_linear::graphql::ISSUE_ID_CONFLICT_MESSAGE
                 });
             }
             Some(chosen) => chosen.to_owned(),
@@ -8425,7 +8431,7 @@ fn linear_write_document(
                 if rows.iter().any(|row| row["id"] == chosen)
                     || burnt.iter().any(|held| held == chosen) =>
             {
-                return Err(LINEAR_DOCUMENT_ID_CONFLICT);
+                return Err(onetaskgraph_linear::graphql::DOCUMENT_ID_CONFLICT_MESSAGE);
             }
             Some(chosen) => chosen.to_owned(),
             None => format!("D-W{}", rows.len() + 1),
@@ -8973,16 +8979,22 @@ fn linear_burn(data: &mut Value, id: &str) {
     }
 }
 
-/// The `message` of Linear's refusal of a create under an id a record already holds — a deleted
-/// one's included — as the live project-create journey observed it on 2026-11-03, answered under
-/// HTTP 200 beside `Entity <Kind> with id <id> already exists.` as its presentable sentence.
-pub const LINEAR_ID_CONFLICT_PREFIX: &str = "conflict on insert of ";
-/// [`LINEAR_ID_CONFLICT_PREFIX`] for a project.
-pub const LINEAR_PROJECT_ID_CONFLICT: &str = "conflict on insert of Project";
-/// [`LINEAR_ID_CONFLICT_PREFIX`] for an issue.
-pub const LINEAR_ISSUE_ID_CONFLICT: &str = "conflict on insert of Issue";
-/// [`LINEAR_ID_CONFLICT_PREFIX`] for a document.
-pub const LINEAR_DOCUMENT_ID_CONFLICT: &str = "conflict on insert of Document";
+/// Linear's refusal of a create under an id a record already holds, by the kind it names: the
+/// plugin's own contract constants, which the live project-create journey checks against Linear.
+const LINEAR_ID_CONFLICTS: [(&str, &str); 3] = [
+    (
+        onetaskgraph_linear::graphql::PROJECT_ID_CONFLICT_MESSAGE,
+        "Project",
+    ),
+    (
+        onetaskgraph_linear::graphql::ISSUE_ID_CONFLICT_MESSAGE,
+        "Issue",
+    ),
+    (
+        onetaskgraph_linear::graphql::DOCUMENT_ID_CONFLICT_MESSAGE,
+        "Document",
+    ),
+];
 
 /// The root field a create `query` writes, for the `path` of its refusal.
 fn linear_create_root(query: &str) -> Option<&'static str> {
