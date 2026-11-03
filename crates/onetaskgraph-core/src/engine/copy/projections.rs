@@ -1605,6 +1605,8 @@ impl Engine {
             item: view,
             depends_on: edges,
         };
+        // What an asset write said it stored, from which the assets it uploaded are read.
+        let mut stored = None;
         let landed = if !carrying {
             destination.source().write_task(&write).await
         } else {
@@ -1616,7 +1618,10 @@ impl Engine {
                     &assets::write_of(task.assets.clone(), recorded),
                 )
                 .await
-                .map(|written| written.id)
+                .map(|written| {
+                    stored = written.content;
+                    written.id
+                })
         }
         .and_then(|landed| answered_id(landed, "write_task"))
         .map_err(|error| match target {
@@ -1632,9 +1637,7 @@ impl Engine {
             // A view's links to its own headings name its own address and, on Linear, the ids
             // its create was answered with, so a new view is written once more with them: an
             // update of what this copy created, which the create's undo takes back with it.
-            if let Some(links) = &view_links
-                && !carrying
-            {
+            if let Some(links) = &view_links {
                 let own = super::located(
                     destination
                         .source()
@@ -1647,16 +1650,33 @@ impl Engine {
                 if write.item.content.as_deref() != Some(finished.as_str()) {
                     let mut item = write.item.clone();
                     item.content = Some(finished);
-                    let finished = destination
-                        .source()
-                        .write_task(&ItemWrite {
-                            target: Some(landed.clone()),
-                            item,
-                            depends_on: write.depends_on.clone(),
-                        })
-                        .await
-                        .and_then(|answered| answered_id(answered, "write_task"))
-                        .map_err(|error| refused(destination, error))?;
+                    let again = ItemWrite {
+                        target: Some(landed.clone()),
+                        item,
+                        depends_on: write.depends_on.clone(),
+                    };
+                    let finished = if carrying {
+                        // Its assets go with it, each the create uploaded reused rather than sent
+                        // again.
+                        let uploaded = super::super::stored::served(
+                            write.item.content.as_deref().unwrap_or_default(),
+                            stored.as_deref().unwrap_or_default(),
+                            &task.assets,
+                        );
+                        destination
+                            .source()
+                            .write_task_with_assets(
+                                &again,
+                                None,
+                                &assets::write_of(task.assets.clone(), uploaded),
+                            )
+                            .await
+                            .map(|written| written.id)
+                    } else {
+                        destination.source().write_task(&again).await
+                    }
+                    .and_then(|answered| answered_id(answered, "write_task"))
+                    .map_err(|error| refused(destination, error))?;
                     // An update of the view it names, and an answer naming another is one this copy
                     // cannot say what was written to.
                     if finished != landed {

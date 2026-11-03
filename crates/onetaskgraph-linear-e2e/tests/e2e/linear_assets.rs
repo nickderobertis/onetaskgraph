@@ -1168,6 +1168,181 @@ fn project_home_routed_to_a_member_source_carries_issue_and_document_assets() {
     }
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: folders of Markdown, the loopback Linear and its loopback asset storage, which only this suite serves, and the pinned onevcs release the boundary journeys already run.
+#[test]
+fn a_new_linear_view_carrying_an_image_names_its_own_heading_by_the_id_its_create_was_answered_with()
+ {
+    // A public view Linear creates holds its task's image and a link to one of its own headings.
+    // The heading's id exists only once the create is answered, so the view is written once
+    // more to name it — with its image, which the create uploaded and the second write reuses.
+    let sandbox = Sandbox::new();
+    let (mut config, workspace) = Workspace::holding(
+        &sandbox,
+        1,
+        json!({
+            "tasks": [], "projects": [], "documents": [], "labels": [],
+            "task_dependencies": [], "project_dependencies": []
+        }),
+    );
+    config["status_mapping"] = crate::fixtures::linear_default_mapping();
+    let mut home = onetaskgraph_e2e_support::onevcs::OnevcsHome::new(&sandbox);
+    home.private("hiddenco", "quietharbor")
+        .public("openco", "openwidget");
+    let folder = |name: &str| json!({"plugin": "local-md", "config": {"root": sandbox.subdirectory(name)}, "visibility": "private"});
+    sandbox.project_document(
+        &json!({
+            "sources": {
+                "plan": folder("plan"),
+                "vault": {
+                    "plugin": "local-md",
+                    "config": {"root": sandbox.subdirectory("vault")},
+                    "visibility": "private",
+                    "routes": [{"repositories": ["github.com/openco/*"], "to": "tracker"}],
+                },
+                "tracker": {"plugin": "linear", "config": config, "visibility": "public"},
+            },
+            "write_policy": home.write_policy(),
+        })
+        .to_string(),
+    );
+    let run = |arguments: &[&str]| -> String {
+        let output = sandbox
+            .command()
+            .env("ONEVCS_HOME", home.path())
+            .envs(workspace.clock.client_env(0))
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "`onetaskgraph {}`: {}",
+            arguments.join(" "),
+            stderr(&output)
+        );
+        stdout(&output)
+    };
+    let plan = sandbox.subdirectory("plan");
+    std::fs::create_dir_all(plan.join("projects")).unwrap();
+    std::fs::write(
+        plan.join("projects/rollout.md"),
+        "---\ntitle: Quietharbor rollout\nstatus: todo\n---\nThe private plan.\n",
+    )
+    .unwrap();
+    // Private work in the plan keeps its home on the private side, so the public task is seen
+    // there only through its view.
+    std::fs::create_dir_all(plan.join("tasks")).unwrap();
+    std::fs::write(
+        plan.join("tasks/producer.md"),
+        "---\ntitle: Harden the ingest\nstatus: todo\nproject: rollout\n\
+         repositories: [github.com/hiddenco/quietharbor]\n---\nPrivate work.\n",
+    )
+    .unwrap();
+    let inputs = sandbox.subdirectory("inputs");
+    let image = inputs.join("shot.png");
+    std::fs::write(&image, images::png(7, 50_500)).unwrap();
+    let body = inputs.join("body.md");
+    std::fs::write(
+        &body,
+        "See [the retry](#step-2b-retry-once), as drawn: ![the retry](./shot.png)\n\n\
+         ### Step 2.b: retry (once)\n\nOnce.\n",
+    )
+    .unwrap();
+    run(&[
+        "task",
+        "create",
+        "plan",
+        "--project",
+        "rollout",
+        "--title",
+        "Retry the widget once",
+        "--body-file",
+        body.to_str().unwrap(),
+        "--repository",
+        "github.com/openco/openwidget",
+        "--asset",
+        image.to_str().unwrap(),
+    ]);
+    let copy = ["project", "copy", "plan:rollout", "--to", "vault", "--json"];
+    let reported: Value = serde_json::from_str(&run(&copy)).unwrap();
+    let home_project = reported["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["source"] == "plan:rollout")
+        .unwrap()["destination"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let shown = |kind: &str, id: &str| -> Value {
+        serde_json::from_str::<Value>(&run(&[kind, "show", id, "--json"])).unwrap()["items"][0]
+            ["item"]
+            .clone()
+    };
+    let view =
+        shown("project", &home_project)["metadata"]["onetaskgraph.public_projections"]["tasks"][0]
+            ["projection"]
+            .as_str()
+            .expect("the task's view")
+            .to_owned();
+    let native = view.split_once(':').unwrap().1.to_owned();
+    let held = shown("task", &view);
+    let url = held["location"]["url"]
+        .as_str()
+        .expect("a Linear address")
+        .to_owned();
+    let id8: String = onetaskgraph_e2e_support::linear_editor::stored(
+        &workspace
+            .held
+            .editor_state(crate::fixtures::LinearRecord::Task, &native)
+            .expect("an editor state"),
+    )
+    .iter()
+    .find(|(text, _)| text == "Step 2.b: retry (once)")
+    .map(|(_, id)| id.replace('-', "")[..8].to_owned())
+    .expect("the heading's stored id");
+    let raw = workspace.held.long_form("tasks", &native).unwrap();
+    assert!(
+        raw.contains(&format!(
+            "[the retry]({url}#heading-step-2b-retry-once-{id8})"
+        )),
+        "the view names its own heading by its stored id: {raw}"
+    );
+    assert!(
+        raw.contains("![the retry](http://") && !raw.contains("](./"),
+        "the view's image is served where the create uploaded it: {raw}"
+    );
+    let state = workspace.state.lock().unwrap();
+    assert_eq!(state.uploads.len(), 1, "the image is uploaded once");
+    drop(state);
+    // A repeat sends the view one update saying exactly what Linear stores, and nothing else.
+    // That update is not this view's links: on base `ebce65c3` every repeat copy rewrites an
+    // image-carrying public view on Linear, links or none, and the manager ruled it out of this
+    // change's scope.
+    let stored = workspace.held.long_form("tasks", &native).unwrap();
+    let mark = workspace.held.served_count();
+    run(&copy);
+    let mutations: Vec<(String, Value)> = workspace
+        .held
+        .served_since(mark)
+        .into_iter()
+        .filter(|(document, _)| document.trim_start().starts_with("mutation"))
+        .collect();
+    assert_eq!(mutations.len(), 1, "{mutations:#?}");
+    let (document, variables) = &mutations[0];
+    assert!(document.contains("issueUpdate("), "{document}");
+    assert_eq!(variables["id"], native.as_str());
+    assert_eq!(
+        variables["input"]["description"].as_str(),
+        Some(stored.as_str()),
+        "the repeat's update says what Linear already stores"
+    );
+    assert_eq!(
+        workspace.held.long_form("tasks", &native).unwrap(),
+        stored,
+        "and the view reads as it did"
+    );
+}
+
 #[derive(Default)]
 struct LiveUploads {
     signed: BTreeMap<usize, String>,
