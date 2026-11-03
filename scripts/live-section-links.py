@@ -193,7 +193,10 @@ def main() -> int:
         done_state = next(state["name"] for state in states if state["type"] == "completed")
         project_status = next(status["name"] for status in vocabulary["projectStatuses"]["nodes"] if status["type"] in ("planned", "backlog"))
 
-        # 2. The authored project.
+        # 2. The authored project, under a source name of this run's own: a Linear create is
+        # sent the id its create key derives from the source item, and a record a previous run
+        # deleted still holds its id in Linear's trash.
+        authored_name = f"authored-{int(time.time())}"
         sandbox = out / "sandbox"
         authored = sandbox / "authored"
         for folder in ("projects", "tasks", "documents"):
@@ -210,7 +213,7 @@ def main() -> int:
             (authored / path).write_text(f"---\n{front}\n---\n{body}")
         (sandbox / "config").mkdir(exist_ok=True)
         (sandbox / "onetaskgraph.yaml").write_text(json.dumps({"sources": {
-            "authored": {"plugin": "local-md", "config": {"root": str(authored)}},
+            authored_name: {"plugin": "local-md", "config": {"root": str(authored)}},
             "board": {"plugin": "github-projects", "config": {"owner": owner, "project_number": copied["number"], "repository": repository, "status_mapping": {"todo": options[0]["name"], "backlog": None, "queued": None, "in-progress": None}}},
             "linear": {"plugin": "linear", "config": {"team": team, "status_mapping": {"todo": {"task": open_state, "project": project_status}, "done": {"task": done_state}}}},
         }}))
@@ -240,7 +243,7 @@ def main() -> int:
                     linear_created.append((verb, outcome["destination"].split(":", 1)[1]))
             return landed
 
-        source = {"P": ("project", "authored:P"), "T": ("task", "authored:T"), "U": ("task", "authored:U"), "D": ("document", "authored:D")}
+        source = {key_: (verb, f"{authored_name}:{key_}") for key_, verb in (("P", "project"), ("T", "task"), ("U", "task"), ("D", "document"))}
         # 3. The three hops.
         on_board = copy(source, "board")
         in_linear = copy(source, "linear")

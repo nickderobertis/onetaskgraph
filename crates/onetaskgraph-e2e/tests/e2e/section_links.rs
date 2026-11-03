@@ -1372,6 +1372,7 @@ fn a_linear_heading_its_record_does_not_store_is_linked_by_the_record_alone_and_
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback stand-ins this suite already drives for both hosted destinations.
 #[test]
 fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_form() {
+    let mut repeated_writes = Vec::new();
     for kind in KINDS {
         let sandbox = Sandbox::new();
         let (authored_config, _) = authored(&sandbox, "plans");
@@ -1427,13 +1428,49 @@ fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_f
         );
         let root = (kind == "local-md").then(|| root_of(&sandbox, "dest"));
         let mark = destination.mark(root.as_deref());
+        let before = root.as_deref().map(files_under);
         ok(&sandbox, &copy);
-        assert_eq!(
-            destination.writes_since(&mark, root.as_deref()),
-            Vec::<String>::new(),
-            "{kind}: a repeat copy writes nothing"
-        );
+        let written = destination.writes_since(&mark, root.as_deref());
+        if let (Some(root), Some(before)) = (root.as_deref(), before) {
+            // The one exemption the manager ruled on evidence from base `ebce65c3`: a second
+            // `--comments` copy into a folder of Markdown may move a record's
+            // `onetaskgraph.copied_version` line — the copy's own link write moved the source
+            // file's token after it was recorded — and no other line of any file.
+            let after = files_under(root);
+            for path in &written {
+                let lines = |held: &BTreeMap<String, Vec<u8>>| -> Vec<String> {
+                    String::from_utf8_lossy(held.get(path).map_or(&[][..], Vec::as_slice))
+                        .lines()
+                        .filter(|line| {
+                            !line
+                                .trim_start()
+                                .starts_with("onetaskgraph.copied_version:")
+                        })
+                        .map(str::to_owned)
+                        .collect()
+                };
+                assert_eq!(
+                    lines(&before),
+                    lines(&after),
+                    "{kind}: {path} changed beyond its copied_version line"
+                );
+            }
+            let mark = destination.mark(Some(root));
+            ok(&sandbox, &copy);
+            assert_eq!(
+                destination.writes_since(&mark, Some(root)),
+                Vec::<String>::new(),
+                "{kind}: a third copy writes no file"
+            );
+        } else if !written.is_empty() {
+            repeated_writes.push(format!("{kind}: {written:?}"));
+        }
     }
+    assert_eq!(
+        repeated_writes,
+        Vec::<String>::new(),
+        "a repeat copy writes nothing into a hosted destination"
+    );
 }
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown, one loopback board and the loopback Linear workspace.
