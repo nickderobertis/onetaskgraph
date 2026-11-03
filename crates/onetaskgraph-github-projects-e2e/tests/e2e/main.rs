@@ -50,6 +50,9 @@ mod plan_reads;
 mod plan_writes;
 mod private_home;
 mod project_status;
+// `sources sanitize` against the loopback board, screened by the pinned onevcs release.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Loopback-only and seconds long, like every journey of this crate; it drives the sweep through this plugin's own search and comment reads, so this plugin's edge is the one it belongs behind, beside the screened plan copy that already runs the same pinned onevcs.
+mod sanitize_sweep;
 mod status_complete;
 mod status_reconcile;
 mod store_cost;
