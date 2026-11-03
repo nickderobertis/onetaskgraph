@@ -295,8 +295,11 @@ pub enum Written {
     Pending,
 }
 
-/// The canonical GitHub host prefix, and the one [`SectionForm::GithubProjects`] writes.
+/// The canonical GitHub host prefix: the one a GitHub board reports its issues' locations
+/// under, and recognised in a link written by hand.
 const GITHUB: &str = "https://github.com/";
+/// The prefix [`SectionForm::GithubProjects`] writes a cross-record link under: GitHub answers
+/// it with a redirect that keeps the fragment, so the link lands when clicked inside GitHub.
 const GITHUB_WWW: &str = "https://www.github.com/";
 /// The prefix GitHub gives every `id` in a body it renders.
 const USER_CONTENT: &str = "user-content-";

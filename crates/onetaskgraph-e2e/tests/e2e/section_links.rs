@@ -2671,3 +2671,79 @@ fn a_task_linking_its_own_record_and_its_comments_fragment_are_written_for_the_d
         );
     }
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: folders of Markdown and the loopback board.
+#[test]
+fn a_relative_link_to_another_record_without_a_fragment_names_that_records_counterpart() {
+    // Two tasks each link the other by a path relative to its own file and no fragment, so
+    // whichever a folder of Markdown creates first links a record whose file is not there yet:
+    // each link names the other's counterpart — relative to the linking file's new place in a
+    // folder of Markdown, by its issue's location on a board — and carries no fragment.
+    for kind in ["github-projects", "local-md"] {
+        let sandbox = Sandbox::new();
+        let config = empty_folder(&sandbox, "plans");
+        let root = root_of(&sandbox, "plans");
+        for folder in ["projects", "tasks"] {
+            std::fs::create_dir_all(root.join(folder)).expect("a folder");
+        }
+        std::fs::write(
+            root.join("projects/P.md"),
+            "---\ntitle: Plan\nstatus: todo\n---\nThe plan.\n",
+        )
+        .expect("the project");
+        std::fs::write(
+            root.join("tasks/A.md"),
+            "---\ntitle: Alpha\nstatus: todo\nproject: P\n---\nAfter [beta](B.md).\n",
+        )
+        .expect("the first task");
+        std::fs::write(
+            root.join("tasks/B.md"),
+            "---\ntitle: Beta\nstatus: todo\nproject: P\n---\nBefore [alpha](./A.md).\n",
+        )
+        .expect("the second task");
+        let (destination, dest_config) = store(&sandbox, kind, "dest", None);
+        configure(
+            &sandbox,
+            &[
+                ("plans", &json!({"plugin": "local-md", "config": config})),
+                ("dest", &dest_config),
+            ],
+        );
+        let reported = outcomes(&ok(
+            &sandbox,
+            &["project", "copy", "plans:P", "--to", "dest", "--json"],
+        ));
+        let landed = |id: &str| Landed {
+            verb: "task",
+            id: reported[id]["destination"].as_str().unwrap().to_owned(),
+        };
+        let (alpha, beta) = (landed("plans:A"), landed("plans:B"));
+        let (alpha_at, beta_at) = (alpha.location(&sandbox), beta.location(&sandbox));
+        let (to_beta, to_alpha) = match &destination {
+            Store::Local => {
+                let dest_root = root_of(&sandbox, "dest");
+                let inside = |at: &str| {
+                    Path::new(at)
+                        .strip_prefix(&dest_root)
+                        .unwrap_or_else(|_| panic!("{at} is in the destination folder"))
+                        .to_str()
+                        .unwrap()
+                        .to_owned()
+                };
+                let (a, b) = (inside(&alpha_at), inside(&beta_at));
+                (relative(&a, &b), relative(&b, &a))
+            }
+            _ => (beta_at.clone(), alpha_at.clone()),
+        };
+        assert_eq!(
+            alpha.content(&sandbox),
+            format!("After [beta]({to_beta})."),
+            "{kind}: alpha links beta's counterpart"
+        );
+        assert_eq!(
+            beta.content(&sandbox),
+            format!("Before [alpha]({to_alpha})."),
+            "{kind}: beta links alpha's counterpart"
+        );
+    }
+}
