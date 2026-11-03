@@ -15,6 +15,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use onetaskgraph_e2e_support::fixtures::LinearRecord;
 use onetaskgraph_e2e_support::linear_editor;
 use serde_json::{Value, json};
 
@@ -281,7 +282,7 @@ impl Store {
 fn stored_id8(workspace: &LinearWorkspace, at: &Landed, text: &str, ordinal: usize) -> String {
     let ids = linear_editor::stored(
         &workspace
-            .editor_state(at.collection(), at.native())
+            .editor_state(at.record(), at.native())
             .unwrap_or_else(|| panic!("{} holds an editor state", at.id)),
     );
     let id = ids
@@ -373,10 +374,15 @@ impl Landed {
     }
 
     fn collection(&self) -> &'static str {
+        self.record().collection()
+    }
+
+    /// The kind of record a Linear workspace holds it as.
+    fn record(&self) -> LinearRecord {
         match self.verb {
-            "task" => "tasks",
-            "project" => "projects",
-            _ => "documents",
+            "task" => LinearRecord::Task,
+            "project" => LinearRecord::Project,
+            _ => LinearRecord::Document,
         }
     }
 
@@ -1090,7 +1096,7 @@ fn every_captured_linear_heading_is_linked_by_the_fragment_its_stored_id_gives_i
         let target = Landed { verb, id: copied };
         // The record as a person's edit in Linear's editor leaves it: holding the ids Linear
         // gave the captured record's headings.
-        workspace.set_editor_state(folder, target.native(), state);
+        workspace.set_editor_state(target.record(), target.native(), state);
 
         let rendered = ok(
             &sandbox,
@@ -1315,7 +1321,7 @@ fn a_linear_heading_its_record_does_not_store_is_linked_by_the_record_alone_and_
             .to_owned(),
     };
     workspace.set_editor_state(
-        "tasks",
+        LinearRecord::Task,
         target.native(),
         &linear_editor::restated(None, "## What\n", "only-what"),
     );
@@ -2163,8 +2169,8 @@ fn a_comment_removed_before_its_section_link_is_finished_is_written_afresh() {
 #[test]
 fn a_repeat_copy_behind_the_cache_of_a_link_to_a_project_heading_writes_nothing() {
     // A task links a heading of its project's description. Copied again into a Linear workspace
-    // behind the local cache, the project is read at most once for its heading ids and the
-    // task's link still names the stored id: nothing is written.
+    // behind the local cache, the project — a target this copy does not write — is read once for
+    // its heading ids, and the task's link still names the stored id: nothing is written.
     let sandbox = Sandbox::new();
     let config = empty_folder(&sandbox, "plans");
     let root = root_of(&sandbox, "plans");
@@ -2229,13 +2235,13 @@ fn a_repeat_copy_behind_the_cache_of_a_link_to_a_project_heading_writes_nothing(
         "a repeat copy writes nothing"
     );
     let native = project.native().to_owned();
-    assert!(
+    assert_eq!(
         served
             .iter()
             .filter(|(document, variables)| reads(document, variables, "project", &native))
-            .count()
-            <= 1,
-        "the project is read at most once for its heading ids"
+            .count(),
+        1,
+        "the project, which this copy does not write, is read once for its heading ids"
     );
     assert!(
         task.content(&sandbox).contains(&expected),

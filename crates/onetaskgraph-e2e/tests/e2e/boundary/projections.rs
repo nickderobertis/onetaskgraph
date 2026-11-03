@@ -3304,7 +3304,10 @@ fn a_new_linear_views_link_to_its_own_heading_names_the_id_its_create_was_answer
         .to_owned();
     let ids = onetaskgraph_e2e_support::linear_editor::stored(
         &workspace
-            .editor_state("tasks", &native)
+            .editor_state(
+                onetaskgraph_e2e_support::fixtures::LinearRecord::Task,
+                &native,
+            )
             .expect("an editor state"),
     );
     let id8: String = ids

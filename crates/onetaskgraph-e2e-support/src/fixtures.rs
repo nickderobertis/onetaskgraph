@@ -6719,13 +6719,15 @@ impl LinearWorkspace {
         })
     }
 
-    /// The editor state this workspace answers one held record of `kind` — `tasks`, `projects`
-    /// or `documents` — with, as `descriptionState` or `contentState`: `None` for a record it
-    /// answers with none.
+    /// The editor state this workspace answers one held record of `kind` with, as
+    /// `descriptionState` or `contentState`: `None` for a record it answers with none.
     #[must_use]
-    pub fn editor_state(&self, kind: &str, id: &str) -> Option<String> {
+    pub fn editor_state(&self, kind: LinearRecord, id: &str) -> Option<String> {
         let data = self.state.lock().unwrap();
-        let row = data[kind].as_array()?.iter().find(|row| row["id"] == id)?;
+        let row = data[kind.collection()]
+            .as_array()?
+            .iter()
+            .find(|row| row["id"] == id)?;
         linear_editor_state(row).as_str().map(str::to_owned)
     }
 
@@ -6737,9 +6739,9 @@ impl LinearWorkspace {
 
     /// Hold one record's editor state as `state` — a captured sample — as a person's edit in
     /// Linear's editor leaves it.
-    pub fn set_editor_state(&self, kind: &str, id: &str, state: &str) {
+    pub fn set_editor_state(&self, kind: LinearRecord, id: &str, state: &str) {
         let mut data = self.state.lock().unwrap();
-        if let Some(row) = data[kind]
+        if let Some(row) = data[kind.collection()]
             .as_array_mut()
             .and_then(|rows| rows.iter_mut().find(|row| row["id"] == id))
         {
@@ -9811,6 +9813,29 @@ pub fn dataset() -> Value {
              "to": {"id": "elsewhere:T-9", "kind": "task"}, "kind": "blocks"}
         ]
     })
+}
+
+/// The kinds of record a Linear workspace holds an editor state for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinearRecord {
+    /// An issue, whose state is its `descriptionState`.
+    Task,
+    /// A project, whose state is its `contentState`.
+    Project,
+    /// A document, whose state is its `contentState`.
+    Document,
+}
+
+impl LinearRecord {
+    /// The collection the workspace double holds this kind of record in.
+    #[must_use]
+    pub fn collection(self) -> &'static str {
+        match self {
+            Self::Task => "tasks",
+            Self::Project => "projects",
+            Self::Document => "documents",
+        }
+    }
 }
 
 #[cfg(test)]
