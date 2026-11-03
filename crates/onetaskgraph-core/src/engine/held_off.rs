@@ -421,15 +421,6 @@ impl TaskSource for HeldOff {
         self.inner.attach_body_markup(markup);
     }
 
-    async fn read_stored_headings(
-        &self,
-        record: MetadataRecord,
-        id: &NativeId,
-    ) -> Result<Option<Vec<onetaskgraph_plugin_api::StoredHeading>>, SourceError> {
-        self.refused()?;
-        self.noted(self.inner.read_stored_headings(record, id).await)
-    }
-
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.refused()?;
         self.noted(self.inner.write_task(write).await)

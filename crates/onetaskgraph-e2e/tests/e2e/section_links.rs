@@ -1887,9 +1887,8 @@ fn a_refused_comment_edit_finishing_a_section_link_takes_the_whole_copy_back() {
 fn a_linear_destination_behind_the_local_cache_still_names_each_headings_stored_id() {
     // With the cache on, a copy's links still name the ids Linear stored its headings under,
     // on the first copy and on a later copy of the design document alone, and a repeat copy
-    // writes nothing. A copy reads a record it needs heading ids for past the cache
-    // (`TaskSource::read_stored_headings`), since a cached answer says nothing of them; this
-    // journey's reads are not ones the cache serves, so it holds the result, not that path.
+    // writes nothing: every listing a copy pins records by reaches Linear and selects the editor
+    // state, so a record the cache answers has its heading ids already.
     let sandbox = Sandbox::new();
     let (authored_config, authored_target) = authored(&sandbox, "plans");
     let (linear, mut config) = store(&sandbox, "linear", "linear", None);
@@ -2157,5 +2156,90 @@ fn a_comment_removed_before_its_section_link_is_finished_is_written_afresh() {
         held.iter().filter(|body| body.contains(&expected)).count(),
         1,
         "written afresh, once, finished: {held:#?}"
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace, behind the store's local cache.
+#[test]
+fn a_repeat_copy_behind_the_cache_of_a_link_to_a_project_heading_writes_nothing() {
+    // A task links a heading of its project's description. Copied again into a Linear workspace
+    // behind the local cache, the project is read at most once for its heading ids and the
+    // task's link still names the stored id: nothing is written.
+    let sandbox = Sandbox::new();
+    let config = empty_folder(&sandbox, "plans");
+    let root = root_of(&sandbox, "plans");
+    for folder in ["projects", "tasks"] {
+        std::fs::create_dir_all(root.join(folder)).expect("a folder");
+    }
+    std::fs::write(
+        root.join("projects/P.md"),
+        "---\ntitle: Plan\nstatus: todo\n---\n## Scope\n\nWhat is in.\n",
+    )
+    .expect("the project");
+    std::fs::write(
+        root.join("tasks/U.md"),
+        "---\ntitle: Referrer\nstatus: todo\nproject: P\n---\nWithin [the scope](../projects/P.md#scope).\n",
+    )
+    .expect("the task");
+    let (linear, mut linear_config) = store(&sandbox, "linear", "linear", None);
+    linear_config["cache"] = json!({"enabled": true, "dir": sandbox.subdirectory("cache")});
+    configure(
+        &sandbox,
+        &[
+            ("plans", &json!({"plugin": "local-md", "config": config})),
+            ("linear", &linear_config),
+        ],
+    );
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    let copy = ["project", "copy", "plans:P", "--to", "linear", "--json"];
+    let reported = outcomes(&ok(&sandbox, &copy));
+    let project = Landed {
+        verb: "project",
+        id: reported["plans:P"]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    let task = Landed {
+        verb: "task",
+        id: reported["plans:U"]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    let expected = format!(
+        "[the scope]({}#heading-scope-{})",
+        project.location(&sandbox),
+        stored_id8(workspace, &project, "Scope", 0)
+    );
+    assert!(
+        task.content(&sandbox).contains(&expected),
+        "{}",
+        task.content(&sandbox)
+    );
+
+    let mark = workspace.served_count();
+    ok(&sandbox, &copy);
+    let served = workspace.served_since(mark);
+    assert_eq!(
+        mutations(served.clone()),
+        Vec::<String>::new(),
+        "a repeat copy writes nothing"
+    );
+    let native = project.native().to_owned();
+    assert!(
+        served
+            .iter()
+            .filter(|(document, variables)| reads(document, variables, "project", &native))
+            .count()
+            <= 1,
+        "the project is read at most once for its heading ids"
+    );
+    assert!(
+        task.content(&sandbox).contains(&expected),
+        "{}",
+        task.content(&sandbox)
     );
 }

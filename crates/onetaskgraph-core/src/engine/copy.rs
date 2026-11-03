@@ -4387,8 +4387,7 @@ impl Engine {
         let mut wanted: BTreeMap<SourceName, Vec<&Referent>> = BTreeMap::new();
         for (item, referents) in planned.iter().zip(&named) {
             for referent in referents {
-                if written.contains_key(&(item.to.clone(), referent.level, referent.id.clone()))
-                {
+                if written.contains_key(&(item.to.clone(), referent.level, referent.id.clone())) {
                     continue;
                 }
                 let at = wanted.entry(item.to.clone()).or_default();
@@ -5704,10 +5703,9 @@ impl Engine {
                         planned[*index].source.to_string(),
                         GlobalId::new(destination.name().clone(), id.clone()),
                     );
-                    journal.landed.insert(
-                        (Level::Task, planned[*index].source.clone()),
-                        id.clone(),
-                    );
+                    journal
+                        .landed
+                        .insert((Level::Task, planned[*index].source.clone()), id.clone());
                     created.insert(*index, id);
                 }
             }
@@ -10960,12 +10958,13 @@ async fn read_destination(
     level: Level,
     id: &NativeId,
 ) -> Result<(), EngineError> {
-    destination
-        .source()
-        .read_stored_headings(level.record(), id)
-        .await
-        .map(|_| ())
-        .map_err(|error| refused(destination, error))
+    let source = destination.source();
+    match level {
+        Level::Task => source.get_task(id).await.map(|_| ()),
+        Level::Project => source.get_project(id).await.map(|_| ()),
+        Level::Document => source.get_document(id).await.map(|_| ()),
+    }
+    .map_err(|error| refused(destination, error))
 }
 
 /// `planned` with every item a planned body links to ahead of that body, and otherwise in the
@@ -11064,9 +11063,7 @@ struct Writing<'a> {
 
 impl sections::Knows for Writing<'_> {
     fn landed(&self, referent: &sections::Linked) -> Option<(NativeId, String)> {
-        let id = self
-            .landed
-            .get(&(referent.level, referent.id.clone()))?;
+        let id = self.landed.get(&(referent.level, referent.id.clone()))?;
         let location = located(
             self.destination
                 .source()

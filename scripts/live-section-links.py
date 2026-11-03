@@ -20,7 +20,9 @@ Nx never run it.
    characters against the stored editor-state id of the heading it names, and that the
    board → Linear hop names no GitHub issue and holds no anchor markup.
 5. In a real Chromium, opens each GitHub section link directly and clicks it inside its issue,
-   recording whether the named heading's anchor is what the page scrolled to.
+   recording whether the named heading's anchor is what the page scrolled to once its layout has
+   settled — its height steady across a short interval. A miss is tried once more and both
+   attempts are recorded; a link missing on both is a failure.
 6. Deletes everything it created — the issues, the board copy, the Linear records — however it
    ended, and names on stderr anything it could not.
 
@@ -185,8 +187,9 @@ class Observation:
     link: str
     href: str
     slug: str
-    direct: Measurement | None = None
-    click: Measurement | None = None
+    # Each attempt, in order: a miss is tried once more once the page has settled again.
+    direct: list[Measurement] = dataclasses.field(default_factory=list)
+    click: list[Measurement] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -596,7 +599,22 @@ MEASURE = """(slug) => {
 }"""
 
 
+HEIGHT = "() => document.documentElement.scrollHeight"
+
+
+def settled(page) -> None:
+    """Wait until the page's layout has settled: its height the same across a short interval."""
+    last = None
+    for _ in range(30):
+        height = page.evaluate(HEIGHT)
+        if height == last:
+            return
+        last = height
+        time.sleep(1)
+
+
 def measured(page, slug: str) -> Measurement:
+    settled(page)
     seen = page.evaluate(MEASURE, slug)
     return Measurement(str(seen["url"]), int(seen["scrollY"]), seen["anchorTop"])
 
@@ -614,31 +632,42 @@ def browse(run: Run, hrefs: dict[Link, str]) -> list[Observation]:
         context = browser.new_context(viewport={"width": 1280, "height": 800})
         for link, href in hrefs.items():
             seen = Observation(f"{link.holder}: [{link.text}]", href, link.heading.github)
-            page = context.new_page()
-            try:
-                page.goto(href, wait_until="load", timeout=60000)
-                time.sleep(4)
-                seen.direct = measured(page, seen.slug)
-            finally:
-                page.close()
-            page = context.new_page()
-            try:
-                page.goto(run.github[link.holder], wait_until="load", timeout=60000)
-                time.sleep(4)
-                anchor = page.locator(".markdown-body a", has_text=re.compile("^" + re.escape(link.text) + "$")).first
-                anchor.scroll_into_view_if_needed(timeout=15000)
-                before = set(context.pages)
-                anchor.click()
-                time.sleep(5)
-                opened = [candidate for candidate in context.pages if candidate not in before]
-                target = opened[0] if opened else page
-                seen.click = measured(target, seen.slug)
-                if target is not page:
-                    target.close()
-            finally:
-                page.close()
-            for mode, measurement in (("direct", seen.direct), ("click", seen.click)):
-                run.check(f"Chromium {mode}: {seen.link} lands on #user-content-{seen.slug}", measurement is not None and measurement.landed(), str(measurement))
+            for attempt in range(2):
+                if attempt and seen.direct[-1].landed():
+                    break
+                page = context.new_page()
+                try:
+                    page.goto(href, wait_until="load", timeout=60000)
+                    seen.direct.append(measured(page, seen.slug))
+                finally:
+                    page.close()
+            for attempt in range(2):
+                if attempt and seen.click[-1].landed():
+                    break
+                page = context.new_page()
+                try:
+                    page.goto(run.github[link.holder], wait_until="load", timeout=60000)
+                    settled(page)
+                    anchor = page.locator(".markdown-body a", has_text=re.compile("^" + re.escape(link.text) + "$")).first
+                    anchor.scroll_into_view_if_needed(timeout=15000)
+                    before = set(context.pages)
+                    anchor.click()
+                    time.sleep(2)
+                    opened = [candidate for candidate in context.pages if candidate not in before]
+                    target = opened[0] if opened else page
+                    seen.click.append(measured(target, seen.slug))
+                    if target is not page:
+                        target.close()
+                finally:
+                    page.close()
+            # A link that misses on both attempts is a failure; one landing on the second is
+            # reported with both, as evidence.
+            for mode, attempts in (("direct", seen.direct), ("click", seen.click)):
+                run.check(
+                    f"Chromium {mode}: {seen.link} lands on #user-content-{seen.slug}",
+                    any(attempt.landed() for attempt in attempts),
+                    "; ".join(str(attempt) for attempt in attempts),
+                )
             observations.append(seen)
         browser.close()
     return observations

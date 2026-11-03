@@ -632,29 +632,6 @@ pub trait TaskSource: Send + Sync {
         None
     }
 
-    /// Read the `record` `id` from its backend — never from anything held in front of it — and
-    /// answer the headings that read says it stores, as [`Self::stored_headings`] reports them.
-    ///
-    /// What a caller that needs a record's heading ids asks when it has none: the engine's
-    /// local cache can answer an ordinary read without reaching the backend, and then nothing
-    /// says where its headings are. Defaulted to the record's ordinary read.
-    ///
-    /// # Errors
-    ///
-    /// Whatever the read fails with.
-    async fn read_stored_headings(
-        &self,
-        record: MetadataRecord,
-        id: &NativeId,
-    ) -> Result<Option<Vec<crate::StoredHeading>>, SourceError> {
-        match record {
-            MetadataRecord::Task => self.get_task(id).await.map(|_| ())?,
-            MetadataRecord::Project => self.get_project(id).await.map(|_| ())?,
-            MetadataRecord::Document => self.get_document(id).await.map(|_| ())?,
-        }
-        Ok(self.stored_headings(record, id))
-    }
-
     /// Hand this source the markup its bodies carry for a reader to address their headings:
     /// see [`crate::BodyMarkup`]. Called once, by the engine, as it builds the source.
     /// Defaulted to ignoring it, which a source whose backend needs no such markup does.
