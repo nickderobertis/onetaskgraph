@@ -88,10 +88,30 @@ fn read_request(mut stream: &TcpStream) -> Option<Value> {
 
 /// Linear's errored answer to a read or a mutation addressing a `kind` it does not hold.
 fn not_found(kind: &str) -> Value {
-    json!({"errors":[{"message":format!("Entity not found: {kind}"),
-        "extensions":{"type":"invalid input","code":"INPUT_ERROR","statusCode":400,
-            "userError":true,"userPresentableMessage":format!("Could not find referenced {kind}.")}}],
-        "data":null})
+    spelled_not_found(kind, Spelling::Both)
+}
+
+/// Which of Linear's two spellings of a not-found an answer carries: both, as Linear sends it,
+/// or one alone, as a rewording of the other would leave it.
+#[derive(Clone, Copy, Debug)]
+enum Spelling {
+    Both,
+    MessageOnly,
+    PresentableOnly,
+}
+
+fn spelled_not_found(kind: &str, spelling: Spelling) -> Value {
+    let message = match spelling {
+        Spelling::PresentableOnly => "Lookup failed for the requested record".to_owned(),
+        _ => format!("Entity not found: {kind}"),
+    };
+    let mut error = json!({"message": message});
+    if !matches!(spelling, Spelling::MessageOnly) {
+        error["extensions"] = json!({"type":"invalid input","code":"INPUT_ERROR",
+            "statusCode":400,"userError":true,
+            "userPresentableMessage":format!("Could not find referenced {kind}.")});
+    }
+    json!({"errors":[error],"data":null})
 }
 
 /// The two statuses Linear sends an errored answer under.
@@ -257,6 +277,27 @@ async fn a_read_by_an_id_linear_does_not_hold_answers_absent_on_every_read_path(
             assert!(
                 sent.iter().any(|query| query == graphql::DOCUMENT),
                 "{at}: {sent:#?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn either_spelling_of_linears_not_found_alone_reads_as_absent() {
+    for spelling in [Spelling::MessageOnly, Spelling::PresentableOnly] {
+        for status in STATUSES {
+            let (endpoint, _) = loopback(move |query, _| match read_kind(query) {
+                Some(kind) => (status, spelled_not_found(kind, spelling)),
+                None => (200, resolution()),
+            });
+            let source = source(&endpoint);
+            let absent = NativeId::from(ABSENT);
+            let at = format!("{spelling:?}, HTTP {status}");
+            assert!(source.get_task(&absent).await.unwrap().is_none(), "{at}");
+            assert!(source.get_project(&absent).await.unwrap().is_none(), "{at}");
+            assert!(
+                source.get_document(&absent).await.unwrap().is_none(),
+                "{at}"
             );
         }
     }

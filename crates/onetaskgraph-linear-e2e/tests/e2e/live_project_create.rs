@@ -217,55 +217,60 @@ fn absent_id(stamp: &str, kind: &str) -> String {
     onetaskgraph_linear::linear_id_of_key(&key).expect("a key-shaped id")
 }
 
-/// Every project and issue of the team whose title carries `stamp`, with Linear's ids.
+/// Every project and issue of the team whose title carries `stamp`, with Linear's ids — or why
+/// Linear's answer does not say which those are, so a listing nobody could read is never taken
+/// for one holding nothing.
 fn stamped(
     runtime: &tokio::runtime::Runtime,
     key: &str,
     team_id: &str,
     stamp: &str,
-) -> Vec<(&'static str, String, String)> {
+) -> Result<Vec<(&'static str, String, String)>, String> {
     let mut found = Vec::new();
-    let projects = graphql(
-        runtime,
-        key,
-        "query($stamp:String!,$team:ID!){ projects(first:50,filter:{name:{contains:$stamp},accessibleTeams:{some:{id:{eq:$team}}}}){ nodes{id name} } }",
-        json!({"stamp": stamp, "team": team_id}),
-    );
-    for node in projects["data"]["projects"]["nodes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        found.push((
+    for (kind, root, title, query) in [
+        (
             "project",
-            node["id"].as_str().unwrap_or_default().to_owned(),
-            node["name"].as_str().unwrap_or_default().to_owned(),
-        ));
-    }
-    let issues = graphql(
-        runtime,
-        key,
-        "query($stamp:String!,$team:ID!){ issues(first:50,filter:{title:{contains:$stamp},team:{id:{eq:$team}}}){ nodes{id title} } }",
-        json!({"stamp": stamp, "team": team_id}),
-    );
-    for node in issues["data"]["issues"]["nodes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-    {
-        found.push((
+            "projects",
+            "name",
+            "query($stamp:String!,$team:ID!){ projects(first:50,filter:{name:{contains:$stamp},accessibleTeams:{some:{id:{eq:$team}}}}){ nodes{id name} pageInfo{hasNextPage} } }",
+        ),
+        (
             "issue",
-            node["id"].as_str().unwrap_or_default().to_owned(),
-            node["title"].as_str().unwrap_or_default().to_owned(),
-        ));
-    }
-    if projects.get("errors").is_some() || issues.get("errors").is_some() {
-        eprintln!(
-            "live project create: listing stamped items was refused: {} {}",
-            projects["errors"], issues["errors"]
+            "issues",
+            "title",
+            "query($stamp:String!,$team:ID!){ issues(first:50,filter:{title:{contains:$stamp},team:{id:{eq:$team}}}){ nodes{id title} pageInfo{hasNextPage} } }",
+        ),
+    ] {
+        let answer = graphql(
+            runtime,
+            key,
+            query,
+            json!({"stamp": stamp, "team": team_id}),
         );
+        if answer.get("errors").is_some() {
+            return Err(format!(
+                "Linear refused the stamped {root} listing: {answer}"
+            ));
+        }
+        let connection = &answer["data"][root];
+        let nodes = connection["nodes"]
+            .as_array()
+            .ok_or_else(|| format!("Linear answered the {root} listing with no nodes: {answer}"))?;
+        if connection["pageInfo"]["hasNextPage"] != false {
+            return Err(format!(
+                "the stamped {root} listing did not end on its first page: {answer}"
+            ));
+        }
+        for node in nodes {
+            let (Some(id), Some(name)) = (node["id"].as_str(), node[title].as_str()) else {
+                return Err(format!(
+                    "Linear answered a {kind} with no id or {title}: {node}"
+                ));
+            };
+            found.push((kind, id.to_owned(), name.to_owned()));
+        }
     }
-    found
+    Ok(found)
 }
 
 /// Remove every item `created` names and every stamped item the team still holds; whether all
@@ -278,14 +283,22 @@ fn cleanup(
     created: &[(&'static str, String)],
 ) -> bool {
     let mut items: Vec<(&'static str, String)> = created.to_vec();
-    for (kind, id, _) in stamped(runtime, key, team_id, stamp) {
+    // What the relay saw created is removed whatever the listing answers; a listing nobody
+    // could read fails the cleanup rather than passing it.
+    let (listed, mut all) = match stamped(runtime, key, team_id, stamp) {
+        Ok(listed) => (listed, true),
+        Err(problem) => {
+            eprintln!("live project create: {problem}");
+            (Vec::new(), false)
+        }
+    };
+    for (kind, id, _) in listed {
         if !items.iter().any(|(_, held)| *held == id) {
             items.push((kind, id));
         }
     }
     // Issues before projects, so no issue outlives the project it was filed under.
     items.sort_by_key(|(kind, _)| *kind != "issue");
-    let mut all = true;
     for (kind, id) in items {
         let (query, root) = match kind {
             "issue" => (onetaskgraph_linear::graphql::ISSUE_DELETE, "issueDelete"),
@@ -419,7 +432,8 @@ pub(crate) fn live_project_create(
         std::panic::resume_unwind(panic);
     }
     assert!(cleaned, "the live project-create journey's cleanup failed");
-    let left = stamped(runtime, key, &team_id, &stamp);
+    let left =
+        stamped(runtime, key, &team_id, &stamp).unwrap_or_else(|problem| panic!("{problem}"));
     assert!(
         left.is_empty(),
         "the live project-create journey left items behind: {left:?}"
@@ -598,6 +612,7 @@ fn drive(
     );
     let crane = format!("{title} crane");
     let issues = stamped(runtime, key, team_id, stamp)
+        .unwrap_or_else(|problem| panic!("{problem}"))
         .into_iter()
         .filter(|(kind, _, name)| *kind == "issue" && name.starts_with(&crane))
         .count();
