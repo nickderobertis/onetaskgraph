@@ -327,6 +327,7 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::BoundaryRefusedPredates { .. } => ("boundary-refused".to_owned(), None, None),
         EngineError::SanitizeDryRun { .. } => ("sanitize-dry-run".to_owned(), None, None),
         EngineError::SanitizeConflict { .. } => ("sanitize-conflict".to_owned(), None, None),
+        EngineError::TermsUnlisted { .. } => ("terms-unlisted".to_owned(), None, None),
         EngineError::DestinationNotPrivate { destination, .. } => (
             "destination-not-private".to_owned(),
             configured(destination),

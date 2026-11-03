@@ -11753,6 +11753,112 @@ retry_after_seconds: (number | null)
 
 }
 export type StatusesReconciled = GeneratedStatusesReconciled.StatusesReconciled;
+export namespace GeneratedSweepReport {
+/**
+ * What one `sources sanitize` did, naming every record by its screened locator and never by
+ * what it said.
+ */
+export interface SweepReport {
+/**
+ * The source swept, as screened.
+ */
+source: unknown
+/**
+ * Whether nothing was written.
+ */
+dry_run: boolean
+/**
+ * Whether the source was read whole rather than searched.
+ */
+complete: boolean
+requests: SweepRequests
+coverage: SweepCoverage
+/**
+ * One entry per item a search returned, and per item a whole read found carrying a term.
+ */
+items: SweepItem[]
+[k: string]: any
+}
+/**
+ * What the sweep cost, from the source's own request accounting.
+ */
+export interface SweepRequests {
+/**
+ * Every request the source counted, `0` for one that counts none.
+ */
+total: number
+/**
+ * Search or listing pages.
+ */
+searches: number
+/**
+ * Reads of an item and its comments.
+ */
+reads: number
+/**
+ * Writes of an item or a comment.
+ */
+writes: number
+[k: string]: any
+}
+/**
+ * Which classes of record the sweep could not establish.
+ */
+export interface SweepCoverage {
+/**
+ * Whether it covered every class.
+ */
+complete: boolean
+/**
+ * `metadata`, `comments`, `normalized-spellings`: each class it did not cover.
+ */
+uncovered: string[]
+[k: string]: any
+}
+/**
+ * What a sweep did with one item.
+ */
+export interface SweepItem {
+/**
+ * The item's qualified id, as screened.
+ */
+id: unknown
+/**
+ * `task`.
+ */
+kind: string
+/**
+ * `rewritten`, `would-rewrite`, `unchanged`, `unfixable`, `conflict` or `not-a-match`.
+ */
+outcome: string
+/**
+ * What it did with each field it changed or could not.
+ */
+fields: SweepField[]
+[k: string]: any
+}
+/**
+ * What a sweep did with one field of an item.
+ */
+export interface SweepField {
+/**
+ * `content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its
+ * key or id as screened.
+ */
+field: unknown
+/**
+ * `rewritten`, `would-rewrite` or `unfixable`.
+ */
+outcome: string
+/**
+ * Why a field is unfixable, in neutral words; absent otherwise.
+ */
+why?: (string | null)
+[k: string]: any
+}
+
+}
+export type SweepReport = GeneratedSweepReport.SweepReport;
 export namespace GeneratedTask {
 /**
  * A source's own opaque identifier for one item.

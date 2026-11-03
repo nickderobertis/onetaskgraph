@@ -413,6 +413,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "sources status-options",
             "sources fields",
             "sources route",
+            "sources sanitize",
             "task list",
             "task show",
             "task show-many",

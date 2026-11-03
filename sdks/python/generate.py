@@ -65,6 +65,8 @@ RESPONSE_ROOTS = {
     "sources_fields": "FieldsReport",
     # Where an item written to a source would land, read from configuration alone.
     "sources_route": "SourceRoute",
+    # What one sweep of a source for declared private terms found, rewrote and could not.
+    "sources_sanitize": "SweepReport",
     "config_show": "EffectiveConfig",
     # What emptying the local cache of one source, or of every source, emptied.
     "cache_clear": "CacheCleared",
@@ -834,7 +836,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
     match command:
         case ("search",):
             return ("text",)
-        case ("sources", "status-options" | "fields" | "route"):
+        case ("sources", "status-options" | "fields" | "route" | "sanitize"):
             return ("source",)
         case ("task" | "document", "copy") | ("task", "show-many" | "locate"):
             return ("ids",)

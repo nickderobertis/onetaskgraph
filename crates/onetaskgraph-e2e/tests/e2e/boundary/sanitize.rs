@@ -954,3 +954,360 @@ fn an_item_whose_stored_repositories_already_name_a_private_repository_is_refuse
     assert!(failure.get("predates_write").is_none(), "{failure}");
     assert!(!stderr(&output).contains("before this write"));
 }
+
+/// Stage on `folder` one task per hit class a whole read covers, as an older store wrote them,
+/// beside one carrying no term at all.
+fn stage_sweep(store: &Store, folder: &str) {
+    store.record(
+        folder,
+        "tasks",
+        "body",
+        "title: Body\nstatus: todo\nproject: p",
+        &format!("Retry the way {TERM} does."),
+    );
+    store.record(
+        folder,
+        "tasks",
+        "said",
+        "title: Said\nstatus: todo\nproject: p",
+        &format!(
+            "{PLAIN}\n\n## Comments\n\n{}",
+            comment("20260913T151107Z-1", &format!("Asked {TERM} first."))
+        ),
+    );
+    store.record(
+        folder,
+        "tasks",
+        "origin",
+        &format!(
+            "title: Origin\nstatus: todo\nproject: p\nmetadata:\n  onetaskgraph.origin: plan:{TERM}-retry"
+        ),
+        PLAIN,
+    );
+    store.record(
+        folder,
+        "tasks",
+        "clean",
+        "title: Clean\nstatus: todo\nproject: p",
+        PLAIN,
+    );
+}
+
+/// Stage the two records whose own locators carry the term: an id, and a metadata key.
+fn stage_locators(store: &Store, folder: &str) {
+    store.record(
+        folder,
+        "tasks",
+        &format!("{TERM}-named"),
+        "title: Named\nstatus: todo\nproject: p",
+        PLAIN,
+    );
+    store.record(
+        folder,
+        "tasks",
+        "keyed",
+        &format!("title: Keyed\nstatus: todo\nproject: p\nmetadata:\n  {TERM}.key: plain"),
+        PLAIN,
+    );
+}
+
+/// `sources sanitize` of `source` with `flags`, its exit code, parsed report, stdout and
+/// stderr.
+fn sweep(store: &Store, source: &str, flags: &[&str]) -> (Option<i32>, Value, String, String) {
+    let mut arguments = vec!["sources", "sanitize", source, "--json"];
+    arguments.extend_from_slice(flags);
+    let output = store.run(&arguments);
+    let out = stdout(&output);
+    (
+        output.status.code(),
+        serde_json::from_str(&out).unwrap_or(Value::Null),
+        out,
+        stderr(&output),
+    )
+}
+
+/// The entry of `report` for the item whose id is `id`.
+fn entry<'a>(report: &'a Value, id: &str) -> &'a Value {
+    report["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|item| item["id"] == json!(id))
+        .unwrap_or_else(|| panic!("an entry for {id}: {report}"))
+}
+
+/// Assert no spelling of the term — any case — is in `said`, nor in the store's cache.
+fn spelled_nowhere(store: &Store, said: &[&str]) {
+    for text in said {
+        assert!(
+            !text.to_lowercase().contains(TERM),
+            "the term is printed: {text}"
+        );
+    }
+    // Everything the store could have written beside the folders: what the test itself staged
+    // — the folders, the bodies, the recorder's own log and the onevcs home — is left out.
+    let root = store
+        .sandbox
+        .project()
+        .parent()
+        .expect("the sandbox")
+        .to_path_buf();
+    for (path, bytes) in tree(&root) {
+        let staged = [
+            "site",
+            "named",
+            "plan",
+            "vault",
+            "boundary-record",
+            "onevcs-",
+            "body-",
+            "onetaskgraph.yaml",
+        ]
+        .iter()
+        .any(|part| path.contains(part));
+        assert!(
+            staged
+                || !String::from_utf8_lossy(&bytes)
+                    .to_lowercase()
+                    .contains(TERM),
+            "a file the store wrote holds the term: {path}"
+        );
+    }
+}
+
+#[test]
+fn a_sweep_of_a_folder_reads_it_whole_and_rewrites_every_hit_class_reporting_locators_alone() {
+    let (store, _record) = sanitizing(replaced());
+    stage_sweep(&store, "site");
+    stage_locators(&store, "site");
+
+    // A dry run first: every search and read, no write.
+    let before = tree(&store.folder("site"));
+    let (code, report, out, err) = sweep(&store, "site", &["--dry-run"]);
+    assert_eq!(code, Some(1), "{out}{err}");
+    assert_eq!(
+        tree(&store.folder("site")),
+        before,
+        "a dry run writes nothing"
+    );
+    assert_eq!(report["dry_run"], json!(true));
+    for id in ["site:body", "site:said", "site:origin"] {
+        assert_eq!(
+            entry(&report, id)["outcome"],
+            json!("would-rewrite"),
+            "{report}"
+        );
+    }
+    spelled_nowhere(&store, &[&out, &err]);
+
+    let (code, report, out, err) = sweep(&store, "site", &[]);
+    // Unfixable locators make it exit 1, though the folder was covered whole.
+    assert_eq!(code, Some(1), "{out}{err}");
+    assert_eq!(report["complete"], json!(true), "{report}");
+    assert_eq!(
+        report["coverage"],
+        json!({"complete": true, "uncovered": []}),
+        "{report}"
+    );
+    assert_eq!(report["source"], json!("site"));
+    assert_eq!(
+        report["requests"],
+        json!({"total": 0, "searches": 0, "reads": 0, "writes": 0}),
+        "a folder spends no requests: {report}"
+    );
+    let fields = |id: &str| -> Vec<(String, String)> {
+        entry(&report, id)["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .map(|field| {
+                (
+                    field["field"].as_str().unwrap_or("<redacted>").to_owned(),
+                    field["outcome"].as_str().expect("an outcome").to_owned(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(entry(&report, "site:body")["outcome"], json!("rewritten"));
+    assert_eq!(
+        fields("site:body"),
+        [("content".to_owned(), "rewritten".to_owned())]
+    );
+    assert_eq!(
+        fields("site:said"),
+        [(
+            "comment:20260913T151107Z-1".to_owned(),
+            "rewritten".to_owned()
+        )]
+    );
+    // A term only in the store's own link value is no locator: the value is rewritten.
+    assert_eq!(
+        fields("site:origin"),
+        [(
+            "metadata:onetaskgraph.origin".to_owned(),
+            "rewritten".to_owned()
+        )]
+    );
+    // An item read whole that carries no term has no entry.
+    assert!(
+        report["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|item| item["id"] != json!("site:clean")),
+        "{report}"
+    );
+    // The two records whose own locators carry the term: unfixable, redacted, numbered from 1
+    // in the order the report emits them.
+    let redacted: Vec<&Value> = report["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["outcome"] == json!("unfixable"))
+        .collect();
+    assert_eq!(redacted.len(), 2, "{report}");
+    let mut ordinals = Vec::new();
+    for item in &redacted {
+        assert_eq!(
+            item["fields"][0]["why"],
+            json!("identifier carries a private term")
+        );
+        for locator in [&item["id"], &item["fields"][0]["field"]] {
+            if locator["redacted"] == json!(true) {
+                ordinals.push(locator["ordinal"].as_u64().expect("an ordinal"));
+            }
+        }
+    }
+    let named = redacted
+        .iter()
+        .find(|item| item["id"]["redacted"] == json!(true))
+        .expect("the item whose id carries the term");
+    assert_eq!(named["id"]["kind"], json!("item"));
+    assert_eq!(
+        ordinals.first(),
+        Some(&1),
+        "ordinals count from 1: {report}"
+    );
+    assert!(
+        ordinals.windows(2).all(|pair| pair[1] == pair[0] + 1),
+        "{ordinals:?}"
+    );
+    spelled_nowhere(&store, &[&out, &err]);
+    let public = text_of(&store, "site");
+    assert!(
+        public.contains(&format!("Retry the way {WITH} does.")),
+        "{public}"
+    );
+    assert!(public.contains(&format!("Asked {WITH} first.")), "{public}");
+    assert!(public.contains(&format!("plan:{WITH}-retry")), "{public}");
+
+    // The human rendering names the same records, by the same screened locators.
+    let human = store.run(&["sources", "sanitize", "site"]);
+    let said = stdout(&human);
+    assert_eq!(human.status.code(), Some(1), "{said}");
+    assert!(said.contains("<redacted item 1>"), "{said}");
+    spelled_nowhere(&store, &[&said, &stderr(&human)]);
+
+    // A rerun writes nothing to what is already sanitised: only the unfixable records remain.
+    let before = tree(&store.folder("site"));
+    let (code, report, _, _) = sweep(&store, "site", &[]);
+    assert_eq!(code, Some(1));
+    assert_eq!(tree(&store.folder("site")), before, "{report}");
+    assert!(
+        report["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|item| item["outcome"] == json!("unfixable")),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_sweep_of_a_clean_folder_exits_zero_with_complete_coverage() {
+    let (store, _record) = sanitizing(replaced());
+    stage_sweep(&store, "site");
+    let (code, report, out, err) = sweep(&store, "site", &[]);
+    assert_eq!(code, Some(0), "{out}{err}");
+    assert_eq!(report["coverage"]["complete"], json!(true));
+    assert_eq!(
+        report["items"].as_array().map(Vec::len),
+        Some(3),
+        "{report}"
+    );
+    let (code, report, _, _) = sweep(&store, "site", &[]);
+    assert_eq!(code, Some(0));
+    assert_eq!(report["items"], json!([]), "{report}");
+}
+
+#[test]
+fn a_sweep_of_a_source_whose_name_carries_a_term_redacts_it_and_an_undecided_policy_exits_two() {
+    let (store, _record) = sanitizing(replaced());
+    let named = format!("{TERM}-site");
+    let mut document: Value = serde_json::from_str(
+        &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the project document"),
+    )
+    .expect("JSON");
+    document["sources"][&named] = json!({
+        "plugin": "local-md",
+        "config": {"root": store.sandbox.subdirectory("named")},
+        "visibility": "public",
+    });
+    store.sandbox.project_document(&document.to_string());
+    store.record(
+        "named",
+        "tasks",
+        "body",
+        "title: Body\nstatus: todo",
+        &format!("{TERM} here"),
+    );
+    let (code, report, out, err) = sweep(&store, &named, &[]);
+    assert_eq!(code, Some(1), "{out}{err}");
+    assert_eq!(
+        report["source"],
+        json!({"redacted": true, "kind": "source", "ordinal": 1}),
+        "{report}"
+    );
+    spelled_nowhere(&store, &[&out, &err]);
+
+    // A policy that cannot decide redacts every locator and exits 2.
+    let mut document: Value = serde_json::from_str(
+        &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the project document"),
+    )
+    .expect("JSON");
+    document["write_policy"]["sanitize_command"] = json!([
+        "python3",
+        "-c",
+        "import sys; sys.stdin.read(); print('{\"verdict\": \"unavailable\", \"reason\": \"registry\"}'); sys.exit(2)"
+    ]);
+    store.sandbox.project_document(&document.to_string());
+    stage_sweep(&store, "site");
+    let (code, _report, out, err) = sweep(&store, "site", &[]);
+    assert_eq!(code, Some(2), "{out}{err}");
+    assert!(err.contains("<redacted item"), "{err}");
+    assert!(
+        !err.contains("site:body") && !out.contains("site:body"),
+        "{out}{err}"
+    );
+    spelled_nowhere(&store, &[&out, &err]);
+}
+
+#[test]
+fn a_sweep_without_a_terms_command_is_refused_naming_it() {
+    let (store, _record) = sanitizing(replaced());
+    let mut document: Value = serde_json::from_str(
+        &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the project document"),
+    )
+    .expect("JSON");
+    document["write_policy"]
+        .as_object_mut()
+        .expect("a policy")
+        .remove("terms_command");
+    store.sandbox.project_document(&document.to_string());
+    let (code, _, out, err) = sweep(&store, "site", &[]);
+    assert_eq!(code, Some(1), "{out}{err}");
+    assert!(err.contains("terms_command"), "{err}");
+}

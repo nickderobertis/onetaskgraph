@@ -304,6 +304,32 @@ pub enum SourcesCommand {
     /// Reads configuration alone, never a source: the destination is the source a route
     /// sends an item with these repositories to, or SOURCE itself when none matches.
     Route(RouteArgs),
+    /// Find the items of one source already carrying a declared private term, and rewrite
+    /// every field and comment the policy's replacements can fix.
+    ///
+    /// Asks the policy's `terms_command` for the terms, then searches the source once per term
+    /// — never listing it — and puts every item a search returns to the policy's sanitisation
+    /// before rewriting it. A search cannot reach every class of record, and the report names
+    /// each one it did not cover; `--complete` reads the source whole once instead. A folder of
+    /// Markdown is always read whole. Exits 0 when everything matched was fixed and coverage is
+    /// complete, 1 when anything is left unfixable or in conflict, 2 when the policy could not
+    /// decide, and 3 when coverage is incomplete and nothing else failed.
+    Sanitize(SanitizeArgs),
+}
+
+/// `onetaskgraph sources sanitize`.
+#[derive(Debug, Args)]
+pub struct SanitizeArgs {
+    /// The configured source to sweep.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap collects this token as text so an unknown name is refused naming the configured ones; the command converts it to a `SourceName` before any lookup.
+    pub source: String,
+    /// Send every search and read, and no write: report what would be rewritten.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Read the source whole once — every item with its comments and metadata — rather than
+    /// searching it, covering every class of record a search cannot.
+    #[arg(long)]
+    pub complete: bool,
 }
 
 /// `onetaskgraph sources route`.

@@ -333,6 +333,34 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
         }
 
         Command::Sources {
+            command: SourcesCommand::Sanitize(args),
+        } => {
+            let Some(source) = usable_source(&args.source, loaded) else {
+                return Ok(EXIT_USAGE);
+            };
+            let engine = engine(loaded);
+            let report = match engine
+                .sanitize_source(&source, args.dry_run, args.complete)
+                .await
+            {
+                Ok(report) => report,
+                // An undecided policy exits 2, its locators already redacted.
+                Err(error @ onetaskgraph_core::EngineError::BoundaryUnavailable { .. }) => {
+                    let failure = Failure::from(&error);
+                    let _ = failed(&failure, loaded.config.output());
+                    return Ok(2);
+                }
+                Err(error) => return Err(Failure::from(&error)),
+            };
+            let rendered = match loaded.config.output() {
+                OutputFormat::Text => render::sweep(&report),
+                OutputFormat::Json => json(&report, "the sweep")?,
+            };
+            emit(out, rendered.trim_end(), "the sweep")?;
+            Ok(report.exit_code())
+        }
+
+        Command::Sources {
             command: SourcesCommand::Route(args),
         } => {
             // Configuration alone: no engine is built, so no source is constructed or asked.

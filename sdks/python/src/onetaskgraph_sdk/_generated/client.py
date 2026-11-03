@@ -45,6 +45,7 @@ if TYPE_CHECKING:
         StatusesReconciled,
         StatusNamesReport,
         StatusOptionsReport,
+        SweepReport,
         TaskAssetNames,
         TaskContentSet,
         TaskDetail,
@@ -76,6 +77,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("search",): ("text",),
     ("sources", "fields"): ("source",),
     ("sources", "route"): ("source",),
+    ("sources", "sanitize"): ("source",),
     ("sources", "status-options"): ("source",),
     ("task", "answers"): ("id",),
     ("task", "assets"): ("id",),
@@ -1071,6 +1073,34 @@ class GeneratedClient:
             reject=reject,
             replace=replace,
             repository=_strings("sources_route", "repository", repository),
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+        )
+
+    async def sources_sanitize(
+        self,
+        source: SourceName | str,
+        *,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> SweepReport:
+        """Run ``onetaskgraph sources sanitize``."""
+        return await self._invoke(
+            ["sources", "sanitize"],
+            _models.SweepReport,
+            source=source,
+            complete=complete,
+            default_sources=default_sources,
+            dry_run=dry_run,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )

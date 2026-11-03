@@ -36,6 +36,7 @@ mod projection;
 mod rendered;
 mod resume;
 mod stored;
+mod sweep;
 mod update;
 
 use std::collections::BTreeMap;
@@ -58,6 +59,8 @@ use crate::plan::{
     PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan, Unanswered,
 };
 use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available_with_clock};
+
+pub use sweep::{SweepCoverage, SweepField, SweepItem, SweepReport, SweepRequests};
 
 use fetch::{Fetched, Stream, fits, merge, unrepeated, walk};
 use join::join_all;
@@ -565,6 +568,20 @@ pub enum EngineError {
         item: String,
         /// Whether the write would pass once the item was sanitised.
         would_pass: bool,
+    },
+
+    /// `sources sanitize` was asked of a store whose policy cannot list its terms.
+    #[error(
+        "source {name} cannot be swept: the policy cannot list the private terms to search \
+         for ({why})\n\
+         next: configure `write_policy.terms_command` — for example [onevcs, boundary, terms, \
+         --input, \"-\"] — and sweep again."
+    )]
+    TermsUnlisted {
+        /// The source asked about.
+        name: String,
+        /// Why, in neutral words.
+        why: String,
     },
 
     /// A sanitising write found its item moved twice since it was read, and wrote nothing.

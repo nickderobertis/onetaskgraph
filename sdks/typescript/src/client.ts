@@ -36,6 +36,7 @@ import type {
   StatusesReconciled,
   StatusNamesReport,
   StatusOptionsReport,
+  SweepReport,
   TaskAssetNames,
   TaskContentSet,
   TaskDetail,
@@ -264,6 +265,7 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "sources status-options": "StatusOptionsReport",
   "sources fields": "FieldsReport",
   "sources route": "SourceRoute",
+  "sources sanitize": "SweepReport",
   "task list": "QueryResponseOfQualifiedTask",
   "task show": "TaskDetail",
   // One `TaskDetail` per id, in request order.
@@ -352,6 +354,7 @@ const partialResponseCommands = new Set(
       command !== "sources list" &&
       command !== "sources fields" &&
       command !== "sources route" &&
+      command !== "sources sanitize" &&
       command !== "project graph" &&
       !command.startsWith("task comment ") &&
       !command.endsWith(" metadata set") &&
@@ -1023,6 +1026,18 @@ export class OnetaskgraphClient {
       args.push("--classification", options.classification);
     }
     return this.run("sources route", args);
+  }
+  // Find the items of `source` already carrying a declared private term and rewrite what the
+  // policy's replacements fix; `complete` reads the source whole, `dryRun` writes nothing.
+  sourcesSanitize(
+    source: string,
+    options: { dryRun?: boolean; complete?: boolean } = {},
+  ): Promise<SweepReport> {
+    return this.run("sources sanitize", [
+      source,
+      ...(options.dryRun ? ["--dry-run"] : []),
+      ...(options.complete ? ["--complete"] : []),
+    ]);
   }
   taskList(
     options: FilterOptions & {

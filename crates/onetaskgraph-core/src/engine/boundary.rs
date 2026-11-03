@@ -1336,7 +1336,7 @@ pub(crate) struct Rewrite {
 }
 
 impl Rewrite {
-    fn of(exposure: &Exposure, answer: &SanitizeVerdict) -> Self {
+    pub(super) fn of(exposure: &Exposure, answer: &SanitizeVerdict) -> Self {
         let changed = |sent: &[String], answered: &[String]| {
             sent.iter()
                 .zip(answered)
@@ -1524,6 +1524,16 @@ impl Engine {
     pub fn with_sanitize_dry_run(mut self, dry_run: bool) -> Self {
         self.boundary.sanitize_dry_run = dry_run;
         self
+    }
+
+    /// The policy this engine asks about the public boundary.
+    pub(crate) fn boundary_policy(&self) -> Arc<dyn WritePolicy> {
+        Arc::clone(&self.boundary.policy)
+    }
+
+    /// The term scope every sanitisation carries.
+    pub(crate) fn term_scope(&self) -> Option<Vec<String>> {
+        self.boundary.scope.clone()
     }
 
     /// The caller's replacement layer every sanitisation carries, in order.
@@ -2344,7 +2354,7 @@ impl Engine {
 /// `exposure`, with the identifiers a refusal of it prints: the destination's name, and the
 /// item's qualified id when it is one of that destination's — a copy names its item by its
 /// source's id, which the write does not put anywhere.
-fn located(destination: &ResolvedSource, item: &str, exposure: Exposure) -> Exposure {
+pub(super) fn located(destination: &ResolvedSource, item: &str, exposure: Exposure) -> Exposure {
     let exposure = exposure.locate(LocatorKind::Source, destination.name().as_str());
     match item.parse::<crate::GlobalId>() {
         Ok(id) if &id.source == destination.name() => exposure.locate(LocatorKind::Item, item),
@@ -2355,7 +2365,7 @@ fn located(destination: &ResolvedSource, item: &str, exposure: Exposure) -> Expo
 /// The refusal of a write `answer` did not pass, naming its item and destination only as the
 /// policy screened them: verbatim where they passed, redacted where they carry a term or the
 /// policy could not decide.
-fn refusal(
+pub(super) fn refusal(
     destination: &ResolvedSource,
     item: &str,
     exposure: &Exposure,
@@ -2408,7 +2418,7 @@ fn refusal(
 
 /// Every comment of `id` its source holds, every page, oldest first — none for a source whose
 /// tasks hold none, and none when they cannot be read, which then leaves them unsanitised.
-async fn every_comment(destination: &ResolvedSource, id: &NativeId) -> Vec<Comment> {
+pub(super) async fn every_comment(destination: &ResolvedSource, id: &NativeId) -> Vec<Comment> {
     if !destination.source().capabilities().comments.is_native() {
         return Vec::new();
     }
@@ -2440,12 +2450,17 @@ async fn every_comment(destination: &ResolvedSource, id: &NativeId) -> Vec<Comme
 /// answer can be read back field by field: the content first among the prose, then each
 /// comment's body; the title, each label's name and each metadata string among the short
 /// fields; and the identifiers a diagnostic of a field would print.
-struct StoredTask {
-    exposure: Exposure,
+pub(super) struct StoredTask {
+    pub(super) exposure: Exposure,
 }
 
 impl StoredTask {
-    fn of(destination: &ResolvedSource, item: &str, task: &Task, comments: &[Comment]) -> Self {
+    pub(super) fn of(
+        destination: &ResolvedSource,
+        item: &str,
+        task: &Task,
+        comments: &[Comment],
+    ) -> Self {
         let mut exposure = Exposure::of_task(task);
         for comment in comments {
             exposure = exposure
@@ -2463,11 +2478,11 @@ impl StoredTask {
 
 /// A task as sanitising it would write it, each comment with its new body, and the field words
 /// of what changed.
-type SanitisedTask = (Task, Vec<(Comment, String)>, Vec<String>);
+pub(super) type SanitisedTask = (Task, Vec<(Comment, String)>, Vec<String>);
 
 /// The fields and comments of `task` that `rewrite` changes, each with the record as it should
 /// then be written; `None` when it changes none.
-fn sanitised_task(
+pub(super) fn sanitised_task(
     task: &Task,
     comments: &[Comment],
     rewrite: &Rewrite,
@@ -2504,7 +2519,7 @@ fn sanitised_task(
 
 /// The screened form of one field word: a fixed word as it is, and a `metadata:` or `comment:`
 /// field by its screened key or id.
-fn screened_field(field: &str, exposure: &Exposure, answered: &[Locator]) -> Locator {
+pub(super) fn screened_field(field: &str, exposure: &Exposure, answered: &[Locator]) -> Locator {
     let screened = |kind: LocatorKind, value: &str, prefix: &str| {
         exposure
             .locators
@@ -2530,7 +2545,7 @@ fn screened_field(field: &str, exposure: &Exposure, answered: &[Locator]) -> Loc
 
 /// `answered`'s screening of `value` of `kind` among `exposure`'s locators, or every locator
 /// redacted when the answer screened none.
-fn screened_locator(
+pub(super) fn screened_locator(
     exposure: &Exposure,
     answered: &[Locator],
     kind: LocatorKind,
@@ -2730,29 +2745,22 @@ impl Engine {
     ) -> Result<(), EngineError> {
         let (exposure, answered) = screened;
         let shown_item = screened_locator(exposure, answered, LocatorKind::Item, item);
-        let (mut rewritten, mut edited, mut fields) = sanitised;
-        if !self.boundary.sanitize_dry_run {
-            let fresh = self.read_held_task(destination, id).await?;
-            if fresh.version != task.version {
-                // Moved once: sanitise the record as it now stands, keeping what changed.
-                let comments = every_comment(destination, id).await;
-                let stored = StoredTask::of(destination, item, &fresh, &comments);
-                let answer = self.screen(&stored.exposure).await;
-                let rewrite = Rewrite::of(&stored.exposure, &answer);
-                let Some(again) = sanitised_task(&fresh, &comments, &rewrite) else {
-                    return Ok(());
-                };
-                (rewritten, edited, fields) = again;
-                let latest = self.read_held_task(destination, id).await?;
-                if latest.version != fresh.version {
-                    return Err(EngineError::SanitizeConflict {
-                        item: shown_item.to_string(),
-                    });
-                }
-            }
-            self.write_sanitised(destination, id, &rewritten, &edited)
-                .await?;
-        }
+        let fields = self
+            .sanitise_written(
+                destination,
+                item,
+                id,
+                task,
+                sanitised,
+                self.boundary.sanitize_dry_run,
+            )
+            .await
+            .map_err(|conflict| match conflict {
+                EngineError::SanitizeConflict { .. } => EngineError::SanitizeConflict {
+                    item: shown_item.to_string(),
+                },
+                other => other,
+            })?;
         if let Ok(mut sanitized) = self.boundary.sanitized.lock() {
             sanitized.dry_run |= self.boundary.sanitize_dry_run;
             for field in fields {
@@ -2765,7 +2773,49 @@ impl Engine {
         Ok(())
     }
 
-    async fn read_held_task(
+    /// Write `sanitised` back over `task` unless `dry_run`, on condition that the task is still
+    /// at the version `task` was read at, answering the field words of what was — or would be
+    /// — written.
+    ///
+    /// A task that moved meanwhile is read again once and sanitised from that fresh record, so
+    /// a change stored in between is kept; one that moves a second time is
+    /// [`EngineError::SanitizeConflict`], nothing overwritten.
+    pub(super) async fn sanitise_written(
+        &self,
+        destination: &ResolvedSource,
+        item: &str,
+        id: &NativeId,
+        task: &Task,
+        sanitised: SanitisedTask,
+        dry_run: bool,
+    ) -> Result<Vec<String>, EngineError> {
+        let (mut rewritten, mut edited, mut fields) = sanitised;
+        if !dry_run {
+            let fresh = self.read_held_task(destination, id).await?;
+            if fresh.version != task.version {
+                // Moved once: sanitise the record as it now stands, keeping what changed.
+                let comments = every_comment(destination, id).await;
+                let stored = StoredTask::of(destination, item, &fresh, &comments);
+                let answer = self.screen(&stored.exposure).await;
+                let rewrite = Rewrite::of(&stored.exposure, &answer);
+                let Some(again) = sanitised_task(&fresh, &comments, &rewrite) else {
+                    return Ok(Vec::new());
+                };
+                (rewritten, edited, fields) = again;
+                let latest = self.read_held_task(destination, id).await?;
+                if latest.version != fresh.version {
+                    return Err(EngineError::SanitizeConflict {
+                        item: item.to_owned(),
+                    });
+                }
+            }
+            self.write_sanitised(destination, id, &rewritten, &edited)
+                .await?;
+        }
+        Ok(fields)
+    }
+
+    pub(super) async fn read_held_task(
         &self,
         destination: &ResolvedSource,
         id: &NativeId,

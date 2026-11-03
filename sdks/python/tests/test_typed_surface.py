@@ -78,6 +78,7 @@ from onetaskgraph_sdk import (
     StatusMapping,
     StatusNamesReport,
     StatusOptionsReport,
+    SweepReport,
     TaskAssetNames,
     TaskContentSet,
     TaskDetail,
@@ -257,6 +258,9 @@ from onetaskgraph_sdk._generated.models import (
     StatusOptionsReport as ModelsStatusOptionsReport,
 )
 from onetaskgraph_sdk._generated.models import (
+    SweepReport as ModelsSweepReport,
+)
+from onetaskgraph_sdk._generated.models import (
     TaskAssetNames as ModelsTaskAssetNames,
 )
 from onetaskgraph_sdk._generated.models import (
@@ -386,6 +390,7 @@ FROM_ROOT: dict[str, object] = {
     "StatusNamesReport": StatusNamesReport,
     "StatusOptionsReport": StatusOptionsReport,
     "StatusesReconciled": StatusesReconciled,
+    "SweepReport": SweepReport,
     "TaskAssetNames": TaskAssetNames,
     "TaskContentSet": TaskContentSet,
     "TaskDetail": TaskDetail,
@@ -459,6 +464,7 @@ FROM_MODELS: dict[str, object] = {
     "StatusNamesReport": ModelsStatusNamesReport,
     "StatusOptionsReport": ModelsStatusOptionsReport,
     "StatusesReconciled": ModelsStatusesReconciled,
+    "SweepReport": ModelsSweepReport,
     "TaskAssetNames": ModelsTaskAssetNames,
     "TaskContentSet": ModelsTaskContentSet,
     "TaskDetail": ModelsTaskDetail,
@@ -594,6 +600,7 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "StatusNamesReport": StatusNamesReport,
     "StatusOptionsReport": StatusOptionsReport,
     "StatusesReconciled": StatusesReconciled,
+    "SweepReport": SweepReport,
     "TaskAssetNames": TaskAssetNames,
     "TaskContentSet": TaskContentSet,
     "TaskDetail": TaskDetail,
@@ -659,6 +666,7 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "StatusNamesReport": ModelsStatusNamesReport,
     "StatusOptionsReport": ModelsStatusOptionsReport,
     "StatusesReconciled": ModelsStatusesReconciled,
+    "SweepReport": ModelsSweepReport,
     "TaskAssetNames": ModelsTaskAssetNames,
     "TaskContentSet": ModelsTaskContentSet,
     "TaskDetail": ModelsTaskDetail,

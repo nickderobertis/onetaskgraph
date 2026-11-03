@@ -271,6 +271,7 @@ pub fn schema_bundle() -> Value {
     // What `sources route` answers with, and the placement a routed copy's report names for
     // each item it landed.
     roots.insert("SourceRoute", schema_for!(SourceRoute));
+    roots.insert("SweepReport", schema_for!(crate::SweepReport));
     roots.insert("Placement", schema_for!(Placement));
     roots.insert("Setting", schema_for!(Setting));
     roots.insert("Origin", schema_for!(Origin));

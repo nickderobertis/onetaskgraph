@@ -20347,6 +20347,161 @@ export const runtimeSchemas = {
       }
     }
   },
+  "SweepReport": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "SweepReport",
+    "description": "What one `sources sanitize` did, naming every record by its screened locator and never by\nwhat it said.",
+    "type": "object",
+    "properties": {
+      "source": {
+        "description": "The source swept, as screened."
+      },
+      "dry_run": {
+        "description": "Whether nothing was written.",
+        "type": "boolean"
+      },
+      "complete": {
+        "description": "Whether the source was read whole rather than searched.",
+        "type": "boolean"
+      },
+      "requests": {
+        "description": "What the sweep cost, from the source's own request accounting.",
+        "$ref": "#/$defs/SweepRequests"
+      },
+      "coverage": {
+        "description": "Which classes of record the sweep could not establish.",
+        "$ref": "#/$defs/SweepCoverage"
+      },
+      "items": {
+        "description": "One entry per item a search returned, and per item a whole read found carrying a term.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/SweepItem"
+        }
+      }
+    },
+    "required": [
+      "source",
+      "dry_run",
+      "complete",
+      "requests",
+      "coverage",
+      "items"
+    ],
+    "$defs": {
+      "SweepRequests": {
+        "description": "What a sweep sent its source.",
+        "type": "object",
+        "properties": {
+          "total": {
+            "description": "Every request the source counted, `0` for one that counts none.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "searches": {
+            "description": "Search or listing pages.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "reads": {
+            "description": "Reads of an item and its comments.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "writes": {
+            "description": "Writes of an item or a comment.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "total",
+          "searches",
+          "reads",
+          "writes"
+        ]
+      },
+      "SweepCoverage": {
+        "description": "Which classes of record a sweep could not establish.",
+        "type": "object",
+        "properties": {
+          "complete": {
+            "description": "Whether it covered every class.",
+            "type": "boolean"
+          },
+          "uncovered": {
+            "description": "`metadata`, `comments`, `normalized-spellings`: each class it did not cover.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "complete",
+          "uncovered"
+        ]
+      },
+      "SweepItem": {
+        "description": "What a sweep did with one item.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The item's qualified id, as screened."
+          },
+          "kind": {
+            "description": "`task`.",
+            "type": "string"
+          },
+          "outcome": {
+            "description": "`rewritten`, `would-rewrite`, `unchanged`, `unfixable`, `conflict` or `not-a-match`.",
+            "type": "string"
+          },
+          "fields": {
+            "description": "What it did with each field it changed or could not.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SweepField"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "outcome",
+          "fields"
+        ]
+      },
+      "SweepField": {
+        "description": "What a sweep did with one field of an item.",
+        "type": "object",
+        "properties": {
+          "field": {
+            "description": "`content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its\nkey or id as screened."
+          },
+          "outcome": {
+            "description": "`rewritten`, `would-rewrite` or `unfixable`.",
+            "type": "string"
+          },
+          "why": {
+            "description": "Why a field is unfixable, in neutral words; absent otherwise.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "field",
+          "outcome"
+        ]
+      }
+    }
+  },
   "Task": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Task",

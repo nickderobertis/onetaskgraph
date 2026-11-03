@@ -477,6 +477,9 @@ test("every flag the create, render, answers and template verbs take is spelled 
     "json",
     "interactive",
     "no-interactive",
+    "replace",
+    "reject",
+    "sanitize-dry-run",
     "help",
   ]);
   const client = readFileSync(resolve(import.meta.dir, "../src/client.ts"), "utf8");

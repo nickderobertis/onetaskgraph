@@ -1275,6 +1275,41 @@ pub fn sanitised(rendered: String, done: &onetaskgraph_core::boundary::Sanitizat
     out
 }
 
+/// What `sources sanitize` did: one line for what it covered and cost, then one per item and
+/// one per field it changed or could not, every record by its screened locator.
+pub fn sweep(report: &onetaskgraph_core::SweepReport) -> String {
+    let mut out = format!(
+        "{}: {} — {} request(s), {} search(es), {} read(s), {} write(s)",
+        report.source,
+        match (report.complete, report.dry_run) {
+            (true, true) => "read whole, nothing written",
+            (true, false) => "read whole",
+            (false, true) => "searched, nothing written",
+            (false, false) => "searched",
+        },
+        report.requests.total,
+        report.requests.searches,
+        report.requests.reads,
+        report.requests.writes,
+    );
+    if !report.coverage.complete {
+        out.push_str(&format!(
+            "\nnot covered: {}",
+            report.coverage.uncovered.join(", ")
+        ));
+    }
+    for item in &report.items {
+        out.push_str(&format!("\n{} {}", item.id, item.outcome));
+        for field in &item.fields {
+            out.push_str(&format!("\n  {} {}", field.field, field.outcome));
+            if let Some(why) = &field.why {
+                out.push_str(&format!(" ({why})"));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use onetaskgraph_plugin_api::{Asset, AssetName};
