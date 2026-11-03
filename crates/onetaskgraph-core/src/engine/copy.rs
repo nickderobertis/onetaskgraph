@@ -1276,6 +1276,10 @@ struct Journal {
     sections: HashMap<GlobalId, SectionLinks>,
     /// Each comment written with links not addressable yet, finished with the rest.
     comments_pending: Vec<CommentPending>,
+    /// Each task a `--comments` write stamped with a record, by its source and id at the
+    /// destination: what that write sent, so a comment finished after it can be brought into
+    /// the record it digests.
+    stamped: HashMap<(SourceName, NativeId), Stamped>,
     /// What each copied task's carried comments could not do for their section links.
     comment_sections: HashMap<GlobalId, sections::SectionCounts>,
     /// One entry per copied item whose `onetaskgraph.copies` link this copy wrote, in that
@@ -1790,9 +1794,9 @@ struct Planned {
     /// The links of its content not addressable when it was planned, as [`Self::links`]
     /// wrote them.
     pending: Vec<sections::Pending>,
-    /// Each carried comment whose links were not all addressable when it was planned, by its
-    /// id at the source: finished once the task has landed.
-    comment_links: Vec<(NativeId, sections::BodyLinks, Vec<sections::Pending>)>,
+    /// Each carried comment whose links were not all addressable when it was planned, by the
+    /// origin its copy carries: finished once the task has landed.
+    comment_links: Vec<CommentLinks>,
     /// What its carried comments could not do for their section links, for the comments with
     /// nothing left to finish.
     comment_sections: sections::SectionCounts,
@@ -4566,8 +4570,13 @@ impl Engine {
                         // one finished later reports it then.
                         item.comment_sections.add(rendered.sections);
                     } else {
-                        item.comment_links
-                            .push((comment.id.clone(), links, rendered.pending));
+                        // Keyed by the origin its copy carries, which a comment that is a copy
+                        // already names as the first origin rather than as itself.
+                        item.comment_links.push((
+                            comments::key(&comments::origin_of(&item.source, comment)),
+                            links,
+                            rendered.pending,
+                        ));
                     }
                 }
             }
@@ -7717,6 +7726,12 @@ impl Engine {
                 .add(item.comment_sections);
             let (plan, pending, finished_counts) =
                 self.finished_comments(destination, item, &written.native, plan, journal);
+            Self::restamp_comments(
+                journal,
+                destination.name(),
+                &written.native,
+                plan.after.clone(),
+            );
             journal
                 .comment_sections
                 .entry(item.source.clone())
@@ -7730,7 +7745,7 @@ impl Engine {
             for (origin, links, still) in pending {
                 let written_copy = plan.steps.iter().find_map(|step| match step {
                     comments::Step::Add(copy) | comments::Step::Edit { copy, .. }
-                        if copy.origin.id == origin =>
+                        if comments::key(&copy.origin) == origin =>
                     {
                         Some(copy.clone())
                     }
@@ -7789,6 +7804,7 @@ impl Engine {
             )
             .map(|location| (task.clone(), location)),
         };
+        let mut reworded = Vec::new();
         for step in &mut plan.steps {
             let (comments::Step::Add(copy) | comments::Step::Edit { copy, .. }) = step else {
                 continue;
@@ -7796,7 +7812,7 @@ impl Engine {
             let Some((_, links, pending)) = item
                 .comment_links
                 .iter()
-                .find(|(id, _, _)| *id == copy.origin.id)
+                .find(|(origin, _, _)| *origin == comments::key(&copy.origin))
             else {
                 continue;
             };
@@ -7809,18 +7825,96 @@ impl Engine {
             if let Ok(body) = onetaskgraph_plugin_api::CommentBody::new(finished) {
                 copy.body = body;
             }
+            reworded.push((copy.origin.clone(), copy.body.as_str().to_owned()));
             if still.is_empty() {
                 finished_counts.add(links.render(&knows, sections::Pass::Final).sections);
             } else {
-                pending_after.push((copy.origin.id.clone(), links.clone(), still));
+                pending_after.push((comments::key(&copy.origin), links.clone(), still));
             }
+        }
+        for (origin, body) in &reworded {
+            comments::reword(&mut plan.after, origin, body);
         }
         (plan, pending_after, finished_counts)
     }
 
+    /// The comments the record of `item`'s write as `task` digests: as the copy leaves them,
+    /// each carried one with its section links finished as far as they can be before the task
+    /// has landed. `None` for a copy that carries none.
+    fn digested_comments(
+        &self,
+        destination: &ResolvedSource,
+        item: &Planned,
+        task: &NativeId,
+        journal: &Journal,
+    ) -> Option<Vec<Value>> {
+        match &item.comment_plan {
+            Some(plan) if item.carried.is_some() => Some(
+                self.finished_comments(destination, item, task, plan, journal)
+                    .0
+                    .after,
+            ),
+            _ => record_comments(item),
+        }
+    }
+
+    /// Bring the record of the task `id` of `at` a `--comments` write stamped into line with
+    /// `comments`, the comments as its carried ones were finished after that write: in the
+    /// write the item is already owed when it is owed one, and otherwise in one more, counted
+    /// as a write that finished its section links.
+    fn restamp_comments(
+        journal: &mut Journal,
+        at: &SourceName,
+        id: &NativeId,
+        comments: Vec<Value>,
+    ) {
+        let Some(stamped) = journal.stamped.get_mut(&(at.clone(), id.clone())) else {
+            return;
+        };
+        if stamped.comments == comments {
+            return;
+        }
+        stamped.comments.clone_from(&comments);
+        if let Some(held) = journal
+            .sections_pending
+            .iter_mut()
+            .find(|held| &held.at == at && &held.id == id)
+        {
+            held.comments = Some(comments);
+            return;
+        }
+        if let Some(follow) = journal
+            .follow_ups
+            .iter_mut()
+            .find(|follow| &follow.at == at && &follow.id == id)
+        {
+            follow.record.get_or_insert_with(|| stamped.record.clone());
+            follow.comments = Some(comments);
+            return;
+        }
+        let source = stamped.source.clone();
+        let follow = FollowUp {
+            at: at.clone(),
+            id: id.clone(),
+            source: source.clone(),
+            item: stamped.item.clone(),
+            edges: stamped.edges.clone(),
+            record: Some(stamped.record.clone()),
+            comments: Some(comments),
+            stored: content_of(&stamped.item).unwrap_or_default().to_owned(),
+        };
+        journal.follow_ups.push(follow);
+        journal
+            .sections
+            .entry(source)
+            .or_default()
+            .section_link_updates += 1;
+    }
+
     /// Make one destination task's comments what `plan` decided, recording how to take each
     /// write back — renewing the lease on `source`'s intent before each, while this copy owns
-    /// its create.
+    /// its create. Answers each comment it added or edited, by the origin its copy carries,
+    /// with its id at the destination.
     async fn write_comments(
         &self,
         destination: &ResolvedSource,
@@ -7828,7 +7922,7 @@ impl Engine {
         task: &NativeId,
         plan: &comments::CommentPlan,
         journal: &mut Journal,
-    ) -> Result<Vec<(NativeId, NativeId)>, EngineError> {
+    ) -> Result<Vec<(comments::OriginKey, NativeId)>, EngineError> {
         let mut landed = Vec::new();
         let at = destination.name().clone();
         let gone = || EngineError::NoSuchTask {
@@ -7866,7 +7960,7 @@ impl Engine {
                         .map_err(|error| refused(destination, error))?;
                     match edited {
                         Some(_) => {
-                            landed.push((copy.origin.id.clone(), id.clone()));
+                            landed.push((comments::key(&copy.origin), id.clone()));
                             if let (Some(origin), Ok(body)) = (
                                 before.origin.clone(),
                                 onetaskgraph_plugin_api::CommentBody::new(before.body.clone()),
@@ -7889,7 +7983,7 @@ impl Engine {
                                 .await
                                 .map_err(|error| refused(destination, error))?
                                 .ok_or_else(gone)?;
-                            landed.push((copy.origin.id.clone(), added.id.clone()));
+                            landed.push((comments::key(&copy.origin), added.id.clone()));
                             journal.comments.push(CommentUndo {
                                 at: at.clone(),
                                 task: task.clone(),
@@ -7905,7 +7999,7 @@ impl Engine {
                         .await
                         .map_err(|error| refused(destination, error))?
                         .ok_or_else(gone)?;
-                    landed.push((copy.origin.id.clone(), added.id.clone()));
+                    landed.push((comments::key(&copy.origin), added.id.clone()));
                     journal.comments.push(CommentUndo {
                         at: at.clone(),
                         task: task.clone(),
@@ -8944,7 +9038,7 @@ impl Engine {
             item,
             outgoing(
                 item,
-                suggested,
+                suggested.clone(),
                 project.clone(),
                 &origin,
                 delivers,
@@ -9006,6 +9100,7 @@ impl Engine {
             Item::Task(task) => stamping.stamps(task, prior.as_ref()),
             Item::Project(_) | Item::Document(_) => stamping != Stamping::Never,
         };
+        let digested = self.digested_comments(destination, item, &suggested, journal);
         let record = stamped.then(|| {
             record_of(
                 item,
@@ -9013,6 +9108,7 @@ impl Engine {
                 edges,
                 destination.name(),
                 prior.as_ref().and_then(|prior| prior.recorded.as_ref()),
+                digested.clone(),
             )
         });
         if let Some(record) = &record {
@@ -9210,8 +9306,20 @@ impl Engine {
                 item: composed.clone(),
                 edges: edges.to_vec(),
                 record: record.clone(),
-                comments: record_comments(item),
+                comments: digested.clone(),
             });
+        }
+        if let (Some(record), Some(comments)) = (&record, &digested) {
+            journal.stamped.insert(
+                (destination.name().clone(), landed.clone()),
+                Stamped {
+                    source: item.source.clone(),
+                    item: composed.clone(),
+                    edges: edges.to_vec(),
+                    record: record.clone(),
+                    comments: comments.clone(),
+                },
+            );
         }
         if let Some(stored) =
             stored::rewritten(destination, created_kind.record(), &landed, sent.as_deref())
@@ -9224,6 +9332,7 @@ impl Engine {
                 sent.as_deref(),
                 stored,
                 record,
+                digested,
             )
         {
             journal.follow_ups.push(follow);
@@ -9279,6 +9388,12 @@ impl Engine {
                 .write_comment_copy(&held.task, Some(&held.comment), &copy)
                 .await
                 .map_err(|error| refused(destination, error))?;
+            // The task's record digests its comments as they now read.
+            if let Some(stamped) = journal.stamped.get(&(held.at.clone(), held.task.clone())) {
+                let mut comments = stamped.comments.clone();
+                comments::reword(&mut comments, &copy.origin, copy.body.as_str());
+                Self::restamp_comments(journal, &held.at, &held.task, comments);
+            }
             match edited {
                 Some(_) => journal.comments.push(CommentUndo {
                     at: held.at.clone(),
@@ -10873,12 +10988,13 @@ fn record_of(
     edges: &[DependencyEdge],
     destination: &SourceName,
     recorded: Option<&AssetUploads>,
+    comments: Option<Vec<Value>>,
 ) -> record::Record {
     let content = served_by(content_of(landing), &item.assets, recorded);
     record::Record {
         version: source_version(item, content.as_deref()),
         with_comments: item.carried.is_some(),
-        digest: record::digest_of(landing, edges, record_comments(item), destination),
+        digest: record::digest_of(landing, edges, comments, destination),
     }
 }
 
@@ -11093,9 +11209,13 @@ impl sections::Knows for Writing<'_> {
     }
 }
 
-/// One carried comment's links not addressable when its task landed: its origin id, its links
-/// and what is still pending.
-type CommentLinks = (NativeId, sections::BodyLinks, Vec<sections::Pending>);
+/// One carried comment's links not addressable yet: the origin its copy carries, its links and
+/// what is still pending.
+type CommentLinks = (
+    comments::OriginKey,
+    sections::BodyLinks,
+    Vec<sections::Pending>,
+);
 
 /// One comment written with links not addressable yet, finished once every write of the copy
 /// has landed: see [`Engine::finish_sections`].
@@ -11114,6 +11234,20 @@ struct CommentPending {
     links: sections::BodyLinks,
     /// The placeholders it was written with.
     pending: Vec<sections::Pending>,
+}
+
+/// A task a `--comments` write stamped with a record: see [`Journal::stamped`].
+struct Stamped {
+    /// The task copied, at its source.
+    source: GlobalId,
+    /// The task as that write sent it, its record included.
+    item: Item,
+    /// Its forward edges, as that write sent them.
+    edges: Vec<DependencyEdge>,
+    /// The record it was stamped with.
+    record: record::Record,
+    /// The comments that record digests.
+    comments: Vec<Value>,
 }
 
 /// One item whose content was written with links not addressable yet, finished once every
@@ -11182,8 +11316,9 @@ fn record_comments(item: &Planned) -> Option<Vec<Value>> {
 /// The follow-up write a copy owes the item it landed as `id` from `composed`, whose write sent
 /// `sent` and whose answer said the destination stores `stored`: that content verbatim, its
 /// rendering's provenance moved onto it where it vouched for what was sent, the assets the write
-/// uploaded recorded as it recorded them, and `record` — `None` when the item records nothing a
-/// stored content could make untrue, so it is written once and no more.
+/// uploaded recorded as it recorded them, and `record` over `comments`, the comments it
+/// digests — `None` when the item records nothing a stored content could make untrue, so it is
+/// written once and no more.
 #[expect(
     clippy::too_many_arguments,
     reason = "each is one fact the first write settled and the follow-up has to repeat"
@@ -11197,6 +11332,7 @@ fn follow_up_of(
     sent: Option<&str>,
     stored: String,
     record: Option<record::Record>,
+    comments: Option<Vec<Value>>,
 ) -> Option<FollowUp> {
     let before = content_of(&composed).unwrap_or_default().to_owned();
     let sent = sent.unwrap_or_default();
@@ -11233,7 +11369,7 @@ fn follow_up_of(
         item: composed,
         edges: edges.to_vec(),
         record,
-        comments: record_comments(item),
+        comments,
         stored,
     })
 }
@@ -11286,6 +11422,7 @@ fn stale_record(
         edges,
         destination.name(),
         held.recorded.as_ref(),
+        record_comments(item),
     );
     !record.held_by(&held_task.metadata)
         && (item.carried.is_some() || record::carried_comments(&held_task.metadata))

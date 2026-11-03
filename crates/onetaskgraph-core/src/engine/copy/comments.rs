@@ -59,9 +59,12 @@ pub(super) struct CommentPlan {
     pub(super) after: Vec<Value>,
 }
 
+/// A copy's origin, by its task and id: [`key`].
+pub(super) type OriginKey = (String, String);
+
 /// The origin one source comment's copy carries: the origin it was itself copied from, or —
 /// for a comment written at the source — the comment there.
-fn origin_of(source: &GlobalId, comment: &Comment) -> CommentOrigin {
+pub(super) fn origin_of(source: &GlobalId, comment: &Comment) -> CommentOrigin {
     comment.origin.clone().unwrap_or_else(|| CommentOrigin {
         task: source.to_string(),
         id: comment.id.clone(),
@@ -73,7 +76,7 @@ fn origin_of(source: &GlobalId, comment: &Comment) -> CommentOrigin {
 }
 
 /// The identity a copy is matched on: its origin's task and id.
-fn key(origin: &CommentOrigin) -> (String, String) {
+pub(super) fn key(origin: &CommentOrigin) -> OriginKey {
     (origin.task.clone(), origin.id.0.clone())
 }
 
@@ -164,6 +167,17 @@ pub(super) fn plan(
         }
     }
     plan
+}
+
+/// `after` — a destination's comments as [`digest_entries`] gives them — with the copy of
+/// `origin` saying `body`, as a copy finished its section links after it was planned.
+pub(super) fn reword(after: &mut [Value], origin: &CommentOrigin, body: &str) {
+    let entry = copy_entry(origin, body);
+    for held in after.iter_mut() {
+        if held.get("origin") == entry.get("origin") {
+            held.clone_from(&entry);
+        }
+    }
 }
 
 /// One copy as the destination digest counts it: its origin's identity and what it says.

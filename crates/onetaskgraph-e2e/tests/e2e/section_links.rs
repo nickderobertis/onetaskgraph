@@ -1453,32 +1453,33 @@ fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_f
         } else {
             Vec::new()
         };
+        // Every record's metadata as it reads back, but the one value the exemption lets move.
+        let records = |sandbox: &Sandbox| -> Vec<Value> {
+            [("project", "P"), ("task", "T"), ("task", "U")]
+                .iter()
+                .map(|(verb, key)| {
+                    let mut metadata = shown(sandbox, verb, &landed(key).id)["metadata"].clone();
+                    if let Some(held) = metadata.as_object_mut() {
+                        held.remove("onetaskgraph.copied_version");
+                    }
+                    metadata
+                })
+                .collect()
+        };
+        let before_records = records(&sandbox);
         ok(&sandbox, &copy);
+        assert_eq!(
+            records(&sandbox),
+            before_records,
+            "{kind}: a second copy moves no record value but copied_version"
+        );
         let written = destination.writes_since(&mark, root.as_deref());
         if let (Some(root), Some(before)) = (root.as_deref(), before) {
             // The one exemption the manager ruled on evidence from base `ebce65c3`: from a folder
             // of Markdown, a second `--comments` copy may move a record's
             // `onetaskgraph.copied_version` line — the copy's own link write moved the source
             // file's token after it was recorded — and no other line of any file.
-            let after = files_under(root);
-            for path in &written {
-                let lines = |held: &BTreeMap<String, Vec<u8>>| -> Vec<String> {
-                    String::from_utf8_lossy(held.get(path).map_or(&[][..], Vec::as_slice))
-                        .lines()
-                        .filter(|line| {
-                            !line
-                                .trim_start()
-                                .starts_with("onetaskgraph.copied_version:")
-                        })
-                        .map(str::to_owned)
-                        .collect()
-                };
-                assert_eq!(
-                    lines(&before),
-                    lines(&after),
-                    "{kind}: {path} changed beyond its copied_version line"
-                );
-            }
+            only_copied_version_moved(&before, &files_under(root), &written, kind);
             let mark = destination.mark(Some(root));
             ok(&sandbox, &copy);
             assert_eq!(
@@ -1503,7 +1504,123 @@ fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_f
                 "{kind}: a third copy writes nothing"
             );
             let _ = written;
+            // The same exemption from a hosted source, by the manager's ruling on evidence from
+            // base `ebce65c3`: the hosted store now holding the carried comment is copied on into
+            // a folder, its comment's links in the folder's form on the first copy; a second copy
+            // sends the store no mutation and moves no line of a file but its
+            // `onetaskgraph.copied_version` — the first copy's link write onto the store moved
+            // the store's token after it was recorded — and a third writes nothing anywhere.
+            let (_, onward) = store(&sandbox, "local-md", "onward", None);
+            configure(
+                &sandbox,
+                &[
+                    ("plans", &authored_config),
+                    ("dest", &config),
+                    ("onward", &onward),
+                ],
+            );
+            let project = reported["plans:P"]["destination"].as_str().unwrap();
+            let again = [
+                "project",
+                "copy",
+                project,
+                "--to",
+                "onward",
+                "--comments",
+                "--json",
+            ];
+            let onward_root = root_of(&sandbox, "onward");
+            let first = outcomes(&ok(&sandbox, &again));
+            // The comment carried on out of the hosted store — a copy already, naming the folder
+            // it came from as its first origin — names the folder's own record of the heading.
+            let commented = Landed {
+                verb: "task",
+                id: first[&format!("dest:{}", comments_on.native())]["destination"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            };
+            let onward_target = first[&format!("dest:{}", target.native())]["destination"]
+                .as_str()
+                .unwrap()
+                .split_once(':')
+                .unwrap()
+                .1
+                .to_owned();
+            let listed: Value = serde_json::from_str(&ok(
+                &sandbox,
+                &["task", "comment", "list", &commented.id, "--json"],
+            ))
+            .expect("comments as JSON");
+            assert!(
+                listed["comments"]
+                    .as_array()
+                    .expect("comments")
+                    .iter()
+                    .any(
+                        |comment| comment["body"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .contains(&format!(
+                                "[the second budgets]({onward_target}.md#budgets-1)"
+                            ))
+                    ),
+                "{kind} -> local-md: the carried comment names the folder's heading: {listed:#}"
+            );
+            let what = format!("{kind} -> local-md");
+            for pass in ["second", "third"] {
+                let before = files_under(&onward_root);
+                let (at_source, at_folder) = (
+                    destination.mark(None),
+                    Store::Local.mark(Some(&onward_root)),
+                );
+                ok(&sandbox, &again);
+                assert_eq!(
+                    destination.writes_since(&at_source, None),
+                    Vec::<String>::new(),
+                    "{what}: a {pass} copy sends its source no mutation"
+                );
+                let written = Store::Local.writes_since(&at_folder, Some(&onward_root));
+                if pass == "second" {
+                    only_copied_version_moved(&before, &files_under(&onward_root), &written, &what);
+                } else {
+                    assert_eq!(
+                        written,
+                        Vec::<String>::new(),
+                        "{what}: a third copy writes no file"
+                    );
+                }
+            }
         }
+    }
+}
+
+/// Hold every file of `written` — a folder's files a copy changed, read `before` and `after` it —
+/// to moving no line but its `onetaskgraph.copied_version`: the one value the ruled `--comments`
+/// record refresh may move.
+fn only_copied_version_moved(
+    before: &BTreeMap<String, Vec<u8>>,
+    after: &BTreeMap<String, Vec<u8>>,
+    written: &[String],
+    what: &str,
+) {
+    for path in written {
+        let lines = |held: &BTreeMap<String, Vec<u8>>| -> Vec<String> {
+            String::from_utf8_lossy(held.get(path).map_or(&[][..], Vec::as_slice))
+                .lines()
+                .filter(|line| {
+                    !line
+                        .trim_start()
+                        .starts_with("onetaskgraph.copied_version:")
+                })
+                .map(str::to_owned)
+                .collect()
+        };
+        assert_eq!(
+            lines(before),
+            lines(after),
+            "{what}: {path} changed beyond its copied_version line"
+        );
     }
 }
 
@@ -1841,9 +1958,27 @@ fn refreshes_only_the_copy_record(
             .map(|record| masked(&store.raw(record)))
             .collect()
     };
-    let before = held(store);
+    // And every record value as it reads back, but the one the exemption lets move.
+    let read = |sandbox: &Sandbox| -> Vec<Value> {
+        records
+            .iter()
+            .map(|record| {
+                let mut metadata = shown(sandbox, record.verb, &record.id)["metadata"].clone();
+                if let Some(held) = metadata.as_object_mut() {
+                    held.remove("onetaskgraph.copied_version");
+                }
+                metadata
+            })
+            .collect()
+    };
+    let (before, before_read) = (held(store), read(sandbox));
     ok(sandbox, copy);
     assert_eq!(held(store), before, "only copied_version moved");
+    assert_eq!(
+        read(sandbox),
+        before_read,
+        "no record value but copied_version moved"
+    );
     let mark = store.mark(None);
     ok(sandbox, copy);
     assert_eq!(
@@ -1851,6 +1986,119 @@ fn refreshes_only_the_copy_record(
         Vec::<String>::new(),
         "a third copy writes nothing"
     );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn a_comment_finished_after_its_task_landed_is_in_the_record_its_task_keeps() {
+    // Two tasks with plain bodies, each with a comment linking a heading of the other, copied into
+    // a Linear workspace: the task that lands first has its comment finished by an edit once the
+    // other has landed, and with no body write left to carry it, its record is written once more
+    // to digest that comment as it now reads; with a body Linear stores otherwise, the follow-up
+    // write the copy already owes it carries that record instead. Either way a repeat moves
+    // nothing but the ruled copied_version.
+    // The bodies, and the finishing writes the first task to land reports: its comment's edit,
+    // and — with no follow-up owed — its record's own write.
+    for (prose, finishing) in [("Plain.", 2), ("- A bullet Linear stores as `* `.", 1)] {
+        let sandbox = Sandbox::new();
+        let config = empty_folder(&sandbox, "plans");
+        let root = root_of(&sandbox, "plans");
+        for folder in ["projects", "tasks"] {
+            std::fs::create_dir_all(root.join(folder)).expect("a folder");
+        }
+        std::fs::write(
+            root.join("projects/P.md"),
+            "---\ntitle: Plan\nstatus: todo\n---\nThe plan.\n",
+        )
+        .expect("the project");
+        for (key, title, other) in [("A", "Alpha", "B"), ("B", "Beta", "A")] {
+            let slug = if other == "A" { "alpha" } else { "beta" };
+            std::fs::write(
+                root.join(format!("tasks/{key}.md")),
+                format!(
+                    "---\ntitle: {title}\nstatus: todo\nproject: P\n---\n## {title}\n\n{prose}\n\n\
+                     ## Comments\n\n<!-- onetaskgraph:comment id=\"c-{key}\" \
+                     created_at=\"2026-11-02T12:00:00Z\" updated_at=\"2026-11-02T12:00:00Z\" -->\n\
+                     ### comment — 2026-11-02T12:00:00Z\n\nSee [{slug}]({other}.md#{slug}).\n\n\
+                     <!-- /onetaskgraph:comment -->\n"
+                ),
+            )
+            .expect("a task");
+        }
+        let (linear, dest) = store(&sandbox, "linear", "linear", None);
+        configure(
+            &sandbox,
+            &[
+                ("plans", &json!({"plugin": "local-md", "config": config})),
+                ("dest", &dest),
+            ],
+        );
+        let Store::Linear(workspace) = &linear else {
+            unreachable!("a workspace")
+        };
+        workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::Measured);
+        let copy = [
+            "project",
+            "copy",
+            "plans:P",
+            "--to",
+            "dest",
+            "--comments",
+            "--json",
+        ];
+        let reported = outcomes(&ok(&sandbox, &copy));
+        let updates: Vec<Value> = ["plans:A", "plans:B"]
+            .iter()
+            .map(|key| {
+                reported[*key]
+                    .get("section_link_updates")
+                    .cloned()
+                    .unwrap_or(json!(0))
+            })
+            .collect();
+        let mut sorted = updates.clone();
+        sorted.sort_by_key(|figure| figure.as_u64());
+        assert_eq!(
+            sorted,
+            vec![json!(0), json!(finishing)],
+            "{prose}: {reported:#?}"
+        );
+        let landed = |key: &str| Landed {
+            verb: "task",
+            id: reported[&format!("plans:{key}")]["destination"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        };
+        let (alpha, beta) = (landed("A"), landed("B"));
+        for (on, to, text, slug) in [
+            (&alpha, &beta, "Beta", "beta"),
+            (&beta, &alpha, "Alpha", "alpha"),
+        ] {
+            let expected = format!(
+                "[{slug}]({}#heading-{slug}-{})",
+                to.location(&sandbox),
+                stored_id8(workspace, to, text, 0)
+            );
+            let listed: Value = serde_json::from_str(&ok(
+                &sandbox,
+                &["task", "comment", "list", &on.id, "--json"],
+            ))
+            .expect("comments");
+            assert!(
+                listed["comments"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|comment| comment["body"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains(&expected)),
+                "its comment names the other task's stored heading: {listed:#}"
+            );
+        }
+        refreshes_only_the_copy_record(&sandbox, &copy, &linear, &[alpha, beta]);
+    }
 }
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
