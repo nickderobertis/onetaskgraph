@@ -129,6 +129,8 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
         case "health":
             return {"result": {"reachable": True, "detail": f"{len(state['tasks'])} task(s)"}}
         case "metering":
+            if state.get("metering_fails"):
+                return {"error": {"kind": "unavailable", "message": "the count could not be read"}}
             return {"result": {"metering": {"requests": len(state["log"]), "budgets": []}}}
         case "get_task":
             task = _task(state, params.get("id"))
@@ -224,11 +226,30 @@ def _well_formed(held: object) -> bool:
             "edges": dict(),
             "log": list(),
         }:
-            return all(
-                isinstance(task, dict)
-                and isinstance(task.get("id"), str)
-                and isinstance(task.get("version"), str)
-                for task in tasks
+            return (
+                all(
+                    isinstance(task, dict)
+                    and isinstance(task.get("id"), str)
+                    and isinstance(task.get("version"), str)
+                    for task in tasks
+                )
+                and all(isinstance(count, int) for count in held["reads"].values())
+                and all(
+                    isinstance(reads, list) and all(isinstance(read, int) for read in reads)
+                    for reads in held["moves"].values()
+                )
+                and all(isinstance(edit, dict) for edit in held["edits"].values())
+                and all(isinstance(text, str) for text in held["index"].values())
+                and all(
+                    isinstance(comments, list)
+                    and all(
+                        isinstance(comment, dict)
+                        and isinstance(comment.get("id"), str)
+                        and isinstance(comment.get("body"), str)
+                        for comment in comments
+                    )
+                    for comments in held["comments"].values()
+                )
             )
         case _:
             return False

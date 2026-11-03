@@ -766,6 +766,21 @@ fn answer_problem(input: &PublicSanitizeInput, answer: &SanitizeVerdict) -> Opti
             }
         }
     }
+    // A short field that reads as a path is sent on both surfaces, and is written once.
+    let as_metadata: std::collections::HashMap<&String, &String> =
+        input.metadata.iter().zip(&answer.metadata).collect();
+    if input
+        .paths
+        .iter()
+        .zip(&answer.paths)
+        .any(|(value, rewritten)| {
+            as_metadata
+                .get(value)
+                .is_some_and(|other| *other != rewritten)
+        })
+    {
+        return Some("the policy answered one value two ways");
+    }
     if answer.verdict == WriteVerdict::Pass
         && (!answer.unfixed.is_empty()
             || answer

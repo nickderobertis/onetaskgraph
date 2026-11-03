@@ -2600,7 +2600,8 @@ classes — a hit only in stored metadata (the store's own `onetaskgraph.origin`
 report lists each it did not cover under `coverage.uncovered`, and the sweep **exits 3** rather
 than claim a clean source. `--complete` reads the source whole once, a page at a time, each
 page's items decided and written before the next is asked for, covering all three; a source
-whose requests spend no quota, a folder of Markdown, is always read whole. `--dry-run` sends
+whose requests spend no quota, a folder of Markdown, is always read whole; one whose request
+count cannot be read is searched, as one spending a shared allowance is. `--dry-run` sends
 every search and read and no write.
 
 ```json

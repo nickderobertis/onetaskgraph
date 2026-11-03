@@ -587,6 +587,19 @@ pub enum EngineError {
         why: String,
     },
 
+    /// `sources sanitize` was asked of a store whose terms command could not decide.
+    #[error(
+        "source {name} was not swept: the policy could not decide the private terms to search \
+         for ({why})\n\
+         next: repair what `write_policy.terms_command` reports, then sweep again."
+    )]
+    TermsUndecided {
+        /// The source asked about.
+        name: String,
+        /// Why, in neutral words.
+        why: String,
+    },
+
     /// A sanitising write found its item moved twice since it was read, and wrote nothing.
     #[error(
         "{item} changed twice while it was being sanitised, so nothing was overwritten\n\

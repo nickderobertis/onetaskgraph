@@ -233,7 +233,9 @@ impl Engine {
                 replacements: self.replacements().to_vec(),
             })
             .await
-            .map_err(|error| EngineError::TermsUnlisted {
+            // A terms command that could not decide is the policy undecided, as a write's
+            // sanitisation would be: a refusal the command line answers with exit 2.
+            .map_err(|error| EngineError::TermsUndecided {
                 name: source.to_string(),
                 why: error.message,
             })?
@@ -241,8 +243,11 @@ impl Engine {
                 name: source.to_string(),
                 why: "no write_policy.terms_command is configured".to_owned(),
             })?;
-        let before = destination.source().metering().await.ok().flatten();
-        let whole = complete || before.is_none();
+        // Read whole only a source that says it counts no requests: one whose count could not
+        // be read may be spending a shared allowance, so it is searched as a counting one is.
+        let metering = destination.source().metering().await;
+        let whole = complete || matches!(metering, Ok(None));
+        let before = metering.ok().flatten();
         let mut sweep = Sweep {
             requests: SweepRequests::default(),
             items: Vec::new(),

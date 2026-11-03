@@ -2419,7 +2419,7 @@ fn a_comment_another_writer_adds_before_the_sanitising_write_is_sanitised_and_na
 }
 
 #[test]
-fn a_terms_command_that_fails_or_answers_out_of_shape_refuses_the_sweep_by_name() {
+fn a_terms_command_that_fails_or_answers_out_of_shape_is_an_undecided_policy_exiting_two() {
     let (store, _record) = sanitizing(replaced());
     let python = crate::document_store::interpreter();
     for (what, script, said) in [
@@ -2442,10 +2442,11 @@ fn a_terms_command_that_fails_or_answers_out_of_shape_refuses_the_sweep_by_name(
         repolicy(&store, |policy| {
             policy["terms_command"] = json!([python.to_string_lossy(), "-c", script]);
         });
+        // An undecided policy, however it failed, exits 2 as a write's undecided check does.
         let (code, _, out, err) = sweep(&store, "site", &[]);
-        assert_eq!(code, Some(1), "{what}: {out}{err}");
+        assert_eq!(code, Some(2), "{what}: {out}{err}");
         assert!(
-            err.contains("cannot be swept") && err.contains(said),
+            err.contains("was not swept") && err.contains(said),
             "{what}: {err}"
         );
     }
@@ -2698,4 +2699,64 @@ fn a_comment_gone_before_its_sanitising_edit_refuses_the_write_it_was_for_saying
     let task = shared.task("t1");
     assert!(!task["content"].as_str().expect("content").contains(TERM));
     assert_eq!(task["priority"], json!("none"));
+}
+
+#[test]
+fn a_source_whose_request_count_cannot_be_read_is_searched_rather_than_read_whole() {
+    let shared = Shared::new(
+        &[("t1", &with_term()), ("t2", "Plain.")],
+        json!({}),
+        json!({}),
+    );
+    let mut state = shared.state();
+    state["metering_fails"] = json!(true);
+    std::fs::write(&shared.state, state.to_string()).expect("the state");
+    let (code, report, out, err) = sweep(&shared.store, "shared", &[]);
+    assert_eq!(code, Some(3), "{out}{err}");
+    assert_eq!(report["complete"], json!(false), "{report}");
+    assert_eq!(
+        entry(&report, "shared:t1")["outcome"],
+        json!("rewritten"),
+        "{report}"
+    );
+    let log = shared.state()["log"].clone();
+    assert!(
+        log.as_array()
+            .expect("a log")
+            .iter()
+            .filter(|method| *method == "query_tasks")
+            .count()
+            >= 1,
+        "{log}"
+    );
+}
+
+#[test]
+fn a_sanitising_dry_run_s_human_answer_says_nothing_was_written_and_what_would_change() {
+    let (store, _record) = sanitizing(replaced());
+    stage_older(&store);
+    let before = tree(&store.folder("site"));
+    let said = store.ok(&[
+        "task",
+        "priority",
+        "set",
+        "site:older",
+        "high",
+        "--sanitize-dry-run",
+    ]);
+    assert_eq!(tree(&store.folder("site")), before, "nothing was written");
+    let lines: Vec<&str> = said.trim_end().lines().collect();
+    assert!(
+        lines[0].starts_with("nothing was written") && lines[0].contains("would then pass"),
+        "{said}"
+    );
+    let mut rest: Vec<&str> = lines[1..].to_vec();
+    rest.sort_unstable();
+    let mut expected: Vec<String> = SIDE_EFFECTS
+        .iter()
+        .map(|field| format!("would sanitise site:older {field}"))
+        .collect();
+    expected.sort();
+    assert_eq!(rest, expected, "{said}");
+    assert!(!said.contains(TERM));
 }

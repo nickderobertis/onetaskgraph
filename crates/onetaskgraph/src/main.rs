@@ -349,7 +349,10 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             {
                 Ok(report) => report,
                 // An undecided policy exits 2, its locators already redacted.
-                Err(error @ onetaskgraph_core::EngineError::BoundaryUnavailable { .. }) => {
+                Err(
+                    error @ (onetaskgraph_core::EngineError::BoundaryUnavailable { .. }
+                    | onetaskgraph_core::EngineError::TermsUndecided { .. }),
+                ) => {
                     let failure = Failure::from(&error);
                     let _ = failed(&failure, loaded.config.output());
                     return Ok(2);
