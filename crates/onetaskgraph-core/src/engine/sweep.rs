@@ -201,10 +201,9 @@ impl Engine {
                     .map_err(|error| refused(destination, error))?;
                 sweep.requests.searches += 1;
                 // Each item of the page is decided, and written, before the next is asked for.
-                for task in page.items {
-                    self.sweep_item(destination, task.id, false, dry_run, &mut sweep)
-                        .await?;
-                }
+                let ids = page.items.into_iter().map(|task| task.id).collect();
+                self.sweep_batch(destination, ids, false, dry_run, &mut sweep)
+                    .await?;
                 match page.next {
                     Some(next) => cursor = Some(next),
                     None => break,
@@ -233,12 +232,14 @@ impl Engine {
                         .await
                         .map_err(|error| refused(destination, error))?;
                     sweep.requests.searches += 1;
-                    for task in page.items {
-                        if seen.insert(task.id.clone()) {
-                            self.sweep_item(destination, task.id, true, dry_run, &mut sweep)
-                                .await?;
-                        }
-                    }
+                    let ids = page
+                        .items
+                        .into_iter()
+                        .map(|task| task.id)
+                        .filter(|id| seen.insert(id.clone()))
+                        .collect();
+                    self.sweep_batch(destination, ids, true, dry_run, &mut sweep)
+                        .await?;
                     match page.next {
                         Some(next) => cursor = Some(next),
                         None => break,
@@ -299,20 +300,74 @@ impl Engine {
         Ok(report)
     }
 
-    /// Decide, and unless `dry_run` write, one item: read it with its comments, put it to the
+    /// Read `ids` with the first page of their comments in the source's own batched read, and
+    /// decide each in turn — the rest of an item's comments read only where it has more.
+    async fn sweep_batch(
+        &self,
+        destination: &ResolvedSource,
+        ids: Vec<NativeId>,
+        searched: bool,
+        dry_run: bool,
+        sweep: &mut Sweep,
+    ) -> Result<(), EngineError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let commented = destination.source().capabilities().comments.is_native();
+        let first = PageRequest {
+            cursor: None,
+            limit: 20,
+        };
+        let details = destination
+            .source()
+            .get_task_details(&ids, commented.then_some(&first))
+            .await;
+        sweep.requests.reads += 1;
+        for (id, detail) in ids.into_iter().zip(details) {
+            let Some(read) = detail.map_err(|error| refused(destination, error))? else {
+                continue;
+            };
+            let mut comments = Vec::new();
+            if let Some(Ok(Some(page))) = read.comments {
+                comments.extend(page.items);
+                if page.next.is_some() {
+                    // Every page of one revision, read again from the start rather than
+                    // resumed, so no comment is counted twice.
+                    comments = every_comment(destination, &id).await;
+                    sweep.requests.reads += 1;
+                }
+            }
+            self.sweep_item(
+                destination,
+                id,
+                read.task,
+                comments,
+                searched,
+                dry_run,
+                sweep,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Decide, and unless `dry_run` write, one item read with its comments: put it to the
     /// policy's sanitisation once, and rewrite what that answer rewrote.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one item as read, where it lives, and how the sweep was asked to treat it"
+    )]
     async fn sweep_item(
         &self,
         destination: &ResolvedSource,
         id: NativeId,
+        task: Task,
+        comments: Vec<onetaskgraph_plugin_api::Comment>,
         searched: bool,
         dry_run: bool,
         sweep: &mut Sweep,
     ) -> Result<(), EngineError> {
         let item = format!("{}:{id}", destination.name());
-        let task: Task = self.read_held_task(destination, &id).await?;
-        let comments = every_comment(destination, &id).await;
-        sweep.requests.reads += 1;
         let stored = StoredTask::of(destination, &item, &task, &comments);
         let answer: SanitizeVerdict = self.screen(&stored.exposure).await;
         if let WriteVerdict::Unavailable { .. } = answer.verdict {

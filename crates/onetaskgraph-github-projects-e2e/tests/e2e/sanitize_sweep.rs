@@ -219,3 +219,117 @@ fn a_complete_sweep_reads_the_board_whole_and_covers_every_class() {
     assert_eq!(code, Some(0));
     assert_eq!(report["items"], json!([]), "{report}");
 }
+
+/// The budgets' board: `size` items with comments, and the term-carrying items of
+/// `sanitize-sweep-requests` and `sanitize-complete-sweep-requests` among them.
+///
+/// Six searchable terms: the three onevcs derives from the invented private identity and three
+/// a store's own replacements add. Nine items carry one the searches find — five in the body,
+/// one in the body and a comment, one beside a private repository and so unfixable, and two in
+/// a comment alone — and two carry one only in a stored origin value or as a spelling with a
+/// zero-width character inside it. Every item holds `index % 21` comments, or with `deep`, the
+/// two per cent at every fiftieth item hold 25.
+pub(super) struct Workload {
+    board: Board,
+    pub(super) size: usize,
+}
+
+impl Workload {
+    pub(super) fn new(size: usize, deep: bool) -> Self {
+        let sandbox = Sandbox::new();
+        let mut items: Vec<Value> = (0..size)
+            .map(|n| {
+                issue(
+                    &format!("W-{n}"),
+                    &format!("Item {n}"),
+                    "Nothing private here.",
+                    "",
+                )
+            })
+            .collect();
+        let hits: [(usize, &str, &str); 9] = [
+            (11, "Retry as emberline does.", ""),
+            (222, "Retry as emberline did.", ""),
+            (333, "Ask duskfield first.", ""),
+            (444, "Ask pinecrest first.", ""),
+            (555, &*format!("Mirror {TERM} here."), ""),
+            (666, "Nothing private here.", "Seen in emberline."),
+            (777, "Nothing private here.", "Seen in duskfield."),
+            (888, "Ask duskfield too.", "And pinecrest."),
+            (999, &*format!("Mirror {TERM} there."), ""),
+        ];
+        for (index, body, _) in &hits {
+            items[*index]["body"] = json!(body);
+        }
+        // The unfixable one names the private repository.
+        items[999]["repo"] = json!(format!("hiddenco/{TERM}"));
+        items[1111]["origin"] = json!("plan:pinecrest-1");
+        items[1222]["body"] = json!("Mirror quiet\u{200b}harbor here.");
+        let (config, board) = github_projects_with_items(&sandbox, items);
+        for n in 0..size {
+            let count = if deep {
+                if n % 50 == 0 { 25 } else { n % 21 }
+            } else {
+                n % 21
+            };
+            for c in 0..count {
+                board.add_comment(&format!("W-{n}"), &format!("Comment {c}."));
+            }
+        }
+        for (index, _, said) in &hits {
+            if !said.is_empty() {
+                board.add_comment(&format!("W-{index}"), said);
+            }
+        }
+        let mut home = OnevcsHome::new(&sandbox);
+        home.private("hiddenco", TERM)
+            .public("nickderobertis", "onetaskgraph");
+        let mut configured: Value = serde_json::from_str(&document(&json!({
+            "board": {"plugin": "github-projects", "config": config, "visibility": "public"},
+        })))
+        .expect("a configuration document");
+        configured["write_policy"] = home.sanitizing_write_policy(json!([
+            { "term": TERM, "with": WITH },
+            { "term": "emberline", "with": "ember-x" },
+            { "term": "duskfield", "with": "dusk-x" },
+            { "term": "pinecrest", "with": "pine-x" },
+        ]));
+        sandbox.project_document(&configured.to_string());
+        Self {
+            board: Board {
+                sandbox,
+                board,
+                home,
+            },
+            size,
+        }
+    }
+
+    /// One sweep's report, with `flags`.
+    pub(super) fn sweep(&self, flags: &[&str]) -> Value {
+        let (code, report, out, err, _) = self.board.sweep(flags);
+        assert!(
+            matches!(code, Some(0 | 1 | 3)),
+            "the sweep answered a report: {code:?} {out}{err}"
+        );
+        assert!(!out.contains(TERM) && !err.contains(TERM));
+        report
+    }
+}
+
+/// `report`'s request figures, as a detail line.
+pub(super) fn requests(report: &Value) -> (u64, String) {
+    let requests = &report["requests"];
+    let total = requests["total"].as_u64().expect("a request total");
+    (
+        total,
+        format!(
+            "total {total}: searches {}, reads {}, writes {}; {} item(s) reported; coverage {}",
+            requests["searches"],
+            requests["reads"],
+            requests["writes"],
+            report["items"].as_array().map_or(0, Vec::len),
+            report["coverage"],
+        ),
+    )
+}

@@ -197,6 +197,46 @@ fn report_settlement_update() {
 // llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-end[tests_assert_real_behavior]
 
+// llmlint: ignore-block[tests_assert_real_behavior] Report-only entries budgets.yaml selects, which report nothing without ONEBUDGETSPEC_BUDGET_ID; the sweep journeys in `sanitize_sweep.rs` assert what a sweep does on the same board.
+/// `sanitize-sweep-requests`: every request a default sweep and one rerun send to the
+/// 2,000-item board, measured fresh — the standalone-measurement exception, loopback-only.
+#[test]
+fn report_sanitize_sweep() {
+    let Some(_budget) = selected() else {
+        return;
+    };
+    let workload = super::sanitize_sweep::Workload::new(2_000, false);
+    let (first, first_detail) = super::sanitize_sweep::requests(&workload.sweep(&[]));
+    let (rerun, rerun_detail) = super::sanitize_sweep::requests(&workload.sweep(&[]));
+    hand_over(
+        (first + rerun) as f64,
+        &format!(
+            "{} items; first sweep {first_detail}; rerun {rerun_detail}",
+            workload.size
+        ),
+    );
+}
+
+/// `sanitize-complete-sweep-requests`: every request one `--complete` sweep sends, per 1,000
+/// items of the 2,000-item board, measured fresh.
+#[test]
+fn report_sanitize_complete_sweep() {
+    let Some(_budget) = selected() else {
+        return;
+    };
+    let workload = super::sanitize_sweep::Workload::new(2_000, true);
+    let (total, detail) = super::sanitize_sweep::requests(&workload.sweep(&["--complete"]));
+    let per_thousand = total as f64 * 1_000.0 / workload.size as f64;
+    hand_over(
+        per_thousand,
+        &format!(
+            "{} items, {per_thousand:.1} per 1,000; {detail}",
+            workload.size
+        ),
+    );
+}
+// llmlint: ignore-end[tests_assert_real_behavior]
+
 fn report_store_cost(workload: &str) {
     let Some(budget) = selected() else {
         return;
