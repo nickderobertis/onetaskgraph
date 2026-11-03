@@ -30,7 +30,8 @@ use std::process::Stdio;
 use std::sync::{Arc, LazyLock};
 
 use onetaskgraph_plugin_api::{
-    Classification, Document, Label, NativeId, Project, Repository, Task, Visibility, WriteTarget,
+    Classification, Comment, CommentBody, Document, Label, NativeId, PageRequest, Project,
+    Repository, Task, Visibility, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -861,6 +862,8 @@ pub(crate) struct Boundary {
     replacements: Vec<Replacement>,
     /// Whether sanitise-on-refusal writes nothing and only answers what it would change.
     sanitize_dry_run: bool,
+    /// Whether a narrow write to an existing task is screened with the task as it stands.
+    whole_item: bool,
     /// What the screened writes of this command replaced, until [`Engine::take_sanitization`].
     sanitized: Arc<std::sync::Mutex<Sanitization>>,
     /// What the policy has answered in this command, until [`Engine::end_command`].
@@ -990,6 +993,7 @@ impl Default for Boundary {
             scope: None,
             replacements: Vec::new(),
             sanitize_dry_run: false,
+            whole_item: false,
             sanitized: Arc::default(),
             screened: Arc::default(),
             withheld: Arc::default(),
@@ -1017,6 +1021,7 @@ impl Boundary {
                 .map(|config| config.replacements.clone())
                 .unwrap_or_default(),
             sanitize_dry_run: false,
+            whole_item: write_policy.is_some_and(|config| config.sanitize_command.is_some()),
             sanitized: Arc::default(),
             screened: Arc::default(),
             withheld: Arc::default(),
@@ -1488,6 +1493,7 @@ impl Engine {
     pub fn with_write_policy(mut self, policy: Arc<dyn WritePolicy>) -> Self {
         self.boundary.active = true;
         self.boundary.policy = policy;
+        self.boundary.whole_item = true;
         self.boundary.forget();
         self
     }
@@ -2199,6 +2205,21 @@ impl Engine {
         if !self.boundary.active {
             return Ok(Rewrite::default());
         }
+        if held == Held::Task && self.sanitizes_whole_items() {
+            let task = destination.source().get_task(id).await.map_err(|error| {
+                EngineError::SourceRefused {
+                    name: destination.name().to_string(),
+                    error,
+                }
+            })?;
+            return match task {
+                Some(task) => {
+                    self.admit_whole_task(destination, item, id, task, exposure)
+                        .await
+                }
+                None => Ok(Rewrite::default()),
+            };
+        }
         let stored = match held {
             Held::Task => destination.source().get_task(id).await.map(|task| {
                 task.map(|task| (task.classification, task.repositories, task.project))
@@ -2382,6 +2403,445 @@ fn refusal(
             destination: destination_shown,
             reason: "the check passed nothing it was asked about".to_owned(),
         },
+    }
+}
+
+/// Every comment of `id` its source holds, every page, oldest first — none for a source whose
+/// tasks hold none, and none when they cannot be read, which then leaves them unsanitised.
+async fn every_comment(destination: &ResolvedSource, id: &NativeId) -> Vec<Comment> {
+    if !destination.source().capabilities().comments.is_native() {
+        return Vec::new();
+    }
+    let mut comments = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = destination
+            .source()
+            .task_comments(
+                id,
+                &PageRequest {
+                    cursor: cursor.take(),
+                    limit: 100,
+                },
+            )
+            .await;
+        let Ok(Some(page)) = page else {
+            return comments;
+        };
+        comments.extend(page.items);
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return comments,
+        }
+    }
+}
+
+/// What a stored task and its comments put in front of a reader, laid out so a sanitisation's
+/// answer can be read back field by field: the content first among the prose, then each
+/// comment's body; the title, each label's name and each metadata string among the short
+/// fields; and the identifiers a diagnostic of a field would print.
+struct StoredTask {
+    exposure: Exposure,
+}
+
+impl StoredTask {
+    fn of(destination: &ResolvedSource, item: &str, task: &Task, comments: &[Comment]) -> Self {
+        let mut exposure = Exposure::of_task(task);
+        for comment in comments {
+            exposure = exposure
+                .and(Exposure::text(comment.body.clone()))
+                .locate(LocatorKind::Comment, comment.id.as_str());
+        }
+        for key in task.metadata.keys() {
+            exposure = exposure.locate(LocatorKind::MetadataKey, key.as_str());
+        }
+        Self {
+            exposure: located(destination, item, exposure),
+        }
+    }
+}
+
+/// A task as sanitising it would write it, each comment with its new body, and the field words
+/// of what changed.
+type SanitisedTask = (Task, Vec<(Comment, String)>, Vec<String>);
+
+/// The fields and comments of `task` that `rewrite` changes, each with the record as it should
+/// then be written; `None` when it changes none.
+fn sanitised_task(
+    task: &Task,
+    comments: &[Comment],
+    rewrite: &Rewrite,
+) -> Option<SanitisedTask> {
+    let mut rewritten = task.clone();
+    rewrite.task(&mut rewritten);
+    let mut fields = Vec::new();
+    if rewritten.content != task.content {
+        fields.push("content".to_owned());
+    }
+    if rewritten.title != task.title {
+        fields.push("title".to_owned());
+    }
+    if rewritten.labels != task.labels {
+        fields.push("label".to_owned());
+    }
+    for (key, value) in &rewritten.metadata {
+        if task.metadata.get(key) != Some(value) {
+            fields.push(format!("metadata:{key}"));
+        }
+    }
+    let edited: Vec<(Comment, String)> = comments
+        .iter()
+        .filter_map(|comment| {
+            let body = rewrite.text(&comment.body);
+            (body != comment.body).then(|| (comment.clone(), body))
+        })
+        .collect();
+    for (comment, _) in &edited {
+        fields.push(format!("comment:{}", comment.id));
+    }
+    (!fields.is_empty()).then_some((rewritten, edited, fields))
+}
+
+/// The screened form of one field word: a fixed word as it is, and a `metadata:` or `comment:`
+/// field by its screened key or id.
+fn screened_field(field: &str, exposure: &Exposure, answered: &[Locator]) -> Locator {
+    let screened = |kind: LocatorKind, value: &str, prefix: &str| {
+        exposure
+            .locators
+            .iter()
+            .position(|locator| locator.kind == kind && locator.value == value)
+            .and_then(|index| answered.get(index))
+            .map_or_else(
+                || Locator::Plain(field.to_owned()),
+                |locator| match locator {
+                    Locator::Plain(value) => Locator::Plain(format!("{prefix}{value}")),
+                    redacted @ Locator::Redacted { .. } => redacted.clone(),
+                },
+            )
+    };
+    if let Some(key) = field.strip_prefix("metadata:") {
+        screened(LocatorKind::MetadataKey, key, "metadata:")
+    } else if let Some(id) = field.strip_prefix("comment:") {
+        screened(LocatorKind::Comment, id, "comment:")
+    } else {
+        Locator::Plain(field.to_owned())
+    }
+}
+
+/// `answered`'s screening of `value` of `kind` among `exposure`'s locators, or every locator
+/// redacted when the answer screened none.
+fn screened_locator(
+    exposure: &Exposure,
+    answered: &[Locator],
+    kind: LocatorKind,
+    value: &str,
+) -> Locator {
+    let answered = if answered.len() == exposure.locators.len() {
+        answered.to_vec()
+    } else {
+        redacted(&exposure.locators)
+    };
+    exposure
+        .locators
+        .iter()
+        .position(|locator| locator.kind == kind && locator.value == value)
+        .and_then(|index| answered.get(index).cloned())
+        .unwrap_or_else(|| Locator::Plain(value.to_owned()))
+}
+
+impl Engine {
+    /// Whether a narrow write to an existing task is screened with the task as it stands, so a
+    /// term already on it is sanitised rather than written past: on whenever the policy can
+    /// rewrite — a `sanitize_command`, or a linking caller's own policy.
+    fn sanitizes_whole_items(&self) -> bool {
+        self.boundary.whole_item
+    }
+
+    /// Admit one narrow write to the task `task`, as `destination` holds it, by one sanitisation
+    /// of the write together with the task and every comment on it: what the write adds, and
+    /// what it leaves standing beside it in public.
+    ///
+    /// A term already on the task that the answer rewrites is sanitised before the write is
+    /// made — the task and its comments written back, conditional on the version the read
+    /// answered — and reported in the write's `sanitization`. One the answer cannot fix refuses
+    /// the write saying the term was already on the item before it; a task already private by
+    /// its own record is refused by the classification rule, saying its `repositories` already
+    /// named a private repository.
+    async fn admit_whole_task(
+        &self,
+        destination: &ResolvedSource,
+        item: &str,
+        id: &NativeId,
+        task: Task,
+        exposure: &Exposure,
+    ) -> Result<Rewrite, EngineError> {
+        let classification = self.classify(task.classification, &task.repositories).await;
+        if classification == Classification::Private {
+            // Its locators are screened by one call on this refusal's path alone.
+            let locators = located(destination, item, Exposure::default());
+            let answer = self.screen(&locators).await;
+            return Err(EngineError::NotPrivateDestinationPredates {
+                item: screened_locator(&locators, &answer.locators, LocatorKind::Item, item)
+                    .to_string(),
+                destination: screened_locator(
+                    &locators,
+                    &answer.locators,
+                    LocatorKind::Source,
+                    destination.name().as_str(),
+                )
+                .to_string(),
+                declared: self.declared(destination.name()),
+            });
+        }
+        let comments = every_comment(destination, id).await;
+        let stored = StoredTask::of(destination, item, &task, &comments);
+        let write = located(destination, item, exposure.clone());
+        let whole = write.clone().and(stored.exposure.clone());
+        if let Some(rewrite) = self.boundary.passed(&whole) {
+            return Ok(rewrite);
+        }
+        let answer = self.screen(&whole).await;
+        match &answer.verdict {
+            WriteVerdict::Pass => {
+                let rewrite = Rewrite::of(&whole, &answer);
+                self.boundary.pass(&whole, &rewrite);
+                if let Some((sanitised, edited, fields)) =
+                    sanitised_task(&task, &comments, &rewrite)
+                {
+                    self.sanitise_task(
+                        destination,
+                        item,
+                        id,
+                        &task,
+                        (sanitised, edited, fields),
+                        (&whole, &answer.locators),
+                    )
+                    .await?;
+                    if self.boundary.sanitize_dry_run {
+                        return Err(EngineError::SanitizeDryRun {
+                            item: screened_locator(
+                                &whole,
+                                &answer.locators,
+                                LocatorKind::Item,
+                                item,
+                            )
+                            .to_string(),
+                            would_pass: true,
+                        });
+                    }
+                }
+                Ok(rewrite)
+            }
+            WriteVerdict::Refuse { reason } => {
+                // Whether the term left is the task's own, as it stood before this write: an
+                // answer that says which entry names one in the task's part; one that cannot
+                // say is asked about the write alone, on this refusal's path only.
+                let offset = |surface: SanitizeSurface, fixed: bool| match (surface, fixed) {
+                    (SanitizeSurface::Text, false) => write.text.len(),
+                    (SanitizeSurface::Path, false) => write.paths.len(),
+                    (SanitizeSurface::Metadata, false) => write.metadata.len(),
+                    (SanitizeSurface::Text, true) => write.fixed.text.len(),
+                    (SanitizeSurface::Path, true) => write.fixed.paths.len(),
+                    (SanitizeSurface::Metadata, true) => write.fixed.metadata.len(),
+                    (SanitizeSurface::Locators, _) => usize::MAX,
+                };
+                let predates = if answer.unfixed.is_empty() {
+                    self.screen(&write).await.verdict == WriteVerdict::Pass
+                } else {
+                    answer.unfixed.iter().any(|unfixed| {
+                        usize::try_from(unfixed.index)
+                            .is_ok_and(|index| index >= offset(unfixed.surface, unfixed.fixed))
+                    })
+                };
+                if !predates {
+                    return Err(refusal(destination, item, &whole, &answer));
+                }
+                // What replacement can fix is fixed, once; what it cannot is named.
+                let rewrite = Rewrite::of(&whole, &answer);
+                if let Some(sanitised) = sanitised_task(&task, &comments, &rewrite) {
+                    self.sanitise_task(
+                        destination,
+                        item,
+                        id,
+                        &task,
+                        sanitised,
+                        (&whole, &answer.locators),
+                    )
+                    .await?;
+                }
+                let mut unfixable = Vec::new();
+                for unfixed in &answer.unfixed {
+                    let kind = match (unfixed.surface, unfixed.fixed) {
+                        (SanitizeSurface::Locators, _) => "an identifier",
+                        (SanitizeSurface::Metadata, true) => {
+                            let at = usize::try_from(unfixed.index).unwrap_or(usize::MAX);
+                            let value = whole.fixed.metadata.get(at);
+                            if value.is_some_and(|value| {
+                                task.repositories
+                                    .iter()
+                                    .any(|repository| repository.as_str() == value)
+                            }) {
+                                "repositories"
+                            } else {
+                                "an id"
+                            }
+                        }
+                        (_, true) => "an id",
+                        (_, false) => "a term no replacement is declared for",
+                    };
+                    if !unfixable.contains(&kind) {
+                        unfixable.push(kind);
+                    }
+                }
+                let screened = |kind: LocatorKind, value: &str| {
+                    screened_locator(&whole, &answer.locators, kind, value)
+                };
+                Err(EngineError::BoundaryRefusedPredates {
+                    item: screened(LocatorKind::Item, item).to_string(),
+                    destination: screened(LocatorKind::Source, destination.name().as_str())
+                        .to_string(),
+                    reason: reason.clone(),
+                    unfixable: if unfixable.is_empty() {
+                        "a term no replacement is declared for".to_owned()
+                    } else {
+                        unfixable.join(", ")
+                    },
+                })
+            }
+            WriteVerdict::Unavailable { .. } => Err(refusal(destination, item, &whole, &answer)),
+        }
+    }
+
+    /// Write `sanitised` back over `task` — unless this is a dry run, which only reports it — on
+    /// condition that the task is still at the version `task` was read at.
+    ///
+    /// A task that moved meanwhile is read again once and sanitised from that fresh record, so
+    /// a change stored in between is kept; one that moves a second time is refused as a
+    /// conflict, nothing overwritten. Every field and comment written is reported by its
+    /// screened locator.
+    async fn sanitise_task(
+        &self,
+        destination: &ResolvedSource,
+        item: &str,
+        id: &NativeId,
+        task: &Task,
+        sanitised: SanitisedTask,
+        screened: (&Exposure, &[Locator]),
+    ) -> Result<(), EngineError> {
+        let (exposure, answered) = screened;
+        let shown_item = screened_locator(exposure, answered, LocatorKind::Item, item);
+        let (mut rewritten, mut edited, mut fields) = sanitised;
+        if !self.boundary.sanitize_dry_run {
+            let fresh = self.read_held_task(destination, id).await?;
+            if fresh.version != task.version {
+                // Moved once: sanitise the record as it now stands, keeping what changed.
+                let comments = every_comment(destination, id).await;
+                let stored = StoredTask::of(destination, item, &fresh, &comments);
+                let answer = self.screen(&stored.exposure).await;
+                let rewrite = Rewrite::of(&stored.exposure, &answer);
+                let Some(again) = sanitised_task(&fresh, &comments, &rewrite) else {
+                    return Ok(());
+                };
+                (rewritten, edited, fields) = again;
+                let latest = self.read_held_task(destination, id).await?;
+                if latest.version != fresh.version {
+                    return Err(EngineError::SanitizeConflict {
+                        item: shown_item.to_string(),
+                    });
+                }
+            }
+            self.write_sanitised(destination, id, &rewritten, &edited)
+                .await?;
+        }
+        if let Ok(mut sanitized) = self.boundary.sanitized.lock() {
+            sanitized.dry_run |= self.boundary.sanitize_dry_run;
+            for field in fields {
+                sanitized.side_effect.push(SideEffect {
+                    item: shown_item.clone(),
+                    field: screened_field(&field, exposure, answered),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    async fn read_held_task(
+        &self,
+        destination: &ResolvedSource,
+        id: &NativeId,
+    ) -> Result<Task, EngineError> {
+        destination
+            .source()
+            .get_task(id)
+            .await
+            .map_err(|error| EngineError::SourceRefused {
+                name: destination.name().to_string(),
+                error,
+            })?
+            .ok_or_else(|| EngineError::NoSuchTask {
+                id: format!("{}:{id}", destination.name()),
+            })
+    }
+
+    /// One task's sanitised fields and comments, written through the source's own write side:
+    /// the task whole with every forward edge it holds, then each comment's new body.
+    async fn write_sanitised(
+        &self,
+        destination: &ResolvedSource,
+        id: &NativeId,
+        task: &Task,
+        comments: &[(Comment, String)],
+    ) -> Result<(), EngineError> {
+        let refused = |error| EngineError::SourceRefused {
+            name: destination.name().to_string(),
+            error,
+        };
+        let mut depends_on = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = destination
+                .source()
+                .task_dependencies(
+                    id,
+                    onetaskgraph_plugin_api::Direction::DependsOn,
+                    &PageRequest {
+                        cursor: cursor.take(),
+                        limit: 100,
+                    },
+                )
+                .await
+                .map_err(refused)?;
+            depends_on.extend(page.items);
+            match page.next {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        super::stored::forget(
+            destination,
+            onetaskgraph_plugin_api::MetadataRecord::Task,
+            id,
+        );
+        destination
+            .source()
+            .write_task(&onetaskgraph_plugin_api::ItemWrite {
+                target: Some(id.clone()),
+                item: task.clone(),
+                depends_on,
+            })
+            .await
+            .map_err(refused)?;
+        for (comment, body) in comments {
+            let Ok(body) = CommentBody::new(body.clone()) else {
+                continue;
+            };
+            destination
+                .source()
+                .edit_comment(id, &comment.id, &body)
+                .await
+                .map_err(refused)?;
+        }
+        Ok(())
     }
 }
 

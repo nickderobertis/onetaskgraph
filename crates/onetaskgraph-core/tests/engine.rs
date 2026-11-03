@@ -5277,6 +5277,7 @@ fn a_failure_document_names_what_failed_where_and_takes_a_wrapped_failures_class
             failure,
             expected: onetaskgraph_core::ExpectedWrite::default(),
             held: None,
+            predates_write: None,
         })
         .expect("a failure document renders")
     };
@@ -5962,7 +5963,7 @@ const FIFTY_THIRD_BUNDLE_SHAPE: [(&str, u64); 137] = [
     ("ExpectedWrite", 0xea67809209cbe590),
     ("Failure", 0x262f6bea47b38246),
     ("FailureClass", 0x7fcbfc34989aa444),
-    ("FailureDocument", 0x16b67e131a022b69),
+    ("FailureDocument", 0x071032c85b939b91),
     ("GlobalId", 0xe692661021d9c53e),
     ("Health", 0x4a65ae032f76c6ca),
     ("HeldTask", 0x72aa6c278ce2989a),

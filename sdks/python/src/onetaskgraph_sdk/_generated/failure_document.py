@@ -233,3 +233,9 @@ class FailureDocument(BaseModel):
             description="What the destination item a copy refused to write held, as the copy's read of it\nbefore writing found it — present only for a refusal made after that read, such as\n`target-task-origin`."
         ),
     ] = None
+    predates_write: Annotated[
+        bool | None,
+        Field(
+            description="`true` when the write was refused for something already on its item before it — a\nprivate repository among its `repositories`, or a term sanitising it could not fix —\nand absent otherwise."
+        ),
+    ] = None

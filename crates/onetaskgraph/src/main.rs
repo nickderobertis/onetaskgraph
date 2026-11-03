@@ -206,6 +206,33 @@ fn fail(message: &str, code: u8) -> ExitCode {
 /// is what it parses. A usage failure never reaches here: it is the invocation that was
 /// wrong, and [`fail`] reports it at [`EXIT_USAGE`] with no document.
 fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
+    // A sanitisation dry run is an answer, not a failure: what it would change, and whether
+    // the write would then pass, with nothing written.
+    if failure.kind() == "sanitize-dry-run" {
+        let done = sanitization();
+        let rendered = match output {
+            OutputFormat::Json => json(
+                &serde_json::json!({
+                    "written": false,
+                    "would_pass": failure.message().contains("would then pass"),
+                    "sanitization": done.to_json(),
+                }),
+                "the dry run",
+            )
+            .unwrap_or_default(),
+            OutputFormat::Text => render::sanitised(
+                failure
+                    .message()
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned(),
+                &done,
+            ),
+        };
+        let _ = emit(&mut io::stdout().lock(), rendered.trim_end(), "the dry run");
+        return ExitCode::from(EXIT_OK);
+    }
     let code = fail(failure.message(), EXIT_FAILURE);
     if output == OutputFormat::Json {
         let document = FailureDocument {
@@ -219,6 +246,9 @@ fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take(),
+            predates_write: FAILED_PREDATES
+                .load(std::sync::atomic::Ordering::SeqCst)
+                .then_some(true),
         };
         // Best effort, and deliberately silent: the stderr line above already said why the
         // command failed, and a reader that has gone away cannot be told anything more.
@@ -1039,6 +1069,9 @@ static CLOCK: OnceLock<SharedClock> = OnceLock::new();
 /// The replacement entries `--replace` and `--reject` gave, in the order they were typed.
 static REPLACEMENTS: OnceLock<Vec<onetaskgraph_core::boundary::Replacement>> = OnceLock::new();
 
+/// Whether the write that failed was refused for something already on its item before it.
+static FAILED_PREDATES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Whether `--sanitize-dry-run` was given.
 static SANITIZE_DRY_RUN: OnceLock<bool> = OnceLock::new();
 
@@ -1169,6 +1202,7 @@ fn write_failed(engine: &Engine, error: &onetaskgraph_core::EngineError) -> Fail
     *FAILED_HELD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = error.held().cloned();
+    FAILED_PREDATES.store(error.predates_write(), std::sync::atomic::Ordering::SeqCst);
     Failure::from(error)
 }
 

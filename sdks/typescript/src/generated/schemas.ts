@@ -6981,6 +6981,13 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ]
+      },
+      "predates_write": {
+        "description": "`true` when the write was refused for something already on its item before it — a\nprivate repository among its `repositories`, or a term sanitising it could not fix —\nand absent otherwise.",
+        "type": [
+          "boolean",
+          "null"
+        ]
       }
     },
     "required": [

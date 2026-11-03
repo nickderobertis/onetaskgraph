@@ -4280,6 +4280,12 @@ spent?: (Spent | null)
  * `target-task-origin`.
  */
 held?: (WriteResult | null)
+/**
+ * `true` when the write was refused for something already on its item before it — a
+ * private repository among its `repositories`, or a term sanitising it could not fix —
+ * and absent otherwise.
+ */
+predates_write?: (boolean | null)
 [k: string]: any
 }
 /**

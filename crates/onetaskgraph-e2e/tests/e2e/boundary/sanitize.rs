@@ -749,3 +749,208 @@ async fn a_linking_caller_s_sanitising_policy_writes_what_its_one_call_answered(
     assert_eq!(engine.take_sanitization().replaced, 2);
     assert!(!text_of(&store, "site").contains(TERM));
 }
+
+/// One comment in a folder's own comments section, as an older store wrote it.
+fn comment(id: &str, said: &str) -> String {
+    format!(
+        "<!-- onetaskgraph:comment id=\"{id}\" author=\"ada\" created_at=\"2026-09-13T15:11:07Z\" \
+         updated_at=\"2026-09-13T15:11:07Z\" -->\n### ada — 2026-09-13T15:11:07Z\n\n{said}\n\n\
+         <!-- /onetaskgraph:comment -->"
+    )
+}
+
+/// Stage the task `older` on `site` as a store before replacement could have written it: the
+/// term in its body, title, a label, a metadata value and two comments.
+fn stage_older(store: &Store) {
+    store.record(
+        "site",
+        "tasks",
+        "older",
+        &format!(
+            "title: Port the {TERM} retry\nstatus: todo\nproject: p\nlabels: [{TERM}-ops]\n\
+             metadata:\n  myapp.note: seen in {TERM}"
+        ),
+        &format!(
+            "Retry the way {TERM} does.\n\n## Comments\n\n{}\n\n{}",
+            comment("20260913T151107Z-1", &format!("Asked {TERM} first.")),
+            comment("20260913T151107Z-2", &format!("And {TERM} again."))
+        ),
+    );
+}
+
+const SIDE_EFFECTS: [&str; 6] = [
+    "content",
+    "title",
+    "label",
+    "metadata:myapp.note",
+    "comment:20260913T151107Z-1",
+    "comment:20260913T151107Z-2",
+];
+
+#[test]
+fn a_narrow_write_to_an_item_already_carrying_a_term_sanitises_it_first_and_says_so() {
+    let (store, record) = sanitizing(replaced());
+    stage_older(&store);
+    let before = record.calls().len();
+    let answer: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "priority",
+        "set",
+        "site:older",
+        "high",
+        "--json",
+    ]))
+    .expect("the answer");
+    // One call screened the write with the task and its comments as they stood.
+    assert_eq!(ran(&record, before, BoundaryCommand::Sanitize), 1);
+    assert_eq!(answer["priority"], json!("high"), "{answer}");
+    let fields: Vec<String> = answer["sanitization"]["side_effect"]
+        .as_array()
+        .expect("side effects")
+        .iter()
+        .map(|effect| {
+            assert_eq!(effect["item"], json!("site:older"), "{answer}");
+            effect["field"].as_str().expect("a field").to_owned()
+        })
+        .collect();
+    let mut expected: Vec<String> = SIDE_EFFECTS
+        .iter()
+        .map(|field| (*field).to_owned())
+        .collect();
+    expected.sort();
+    let mut fields_sorted = fields.clone();
+    fields_sorted.sort();
+    assert_eq!(fields_sorted, expected, "{answer}");
+    assert_eq!(answer["sanitization"]["dry_run"], json!(false));
+    let public = text_of(&store, "site");
+    assert!(!public.contains(TERM), "{public}");
+    for written in [
+        format!("Retry the way {WITH} does."),
+        format!("Port the {WITH} retry"),
+        format!("{WITH}-ops"),
+        format!("seen in {WITH}"),
+        format!("Asked {WITH} first."),
+        format!("And {WITH} again."),
+    ] {
+        assert!(public.contains(&written), "{written:?}:\n{public}");
+    }
+    let shown: Value =
+        serde_json::from_str(&store.ok(&["task", "show", "site:older", "--json"])).expect("a task");
+    assert_eq!(shown["items"][0]["item"]["priority"], json!("high"));
+}
+
+#[test]
+fn a_sanitising_write_s_dry_run_writes_nothing_and_says_what_it_would_change() {
+    let (store, _record) = sanitizing(replaced());
+    stage_older(&store);
+    let before = tree(&store.folder("site"));
+    let answer: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "priority",
+        "set",
+        "site:older",
+        "high",
+        "--json",
+        "--sanitize-dry-run",
+    ]))
+    .expect("the answer");
+    assert_eq!(tree(&store.folder("site")), before, "nothing was written");
+    assert_eq!(answer["written"], json!(false), "{answer}");
+    assert_eq!(answer["would_pass"], json!(true), "{answer}");
+    assert_eq!(answer["sanitization"]["dry_run"], json!(true), "{answer}");
+    assert_eq!(
+        answer["sanitization"]["side_effect"]
+            .as_array()
+            .expect("side effects")
+            .len(),
+        SIDE_EFFECTS.len(),
+        "{answer}"
+    );
+    assert!(!answer.to_string().contains(TERM));
+}
+
+#[test]
+fn a_sanitising_write_s_human_answer_is_today_s_line_then_one_sanitised_line_per_field() {
+    let (store, _record) = sanitizing(replaced());
+    store.record(
+        "site",
+        "tasks",
+        "clean",
+        "title: Clean\nstatus: todo\nproject: p",
+        PLAIN,
+    );
+    let today = store.ok(&["task", "priority", "set", "site:clean", "high"]);
+    stage_older(&store);
+    let said = store.ok(&["task", "priority", "set", "site:older", "high"]);
+    let lines: Vec<&str> = said.trim_end().lines().collect();
+    let success: Vec<String> = today
+        .trim_end()
+        .lines()
+        .map(|line| line.replace("site:clean", "site:older"))
+        .collect();
+    assert_eq!(&lines[..success.len()], success.as_slice(), "{said}");
+    let mut rest: Vec<&str> = lines[success.len()..].to_vec();
+    rest.sort_unstable();
+    let mut expected: Vec<String> = SIDE_EFFECTS
+        .iter()
+        .map(|field| format!("sanitised site:older {field}"))
+        .collect();
+    expected.sort();
+    assert_eq!(rest, expected, "{said}");
+    assert!(!said.contains(TERM));
+}
+
+#[test]
+fn an_item_whose_stored_repositories_already_name_a_private_repository_is_refused_saying_so() {
+    let (store, record) = sanitizing(replaced());
+    store.record(
+        "site",
+        "tasks",
+        "leaked",
+        "title: Leaked\nstatus: todo\nproject: p\nrepositories: [github.com/hiddenco/quietharbor]",
+        PLAIN,
+    );
+    let before = tree(&store.folder("site"));
+    let calls = record.calls().len();
+    let output = store.run(&["task", "priority", "set", "site:leaked", "high", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(failure["failure"]["kind"], json!("not-private-destination"));
+    assert_eq!(failure["predates_write"], json!(true), "{failure}");
+    let said = stderr(&output);
+    for words in [
+        "is private, and source site is not declared private",
+        "already named a private repository before this write",
+        "replacement cannot fix `repositories`",
+        "remove that repository from the item's `repositories`",
+        "move the item to a source declared private",
+    ] {
+        assert!(said.contains(words), "{words:?}: {said}");
+    }
+    assert!(!said.contains(TERM) && !said.contains("hiddenco"), "{said}");
+    assert_eq!(tree(&store.folder("site")), before, "nothing was written");
+    // No sanitisation was attempted: the one call screened the refusal's locators alone.
+    let after = &record.calls()[calls..];
+    assert!(
+        after
+            .iter()
+            .filter(|call| call.command == BoundaryCommand::Sanitize)
+            .all(|call| call.input["text"].as_array().is_none_or(Vec::is_empty)),
+        "{after:?}"
+    );
+
+    // A write that itself adds a private repository is refused as before, with no clause.
+    store.record(
+        "plan",
+        "tasks",
+        "adds",
+        "title: Adds\nstatus: todo\nrepositories: [github.com/hiddenco/quietharbor]",
+        PLAIN,
+    );
+    let output = store.run(&["task", "copy", "plan:adds", "--to", "site", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(failure["failure"]["kind"], json!("not-private-destination"));
+    assert!(failure.get("predates_write").is_none(), "{failure}");
+    assert!(!stderr(&output).contains("before this write"));
+}
