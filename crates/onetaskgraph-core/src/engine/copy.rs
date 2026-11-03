@@ -9263,19 +9263,38 @@ impl Engine {
                 body,
                 origin: held.copy.origin.clone(),
             };
-            destination
+            let edited = destination
                 .source()
                 .write_comment_copy(&held.task, Some(&held.comment), &copy)
                 .await
                 .map_err(|error| refused(destination, error))?;
-            journal.comments.push(CommentUndo {
-                at: held.at.clone(),
-                task: held.task.clone(),
-                undo: CommentUndoing::Edited {
-                    id: held.comment.clone(),
-                    before: held.copy,
-                },
-            });
+            match edited {
+                Some(_) => journal.comments.push(CommentUndo {
+                    at: held.at.clone(),
+                    task: held.task.clone(),
+                    undo: CommentUndoing::Edited {
+                        id: held.comment.clone(),
+                        before: held.copy,
+                    },
+                }),
+                // Removed since it was written: the copy is written afresh, as a comment edit of
+                // the copy's plan is when its comment has gone.
+                None => {
+                    let added = destination
+                        .source()
+                        .write_comment_copy(&held.task, None, &copy)
+                        .await
+                        .map_err(|error| refused(destination, error))?
+                        .ok_or_else(|| EngineError::NoSuchTask {
+                            id: GlobalId::new(held.at.clone(), held.task.clone()).to_string(),
+                        })?;
+                    journal.comments.push(CommentUndo {
+                        at: held.at.clone(),
+                        task: held.task.clone(),
+                        undo: CommentUndoing::Added(added.id),
+                    });
+                }
+            }
             journal
                 .sections
                 .entry(held.source)

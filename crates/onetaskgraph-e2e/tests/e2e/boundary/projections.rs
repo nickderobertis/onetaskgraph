@@ -3374,3 +3374,54 @@ fn a_refused_update_finishing_a_new_views_link_takes_the_whole_copy_back() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn a_write_finishing_a_new_view_answered_with_another_item_takes_the_whole_copy_back() {
+    // Linear answers the write that finishes a new view's link with another issue: the copy cannot
+    // say what it wrote, so it fails, and the view it created is taken back.
+    let mut handle = None;
+    let store = Store::laid(Some(registered), |sandbox| {
+        let (mut config, workspace) =
+            crate::fixtures::linear_workspace(sandbox, crate::fixtures::dataset());
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        handle = Some(workspace);
+        sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+        json!({
+            "tracker": {"plugin": "linear", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "tracker"}]},
+        })
+    });
+    let workspace = handle.expect("the workspace");
+    workspace.bend_answers(
+        |document, _| document == onetaskgraph_linear::graphql::ISSUE_REWRITE,
+        1,
+        |_, data| {
+            if let Some(issue) = data.pointer_mut("/issueUpdate/issue") {
+                issue["id"] = json!("another-issue");
+            }
+        },
+    );
+    private_rollout(&store);
+    store.record(
+        "plan",
+        "tasks",
+        "sectioned",
+        &format!(
+            "title: Retry the widget once\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"
+        ),
+        "See [the retry](#step-2b-retry-once) below.\n\n### Step 2.b: retry (once)\n\nOnce.",
+    );
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        workspace.issue_titled("Retry the widget once"),
+        None,
+        "the view the copy created is taken back: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -2050,3 +2050,112 @@ fn a_boards_content_write_and_update_store_the_anchors_and_read_back_as_authored
         );
     }
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn a_comment_removed_before_its_section_link_is_finished_is_written_afresh() {
+    // The comment a copy wrote before the task it links had landed is gone by the time its link
+    // is finished: it is written afresh, once, finished.
+    let sandbox = Sandbox::new();
+    let config = empty_folder(&sandbox, "plans");
+    let root = root_of(&sandbox, "plans");
+    for folder in ["projects", "tasks"] {
+        std::fs::create_dir_all(root.join(folder)).expect("a folder");
+    }
+    std::fs::write(
+        root.join("projects/P.md"),
+        "---\ntitle: Plan\nstatus: todo\n---\nThe plan.\n",
+    )
+    .expect("the project");
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: Alpha\nstatus: todo\nproject: P\n---\n## Alpha\n\nFirst.\n\n## Comments\n\n\
+         <!-- onetaskgraph:comment id=\"c1\" created_at=\"2026-11-02T12:00:00Z\" \
+         updated_at=\"2026-11-02T12:00:00Z\" -->\n### comment — 2026-11-02T12:00:00Z\n\n\
+         Blocked on [beta](B.md#beta).\n\n<!-- /onetaskgraph:comment -->\n",
+    )
+    .expect("the first task");
+    std::fs::write(
+        root.join("tasks/B.md"),
+        "---\ntitle: Beta\nstatus: todo\nproject: P\n---\n## Beta\n\nAfter [alpha](A.md#alpha).\n",
+    )
+    .expect("the second task");
+    let (linear, linear_config) = store(&sandbox, "linear", "linear", None);
+    configure(
+        &sandbox,
+        &[
+            ("plans", &json!({"plugin": "local-md", "config": config})),
+            ("linear", &linear_config),
+        ],
+    );
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    // A person deletes the comment the moment it is created.
+    workspace.after_request(
+        |document, _| document == onetaskgraph_linear::graphql::COMMENT_CREATE,
+        0,
+        |workspace| {
+            let created = workspace
+                .answered()
+                .iter()
+                .rev()
+                .find_map(|answer| {
+                    answer
+                        .pointer("/data/commentCreate/comment/id")
+                        .or_else(|| answer.pointer("/commentCreate/comment/id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .expect("the created comment");
+            workspace.delete_comment(&created);
+        },
+    );
+    let reported = outcomes(&ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plans:P",
+            "--to",
+            "linear",
+            "--comments",
+            "--json",
+        ],
+    ));
+    let alpha = Landed {
+        verb: "task",
+        id: reported["plans:A"]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    let beta = Landed {
+        verb: "task",
+        id: reported["plans:B"]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    let listed: Value = serde_json::from_str(&ok(
+        &sandbox,
+        &["task", "comment", "list", &alpha.id, "--json"],
+    ))
+    .expect("comments");
+    let expected = format!(
+        "[beta]({}#heading-beta-{})",
+        beta.location(&sandbox),
+        stored_id8(workspace, &beta, "Beta", 0)
+    );
+    let held: Vec<&str> = listed["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|comment| comment["body"].as_str())
+        .collect();
+    assert_eq!(
+        held.iter().filter(|body| body.contains(&expected)).count(),
+        1,
+        "written afresh, once, finished: {held:#?}"
+    );
+}

@@ -1642,7 +1642,7 @@ impl Engine {
                 if write.item.content.as_deref() != Some(finished.as_str()) {
                     let mut item = write.item.clone();
                     item.content = Some(finished);
-                    destination
+                    let finished = destination
                         .source()
                         .write_task(&ItemWrite {
                             target: Some(landed.clone()),
@@ -1650,7 +1650,20 @@ impl Engine {
                             depends_on: write.depends_on.clone(),
                         })
                         .await
+                        .and_then(|answered| answered_id(answered, "write_task"))
                         .map_err(|error| refused(destination, error))?;
+                    // An update of the view it names, and an answer naming another is one this copy
+                    // cannot say what was written to.
+                    if finished != landed {
+                        return Err(refused(
+                            destination,
+                            SourceError::Malformed {
+                                message: format!(
+                                    "the write finishing view {landed} answered with the item {finished}"
+                                ),
+                            },
+                        ));
+                    }
                 }
             }
         }
