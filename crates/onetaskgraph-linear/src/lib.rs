@@ -3385,7 +3385,9 @@ impl TaskSource for LinearSource {
             .and_then(|answered| answered.version.clone())
     }
     /// The ids Linear's editor gave the item's headings, as the latest answer that selected its
-    /// editor state carried them — every read and write of a long form selects it.
+    /// editor state carried them: every read of one item, every issue and document listing and
+    /// every write of a long form selects it, and the project listings, which no section link
+    /// reads ids from, do not.
     fn stored_headings(
         &self,
         record: MetadataRecord,

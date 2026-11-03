@@ -295,7 +295,19 @@ def outcomes(report: dict) -> list[Outcome]:
     items = at(report, "items")
     if not isinstance(items, list):
         raise Failure("a copy's report holds no item list; next: run the copy by hand with --json")
-    return [Outcome(text_at(item, "source"), optional_text(item, "destination")) for item in items]
+    return [Outcome(qualified(text_at(item, "source")), qualified_or_none(optional_text(item, "destination"))) for item in items]
+
+
+def qualified(id: str) -> QualifiedId:
+    """`id` when it is `<source>:<native id>`, both non-empty."""
+    source, colon, native = id.partition(":")
+    if not colon or not source or not native.strip():
+        raise Failure(f"{id!r} is not a qualified id; next: read the copy's report by hand with --json")
+    return id
+
+
+def qualified_or_none(id: str | None) -> QualifiedId | None:
+    return None if id is None else qualified(id)
 
 
 def text_at(value: object, *path: str | int) -> str:
@@ -321,8 +333,9 @@ def scratch_issue(url: str) -> str:
 
 
 def linear_url(url: str) -> str:
-    if urllib.parse.urlparse(url).hostname != LINEAR_HOST:
-        raise Failure(f"{url} is not a Linear address; next: check the Linear source's endpoint")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != LINEAR_HOST or parsed.port is not None or parsed.username or parsed.password:
+        raise Failure(f"{url} is not an https Linear address; next: check the Linear source's endpoint")
     return url
 
 

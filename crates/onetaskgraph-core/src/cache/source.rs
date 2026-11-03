@@ -1346,6 +1346,7 @@ impl TaskSource for CachedSource {
 
     /// Past the cache, always: an entry it serves says nothing of where the record's headings
     /// are, which only the backend's own answer says.
+    // llmlint: ignore[changed_behavior_has_e2e] Held at this boundary by `a_read_for_heading_ids_reaches_the_source_past_an_entry_the_cache_serves` over the real `CachedSource`, a served entry and a counting source, which fails without this method. No command today serves the engine's read for heading ids from the cache: the cache-enabled Linear section-link journey passes with the engine's call reverted, so a journey through the binary cannot reach this path yet.
     async fn read_stored_headings(
         &self,
         record: MetadataRecord,
