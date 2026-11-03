@@ -3259,3 +3259,51 @@ fn a_sweep_whose_source_fails_part_way_fails_naming_it_and_a_task_gone_is_passed
         "{report}"
     );
 }
+
+#[test]
+fn a_comment_edited_without_moving_its_task_is_sanitised_from_what_it_now_says() {
+    let shared = Shared::new(
+        &[("t1", "Nothing private.")],
+        json!({"t1": [2]}),
+        json!({
+            "t1": {"comment_target": "c1", "comment_body": format!("Ask {TERM}, and a person's note."),
+                   "silent": "yes"}
+        }),
+    );
+    shared.comment("t1", "c1", &format!("Ask {TERM}."));
+    shared
+        .store
+        .ok(&["task", "priority", "set", "shared:t1", "high"]);
+    let comments = shared.state()["comments"]["t1"].clone();
+    assert_eq!(
+        comments[0]["body"],
+        json!(format!("Ask {WITH}, and a person's note.")),
+        "the person's edit is kept and sanitised: {comments}"
+    );
+    assert_eq!(shared.task("t1")["priority"], json!("high"));
+}
+
+#[test]
+fn a_sanitise_dry_run_of_a_write_whose_item_needs_nothing_makes_the_write() {
+    let (store, _record) = sanitizing(replaced());
+    store.record(
+        "site",
+        "tasks",
+        "clean",
+        "title: Clean\nstatus: todo\nproject: p",
+        PLAIN,
+    );
+    let answer: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "priority",
+        "set",
+        "site:clean",
+        "high",
+        "--json",
+        "--sanitize-dry-run",
+    ]))
+    .expect("the answer");
+    assert_eq!(answer["priority"], json!("high"), "{answer}");
+    assert!(answer.get("sanitization").is_none(), "{answer}");
+    assert!(text_of(&store, "site").contains("priority: high"));
+}

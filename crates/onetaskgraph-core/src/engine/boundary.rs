@@ -3125,10 +3125,27 @@ impl Engine {
         let mut screening = None;
         if !dry_run {
             let fresh = self.read_held_task(destination, id).await?;
-            // A source with no version token moves too: what it holds is compared as well.
-            if fresh.version != task.version || !holds_as_written(&fresh, task) {
+            // A source with no version token moves too, and a comment may be edited without
+            // moving its task's: what it holds, and each comment about to be rewritten, are
+            // compared as well.
+            let fresh_comments = if edited.is_empty() {
+                Vec::new()
+            } else {
+                every_comment(destination, id).await?
+            };
+            let comment_moved = edited.iter().any(|(comment, _)| {
+                fresh_comments
+                    .iter()
+                    .find(|held| held.id == comment.id)
+                    .is_none_or(|held| held.body != comment.body)
+            });
+            if fresh.version != task.version || !holds_as_written(&fresh, task) || comment_moved {
                 // Moved once: sanitise the record as it now stands, keeping what changed.
-                let comments = every_comment(destination, id).await?;
+                let comments = if edited.is_empty() {
+                    every_comment(destination, id).await?
+                } else {
+                    fresh_comments
+                };
                 let stored = StoredTask::of(destination, item, &fresh, &comments);
                 let answer = self.screen(&stored.exposure).await;
                 if answer.verdict != WriteVerdict::Pass {
@@ -3141,7 +3158,11 @@ impl Engine {
                 (rewritten, edited, fields) = again;
                 screening = Some((stored.exposure, answer.locators));
                 let latest = self.read_held_task(destination, id).await?;
-                if latest.version != fresh.version || !holds_as_written(&latest, &fresh) {
+                let latest_comments = every_comment(destination, id).await?;
+                if latest.version != fresh.version
+                    || !holds_as_written(&latest, &fresh)
+                    || latest_comments != comments
+                {
                     return Err(EngineError::SanitizeConflict {
                         item: item.to_owned(),
                     });

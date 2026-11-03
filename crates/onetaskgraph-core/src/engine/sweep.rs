@@ -101,6 +101,7 @@ pub struct SweepReport {
     /// Whether nothing was written.
     pub dry_run: bool,
     /// Whether the source was read whole rather than searched.
+    // llmlint: ignore[invalid_states_unrepresentable] The task's stated report contract carries this member beside `coverage.complete` — `{"source", "dry_run", "complete", "requests", "coverage": {"complete", "uncovered"}, "items"}` — and both SDKs are generated from it; `sanitize_tasks`, the one constructor, sets both from the one decision to read whole.
     pub complete: bool,
     /// What the sweep cost, from the source's own request accounting.
     pub requests: SweepRequests,

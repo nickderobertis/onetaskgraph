@@ -101,13 +101,19 @@ def _move(state: State, task: Task) -> None:
         task["labels"] = [*task["labels"], {"id": edit["label"], "name": edit["label"], "color": None}]
     if "content" in edit:
         task["content"] = edit["content"]
+    if "comment_target" in edit:
+        for comment in state["comments"].get(task["id"], []):
+            if comment["id"] == edit["comment_target"]:
+                comment["body"] = edit.get("comment_body", comment["body"])
     if "comment" in edit:
         state["comments"].setdefault(task["id"], []).append(
             {"id": edit.get("comment_id", f"by-person-{task['version']}"), "body": edit["comment"]}
         )
     if "paragraph" in edit:
         task["content"] = (task.get("content") or "").rstrip("\n") + "\n\n" + edit["paragraph"]
-    task["version"] = str(int(task["version"]) + 1)
+    # A comment edited on its own moves no version of the task it is on.
+    if "silent" not in edit:
+        task["version"] = str(int(task["version"]) + 1)
 
 
 def _malformed(message: str) -> dict[str, dict[str, str]]:
@@ -163,6 +169,8 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             state.get("later_comments_fail") and params.get("page", {}).get("cursor") is not None
         ):
             return {"error": {"kind": "unavailable", "message": "the comments could not be read"}}
+        case "task_comments" | "edit_comment" if not isinstance(params.get("task"), str):
+            return _malformed(f"{method} names its task by a string id")
         case "task_comments":
             held = state["comments"].get(params.get("task"))
             if held is None:
@@ -251,7 +259,8 @@ def _is_task(task: object) -> bool:
 def _is_edit(edit: object) -> bool:
     """Whether `edit` is one another writer's edit: each member it names a string."""
     return isinstance(edit, dict) and all(
-        key in {"label", "content", "paragraph", "comment", "comment_id"}
+        key
+        in {"label", "content", "paragraph", "comment", "comment_id", "comment_body", "comment_target", "silent"}
         and isinstance(value, str)
         for key, value in edit.items()
     )
