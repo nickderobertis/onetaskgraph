@@ -1011,3 +1011,31 @@ async fn a_create_under_a_later_id_answered_as_another_is_refused_for_every_reco
         );
     }
 }
+
+#[tokio::test]
+async fn an_update_of_a_status_and_a_title_reads_an_absent_issue_as_absent() {
+    // With nothing of the team's resolution held, the update reads the issue beside it in one
+    // request, [`graphql::ISSUE_RESOLVED`]; Linear's not-found for that issue is no such task.
+    for status in STATUSES {
+        let (endpoint, sent) = loopback(move |query, _| match read_kind(query) {
+            Some(kind) => (status, not_found(kind)),
+            None => (400, json!({"errors":[{"message":"unexpected request"}]})),
+        });
+        let update = onetaskgraph_plugin_api::TaskUpdate {
+            title: Some("Draft the rollout again".to_owned()),
+            status: Some(serde_json::from_value(json!({"category":"todo","name":"Todo"})).unwrap()),
+            ..onetaskgraph_plugin_api::TaskUpdate::default()
+        };
+        let updated = source(&endpoint)
+            .update_task(&NativeId::from(ABSENT), &update)
+            .await
+            .unwrap_or_else(|error| panic!("HTTP {status}: {error}"));
+        assert!(updated.is_none(), "HTTP {status}: {updated:?}");
+        let sent = sent.lock().unwrap().clone();
+        assert_eq!(
+            sent,
+            vec![graphql::ISSUE_RESOLVED.to_owned()],
+            "HTTP {status}"
+        );
+    }
+}
