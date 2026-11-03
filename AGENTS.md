@@ -1445,6 +1445,21 @@ them do; this is the inventory of what is owed, not a status board.
      stored bodies and editor-state ids to those forms; in a real Chromium each GitHub section
      link lands on its heading opened directly and clicked inside the copied issue.
 
+138. With a `sanitize_command`, a create, update, comment and copy to a public folder land with a
+     declared term replaced in every rewritable field by one call — through the binary, the
+     Python SDK and a linking caller's own policy — the same term in a fixed field is refused
+     writing nothing, a private destination gets the original, and a replacement set in the
+     document, the environment and `--replace` takes effect in that order of precedence over every
+     declaration level onevcs reads.
+139. A narrow write to a task already carrying a term sanitises it and its comments first and
+     names each change, `--sanitize-dry-run` writes nothing, and an item whose stored
+     `repositories` already name a private repository is refused saying so, with
+     `"predates_write": true`.
+140. `sources sanitize` reads a folder whole, and searches a GitHub board — naming every class
+     of record a search could not cover and exiting 3 — or reads it whole with `--complete`;
+     every record in its report is a screened locator, one carrying a term redacted and
+     numbered from 1, and an undecided policy exits 2.
+
 ## The public boundary
 
 Classification, a source's declared `visibility`, classification routes and `write_policy`
@@ -1464,6 +1479,20 @@ store opts in.
   by its own declaration and repositories, never its project (`boundary.rs`); the
   `onetaskgraph.public_projections` map has one definition, `PublicProjections` in
   `engine/copy/projections.rs`, published as a schema root both SDKs generate from.
+- **Replacement is the policy's, and what is written is what it passed.** `WritePolicy` gains
+  `sanitize_public_write` and `declared_terms` with default bodies (Contract 5): the default makes
+  one `check_public_write` over every entry and every locator and rewrites nothing. Every screened
+  write is one sanitisation in place of the check; `Rewrite` (in `boundary.rs`) maps each value the
+  answer changed and each write site applies it — a value the store sends that is not in the
+  exposure is a term let through, so a new field a write carries goes into `Exposure` first,
+  rewritable or `fixed`. The shapes are the `privateterms` crate's, which turns on `serde_json`'s
+  and `schemars`' `preserve_order` for the whole workspace — the reason the bundle's key order
+  and `serde_json::Value`'s size moved with it. The store never matches a term itself. A narrow
+  write to a task, while the policy can rewrite, is screened with the task and its comments as
+  stored, and what that call rewrites of them is written back first (`admit_whole_task`);
+  `sources sanitize` (`engine/sweep.rs`) is the same per item. Neither has a backend
+  precondition: "conditional on the version" is a read immediately before the write, as
+  `set_document_metadata_at` already does.
 - **Destination reality is the plugin's own read** (`TaskSource::visibility`), never the
   policy's. A GitHub source reads each destination — the board, each repository — once per
   copy, before its first write, held by the engine's `hold_visibility` for that one operation
