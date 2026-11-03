@@ -749,7 +749,13 @@ fn answer_problem(input: &PublicSanitizeInput, answer: &SanitizeVerdict) -> Opti
     {
         return Some("the policy answered locators that do not match those sent");
     }
-    if answer.verdict == WriteVerdict::Pass && !answer.unfixed.is_empty() {
+    if answer.verdict == WriteVerdict::Pass
+        && (!answer.unfixed.is_empty()
+            || answer
+                .locators
+                .iter()
+                .any(|locator| matches!(locator, Locator::Redacted { .. })))
+    {
         return Some("the policy passed a write it says still carries a term");
     }
     let within = |unfixed: &Unfixed| {
@@ -2627,6 +2633,15 @@ pub(super) enum ChangedField {
 /// A task as sanitising it would write it, each comment with its new body, and what changed.
 pub(super) type SanitisedTask = (Task, Vec<(Comment, String)>, Vec<ChangedField>);
 
+/// What a sanitising write wrote, or would: the fields it changed, the task as written, and —
+/// when the record moved and was screened again — that screening, which names its fields.
+#[derive(Default)]
+pub(super) struct Sanitised {
+    pub(super) fields: Vec<ChangedField>,
+    pub(super) written: Option<Task>,
+    pub(super) screening: Option<(Exposure, Vec<Locator>)>,
+}
+
 /// One kind of field replacement cannot fix, as a refusal names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnfixableKind {
@@ -2949,7 +2964,11 @@ impl Engine {
     ) -> Result<Option<Task>, EngineError> {
         let (exposure, answered) = screened;
         let shown_item = screened_locator(exposure, answered, LocatorKind::Item, item);
-        let (fields, written) = self
+        let Sanitised {
+            fields,
+            written,
+            screening,
+        } = self
             .sanitise_written(
                 destination,
                 item,
@@ -2967,6 +2986,13 @@ impl Engine {
             })?;
         if let Ok(mut sanitized) = self.boundary.sanitized.lock() {
             sanitized.dry_run |= self.boundary.sanitize_dry_run;
+            // A record read again is named by the screening of what was read, which holds the
+            // keys and comments another writer added.
+            let (exposure, answered) = screening
+                .as_ref()
+                .map_or((exposure, answered), |(exposure, answered)| {
+                    (exposure, answered.as_slice())
+                });
             for field in fields {
                 sanitized.side_effect.push(SideEffect {
                     item: shown_item.clone(),
@@ -2992,8 +3018,9 @@ impl Engine {
         task: &Task,
         sanitised: SanitisedTask,
         dry_run: bool,
-    ) -> Result<(Vec<ChangedField>, Option<Task>), EngineError> {
+    ) -> Result<Sanitised, EngineError> {
         let (mut rewritten, mut edited, mut fields) = sanitised;
+        let mut screening = None;
         if !dry_run {
             let fresh = self.read_held_task(destination, id).await?;
             if fresh.version != task.version {
@@ -3006,9 +3033,10 @@ impl Engine {
                 }
                 let rewrite = Rewrite::of(&stored.exposure, &answer);
                 let Some(again) = sanitised_task(&fresh, &comments, &rewrite) else {
-                    return Ok((Vec::new(), None));
+                    return Ok(Sanitised::default());
                 };
                 (rewritten, edited, fields) = again;
+                screening = Some((stored.exposure, answer.locators));
                 let latest = self.read_held_task(destination, id).await?;
                 if latest.version != fresh.version {
                     return Err(EngineError::SanitizeConflict {
@@ -3018,9 +3046,17 @@ impl Engine {
             }
             self.write_sanitised(destination, id, &rewritten, &edited)
                 .await?;
-            return Ok((fields, Some(rewritten)));
+            return Ok(Sanitised {
+                fields,
+                written: Some(rewritten),
+                screening,
+            });
         }
-        Ok((fields, None))
+        Ok(Sanitised {
+            fields,
+            written: None,
+            screening,
+        })
     }
 
     /// Hold the write a sanitisation was made for to the record that sanitisation wrote: read

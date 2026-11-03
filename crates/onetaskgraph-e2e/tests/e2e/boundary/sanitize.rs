@@ -1440,7 +1440,7 @@ impl Shared {
         std::fs::write(
             &state,
             json!({"tasks": held, "comments": {}, "reads": {}, "moves": moves, "edits": edits,
-                   "index": index, "log": []})
+                   "index": index, "edges": {}, "log": []})
             .to_string(),
         )
         .expect("the peer's state");
@@ -1921,6 +1921,9 @@ elif how == "locators":
     answer["locators"] = ["another-source" for _ in sent.get("locators", [])]
 elif how == "passed-unfixed":
     answer["unfixed"] = [{"surface": "text", "index": 0, "fixed": False}]
+elif how == "passed-redacted":
+    answer["locators"] = [{"redacted": True, "kind": locator["kind"], "ordinal": index + 1}
+                          for index, locator in enumerate(sent.get("locators", []))]
 elif how == "unsent-index":
     answer.update(verdict="refuse", surface="text",
                   unfixed=[{"surface": "text", "index": 99, "fixed": False}])
@@ -1943,7 +1946,13 @@ fn repolicy(store: &Store, change: impl FnOnce(&mut Value)) {
 fn a_policy_answer_that_does_not_match_what_was_sent_is_never_a_pass() {
     let (store, _record) = sanitizing(replaced());
     let python = crate::document_store::interpreter();
-    for how in ["lengths", "locators", "passed-unfixed", "unsent-index"] {
+    for how in [
+        "lengths",
+        "locators",
+        "passed-unfixed",
+        "passed-redacted",
+        "unsent-index",
+    ] {
         repolicy(&store, |policy| {
             policy["sanitize_command"] = json!([python.to_string_lossy(), "-c", MALFORMED, how]);
         });
@@ -2463,4 +2472,46 @@ fn a_replacement_the_environment_spells_as_a_number_or_a_list_is_read_as_the_tex
             "{with}"
         );
     }
+}
+
+#[test]
+fn a_moved_record_whose_new_comment_id_carries_a_term_is_refused_naming_it_only_redacted() {
+    let shared = Shared::new(
+        &[("t1", &with_term())],
+        json!({"t1": [2]}),
+        json!({"t1": {"comment": "Plain.", "comment_id": format!("{TERM}-c9")}}),
+    );
+    let (kind, said) = shared
+        .store
+        .refused(&["task", "priority", "set", "shared:t1", "high"]);
+    assert_eq!(kind, "boundary-refused", "{said}");
+    assert!(!said.contains(TERM), "{said}");
+    assert_eq!(shared.writes(), 0, "nothing was written");
+}
+
+#[test]
+fn a_sanitising_write_keeps_every_forward_edge_of_its_task() {
+    let shared = Shared::new(
+        &[("t1", &with_term()), ("t2", "Plain.")],
+        json!({}),
+        json!({}),
+    );
+    let edge = json!({"from": {"id": "t1", "kind": "task"}, "to": {"id": "t2", "kind": "task"},
+                      "kind": "blocks"});
+    let mut state = shared.state();
+    state["edges"]["t1"] = json!([edge.clone()]);
+    std::fs::write(&shared.state, state.to_string()).expect("the state");
+    shared
+        .store
+        .ok(&["task", "priority", "set", "shared:t1", "high"]);
+    assert_eq!(shared.writes(), 1, "one sanitising write");
+    assert_eq!(
+        shared.state()["edges"]["t1"],
+        json!([edge]),
+        "the edge was written back as it was"
+    );
+    let deps: Value =
+        serde_json::from_str(&shared.store.ok(&["task", "deps", "shared:t1", "--json"]))
+            .expect("the dependencies");
+    assert_eq!(deps["items"].as_array().map(Vec::len), Some(1), "{deps}");
 }

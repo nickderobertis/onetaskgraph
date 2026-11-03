@@ -73,6 +73,8 @@ class State(TypedDict):
     moves: dict[str, list[int]]
     edits: dict[str, dict[str, str]]
     index: dict[str, str]
+    # Each task's forward edges, as a write sent them (§4.7): decoded JSON, kept as sent.
+    edges: dict[str, list[Any]]
     log: list[str]
 
 
@@ -90,7 +92,7 @@ def _move(state: State, task: Task) -> None:
         task["content"] = edit["content"]
     if "comment" in edit:
         state["comments"].setdefault(task["id"], []).append(
-            {"id": f"by-person-{task['version']}", "body": edit["comment"]}
+            {"id": edit.get("comment_id", f"by-person-{task['version']}"), "body": edit["comment"]}
         )
     if "paragraph" in edit:
         task["content"] = (task.get("content") or "").rstrip("\n") + "\n\n" + edit["paragraph"]
@@ -159,12 +161,18 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
                         task["version"] = str(int(task["version"]) + 1)
                     return {"result": {"comment": comment}}
             return {"result": {"comment": None}}
-        case "labels" | "task_dependencies":
+        case "task_dependencies":
+            forward = params.get("direction") == "depends-on"
+            held = state["edges"].get(str(params.get("id")), []) if forward else []
+            return {"result": {"items": held, "next": None}}
+        case "labels":
             return {"result": {"items": [], "next": None}}
         case "write_task":
             match params.get("write"):
                 case {"item": {"id": str(), "title": str(), "status": dict()} as item, **write}:
                     target = write.get("target") or item["id"]
+                    if isinstance(write.get("depends_on"), list):
+                        state["edges"][target] = write["depends_on"]
                 case _:
                     return _malformed("write_task carries a write of a task with an id and title")
             held = _task(state, target)

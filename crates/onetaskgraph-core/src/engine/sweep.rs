@@ -558,7 +558,7 @@ impl Engine {
             .sanitise_written(destination, &item, &id, &task, sanitised, dry_run)
             .await
         {
-            Ok((written, _)) => written,
+            Ok(sanitised) => sanitised,
             Err(EngineError::SanitizeConflict { .. }) => {
                 sweep.items.push(SweepItem {
                     id: shown_item,
@@ -578,16 +578,21 @@ impl Engine {
         } else {
             (FieldOutcome::Rewritten, ItemOutcome::Rewritten)
         };
-        let outcome = if written.is_empty() {
+        let outcome = if written.fields.is_empty() {
             ItemOutcome::Unchanged
         } else if unfixable {
             ItemOutcome::Unfixable
         } else {
             whole
         };
-        for field in &written {
+        // A record read again is named by the screening of what was read.
+        let (exposure, answered) = written.screening.as_ref().map_or(
+            (&stored.exposure, answer.locators.as_slice()),
+            |(exposure, answered)| (exposure, answered.as_slice()),
+        );
+        for field in &written.fields {
             fields.push(SweepField {
-                field: screened_field(field, &stored.exposure, &answer.locators),
+                field: screened_field(field, exposure, answered),
                 outcome: word.clone(),
             });
         }
