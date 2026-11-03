@@ -2698,15 +2698,20 @@ impl Engine {
                 if let Some((sanitised, edited, fields)) =
                     sanitised_task(&task, &comments, &rewrite)
                 {
-                    self.sanitise_task(
-                        destination,
-                        item,
-                        id,
-                        &task,
-                        (sanitised, edited, fields),
-                        (&whole, &answer.locators),
-                    )
-                    .await?;
+                    let written = self
+                        .sanitise_task(
+                            destination,
+                            item,
+                            id,
+                            &task,
+                            (sanitised, edited, fields),
+                            (&whole, &answer.locators),
+                        )
+                        .await?;
+                    if let Some(written) = written {
+                        self.settle_after_sanitising(destination, item, id, &written, &write)
+                            .await?;
+                    }
                     if self.boundary.sanitize_dry_run {
                         return Err(EngineError::SanitizeDryRun {
                             item: screened_locator(
@@ -2817,10 +2822,10 @@ impl Engine {
         task: &Task,
         sanitised: SanitisedTask,
         screened: (&Exposure, &[Locator]),
-    ) -> Result<(), EngineError> {
+    ) -> Result<Option<Task>, EngineError> {
         let (exposure, answered) = screened;
         let shown_item = screened_locator(exposure, answered, LocatorKind::Item, item);
-        let fields = self
+        let (fields, written) = self
             .sanitise_written(
                 destination,
                 item,
@@ -2845,7 +2850,7 @@ impl Engine {
                 });
             }
         }
-        Ok(())
+        Ok(written)
     }
 
     /// Write `sanitised` back over `task` unless `dry_run`, on condition that the task is still
@@ -2863,7 +2868,7 @@ impl Engine {
         task: &Task,
         sanitised: SanitisedTask,
         dry_run: bool,
-    ) -> Result<Vec<String>, EngineError> {
+    ) -> Result<(Vec<String>, Option<Task>), EngineError> {
         let (mut rewritten, mut edited, mut fields) = sanitised;
         if !dry_run {
             let fresh = self.read_held_task(destination, id).await?;
@@ -2877,7 +2882,7 @@ impl Engine {
                 }
                 let rewrite = Rewrite::of(&stored.exposure, &answer);
                 let Some(again) = sanitised_task(&fresh, &comments, &rewrite) else {
-                    return Ok(Vec::new());
+                    return Ok((Vec::new(), None));
                 };
                 (rewritten, edited, fields) = again;
                 let latest = self.read_held_task(destination, id).await?;
@@ -2889,8 +2894,49 @@ impl Engine {
             }
             self.write_sanitised(destination, id, &rewritten, &edited)
                 .await?;
+            return Ok((fields, Some(rewritten)));
         }
-        Ok(fields)
+        Ok((fields, None))
+    }
+
+    /// Hold the write a sanitisation was made for to the record that sanitisation wrote: read
+    /// the task back, and where another writer changed it since — a plugin answers no version
+    /// for a write, so what is compared is what it holds — put the record as it now stands to
+    /// the policy once more, beside the write, and go on over it only when that answer rewrites
+    /// nothing of it and a second read finds it standing still. Anything else is
+    /// [`EngineError::SanitizeConflict`], the write not made, so the other writer's change is
+    /// never overwritten.
+    async fn settle_after_sanitising(
+        &self,
+        destination: &ResolvedSource,
+        item: &str,
+        id: &NativeId,
+        written: &Task,
+        write: &Exposure,
+    ) -> Result<(), EngineError> {
+        let fresh = self.read_held_task(destination, id).await?;
+        if holds_as_written(&fresh, written) {
+            return Ok(());
+        }
+        let comments = every_comment(destination, id).await?;
+        let stored = StoredTask::of(destination, item, &fresh, &comments);
+        let whole = write.clone().and(stored.exposure);
+        let answer = self.screen(&whole).await;
+        let shown = screened_locator(&whole, &answer.locators, LocatorKind::Item, item);
+        if answer.verdict != WriteVerdict::Pass {
+            return Err(refusal(destination, item, &whole, &answer));
+        }
+        let rewrite = Rewrite::of(&whole, &answer);
+        let latest = self.read_held_task(destination, id).await?;
+        if sanitised_task(&fresh, &comments, &rewrite).is_some()
+            || latest.version != fresh.version
+            || !holds_as_written(&latest, &fresh)
+        {
+            return Err(EngineError::SanitizeConflict {
+                item: shown.to_string(),
+            });
+        }
+        Ok(())
     }
 
     pub(super) async fn read_held_task(
@@ -2969,6 +3015,22 @@ impl Engine {
         }
         Ok(())
     }
+}
+
+/// Whether `read` holds what `written` says, every field a person edits compared and the
+/// tokens a backend stamps on a write left out.
+fn holds_as_written(read: &Task, written: &Task) -> bool {
+    read.title == written.title
+        && read.content == written.content
+        && read.status == written.status
+        && read.priority == written.priority
+        && read.metadata == written.metadata
+        && read.repositories == written.repositories
+        && read
+            .labels
+            .iter()
+            .map(|label| &label.name)
+            .eq(written.labels.iter().map(|label| &label.name))
 }
 
 /// Which kind of record a narrow write is about.

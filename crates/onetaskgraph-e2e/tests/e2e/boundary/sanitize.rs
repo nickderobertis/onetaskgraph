@@ -1403,3 +1403,282 @@ fn replacement_flags_and_settings_are_read_in_order_and_refused_by_name_when_mal
         stderr(&output)
     );
 }
+
+/// A store with the public source `shared` beside the folders: `edit_source.py`, whose fixture
+/// lands another writer's `edits` at the read counts `moves` names, per task.
+struct Shared {
+    store: Store,
+    state: std::path::PathBuf,
+}
+
+impl Shared {
+    fn new(tasks: &[(&str, &str)], moves: Value, edits: Value) -> Self {
+        let (store, _record) = sanitizing(replaced());
+        let state = store.sandbox.config_home().join("edit-source.json");
+        let held: Vec<Value> = tasks
+            .iter()
+            .map(|(id, content)| {
+                json!({"id": id, "title": format!("{id} task"), "content": content,
+                       "status": {"category": "todo", "name": "Todo"}, "priority": "none",
+                       "labels": [], "project": null, "url": null, "location": null,
+                       "created_at": null, "updated_at": null, "metadata": {}, "version": "1"})
+            })
+            .collect();
+        let index: serde_json::Map<String, Value> = tasks
+            .iter()
+            .map(|(id, content)| ((*id).to_owned(), json!(format!("{id} task {content}"))))
+            .collect();
+        std::fs::write(
+            &state,
+            json!({"tasks": held, "comments": {}, "reads": {}, "moves": moves, "edits": edits,
+                   "index": index, "log": []})
+            .to_string(),
+        )
+        .expect("the peer's state");
+        let mut document: Value = serde_json::from_str(
+            &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+                .expect("the project document"),
+        )
+        .expect("JSON");
+        document["sources"]["shared"] = json!({
+            "plugin": "subprocess",
+            "visibility": "public",
+            "config": {
+                "command": crate::document_store::interpreter().to_string_lossy(),
+                "args": [
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/e2e/edit_source.py")
+                        .to_string_lossy(),
+                    state.to_string_lossy(),
+                ],
+            },
+        });
+        store.sandbox.project_document(&document.to_string());
+        Self { store, state }
+    }
+
+    fn state(&self) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(&self.state).expect("the state"))
+            .expect("JSON")
+    }
+
+    fn task(&self, id: &str) -> Value {
+        self.state()["tasks"]
+            .as_array()
+            .expect("tasks")
+            .iter()
+            .find(|task| task["id"] == json!(id))
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} is held"))
+    }
+
+    fn writes(&self) -> usize {
+        self.state()["log"]
+            .as_array()
+            .expect("a log")
+            .iter()
+            .filter(|method| *method == "write_task")
+            .count()
+    }
+}
+
+/// The body every interleaving journey's task starts with: the term in its first paragraph.
+fn with_term() -> String {
+    format!("Retry the way {TERM} does.")
+}
+
+fn labels(task: &Value) -> Vec<String> {
+    task["labels"]
+        .as_array()
+        .expect("labels")
+        .iter()
+        .map(|label| label["name"].as_str().expect("a name").to_owned())
+        .collect()
+}
+
+#[test]
+fn a_record_moved_once_before_the_sanitising_write_is_sanitised_from_its_fresh_read() {
+    for edit in [
+        json!({"label": "person-label"}),
+        json!({"paragraph": "A person's paragraph."}),
+    ] {
+        let shared = Shared::new(
+            &[("t1", &with_term())],
+            json!({"t1": [2]}),
+            json!({ "t1": edit.clone() }),
+        );
+        let answer: Value = serde_json::from_str(&shared.store.ok(&[
+            "task",
+            "priority",
+            "set",
+            "shared:t1",
+            "high",
+            "--json",
+        ]))
+        .expect("the answer");
+        let task = shared.task("t1");
+        assert_eq!(task["priority"], json!("high"), "{edit}: {answer}");
+        let content = task["content"].as_str().expect("content");
+        assert!(
+            content.contains(&format!("the way {WITH} does")),
+            "{edit}: {content}"
+        );
+        assert!(!content.contains(TERM), "{edit}: {content}");
+        if edit.get("label").is_some() {
+            assert_eq!(
+                labels(&task),
+                ["person-label"],
+                "{edit}: the person's label is kept"
+            );
+        } else {
+            assert!(
+                content.contains("A person's paragraph."),
+                "{edit}: {content}"
+            );
+        }
+        assert_eq!(
+            answer["sanitization"]["side_effect"][0]["field"],
+            json!("content")
+        );
+    }
+}
+
+#[test]
+fn a_record_moved_twice_is_a_conflict_and_the_other_writer_s_version_stands() {
+    let shared = Shared::new(
+        &[("t1", &with_term())],
+        json!({"t1": [2, 3]}),
+        json!({"t1": {"label": "person-label"}}),
+    );
+    let (kind, said) = shared
+        .store
+        .refused(&["task", "priority", "set", "shared:t1", "high"]);
+    assert_eq!(kind, "sanitize-conflict", "{said}");
+    assert!(
+        said.contains("changed twice") && !said.contains(TERM),
+        "{said}"
+    );
+    let task = shared.task("t1");
+    assert_eq!(shared.writes(), 0, "nothing was overwritten");
+    assert_eq!(
+        task["version"],
+        json!("3"),
+        "both of the other writer's edits stand"
+    );
+    assert_eq!(task["content"], json!(with_term()));
+    assert_eq!(
+        task["priority"],
+        json!("none"),
+        "the write it was made for was not made"
+    );
+}
+
+#[test]
+fn an_edit_between_the_sanitising_write_and_the_write_it_was_for_is_kept_or_refused() {
+    // Read 3 is the read back after the sanitising write: the edit lands there once — kept,
+    // and the priority written over it — or again at read 4, a conflict, the priority unmade.
+    let shared = Shared::new(
+        &[("t1", &with_term())],
+        json!({"t1": [3]}),
+        json!({"t1": {"paragraph": "A person's paragraph."}}),
+    );
+    shared
+        .store
+        .ok(&["task", "priority", "set", "shared:t1", "high"]);
+    let task = shared.task("t1");
+    assert_eq!(task["priority"], json!("high"));
+    let content = task["content"].as_str().expect("content");
+    assert!(
+        content.contains(&format!("the way {WITH} does"))
+            && content.contains("A person's paragraph."),
+        "{content}"
+    );
+
+    let shared = Shared::new(
+        &[("t1", &with_term())],
+        json!({"t1": [3, 4]}),
+        json!({"t1": {"paragraph": "A person's paragraph."}}),
+    );
+    let (kind, said) = shared
+        .store
+        .refused(&["task", "priority", "set", "shared:t1", "high"]);
+    assert_eq!(kind, "sanitize-conflict", "{said}");
+    let task = shared.task("t1");
+    assert_eq!(
+        task["priority"],
+        json!("none"),
+        "the write it was for was not made"
+    );
+    assert!(
+        task["content"]
+            .as_str()
+            .is_some_and(|content| content.ends_with("A person's paragraph.")),
+        "the person's edits are not overwritten: {task}"
+    );
+}
+
+#[test]
+fn a_sweep_keeps_a_move_rewrites_after_it_reports_a_conflict_and_a_rerun_fixes_only_that() {
+    let shared = Shared::new(
+        &[
+            ("t1", &with_term()),
+            ("t2", &with_term()),
+            ("t3", "Nothing private."),
+        ],
+        json!({"t1": [2], "t2": [2, 3]}),
+        json!({"t1": {"label": "person-label"}, "t2": {"label": "person-label"}}),
+    );
+    let (code, report, out, err) = sweep(&shared.store, "shared", &[]);
+    assert_eq!(code, Some(1), "a conflict is left: {out}{err}");
+    assert_eq!(
+        entry(&report, "shared:t1")["outcome"],
+        json!("rewritten"),
+        "{report}"
+    );
+    assert_eq!(
+        entry(&report, "shared:t2")["outcome"],
+        json!("conflict"),
+        "{report}"
+    );
+    let first = shared.task("t1");
+    assert_eq!(
+        labels(&first),
+        ["person-label"],
+        "the other writer's change is kept"
+    );
+    assert!(!first["content"].as_str().expect("content").contains(TERM));
+    let conflicted = shared.task("t2");
+    assert_eq!(
+        conflicted["content"],
+        json!(with_term()),
+        "nothing overwritten"
+    );
+    assert_eq!(shared.writes(), 1);
+
+    // The rerun: the index still returns both hits; the one already sanitised is unchanged
+    // and written nothing, and the conflicted one is rewritten keeping both edits.
+    let (code, report, out, err) = sweep(&shared.store, "shared", &[]);
+    assert_eq!(
+        code,
+        Some(3),
+        "only coverage is left incomplete: {out}{err}"
+    );
+    assert_eq!(
+        entry(&report, "shared:t1")["outcome"],
+        json!("unchanged"),
+        "{report}"
+    );
+    assert_eq!(
+        entry(&report, "shared:t2")["outcome"],
+        json!("rewritten"),
+        "{report}"
+    );
+    assert_eq!(
+        shared.writes(),
+        2,
+        "one write, to the conflicted item alone"
+    );
+    let fixed = shared.task("t2");
+    assert!(!fixed["content"].as_str().expect("content").contains(TERM));
+    assert_eq!(labels(&fixed), ["person-label", "person-label"]);
+}

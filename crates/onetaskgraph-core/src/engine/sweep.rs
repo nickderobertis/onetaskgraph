@@ -521,7 +521,7 @@ impl Engine {
             .sanitise_written(destination, &item, &id, &task, sanitised, dry_run)
             .await
         {
-            Ok(written) => written,
+            Ok((written, _)) => written,
             Err(EngineError::SanitizeConflict { .. }) => {
                 sweep.items.push(SweepItem {
                     id: shown_item,
