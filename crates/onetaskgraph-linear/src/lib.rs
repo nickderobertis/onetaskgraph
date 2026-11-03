@@ -1896,7 +1896,7 @@ enum Under400 {
 /// How [`LinearSource::send_write`] settled a write.
 enum Written {
     /// Linear answered it, with `data`; `sent` is the id a keyed create was sent under.
-    Answered { data: Value, sent: Option<String> },
+    Answered { data: Value, sent: Option<NativeId> },
     /// A keyed create's item an earlier or concurrent attempt made, under that id.
     Held(NativeId),
 }
@@ -2026,7 +2026,7 @@ impl LinearSource {
                 Ok(Ok(data)) => {
                     return Ok(Written::Answered {
                         data,
-                        sent: Some(id),
+                        sent: Some(NativeId(id)),
                     });
                 }
                 Ok(Err(refusal)) => Ok(refusal.into_error()),
@@ -3840,7 +3840,7 @@ impl TaskSource for LinearSource {
                 })?;
         let id = created_as(
             NativeId(backend_id(issue, "id")?.into()),
-            sent.as_deref(),
+            sent.as_ref(),
             "issue",
         )?;
         self.hold_stored(MetadataRecord::Task, &id, issue)?;
@@ -3938,7 +3938,7 @@ impl TaskSource for LinearSource {
             })?;
         let id = created_as(
             NativeId(backend_id(project, "id")?.into()),
-            sent.as_deref(),
+            sent.as_ref(),
             "project",
         )?;
         self.hold_stored(MetadataRecord::Project, &id, project)?;
@@ -4186,7 +4186,7 @@ impl TaskSource for LinearSource {
             })?;
         let id = created_as(
             NativeId(backend_id(document, "id")?.into()),
-            sent.as_deref(),
+            sent.as_ref(),
             "document",
         )?;
         self.hold_stored(MetadataRecord::Document, &id, document)?;
@@ -6072,19 +6072,23 @@ fn classification_of(
 /// this source cannot vouch for — and it says so rather than answer an id a retry's lookup by key
 /// would never find. A refusal is all it is: the item stands where Linear put it, and a later
 /// retry looking it up by the id sent will not find it there.
-fn created_as(answered: NativeId, sent: Option<&str>, kind: &str) -> Result<NativeId, SourceError> {
+fn created_as(
+    answered: NativeId,
+    sent: Option<&NativeId>,
+    kind: &str,
+) -> Result<NativeId, SourceError> {
     let Some(sent) = sent else {
         return Ok(answered);
     };
-    if answered.0 == sent {
+    if answered == *sent {
         Ok(answered)
     } else {
         Err(SourceError::Malformed {
             message: format!(
-                "Linear answered a {kind} create sent with id {sent} as {}, not the id it was sent; \
+                "Linear answered a {kind} create sent with id {} as {}, not the id it was sent; \
                  next: inspect that {kind} before copying again, since a retry looks for the id \
                  that was sent",
-                answered.0
+                sent.0, answered.0
             ),
         })
     }

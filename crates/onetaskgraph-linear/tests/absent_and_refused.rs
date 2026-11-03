@@ -575,3 +575,118 @@ async fn a_keyed_create_whose_answer_never_arrived_is_never_sent_again() {
     assert!(failed.to_string().contains("502"), "{failed}");
     assert_eq!(sent.lock().unwrap().len(), 1, "{:?}", sent.lock().unwrap());
 }
+
+/// A project as Linear answers one, under `id`, with empty pages of relations.
+fn held_project(id: &str) -> Value {
+    let page = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    json!({"id":id,"name":"Harbor rollout","content":"body","url":null,"createdAt":null,
+        "updatedAt":null,"archivedAt":null,"status":{"name":"Todo","type":"planned"},
+        "labels":{"nodes":[]},"relations":page,"inverseRelations":page})
+}
+
+fn keyed_project() -> Project {
+    serde_json::from_value(keyed(json!({"id":"plan:P","title":"Harbor rollout",
+        "content":"body","status":{"category":"todo","name":"Todo"},"labels":[],
+        "repositories":[]})))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_keyed_create_refused_under_an_id_its_earlier_attempt_holds_finishes_that_item() {
+    // An earlier attempt's create landed under the key's first id; this one is refused it, and
+    // the read of that id finds the project, which this create is: written whole, not again.
+    let ids = onetaskgraph_linear::linear_ids_of_key(KEY).unwrap();
+    let sent: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    let record = Arc::clone(&sent);
+    let held = ids[0].clone();
+    let (endpoint, _) = loopback(move |query, variables| {
+        record
+            .lock()
+            .unwrap()
+            .push((query.to_owned(), variables.clone()));
+        match query {
+            graphql::PROJECT_CREATE => (
+                400,
+                json!({"errors":[{"message":"Entity with this id already exists"}]}),
+            ),
+            graphql::RESOLUTION => (200, resolution()),
+            graphql::PROJECT if variables["id"] == held.as_str() => {
+                (200, json!({"data":{"project":held_project(&held)}}))
+            }
+            graphql::PROJECT_REWRITE if variables["id"] == held.as_str() => (
+                200,
+                json!({"data":{"projectUpdate":{"success":true,"project":held_project(&held)}}}),
+            ),
+            _ => (400, not_found("Project")),
+        }
+    });
+    let landed = source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: keyed_project(),
+            depends_on: vec![],
+        })
+        .await
+        .expect("the earlier attempt's project is this create's");
+    assert_eq!(landed.0, ids[0]);
+    let sent = sent.lock().unwrap().clone();
+    let count = |document: &str| sent.iter().filter(|(query, _)| query == document).count();
+    assert_eq!(count(graphql::PROJECT_CREATE), 1, "{sent:#?}");
+    assert_eq!(count(graphql::PROJECT_REWRITE), 1, "{sent:#?}");
+}
+
+/// A write guard refusing every write it is asked about, as one does once another attempt holds
+/// the create.
+struct Revoked;
+
+#[async_trait::async_trait]
+impl onetaskgraph_plugin_api::WriteGuard for Revoked {
+    async fn before_write(&self) -> Result<(), SourceError> {
+        Err(SourceError::Refused {
+            message: "create-in-progress: another attempt holds this create".to_owned(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_create_whose_hold_passed_to_another_attempt_is_not_sent_under_another_id() {
+    let creates: Sent = Arc::default();
+    let record = Arc::clone(&creates);
+    let (endpoint, _) = loopback(move |query, variables| match query {
+        graphql::PROJECT_CREATE => {
+            record.lock().unwrap().push(
+                variables["input"]["id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            );
+            (
+                400,
+                json!({"errors":[{"message":"Entity with this id already exists"}]}),
+            )
+        }
+        graphql::RESOLUTION => (200, resolution()),
+        _ => (400, not_found("Project")),
+    });
+    let source = source(&endpoint);
+    let failed = <dyn onetaskgraph_plugin_api::WriteGuard>::scope(
+        Arc::new(Revoked),
+        source.write_project(&ItemWrite {
+            target: None,
+            item: keyed_project(),
+            depends_on: vec![],
+        }),
+    )
+    .await
+    .expect_err("a create whose hold has passed sends nothing more");
+    assert!(
+        failed.to_string().contains("create-in-progress"),
+        "the guard's refusal is the answer: {failed}"
+    );
+    assert_eq!(
+        creates.lock().unwrap().len(),
+        1,
+        "the first id alone was tried: {:?}",
+        creates.lock().unwrap()
+    );
+}

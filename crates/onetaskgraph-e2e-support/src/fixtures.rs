@@ -8929,6 +8929,7 @@ fn linear_held_status(data: &Value, id: &str) -> Option<Value> {
         .map(|status| json!({"name":status["name"],"type":status["type"]}))
 }
 
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The loopback Linear lives in the shared e2e harness because the engine's suite and the Linear suite both drive it, by the agreed e2e layout; these two helpers are its own request loop's record of which ids a create may not take, which `linear_write_item`, `linear_write_document` and the delete handlers here read and write, so no suite could hold them from outside.
 /// Every id a record of this workspace once held, or a record of another workspace holds: an id
 /// no create may take, as Linear lets one id name one record ever.
 fn linear_burnt(data: &Value) -> Vec<String> {
@@ -8949,6 +8950,7 @@ fn linear_burn(data: &mut Value, id: &str) {
         burnt.push(json!(id));
     }
 }
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 /// What Linear answers a mutation addressing an id it does not hold with: an errored
 /// response, `Entity not found: Issue`, rather than a null payload.
