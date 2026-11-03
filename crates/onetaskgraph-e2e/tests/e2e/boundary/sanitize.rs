@@ -2779,3 +2779,160 @@ fn a_sanitising_dry_run_s_human_answer_says_nothing_was_written_and_what_would_c
     assert_eq!(rest, expected, "{said}");
     assert!(!said.contains(TERM));
 }
+
+#[test]
+fn a_content_set_and_a_task_metadata_set_are_written_replaced() {
+    let (store, _record) = sanitizing(replaced());
+    store.record(
+        "site",
+        "tasks",
+        "plain",
+        "title: Plain\nstatus: todo\nproject: p",
+        PLAIN,
+    );
+    store.ok(&[
+        "task",
+        "content",
+        "set",
+        "site:plain",
+        "--file",
+        &store.body(&format!("Retry the way {TERM} does.\n")),
+    ]);
+    store.ok(&[
+        "task",
+        "metadata",
+        "set",
+        "site:plain",
+        "myapp.note",
+        &format!("\"from {TERM}\""),
+    ]);
+    let held = text_of(&store, "site");
+    assert!(
+        held.contains(&format!("Retry the way {WITH} does.")),
+        "{held}"
+    );
+    assert!(held.contains(&format!("from {WITH}")), "{held}");
+    assert!(!held.contains(TERM), "{held}");
+}
+
+#[test]
+fn a_project_copy_and_a_document_copy_land_with_every_term_replaced() {
+    let (store, _record) = sanitizing(replaced());
+    let mut document: Value = serde_json::from_str(
+        &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the project document"),
+    )
+    .expect("JSON");
+    document["sources"]["mirror"] = json!({
+        "plugin": "local-md",
+        "config": {"root": store.sandbox.subdirectory("mirror")},
+        "visibility": "public",
+    });
+    store.sandbox.project_document(&document.to_string());
+    store.record(
+        "site",
+        "projects",
+        "port",
+        &format!("title: The {TERM} port\nstatus: todo"),
+        PLAIN,
+    );
+    store.record(
+        "site",
+        "tasks",
+        "step",
+        &format!("title: Step past {TERM}\nstatus: todo\nproject: port"),
+        &format!("Mirror {TERM}."),
+    );
+    store.record(
+        "site",
+        "documents",
+        "notes",
+        &format!("title: {TERM} notes\nproject: port\nmetadata:\n  myapp.note: about {TERM}"),
+        &format!("Notes on {TERM}."),
+    );
+    store.ok(&["project", "copy", "site:port", "--to", "mirror"]);
+    store.ok(&["document", "copy", "site:notes", "--to", "mirror"]);
+    let mirrored = text_of(&store, "mirror");
+    assert!(!mirrored.contains(TERM), "{mirrored}");
+    for written in [
+        format!("The {WITH} port"),
+        format!("Step past {WITH}"),
+        format!("Mirror {WITH}."),
+        format!("{WITH} notes"),
+        format!("about {WITH}"),
+        format!("Notes on {WITH}."),
+    ] {
+        assert!(mirrored.contains(&written), "{written:?}:\n{mirrored}");
+    }
+    assert!(
+        files_under(&store, "mirror")
+            .iter()
+            .all(|path| !path.contains(TERM)),
+        "no copied record is named after the term"
+    );
+}
+
+#[test]
+fn a_project_and_a_document_re_rendered_with_a_term_in_an_answer_land_replaced() {
+    let (store, _record) = sanitizing(replaced());
+    let template = template(&store);
+    store.ok(&[
+        "project",
+        "create",
+        "site",
+        "--id",
+        "q",
+        "--title",
+        "Rendered",
+        "--template",
+        &template,
+        "--var",
+        "goal=Plain goal",
+        "--no-interactive",
+    ]);
+    store.ok(&[
+        "document",
+        "create",
+        "site",
+        "--project",
+        "p",
+        "--title",
+        "Rendered notes",
+        "--template",
+        &template,
+        "--var",
+        "goal=Plain goal",
+        "--no-interactive",
+    ]);
+    let document = files_under(&store, "site")
+        .into_iter()
+        .find(|path| path.contains("documents"))
+        .expect("the document");
+    let document_id = std::path::Path::new(&document)
+        .file_stem()
+        .expect("a stem")
+        .to_string_lossy()
+        .into_owned();
+    for (kind, id) in [
+        ("project", "site:q".to_owned()),
+        ("document", format!("site:{document_id}")),
+    ] {
+        store.ok(&[
+            kind,
+            "render",
+            &id,
+            "--template",
+            &template,
+            "--var",
+            &format!("goal=Match {TERM}"),
+            "--no-interactive",
+        ]);
+    }
+    let held = text_of(&store, "site");
+    assert_eq!(
+        held.matches(&format!("# Match {WITH}")).count(),
+        2,
+        "{held}"
+    );
+    assert!(!held.contains(TERM), "{held}");
+}
