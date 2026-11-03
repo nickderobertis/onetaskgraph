@@ -31,7 +31,7 @@ use std::sync::{Arc, LazyLock};
 
 use onetaskgraph_plugin_api::{
     Classification, Comment, CommentBody, Document, Label, NativeId, PageRequest, Project,
-    Repository, Task, Visibility, WriteTarget,
+    Repository, SourceError, Task, Visibility, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -3056,7 +3056,7 @@ impl Engine {
                 (rewritten, edited, fields) = again;
                 screening = Some((stored.exposure, answer.locators));
                 let latest = self.read_held_task(destination, id).await?;
-                if latest.version != fresh.version {
+                if latest.version != fresh.version || !holds_as_written(&latest, &fresh) {
                     return Err(EngineError::SanitizeConflict {
                         item: item.to_owned(),
                     });
@@ -3183,7 +3183,7 @@ impl Engine {
             onetaskgraph_plugin_api::MetadataRecord::Task,
             id,
         );
-        destination
+        let written = destination
             .source()
             .write_task(&onetaskgraph_plugin_api::ItemWrite {
                 target: Some(id.clone()),
@@ -3192,12 +3192,26 @@ impl Engine {
             })
             .await
             .map_err(refused)?;
+        if &written != id {
+            return Err(refused(SourceError::Malformed {
+                message: format!(
+                    "a sanitising write of {id} was answered as a write of another task, {written}"
+                ),
+            }));
+        }
         for (comment, body) in &bodies {
-            destination
+            let edited = destination
                 .source()
                 .edit_comment(id, comment, body)
                 .await
                 .map_err(refused)?;
+            if edited.is_none() {
+                return Err(refused(SourceError::Refused {
+                    message: format!(
+                        "comment {comment} of {id} was gone before its sanitising write"
+                    ),
+                }));
+            }
         }
         Ok(())
     }

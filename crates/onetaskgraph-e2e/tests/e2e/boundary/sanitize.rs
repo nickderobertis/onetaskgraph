@@ -1924,6 +1924,12 @@ elif how == "passed-unfixed":
 elif how == "passed-redacted":
     answer["locators"] = [{"redacted": True, "kind": locator["kind"], "ordinal": index + 1}
                           for index, locator in enumerate(sent.get("locators", []))]
+elif how == "two-ways":
+    seen = set()
+    for index, value in enumerate(answer["metadata"]):
+        if value in seen:
+            answer["metadata"][index] = value + " again"
+        seen.add(value)
 elif how == "unsent-index":
     answer.update(verdict="refuse", surface="text",
                   unfixed=[{"surface": "text", "index": 99, "fixed": False}])
@@ -1951,6 +1957,7 @@ fn a_policy_answer_that_does_not_match_what_was_sent_is_never_a_pass() {
         "locators",
         "passed-unfixed",
         "passed-redacted",
+        "two-ways",
         "unsent-index",
     ] {
         repolicy(&store, |policy| {
@@ -1967,6 +1974,9 @@ fn a_policy_answer_that_does_not_match_what_was_sent_is_never_a_pass() {
             "Plain",
             "--body-file",
             &store.body(PLAIN),
+            // The same short value twice — a title and a label — which "two-ways" answers apart.
+            "--label",
+            "Plain",
         ]);
         assert_eq!(kind, "boundary-unavailable", "{how}: {said}");
         assert_eq!(
@@ -2625,4 +2635,22 @@ fn a_re_render_whose_content_is_rewritten_records_the_digest_of_what_landed() {
         recorded, landed,
         "the provenance names the rendering as it landed"
     );
+}
+
+#[test]
+fn a_source_keeping_no_version_moving_twice_is_a_conflict_too() {
+    let shared = Shared::new(
+        &[("t1", &with_term())],
+        json!({"t1": [2, 3]}),
+        json!({"t1": {"label": "person-label"}}),
+    );
+    let mut state = shared.state();
+    state["unversioned"] = json!(true);
+    std::fs::write(&shared.state, state.to_string()).expect("the state");
+    let (kind, said) = shared
+        .store
+        .refused(&["task", "priority", "set", "shared:t1", "high"]);
+    assert_eq!(kind, "sanitize-conflict", "{said}");
+    assert_eq!(shared.writes(), 0, "nothing was overwritten");
+    assert_eq!(shared.task("t1")["priority"], json!("none"));
 }
