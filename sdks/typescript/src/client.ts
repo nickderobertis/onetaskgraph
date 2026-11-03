@@ -454,6 +454,18 @@ function searchPathFlags(options: TemplateOptions): string[] {
   return flags;
 }
 
+// `text` parsed as a JSON object, or `undefined` when it is not one.
+function safeParse(text: string): Record<string, unknown> | undefined {
+  try {
+    const value: unknown = JSON.parse(text);
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Refuse anything but a list of strings for one repeated flag, by index so a sparse array's
 // hole is refused rather than skipped, and with no key but its entries, which is all that is
 // sent.
@@ -1573,9 +1585,16 @@ export class OnetaskgraphClient {
         // An exit this command does not answer with is an execution failure whatever
         // stdout holds: under `--json` a failed command also writes its failure document
         // there, which is not the response this command's schema describes.
+        // A sweep answers its report on exit 1 (left unfixable or in conflict) and 3
+        // (coverage incomplete); its refusals write a failure document, which has no
+        // `coverage` and is refused below as the failure it is.
+        const reporting =
+          command === "sources sanitize" &&
+          (code === 1 || code === 3) &&
+          !("failure" in (safeParse(stdout) ?? { failure: true }));
         if (
           stdout.length === 0 ||
-          (code !== 0 && (code !== 4 || !partialResponseCommands.has(command)))
+          (code !== 0 && !reporting && (code !== 4 || !partialResponseCommands.has(command)))
         ) {
           reject(new OnetaskgraphExecutionError(code, stderr, failureOf(stdout)));
           return;
