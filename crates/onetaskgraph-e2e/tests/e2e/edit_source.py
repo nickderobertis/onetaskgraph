@@ -82,6 +82,15 @@ def _task(state: State, identifier: object) -> Task | None:
     return next((task for task in state["tasks"] if task["id"] == identifier), None)
 
 
+def _shown(state: State, task: Task) -> dict[str, Any]:
+    """`task` on the wire, as a read answers it (§4.4): without its version when the fixture
+    says this source keeps none (`"unversioned": true` in its state)."""
+    shown: dict[str, Any] = dict(task)
+    if state.get("unversioned"):
+        shown["version"] = None
+    return shown
+
+
 def _move(state: State, task: Task) -> None:
     """Another writer's edit, as the fixture names it for this task: a label added, or the
     content's last paragraph replaced — and the version moved."""
@@ -128,12 +137,12 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
                 state["reads"][task["id"]] = reads
                 if reads in state["moves"].get(task["id"], []):
                     _move(state, task)
-            return {"result": {"task": task}}
+            return {"result": {"task": None if task is None else _shown(state, task)}}
         case "query_tasks":
             text = params.get("query", {}).get("text")
             wanted = str(text.get("terms", "")).lower() if isinstance(text, dict) else None
             items = [
-                task
+                _shown(state, task)
                 for task in state["tasks"]
                 if wanted is None or wanted in state["index"].get(task["id"], "").lower()
             ]

@@ -570,7 +570,7 @@ impl Engine {
             }
             Err(error) => return Err(error),
         };
-        if !dry_run {
+        if written.written.is_some() {
             sweep.requests.writes += 1;
         }
         let (word, whole) = if dry_run {

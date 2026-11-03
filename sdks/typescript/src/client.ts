@@ -1052,6 +1052,7 @@ export class OnetaskgraphClient {
         "sourcesSanitize: options is not a plain object; next: pass an options object",
       );
     }
+    // `as const` keeps each name the literal it is, for the message below.
     for (const [name, value] of [
       ["dryRun", options.dryRun],
       ["complete", options.complete],

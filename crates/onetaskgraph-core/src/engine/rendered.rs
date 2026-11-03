@@ -1432,8 +1432,18 @@ impl Engine {
                         .assets(&carried),
                 )
                 .await?;
-            rendered.body = rewrite.text(&rendered.body);
-            rewrite.answers(&mut rendered.answers);
+            // What lands is the rendering as the policy passed it, so the entry records that
+            // body's digest — as a copy does for a rendering it rewrote — while the answers
+            // digest still names what the template was given.
+            let value = if rewrite.is_identity() {
+                value
+            } else {
+                rendered.body = rewrite.text(&rendered.body);
+                rewrite.answers(&mut rendered.answers);
+                provenance.body_digest =
+                    crate::template::Sha256Digest::of(rendered.body.as_bytes());
+                provenance.to_value()
+            };
             let record = regeneration.record.metadata_record();
             stored::forget(source, record, &id.native);
             let body = || Some(rendered.body.clone());

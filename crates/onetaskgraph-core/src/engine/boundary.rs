@@ -749,6 +749,23 @@ fn answer_problem(input: &PublicSanitizeInput, answer: &SanitizeVerdict) -> Opti
     {
         return Some("the policy answered locators that do not match those sent");
     }
+    // One value sent twice on one surface is one value: answered two ways, the write could not
+    // say which it was passed as.
+    for (sent, answered) in [
+        (&input.text, &answer.text),
+        (&input.paths, &answer.paths),
+        (&input.metadata, &answer.metadata),
+    ] {
+        let mut seen = std::collections::HashMap::new();
+        for (value, rewritten) in sent.iter().zip(answered) {
+            if seen
+                .insert(value, rewritten)
+                .is_some_and(|earlier| earlier != rewritten)
+            {
+                return Some("the policy answered one value two ways");
+            }
+        }
+    }
     if answer.verdict == WriteVerdict::Pass
         && (!answer.unfixed.is_empty()
             || answer
@@ -3023,7 +3040,8 @@ impl Engine {
         let mut screening = None;
         if !dry_run {
             let fresh = self.read_held_task(destination, id).await?;
-            if fresh.version != task.version {
+            // A source with no version token moves too: what it holds is compared as well.
+            if fresh.version != task.version || !holds_as_written(&fresh, task) {
                 // Moved once: sanitise the record as it now stands, keeping what changed.
                 let comments = every_comment(destination, id).await?;
                 let stored = StoredTask::of(destination, item, &fresh, &comments);
@@ -3130,6 +3148,15 @@ impl Engine {
             name: destination.name().to_string(),
             error,
         };
+        // Every comment's new body is checked before anything is written, so a replacement
+        // that would empty one leaves the task as it was rather than half sanitised.
+        let bodies = comments
+            .iter()
+            .map(|(comment, body)| {
+                CommentBody::new(body.clone()).map(|body| (comment.id.clone(), body))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(refused)?;
         let mut depends_on = Vec::new();
         let mut cursor = None;
         loop {
@@ -3165,11 +3192,10 @@ impl Engine {
             })
             .await
             .map_err(refused)?;
-        for (comment, body) in comments {
-            let body = CommentBody::new(body.clone()).map_err(refused)?;
+        for (comment, body) in &bodies {
             destination
                 .source()
-                .edit_comment(id, &comment.id, &body)
+                .edit_comment(id, comment, body)
                 .await
                 .map_err(refused)?;
         }
@@ -3186,6 +3212,10 @@ fn holds_as_written(read: &Task, written: &Task) -> bool {
         && read.priority == written.priority
         && read.metadata == written.metadata
         && read.repositories == written.repositories
+        && read.project == written.project
+        && read.classification == written.classification
+        && read.delivers == written.delivers
+        && read.delivered_by == written.delivered_by
         && read
             .labels
             .iter()

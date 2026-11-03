@@ -2515,3 +2515,114 @@ fn a_sanitising_write_keeps_every_forward_edge_of_its_task() {
             .expect("the dependencies");
     assert_eq!(deps["items"].as_array().map(Vec::len), Some(1), "{deps}");
 }
+
+#[test]
+fn a_source_keeping_no_version_is_still_read_again_when_its_record_moves() {
+    let shared = Shared::new(
+        &[("t1", &with_term())],
+        json!({"t1": [2]}),
+        json!({"t1": {"label": "person-label"}}),
+    );
+    let mut state = shared.state();
+    state["unversioned"] = json!(true);
+    std::fs::write(&shared.state, state.to_string()).expect("the state");
+    shared
+        .store
+        .ok(&["task", "priority", "set", "shared:t1", "high"]);
+    let task = shared.task("t1");
+    assert_eq!(
+        labels(&task),
+        ["person-label"],
+        "the other writer's label is kept"
+    );
+    assert!(!task["content"].as_str().expect("content").contains(TERM));
+    assert_eq!(task["priority"], json!("high"));
+}
+
+/// A sanitise command rewriting the term to nothing — which onevcs refuses to declare, and a
+/// linking caller's policy might still answer.
+const EMPTIES: &str = r#"
+import json, sys
+sent = json.loads(sys.stdin.read())
+answer = {surface: [value.replace("quietharbor", "") for value in sent.get(surface, [])]
+          for surface in ("text", "paths", "metadata")}
+answer.update(verdict="pass", replaced=1, unfixed=[],
+              locators=[locator["value"] for locator in sent.get("locators", [])])
+print(json.dumps(answer))
+"#;
+
+#[test]
+fn a_stored_comment_a_replacement_would_empty_leaves_the_whole_task_unwritten() {
+    let shared = Shared::new(&[("t1", &with_term())], json!({}), json!({}));
+    shared.comment("t1", "c1", TERM);
+    let python = crate::document_store::interpreter();
+    repolicy(&shared.store, |policy| {
+        policy["sanitize_command"] = json!([python.to_string_lossy(), "-c", EMPTIES]);
+    });
+    let output = shared
+        .store
+        .run(&["task", "priority", "set", "shared:t1", "high"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert_eq!(shared.writes(), 0, "the task was not half sanitised");
+    assert_eq!(shared.task("t1")["content"], json!(with_term()));
+    assert_eq!(shared.state()["comments"]["t1"][0]["body"], json!(TERM));
+}
+
+#[test]
+fn a_re_render_whose_content_is_rewritten_records_the_digest_of_what_landed() {
+    let (store, _record) = sanitizing(replaced());
+    let template = template(&store);
+    let created: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "create",
+        "site",
+        "--project",
+        "p",
+        "--title",
+        "Rendered",
+        "--template",
+        &template,
+        "--var",
+        "goal=Plain goal",
+        "--no-interactive",
+        "--json",
+    ]))
+    .expect("the task");
+    let id = created["items"][0]["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    store.ok(&[
+        "task",
+        "render",
+        &id,
+        "--template",
+        &template,
+        "--var",
+        &format!("goal=Match {TERM}"),
+        "--no-interactive",
+    ]);
+    let shown: Value =
+        serde_json::from_str(&store.ok(&["task", "show", &id, "--json"])).expect("the task");
+    let item = &shown["items"][0]["item"];
+    let content = item["content"].as_str().expect("content");
+    assert!(content.contains(&format!("# Match {WITH}")), "{content}");
+    let recorded = item["metadata"]["onetaskgraph.template"]["body_digest"]
+        .as_str()
+        .expect("a body digest");
+    let landed = {
+        use sha2::Digest as _;
+        let digest = sha2::Sha256::digest(content.as_bytes());
+        format!(
+            "sha256:{}",
+            digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        )
+    };
+    assert_eq!(
+        recorded, landed,
+        "the provenance names the rendering as it landed"
+    );
+}
