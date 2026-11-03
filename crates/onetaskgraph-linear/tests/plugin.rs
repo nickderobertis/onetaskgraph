@@ -7416,6 +7416,71 @@ fn a_base64_state_that_is_not_a_yjs_update_answers_no_headings() {
     }
 }
 
+/// A heading whose stored id is absent, not a string, not hex or too short to name the 8 hex
+/// characters Linear's heading link carries names no heading a link could address: it is left
+/// out, and every heading beside it with a well-formed id is still read, in order.
+#[test]
+fn a_heading_with_a_malformed_id_is_left_out_and_its_neighbours_are_read() {
+    use base64::Engine as _;
+    use yrs::types::xml::{XmlElementPrelim, XmlTextPrelim};
+    use yrs::{Doc, ReadTxn, Transact, Xml, XmlFragment};
+
+    enum Id {
+        Absent,
+        Number(f64),
+        Text(&'static str),
+    }
+    let headings = [
+        ("Before", Id::Text("cf430ed3-0000-4000-8000-000000000001")),
+        ("No id", Id::Absent),
+        ("Numbered", Id::Number(12_345_678.0)),
+        ("Not hex", Id::Text("zzzzzzzz-zzzz")),
+        ("Too short", Id::Text("e154-4ca")),
+        ("After", Id::Text("e1544ca7")),
+    ];
+    let doc = Doc::new();
+    let fragment = doc.get_or_insert_xml_fragment("prosemirror");
+    {
+        let mut txn = doc.transact_mut();
+        for (index, (text, id)) in headings.iter().enumerate() {
+            let heading = fragment.insert(
+                &mut txn,
+                u32::try_from(index).unwrap(),
+                XmlElementPrelim::empty("heading"),
+            );
+            match id {
+                Id::Absent => {}
+                Id::Number(number) => {
+                    heading.insert_attribute(&mut txn, "id", *number);
+                }
+                Id::Text(id) => {
+                    heading.insert_attribute(&mut txn, "id", *id);
+                }
+            }
+            heading.insert(&mut txn, 0, XmlTextPrelim::new(*text));
+        }
+    }
+    let state = base64::engine::general_purpose::STANDARD.encode(
+        doc.transact()
+            .encode_state_as_update_v1(&yrs::StateVector::default()),
+    );
+    let read: Vec<(String, String)> = onetaskgraph_linear::headings::decoded(&state)
+        .expect("a well-formed state decodes")
+        .into_iter()
+        .map(|heading| (heading.text, heading.id))
+        .collect();
+    assert_eq!(
+        read,
+        vec![
+            (
+                "Before".to_owned(),
+                "cf430ed3-0000-4000-8000-000000000001".to_owned()
+            ),
+            ("After".to_owned(), "e1544ca7".to_owned()),
+        ]
+    );
+}
+
 /// A later answer whose editor state is `null`, or does not decode, says the record's headings
 /// are no longer known: nothing an earlier answer carried is answered for it.
 #[test]
