@@ -20545,41 +20545,55 @@ export const runtimeSchemas = {
         "properties": {
           "field": {
             "description": "`content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its\nkey or id as screened."
-          },
-          "outcome": {
-            "description": "What the sweep did with it.",
-            "$ref": "#/$defs/FieldOutcome"
-          },
-          "why": {
-            "description": "Why a field is unfixable, in neutral words; absent otherwise.",
-            "type": [
-              "string",
-              "null"
-            ]
           }
         },
         "required": [
-          "field",
-          "outcome"
-        ]
-      },
-      "FieldOutcome": {
-        "description": "What a sweep did with one field.",
+          "field"
+        ],
         "oneOf": [
           {
             "description": "It was rewritten.",
-            "type": "string",
-            "const": "rewritten"
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "const": "rewritten"
+              }
+            },
+            "required": [
+              "outcome"
+            ]
           },
           {
             "description": "A dry run: it would be rewritten.",
-            "type": "string",
-            "const": "would-rewrite"
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "const": "would-rewrite"
+              }
+            },
+            "required": [
+              "outcome"
+            ]
           },
           {
             "description": "Replacement cannot fix it.",
-            "type": "string",
-            "const": "unfixable"
+            "type": "object",
+            "properties": {
+              "why": {
+                "description": "Why, in neutral words.",
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string",
+                "const": "unfixable"
+              }
+            },
+            "required": [
+              "outcome",
+              "why"
+            ]
           }
         ]
       }

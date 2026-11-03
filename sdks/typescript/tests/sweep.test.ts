@@ -142,6 +142,8 @@ test("a sweep that cannot run still rejects", async () => {
 
 test("sourcesSanitize refuses arguments it cannot send, before the binary is started", () => {
   const client = new OnetaskgraphClient({ binaryPath: "/nonexistent/onetaskgraph", cwd: tmpdir() });
+  // Widened on purpose: these are the arguments a JavaScript caller, unchecked by TypeScript,
+  // can still pass, and the method has to refuse them at run time.
   const sanitize = client.sourcesSanitize.bind(client) as (...args: unknown[]) => unknown;
   expect(() => sanitize(7)).toThrow("source is not a string");
   expect(() => sanitize("site", null)).toThrow("options is not a plain object");

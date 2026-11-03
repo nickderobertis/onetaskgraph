@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 
 class SweepRequests(BaseModel):
@@ -60,29 +60,47 @@ class ItemOutcome(StrEnum):
     ItemOutcomeNotAMatch = "not-a-match"
 
 
-class FieldOutcome(StrEnum):
-    FieldOutcomeRewritten = "rewritten"
-    FieldOutcomeWouldRewrite = "would-rewrite"
-    FieldOutcomeUnfixable = "unfixable"
-
-
-class SweepCoverage(BaseModel):
-    complete: Annotated[bool, Field(description="Whether it covered every class.")]
-    uncovered: Annotated[list[Uncovered], Field(description="Each class it did not cover.")]
-
-
-class SweepField(BaseModel):
+class SweepFieldRewritten(BaseModel):
     field: Annotated[
         Any,
         Field(
             description="`content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its\nkey or id as screened."
         ),
     ]
-    outcome: Annotated[FieldOutcome, Field(description="What the sweep did with it.")]
-    why: Annotated[
-        str | None,
-        Field(description="Why a field is unfixable, in neutral words; absent otherwise."),
-    ] = None
+    outcome: Literal["rewritten"]
+
+
+class SweepFieldWouldRewrite(BaseModel):
+    field: Annotated[
+        Any,
+        Field(
+            description="`content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its\nkey or id as screened."
+        ),
+    ]
+    outcome: Literal["would-rewrite"]
+
+
+class SweepFieldUnfixable(BaseModel):
+    field: Annotated[
+        Any,
+        Field(
+            description="`content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its\nkey or id as screened."
+        ),
+    ]
+    why: Annotated[str, Field(description="Why, in neutral words.")]
+    outcome: Literal["unfixable"]
+
+
+class SweepField(RootModel[SweepFieldRewritten | SweepFieldWouldRewrite | SweepFieldUnfixable]):
+    root: Annotated[
+        SweepFieldRewritten | SweepFieldWouldRewrite | SweepFieldUnfixable,
+        Field(description="What a sweep did with one field of an item."),
+    ]
+
+
+class SweepCoverage(BaseModel):
+    complete: Annotated[bool, Field(description="Whether it covered every class.")]
+    uncovered: Annotated[list[Uncovered], Field(description="Each class it did not cover.")]
 
 
 class SweepItem(BaseModel):

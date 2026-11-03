@@ -13,7 +13,7 @@ none of the SDK's own models.
 import json
 import sys
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 KIND = "sweep-source"
 PROTOCOL_VERSION = 2
@@ -63,7 +63,18 @@ class Held(TypedDict):
 
 
 def _held(store: Path) -> Held:
-    return json.loads(store.read_text(encoding="utf-8"))
+    """Read the peer's own file: a count of requests beside a list of tasks.
+
+    Anything else ends the peer, saying why.
+    """
+    held = json.loads(store.read_text(encoding="utf-8"))
+    match held:
+        case {"requests": int(), "tasks": list(tasks)} if all(
+            isinstance(task, dict) and {"id", "title", "content"} <= task.keys() for task in tasks
+        ):
+            return cast(Held, held)
+        case _:
+            sys.exit(f"{KIND}: {store} is not this peer's state")
 
 
 def _matches(task: Task, query: dict[str, Any]) -> bool:

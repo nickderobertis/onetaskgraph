@@ -19,7 +19,7 @@ It is spawned with a cleared environment (§3.1), so it imports only the standar
 import json
 import sys
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 KIND = "edit-source"
 PROTOCOL_VERSION = 2
@@ -85,6 +85,8 @@ def _move(state: State, task: Task) -> None:
     edit = state["edits"].get(task["id"], {})
     if "label" in edit:
         task["labels"] = [*task["labels"], {"id": edit["label"], "name": edit["label"], "color": None}]
+    if "content" in edit:
+        task["content"] = edit["content"]
     if "paragraph" in edit:
         task["content"] = (task.get("content") or "").rstrip("\n") + "\n\n" + edit["paragraph"]
     task["version"] = str(int(task["version"]) + 1)
@@ -167,19 +169,41 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             }
 
 
+STATE_MEMBERS = frozenset(State.__annotations__)
+
+
+def _state(store: Path) -> State:
+    """The peer's own file, refused — ending the peer, naming what is missing — unless it
+    holds every member `State` names."""
+    held = json.loads(store.read_text(encoding="utf-8"))
+    if not isinstance(held, dict) or not STATE_MEMBERS <= held.keys():
+        missing = sorted(STATE_MEMBERS - set(held)) if isinstance(held, dict) else "every member"
+        sys.exit(f"{KIND}: {store} is not this peer's state; it lacks {missing}")
+    return cast(State, held)
+
+
 def _main() -> None:
     store = Path(sys.argv[1])
     for line in sys.stdin:
         if not line.strip():
             continue
-        request = json.loads(line)
-        state = json.loads(store.read_text(encoding="utf-8"))
-        params = request.get("params") if isinstance(request.get("params"), dict) else {}
-        if request.get("method") != "initialize":
-            state["log"].append(request.get("method"))
-        answer = _answer(state, str(request.get("method")), params)
+        try:
+            request = json.loads(line)
+        except ValueError:
+            print(f"{KIND}: ignoring a line that is not JSON", file=sys.stderr)
+            continue
+        match request:
+            case {"id": str(identifier), "method": str(method), **rest}:
+                params = rest.get("params")
+            case _:
+                print(f"{KIND}: ignoring a line that is not a request", file=sys.stderr)
+                continue
+        state = _state(store)
+        if method != "initialize":
+            state["log"].append(method)
+        answer = _answer(state, method, params if isinstance(params, dict) else {})
         store.write_text(json.dumps(state), encoding="utf-8")
-        sys.stdout.write(json.dumps({"id": request["id"], **answer}) + "\n")
+        sys.stdout.write(json.dumps({"id": identifier, **answer}) + "\n")
         sys.stdout.flush()
 
 

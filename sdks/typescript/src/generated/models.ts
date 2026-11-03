@@ -11758,6 +11758,31 @@ export namespace GeneratedSweepReport {
  * A class of record a search cannot establish.
  */
 export type Uncovered = ("metadata" | "comments" | "normalized-spellings")
+/**
+ * What a sweep did with one field of an item.
+ */
+export type SweepField = ({
+/**
+ * `content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its
+ * key or id as screened.
+ */
+field: unknown
+[k: string]: any
+} & SweepField1)
+export type SweepField1 = ({
+outcome: "rewritten"
+[k: string]: any
+} | {
+outcome: "would-rewrite"
+[k: string]: any
+} | {
+/**
+ * Why, in neutral words.
+ */
+why: string
+outcome: "unfixable"
+[k: string]: any
+})
 
 /**
  * What one `sources sanitize` did, naming every record by its screened locator and never by
@@ -11842,25 +11867,6 @@ outcome: ("rewritten" | "would-rewrite" | "unchanged" | "unfixable" | "conflict"
  * What it did with each field it changed or could not.
  */
 fields: SweepField[]
-[k: string]: any
-}
-/**
- * What a sweep did with one field of an item.
- */
-export interface SweepField {
-/**
- * `content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its
- * key or id as screened.
- */
-field: unknown
-/**
- * What the sweep did with it.
- */
-outcome: ("rewritten" | "would-rewrite" | "unfixable")
-/**
- * Why a field is unfixable, in neutral words; absent otherwise.
- */
-why?: (string | null)
 [k: string]: any
 }
 

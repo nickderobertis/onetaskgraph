@@ -214,7 +214,11 @@ fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
             OutputFormat::Json => json(
                 &serde_json::json!({
                     "written": false,
-                    "would_pass": failure.message().contains("would then pass"),
+                    "would_pass": FAILED_WOULD_PASS
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take()
+                        .unwrap_or(false),
                     "sanitization": done.to_json(),
                 }),
                 "the dry run",
@@ -1100,6 +1104,9 @@ static REPLACEMENTS: OnceLock<Vec<onetaskgraph_core::boundary::Replacement>> = O
 /// Whether the write that failed was refused for something already on its item before it.
 static FAILED_PREDATES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Whether the write a sanitisation dry run stood in for would then have passed.
+static FAILED_WOULD_PASS: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
+
 /// Whether `--sanitize-dry-run` was given.
 static SANITIZE_DRY_RUN: OnceLock<bool> = OnceLock::new();
 
@@ -1231,6 +1238,11 @@ fn write_failed(engine: &Engine, error: &onetaskgraph_core::EngineError) -> Fail
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = error.held().cloned();
     FAILED_PREDATES.store(error.predates_write(), std::sync::atomic::Ordering::SeqCst);
+    if let onetaskgraph_core::EngineError::SanitizeDryRun { would_pass, .. } = error {
+        *FAILED_WOULD_PASS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(*would_pass);
+    }
     Failure::from(error)
 }
 

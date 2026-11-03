@@ -1307,10 +1307,17 @@ pub fn sweep(report: &onetaskgraph_core::SweepReport) -> String {
     for item in &report.items {
         out.push_str(&format!("\n{} {}", item.id, item.outcome));
         for field in &item.fields {
-            out.push_str(&format!("\n  {} {}", field.field, field.outcome));
-            if let Some(why) = &field.why {
-                out.push_str(&format!(" ({why})"));
-            }
+            out.push_str(&match &field.outcome {
+                onetaskgraph_core::FieldOutcome::Rewritten => {
+                    format!("\n  {} rewritten", field.field)
+                }
+                onetaskgraph_core::FieldOutcome::WouldRewrite => {
+                    format!("\n  {} would-rewrite", field.field)
+                }
+                onetaskgraph_core::FieldOutcome::Unfixable { why } => {
+                    format!("\n  {} unfixable ({why})", field.field)
+                }
+            });
         }
     }
     out

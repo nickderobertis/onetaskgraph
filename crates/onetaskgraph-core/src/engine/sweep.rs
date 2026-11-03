@@ -76,16 +76,19 @@ pub enum ItemOutcome {
     NotAMatch,
 }
 
-/// What a sweep did with one field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
+/// What a sweep did with one field: `{"outcome": …}`, and `why` beside an unfixable one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(tag = "outcome", rename_all = "kebab-case")]
 pub enum FieldOutcome {
     /// It was rewritten.
     Rewritten,
     /// A dry run: it would be rewritten.
     WouldRewrite,
     /// Replacement cannot fix it.
-    Unfixable,
+    Unfixable {
+        /// Why, in neutral words.
+        why: String,
+    },
 }
 
 /// What one `sources sanitize` did, naming every record by its screened locator and never by
@@ -155,10 +158,8 @@ pub struct SweepField {
     #[schemars(with = "serde_json::Value")]
     pub field: Locator,
     /// What the sweep did with it.
+    #[serde(flatten)]
     pub outcome: FieldOutcome,
-    /// Why a field is unfixable, in neutral words; absent otherwise.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub why: Option<String>,
 }
 
 impl SweepReport {
@@ -458,8 +459,9 @@ impl Engine {
             unfixable = true;
             fields.push(SweepField {
                 field: Locator::Plain("repositories".to_owned()),
-                outcome: FieldOutcome::Unfixable,
-                why: Some("names a private repository".to_owned()),
+                outcome: FieldOutcome::Unfixable {
+                    why: "names a private repository".to_owned(),
+                },
             });
         }
         if let WriteVerdict::Refuse { .. } = answer.verdict {
@@ -488,8 +490,9 @@ impl Engine {
                         };
                         Some(SweepField {
                             field,
-                            outcome: FieldOutcome::Unfixable,
-                            why: Some(IDENTIFIER.to_owned()),
+                            outcome: FieldOutcome::Unfixable {
+                                why: IDENTIFIER.to_owned(),
+                            },
                         })
                     })
                     .collect();
@@ -497,8 +500,9 @@ impl Engine {
                 if named.is_empty() {
                     named.push(SweepField {
                         field: Locator::Plain("id".to_owned()),
-                        outcome: FieldOutcome::Unfixable,
-                        why: Some(IDENTIFIER.to_owned()),
+                        outcome: FieldOutcome::Unfixable {
+                            why: IDENTIFIER.to_owned(),
+                        },
                     });
                 }
                 sweep.items.push(SweepItem {
@@ -512,8 +516,9 @@ impl Engine {
             if fields.is_empty() {
                 fields.push(SweepField {
                     field: Locator::Plain("content".to_owned()),
-                    outcome: FieldOutcome::Unfixable,
-                    why: Some("carries a term no replacement is declared for".to_owned()),
+                    outcome: FieldOutcome::Unfixable {
+                        why: "carries a term no replacement is declared for".to_owned(),
+                    },
                 });
             }
         }
@@ -582,8 +587,7 @@ impl Engine {
         for field in &written {
             fields.push(SweepField {
                 field: screened_field(field, &stored.exposure, &answer.locators),
-                outcome: word,
-                why: None,
+                outcome: word.clone(),
             });
         }
         sweep.items.push(SweepItem {
@@ -651,4 +655,3 @@ macro_rules! spelled {
 
 spelled!(Uncovered);
 spelled!(ItemOutcome);
-spelled!(FieldOutcome);

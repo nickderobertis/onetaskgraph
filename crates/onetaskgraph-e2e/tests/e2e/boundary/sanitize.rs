@@ -2319,3 +2319,51 @@ fn a_record_whose_fresh_read_the_policy_refuses_is_refused_writing_nothing() {
             .is_some_and(|content| content.ends_with("Owned by hiddenco."))
     );
 }
+
+#[test]
+fn a_search_hit_the_policy_finds_no_term_in_is_reported_not_a_match_and_written_nothing() {
+    // The index still holds the term; the record a person since cleaned does not, and carries
+    // no replacement either, so nothing a sanitisation did explains the hit.
+    let shared = Shared::new(&[("t1", &with_term())], json!({}), json!({}));
+    shared.patch("t1", json!({"content": "Cleaned by hand."}));
+    let (code, report, out, err) = sweep(&shared.store, "shared", &[]);
+    assert_eq!(code, Some(3), "{out}{err}");
+    assert_eq!(
+        entry(&report, "shared:t1"),
+        &json!({"id": "shared:t1", "kind": "task", "outcome": "not-a-match", "fields": []}),
+        "{report}"
+    );
+    assert_eq!(shared.writes(), 0);
+}
+
+#[test]
+fn a_record_another_writer_cleaned_before_the_sanitising_write_is_left_as_they_left_it() {
+    let shared = Shared::new(
+        &[("t1", &with_term())],
+        json!({"t1": [2]}),
+        json!({"t1": {"content": "Cleaned by hand."}}),
+    );
+    let answer: Value = serde_json::from_str(&shared.store.ok(&[
+        "task",
+        "priority",
+        "set",
+        "shared:t1",
+        "high",
+        "--json",
+    ]))
+    .expect("the answer");
+    assert_eq!(
+        shared.writes(),
+        0,
+        "nothing left to sanitise, so no sanitising write"
+    );
+    let task = shared.task("t1");
+    assert_eq!(task["content"], json!("Cleaned by hand."));
+    assert_eq!(task["priority"], json!("high"));
+    assert!(
+        answer["sanitization"]["side_effect"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "{answer}"
+    );
+}
