@@ -85,6 +85,21 @@ pub(crate) fn succeeded(arguments: &[&str], output: &Output) -> Value {
 /// A folder of Markdown under `sandbox` holding the project `harbor`, titled `harbor`, with
 /// `tasks` tasks filed under it, and the project `lighthouse`, titled `lighthouse`, with none.
 pub(crate) fn plan(sandbox: &Sandbox, harbor: &str, lighthouse: &str, tasks: usize) -> PathBuf {
+    plan_named(sandbox, "harbor", harbor, lighthouse, tasks)
+}
+
+/// [`plan`], its first project and tasks under the id `slug` rather than `harbor`.
+///
+/// A create's key is the same for every copy of one source id into one destination name, so a
+/// journey against a workspace that outlives it names its plan afresh each run: otherwise a run
+/// would meet the items an earlier run's copy left, as the copy's own counterparts.
+pub(crate) fn plan_named(
+    sandbox: &Sandbox,
+    slug: &str,
+    harbor: &str,
+    lighthouse: &str,
+    tasks: usize,
+) -> PathBuf {
     let root = sandbox.subdirectory("plan");
     let write = |path: &str, text: String| {
         let path = root.join(path);
@@ -92,7 +107,7 @@ pub(crate) fn plan(sandbox: &Sandbox, harbor: &str, lighthouse: &str, tasks: usi
         std::fs::write(path, text).expect("a record");
     };
     write(
-        "projects/harbor.md",
+        &format!("projects/{slug}.md"),
         format!("---\ntitle: {harbor}\nstatus: todo\n---\nMove the harbor cranes.\n"),
     );
     write(
@@ -101,9 +116,9 @@ pub(crate) fn plan(sandbox: &Sandbox, harbor: &str, lighthouse: &str, tasks: usi
     );
     for index in 0..tasks {
         write(
-            &format!("tasks/crane-{index}.md"),
+            &format!("tasks/{slug}-crane-{index}.md"),
             format!(
-                "---\ntitle: {}\nstatus: todo\nproject: harbor\n---\nCrane step {index}.\n",
+                "---\ntitle: {}\nstatus: todo\nproject: {slug}\n---\nCrane step {index}.\n",
                 task_title(harbor, index)
             ),
         );

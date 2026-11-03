@@ -19,7 +19,7 @@ use sha2::{Digest as _, Sha256};
 use crate::common::{Sandbox, stderr, stdout};
 use crate::fixtures::document;
 use crate::linear_assets::document_lifecycle::namespace::Namespace;
-use crate::project_create::{outcome, plan, qualified, succeeded, task_title, titles};
+use crate::project_create::{outcome, plan_named, qualified, succeeded, task_title, titles};
 
 const LINEAR: &str = "https://api.linear.app/graphql";
 
@@ -230,6 +230,19 @@ fn graphql(runtime: &tokio::runtime::Runtime, key: &str, query: &str, variables:
     })
 }
 
+/// A plan project id of this run's own for `scenario`: a create's key is the same for every
+/// copy of one source id into one destination name, so a fixed id would meet an earlier run's
+/// copy in the team as this copy's own counterpart.
+fn slug(stamp: &str, scenario: &str) -> String {
+    let digest = Sha256::digest(format!("{stamp} {scenario}").as_bytes());
+    let hex: String = digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("{scenario}-{hex}")
+}
+
 /// A v4 UUID no item of Linear's holds, derived from this run's stamp and `kind`.
 fn absent_id(stamp: &str, kind: &str) -> String {
     let digest = Sha256::digest(format!("{stamp} absent {kind}").as_bytes());
@@ -348,11 +361,18 @@ fn cleanup(
     all
 }
 
-/// A sandbox copying a folder `plan` — the project `harbor`, titled `title`, with two tasks —
+/// A sandbox copying a folder `plan` — the project `slug`, titled `title`, with two tasks —
 /// into the Linear source `dest`, reached through `endpoint`.
-fn sandbox(key: &str, endpoint: &str, team: &str, mapping: &Value, title: &str) -> Sandbox {
+fn sandbox(
+    key: &str,
+    endpoint: &str,
+    team: &str,
+    mapping: &Value,
+    slug: &str,
+    title: &str,
+) -> Sandbox {
     let sandbox = Sandbox::new();
-    let root = plan(&sandbox, title, &format!("{title} spare"), 2);
+    let root = plan_named(&sandbox, slug, title, &format!("{title} spare"), 2);
     sandbox.secrets_file(&format!("LINEAR_API_KEY={key}\n"));
     sandbox.project_document(&document(&json!({
         "plan": {"plugin": "local-md", "config": {"root": root}},
@@ -521,8 +541,10 @@ fn drive(
 
     // (a) A project Linear does not hold yet, created with its two tasks.
     let title = format!("{prefix}{stamp} harbor");
-    let first = sandbox(key, endpoint, team, mapping, &title);
-    let copy = ["--json", "project", "copy", "plan:harbor", "--to", "dest"];
+    let harbor = slug(stamp, "harbor");
+    let first = sandbox(key, endpoint, team, mapping, &harbor, &title);
+    let source = format!("plan:{harbor}");
+    let copy = ["--json", "project", "copy", source.as_str(), "--to", "dest"];
     let output = first.command().args(copy).output().unwrap();
     assert_eq!(
         output.status.code(),
@@ -533,7 +555,7 @@ fn drive(
         seen(relayed)
     );
     let report = succeeded(&copy, &output);
-    let landed = outcome(&report, "plan:harbor");
+    let landed = outcome(&report, &source);
     assert_eq!(landed["action"], "created", "{report:#}");
     let project = landed["destination"].as_str().expect("where it landed");
     let show = ["--json", "project", "show", project];
@@ -555,7 +577,10 @@ fn drive(
     // (b) A create Linear applied whose answer never reached the binary — nor the answer to the
     // read the plugin makes at once for it — so the copy fails, and a second one has to find it.
     let title = format!("{prefix}{stamp} retry");
-    let second = sandbox(key, endpoint, team, mapping, &title);
+    let retry = slug(stamp, "retry");
+    let second = sandbox(key, endpoint, team, mapping, &retry, &title);
+    let source = format!("plan:{retry}");
+    let copy = ["--json", "project", "copy", source.as_str(), "--to", "dest"];
     lock(relayed).lose_create = true;
     let output = second.command().args(copy).output().unwrap();
     let lost = lock(relayed)
@@ -584,7 +609,7 @@ fn drive(
     );
     let output = second.command().args(copy).output().unwrap();
     let report = succeeded(&copy, &output);
-    let landed = outcome(&report, "plan:harbor");
+    let landed = outcome(&report, &source);
     let linked = landed["destination"].as_str().expect("where it landed");
     let made = lock(relayed)
         .created
