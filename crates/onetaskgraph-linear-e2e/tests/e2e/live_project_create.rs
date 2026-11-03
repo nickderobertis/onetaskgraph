@@ -31,6 +31,8 @@ const READS: u32 = 20;
 struct Relay {
     /// Lose the answer to the next `projectCreate`, after Linear applied it.
     lose_create: bool,
+    /// Refuse this many more `issueCreate`s, as Linear refuses a write, without sending them.
+    refuse_issue_creates: usize,
     /// Fail the next read of one project by id, without sending it to Linear: armed by the lost
     /// create alone, so it is the read the plugin makes for what that create left.
     fail_project_read: bool,
@@ -120,6 +122,19 @@ fn relay(key: String, namespace: Arc<Namespace>) -> (String, Arc<Mutex<Relay>>) 
                 .unwrap_or("")
                 .to_owned();
             lock(&held).sent.push(root);
+            if query == onetaskgraph_linear::graphql::ISSUE_CREATE && {
+                let mut relay = lock(&held);
+                let refuse = relay.refuse_issue_creates > 0;
+                relay.refuse_issue_creates = relay.refuse_issue_creates.saturating_sub(1);
+                refuse
+            } {
+                respond(
+                    &mut stream,
+                    200,
+                    br#"{"errors":[{"message":"relay: this task is refused"}],"data":null}"#,
+                );
+                continue;
+            }
             if query == onetaskgraph_linear::graphql::PROJECT
                 && std::mem::take(&mut lock(&held).fail_project_read)
             {
@@ -353,12 +368,41 @@ fn cleanup(
             ),
         };
         let answer = graphql(runtime, key, query, json!({"id": id}));
-        if answer["data"][root]["success"] != true {
+        if answer["data"][root]["success"] != true && !already_gone(runtime, key, kind, &id) {
             eprintln!("live project create: could not remove {kind} {id}: {answer}");
             all = false;
         }
     }
     all
+}
+
+/// Whether the `kind` Linear holds under `id` is gone already — not there at all, or in the
+/// trash, as a copy's own undo leaves what it took back — so a delete of it has nothing to do.
+fn already_gone(runtime: &tokio::runtime::Runtime, key: &str, kind: &str, id: &str) -> bool {
+    let (query, root, missing) = match kind {
+        "issue" => (
+            onetaskgraph_linear::graphql::ISSUE,
+            "issue",
+            onetaskgraph_linear::graphql::ISSUE_NOT_FOUND_MESSAGE,
+        ),
+        "project" => (
+            onetaskgraph_linear::graphql::PROJECT,
+            "project",
+            onetaskgraph_linear::graphql::PROJECT_NOT_FOUND_MESSAGE,
+        ),
+        _ => (
+            onetaskgraph_linear::graphql::DOCUMENT,
+            "document",
+            onetaskgraph_linear::graphql::DOCUMENT_NOT_FOUND_MESSAGE,
+        ),
+    };
+    let read = graphql(runtime, key, query, json!({"id": id}));
+    let not_found = read["errors"]
+        .as_array()
+        .is_some_and(|errors| errors.iter().any(|error| error["message"] == missing));
+    let trashed = read["data"][root]["archivedAt"].is_string();
+    eprintln!("live project create: {kind} {id} reads back as {read}");
+    not_found || trashed
 }
 
 /// A sandbox copying a folder `plan` — the project `slug`, titled `title`, with two tasks —
@@ -478,8 +522,9 @@ pub(crate) fn live_project_create(
         std::panic::resume_unwind(panic);
     }
     assert!(cleaned, "the live project-create journey's cleanup failed");
-    let left =
+    let mut left =
         stamped(runtime, key, &team_id, &stamp).unwrap_or_else(|problem| panic!("{problem}"));
+    left.retain(|(kind, id, _)| !already_gone(runtime, key, kind, id));
     assert!(
         left.is_empty(),
         "the live project-create journey left items behind: {left:?}"
@@ -666,5 +711,83 @@ fn drive(
         .filter(|(kind, _, name)| *kind == "issue" && name.starts_with(&crane))
         .count();
     assert_eq!(issues, 2, "each task is in the team once");
+
+    // (d) A copy whose undo took back the project it created: the id its key derives is now one
+    // a deleted project held, and every later copy of the plan sends that key. Linear's answer
+    // to a create under that id is in the relay's log either way.
+    let title = format!("{prefix}{stamp} undo");
+    let undo = slug(stamp, "undo");
+    let third = sandbox(key, endpoint, team, mapping, &undo, &title);
+    let source = format!("plan:{undo}");
+    let copy = ["--json", "project", "copy", source.as_str(), "--to", "dest"];
+    let before = lock(relayed).created.len();
+    lock(relayed).refuse_issue_creates = usize::from(onetaskgraph_linear::CREATE_ID_GENERATIONS);
+    let output = third.command().args(copy).output().unwrap();
+    let refused_left = lock(relayed).refuse_issue_creates;
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a copy refused its task does not succeed: {}\n{}",
+        stdout(&output),
+        seen(relayed)
+    );
+    assert_eq!(
+        refused_left,
+        0,
+        "every id the task's key derives was tried: {}",
+        seen(relayed)
+    );
+    let undone: Vec<String> = lock(relayed).created[before..]
+        .iter()
+        .filter(|(kind, _)| *kind == "project")
+        .map(|(_, id)| id.clone())
+        .collect();
+    assert_eq!(
+        undone.len(),
+        1,
+        "the copy created its project first: {}",
+        seen(relayed)
+    );
+    let gone = graphql(
+        runtime,
+        key,
+        onetaskgraph_linear::graphql::PROJECT,
+        json!({"id": undone[0]}),
+    );
+    eprintln!("live project create: the undone project reads back as {gone}");
+    let output = third.command().args(copy).output().unwrap();
+    let report = succeeded(&copy, &output);
+    let landed = outcome(&report, &source);
+    assert_eq!(landed["action"], "created", "{report:#}\n{}", seen(relayed));
+    let linked = landed["destination"]
+        .as_str()
+        .expect("where it landed")
+        .to_owned();
+    let show = ["--json", "project", "show", linked.as_str()];
+    let shown = read_until(&third, &show, |shown| {
+        shown["items"][0]["item"]["title"] == title.as_str()
+    });
+    let create_key = shown["items"][0]["item"]["metadata"]
+        [onetaskgraph_plugin_api::MetadataKey::CREATE_KEY]
+        .as_str()
+        .expect("the project carries the copy's create key")
+        .to_owned();
+    let generations = onetaskgraph_linear::linear_ids_of_key(&create_key).unwrap();
+    assert_eq!(
+        format!("dest:{}", generations[0]),
+        format!("dest:{}", undone[0]),
+        "the undone project was made under the key's first id"
+    );
+    let generation = generations
+        .iter()
+        .position(|id| linked == format!("dest:{id}"))
+        .unwrap_or_else(|| panic!("{linked} is one of the key's ids: {generations:?}"));
+    eprintln!("live project create: the re-copy landed under generation {generation}");
+    let expected = vec![task_title(&title, 0), task_title(&title, 1)];
+    assert_eq!(
+        titles(&tasks_of(&third, &linked, &expected)),
+        expected,
+        "each task once, under the project the re-copy made"
+    );
     let _ = qualified;
 }

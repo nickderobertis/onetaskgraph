@@ -126,6 +126,12 @@ pub(crate) fn plan_named(
     root
 }
 
+/// `operation` once for each id a create key derives: a loopback refusing each of those once
+/// refuses one keyed create under every id it is tried under.
+fn every_generation(operation: &'static str) -> Vec<&'static str> {
+    vec![operation; usize::from(onetaskgraph_linear::CREATE_ID_GENERATIONS)]
+}
+
 /// The title of the `index`th task of a plan whose project is titled `project`.
 pub(crate) fn task_title(project: &str, index: usize) -> String {
     format!("{project} crane {index}")
@@ -239,6 +245,18 @@ fn a_new_project_is_created_with_its_tasks_and_a_dry_run_and_a_no_tasks_copy_too
     let held = projects_titled(&setup.sandbox, "linear", "Harbor rollout");
     assert_eq!(held.len(), 1, "{held:#?}");
     assert_eq!(qualified(&held[0]), created, "{held:#?}");
+    // Under the one id every release before this one derived from the key, so an item written
+    // by one still reads back as the copy's own.
+    let key = held[0]["metadata"][onetaskgraph_plugin_api::MetadataKey::CREATE_KEY]
+        .as_str()
+        .expect("the copy's create key");
+    assert_eq!(
+        created,
+        format!(
+            "linear:{}",
+            onetaskgraph_linear::linear_id_of_key(key).unwrap()
+        )
+    );
     assert_eq!(
         titles(&tasks_under(&setup.sandbox, "linear", created)),
         vec![
@@ -348,7 +366,10 @@ fn a_project_create_whose_answer_was_lost_is_linked_by_the_retry_and_made_once()
 fn a_project_create_linear_refuses_fails_naming_linears_refusal_and_writes_no_task() {
     // Linear refuses the create; nothing was made, so the read for an earlier attempt's project
     // is answered `Entity not found: Project` — and that is not what the copy reports.
-    let setup = Setup::refusing(2, &[onetaskgraph_linear::graphql::PROJECT_CREATE]);
+    let setup = Setup::refusing(
+        2,
+        &every_generation(onetaskgraph_linear::graphql::PROJECT_CREATE),
+    );
     let copy = ["--json", "project", "copy", "plan:harbor", "--to", "linear"];
     let (output, served) = setup.run(&copy);
     assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
@@ -374,12 +395,89 @@ fn a_project_create_linear_refuses_fails_naming_linears_refusal_and_writes_no_ta
     );
     assert!(projects_titled(&setup.sandbox, "linear", "Harbor rollout").is_empty());
 
-    // Refused once: the next copy creates it, under the id the refused attempt was sent with.
+    assert_eq!(
+        mutations(&served)
+            .iter()
+            .filter(|query| **query == onetaskgraph_linear::graphql::PROJECT_CREATE)
+            .count(),
+        usize::from(onetaskgraph_linear::CREATE_ID_GENERATIONS),
+        "tried under every id its key derives, and refused under each"
+    );
+
+    // Refused no more: the next copy creates it, under the id the refused attempt was first sent
+    // with.
     let (report, _) = setup.ok(&copy);
     assert_eq!(
         outcome(&report, "plan:harbor")["action"],
         "created",
         "{report:#}"
+    );
+    assert_eq!(
+        projects_titled(&setup.sandbox, "linear", "Harbor rollout").len(),
+        1
+    );
+}
+
+#[test]
+fn a_project_copy_lands_after_an_undo_deleted_the_project_its_key_derived_an_id_for() {
+    // The first copy creates the project and then is refused its first task, so its undo takes
+    // the project back: the id the copy's key derives is now one a deleted project held, and
+    // Linear lets an id name one record ever. Every copy of this plan since sends that key.
+    let setup = Setup::refusing(
+        2,
+        &every_generation(onetaskgraph_linear::graphql::ISSUE_CREATE),
+    );
+    let copy = ["--json", "project", "copy", "plan:harbor", "--to", "linear"];
+    let (output, served) = setup.run(&copy);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let first: Vec<&Value> = served
+        .iter()
+        .filter(|(query, _)| query == onetaskgraph_linear::graphql::PROJECT_CREATE)
+        .map(|(_, variables)| &variables["input"]["id"])
+        .collect();
+    assert_eq!(first.len(), 1, "{served:#?}");
+    assert!(
+        served
+            .iter()
+            .any(|(query, _)| query == onetaskgraph_linear::graphql::PROJECT_DELETE),
+        "the undo took the project back: {served:#?}"
+    );
+    assert!(projects_titled(&setup.sandbox, "linear", "Harbor rollout").is_empty());
+
+    let (report, served) = setup.ok(&copy);
+    let landed = outcome(&report, "plan:harbor");
+    assert_eq!(landed["action"], "created", "{report:#}");
+    let sent: Vec<&Value> = served
+        .iter()
+        .filter(|(query, _)| query == onetaskgraph_linear::graphql::PROJECT_CREATE)
+        .map(|(_, variables)| &variables["input"]["id"])
+        .collect();
+    assert_eq!(
+        sent.first(),
+        first.first(),
+        "the retry is sent first under the same id: {sent:#?}"
+    );
+    assert_eq!(sent.len(), 2, "and lands under the next: {sent:#?}");
+    let held = projects_titled(&setup.sandbox, "linear", "Harbor rollout");
+    assert_eq!(held.len(), 1, "one project for the plan: {held:#?}");
+    assert_eq!(
+        qualified(&held[0]),
+        format!("linear:{}", sent[1].as_str().unwrap())
+    );
+    let destination = landed["destination"].as_str().unwrap();
+    assert_eq!(
+        titles(&tasks_under(&setup.sandbox, "linear", destination)),
+        vec![
+            task_title("Harbor rollout", 0),
+            task_title("Harbor rollout", 1)
+        ]
+    );
+    // A third copy changes nothing: the plan's link names the project, and nothing is created.
+    let (_, served) = setup.ok(&copy);
+    assert!(
+        !mutations(&served).contains(&onetaskgraph_linear::graphql::PROJECT_CREATE),
+        "{:#?}",
+        mutations(&served)
     );
     assert_eq!(
         projects_titled(&setup.sandbox, "linear", "Harbor rollout").len(),

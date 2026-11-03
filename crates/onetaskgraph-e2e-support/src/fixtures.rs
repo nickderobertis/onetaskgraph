@@ -6457,6 +6457,13 @@ impl LinearWorkspace {
         });
     }
 
+    /// Have `id` held by a record this workspace does not answer for — a deleted one, or one of
+    /// another workspace — so a create sent under it is refused, as Linear refuses one.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's private state, which only its request loop here answers from: like `refuse_unknown_projects` beside it, it can only be a method of this handle.
+    pub fn burn_id(&self, id: &str) {
+        linear_burn(&mut self.state.lock().unwrap(), id);
+    }
+
     /// Refuse, from now on, a document filed under a project this workspace does not hold, as
     /// Linear does — `Entity not found: Project`.
     pub fn refuse_unknown_projects(&self) {
@@ -7854,6 +7861,7 @@ fn linear_response(
     }
     if operation == graphql::DOCUMENT_DELETE {
         let id = vars["id"].as_str().ok_or("delete id must be a string")?;
+        linear_burn(data, id);
         data["documents"]
             .as_array_mut()
             .ok_or("fixture collection is not an array")?
@@ -7892,6 +7900,7 @@ fn linear_response(
     if matches!(operation, graphql::ISSUE_DELETE | graphql::PROJECT_DELETE) {
         let project = operation == graphql::PROJECT_DELETE;
         let id = vars["id"].as_str().ok_or("delete id must be a string")?;
+        linear_burn(data, id);
         let rows = data[if project { "projects" } else { "tasks" }]
             .as_array_mut()
             .ok_or("fixture collection is not an array")?;
@@ -8249,13 +8258,18 @@ fn linear_write_item(
     let vocabulary = json!({"_linear_states": data["_linear_states"].clone(),
         "_linear_project_statuses": data["_linear_project_statuses"].clone()});
     let vocabulary_markdown = json!({"_linear_markdown": data["_linear_markdown"].clone()});
+    let burnt = linear_burnt(data);
     let rows = data[collection]
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
     let id = if create {
-        // A caller-chosen `id` is the item's own, and Linear lets only one item hold an id.
+        // A caller-chosen `id` is the item's own, and Linear lets only one item hold an id —
+        // a deleted one's, and one another workspace holds, included.
         match input.get("id").and_then(Value::as_str) {
-            Some(chosen) if rows.iter().any(|row| row["id"] == chosen) => {
+            Some(chosen)
+                if rows.iter().any(|row| row["id"] == chosen)
+                    || burnt.iter().any(|held| held == chosen) =>
+            {
                 return Err("Entity with this id already exists");
             }
             Some(chosen) => chosen.to_owned(),
@@ -8377,14 +8391,18 @@ fn linear_write_document(
         return Err(onetaskgraph_linear::graphql::PROJECT_NOT_FOUND_MESSAGE);
     }
     let stored = linear_stored(data, input.get("content"));
+    let burnt = linear_burnt(data);
     let rows = data["documents"]
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
     let id = if create {
         // A caller-chosen `id` is the document's own, held by one document at most, as an
-        // issue's is.
+        // issue's is — a deleted one's included.
         match input.get("id").and_then(Value::as_str) {
-            Some(chosen) if rows.iter().any(|row| row["id"] == chosen) => {
+            Some(chosen)
+                if rows.iter().any(|row| row["id"] == chosen)
+                    || burnt.iter().any(|held| held == chosen) =>
+            {
                 return Err("Entity with this id already exists");
             }
             Some(chosen) => chosen.to_owned(),
@@ -8909,6 +8927,27 @@ fn linear_held_status(data: &Value, id: &str) -> Option<Value> {
         .iter()
         .find(|status| status["id"] == id)
         .map(|status| json!({"name":status["name"],"type":status["type"]}))
+}
+
+/// Every id a record of this workspace once held, or a record of another workspace holds: an id
+/// no create may take, as Linear lets one id name one record ever.
+fn linear_burnt(data: &Value) -> Vec<String> {
+    data["_linear_burnt"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|id| id.as_str().map(str::to_owned))
+        .collect()
+}
+
+/// Record that `id` is held by a record this workspace no longer answers for.
+fn linear_burn(data: &mut Value, id: &str) {
+    if !data["_linear_burnt"].is_array() {
+        data["_linear_burnt"] = json!([]);
+    }
+    if let Some(burnt) = data["_linear_burnt"].as_array_mut() {
+        burnt.push(json!(id));
+    }
 }
 
 /// What Linear answers a mutation addressing an id it does not hold with: an errored

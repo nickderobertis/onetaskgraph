@@ -437,11 +437,13 @@ async fn a_create_linear_refuses_fails_with_its_own_refusal_whatever_the_lookup_
                 );
             }
             let sent = sent.lock().unwrap().clone();
+            // Linear refused each one, so each was tried under every id its key derives, and
+            // under none twice — and the refusal reported is still the create's own.
             for create in creates {
                 assert_eq!(
                     sent.iter().filter(|query| *query == create).count(),
-                    1,
-                    "{at}: each create is sent once: {sent:#?}"
+                    usize::from(onetaskgraph_linear::CREATE_ID_GENERATIONS),
+                    "{at}: each create is tried under each generation once: {sent:#?}"
                 );
             }
             // The lookup did run after each refusal, so each case is what its name says.
@@ -454,4 +456,122 @@ async fn a_create_linear_refuses_fails_with_its_own_refusal_whatever_the_lookup_
             );
         }
     }
+}
+
+/// The ids a loopback's project creates were sent under, in order.
+type Sent = Arc<Mutex<Vec<String>>>;
+
+#[tokio::test]
+async fn a_keyed_create_whose_id_another_record_holds_lands_under_the_next() {
+    // The first id the key derives is held by a record this source cannot read — a project a
+    // copy's undo deleted, or one of another workspace — so Linear refuses a create under it.
+    let ids = onetaskgraph_linear::linear_ids_of_key(KEY).unwrap();
+    assert_eq!(ids[0], onetaskgraph_linear::linear_id_of_key(KEY).unwrap());
+    for status in STATUSES {
+        let sent: Sent = Arc::default();
+        let created: Arc<Mutex<Option<String>>> = Arc::default();
+        let (record, held) = (Arc::clone(&sent), Arc::clone(&created));
+        let burnt = ids[0].clone();
+        let (endpoint, _) = loopback(move |query, variables| {
+            if query == graphql::PROJECT_CREATE {
+                let id = variables["input"]["id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                record.lock().unwrap().push(id.clone());
+                if id == burnt {
+                    let refused = json!({"errors":[{"message":"Entity with this id already exists"}],"data":null});
+                    return (status, refused);
+                }
+                *held.lock().unwrap() = Some(id.clone());
+                let project = json!({"id":id,"name":"Harbor rollout","content":variables["input"]["content"],
+                    "url":null,"createdAt":null,"updatedAt":null,"archivedAt":null,
+                    "status":{"name":"Todo","type":"planned"},"labels":{"nodes":[]},
+                    "relations":{"nodes":[],"pageInfo":{"hasNextPage":false}},
+                    "inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false}}});
+                return (
+                    200,
+                    json!({"data":{"projectCreate":{"success":true,"project":project}}}),
+                );
+            }
+            if query == graphql::RESOLUTION {
+                return (200, resolution());
+            }
+            if query == graphql::PROJECT {
+                let asked = variables["id"].as_str().unwrap_or_default();
+                if held.lock().unwrap().as_deref() == Some(asked) {
+                    let project = json!({"id":asked,"name":"Harbor rollout","content":null,"url":null,
+                        "createdAt":null,"updatedAt":null,"archivedAt":null,
+                        "status":{"name":"Todo","type":"planned"},"labels":{"nodes":[]}});
+                    return (200, json!({"data":{"project":project}}));
+                }
+                return (400, not_found("Project"));
+            }
+            (400, json!({"errors":[{"message":"unexpected request"}]}))
+        });
+        let source = source(&endpoint);
+        let project: Project = serde_json::from_value(keyed(json!({"id":"plan:P",
+            "title":"Harbor rollout","content":"body","status":{"category":"todo","name":"Todo"},
+            "labels":[],"repositories":[]})))
+        .unwrap();
+        let landed = source
+            .write_project(&ItemWrite {
+                target: None,
+                item: project,
+                depends_on: vec![],
+            })
+            .await
+            .unwrap_or_else(|error| panic!("HTTP {status}: the create lands: {error}"));
+        assert_eq!(landed.0, ids[1], "HTTP {status}: under the next generation");
+        assert_eq!(*sent.lock().unwrap(), ids[..2].to_vec(), "HTTP {status}");
+        // A retry's look for it finds the one project, under the generation it landed under.
+        let target = WriteTarget::New {
+            repositories: &[],
+            project: None,
+        };
+        assert_eq!(
+            source
+                .created_with_key(MetadataRecord::Project, KEY, None, &target)
+                .await
+                .unwrap(),
+            vec![NativeId(ids[1].clone())],
+            "HTTP {status}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_keyed_create_whose_answer_never_arrived_is_never_sent_again() {
+    // Linear may have applied it, so another create under another id could make a second item.
+    let sent: Sent = Arc::default();
+    let record = Arc::clone(&sent);
+    let (endpoint, _) = loopback(move |query, variables| {
+        if query == graphql::PROJECT_CREATE {
+            record.lock().unwrap().push(
+                variables["input"]["id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            );
+            return (502, json!({"errors":[{"message":"bad gateway"}]}));
+        }
+        if query == graphql::RESOLUTION {
+            return (200, resolution());
+        }
+        (400, not_found("Project"))
+    });
+    let project: Project = serde_json::from_value(keyed(json!({"id":"plan:P",
+        "title":"Harbor rollout","content":"body","status":{"category":"todo","name":"Todo"},
+        "labels":[],"repositories":[]})))
+    .unwrap();
+    let failed = source(&endpoint)
+        .write_project(&ItemWrite {
+            target: None,
+            item: project,
+            depends_on: vec![],
+        })
+        .await
+        .expect_err("an unanswered create is not reported landed");
+    assert!(failed.to_string().contains("502"), "{failed}");
+    assert_eq!(sent.lock().unwrap().len(), 1, "{:?}", sent.lock().unwrap());
 }
