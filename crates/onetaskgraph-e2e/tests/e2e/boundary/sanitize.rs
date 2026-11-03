@@ -541,3 +541,211 @@ fn replacements_without_a_sanitize_command_are_refused_at_load_naming_the_key() 
     assert!(stderr(&output).contains("write_policy.sanitize_command"));
     assert!(files_under(&plain, "site").is_empty());
 }
+
+/// A linking caller's policy written before this store could sanitise: it implements only the
+/// two methods that existed then, over the released onevcs, and records every input it checks.
+struct OldOnly {
+    inner: super::LinkedOnevcs,
+    checked: std::sync::Mutex<Vec<onetaskgraph_core::boundary::PublicWriteInput>>,
+}
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for OldOnly {
+    async fn repository_visibility(
+        &self,
+        repository: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        self.inner.repository_visibility(repository).await
+    }
+
+    async fn check_public_write(
+        &self,
+        input: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        self.checked.lock().expect("the record").push(input.clone());
+        self.inner.check_public_write(input).await
+    }
+}
+
+fn old_only(store: &Store) -> std::sync::Arc<OldOnly> {
+    std::sync::Arc::new(OldOnly {
+        inner: super::LinkedOnevcs {
+            home: store
+                .onevcs
+                .as_ref()
+                .expect("an onevcs home")
+                .path()
+                .to_path_buf(),
+        },
+        checked: std::sync::Mutex::new(Vec::new()),
+    })
+}
+
+#[tokio::test]
+async fn an_old_only_linking_policy_answers_as_before_with_one_check_per_write_holding_every_locator()
+ {
+    let store = Store::new(Some(registered), json!({}));
+    store.public_project_p();
+    let policy = old_only(&store);
+    let engine = super::linked_engine(&store).with_write_policy(policy.clone());
+    let created = engine
+        .create_task(&super::task_on_site(PLAIN, &[]))
+        .await
+        .expect("a term-free create is written as before");
+    let id = created.task.id.clone();
+    assert_eq!(policy.checked.lock().expect("the record").len(), 1);
+    engine
+        .set_task_priority(&id, onetaskgraph_plugin_api::Priority::High)
+        .await
+        .expect("a term-free narrow write is written as before");
+    let checked = policy.checked.lock().expect("the record").clone();
+    assert_eq!(checked.len(), 2, "one check per write: {checked:?}");
+    // Every locator the write's diagnostics would print is in the one check's input.
+    assert!(
+        checked[0].metadata.contains(&"site".to_owned()),
+        "{checked:?}"
+    );
+    assert!(
+        checked[1].metadata.contains(&"site".to_owned())
+            && checked[1].metadata.contains(&id.to_string()),
+        "{checked:?}"
+    );
+    assert!(engine.take_sanitization().is_empty());
+}
+
+#[tokio::test]
+async fn an_old_only_linking_policy_refuses_an_item_whose_id_carries_a_term_redacting_every_locator()
+ {
+    let store = Store::new(Some(registered), json!({}));
+    store.public_project_p();
+    store.record(
+        "site",
+        "tasks",
+        &format!("{TERM}-note"),
+        "title: Note\nstatus: todo\nproject: p",
+        PLAIN,
+    );
+    let before = tree(&store.folder("site"));
+    let id: onetaskgraph_core::GlobalId = format!("site:{TERM}-note").parse().expect("an id");
+    let engine = super::linked_engine(&store).with_write_policy(old_only(&store));
+    let refused = engine
+        .set_task_priority(&id, onetaskgraph_plugin_api::Priority::High)
+        .await
+        .expect_err("the id carries a term");
+    let said = refused.to_string();
+    assert_eq!(super::kind_of(&refused), "boundary-refused", "{said}");
+    assert!(
+        said.contains("<redacted item 2>") && said.contains("<redacted source 1>"),
+        "{said}"
+    );
+    assert!(!said.contains(TERM), "{said}");
+    assert_eq!(tree(&store.folder("site")), before, "nothing was written");
+
+    // A check that cannot be asked redacts every locator too.
+    let unreachable =
+        super::linked_engine(&store).with_write_policy(std::sync::Arc::new(super::Unreachable));
+    let refused = unreachable
+        .set_task_priority(&id, onetaskgraph_plugin_api::Priority::High)
+        .await
+        .expect_err("an unreachable check never passes");
+    let said = refused.to_string();
+    assert_eq!(super::kind_of(&refused), "boundary-unavailable", "{said}");
+    assert!(
+        said.contains("<redacted item 2>") && !said.contains(TERM),
+        "{said}"
+    );
+}
+
+/// A linking caller's policy that sanitises through the released onevcs itself, counting calls.
+struct Sanitizing {
+    home: std::path::PathBuf,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for Sanitizing {
+    async fn repository_visibility(
+        &self,
+        _repository: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        Ok(onetaskgraph_core::boundary::RepositoryVisibility::Unknown)
+    }
+
+    async fn check_public_write(
+        &self,
+        _input: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        panic!("a sanitising policy is never asked to check");
+    }
+
+    async fn sanitize_public_write(
+        &self,
+        input: &onetaskgraph_core::boundary::PublicSanitizeInput,
+    ) -> Result<
+        onetaskgraph_core::boundary::SanitizeVerdict,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let output = std::process::Command::new(crate::onevcs::onevcs())
+            .args(["boundary", "sanitize", "--input", "-"])
+            .env("ONEVCS_HOME", &self.home)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write as _;
+                child
+                    .stdin
+                    .take()
+                    .expect("stdin")
+                    .write_all(&serde_json::to_vec(input).expect("serializes"))?;
+                child.wait_with_output()
+            })
+            .expect("onevcs runs");
+        Ok(onetaskgraph_core::boundary::sanitize_verdict(
+            input,
+            output.status.code(),
+            &output.stdout,
+        ))
+    }
+}
+
+#[tokio::test]
+async fn a_linking_caller_s_sanitising_policy_writes_what_its_one_call_answered() {
+    let store = Store::new(Some(registered), json!({}));
+    store.public_project_p();
+    let policy = std::sync::Arc::new(Sanitizing {
+        home: store.onevcs.as_ref().expect("a home").path().to_path_buf(),
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let engine = super::linked_engine(&store)
+        .with_write_policy(policy.clone())
+        .with_replacements(vec![onetaskgraph_core::boundary::Replacement::Replace {
+            term: TERM.to_owned(),
+            with: WITH.to_owned(),
+        }]);
+    let mut task = super::task_on_site(&format!("Retry as {TERM} does."), &[]);
+    task.title = format!("Port {TERM}");
+    let created = engine.create_task(&task).await.expect("written replaced");
+    assert_eq!(policy.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let shown = engine
+        .task(&created.task.id)
+        .await
+        .expect("the task reads back");
+    let item = &shown.items[0].item;
+    assert_eq!(item.title, format!("Port {WITH}"));
+    assert_eq!(
+        item.content.as_deref(),
+        Some(&*format!("Retry as {WITH} does."))
+    );
+    assert_eq!(engine.take_sanitization().replaced, 2);
+    assert!(!text_of(&store, "site").contains(TERM));
+}
