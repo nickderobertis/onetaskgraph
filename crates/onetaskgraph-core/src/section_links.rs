@@ -266,6 +266,7 @@ pub fn linear_section_form() -> LinearSectionForm {
 }
 
 /// One destination kind's section form: the one entry each kind has.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The task contract this module implements requires each destination kind's form to be "one entry per destination kind" chosen "in one place in onetaskgraph-core", and the slug rules implemented there once; no plugin may depend on the engine (AGENTS.md), so a plugin cannot own a form the engine reads, and GitHub's anchor markup reaches the GitHub plugin only as the `BodyMarkup` this entry hands it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionForm {
     /// A folder of Markdown: the path relative to the linking record's own file, then

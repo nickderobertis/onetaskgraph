@@ -4502,7 +4502,7 @@ impl Engine {
                     if !could_name(&comment.body) || !links.matters() {
                         continue;
                     }
-                    let rendered = links.render(&planning, false);
+                    let rendered = links.render(&planning, sections::Pass::Provisional);
                     comment.body = rendered.content;
                     if !rendered.pending.is_empty() {
                         item.comment_links
@@ -4518,7 +4518,7 @@ impl Engine {
                 own: own.clone(),
                 missed: std::cell::RefCell::new(Vec::new()),
             };
-            let mut rendered = links.render(&planning, false);
+            let mut rendered = links.render(&planning, sections::Pass::Provisional);
             // A Linear record the copy does not write is read once, for the ids its headings
             // are stored under: a record it writes is answered by its own write.
             if matches!(
@@ -4539,7 +4539,7 @@ impl Engine {
                         own,
                         missed: std::cell::RefCell::new(Vec::new()),
                     };
-                    rendered = links.render(&planning, false);
+                    rendered = links.render(&planning, sections::Pass::Provisional);
                 }
             }
             if rendered.content != content
@@ -7694,7 +7694,8 @@ impl Engine {
             else {
                 continue;
             };
-            let (finished, _) = links.finished(copy.body.as_str(), pending, &knows, true);
+            let (finished, _) =
+                links.finished(copy.body.as_str(), pending, &knows, sections::Pass::Final);
             if let Ok(body) = onetaskgraph_plugin_api::CommentBody::new(finished) {
                 copy.body = body;
             }
@@ -8844,7 +8845,8 @@ impl Engine {
                 own: target.clone().zip(prior_location.clone()),
             };
             if let Some(content) = content_of(&landing).map(str::to_owned) {
-                let (finished, still) = links.finished(&content, &item.pending, &knows, false);
+                let (finished, still) =
+                    links.finished(&content, &item.pending, &knows, sections::Pass::Provisional);
                 if finished != content {
                     stored::restamp(metadata_of(&mut landing), &[&content], &finished);
                     set_content(&mut landing, finished);
@@ -8853,7 +8855,7 @@ impl Engine {
             }
             journal.sections.insert(
                 item.source.clone(),
-                SectionLinks::of(links.render(&knows, true).sections, 0),
+                SectionLinks::of(links.render(&knows, sections::Pass::Final).sections, 0),
             );
         }
         // A task lands with the record of this copy — the source's token it read, whether it
@@ -9126,7 +9128,7 @@ impl Engine {
                 landed: &journal.landed,
                 own: held.own.clone(),
             };
-            let figures = held.links.render(&knows, true).sections;
+            let figures = held.links.render(&knows, sections::Pass::Final).sections;
             // A destination that stores other content than it was sent is already written once
             // more with what it stored: its links are finished in that write.
             if let Some(follow) = journal
@@ -9135,7 +9137,9 @@ impl Engine {
                 .find(|follow| follow.at == held.at && follow.id == held.id)
             {
                 let stored = content_of(&follow.item).unwrap_or_default().to_owned();
-                let (finished, _) = held.links.finished(&stored, &held.pending, &knows, true);
+                let (finished, _) =
+                    held.links
+                        .finished(&stored, &held.pending, &knows, sections::Pass::Final);
                 if finished != stored {
                     stored::restamp(metadata_of(&mut follow.item), &[&stored], &finished);
                     set_content(&mut follow.item, finished.clone());
@@ -9147,7 +9151,9 @@ impl Engine {
                 continue;
             }
             let sent = content_of(&held.item).unwrap_or_default().to_owned();
-            let (finished, _) = held.links.finished(&sent, &held.pending, &knows, true);
+            let (finished, _) =
+                held.links
+                    .finished(&sent, &held.pending, &knows, sections::Pass::Final);
             let updates = u64::from(finished != sent);
             journal
                 .sections

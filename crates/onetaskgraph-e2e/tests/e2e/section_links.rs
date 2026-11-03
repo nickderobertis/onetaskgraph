@@ -686,39 +686,38 @@ fn root_of(sandbox: &Sandbox, name: &str) -> PathBuf {
     std::fs::canonicalize(sandbox.subdirectory(name)).expect("a root")
 }
 
+/// A source a journey copies the authored project out of.
+struct Source {
+    /// The store it is.
+    store: Store,
+    /// Every source configuration the journey names, the authored folder's included.
+    sources: Vec<(&'static str, Value)>,
+    /// The absolute path of the authored target task.
+    authored_target: String,
+    /// Its records, once it holds them: the authored folder's at once, a tracker's once seeded.
+    ids: BTreeMap<&'static str, Landed>,
+}
+
 /// A source of `kind` named `src` holding the authored project in that kind's own form: the
-/// authored folder itself, or a tracker an earlier copy wrote it into, seeded here through
-/// that copy and held to the tracker's form before anything is copied out of it. Answers the
-/// store, its configuration, the authored target's path, the source's records and its root.
-#[allow(clippy::type_complexity)]
-fn source_of(
-    sandbox: &Sandbox,
-    kind: &str,
-) -> (
-    Store,
-    Vec<(&'static str, Value)>,
-    String,
-    BTreeMap<&'static str, Landed>,
-    Option<PathBuf>,
-) {
-    let (authored_config, target) = authored(sandbox, "authored");
+/// authored folder itself, or a tracker an earlier copy writes it into, which a journey seeds
+/// through that copy and holds to the tracker's form before anything is copied out of it.
+fn source_of(sandbox: &Sandbox, kind: &str) -> Source {
+    let (authored_config, authored_target) = authored(sandbox, "authored");
     if kind == "local-md" {
-        return (
-            Store::Local,
-            vec![("authored", authored_config)],
-            target,
-            authored_ids("authored"),
-            Some(root_of(sandbox, "authored")),
-        );
+        return Source {
+            store: Store::Local,
+            sources: vec![("authored", authored_config)],
+            authored_target,
+            ids: authored_ids("authored"),
+        };
     }
     let (store, config) = store(sandbox, kind, "src", None);
-    (
+    Source {
         store,
-        vec![("authored", authored_config), ("src", config)],
-        target,
-        BTreeMap::new(),
-        None,
-    )
+        sources: vec![("authored", authored_config), ("src", config)],
+        authored_target,
+        ids: BTreeMap::new(),
+    }
 }
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback stand-ins this suite already drives for both hosted destinations. AGENTS.md puts a journey crossing more than one plugin in this suite.
@@ -760,7 +759,12 @@ fn every_pair_of_kinds_writes_the_others_section_links_in_its_own_form_and_repea
         for to in KINDS {
             let what = format!("{from} -> {to}");
             let sandbox = Sandbox::new();
-            let (source, mut sources, authored_target, mut ids, _) = source_of(&sandbox, from);
+            let Source {
+                store: source,
+                mut sources,
+                authored_target,
+                mut ids,
+            } = source_of(&sandbox, from);
             let (destination, config) = store(&sandbox, to, "dst", Some(&source));
             sources.push(("dst", config));
             let named: Vec<(&str, &Value)> = sources
@@ -1580,4 +1584,44 @@ fn authored_target_of(sandbox: &Sandbox) -> String {
         .join("tasks/T.md")
         .display()
         .to_string()
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn a_refused_section_link_update_takes_the_whole_copy_back() {
+    // The target's same-record link is finished in an update after its create, and Linear
+    // refuses that update: the copy fails, saying so, and the workspace holds nothing it wrote.
+    let sandbox = Sandbox::new();
+    let (authored_config, _) = authored(&sandbox, "plans");
+    let config = json!({"plugin": "linear", "config": crate::fixtures::linear_empty_workspace_failing(
+        &sandbox,
+        &[onetaskgraph_linear::graphql::ISSUE_REWRITE],
+    )});
+    configure(
+        &sandbox,
+        &[("plans", &authored_config), ("linear", &config)],
+    );
+    let output = sandbox
+        .command()
+        .args(["project", "copy", "plans:P", "--to", "linear"])
+        .output()
+        .expect("the binary runs");
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let listed: Value = serde_json::from_str(&ok(
+        &sandbox,
+        &["task", "list", "--source", "linear", "--json"],
+    ))
+    .expect("a listing");
+    assert_eq!(
+        listed["items"],
+        json!([]),
+        "every task the copy created is taken back: {}",
+        stderr(&output)
+    );
+    let projects: Value = serde_json::from_str(&ok(
+        &sandbox,
+        &["project", "list", "--source", "linear", "--json"],
+    ))
+    .expect("a listing");
+    assert_eq!(projects["items"], json!([]), "and the project");
 }

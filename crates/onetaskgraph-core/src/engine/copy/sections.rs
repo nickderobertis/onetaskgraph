@@ -102,14 +102,33 @@ pub(super) trait Knows {
     fn own(&self) -> Option<(NativeId, String)>;
 }
 
+/// Which rendering of a body this is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Pass {
+    /// One while the copy may still learn more: a link not addressable yet is left pending.
+    Provisional,
+    /// The rendering that lands once nothing more will be learned: nothing is left pending,
+    /// and a link the form still cannot address is written as the record's link alone.
+    Final,
+}
+
+/// Where a link was spelled in a body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Spelled {
+    /// As a whole Markdown link destination, `](…)`.
+    Destination,
+    /// Anywhere else, as a literal location.
+    Literal,
+}
+
 /// A link written as its source spelled it, because the destination's form cannot address it
 /// yet: rendered again once the copy knows more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Pending {
     /// The link's text exactly as the source spelled it.
     pub(super) text: String,
-    /// Whether it is a Markdown link destination, read in that context.
-    linked: bool,
+    /// Where it was spelled, which is the context it is read again in.
+    spelled: Spelled,
 }
 
 /// One rendering of a body.
@@ -158,8 +177,8 @@ struct Occurrence<'a> {
     fragment: Option<&'a str>,
     /// Whether it was spelled as a path relative to the body's own file.
     relative: bool,
-    /// Whether it is a whole Markdown link destination.
-    linked: bool,
+    /// Where it was spelled.
+    spelled: Spelled,
 }
 
 impl BodyLinks {
@@ -244,10 +263,8 @@ impl BodyLinks {
             })
     }
 
-    /// The body rendered against what `knows` says now. `last` is the rendering that lands
-    /// once nothing more will be learned: nothing is left pending, and a link the form still
-    /// cannot address is written as the record's link alone.
-    pub(super) fn render(&self, knows: &dyn Knows, last: bool) -> Rendered {
+    /// The body rendered against what `knows` says now, on the terms `pass` names.
+    pub(super) fn render(&self, knows: &dyn Knows, pass: Pass) -> Rendered {
         let content = self.original.as_str();
         let mut rendered = Rendered {
             content: String::with_capacity(content.len()),
@@ -265,12 +282,12 @@ impl BodyLinks {
                 rendered.content.push_str(opening);
                 at += opening.len();
                 if let Some(occurrence) = self.in_destination(content, at, opening.len() == 3) {
-                    at = self.write(&occurrence, content, at, knows, last, &mut rendered);
+                    at = self.write(&occurrence, content, at, knows, pass, &mut rendered);
                 }
                 continue;
             }
             if let Some(occurrence) = self.spelled(content, at) {
-                at = self.write(&occurrence, content, at, knows, last, &mut rendered);
+                at = self.write(&occurrence, content, at, knows, pass, &mut rendered);
                 continue;
             }
             let character = content[at..]
@@ -291,14 +308,14 @@ impl BodyLinks {
         written: &str,
         pending: &[Pending],
         knows: &dyn Knows,
-        last: bool,
+        pass: Pass,
     ) -> (String, Vec<Pending>) {
         let mut replacements: Vec<(Pending, Option<String>)> = Vec::new();
         for placeholder in pending {
             if replacements.iter().any(|(held, _)| held == placeholder) {
                 continue;
             }
-            let original = if placeholder.linked {
+            let original = if placeholder.spelled == Spelled::Destination {
                 format!("]({})", placeholder.text)
             } else {
                 placeholder.text.clone()
@@ -307,10 +324,10 @@ impl BodyLinks {
                 original,
                 ..self.clone()
             }
-            .render(knows, last);
+            .render(knows, pass);
             let text = if !lone.pending.is_empty() {
                 None
-            } else if placeholder.linked {
+            } else if placeholder.spelled == Spelled::Destination {
                 lone.content
                     .strip_prefix("](")
                     .and_then(|rest| rest.strip_suffix(')'))
@@ -326,7 +343,7 @@ impl BodyLinks {
         let mut at = 0;
         while at < written.len() {
             let found = replacements.iter().find(|(placeholder, _)| {
-                if placeholder.linked {
+                if placeholder.spelled == Spelled::Destination {
                     // As it was sent, or as a destination that writes every link destination in
                     // angle brackets stores it.
                     written[at..].starts_with(&placeholder.text) && {
@@ -384,7 +401,7 @@ impl BodyLinks {
                 end,
                 fragment: Some(fragment),
                 relative: false,
-                linked: true,
+                spelled: Spelled::Destination,
             });
         }
         if self.from != Some(SectionForm::LocalMd) {
@@ -407,7 +424,7 @@ impl BodyLinks {
             end,
             fragment,
             relative: true,
-            linked: true,
+            spelled: Spelled::Destination,
         })
     }
 
@@ -441,7 +458,7 @@ impl BodyLinks {
             end,
             fragment,
             relative: false,
-            linked: false,
+            spelled: Spelled::Literal,
         })
     }
 
@@ -452,14 +469,14 @@ impl BodyLinks {
         content: &str,
         at: usize,
         knows: &dyn Knows,
-        last: bool,
+        pass: Pass,
         rendered: &mut Rendered,
     ) -> usize {
         let verbatim = &content[at..occurrence.end];
         let written = match occurrence.referent {
-            None => self.own_link(occurrence, verbatim, knows, last, rendered),
+            None => self.own_link(occurrence, verbatim, knows, pass, rendered),
             Some(referent) => {
-                self.cross_link(referent, occurrence, verbatim, knows, last, rendered)
+                self.cross_link(referent, occurrence, verbatim, knows, pass, rendered)
             }
         };
         match written {
@@ -467,7 +484,7 @@ impl BodyLinks {
             None => {
                 rendered.pending.push(Pending {
                     text: verbatim.to_owned(),
-                    linked: occurrence.linked,
+                    spelled: occurrence.spelled,
                 });
                 rendered.content.push_str(verbatim);
             }
@@ -482,7 +499,7 @@ impl BodyLinks {
         occurrence: &Occurrence<'_>,
         verbatim: &str,
         knows: &dyn Knows,
-        last: bool,
+        pass: Pass,
         rendered: &mut Rendered,
     ) -> Option<String> {
         let bare = verbatim.starts_with(FRAGMENT);
@@ -498,9 +515,9 @@ impl BodyLinks {
                     rendered.counts.rewritten += 1;
                     self.plain(&location, occurrence.relative, knows)
                         .map(|link| with_fragment(link, occurrence.fragment))
-                        .or_else(|| last.then(|| location.clone()))
+                        .or_else(|| (pass == Pass::Final).then(|| location.clone()))
                 }
-                None if last => Some(verbatim.to_owned()),
+                None if pass == Pass::Final => Some(verbatim.to_owned()),
                 None => None,
             };
         };
@@ -524,7 +541,7 @@ impl BodyLinks {
             stored.as_deref(),
         );
         let fallback = own.map_or_else(|| verbatim.to_owned(), |(_, location)| location);
-        settle(written, fallback, last, rendered)
+        settle(written, fallback, pass, rendered)
     }
 
     /// A link to another record of the body's project. `None` is a link not addressable yet.
@@ -534,14 +551,14 @@ impl BodyLinks {
         occurrence: &Occurrence<'_>,
         verbatim: &str,
         knows: &dyn Knows,
-        last: bool,
+        pass: Pass,
         rendered: &mut Rendered,
     ) -> Option<String> {
         let (id, location) = match &referent.counterpart {
             Counterpart::At { id, location } => (id.clone(), location.clone()),
             Counterpart::InCopy => match knows.landed(referent) {
                 Some(landed) => landed,
-                None if last => {
+                None if pass == Pass::Final => {
                     rendered.counts.unresolved += 1;
                     return Some(verbatim.to_owned());
                 }
@@ -561,7 +578,7 @@ impl BodyLinks {
         let Some(fragment) = occurrence.fragment else {
             return self
                 .plain(&location, occurrence.relative, knows)
-                .or_else(|| last.then(|| location.clone()));
+                .or_else(|| (pass == Pass::Final).then(|| location.clone()));
         };
         let heading = self.from.and_then(|from| {
             from.heading_of(fragment, &referent.headings, referent.stored.as_deref())
@@ -576,7 +593,7 @@ impl BodyLinks {
             let relative = occurrence.relative || self.to == Some(SectionForm::LocalMd);
             return self
                 .plain(&location, relative, knows)
-                .or_else(|| last.then(|| location.clone()))
+                .or_else(|| (pass == Pass::Final).then(|| location.clone()))
                 .map(|link| format!("{link}#{fragment}"));
         };
         let own = knows.own().map(|(_, location)| location);
@@ -588,7 +605,7 @@ impl BodyLinks {
             &referent.headings,
             stored.as_deref(),
         );
-        settle(written, location, last, rendered)
+        settle(written, location, pass, rendered)
     }
 
     /// A plain reference to `location`: relative to the body's own file when it was spelled
@@ -607,7 +624,7 @@ impl BodyLinks {
 fn settle(
     written: Written,
     fallback: String,
-    last: bool,
+    pass: Pass,
     rendered: &mut Rendered,
 ) -> Option<String> {
     match written {
@@ -616,7 +633,7 @@ fn settle(
             rendered.sections.unaddressable += 1;
             Some(link)
         }
-        Written::Pending if last => {
+        Written::Pending if pass == Pass::Final => {
             rendered.sections.unaddressable += 1;
             Some(fallback)
         }

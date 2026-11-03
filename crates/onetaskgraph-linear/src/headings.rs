@@ -39,9 +39,16 @@ pub fn decoded(state: &str) -> Option<Vec<StoredHeading>> {
         if element.tag().as_ref() != "heading" {
             continue;
         }
+        // An id is Linear's UUID: hex digits and hyphens, with at least the 8 hex characters a
+        // heading link names. Anything else names no heading a link could address.
         let Some(Out::Any(Any::String(id))) = element.get_attribute(&txn, "id") else {
             continue;
         };
+        if !id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+            || id.chars().filter(char::is_ascii_hexdigit).count() < 8
+        {
+            continue;
+        }
         let mut text = String::new();
         for inner in element.successors(&txn) {
             if let XmlOut::Text(run) = inner {

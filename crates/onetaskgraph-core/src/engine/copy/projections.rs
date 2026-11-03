@@ -1520,7 +1520,7 @@ impl Engine {
                         .map(|location| (held.id.clone(), location))
                 });
                 let knows = ViewKnows { destination, own };
-                view.content = Some(links.render(&knows, true).content);
+                view.content = Some(links.render(&knows, super::sections::Pass::Final).content);
             }
         }
         let edges: Vec<DependencyEdge> = task
