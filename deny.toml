@@ -10,6 +10,15 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# One named exception, by the manager's ruling on node `onetaskgraph-section-links`.
+# `smallstr` is reached only through `yrs`, the maintained Yjs implementation the Linear
+# plugin decodes a record's stored editor state with (its heading ids, for section links);
+# every `yrs` release from 0.18.8 to 0.28.0 depends on it. The advisory is that the crate is
+# unmaintained, not a vulnerability, and it names no upgrade. Retired by: a `yrs` release
+# that no longer depends on `smallstr`.
+ignore = [
+  { id = "RUSTSEC-2026-0215", reason = "smallstr is unmaintained, reached only through yrs, whose every release depends on it; remove when a yrs release drops smallstr" },
+]
 
 [licenses]
 version = 2
@@ -64,6 +73,12 @@ skip = [
   # thiserror 2.
   { crate = "thiserror:1", reason = "reached only through graphql-parser 0.4.1, which was already in this lockfile as a dev-dependency; removable the day graphql-parser moves to thiserror 2, and not before" },
   { crate = "thiserror-impl:1", reason = "the derive half of thiserror 1, reached only through the crate skipped above; removable on the same day and for the same reason" },
+  # The third, by the manager's ruling on node `onetaskgraph-section-links`. `yrs` (the Yjs
+  # decoder above the advisory ignore) requires dashmap ^6.2, and dashmap 6.2.1, its newest
+  # stable release, pins hashbrown 0.14 while `jsonschema` is on 0.17. Retired by: a `yrs`
+  # release accepting a dashmap (7 is release-candidate only) that shares this workspace's
+  # hashbrown.
+  { crate = "hashbrown:0.14", reason = "reached only through yrs -> dashmap 6.2, which pins hashbrown 0.14; remove when yrs accepts a dashmap on this workspace's hashbrown" },
 ]
 
 # The engine compensates for a missing capability transiently: it holds at most one source
