@@ -135,13 +135,16 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
                 return {"error": {"kind": "unavailable", "message": "the count could not be read"}}
             return {"result": {"metering": {"requests": len(state["log"]), "budgets": []}}}
         case "get_task":
-            task = _task(state, params.get("id"))
+            gone = state.get("gone", [])
+            task = None if params.get("id") in gone else _task(state, params.get("id"))
             if task is not None:
                 reads = state["reads"].get(task["id"], 0) + 1
                 state["reads"][task["id"]] = reads
                 if reads in state["moves"].get(task["id"], []):
                     _move(state, task)
             return {"result": {"task": None if task is None else _shown(state, task)}}
+        case "query_tasks" if state.get("query_fails"):
+            return {"error": {"kind": "unavailable", "message": "the tasks could not be listed"}}
         case "query_tasks":
             match params.get("query"):
                 case {"text": {"terms": str(terms)}}:
@@ -156,6 +159,10 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
                 if wanted is None or wanted in state["index"].get(task["id"], "").lower()
             ]
             return {"result": {"items": items, "next": None}}
+        case "task_comments" if state.get("comments_fail") or (
+            state.get("later_comments_fail") and params.get("page", {}).get("cursor") is not None
+        ):
+            return {"error": {"kind": "unavailable", "message": "the comments could not be read"}}
         case "task_comments":
             held = state["comments"].get(params.get("task"))
             if held is None:

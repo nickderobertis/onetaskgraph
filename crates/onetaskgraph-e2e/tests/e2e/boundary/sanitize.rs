@@ -1944,6 +1944,19 @@ elif how == "two-ways":
         if value in seen:
             answer["metadata"][index] = value + " again"
         seen.add(value)
+elif how == "wrong-kind":
+    answer.update(verdict="refuse", surface="locators",
+                  unfixed=[{"surface": "locators", "index": 0, "fixed": True}])
+    answer["locators"][0] = {"redacted": True, "kind": "comment", "ordinal": 1}
+elif how == "zero-ordinal":
+    answer.update(verdict="refuse", surface="locators",
+                  unfixed=[{"surface": "locators", "index": 0, "fixed": True}])
+    answer["locators"][0] = {"redacted": True, "kind": sent["locators"][0]["kind"], "ordinal": 0}
+elif how == "path-conflict":
+    answer["paths"] = [value + "-other" for value in answer["paths"]]
+elif how == "locator-rewritable":
+    answer.update(verdict="refuse", surface="locators",
+                  unfixed=[{"surface": "locators", "index": 0, "fixed": False}])
 elif how == "pass-exit-one":
     print(json.dumps(answer))
     sys.exit(1)
@@ -1983,6 +1996,10 @@ fn a_policy_answer_that_does_not_match_what_was_sent_is_never_a_pass() {
         "passed-unfixed",
         "passed-redacted",
         "two-ways",
+        "wrong-kind",
+        "zero-ordinal",
+        "path-conflict",
+        "locator-rewritable",
         "pass-exit-one",
         "refuse-exit-zero",
         "killed",
@@ -2005,6 +2022,10 @@ fn a_policy_answer_that_does_not_match_what_was_sent_is_never_a_pass() {
             // The same short value twice — a title and a label — which "two-ways" answers apart.
             "--label",
             "Plain",
+            // A value that reads as a path, sent on both surfaces, which "path-conflict" answers
+            // apart.
+            "--metadata",
+            "myapp.doc=\"docs/plain.md\"",
         ]);
         assert_eq!(kind, "boundary-unavailable", "{how}: {said}");
         assert_eq!(
@@ -3192,5 +3213,49 @@ async fn an_undecided_linking_policy_s_locators_are_never_printed() {
     assert!(
         said.contains("<redacted item") && !said.contains(TERM),
         "{said}"
+    );
+}
+
+#[test]
+fn a_sweep_whose_source_fails_part_way_fails_naming_it_and_a_task_gone_is_passed_over() {
+    for (switch, said) in [
+        ("query_fails", "could not be listed"),
+        ("comments_fail", "comments could not be read"),
+        ("later_comments_fail", "comments could not be read"),
+    ] {
+        let shared = Shared::new(&[("t1", &with_term())], json!({}), json!({}));
+        let mut state = shared.state();
+        state["comments"]["t1"] = json!(
+            (0..130)
+                .map(|n| json!({"id": format!("c-{n}"), "body": format!("Comment {n}.")}))
+                .collect::<Vec<_>>()
+        );
+        state[switch] = json!(true);
+        std::fs::write(&shared.state, state.to_string()).expect("the state");
+        let (code, _, out, err) = sweep(&shared.store, "shared", &["--complete"]);
+        assert_eq!(code, Some(1), "{switch}: {out}{err}");
+        assert!(err.contains(said), "{switch}: {err}");
+        assert_eq!(shared.writes(), 0, "{switch}: nothing was written");
+    }
+    // A task the listing names and a read then finds gone is no record to sweep.
+    let shared = Shared::new(
+        &[("t1", &with_term()), ("t2", &with_term())],
+        json!({}),
+        json!({}),
+    );
+    let mut state = shared.state();
+    state["gone"] = json!(["t1"]);
+    std::fs::write(&shared.state, state.to_string()).expect("the state");
+    let (code, report, out, err) = sweep(&shared.store, "shared", &["--complete"]);
+    assert_eq!(code, Some(0), "{out}{err}");
+    assert_eq!(
+        report["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|item| item["id"].clone())
+            .collect::<Vec<_>>(),
+        [json!("shared:t2")],
+        "{report}"
     );
 }
