@@ -268,6 +268,11 @@ impl BodyLinks {
                 && destinations(&self.original).any(|(_, target)| target.starts_with(FRAGMENT)))
             || self.own_location.as_deref().is_some_and(|own| {
                 (0..self.original.len()).any(|at| delimited(&self.original, at, own))
+                    || (self.from == Some(SectionForm::LocalMd)
+                        && destinations(&self.original).any(|(_, target)| {
+                            let path = target.split(FRAGMENT).next().unwrap_or_default();
+                            resolve_relative(own, path).as_deref() == Some(own)
+                        }))
             })
     }
 

@@ -2306,3 +2306,88 @@ fn a_same_record_link_in_angle_brackets_and_one_naming_no_heading_are_each_handl
         reported["plans:B"]
     );
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: folders of Markdown and the loopback board.
+#[test]
+fn a_task_linking_its_own_record_and_its_comments_fragment_are_written_for_the_destination() {
+    // A task's body links its own file by a path relative to it, and a comment on it links one
+    // of its headings by a fragment alone: the body's link names the task's own record wherever
+    // it lands — relative to its file, once a folder of Markdown has created it, so finished by
+    // a write of its own — and the comment's fragment is read as a heading of the task.
+    for kind in ["github-projects", "local-md"] {
+        let sandbox = Sandbox::new();
+        let config = empty_folder(&sandbox, "plans");
+        let root = root_of(&sandbox, "plans");
+        for folder in ["projects", "tasks"] {
+            std::fs::create_dir_all(root.join(folder)).expect("a folder");
+        }
+        std::fs::write(
+            root.join("projects/P.md"),
+            "---\ntitle: Plan\nstatus: todo\n---\nThe plan.\n",
+        )
+        .expect("the project");
+        std::fs::write(
+            root.join("tasks/A.md"),
+            "---\ntitle: Alpha\nstatus: todo\nproject: P\n---\n## Budgets\n\nThis is \
+             [this task](A.md).\n\n## Comments\n\n<!-- onetaskgraph:comment id=\"c1\" \
+             created_at=\"2026-11-02T12:00:00Z\" updated_at=\"2026-11-02T12:00:00Z\" -->\n\
+             ### comment — 2026-11-02T12:00:00Z\n\nSee [the budgets](#budgets).\n\n\
+             <!-- /onetaskgraph:comment -->\n",
+        )
+        .expect("the task");
+        let (destination, dest_config) = store(&sandbox, kind, "dest", None);
+        configure(
+            &sandbox,
+            &[
+                ("plans", &json!({"plugin": "local-md", "config": config})),
+                ("dest", &dest_config),
+            ],
+        );
+        let reported = outcomes(&ok(
+            &sandbox,
+            &[
+                "project",
+                "copy",
+                "plans:P",
+                "--to",
+                "dest",
+                "--comments",
+                "--json",
+            ],
+        ));
+        let task = Landed {
+            verb: "task",
+            id: reported["plans:A"]["destination"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        };
+        let there = task.location(&sandbox);
+        let (own_link, fragment) = match &destination {
+            Store::Local => ("A.md".to_owned(), "#budgets"),
+            _ => (there.clone(), "#user-content-budgets"),
+        };
+        assert!(
+            task.content(&sandbox)
+                .contains(&format!("[this task]({own_link})")),
+            "{kind}: {}",
+            task.content(&sandbox)
+        );
+        let listed: Value = serde_json::from_str(&ok(
+            &sandbox,
+            &["task", "comment", "list", &task.id, "--json"],
+        ))
+        .expect("comments");
+        assert!(
+            listed["comments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|comment| comment["body"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains(&format!("[the budgets]({fragment})"))),
+            "{kind}: {listed:#}"
+        );
+    }
+}
