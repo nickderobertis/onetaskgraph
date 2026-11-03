@@ -187,7 +187,7 @@ impl LinearSource {
                 .as_ref()
                 .ok_or_else(|| failure(asset, Stage::Mutation, "missing bytes for a new asset"))?;
             let upload = loop {
-                let body = match self.answer_using(&client, FILE_UPLOAD, json!({"contentType":asset.content_type.as_str(),"filename":asset.name.as_str(),"size":bytes.len()})).await {
+                let body = match self.answer_using(&client, FILE_UPLOAD, json!({"contentType":asset.content_type.as_str(),"filename":asset.name.as_str(),"size":bytes.len()}), crate::Under400::Unavailable).await {
                     Err(SourceError::RateLimited { retry_after_seconds, message }) => {
                         self.wait_asset(asset, Stage::Mutation, message.as_deref().unwrap_or("Linear rate limiter"), retry_after_seconds.map(Duration::from_secs), &mut waited).await?;
                         continue;

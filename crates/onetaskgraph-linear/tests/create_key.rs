@@ -28,3 +28,23 @@ fn a_create_key_is_sent_as_its_v4_shaped_id_and_a_malformed_one_is_refused() {
         assert!(linear_id_of_key(malformed).is_err(), "{malformed:?}");
     }
 }
+
+#[test]
+fn a_create_key_derives_its_generations_first_the_id_every_release_sent() {
+    let ids = onetaskgraph_linear::linear_ids_of_key("017656ef-4f62-53d5-ba4b-ae0bc4c07fa5")
+        .expect("a key");
+    assert_eq!(
+        ids,
+        [
+            "017656ef-4f62-43d5-ba4b-ae0bc4c07fa5",
+            "017656ef-4f62-43d5-ba4b-ae0bc4c07fa4",
+            "017656ef-4f62-43d5-ba4b-ae0bc4c07fa7",
+            "017656ef-4f62-43d5-ba4b-ae0bc4c07fa6",
+            "017656ef-4f62-43d5-ba4b-ae0bc4c07fa1",
+            "017656ef-4f62-43d5-ba4b-ae0bc4c07fa0",
+            "017656ef-4f62-43d5-ba4b-ae0bc4c07fa3",
+            "017656ef-4f62-43d5-ba4b-ae0bc4c07fa2",
+        ]
+    );
+    assert!(onetaskgraph_linear::linear_ids_of_key("not-a-uuid").is_err());
+}
