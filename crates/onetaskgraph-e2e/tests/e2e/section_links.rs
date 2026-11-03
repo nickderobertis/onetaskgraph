@@ -1705,7 +1705,8 @@ fn a_destination_with_no_section_form_receives_every_fragment_as_written() {
 #[test]
 fn links_that_run_in_a_cycle_through_bodies_and_a_comment_all_land_and_a_repeat_writes_nothing() {
     // Two tasks whose bodies link each other's heading, and a comment on the first linking the
-    // second: whichever lands first, each link is finished once its target has landed.
+    // second: whichever lands first, each link is finished once its target has landed, and each
+    // finishing write — the comment's and the body's — is counted on the task it finishes.
     let sandbox = Sandbox::new();
     let config = empty_folder(&sandbox, "plans");
     let root = root_of(&sandbox, "plans");
@@ -1750,6 +1751,7 @@ fn links_that_run_in_a_cycle_through_bodies_and_a_comment_all_land_and_a_repeat_
         "--comments",
         "--json",
     ];
+    let mark = workspace.served_count();
     let reported = outcomes(&ok(&sandbox, &copy));
     let landed = |key: &str| Landed {
         verb: "task",
@@ -1759,6 +1761,30 @@ fn links_that_run_in_a_cycle_through_bodies_and_a_comment_all_land_and_a_repeat_
             .to_owned(),
     };
     let (alpha, beta) = (landed("A"), landed("B"));
+    // The first task lands before the second, so both its comment and its body are finished
+    // afterwards — the comment by one edit, the body by one update — and its report counts
+    // both; the second lands with every link it holds already addressable.
+    let served = workspace.served_since(mark);
+    let finishing: Vec<&Value> = served
+        .iter()
+        .filter(|(document, _)| {
+            document.contains("commentUpdate(") || document.contains("issueUpdate(")
+        })
+        .map(|(_, variables)| variables)
+        .collect();
+    assert_eq!(finishing.len(), 2, "one comment edit and one body update");
+    assert!(
+        finishing
+            .iter()
+            .any(|variables| variables["id"] == alpha.native()),
+        "the body update is the first task's: {finishing:#?}"
+    );
+    assert_eq!(
+        reported["plans:A"]["section_link_updates"], 2,
+        "{:#}",
+        reported["plans:A"]
+    );
+    assert_eq!(reported["plans:B"].get("section_link_updates"), None);
     let link = |to: &Landed, text: &str, slug: &str| {
         format!(
             "{}#heading-{slug}-{}",

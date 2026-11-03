@@ -501,6 +501,19 @@ pub struct SectionLinks {
     pub section_link_updates: u64,
 }
 
+/// Record `source`'s body figures as its final rendering counts them, adding `updates` to the
+/// finishing writes already counted for it — its comments' edits among them, which the
+/// rendering's figures do not replace.
+fn settle(
+    journal: &mut Journal,
+    source: &GlobalId,
+    figures: sections::SectionCounts,
+    updates: u64,
+) {
+    let held = journal.sections.entry(source.clone()).or_default();
+    *held = SectionLinks::of(figures, held.section_link_updates + updates);
+}
+
 impl SectionLinks {
     /// The figures of one rendering, and the updates already counted.
     fn of(counts: sections::SectionCounts, updates: u64) -> Self {
@@ -9323,9 +9336,7 @@ impl Engine {
                     set_content(&mut follow.item, finished.clone());
                     follow.stored = finished;
                 }
-                journal
-                    .sections
-                    .insert(held.source.clone(), SectionLinks::of(figures, 0));
+                settle(journal, &held.source, figures, 0);
                 continue;
             }
             let sent = content_of(&held.item).unwrap_or_default().to_owned();
@@ -9333,9 +9344,7 @@ impl Engine {
                 held.links
                     .finished(&sent, &held.pending, &knows, sections::Pass::Final);
             let updates = u64::from(finished != sent);
-            journal
-                .sections
-                .insert(held.source.clone(), SectionLinks::of(figures, updates));
+            settle(journal, &held.source, figures, updates);
             if updates == 0 {
                 continue;
             }
