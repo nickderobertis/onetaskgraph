@@ -90,7 +90,13 @@ def _answer(state: dict[str, Any], method: str, params: dict[str, Any]) -> dict[
             return {"result": {"items": items, "next": None}}
         case "task_comments":
             held = state["comments"].get(params.get("task"))
-            return {"result": {"page": None if held is None else {"items": held, "next": None}}}
+            if held is None:
+                return {"result": {"page": None}}
+            page = params.get("page", {})
+            start = int(page.get("cursor") or 0)
+            end = start + int(page.get("limit") or 100)
+            following = str(end) if end < len(held) else None
+            return {"result": {"page": {"items": held[start:end], "next": following}}}
         case "edit_comment":
             for comment in state["comments"].get(params.get("task"), []):
                 if comment["id"] == params.get("comment"):

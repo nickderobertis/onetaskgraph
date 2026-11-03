@@ -2614,6 +2614,7 @@ mod tests {
                 "sources status-options",
                 "sources fields",
                 "sources route",
+                "sources sanitize",
                 "task list",
                 "task show",
                 "task show-many",

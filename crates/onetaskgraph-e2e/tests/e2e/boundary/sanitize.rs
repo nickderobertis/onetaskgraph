@@ -1907,3 +1907,363 @@ fn both_predates_refusals_name_a_source_whose_name_carries_a_term_only_redacted(
         );
     }
 }
+
+/// A sanitise command answering one malformed way, named by its argument.
+const MALFORMED: &str = r#"
+import json, sys
+sent = json.loads(sys.stdin.read())
+answer = {"verdict": "pass", "text": sent.get("text", []), "paths": sent.get("paths", []),
+          "metadata": sent.get("metadata", []), "replaced": 0, "unfixed": [],
+          "locators": [locator["value"] for locator in sent.get("locators", [])]}
+how = sys.argv[1]
+if how == "lengths":
+    answer["text"] = []
+elif how == "locators":
+    answer["locators"] = ["another-source" for _ in sent.get("locators", [])]
+elif how == "passed-unfixed":
+    answer["unfixed"] = [{"surface": "text", "index": 0, "fixed": False}]
+elif how == "unsent-index":
+    answer.update(verdict="refuse", surface="text",
+                  unfixed=[{"surface": "text", "index": 99, "fixed": False}])
+print(json.dumps(answer))
+sys.exit(1 if answer["verdict"] == "refuse" else 0)
+"#;
+
+/// Rewrite the store's `write_policy` with `change`.
+fn repolicy(store: &Store, change: impl FnOnce(&mut Value)) {
+    let mut document: Value = serde_json::from_str(
+        &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the project document"),
+    )
+    .expect("JSON");
+    change(&mut document["write_policy"]);
+    store.sandbox.project_document(&document.to_string());
+}
+
+#[test]
+fn a_policy_answer_that_does_not_match_what_was_sent_is_never_a_pass() {
+    let (store, _record) = sanitizing(replaced());
+    let python = crate::document_store::interpreter();
+    for how in ["lengths", "locators", "passed-unfixed", "unsent-index"] {
+        repolicy(&store, |policy| {
+            policy["sanitize_command"] = json!([python.to_string_lossy(), "-c", MALFORMED, how]);
+        });
+        let before = tree(&store.folder("site"));
+        let (kind, said) = store.refused(&[
+            "task",
+            "create",
+            "site",
+            "--project",
+            "p",
+            "--title",
+            "Plain",
+            "--body-file",
+            &store.body(PLAIN),
+        ]);
+        assert_eq!(kind, "boundary-unavailable", "{how}: {said}");
+        assert_eq!(
+            tree(&store.folder("site")),
+            before,
+            "{how}: nothing was written"
+        );
+    }
+}
+
+#[test]
+fn a_term_replacement_cannot_fix_is_refused_after_what_it_can_fix_is_fixed_and_a_dry_run_writes_nothing()
+ {
+    let (store, _record) = sanitizing(replaced());
+    // `quietharbor` is replaced; the owner onevcs derives, `hiddenco`, has no replacement.
+    let body = format!("Retry like {TERM} and hiddenco do.");
+    store.record(
+        "site",
+        "tasks",
+        "mixed",
+        "title: Mixed\nstatus: todo\nproject: p",
+        &body,
+    );
+    let before = tree(&store.folder("site"));
+    let output = store.run(&[
+        "task",
+        "priority",
+        "set",
+        "site:mixed",
+        "high",
+        "--json",
+        "--sanitize-dry-run",
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert_eq!(
+        tree(&store.folder("site")),
+        before,
+        "a dry run writes nothing"
+    );
+
+    let output = store.run(&["task", "priority", "set", "site:mixed", "high", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(failure["failure"]["kind"], json!("boundary-refused"));
+    assert_eq!(failure["predates_write"], json!(true));
+    let said = stderr(&output);
+    assert!(
+        said.contains("already on the item before this write")
+            && said.contains("a term no replacement is declared for"),
+        "{said}"
+    );
+    let held = text_of(&store, "site");
+    assert!(
+        held.contains(&format!("Retry like {WITH} and hiddenco do.")),
+        "{held}"
+    );
+    assert!(
+        !held.contains("priority: high"),
+        "the write itself was not made: {held}"
+    );
+}
+
+#[test]
+fn a_comment_edit_is_replaced_and_a_replacement_that_empties_a_comment_writes_nothing() {
+    let (store, _record) = sanitizing(replaced());
+    store.record(
+        "site",
+        "tasks",
+        "talk",
+        "title: Talk\nstatus: todo\nproject: p",
+        PLAIN,
+    );
+    let added: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "comment",
+        "add",
+        "site:talk",
+        "--body-file",
+        &store.body("First.\n"),
+        "--json",
+    ]))
+    .expect("the comment");
+    let comment = added["comment"]["id"]
+        .as_str()
+        .or_else(|| added["id"].as_str())
+        .unwrap_or_else(|| panic!("a comment id: {added}"))
+        .to_owned();
+    store.ok(&[
+        "task",
+        "comment",
+        "edit",
+        "site:talk",
+        &comment,
+        "--body-file",
+        &store.body(&format!("Asked {TERM}.\n")),
+    ]);
+    let held = text_of(&store, "site");
+    assert!(
+        held.contains(&format!("Asked {WITH}.")) && !held.contains(TERM),
+        "{held}"
+    );
+
+    let before = tree(&store.folder("site"));
+    let output = store.run(&[
+        "task",
+        "comment",
+        "add",
+        "site:talk",
+        "--body-file",
+        &store.body(TERM),
+        "--replace",
+        &format!("{TERM}="),
+    ]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(!stderr(&output).contains(TERM), "{}", stderr(&output));
+    assert_eq!(tree(&store.folder("site")), before, "nothing was written");
+}
+
+#[test]
+fn a_project_s_and_a_document_s_metadata_value_is_written_replaced() {
+    let (store, _record) = sanitizing(replaced());
+    store.ok(&[
+        "document",
+        "create",
+        "site",
+        "--project",
+        "p",
+        "--title",
+        "Notes",
+        "--body-file",
+        &store.body(PLAIN),
+    ]);
+    let document = files_under(&store, "site")
+        .into_iter()
+        .find(|path| path.contains("documents"))
+        .expect("the document");
+    let document_id = std::path::Path::new(&document)
+        .file_stem()
+        .expect("a stem")
+        .to_string_lossy()
+        .into_owned();
+    for (kind, id) in [
+        ("project", "site:p".to_owned()),
+        ("document", format!("site:{document_id}")),
+    ] {
+        store.ok(&[
+            kind,
+            "metadata",
+            "set",
+            &id,
+            "myapp.note",
+            &format!("\"seen in {TERM}\""),
+        ]);
+    }
+    let held = text_of(&store, "site");
+    assert_eq!(
+        held.matches(&format!("seen in {WITH}")).count(),
+        2,
+        "{held}"
+    );
+    assert!(!held.contains(TERM), "{held}");
+}
+
+#[test]
+fn a_re_render_with_a_term_in_an_answer_regenerates_the_content_replaced() {
+    let (store, _record) = sanitizing(replaced());
+    let template = template(&store);
+    let created: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "create",
+        "site",
+        "--project",
+        "p",
+        "--title",
+        "Rendered",
+        "--template",
+        &template,
+        "--var",
+        "goal=Plain goal",
+        "--no-interactive",
+        "--json",
+    ]))
+    .expect("the task");
+    let id = created["items"][0]["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    store.ok(&[
+        "task",
+        "render",
+        &id,
+        "--template",
+        &template,
+        "--var",
+        &format!("goal=Match {TERM}"),
+        "--no-interactive",
+    ]);
+    let held = text_of(&store, "site");
+    assert!(held.contains(&format!("# Match {WITH}")), "{held}");
+    assert!(!held.contains(TERM), "{held}");
+}
+
+#[test]
+fn a_complete_sweep_reads_every_comment_page_and_rewrites_a_hit_on_a_later_one() {
+    let shared = Shared::new(&[("t1", "Nothing private.")], json!({}), json!({}));
+    let mut state = shared.state();
+    state["comments"]["t1"] = json!(
+        (0..130)
+            .map(
+                |n| json!({"id": format!("c-{n}"), "author": "ada", "created_at": null,
+            "updated_at": null, "url": null, "origin": null,
+            "body": if n == 129 { format!("Asked {TERM}.") } else { format!("Comment {n}.") }})
+            )
+            .collect::<Vec<_>>()
+    );
+    std::fs::write(&shared.state, state.to_string()).expect("the state");
+    let (code, report, out, err) = sweep(&shared.store, "shared", &["--complete"]);
+    assert_eq!(code, Some(0), "{out}{err}");
+    assert_eq!(
+        entry(&report, "shared:t1")["fields"],
+        json!([{"field": "comment:c-129", "outcome": "rewritten"}]),
+        "{report}"
+    );
+    let comments = shared.state()["comments"]["t1"].clone();
+    assert_eq!(comments[129]["body"], json!(format!("Asked {WITH}.")));
+    assert_eq!(comments[0]["body"], json!("Comment 0."));
+}
+
+#[test]
+fn a_sweep_reports_an_item_naming_a_private_repository_unfixable_and_fixes_the_rest_of_it() {
+    let (store, _record) = sanitizing(replaced());
+    store.record(
+        "site",
+        "tasks",
+        "leaked",
+        "title: Leaked\nstatus: todo\nproject: p\nrepositories: [github.com/hiddenco/quietharbor]",
+        &format!("Mirror {TERM} here."),
+    );
+    let (code, report, out, err) = sweep(&store, "site", &[]);
+    assert_eq!(code, Some(1), "{out}{err}");
+    let leaked = entry(&report, "site:leaked");
+    assert_eq!(leaked["outcome"], json!("unfixable"), "{report}");
+    assert_eq!(
+        leaked["fields"][0],
+        json!({"field": "repositories", "outcome": "unfixable", "why": "names a private repository"}),
+        "{report}"
+    );
+    assert_eq!(
+        leaked["fields"][1],
+        json!({"field": "content", "outcome": "rewritten"}),
+        "{report}"
+    );
+    assert!(text_of(&store, "site").contains(&format!("Mirror {WITH} here.")));
+}
+
+#[test]
+fn a_public_view_a_sanitisation_would_have_to_rewrite_is_refused_before_anything_is_written() {
+    let store = Store::laid(
+        Some(registered),
+        |_| json!({"vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "site"}]}}),
+    );
+    let home = store.onevcs.as_ref().expect("a home");
+    let policy = home.sanitizing_write_policy(replaced());
+    repolicy(&store, |configured| *configured = policy);
+    store.record(
+        "plan",
+        "projects",
+        "rollout",
+        "title: Rollout\nstatus: todo",
+        PLAIN,
+    );
+    // Private work of its own, so the plan homes privately and its public task is a view.
+    store.record(
+        "plan",
+        "tasks",
+        "producer",
+        "title: Producer\nstatus: todo\nproject: rollout\n\
+         repositories: [github.com/hiddenco/quietharbor]",
+        PLAIN,
+    );
+    store.record(
+        "plan",
+        "tasks",
+        "leaky",
+        &format!(
+            "title: Port the {TERM} retry\nstatus: todo\nproject: rollout\nrepositories: \
+             [github.com/openco/openwidget]"
+        ),
+        PLAIN,
+    );
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_eq!(kind, "boundary-refused", "{said}");
+    assert!(
+        said.contains("a public view is never rewritten") && !said.contains(TERM),
+        "{said}"
+    );
+    let after = store.tree();
+    assert!(
+        after
+            .iter()
+            .filter(|(path, _)| !path.contains("boundary-record"))
+            .eq(before
+                .iter()
+                .filter(|(path, _)| !path.contains("boundary-record"))),
+        "nothing of the plan was written"
+    );
+}
