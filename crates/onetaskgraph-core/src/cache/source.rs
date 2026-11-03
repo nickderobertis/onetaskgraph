@@ -2044,6 +2044,8 @@ mod tests {
         kind_writes: Vec<bool>,
         /// How many times it was asked whether it is answering.
         healths: usize,
+        /// How many reads of a task by id reached it.
+        task_reads: usize,
     }
 
     #[async_trait::async_trait]
@@ -2059,7 +2061,23 @@ mod tests {
             self.inner.health().await
         }
         async fn get_task(&self, _id: &NativeId) -> Result<Option<Task>, SourceError> {
+            self.probe.lock().expect("the probe").task_reads += 1;
             Ok(Some(self.answer.clone()))
+        }
+        /// The one heading its answer holds, known once a read of it has reached this source.
+        fn stored_headings(
+            &self,
+            _record: MetadataRecord,
+            id: &NativeId,
+        ) -> Option<Vec<onetaskgraph_plugin_api::StoredHeading>> {
+            (self.probe.lock().expect("the probe").task_reads > 0 && *id == self.answer.id).then(
+                || {
+                    vec![onetaskgraph_plugin_api::StoredHeading {
+                        text: "Budgets".to_owned(),
+                        id: "a15ed9c1-1094-42c9-806b-494ef7de1ee2".to_owned(),
+                    }]
+                },
+            )
         }
         async fn set_task_priority(
             &self,
@@ -2522,6 +2540,37 @@ mod tests {
         assert!(cache.read(&id("T-1")).is_none());
         assert!(cache.read(&id("T-2")).is_none());
         assert!(!cache.command().read.contains_key(&id("T-1")));
+    }
+
+    #[tokio::test]
+    async fn a_read_for_heading_ids_reaches_the_source_past_an_entry_the_cache_serves() {
+        // An entry the cache serves says nothing of where the task's headings are, so a read
+        // for them is sent past it, to the source, and answers what that read says.
+        let dir = tempfile::tempdir().expect("a directory");
+        let (source, cache, probe) = counting(dir.path(), task("T-1", "v1"));
+        source.get_task(&id("T-1")).await.expect("the read");
+        assert_eq!(probe.lock().expect("the probe").task_reads, 1);
+        cache.pin(&id("T-1"), "v1");
+        source.get_task(&id("T-1")).await.expect("the served read");
+        assert_eq!(
+            probe.lock().expect("the probe").task_reads,
+            1,
+            "the pinned read is the entry's"
+        );
+        let headings = source
+            .read_stored_headings(MetadataRecord::Task, &id("T-1"))
+            .await
+            .expect("the read for heading ids");
+        assert_eq!(
+            probe.lock().expect("the probe").task_reads,
+            2,
+            "the read for heading ids reached the source"
+        );
+        assert_eq!(
+            headings.map(|held| held.len()),
+            Some(1),
+            "and answers what that read says"
+        );
     }
 
     #[tokio::test]
