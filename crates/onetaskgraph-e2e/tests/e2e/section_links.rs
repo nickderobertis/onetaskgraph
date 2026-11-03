@@ -767,7 +767,7 @@ fn authored_section_links_land_in_each_destinations_form_and_a_repeat_copy_write
 /// person writes, beside the platform's `\\` — and an unnormalised `.` segment, still has every
 /// relative and absolute section link of its records read as naming the record it resolves to.
 /// The folder canonicalizes each file it reads, so the locations compared are canonical however
-/// the root is spelled: this holds the configured spelling end to end, not `same_path` itself.
+/// the root is spelled, and this holds the configured spelling end to end.
 #[test]
 fn a_root_configured_with_forward_slashes_has_its_relative_section_links_read() {
     let sandbox = Sandbox::new();
