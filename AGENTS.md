@@ -1456,7 +1456,7 @@ visibility**, which is what keeps every request sequence and budget above unchan
 store opts in.
 
 - **No production dependency on onevcs.** The command adapter speaks onevcs's versioned
-  boundary schema, pinned at `engine/boundary/onevcs-boundary-schema-v1.json`; the release the
+  boundary schema, pinned at `engine/boundary/onevcs-boundary-schema-v4.json`; the release the
   journeys drive is pinned once, as `ONEVCS_CLI` in `crates/onetaskgraph-e2e-support/src/onevcs.rs`,
   and provided by `uv`. Moving it means re-pinning that schema, which the reconciliation journey
   refuses to let drift.

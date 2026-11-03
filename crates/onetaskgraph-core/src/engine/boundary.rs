@@ -184,10 +184,10 @@ impl WritePolicy for MissingWritePolicy {
 /// The schemas onevcs's `boundary` commands exchange, as the released `onevcs boundary schema
 /// --json` printed them. What this adapter sends and accepts is validated against them, and
 /// the reconciliation journey fails the moment the released command prints anything else.
-pub const ONEVCS_BOUNDARY_SCHEMA: &str = include_str!("boundary/onevcs-boundary-schema-v1.json");
+pub const ONEVCS_BOUNDARY_SCHEMA: &str = include_str!("boundary/onevcs-boundary-schema-v4.json");
 
 /// The `schema_version` of [`ONEVCS_BOUNDARY_SCHEMA`], which an answer is held to.
-pub const ONEVCS_BOUNDARY_SCHEMA_VERSION: u64 = 1;
+pub const ONEVCS_BOUNDARY_SCHEMA_VERSION: u64 = 4;
 
 /// One compiled validator per schema half, built once.
 struct Validators {

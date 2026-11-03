@@ -18,7 +18,7 @@ use crate::common::Sandbox;
 ///
 /// Its `boundary schema --json` is what the store's command adapter embeds, so moving this pin
 /// is moving the schema the reconciliation journey compares against.
-pub const ONEVCS_CLI: &str = "onevcs-cli==0.44.0";
+pub const ONEVCS_CLI: &str = "onevcs-cli==0.59.0";
 
 // llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] uv provides the pinned release from its own cache, fetching it from PyPI at most once per host, and only journeys that configure a `write_policy` ask for it: the engine suite's `boundary` journeys, which are the engine's and the configuration's and so cannot sit behind a plugin crate's edge, and the GitHub Projects suite's screened plan copy and approval, which already sit behind that plugin's own edge.
 /// The pinned `onevcs` executable, resolved once per test process through `uv`.
