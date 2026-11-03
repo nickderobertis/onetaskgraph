@@ -1401,6 +1401,7 @@ dependencies = [
  "onetaskgraph-plugin-api",
  "regex",
  "reqwest",
+ "secrecy",
  "serde-saphyr",
  "serde_json",
  "sha2",

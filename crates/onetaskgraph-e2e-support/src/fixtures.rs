@@ -7877,7 +7877,11 @@ fn linear_response(
             .unwrap()
             .iter()
             .find(|v| v["id"] == id);
-        return Ok(json!({"document":item.map(linear_document)}));
+        // An id naming nothing is an errored answer, as Linear gives it, never a null.
+        let Some(item) = item else {
+            return Err(graphql::DOCUMENT_NOT_FOUND_MESSAGE);
+        };
+        return Ok(json!({ "document": linear_document(item) }));
     }
     if matches!(
         operation,
@@ -7964,7 +7968,11 @@ fn linear_response(
                 &vars,
             )}));
         }
-        return Ok(json!({"issue":item.map(|v|linear_task(v,data))}));
+        // An id naming nothing is an errored answer, as Linear gives it, never a null.
+        let Some(item) = item else {
+            return Err(graphql::ISSUE_NOT_FOUND_MESSAGE);
+        };
+        return Ok(json!({ "issue": linear_task(item, data) }));
     }
     if matches!(operation, graphql::PROJECT | graphql::PROJECT_RELATIONS) {
         let id = vars["id"].as_str().unwrap_or("");
@@ -7979,7 +7987,11 @@ fn linear_response(
                 &vars,
             )}));
         }
-        return Ok(json!({"project":item.map(|v|linear_project(v,data))}));
+        // An id naming nothing is an errored answer, as Linear gives it, never a null.
+        let Some(item) = item else {
+            return Err(graphql::PROJECT_NOT_FOUND_MESSAGE);
+        };
+        return Ok(json!({ "project": linear_project(item, data) }));
     }
     Ok(json!({"viewer":{"id":"fixture-user"}}))
 }
