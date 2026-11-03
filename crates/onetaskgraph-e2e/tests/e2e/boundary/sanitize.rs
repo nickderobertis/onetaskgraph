@@ -396,6 +396,20 @@ fn a_replacement_set_in_the_file_the_environment_or_the_flag_takes_effect_flag_o
     ];
     assert_eq!(title(&store, &[], &[]), "From file-word");
     assert_eq!(title(&store, &environment, &[]), "From env-word");
+    // `--set` addresses an entry by its index, as the environment does, and wins over it.
+    assert_eq!(
+        title(
+            &store,
+            &environment,
+            &[
+                "--set",
+                &format!("write_policy.replacements.0.term={TERM}"),
+                "--set",
+                "write_policy.replacements.0.with=set-word",
+            ]
+        ),
+        "From set-word"
+    );
     assert_eq!(
         title(
             &store,
@@ -2432,6 +2446,11 @@ fn a_terms_command_that_fails_or_answers_out_of_shape_is_an_undecided_policy_exi
             "a failure",
             "import sys; sys.exit(1)",
             "without terms this store believes",
+        ),
+        (
+            "terms beside an undecided verdict",
+            "import sys; sys.stdin.read(); print('{\"terms\": [], \"verdict\": \"unavailable\", \"reason\": \"registry\"}')",
+            "could not decide (registry)",
         ),
         (
             "an answer out of shape",

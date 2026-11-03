@@ -326,8 +326,8 @@ pub struct SanitizeArgs {
     /// Send every search and read, and no write: report what would be rewritten.
     #[arg(long)]
     pub dry_run: bool,
-    /// Read the source whole once — every item with its comments and metadata — rather than
-    /// searching it, covering every class of record a search cannot.
+    /// Read the source's tasks whole once — every task with its comments and metadata — rather
+    /// than searching them, covering every class of record a search cannot.
     #[arg(long)]
     pub complete: bool,
 }

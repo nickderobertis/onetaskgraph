@@ -639,14 +639,16 @@ impl WritePolicy for CommandWritePolicy {
         }
         let (code, stdout) = run(command, &document).await?;
         let answer = validated(&stdout, &VALIDATORS.terms_output);
+        // An undecided verdict is believed first, beside terms or not: no answer that says it
+        // could not decide is read as having decided.
         let terms = match (code, answer) {
-            (Some(0), Some(answer)) if answer.get("terms").is_some() => answer["terms"].clone(),
             (_, Some(answer)) if answer.get("verdict").is_some() => {
                 return Err(PolicyError::new(format!(
                     "the terms command could not decide ({})",
                     answer["reason"].as_str().unwrap_or("no reason given")
                 )));
             }
+            (Some(0), Some(answer)) if answer.get("terms").is_some() => answer["terms"].clone(),
             (code, _) => {
                 return Err(PolicyError::new(format!(
                     "the terms command {} {} without terms this store believes",

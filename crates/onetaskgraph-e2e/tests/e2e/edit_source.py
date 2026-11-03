@@ -82,6 +82,8 @@ def _task(state: State, identifier: object) -> Task | None:
     return next((task for task in state["tasks"] if task["id"] == identifier), None)
 
 
+# A task on the wire is the JSON object §4.4 describes, its members of mixed JSON types: `Any`
+# is a decoded JSON value, as every response this peer writes is.
 def _shown(state: State, task: Task) -> dict[str, Any]:
     """`task` on the wire, as a read answers it (§4.4): without its version when the fixture
     says this source keeps none (`"unversioned": true` in its state)."""
@@ -108,7 +110,7 @@ def _move(state: State, task: Task) -> None:
     task["version"] = str(int(task["version"]) + 1)
 
 
-def _malformed(message: str) -> dict[str, Any]:
+def _malformed(message: str) -> dict[str, dict[str, str]]:
     return {"error": {"kind": "malformed", "message": message}}
 
 
