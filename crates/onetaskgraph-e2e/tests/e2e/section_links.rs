@@ -1372,7 +1372,6 @@ fn a_linear_heading_its_record_does_not_store_is_linked_by_the_record_alone_and_
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback stand-ins this suite already drives for both hosted destinations.
 #[test]
 fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_form() {
-    let mut repeated_writes = Vec::new();
     for kind in KINDS {
         let sandbox = Sandbox::new();
         let (authored_config, _) = authored(&sandbox, "plans");
@@ -1429,11 +1428,19 @@ fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_f
         let root = (kind == "local-md").then(|| root_of(&sandbox, "dest"));
         let mark = destination.mark(root.as_deref());
         let before = root.as_deref().map(files_under);
+        let before_bodies: Vec<String> = if root.is_none() {
+            ["P", "T", "U"]
+                .iter()
+                .map(|key| masked(&destination.raw(&landed(key))))
+                .collect()
+        } else {
+            Vec::new()
+        };
         ok(&sandbox, &copy);
         let written = destination.writes_since(&mark, root.as_deref());
         if let (Some(root), Some(before)) = (root.as_deref(), before) {
-            // The one exemption the manager ruled on evidence from base `ebce65c3`: a second
-            // `--comments` copy into a folder of Markdown may move a record's
+            // The one exemption the manager ruled on evidence from base `ebce65c3`: from a folder
+            // of Markdown, a second `--comments` copy may move a record's
             // `onetaskgraph.copied_version` line — the copy's own link write moved the source
             // file's token after it was recorded — and no other line of any file.
             let after = files_under(root);
@@ -1462,15 +1469,41 @@ fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_f
                 Vec::<String>::new(),
                 "{kind}: a third copy writes no file"
             );
-        } else if !written.is_empty() {
-            repeated_writes.push(format!("{kind}: {written:?}"));
+        } else {
+            // The same exemption at a hosted destination: the second copy may move nothing of a
+            // stored body but its record's `onetaskgraph.copied_version`, and a third copy sends
+            // no mutation at all.
+            let held: Vec<String> = ["P", "T", "U"]
+                .iter()
+                .map(|key| masked(&destination.raw(&landed(key))))
+                .collect();
+            assert_eq!(held, before_bodies, "{kind}: only copied_version moved");
+            let mark = destination.mark(None);
+            ok(&sandbox, &copy);
+            assert_eq!(
+                destination.writes_since(&mark, None),
+                Vec::<String>::new(),
+                "{kind}: a third copy writes nothing"
+            );
+            let _ = written;
         }
     }
-    assert_eq!(
-        repeated_writes,
-        Vec::<String>::new(),
-        "a repeat copy writes nothing into a hosted destination"
-    );
+}
+
+/// `text` with every local-md change token (`md1|<64 hex>`) blanked: the one value the ruled
+/// `--comments` record refresh may move.
+fn masked(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("md1|") {
+        out.push_str(&rest[..at + 4]);
+        let tail = &rest[at + 4..];
+        let hex = tail.chars().take_while(char::is_ascii_hexdigit).count();
+        out.push_str("<token>");
+        rest = &tail[hex..];
+    }
+    out.push_str(rest);
+    out
 }
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown, one loopback board and the loopback Linear workspace.
