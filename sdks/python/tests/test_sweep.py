@@ -186,7 +186,9 @@ def test_a_sweep_leaving_an_identifier_unfixable_answers_its_report_on_exit_one(
     unfixable = report.items[0]
     assert unfixable.outcome.value == "unfixable"
     assert unfixable.id == {"redacted": True, "kind": "item", "ordinal": 1}
-    assert unfixable.fields[0].why == "identifier carries a private term"
+    field = unfixable.fields[0].root
+    assert field.outcome == "unfixable"
+    assert getattr(field, "why", None) == "identifier carries a private term"
 
 
 def test_a_sweep_that_cannot_run_still_raises(binary: Path, tmp_path: Path) -> None:
