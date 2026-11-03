@@ -4512,7 +4512,31 @@ impl Engine {
             };
             // Each carried comment's links, read as the task's own: a fragment alone in one
             // names a heading of the task it is a comment on.
+            let landing = item.to.clone();
             if let Some(carried) = item.carried.as_mut() {
+                // A Linear record a comment links and this copy does not write is read once,
+                // first, for the ids its headings are stored under.
+                if matches!(
+                    to,
+                    Some(SectionForm::Linear(LinearSectionForm::HeadingLink))
+                ) {
+                    let probing = Planning {
+                        destination,
+                        own: own.clone(),
+                        missed: std::cell::RefCell::new(Vec::new()),
+                    };
+                    for comment in carried.iter() {
+                        let links = links.for_comment(comment.body.clone());
+                        if could_name(&comment.body) && links.matters() {
+                            let _ = links.render(&probing, sections::Pass::Provisional);
+                        }
+                    }
+                    for (level, id) in probing.missed.take() {
+                        if read_for_headings.insert((landing.clone(), level, id.clone())) {
+                            read_destination(destination, level, &id).await?;
+                        }
+                    }
+                }
                 let planning = Planning {
                     destination,
                     own: own.clone(),

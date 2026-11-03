@@ -1923,3 +1923,79 @@ fn a_linear_destination_behind_the_local_cache_still_names_each_headings_stored_
     );
     repeats_writing_nothing(&sandbox, "cached", &from, "linear", &linear, None, &landed);
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn a_comment_linking_a_linear_record_the_copy_does_not_write_names_its_stored_heading_id() {
+    // The project is copied first, without comments; then one task alone with its comment, which
+    // links a task already in Linear that this copy does not write: that task is read once for
+    // the ids its headings are stored under.
+    let sandbox = Sandbox::new();
+    let (authored_config, _) = authored(&sandbox, "plans");
+    // The referrer's own body links nothing, so its comment is the one link this copy carries.
+    let referrer = root_of(&sandbox, "plans").join("tasks/U.md");
+    std::fs::write(
+        &referrer,
+        "---\ntitle: Referrer\nstatus: todo\nproject: P\n---\nPlain.\n\n## Comments\n\n\
+         <!-- onetaskgraph:comment id=\"c1\" created_at=\"2026-11-02T12:00:00Z\" \
+         updated_at=\"2026-11-02T12:00:00Z\" -->\n### comment — 2026-11-02T12:00:00Z\n\n\
+         The bar is [the second budgets](T.md#budgets-1).\n\n<!-- /onetaskgraph:comment -->\n",
+    )
+    .expect("the comment");
+    let (linear, config) = store(&sandbox, "linear", "linear", None);
+    configure(
+        &sandbox,
+        &[("plans", &authored_config), ("linear", &config)],
+    );
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    let project = outcomes(&ok(
+        &sandbox,
+        &["project", "copy", "plans:P", "--to", "linear", "--json"],
+    ));
+    let target = Landed {
+        verb: "task",
+        id: project["plans:T"]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    let copied = outcomes(&ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "plans:U",
+            "--to",
+            "linear",
+            "--comments",
+            "--json",
+        ],
+    ));
+    let comments_on = copied["plans:U"]["destination"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let listed: Value = serde_json::from_str(&ok(
+        &sandbox,
+        &["task", "comment", "list", &comments_on, "--json"],
+    ))
+    .expect("comments");
+    let expected = format!(
+        "[the second budgets]({}#heading-budgets-{})",
+        target.location(&sandbox),
+        stored_id8(workspace, &target, "Budgets", 1)
+    );
+    assert!(
+        listed["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|comment| comment["body"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(&expected)),
+        "the comment names the stored id: {listed:#}"
+    );
+}

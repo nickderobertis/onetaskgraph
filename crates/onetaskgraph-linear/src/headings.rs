@@ -19,6 +19,7 @@ use yrs::{Any, Doc, Out, Text, Transact, Update, Xml, XmlFragment};
 /// The Yjs fragment Linear's editor keeps a record's content in.
 const FRAGMENT: &str = "prosemirror";
 
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Linear's editor state is undocumented and publishes no schema to derive from; by the manager's ruling on node onetaskgraph-section-links its drift check is the committed live check `scripts/live-section-links.py`, which reads real TES2 states with an independent decoder, with a gated live-lane entry point recorded as a follow-up, and the samples captured from TES2 under `tests/fixtures/editor-state/` hold this decoder to Linear's own bytes.
 /// Every heading of one editor state, in order, with the id Linear stored it under — `None`
 /// for a state that does not decode, which says nothing about the record's headings.
 #[must_use]

@@ -524,7 +524,7 @@ def observe() -> int:
                     held = at(held, str(record.verb))
                     return Stored(linear_url(text_at(held, "url")), optional_text(held, "content") or "", optional_text(held, "contentState"))
                 case other:
-                    raise Failure(f"no Linear record kind {other}")
+                    raise Failure(f"no Linear record kind {other}; next: add its read to `stored`, beside the task, project and document reads")
 
         for hop, landed in (("local-md -> TES2", in_linear), ("board -> TES2", onward)):
             records = {name: stored(record) for name, record in landed.items()}
