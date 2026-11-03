@@ -613,18 +613,34 @@ pub mod graphql {
     pub const DOCUMENT_NOT_FOUND_PRESENTABLE: &str = "Could not find referenced Document.";
     /// Linear's refusal of a `projectCreate` under an id a record already holds — a deleted
     /// one's included — answered under HTTP 200, as the live project-create journey of
-    /// `onetaskgraph-linear-e2e` observed it on 2026-11-03 and checks on every credentialed run.
-    /// The loopback fixtures share this contract.
+    /// `onetaskgraph-linear-e2e` observed it on 2026-11-03 and checks, for each of the three
+    /// kinds, on every credentialed run. The loopback fixtures share this contract; nothing in
+    /// this source reads it, because a keyed create tries its next id on any refusal.
     pub const PROJECT_ID_CONFLICT_MESSAGE: &str = "conflict on insert of Project";
     /// [`PROJECT_ID_CONFLICT_MESSAGE`] for an `issueCreate`.
     pub const ISSUE_ID_CONFLICT_MESSAGE: &str = "conflict on insert of Issue";
     /// [`PROJECT_ID_CONFLICT_MESSAGE`] for a `documentCreate`.
     pub const DOCUMENT_ID_CONFLICT_MESSAGE: &str = "conflict on insert of Document";
 
-    /// The `userPresentableMessage` beside an id-conflict message, for the `kind` — `Project`,
-    /// `Issue` or `Document` — and the `id` the create was sent under.
+    /// [`PROJECT_ID_CONFLICT_MESSAGE`] or its counterpart for `record`'s create.
     #[must_use]
-    pub fn id_conflict_presentable(kind: &str, id: &str) -> String {
+    pub fn id_conflict_message(record: super::MetadataRecord) -> &'static str {
+        match record {
+            super::MetadataRecord::Task => ISSUE_ID_CONFLICT_MESSAGE,
+            super::MetadataRecord::Project => PROJECT_ID_CONFLICT_MESSAGE,
+            super::MetadataRecord::Document => DOCUMENT_ID_CONFLICT_MESSAGE,
+        }
+    }
+
+    /// The `userPresentableMessage` beside [`id_conflict_message`], for `record`'s create sent
+    /// under `id`.
+    #[must_use]
+    pub fn id_conflict_presentable(record: super::MetadataRecord, id: &str) -> String {
+        let kind = match record {
+            super::MetadataRecord::Task => "Issue",
+            super::MetadataRecord::Project => "Project",
+            super::MetadataRecord::Document => "Document",
+        };
         format!("Entity {kind} with id {id} already exists.")
     }
 

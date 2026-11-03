@@ -7006,9 +7006,9 @@ fn linear_serve(
                 // A create under an id a record already holds is answered under HTTP 200, as
                 // Linear answers it, naming the id in its presentable sentence.
                 Err(message)
-                    if let Some((_, kind)) = LINEAR_ID_CONFLICTS
-                        .iter()
-                        .find(|(said, _)| *said == message) =>
+                    if let Some(record) = LINEAR_ID_CONFLICTS.into_iter().find(|record| {
+                        onetaskgraph_linear::graphql::id_conflict_message(*record) == message
+                    }) =>
                 {
                     let id = request["variables"]["input"]["id"]
                         .as_str()
@@ -7021,7 +7021,7 @@ fn linear_serve(
                                 "extensions": {"code": "INPUT_ERROR", "statusCode": 400,
                                     "type": "invalid input", "userError": true,
                                     "userPresentableMessage":
-                                        onetaskgraph_linear::graphql::id_conflict_presentable(kind, id)}}]}),
+                                        onetaskgraph_linear::graphql::id_conflict_presentable(record, id)}}]}),
                     )
                 }
                 Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
@@ -8981,19 +8981,10 @@ fn linear_burn(data: &mut Value, id: &str) {
 
 /// Linear's refusal of a create under an id a record already holds, by the kind it names: the
 /// plugin's own contract constants, which the live project-create journey checks against Linear.
-const LINEAR_ID_CONFLICTS: [(&str, &str); 3] = [
-    (
-        onetaskgraph_linear::graphql::PROJECT_ID_CONFLICT_MESSAGE,
-        "Project",
-    ),
-    (
-        onetaskgraph_linear::graphql::ISSUE_ID_CONFLICT_MESSAGE,
-        "Issue",
-    ),
-    (
-        onetaskgraph_linear::graphql::DOCUMENT_ID_CONFLICT_MESSAGE,
-        "Document",
-    ),
+const LINEAR_ID_CONFLICTS: [onetaskgraph_plugin_api::MetadataRecord; 3] = [
+    onetaskgraph_plugin_api::MetadataRecord::Project,
+    onetaskgraph_plugin_api::MetadataRecord::Task,
+    onetaskgraph_plugin_api::MetadataRecord::Document,
 ];
 
 /// The root field a create `query` writes, for the `path` of its refusal.

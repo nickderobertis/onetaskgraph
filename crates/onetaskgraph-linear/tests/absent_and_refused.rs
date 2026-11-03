@@ -117,15 +117,15 @@ fn spelled_not_found(kind: &str, spelling: Spelling) -> Value {
 /// Linear's refusal of a create under an id a record already holds — a deleted one's included —
 /// as the live project-create journey observed it on 2026-11-03, under HTTP 200.
 fn id_conflict(kind: &str, id: &str) -> Value {
-    let message = match kind {
-        "Project" => graphql::PROJECT_ID_CONFLICT_MESSAGE,
-        "Issue" => graphql::ISSUE_ID_CONFLICT_MESSAGE,
-        _ => graphql::DOCUMENT_ID_CONFLICT_MESSAGE,
+    let record = match kind {
+        "Project" => MetadataRecord::Project,
+        "Issue" => MetadataRecord::Task,
+        _ => MetadataRecord::Document,
     };
-    json!({"data":null,"errors":[{"message":message,
+    json!({"data":null,"errors":[{"message":graphql::id_conflict_message(record),
         "path":[format!("{}Create", kind.to_ascii_lowercase())],
         "extensions":{"code":"INPUT_ERROR","statusCode":400,"type":"invalid input","userError":true,
-            "userPresentableMessage":graphql::id_conflict_presentable(kind, id)}}]})
+            "userPresentableMessage":graphql::id_conflict_presentable(record, id)}}]})
 }
 
 /// The two statuses Linear sends an errored answer under.

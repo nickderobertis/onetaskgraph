@@ -555,6 +555,67 @@ pub(crate) fn live_project_create(
     );
 }
 
+/// Linear's refusal of an issue and a document created under an id one already holds, held to
+/// the plugin's contract constants — the drift gate on the spelling both loopback fixtures answer
+/// with, beside the project's in the undo scenario. The issue is one of this journey's own tasks;
+/// the document is made for it and removed with everything else the journey made.
+fn conflicts(
+    runtime: &tokio::runtime::Runtime,
+    key: &str,
+    team_id: &str,
+    stamp: &str,
+    relayed: &Arc<Mutex<Relay>>,
+) {
+    use onetaskgraph_plugin_api::MetadataRecord;
+    let prefix = onetaskgraph_linear::LIVE_ARTIFACT_TITLE_PREFIX;
+    let issue = lock(relayed)
+        .created
+        .iter()
+        .find(|(kind, _)| *kind == "issue")
+        .map(|(_, id)| id.clone())
+        .expect("the copy created its tasks");
+    let made = graphql(
+        runtime,
+        key,
+        onetaskgraph_linear::graphql::DOCUMENT_CREATE,
+        json!({"input": {"teamId": team_id, "title": format!("{prefix}{stamp} conflict notes"),
+                         "content": "Notes held under an id a second create is refused."}}),
+    );
+    let document = made["data"]["documentCreate"]["document"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("Linear created the document: {made}"))
+        .to_owned();
+    lock(relayed).created.push(("document", document.clone()));
+    for (record, query, input) in [
+        (
+            MetadataRecord::Task,
+            onetaskgraph_linear::graphql::ISSUE_CREATE,
+            json!({"teamId": team_id, "title": format!("{prefix}{stamp} conflict"), "id": issue}),
+        ),
+        (
+            MetadataRecord::Document,
+            onetaskgraph_linear::graphql::DOCUMENT_CREATE,
+            json!({"teamId": team_id, "title": format!("{prefix}{stamp} conflict notes"),
+                   "content": "A second create under a held id.", "id": document}),
+        ),
+    ] {
+        let sent = input["id"].as_str().unwrap_or_default().to_owned();
+        let answer = graphql(runtime, key, query, json!({ "input": input }));
+        evidence!("Linear answered a {record:?} create under an id it holds with {answer}");
+        let refusal = &answer["errors"][0];
+        assert_eq!(
+            refusal["message"],
+            onetaskgraph_linear::graphql::id_conflict_message(record),
+            "{answer}"
+        );
+        assert_eq!(
+            refusal["extensions"]["userPresentableMessage"],
+            onetaskgraph_linear::graphql::id_conflict_presentable(record, &sent),
+            "{answer}"
+        );
+    }
+}
+
 #[allow(
     clippy::too_many_arguments,
     reason = "the journey's identities, each one the caller already holds"
@@ -642,6 +703,7 @@ fn drive(
         expected,
         "each task is filed under the project it created"
     );
+    conflicts(runtime, key, team_id, stamp, relayed);
 
     // (b) A create Linear applied whose answer never reached the binary — nor the answer to the
     // read the plugin makes at once for it — so the copy fails, and a second one has to find it.
@@ -827,7 +889,10 @@ fn drive(
     );
     assert_eq!(
         refusal["extensions"]["userPresentableMessage"],
-        onetaskgraph_linear::graphql::id_conflict_presentable("Project", &undone[0]),
+        onetaskgraph_linear::graphql::id_conflict_presentable(
+            onetaskgraph_plugin_api::MetadataRecord::Project,
+            &undone[0],
+        ),
         "{refusal}"
     );
     evidence!("Linear refused the create under the deleted project's id: {refusal}");
