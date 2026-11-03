@@ -65,6 +65,7 @@ pub(super) struct CommentPlan {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct OriginKey {
     /// The qualified id of the task the comment was first written on.
+    // llmlint: ignore[invalid_states_unrepresentable] This is `CommentOrigin::task` exactly as the plugin contract carries it — a `String`, because `GlobalId` is deliberately not in the api crate — and a comment's origin is matched on it verbatim; parsing it into a `GlobalId` here would make an origin a person mistyped at a destination unmatchable, so the copy would add a duplicate beside it instead of keeping it in step.
     task: String,
     /// The comment's id in that task's source.
     comment: NativeId,
