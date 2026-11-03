@@ -3265,3 +3265,67 @@ fn a_views_link_to_its_own_heading_lands_in_the_boards_section_form() {
         "a repeat copy writes the board nothing"
     );
 }
+
+#[test]
+fn a_new_linear_views_link_to_its_own_heading_names_the_id_its_create_was_answered_with() {
+    // A view Linear creates has no address, and its headings no ids, until its create is
+    // answered: its link to its own heading is written in Linear's form once they exist, and a
+    // repeat copy writes nothing.
+    let mut handle = None;
+    let store = Store::laid(Some(registered), |sandbox| {
+        let (mut config, workspace) =
+            crate::fixtures::linear_workspace(sandbox, crate::fixtures::dataset());
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        handle = Some(workspace);
+        sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+        json!({
+            "tracker": {"plugin": "linear", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "tracker"}]},
+        })
+    });
+    let workspace = handle.expect("the workspace");
+    private_rollout(&store);
+    store.record(
+        "plan",
+        "tasks",
+        "sectioned",
+        &format!(
+            "title: Retry the widget once\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"
+        ),
+        "See [the retry](#step-2b-retry-once) below.\n\n### Step 2.b: retry (once)\n\nOnce.",
+    );
+    let landed = copy_rollout(&store);
+    let view = view_of(&store, &landed, &landed["plan:sectioned"]);
+    let native = view.split_once(':').expect("a qualified id").1.to_owned();
+    let shown_view = shown(&store, "task", &view);
+    let url = shown_view["location"]["url"]
+        .as_str()
+        .expect("a Linear address")
+        .to_owned();
+    let ids = onetaskgraph_e2e_support::linear_editor::stored(
+        &workspace
+            .editor_state("tasks", &native)
+            .expect("an editor state"),
+    );
+    let id8: String = ids
+        .iter()
+        .find(|(text, _)| text == "Step 2.b: retry (once)")
+        .map(|(_, id)| id.replace('-', "")[..8].to_owned())
+        .expect("the heading's stored id");
+    let content = shown_view["content"].as_str().expect("the view's content");
+    assert!(
+        content.contains(&format!(
+            "[the retry]({url}#heading-step-2b-retry-once-{id8})"
+        )),
+        "{content}"
+    );
+    let mark = workspace.served_count();
+    copy_rollout(&store);
+    assert!(
+        workspace
+            .served_since(mark)
+            .iter()
+            .all(|(document, _)| !document.trim_start().starts_with("mutation")),
+        "a repeat copy writes Linear nothing"
+    );
+}

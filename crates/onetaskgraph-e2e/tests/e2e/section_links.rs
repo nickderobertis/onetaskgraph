@@ -1813,3 +1813,64 @@ fn refreshes_only_the_copy_record(
         "a third copy writes nothing"
     );
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn a_refused_comment_edit_finishing_a_section_link_takes_the_whole_copy_back() {
+    // A comment written before the task it links had landed is finished by an edit, and Linear
+    // refuses that edit: the copy fails and the workspace holds nothing it wrote.
+    let sandbox = Sandbox::new();
+    let config = empty_folder(&sandbox, "plans");
+    let root = root_of(&sandbox, "plans");
+    for folder in ["projects", "tasks"] {
+        std::fs::create_dir_all(root.join(folder)).expect("a folder");
+    }
+    std::fs::write(
+        root.join("projects/P.md"),
+        "---\ntitle: Plan\nstatus: todo\n---\nThe plan.\n",
+    )
+    .expect("the project");
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: Alpha\nstatus: todo\nproject: P\n---\n## Alpha\n\nFirst.\n\n## Comments\n\n\
+         <!-- onetaskgraph:comment id=\"c1\" created_at=\"2026-11-02T12:00:00Z\" \
+         updated_at=\"2026-11-02T12:00:00Z\" -->\n### comment — 2026-11-02T12:00:00Z\n\n\
+         Blocked on [beta](B.md#beta).\n\n<!-- /onetaskgraph:comment -->\n",
+    )
+    .expect("the first task");
+    std::fs::write(
+        root.join("tasks/B.md"),
+        "---\ntitle: Beta\nstatus: todo\nproject: P\n---\n## Beta\n\nAfter [alpha](A.md#alpha).\n",
+    )
+    .expect("the second task");
+    let linear = json!({"plugin": "linear", "config": crate::fixtures::linear_empty_workspace_failing(
+        &sandbox,
+        &[onetaskgraph_linear::graphql::COMMENT_UPDATE],
+    )});
+    configure(
+        &sandbox,
+        &[
+            ("plans", &json!({"plugin": "local-md", "config": config})),
+            ("linear", &linear),
+        ],
+    );
+    let output = sandbox
+        .command()
+        .args(["project", "copy", "plans:P", "--to", "linear", "--comments"])
+        .output()
+        .expect("the binary runs");
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    for verb in ["task", "project"] {
+        let listed: Value = serde_json::from_str(&ok(
+            &sandbox,
+            &[verb, "list", "--source", "linear", "--json"],
+        ))
+        .expect("a listing");
+        assert_eq!(
+            listed["items"],
+            json!([]),
+            "every {verb} the copy created is taken back: {}",
+            stderr(&output)
+        );
+    }
+}

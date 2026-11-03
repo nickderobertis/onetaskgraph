@@ -254,13 +254,48 @@ def request(url: str, authorization: str, body: dict | None = None) -> dict:
 def at(value: object, *path: str | int) -> object:
     """The member of `value` at `path`, refused with what is missing where an answer lacks it."""
     for step in path:
-        held = value.get(step) if isinstance(value, dict) and isinstance(step, str) else (
-            value[step] if isinstance(value, list) and isinstance(step, int) and step < len(value) else None
-        )
+        match (value, step):
+            case (dict(), str()):
+                held = value.get(step)
+            case (list(), int()) if step < len(value):
+                held = value[step]
+            case _:
+                held = None
         if held is None:
             raise Failure(f"an answer lacks {'.'.join(map(str, path))}; next: compare the query with the tracker's schema")
         value = held
     return value
+
+
+def optional_text(value: object, field: str) -> str | None:
+    """A member an answer may give as a string or as null."""
+    held = value.get(field) if isinstance(value, dict) else None
+    if held is not None and not isinstance(held, str):
+        raise Failure(f"an answer's {field} is not a string; next: compare the query with the tracker's schema")
+    return held
+
+
+@dataclasses.dataclass(frozen=True)
+class Named:
+    """A Linear workflow state or project status: its name and its type."""
+
+    name: str
+    type: str
+
+
+@dataclasses.dataclass(frozen=True)
+class Outcome:
+    """One item of a copy's report: its source id and, once it landed, where."""
+
+    source: QualifiedId
+    destination: QualifiedId | None
+
+
+def outcomes(report: dict) -> list[Outcome]:
+    items = at(report, "items")
+    if not isinstance(items, list):
+        raise Failure("a copy's report holds no item list; next: run the copy by hand with --json")
+    return [Outcome(text_at(item, "source"), optional_text(item, "destination")) for item in items]
 
 
 def text_at(value: object, *path: str | int) -> str:
@@ -372,18 +407,23 @@ def observe() -> int:
         board_copy = text_at(copied, "copyProjectV2", "projectV2", "id")
         run.board = text_at(copied, "copyProjectV2", "projectV2", "url")
         board_number = at(copied, "copyProjectV2", "projectV2", "number")
+        if not isinstance(board_number, int) or board_number < 1:
+            raise Failure(f"GitHub answered the board copy's number as {board_number!r}; next: check the copy on GitHub")
         options = github(token, "query($id:ID!){ node(id:$id){ ... on ProjectV2{ field(name:\"Status\"){ ... on ProjectV2SingleSelectField{ options{ name } } } } } }", {"id": board_copy})
         first_option = text_at(options, "node", "field", "options", 0, "name")
         vocabulary = linear(key, "query($k:String!){ teams(filter:{key:{eq:$k}}){ nodes{ states{ nodes{ name type } } } } projectStatuses{ nodes{ name type } } }", {"k": team})
-        states = at(vocabulary, "teams", "nodes", 0, "states", "nodes")
-        statuses = at(vocabulary, "projectStatuses", "nodes")
-        if not isinstance(states, list) or not isinstance(statuses, list):
-            raise Failure("Linear answered no list of states; next: check the team key")
+        def decoded(rows: object) -> list[Named]:
+            if not isinstance(rows, list):
+                raise Failure("Linear answered no list of states; next: check the team key")
+            return [Named(text_at(row, "name"), text_at(row, "type")) for row in rows]
 
-        def named(rows: list, types: tuple[str, ...]) -> str:
+        states = decoded(at(vocabulary, "teams", "nodes", 0, "states", "nodes"))
+        statuses = decoded(at(vocabulary, "projectStatuses", "nodes"))
+
+        def named(rows: list[Named], types: tuple[str, ...]) -> str:
             for row in rows:
-                if isinstance(row, dict) and row.get("type") in types:
-                    return text_at(row, "name")
+                if row.type in types:
+                    return row.name
             raise Failure(f"TES2 holds no state of type {types}; next: check the team's workflow")
 
         open_state, done_state = named(states, ("unstarted",)), named(states, ("completed",))
@@ -425,7 +465,7 @@ def observe() -> int:
             return json.loads(done.stdout)
 
         def location(record: Record) -> str:
-            return binary(record.verb, "show", record.id)["items"][0]["item"]["location"]["url"]
+            return text_at(binary(record.verb, "show", record.id), "items", 0, "item", "location", "url")
 
         def copy(source: dict[str, Record], to: str) -> dict[str, Record]:
             reports = []
@@ -435,17 +475,23 @@ def observe() -> int:
             finally:
                 # Everything a copy reported landing is removed, whichever later step failed.
                 for report in reports:
-                    for item in report["items"]:
-                        if not item.get("destination"):
+                    for outcome in outcomes(report):
+                        if outcome.destination is None:
                             continue
-                        verb = next(record.verb for record in source.values() if record.id == item["source"])
-                        landed = Record("", verb, item["destination"])
+                        verb = next(record.verb for record in source.values() if record.id == outcome.source)
+                        landed = Record("", verb, outcome.destination)
                         if to == "board":
                             created_issues.append(location(landed))
                         else:
                             created_linear.append(landed)
-            by_source = {item["source"]: item["destination"] for report in reports for item in report["items"]}
-            return {name: Record(name, record.verb, by_source[record.id]) for name, record in source.items()}
+            by_source = {outcome.source: outcome.destination for report in reports for outcome in outcomes(report)}
+            landed_at = {}
+            for name, record in source.items():
+                destination = by_source.get(record.id)
+                if destination is None:
+                    raise Failure(f"{record.id} did not land in {to}; next: read the copy's report")
+                landed_at[name] = Record(name, record.verb, destination)
+            return landed_at
 
         source = {name: Record(name, verb, f"{authored_name}:{name}") for name, verb in (("P", Verb.PROJECT), ("T", Verb.TASK), ("U", Verb.TASK), ("D", Verb.DOCUMENT))}
         on_board = copy(source, "board")
@@ -468,11 +514,11 @@ def observe() -> int:
             match record.verb:
                 case Verb.TASK:
                     held = at(linear(key, "query($id:String!){ issue(id:$id){ url description descriptionState } }", {"id": record.native}), "issue")
-                    return Stored(linear_url(text_at(held, "url")), held.get("description") or "", held.get("descriptionState"))
+                    return Stored(linear_url(text_at(held, "url")), optional_text(held, "description") or "", optional_text(held, "descriptionState"))
                 case Verb.PROJECT | Verb.DOCUMENT:
                     held = linear(key, f"query($id:String!){{ {record.verb}(id:$id){{ url content contentState }} }}", {"id": record.native})
                     held = at(held, str(record.verb))
-                    return Stored(linear_url(text_at(held, "url")), held.get("content") or "", held.get("contentState"))
+                    return Stored(linear_url(text_at(held, "url")), optional_text(held, "content") or "", optional_text(held, "contentState"))
                 case other:
                     raise Failure(f"no Linear record kind {other}")
 

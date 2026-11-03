@@ -1494,6 +1494,7 @@ impl Engine {
         let mut view = task.view(id.clone(), Some(landing.project.clone()));
         // A view's links to its own headings, in the destination's section form: a view holds
         // no other link to a record, which the preflight refused.
+        let mut view_links = None;
         if let Some(content) = view.content.clone() {
             let from = crate::section_links::SectionForm::for_kind(
                 self.readable(&task.source.source)?.kind(),
@@ -1521,6 +1522,7 @@ impl Engine {
                 });
                 let knows = ViewKnows { destination, own };
                 view.content = Some(links.render(&knows, super::sections::Pass::Final).content);
+                view_links = Some(links);
             }
         }
         let edges: Vec<DependencyEdge> = task
@@ -1622,6 +1624,35 @@ impl Engine {
                 kind: Level::Task,
                 id: landed.clone(),
             });
+            // A view's links to its own headings name its own address and, on Linear, the ids
+            // its create was answered with, so a new view is written once more with them: an
+            // update of what this copy created, which the create's undo takes back with it.
+            if let Some(links) = &view_links
+                && !carrying
+            {
+                let own = super::located(
+                    destination
+                        .source()
+                        .written_location(onetaskgraph_plugin_api::MetadataRecord::Task, &landed)
+                        .as_ref(),
+                )
+                .map(|location| (landed.clone(), location));
+                let knows = ViewKnows { destination, own };
+                let finished = links.render(&knows, super::sections::Pass::Final).content;
+                if write.item.content.as_deref() != Some(finished.as_str()) {
+                    let mut item = write.item.clone();
+                    item.content = Some(finished);
+                    destination
+                        .source()
+                        .write_task(&ItemWrite {
+                            target: Some(landed.clone()),
+                            item,
+                            depends_on: write.depends_on.clone(),
+                        })
+                        .await
+                        .map_err(|error| refused(destination, error))?;
+                }
+            }
         }
         Ok(landed)
     }

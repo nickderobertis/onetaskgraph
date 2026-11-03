@@ -218,6 +218,7 @@ pub fn github_slugs(texts: &[String]) -> Vec<String> {
 /// documents titled `Step 2.b: retry (once)` (`step-2b-retry-once`) and
 /// `Under_score & A/B  x--y` (`under-score-and-ab-x-y`). A recognised Linear link is never
 /// read by this part: its heading is found by the id.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The tracker's form is undocumented and has no authoritative artifact to derive from; by the manager's ruling on node onetaskgraph-section-links its drift check is the committed live check `scripts/live-section-links.py`, run by hand against the real tracker, with a gated live-lane entry point recorded as a follow-up, and the locally gated journeys in `crates/onetaskgraph-e2e/tests/e2e/section_links.rs` hold this entry to the README's statement of it.
 #[must_use]
 pub fn linear_slug(text: &str) -> String {
     let lowered = plain(text).to_lowercase().replace('&', " and ");
@@ -396,6 +397,7 @@ impl SectionForm {
                 };
                 Written::Link(format!("{}#{slug}", relative_path(from, location)))
             }
+            // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] The tracker's form is undocumented and has no authoritative artifact to derive from; by the manager's ruling on node onetaskgraph-section-links its drift check is the committed live check `scripts/live-section-links.py`, run by hand against the real tracker, with a gated live-lane entry point recorded as a follow-up, and the locally gated journeys in `crates/onetaskgraph-e2e/tests/e2e/section_links.rs` hold this entry to the README's statement of it.
             Self::GithubProjects => {
                 let at = location
                     .strip_prefix(GITHUB)
