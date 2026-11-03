@@ -763,6 +763,45 @@ fn authored_section_links_land_in_each_destinations_form_and_a_repeat_copy_write
     }
 }
 
+/// A folder whose root is configured with `/` between its parts — on Windows the spelling a
+/// person writes, beside the platform's `\\` — and an unnormalised `.` segment, still has every
+/// relative and absolute section link of its records read as naming the record it resolves to.
+/// The folder canonicalizes each file it reads, so the locations compared are canonical however
+/// the root is spelled: this holds the configured spelling end to end, not `same_path` itself.
+#[test]
+fn a_root_configured_with_forward_slashes_has_its_relative_section_links_read() {
+    let sandbox = Sandbox::new();
+    let (mut authored_config, authored_target) = authored(&sandbox, "plans");
+    let canonical = root_of(&sandbox, "plans");
+    let spelled = format!(
+        "{}/./",
+        canonical
+            .display()
+            .to_string()
+            .trim_start_matches(r"\\?\")
+            .replace('\\', "/")
+    );
+    authored_config["config"]["root"] = json!(spelled);
+    let (destination, config) = store(&sandbox, "local-md", "dest", None);
+    configure(&sandbox, &[("plans", &authored_config), ("dest", &config)]);
+    let from = authored_ids("plans");
+
+    let (landed, reported) = copy_plan(&sandbox, &from, "dest");
+    holds_the_form(
+        &sandbox,
+        &format!("a root spelled {spelled}"),
+        &destination,
+        &landed,
+        &authored_target,
+    );
+    assert_eq!(
+        reported["D"]["section_links_unresolved"],
+        json!(1),
+        "{:#}",
+        reported["D"]
+    );
+}
+
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: folders of Markdown and the loopback stand-ins this suite already drives, two boards of one loopback server and two loopback Linear workspaces among them.
 #[test]
 fn every_pair_of_kinds_writes_the_others_section_links_in_its_own_form_and_repeats_write_nothing() {
