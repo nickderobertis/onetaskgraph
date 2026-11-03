@@ -109,9 +109,13 @@ test("a search sweep answers its report on exit 3", async () => {
   expect(report.items.map((item) => [item.id, item.outcome])).toEqual([
     ["tracker:t1", "rewritten"],
   ]);
+  // `complete` reads the source whole, covering every class a search cannot.
+  const whole = await client.sourcesSanitize("tracker", { complete: true, dryRun: true });
+  expect(whole.coverage).toEqual({ complete: true, uncovered: [] });
+  expect(whole.dry_run).toBe(true);
   const after = JSON.parse(readFileSync(held, "utf8")).tasks;
   expect(after.find((entry: { id: string }) => entry.id === "t1").content).toBe("As ember-x does.");
-});
+}, 30_000);
 
 test("a sweep leaving an identifier unfixable answers its report on exit 1", async () => {
   const [client, root] = store({

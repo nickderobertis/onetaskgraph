@@ -185,10 +185,13 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
                 case _:
                     return _malformed("write_task carries a write of a task with an id and title")
             held = _task(state, target)
+            answered = state.get("answer_ids", {}).get(target, target)
+            if state.get("drop_comments_on_write"):
+                state["comments"].pop(target, None)
             item["id"] = target
             item["version"] = str(int(held["version"]) + 1) if held else "1"
             state["tasks"] = [task for task in state["tasks"] if task["id"] != target] + [item]
-            return {"result": {"id": target}}
+            return {"result": {"id": answered}}
         case "set_task_priority":
             task = _task(state, params.get("id"))
             if task is None:
@@ -207,18 +210,36 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             }
 
 
-STATE_MEMBERS = frozenset(State.__annotations__)
+def _well_formed(held: object) -> bool:
+    """Whether `held` is this peer's own state: every member `State` names, of its type, and
+    each task an object with a string id and version."""
+    match held:
+        case {
+            "tasks": list(tasks),
+            "comments": dict(),
+            "reads": dict(),
+            "moves": dict(),
+            "edits": dict(),
+            "index": dict(),
+            "edges": dict(),
+            "log": list(),
+        }:
+            return all(
+                isinstance(task, dict)
+                and isinstance(task.get("id"), str)
+                and isinstance(task.get("version"), str)
+                for task in tasks
+            )
+        case _:
+            return False
 
 
 def _state(store: Path) -> State:
-    """The peer's own file, refused — ending the peer, naming what is missing — unless it
-    holds every member `State` names."""
+    """The peer's own file, refused — ending the peer — unless it is well formed."""
     held = json.loads(store.read_text(encoding="utf-8"))
-    if not isinstance(held, dict) or not STATE_MEMBERS <= held.keys():
-        missing = sorted(STATE_MEMBERS - set(held)) if isinstance(held, dict) else "every member"
-        sys.exit(f"{KIND}: {store} is not this peer's state; it lacks {missing}")
-    # Its members are this peer's own writing, checked present above: the cast names the shape
-    # `_main` itself wrote last time.
+    if not _well_formed(held):
+        sys.exit(f"{KIND}: {store} is not this peer's state")
+    # Checked member by member above for everything this peer indexes or counts.
     return cast(State, held)
 
 

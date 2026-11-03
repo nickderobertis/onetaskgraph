@@ -70,7 +70,11 @@ def _held(store: Path) -> Held:
     held = json.loads(store.read_text(encoding="utf-8"))
     match held:
         case {"requests": int(), "tasks": list(tasks)} if all(
-            isinstance(task, dict) and {"id", "title", "content"} <= task.keys() for task in tasks
+            isinstance(task, dict)
+            and isinstance(task.get("id"), str)
+            and isinstance(task.get("title"), str)
+            and isinstance(task.get("content"), (str, type(None)))
+            for task in tasks
         ):
             # Checked member by member above for what the peer reads; the rest of each task is
             # passed through as the engine sent it.

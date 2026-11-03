@@ -2654,3 +2654,48 @@ fn a_source_keeping_no_version_moving_twice_is_a_conflict_too() {
     assert_eq!(shared.writes(), 0, "nothing was overwritten");
     assert_eq!(shared.task("t1")["priority"], json!("none"));
 }
+
+#[test]
+fn a_sanitising_write_answered_as_another_task_refuses_the_write_it_was_for() {
+    let shared = Shared::new(&[("t1", &with_term())], json!({}), json!({}));
+    let mut state = shared.state();
+    state["answer_ids"] = json!({"t1": "t9"});
+    std::fs::write(&shared.state, state.to_string()).expect("the state");
+    let output = shared
+        .store
+        .run(&["task", "priority", "set", "shared:t1", "high"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("another task"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        shared.task("t1")["priority"],
+        json!("none"),
+        "the write it was for was not made"
+    );
+}
+
+#[test]
+fn a_comment_gone_before_its_sanitising_edit_refuses_the_write_it_was_for_saying_so() {
+    let shared = Shared::new(&[("t1", &with_term())], json!({}), json!({}));
+    shared.comment("t1", "c1", &format!("Ask {TERM}."));
+    let mut state = shared.state();
+    state["drop_comments_on_write"] = json!(true);
+    std::fs::write(&shared.state, state.to_string()).expect("the state");
+    let output = shared
+        .store
+        .run(&["task", "priority", "set", "shared:t1", "high"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let said = stderr(&output);
+    assert!(
+        said.contains("was gone before its sanitising write"),
+        "{said}"
+    );
+    assert!(!said.contains(TERM), "{said}");
+    // The task's own sanitising write had landed; the write it was for was not made.
+    let task = shared.task("t1");
+    assert!(!task["content"].as_str().expect("content").contains(TERM));
+    assert_eq!(task["priority"], json!("none"));
+}
