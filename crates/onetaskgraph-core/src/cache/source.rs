@@ -1344,6 +1344,16 @@ impl TaskSource for CachedSource {
         self.inner.attach_body_markup(markup);
     }
 
+    /// Past the cache, always: an entry it serves says nothing of where the record's headings
+    /// are, which only the backend's own answer says.
+    async fn read_stored_headings(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+    ) -> Result<Option<Vec<onetaskgraph_plugin_api::StoredHeading>>, SourceError> {
+        self.inner.read_stored_headings(record, id).await
+    }
+
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.relating(
             EdgeKind::TaskReverse,

@@ -10871,13 +10871,12 @@ async fn read_destination(
     level: Level,
     id: &NativeId,
 ) -> Result<(), EngineError> {
-    let source = destination.source();
-    match level {
-        Level::Task => source.get_task(id).await.map(|_| ()),
-        Level::Project => source.get_project(id).await.map(|_| ()),
-        Level::Document => source.get_document(id).await.map(|_| ()),
-    }
-    .map_err(|error| refused(destination, error))
+    destination
+        .source()
+        .read_stored_headings(level.record(), id)
+        .await
+        .map(|_| ())
+        .map_err(|error| refused(destination, error))
 }
 
 /// `planned` with every item a planned body links to ahead of that body, and otherwise in the

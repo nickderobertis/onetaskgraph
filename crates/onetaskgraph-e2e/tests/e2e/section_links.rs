@@ -1874,3 +1874,45 @@ fn a_refused_comment_edit_finishing_a_section_link_takes_the_whole_copy_back() {
         );
     }
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace, behind the store's local cache.
+#[test]
+fn a_linear_destination_behind_the_local_cache_still_names_each_headings_stored_id() {
+    // With the cache on, a copy's links still name the ids Linear stored its headings under,
+    // on the first copy and on a later copy of the design document alone, and a repeat copy
+    // writes nothing. A copy reads a record it needs heading ids for past the cache
+    // (`TaskSource::read_stored_headings`), since a cached answer says nothing of them; this
+    // journey's reads are not ones the cache serves, so it holds the result, not that path.
+    let sandbox = Sandbox::new();
+    let (authored_config, authored_target) = authored(&sandbox, "plans");
+    let (linear, mut config) = store(&sandbox, "linear", "linear", None);
+    config["cache"] = json!({"enabled": true, "dir": sandbox.subdirectory("cache")});
+    configure(
+        &sandbox,
+        &[("plans", &authored_config), ("linear", &config)],
+    );
+    let from = authored_ids("plans");
+    let (landed, _) = copy_plan(&sandbox, &from, "linear");
+    holds_the_form(&sandbox, "cached", &linear, &landed, &authored_target);
+    // A later copy of the design document alone.
+    ok(&sandbox, &["task", "show", &landed["T"].id]);
+    let written = Landed {
+        verb: "document",
+        id: outcomes(&ok(
+            &sandbox,
+            &["document", "copy", "plans:D", "--to", "linear", "--json"],
+        ))["plans:D"]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    assert_eq!(written.id, landed["D"].id);
+    holds_the_form(
+        &sandbox,
+        "cached, again",
+        &linear,
+        &landed,
+        &authored_target,
+    );
+    repeats_writing_nothing(&sandbox, "cached", &from, "linear", &linear, None, &landed);
+}
