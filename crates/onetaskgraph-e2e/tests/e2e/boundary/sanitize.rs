@@ -1682,3 +1682,69 @@ fn a_sweep_keeps_a_move_rewrites_after_it_reports_a_conflict_and_a_rerun_fixes_o
     assert!(!fixed["content"].as_str().expect("content").contains(TERM));
     assert_eq!(labels(&fixed), ["person-label", "person-label"]);
 }
+
+#[test]
+fn a_recopy_of_an_item_whose_id_carries_a_replaced_term_updates_the_item_it_copied_before() {
+    let (store, _record) = sanitizing(replaced());
+    // A second public folder the copy lands in, beside `site`, which it is copied out of.
+    let mut document: Value = serde_json::from_str(
+        &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the project document"),
+    )
+    .expect("JSON");
+    document["sources"]["mirror"] = json!({
+        "plugin": "local-md",
+        "config": {"root": store.sandbox.subdirectory("mirror")},
+        "visibility": "public",
+    });
+    store.sandbox.project_document(&document.to_string());
+    let source_id = format!("{TERM}-retry");
+    let source = format!("site:{source_id}");
+    let lay = |title: &str| {
+        let path = store
+            .folder("site")
+            .join("tasks")
+            .join(format!("{source_id}.md"));
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("the folder");
+        std::fs::write(
+            &path,
+            format!("---\ntitle: {title}\nstatus: todo\n---\n{PLAIN}\n"),
+        )
+        .expect("the source task");
+    };
+    lay("Retry");
+    let first: Value =
+        serde_json::from_str(&store.ok(&["task", "copy", &source, "--to", "mirror", "--json"]))
+            .expect("the copy");
+    let landed = first["items"][0]["destination"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a destination: {first}"))
+        .to_owned();
+    assert!(
+        !landed.contains(TERM),
+        "the id it landed under is as passed: {landed}"
+    );
+    let mirrored = text_of(&store, "mirror");
+    assert!(!mirrored.contains(TERM), "{mirrored}");
+    assert!(
+        files_under(&store, "mirror")
+            .iter()
+            .all(|path| !path.contains(TERM)),
+        "no public file is named after the term"
+    );
+    // The origin it records names the source item in its replaced form.
+    assert!(
+        mirrored.contains(&format!("site:{WITH}-retry")),
+        "{mirrored}"
+    );
+
+    // A second copy after an edit at the source reaches that same item.
+    lay("Retry again");
+    let before = files_under(&store, "mirror");
+    let second: Value =
+        serde_json::from_str(&store.ok(&["task", "copy", &source, "--to", "mirror", "--json"]))
+            .expect("the copy");
+    assert_eq!(second["items"][0]["destination"], json!(landed), "{second}");
+    assert_eq!(files_under(&store, "mirror"), before, "no second item");
+    assert!(text_of(&store, "mirror").contains("Retry again"));
+}

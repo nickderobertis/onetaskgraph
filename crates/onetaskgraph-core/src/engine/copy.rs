@@ -1800,6 +1800,9 @@ struct Planned {
     /// What its carried comments could not do for their section links, for the comments with
     /// nothing left to finish.
     comment_sections: sections::SectionCounts,
+    /// What the sanitisation that admitted its copy rewrote, applied to every value the copy
+    /// composes for it at a write — its origin, which names its source's id, among them.
+    rewrite: Rewrite,
 }
 
 impl Planned {
@@ -7002,6 +7005,7 @@ impl Engine {
             pending: Vec::new(),
             comment_links: Vec::new(),
             comment_sections: sections::SectionCounts::default(),
+            rewrite: Rewrite::default(),
         })
     }
 
@@ -7345,6 +7349,19 @@ impl Engine {
                 carriers.first().cloned()
             }
             None => self.scan(destination, item.level(), &wanted).await?,
+        };
+        // A copy into a destination its policy rewrites wrote the origin as that policy passed
+        // it: an id carrying a replaced term is found by its replaced spelling, asked of the
+        // policy only once the id as it stands has found nothing.
+        let scanned = match scanned {
+            Some(found) => Some(found),
+            None => match self.origin_as_written(destination, id).await {
+                Some(replaced) => {
+                    self.scan(destination, item.level(), &Wanted::Origin(replaced))
+                        .await?
+                }
+                None => None,
+            },
         };
         if let Some(found) = scanned {
             let held = self
@@ -10632,6 +10649,7 @@ fn outgoing(
             metadata: {
                 let mut metadata = carried(&task.metadata);
                 created_with(&mut metadata, item, held);
+                item.rewrite.metadata_values(&mut metadata);
                 metadata
             },
             classification,
@@ -10644,6 +10662,7 @@ fn outgoing(
                 metadata.remove(MetadataKey::MEMBER_OF_KEY);
             }
             created_with(&mut metadata, item, held);
+            item.rewrite.metadata_values(&mut metadata);
             Item::Project(Box::new(Project {
                 id,
                 url: None,
@@ -10671,6 +10690,7 @@ fn outgoing(
             metadata: {
                 let mut metadata = carried(&document.metadata);
                 created_with(&mut metadata, item, held);
+                item.rewrite.metadata_values(&mut metadata);
                 metadata
             },
             classification,
@@ -10737,6 +10757,12 @@ fn exposure_of(item: &Planned, withheld: impl Fn(&GlobalId) -> bool) -> Exposure
         Item::Document(document) => Exposure::of_document(document),
     }
     .assets(&item.assets)
+    // The id a create offers the destination is made up from the source's, and a destination
+    // whose ids are paths writes it where a reader sees it, so it is screened as the title is.
+    .and(match item.target {
+        Target::Create => Exposure::short([item.item.id().as_str().to_owned()]),
+        Target::Update { .. } => Exposure::default(),
+    })
     // The source spelling its links are rendered from at each write, so the rendering is
     // rewritten exactly as the content it becomes.
     .and(item.links.as_ref().map_or_else(Exposure::default, |links| {
@@ -10773,10 +10799,27 @@ fn rewritten(item: &mut Planned, rewrite: &Rewrite) -> Result<(), EngineError> {
     if rewrite.is_identity() {
         return Ok(());
     }
+    item.rewrite = rewrite.clone();
+    let creates = matches!(item.target, Target::Create);
     match &mut item.item {
-        Item::Task(task) => rewrite.task(task),
-        Item::Project(project) => rewrite.project(project),
-        Item::Document(document) => rewrite.document(document),
+        Item::Task(task) => {
+            rewrite.task(task);
+            if creates {
+                task.id = NativeId::from(rewrite.short(task.id.as_str()).as_str());
+            }
+        }
+        Item::Project(project) => {
+            rewrite.project(project);
+            if creates {
+                project.id = NativeId::from(rewrite.short(project.id.as_str()).as_str());
+            }
+        }
+        Item::Document(document) => {
+            rewrite.document(document);
+            if creates {
+                document.id = NativeId::from(rewrite.short(document.id.as_str()).as_str());
+            }
+        }
     }
     if let Some(links) = &mut item.links {
         links.original = rewrite.text(&links.original);

@@ -921,6 +921,8 @@ pub(crate) struct Boundary {
     sanitize_dry_run: bool,
     /// Whether a narrow write to an existing task is screened with the task as it stands.
     whole_item: bool,
+    /// Whether the configuration names a `sanitize_command`, the one policy known to rewrite.
+    replaces_by_command: bool,
     /// What the screened writes of this command replaced, until [`Engine::take_sanitization`].
     sanitized: Arc<std::sync::Mutex<Sanitization>>,
     /// What the policy has answered in this command, until [`Engine::end_command`].
@@ -1051,6 +1053,7 @@ impl Default for Boundary {
             replacements: Vec::new(),
             sanitize_dry_run: false,
             whole_item: false,
+            replaces_by_command: false,
             sanitized: Arc::default(),
             screened: Arc::default(),
             withheld: Arc::default(),
@@ -1079,6 +1082,8 @@ impl Boundary {
                 .unwrap_or_default(),
             sanitize_dry_run: false,
             whole_item: write_policy.is_some_and(|config| config.sanitize_command.is_some()),
+            replaces_by_command: write_policy
+                .is_some_and(|config| config.sanitize_command.is_some()),
             sanitized: Arc::default(),
             screened: Arc::default(),
             withheld: Arc::default(),
@@ -1159,6 +1164,15 @@ impl Exposure {
                 metadata: values.into_iter().collect(),
                 ..FixedEntries::default()
             },
+            ..Self::default()
+        }
+    }
+
+    /// Short fields a write carries that replacement rewrites — the id a create makes up from
+    /// its source's.
+    pub(crate) fn short(values: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            metadata: values.into_iter().collect(),
             ..Self::default()
         }
     }
@@ -1551,6 +1565,7 @@ impl Engine {
         self.boundary.active = true;
         self.boundary.policy = policy;
         self.boundary.whole_item = true;
+        self.boundary.replaces_by_command = false;
         self.boundary.forget();
         self
     }
@@ -1581,6 +1596,33 @@ impl Engine {
     pub fn with_sanitize_dry_run(mut self, dry_run: bool) -> Self {
         self.boundary.sanitize_dry_run = dry_run;
         self
+    }
+
+    /// `origin` as a copy into `destination` writes it, when that is another spelling: asked of
+    /// a configured `sanitize_command` only, only when `destination` is screened and only for an
+    /// origin a copy writes there — never one naming a source declared private, which is
+    /// withheld — and `None` whenever the answer is the origin as it stands or did not pass.
+    pub(crate) async fn origin_as_written(
+        &self,
+        destination: &ResolvedSource,
+        origin: &crate::GlobalId,
+    ) -> Option<String> {
+        if !self.boundary.active
+            || !self.boundary.replaces_by_command
+            || self.declared(destination.name()) == SourceVisibility::Private
+            || self.declared(&origin.source) == SourceVisibility::Private
+        {
+            return None;
+        }
+        let origin = origin.to_string();
+        let origin = origin.as_str();
+        let exposure = Exposure::short([origin.to_owned()]);
+        let answer = self.screen(&exposure).await;
+        if answer.verdict != WriteVerdict::Pass {
+            return None;
+        }
+        let written = Rewrite::of(&exposure, &answer).short(origin);
+        (written != origin).then_some(written)
     }
 
     /// The policy this engine asks about the public boundary.

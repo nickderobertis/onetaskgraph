@@ -2546,8 +2546,12 @@ label names, comment bodies, metadata string values and rendering answers' strin
 under `fixed`, what is checked and never rewritten: `repositories`, status, priority, every id
 (a project, a parent, `delivers`, `delivered_by`, a dependency's far end), metadata keys and
 asset names. A term left in a fixed entry refuses the write, nothing written; a destination
-declared private receives the original text. An id a create makes up from a title is made up
-from the title as written. The store matches no term itself: onevcs folds the caller's layer
+declared private receives the original text. An id a create makes up from a title, or a copy
+from its source's id, is made up as written, and the store's own `onetaskgraph.origin` and
+`onetaskgraph.copies` values are written replaced like any other: a re-copy of an item whose id
+carries a replaced term finds the item it copied before by its link, or — when the origin
+search for the id as it stands finds nothing — by one more sanitisation of that origin and a
+search for its replaced spelling, made only under a configured `sanitize_command`. The store matches no term itself: onevcs folds the caller's layer
 over every declaration level it reads.
 
 `replacements` is the store's own replacement layer, sent with every sanitisation above every
