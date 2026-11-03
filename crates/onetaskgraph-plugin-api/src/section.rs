@@ -19,6 +19,7 @@ pub struct StoredHeading {
     /// The heading's text, without its leading `#` marks or any inline formatting.
     pub text: String,
     /// The id its backend stores the heading under.
+    // llmlint: ignore[invalid_states_unrepresentable] The id is whatever a backend stores, and the contract crate states no backend's id grammar; a plugin keeps only well-formed ids (Linear's decoder keeps hex ids carrying 8 hex characters) and the engine's form checks the hex it writes, so a newtype here would only move that check into a crate every plugin rebuilds against.
     pub id: String,
 }
 

@@ -1261,6 +1261,8 @@ struct Journal {
     sections_pending: Vec<SectionsPending>,
     /// Each copied item's section-link figures, as its last rendering left them.
     sections: HashMap<GlobalId, SectionLinks>,
+    /// Each comment written with links not addressable yet, finished with the rest.
+    comments_pending: Vec<CommentPending>,
     /// One entry per copied item whose `onetaskgraph.copies` link this copy wrote, in that
     /// order.
     ///
@@ -2487,7 +2489,7 @@ impl Engine {
         // Each item whose destination stores other content than it was sent is written once
         // more, now that its source's link is written and so its change token is final; one the
         // destination then stores otherwise again is reported `failed` with why.
-        self.finish_sections(journal)?;
+        self.finish_sections(journal).await?;
         let diverged = self.follow_up(journal).await?;
         self.written_results(&mut items, &levels).await;
         for outcome in &mut items {
@@ -7649,9 +7651,37 @@ impl Engine {
             }
         }
         if let Some(plan) = &item.comment_plan {
-            let plan = self.finished_comments(destination, item, &written.native, plan, journal);
-            self.write_comments(destination, &item.source, &written.native, &plan, journal)
+            let (plan, pending) =
+                self.finished_comments(destination, item, &written.native, plan, journal);
+            let landed = self
+                .write_comments(destination, &item.source, &written.native, &plan, journal)
                 .await?;
+            // A comment whose link names a record not landed yet is finished once every write
+            // of the copy has: see `Engine::finish_sections`.
+            for (origin, links, still) in pending {
+                let written_copy = plan.steps.iter().find_map(|step| match step {
+                    comments::Step::Add(copy) | comments::Step::Edit { copy, .. }
+                        if copy.origin.id == origin =>
+                    {
+                        Some(copy.clone())
+                    }
+                    _ => None,
+                });
+                if let (Some((_, comment)), Some(copy)) = (
+                    landed.iter().find(|(held, _)| *held == origin),
+                    written_copy,
+                ) {
+                    journal.comments_pending.push(CommentPending {
+                        at: destination.name().clone(),
+                        source: item.source.clone(),
+                        task: written.native.clone(),
+                        comment: comment.clone(),
+                        copy,
+                        links,
+                        pending: still,
+                    });
+                }
+            }
         }
         let mut landed = outcome(reached(Some(written), changed));
         landed.expected = expected;
@@ -7659,7 +7689,8 @@ impl Engine {
     }
 
     /// `plan` with each comment it writes whose links were not addressable when it was planned
-    /// finished, now that its task `task` has landed.
+    /// rendered again, now that its task `task` has landed, and each whose links still are not,
+    /// by its origin id, with its links and what is still pending.
     fn finished_comments(
         &self,
         destination: &ResolvedSource,
@@ -7667,10 +7698,11 @@ impl Engine {
         task: &NativeId,
         plan: &comments::CommentPlan,
         journal: &Journal,
-    ) -> comments::CommentPlan {
+    ) -> (comments::CommentPlan, Vec<CommentLinks>) {
         let mut plan = plan.clone();
+        let mut pending_after = Vec::new();
         if item.comment_links.is_empty() {
-            return plan;
+            return (plan, pending_after);
         }
         let knows = Writing {
             destination,
@@ -7694,13 +7726,20 @@ impl Engine {
             else {
                 continue;
             };
-            let (finished, _) =
-                links.finished(copy.body.as_str(), pending, &knows, sections::Pass::Final);
+            let (finished, still) = links.finished(
+                copy.body.as_str(),
+                pending,
+                &knows,
+                sections::Pass::Provisional,
+            );
             if let Ok(body) = onetaskgraph_plugin_api::CommentBody::new(finished) {
                 copy.body = body;
             }
+            if !still.is_empty() {
+                pending_after.push((copy.origin.id.clone(), links.clone(), still));
+            }
         }
-        plan
+        (plan, pending_after)
     }
 
     /// Make one destination task's comments what `plan` decided, recording how to take each
@@ -7713,7 +7752,8 @@ impl Engine {
         task: &NativeId,
         plan: &comments::CommentPlan,
         journal: &mut Journal,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Vec<(NativeId, NativeId)>, EngineError> {
+        let mut landed = Vec::new();
         let at = destination.name().clone();
         let gone = || EngineError::NoSuchTask {
             id: GlobalId::new(at.clone(), task.clone()).to_string(),
@@ -7750,6 +7790,7 @@ impl Engine {
                         .map_err(|error| refused(destination, error))?;
                     match edited {
                         Some(_) => {
+                            landed.push((copy.origin.id.clone(), id.clone()));
                             if let (Some(origin), Ok(body)) = (
                                 before.origin.clone(),
                                 onetaskgraph_plugin_api::CommentBody::new(before.body.clone()),
@@ -7772,6 +7813,7 @@ impl Engine {
                                 .await
                                 .map_err(|error| refused(destination, error))?
                                 .ok_or_else(gone)?;
+                            landed.push((copy.origin.id.clone(), added.id.clone()));
                             journal.comments.push(CommentUndo {
                                 at: at.clone(),
                                 task: task.clone(),
@@ -7787,6 +7829,7 @@ impl Engine {
                         .await
                         .map_err(|error| refused(destination, error))?
                         .ok_or_else(gone)?;
+                    landed.push((copy.origin.id.clone(), added.id.clone()));
                     journal.comments.push(CommentUndo {
                         at: at.clone(),
                         task: task.clone(),
@@ -7795,7 +7838,7 @@ impl Engine {
                 }
             }
         }
-        Ok(())
+        Ok(landed)
     }
 
     /// Which destination project this item is filed under, when it is filed at all.
@@ -9120,7 +9163,55 @@ impl Engine {
     /// tokens its whole item moves it when the link lands — and a later copy of an unchanged
     /// source finds it unchanged. A follow-up that fails fails the copy, which then undoes every
     /// write it made; one answered with other content is landed and reported `failed`.
-    fn finish_sections(&self, journal: &mut Journal) -> Result<(), EngineError> {
+    async fn finish_sections(&self, journal: &mut Journal) -> Result<(), EngineError> {
+        for held in std::mem::take(&mut journal.comments_pending) {
+            let destination = self.writable(&held.at)?;
+            let knows = Writing {
+                destination,
+                landed: &journal.landed,
+                own: located(
+                    destination
+                        .source()
+                        .written_location(MetadataRecord::Task, &held.task)
+                        .as_ref(),
+                )
+                .map(|location| (held.task.clone(), location)),
+            };
+            let (finished, _) = held.links.finished(
+                held.copy.body.as_str(),
+                &held.pending,
+                &knows,
+                sections::Pass::Final,
+            );
+            if finished == held.copy.body.as_str() {
+                continue;
+            }
+            let Ok(body) = onetaskgraph_plugin_api::CommentBody::new(finished) else {
+                continue;
+            };
+            let copy = CommentCopy {
+                body,
+                origin: held.copy.origin.clone(),
+            };
+            destination
+                .source()
+                .write_comment_copy(&held.task, Some(&held.comment), &copy)
+                .await
+                .map_err(|error| refused(destination, error))?;
+            journal.comments.push(CommentUndo {
+                at: held.at.clone(),
+                task: held.task.clone(),
+                undo: CommentUndoing::Edited {
+                    id: held.comment.clone(),
+                    before: held.copy,
+                },
+            });
+            journal
+                .sections
+                .entry(held.source)
+                .or_default()
+                .section_link_updates += 1;
+        }
         for held in std::mem::take(&mut journal.sections_pending) {
             let destination = self.writable(&held.at)?;
             let knows = Writing {
@@ -10796,16 +10887,19 @@ fn targets_first(planned: Vec<Planned>) -> Vec<Planned> {
     let links: Vec<Vec<usize>> = planned
         .iter()
         .map(|item| {
-            let Some(links) = &item.links else {
-                return Vec::new();
-            };
+            let referents: Vec<&sections::Linked> = item
+                .links
+                .iter()
+                .chain(item.comment_links.iter().map(|(_, links, _)| links))
+                .flat_map(|links| &links.referents)
+                .collect();
             planned
                 .iter()
                 .enumerate()
                 .filter(|(_, other)| {
                     other.to == item.to
                         && !std::ptr::eq(*other, item)
-                        && links.referents.iter().any(|referent| {
+                        && referents.iter().any(|referent| {
                             referent.level == other.item.level() && referent.id == other.source
                         })
                 })
@@ -10903,6 +10997,29 @@ impl sections::Knows for Writing<'_> {
     fn own(&self) -> Option<(NativeId, String)> {
         self.own.clone()
     }
+}
+
+/// One carried comment's links not addressable when its task landed: its origin id, its links
+/// and what is still pending.
+type CommentLinks = (NativeId, sections::BodyLinks, Vec<sections::Pending>);
+
+/// One comment written with links not addressable yet, finished once every write of the copy
+/// has landed: see [`Engine::finish_sections`].
+struct CommentPending {
+    /// The source the destination task is in.
+    at: SourceName,
+    /// The task copied, at its source.
+    source: GlobalId,
+    /// The destination task.
+    task: NativeId,
+    /// The comment at the destination.
+    comment: NativeId,
+    /// The copy as it was written.
+    copy: CommentCopy,
+    /// Its links.
+    links: sections::BodyLinks,
+    /// The placeholders it was written with.
+    pending: Vec<sections::Pending>,
 }
 
 /// One item whose content was written with links not addressable yet, finished once every

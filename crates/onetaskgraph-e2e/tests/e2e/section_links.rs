@@ -1625,3 +1625,191 @@ fn a_refused_section_link_update_takes_the_whole_copy_back() {
     .expect("a listing");
     assert_eq!(projects["items"], json!([]), "and the project");
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the file-backed stdio peer this suite already spawns.
+#[test]
+fn a_destination_with_no_section_form_receives_every_fragment_as_written() {
+    // A stdio plugin states no section form, so its documents' links are pointed at its own
+    // records and every fragment is carried byte for byte, nothing counted.
+    let sandbox = Sandbox::new();
+    let config = empty_folder(&sandbox, "plans");
+    let root = root_of(&sandbox, "plans");
+    for folder in ["projects", "documents"] {
+        std::fs::create_dir_all(root.join(folder)).expect("a folder");
+    }
+    std::fs::write(
+        root.join("projects/P.md"),
+        "---\ntitle: Plan\nstatus: todo\n---\nThe plan.\n",
+    )
+    .expect("the project");
+    std::fs::write(
+        root.join("documents/E.md"),
+        "---\ntitle: Budgets\nproject: P\n---\n## Budgets\n\nThe numbers.\n",
+    )
+    .expect("the linked document");
+    std::fs::write(
+        root.join("documents/D.md"),
+        "---\ntitle: Design\nproject: P\n---\n## Overview\n\nSee [the budgets](E.md#budgets) \
+         and [the top](#overview).\n",
+    )
+    .expect("the design document");
+    let store = sandbox.project().join("store.json");
+    let peer = crate::document_store::store_at(&store, None, "native");
+    configure(
+        &sandbox,
+        &[
+            ("plans", &json!({"plugin": "local-md", "config": config})),
+            ("store", &peer),
+        ],
+    );
+    ok(&sandbox, &["document", "copy", "plans:E", "--to", "store"]);
+    let copied = outcomes(&ok(
+        &sandbox,
+        &["document", "copy", "plans:D", "--to", "store", "--json"],
+    ));
+    let design = &copied["plans:D"];
+    for figure in [
+        "section_links_unresolved",
+        "section_links_unaddressable",
+        "section_link_updates",
+    ] {
+        assert_eq!(design.get(figure), None, "{figure}: {design:#}");
+    }
+    let content = Landed {
+        verb: "document",
+        id: design["destination"].as_str().unwrap().to_owned(),
+    }
+    .content(&sandbox);
+    // The peer reports no location for its records, so there is nowhere of its own to point
+    // the link at: it arrives as it was written, its fragment byte for byte.
+    assert_eq!(
+        content, "## Overview\n\nSee [the budgets](E.md#budgets) and [the top](#overview).",
+        "every fragment is carried as written"
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn links_that_run_in_a_cycle_through_bodies_and_a_comment_all_land_and_a_repeat_writes_nothing() {
+    // Two tasks whose bodies link each other's heading, and a comment on the first linking the
+    // second: whichever lands first, each link is finished once its target has landed.
+    let sandbox = Sandbox::new();
+    let config = empty_folder(&sandbox, "plans");
+    let root = root_of(&sandbox, "plans");
+    for folder in ["projects", "tasks"] {
+        std::fs::create_dir_all(root.join(folder)).expect("a folder");
+    }
+    std::fs::write(
+        root.join("projects/P.md"),
+        "---\ntitle: Plan\nstatus: todo\n---\nThe plan.\n",
+    )
+    .expect("the project");
+    std::fs::write(
+        root.join("tasks/A.md"),
+        "---\ntitle: Alpha\nstatus: todo\nproject: P\n---\n## Alpha\n\nAfter [beta](B.md#beta).\n\n\
+         ## Comments\n\n<!-- onetaskgraph:comment id=\"c1\" created_at=\"2026-11-02T12:00:00Z\" \
+         updated_at=\"2026-11-02T12:00:00Z\" -->\n### comment — 2026-11-02T12:00:00Z\n\n\
+         Blocked on [beta](B.md#beta).\n\n<!-- /onetaskgraph:comment -->\n",
+    )
+    .expect("the first task");
+    std::fs::write(
+        root.join("tasks/B.md"),
+        "---\ntitle: Beta\nstatus: todo\nproject: P\n---\n## Beta\n\nBefore [alpha](A.md#alpha).\n",
+    )
+    .expect("the second task");
+    let (linear, linear_config) = store(&sandbox, "linear", "linear", None);
+    configure(
+        &sandbox,
+        &[
+            ("plans", &json!({"plugin": "local-md", "config": config})),
+            ("linear", &linear_config),
+        ],
+    );
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    let copy = [
+        "project",
+        "copy",
+        "plans:P",
+        "--to",
+        "linear",
+        "--comments",
+        "--json",
+    ];
+    let reported = outcomes(&ok(&sandbox, &copy));
+    let landed = |key: &str| Landed {
+        verb: "task",
+        id: reported[&format!("plans:{key}")]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    let (alpha, beta) = (landed("A"), landed("B"));
+    let link = |to: &Landed, text: &str, slug: &str| {
+        format!(
+            "{}#heading-{slug}-{}",
+            to.location(&sandbox),
+            stored_id8(workspace, to, text, 0)
+        )
+    };
+    assert!(
+        alpha
+            .content(&sandbox)
+            .contains(&format!("[beta]({})", link(&beta, "Beta", "beta"))),
+        "{}",
+        alpha.content(&sandbox)
+    );
+    assert!(
+        beta.content(&sandbox)
+            .contains(&format!("[alpha]({})", link(&alpha, "Alpha", "alpha"))),
+        "{}",
+        beta.content(&sandbox)
+    );
+    let listed: Value = serde_json::from_str(&ok(
+        &sandbox,
+        &["task", "comment", "list", &alpha.id, "--json"],
+    ))
+    .expect("comments");
+    let expected = format!("[beta]({})", link(&beta, "Beta", "beta"));
+    assert!(
+        listed["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|comment| comment["body"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(&expected)),
+        "the comment names the second task's heading: {listed:#}"
+    );
+    refreshes_only_the_copy_record(&sandbox, &copy, &linear, &[alpha, beta]);
+}
+
+/// Repeat `copy` — a `--comments` copy out of a folder of Markdown into the hosted `store` — and
+/// hold it to the one exemption the manager ruled on evidence from base `ebce65c3`: the second
+/// copy may move nothing of `records`' stored bodies but their `onetaskgraph.copied_version`,
+/// and a third copy sends no mutation.
+fn refreshes_only_the_copy_record(
+    sandbox: &Sandbox,
+    copy: &[&str],
+    store: &Store,
+    records: &[Landed],
+) {
+    let held = |store: &Store| -> Vec<String> {
+        records
+            .iter()
+            .map(|record| masked(&store.raw(record)))
+            .collect()
+    };
+    let before = held(store);
+    ok(sandbox, copy);
+    assert_eq!(held(store), before, "only copied_version moved");
+    let mark = store.mark(None);
+    ok(sandbox, copy);
+    assert_eq!(
+        store.writes_since(&mark, None),
+        Vec::<String>::new(),
+        "a third copy writes nothing"
+    );
+}

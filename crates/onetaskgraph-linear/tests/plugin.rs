@@ -7385,3 +7385,41 @@ fn heading_ids_are_read_out_of_the_editor_state_linear_stored() {
     }
     assert_eq!(onetaskgraph_linear::headings::decoded("not base64!"), None);
 }
+
+/// A later answer whose editor state is `null`, or does not decode, says the record's headings
+/// are no longer known: nothing an earlier answer carried is answered for it.
+#[test]
+fn a_null_or_undecodable_editor_state_answers_no_headings() {
+    use onetaskgraph_plugin_api::MetadataRecord;
+    let sample: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/editor-state/tes2-773.json")).unwrap();
+    let answer = |state: serde_json::Value| {
+        onetaskgraph_linear::headings::carried(&serde_json::json!({
+            "issue": {"id": "i1", "description": "x", "descriptionState": state},
+            "document": {"id": "d1", "title": "D", "contentState": "not base64!"},
+            "project": {"id": "p1", "name": "P", "contentState": null},
+        }))
+    };
+    let held = answer(sample["state"].clone());
+    let issue = held
+        .iter()
+        .find(|((record, id), _)| *record == MetadataRecord::Task && id.0 == "i1")
+        .expect("the issue is answered");
+    assert_eq!(issue.1.as_ref().map(Vec::len), Some(5));
+    for (record, id) in [
+        (MetadataRecord::Document, "d1"),
+        (MetadataRecord::Project, "p1"),
+    ] {
+        let entry = held
+            .iter()
+            .find(|((held_record, held_id), _)| *held_record == record && held_id.0 == id)
+            .unwrap_or_else(|| panic!("{id} is answered"));
+        assert_eq!(entry.1, None, "{id}: no headings known");
+    }
+    let cleared = answer(serde_json::Value::Null);
+    let issue = cleared
+        .iter()
+        .find(|((record, id), _)| *record == MetadataRecord::Task && id.0 == "i1")
+        .expect("the issue is answered");
+    assert_eq!(issue.1, None, "a null state answers no headings");
+}

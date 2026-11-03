@@ -30,6 +30,7 @@ use onetaskgraph_plugin_api::{BodyMarkup, SharedBodyMarkup, StoredHeading};
 
 /// One heading of a record: its text, and how many headings of that same text come before
 /// it in the record — `0` for the first `## Budgets`, `1` for the second.
+// llmlint: ignore[invalid_states_unrepresentable] A heading is carried from one record to its counterpart in another, where it may name nothing — the case a copy counts unresolved or unaddressable — so membership cannot be a property of the value; every form answers it at use, by `RecordHeadings::slug_of` and Linear's stored ids.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Heading {
     /// Its text, as [`headings`] reads it.
@@ -266,7 +267,7 @@ pub fn linear_section_form() -> LinearSectionForm {
 }
 
 /// One destination kind's section form: the one entry each kind has.
-// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The task contract this module implements requires each destination kind's form to be "one entry per destination kind" chosen "in one place in onetaskgraph-core", and the slug rules implemented there once; no plugin may depend on the engine (AGENTS.md), so a plugin cannot own a form the engine reads, and GitHub's anchor markup reaches the GitHub plugin only as the `BodyMarkup` this entry hands it.
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The task contract this module implements requires each destination kind's form to be "one entry per destination kind" chosen "in one place in onetaskgraph-core", and the slug rules implemented there once; no plugin may depend on the engine (AGENTS.md), so a plugin cannot own a form the engine reads, and GitHub's anchor markup reaches the GitHub plugin only as the `BodyMarkup` this entry hands it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionForm {
     /// A folder of Markdown: the path relative to the linking record's own file, then
@@ -469,7 +470,8 @@ fn linear_fragment(heading: &Heading, stored: &[StoredHeading]) -> Option<String
         .filter(|held| same_text(&held.text, &heading.text))
         .nth(heading.ordinal)?;
     let id8: String = held.id.chars().filter(|c| *c != '-').take(8).collect();
-    (id8.len() == 8).then(|| format!("{LINEAR_HEADING}{}-{id8}", linear_slug(&heading.text)))
+    (id8.len() == 8 && id8.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| format!("{LINEAR_HEADING}{}-{id8}", linear_slug(&heading.text)))
 }
 
 /// The path of `to` written relative to the directory of the file `from`, with `/` between
@@ -588,19 +590,41 @@ impl BodyMarkup for GithubAnchors {
         written
     }
 
+    /// Exactly the lines [`Self::written`] adds: an anchor line outside fenced code, straight
+    /// before a heading, naming that heading's own slug. An anchor a person wrote — another id,
+    /// or one inside a fenced example — is part of the body and is read as it is.
     fn read(&self, content: &str) -> String {
+        let slugs = github_slugs(&headings(content));
         let lines: Vec<&str> = content.split_inclusive('\n').collect();
         let mut read = String::with_capacity(content.len());
+        let mut fence: Option<(char, usize)> = None;
+        let mut seen = 0;
         for (index, line) in lines.iter().enumerate() {
             let bare = line.trim_end_matches(['\n', '\r']);
-            let before_heading = lines
-                .get(index + 1)
-                .is_some_and(|next| heading_text(next.trim_end_matches(['\n', '\r'])).is_some());
-            if before_heading && anchored(bare).is_some() {
-                continue;
+            let trimmed = bare.trim_start_matches(' ');
+            if bare.len() - trimmed.len() <= 3
+                && let Some((marker, width)) = fence_of(trimmed)
+            {
+                match fence {
+                    None => fence = Some((marker, width)),
+                    Some((open, wide)) if open == marker && width >= wide => fence = None,
+                    Some(_) => {}
+                }
+            } else if fence.is_none() {
+                if heading_text(bare).is_some() {
+                    seen += 1;
+                } else if let Some(slug) = anchored(bare)
+                    && lines.get(index + 1).is_some_and(|next| {
+                        heading_text(next.trim_end_matches(['\n', '\r'])).is_some()
+                    })
+                    && slugs.get(seen).is_some_and(|expected| expected == slug)
+                {
+                    continue;
+                }
             }
             read.push_str(line);
         }
         read
     }
 }
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]

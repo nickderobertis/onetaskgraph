@@ -67,31 +67,38 @@ pub fn decoded(state: &str) -> Option<Vec<StoredHeading>> {
     Some(headings)
 }
 
-/// Every record an answer carries an editor state for, with its headings: an issue by its
+/// Every record an answer selects an editor state for, with its headings: an issue by its
 /// `descriptionState`, a project — the node naming a `name` — and a document — a `title` —
-/// by their `contentState`, wherever in the answer each sits.
-pub(crate) fn carried(data: &Value) -> Vec<((MetadataRecord, NativeId), Vec<StoredHeading>)> {
+/// by their `contentState`, wherever in the answer each sits. `None` is a state the answer
+/// gave as `null` or that does not decode: that record's headings are no longer known.
+#[must_use]
+pub fn carried(data: &Value) -> Vec<Carried> {
     let mut found = Vec::new();
     walk(data, &mut found);
     found
 }
 
-fn walk(value: &Value, found: &mut Vec<((MetadataRecord, NativeId), Vec<StoredHeading>)>) {
+/// One record an answer selected an editor state for, and its headings when the state held any
+/// that decode.
+pub type Carried = ((MetadataRecord, NativeId), Option<Vec<StoredHeading>>);
+
+fn walk(value: &Value, found: &mut Vec<Carried>) {
     match value {
         Value::Object(object) => {
             if let Some(Value::String(id)) = object.get("id") {
                 let held = match (object.get("descriptionState"), object.get("contentState")) {
-                    (Some(Value::String(state)), _) => Some((MetadataRecord::Task, state)),
-                    (_, Some(Value::String(state))) if object.contains_key("name") => {
+                    (Some(state), _) => Some((MetadataRecord::Task, state)),
+                    (_, Some(state)) if object.contains_key("name") => {
                         Some((MetadataRecord::Project, state))
                     }
-                    (_, Some(Value::String(state))) => Some((MetadataRecord::Document, state)),
+                    (_, Some(state)) => Some((MetadataRecord::Document, state)),
                     _ => None,
                 };
-                if let Some((record, state)) = held
-                    && let Some(headings) = decoded(state)
-                {
-                    found.push(((record, NativeId(id.clone())), headings));
+                if let Some((record, state)) = held {
+                    found.push((
+                        (record, NativeId(id.clone())),
+                        state.as_str().and_then(decoded),
+                    ));
                 }
             }
             for inner in object.values() {

@@ -1968,10 +1968,20 @@ impl LinearSource {
                 // its headings are stored, and is the only thing that does.
                 let carried = headings::carried(&data);
                 if !carried.is_empty() {
-                    self.headings
+                    let mut held = self
+                        .headings
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .extend(carried);
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    for (record, headings) in carried {
+                        match headings {
+                            Some(headings) => {
+                                held.insert(record, headings);
+                            }
+                            None => {
+                                held.remove(&record);
+                            }
+                        }
+                    }
                 }
                 Ok(Ok(data))
             }

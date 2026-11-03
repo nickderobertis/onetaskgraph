@@ -191,3 +191,24 @@ fn relative_paths_are_written_and_read_from_the_linking_file() {
     assert_eq!(resolve_relative("/a/d.md", "https://x/y"), None);
     assert_eq!(resolve_relative("/a/d.md", "#slug"), None);
 }
+
+#[test]
+fn an_anchor_a_person_wrote_and_one_in_a_fenced_example_survive_reading() {
+    let markup = SectionForm::GithubProjects
+        .markup()
+        .expect("GitHub needs anchors");
+    let authored = "<a id=\"budget-table\"></a>\n## Budgets\n\nThe table.\n\n```md\n<a id=\"example\"></a>\n## Example\n```\n\n## Done\n";
+    let written = markup.written(authored);
+    assert!(written.contains("<a id=\"budget-table\"></a>\n<a id=\"budgets\"></a>\n## Budgets"));
+    assert!(written.contains("<a id=\"done\"></a>\n## Done"));
+    assert_eq!(
+        markup.read(&written),
+        authored,
+        "only the written anchors are taken away"
+    );
+    assert_eq!(
+        markup.read(authored),
+        authored,
+        "an authored body reads as it is"
+    );
+}
