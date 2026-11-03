@@ -15,6 +15,7 @@ import os
 import sys
 from collections.abc import Coroutine
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 
@@ -95,7 +96,22 @@ def client(
     return Client(binary, cwd=tmp_path, environment=dict(os.environ))
 
 
-def task(identifier: str, content: str) -> dict[str, object]:
+class Task(TypedDict):
+    """One task as `sweep_source.py` holds it and sends it (§4.4)."""
+
+    id: str
+    title: str
+    content: str
+    status: dict[str, str]
+    labels: list[dict[str, str]]
+    project: None
+    url: None
+    location: None
+    created_at: None
+    updated_at: None
+
+
+def task(identifier: str, content: str) -> Task:
     """One task as the peer holds it and sends it (§4.4)."""
     return {
         "id": identifier,

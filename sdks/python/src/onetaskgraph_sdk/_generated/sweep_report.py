@@ -21,7 +21,7 @@ class SweepRequests(BaseModel):
     searches: Annotated[
         int,
         Field(
-            description="Search or listing pages the sweep asked its source for — each one call of the plugin\ncontract, which a source may answer with more than one request.",
+            description="Search pages — or, for a sweep reading its source whole, listing pages — the sweep asked\nits source for: each one call of the plugin contract, which a source may answer with\nmore than one request.",
             ge=0,
         ),
     ]

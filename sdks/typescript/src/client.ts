@@ -454,7 +454,6 @@ function searchPathFlags(options: TemplateOptions): string[] {
   return flags;
 }
 
-// `text` parsed as a JSON object, or `undefined` when it is not one.
 function safeParse(text: string): Record<string, unknown> | undefined {
   try {
     const value: unknown = JSON.parse(text);
@@ -1048,6 +1047,11 @@ export class OnetaskgraphClient {
     if (typeof source !== "string") {
       throw new TypeError(
         "sourcesSanitize: source is not a string; next: name a configured source",
+      );
+    }
+    if (!isPlainObject(options)) {
+      throw new TypeError(
+        "sourcesSanitize: options is not a plain object; next: pass an options object",
       );
     }
     for (const [name, value] of [

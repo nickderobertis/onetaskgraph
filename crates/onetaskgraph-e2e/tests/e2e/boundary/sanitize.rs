@@ -151,7 +151,6 @@ fn every_rewritable_field_a_public_write_carries_lands_with_the_term_replaced_by
         answered.input
     );
 
-    // A document's and a project's titles.
     let before = record.calls().len();
     store.ok(&[
         "document",
@@ -2265,5 +2264,58 @@ fn a_public_view_a_sanitisation_would_have_to_rewrite_is_refused_before_anything
                 .iter()
                 .filter(|(path, _)| !path.contains("boundary-record"))),
         "nothing of the plan was written"
+    );
+}
+
+#[test]
+fn a_sweep_of_an_empty_source_whose_name_carries_a_term_redacts_it_and_exits_one() {
+    let (store, _record) = sanitizing(replaced());
+    let named = format!("{TERM}-empty");
+    let mut document: Value = serde_json::from_str(
+        &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the project document"),
+    )
+    .expect("JSON");
+    document["sources"][&named] = json!({
+        "plugin": "local-md",
+        "config": {"root": store.sandbox.subdirectory("empty")},
+        "visibility": "public",
+    });
+    store.sandbox.project_document(&document.to_string());
+    let (code, report, out, err) = sweep(&store, &named, &[]);
+    assert_eq!(
+        code,
+        Some(1),
+        "a record nothing can name is not a clean sweep: {out}{err}"
+    );
+    assert_eq!(report["items"], json!([]), "{report}");
+    assert_eq!(
+        report["source"],
+        json!({"redacted": true, "kind": "source", "ordinal": 1}),
+        "{report}"
+    );
+    spelled_nowhere(&store, &[&out, &err]);
+}
+
+#[test]
+fn a_record_whose_fresh_read_the_policy_refuses_is_refused_writing_nothing() {
+    // The other writer's edit adds the owner the policy derives, which has no replacement.
+    let shared = Shared::new(
+        &[("t1", &with_term())],
+        json!({"t1": [2]}),
+        json!({"t1": {"paragraph": "Owned by hiddenco."}}),
+    );
+    let (kind, said) = shared
+        .store
+        .refused(&["task", "priority", "set", "shared:t1", "high"]);
+    assert_eq!(kind, "boundary-refused", "{said}");
+    assert!(!said.contains("hiddenco") && !said.contains(TERM), "{said}");
+    assert_eq!(shared.writes(), 0, "nothing was written");
+    let task = shared.task("t1");
+    assert_eq!(task["priority"], json!("none"));
+    assert!(
+        task["content"]
+            .as_str()
+            .is_some_and(|content| content.ends_with("Owned by hiddenco."))
     );
 }

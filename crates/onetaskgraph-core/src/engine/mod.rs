@@ -555,8 +555,8 @@ pub enum EngineError {
         destination: String,
         /// The policy's neutral reason.
         reason: String,
-        /// The kinds of field replacement cannot fix, in neutral words.
-        unfixable: String,
+        /// The kinds of field replacement cannot fix.
+        unfixable: boundary::UnfixableKinds,
     },
 
     /// `--sanitize-dry-run`: a write that would have sanitised its item first wrote nothing.

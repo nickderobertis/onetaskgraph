@@ -11793,8 +11793,9 @@ export interface SweepRequests {
  */
 total: number
 /**
- * Search or listing pages the sweep asked its source for — each one call of the plugin
- * contract, which a source may answer with more than one request.
+ * Search pages — or, for a sweep reading its source whole, listing pages — the sweep asked
+ * its source for: each one call of the plugin contract, which a source may answer with
+ * more than one request.
  */
 searches: number
 /**

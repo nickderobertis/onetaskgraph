@@ -19,7 +19,7 @@ It is spawned with a cleared environment (§3.1), so it imports only the standar
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 KIND = "edit-source"
 PROTOCOL_VERSION = 2
@@ -40,11 +40,46 @@ CAPABILITIES = {
 }
 
 
-def _task(state: dict[str, Any], identifier: object) -> dict[str, Any] | None:
+class Task(TypedDict):
+    """A task as this peer holds it and sends it (§4.4): every member the store reads, its
+    `version` the token another writer's edit moves."""
+
+    id: str
+    title: str
+    content: str | None
+    status: dict[str, str]
+    priority: str
+    labels: list[dict[str, str | None]]
+    metadata: dict[str, Any]
+    version: str
+
+
+class Comment(TypedDict):
+    """A comment as this peer holds it and sends it (§4.16)."""
+
+    id: str
+    body: str
+
+
+class State(TypedDict):
+    """Everything the peer keeps between invocations: its tasks and their comments, how many
+    times each task was read, the reads at which another writer's edit lands and what it is,
+    the frozen search index, and every method it was asked."""
+
+    tasks: list[Task]
+    comments: dict[str, list[Comment]]
+    reads: dict[str, int]
+    moves: dict[str, list[int]]
+    edits: dict[str, dict[str, str]]
+    index: dict[str, str]
+    log: list[str]
+
+
+def _task(state: State, identifier: object) -> Task | None:
     return next((task for task in state["tasks"] if task["id"] == identifier), None)
 
 
-def _move(state: dict[str, Any], task: dict[str, Any]) -> None:
+def _move(state: State, task: Task) -> None:
     """Another writer's edit, as the fixture names it for this task: a label added, or the
     content's last paragraph replaced — and the version moved."""
     edit = state["edits"].get(task["id"], {})
@@ -55,7 +90,7 @@ def _move(state: dict[str, Any], task: dict[str, Any]) -> None:
     task["version"] = str(int(task["version"]) + 1)
 
 
-def _answer(state: dict[str, Any], method: str, params: dict[str, Any]) -> dict[str, Any]:
+def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]:
     match method:
         case "initialize":
             return {

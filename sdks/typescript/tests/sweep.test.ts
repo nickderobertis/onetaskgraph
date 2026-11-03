@@ -101,7 +101,6 @@ test("a search sweep answers its report on exit 3", async () => {
       config: { command: python, args: [peer, held] },
     },
   });
-  // The store above was only for its directory; this one carries the peer.
   const report = await client.sourcesSanitize("tracker");
   expect(report.coverage).toEqual({
     complete: false,
@@ -139,4 +138,14 @@ test("a sweep that cannot run still rejects", async () => {
   const refused = client.sourcesSanitize("site");
   await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
   await expect(refused).rejects.toThrow("terms_command");
+});
+
+test("sourcesSanitize refuses arguments it cannot send, before the binary is started", () => {
+  const client = new OnetaskgraphClient({ binaryPath: "/nonexistent/onetaskgraph", cwd: tmpdir() });
+  const sanitize = client.sourcesSanitize.bind(client) as (...args: unknown[]) => unknown;
+  expect(() => sanitize(7)).toThrow("source is not a string");
+  expect(() => sanitize("site", null)).toThrow("options is not a plain object");
+  expect(() => sanitize("site", ["--complete"])).toThrow("options is not a plain object");
+  expect(() => sanitize("site", { complete: "yes" })).toThrow("complete is not a boolean");
+  expect(() => sanitize("site", { dryRun: 1 })).toThrow("dryRun is not a boolean");
 });

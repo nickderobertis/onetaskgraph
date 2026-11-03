@@ -198,6 +198,7 @@ fn report_settlement_update() {
 // llmlint: ignore-end[tests_assert_real_behavior]
 
 // llmlint: ignore-block[tests_assert_real_behavior] Report-only entries budgets.yaml selects, which report nothing without ONEBUDGETSPEC_BUDGET_ID; the sweep journeys in `sanitize_sweep.rs` assert what a sweep does on the same board.
+// llmlint: ignore-block[budgets_reuse_gate_telemetry] The task registering these two budgets rules that each figure is "measured fresh by that command, the standalone-measurement exception": the 2,000-item workload is loopback-only and seconds long, while the behaviour journeys in `sanitize_sweep.rs` run a four-item board, so threading the large scenario through them would cost more gate time than measuring it here.
 /// `sanitize-sweep-requests`: every request a default sweep and one rerun send to the
 /// 2,000-item board, measured fresh — the standalone-measurement exception, loopback-only.
 #[test]
@@ -235,6 +236,7 @@ fn report_sanitize_complete_sweep() {
         ),
     );
 }
+// llmlint: ignore-end[budgets_reuse_gate_telemetry]
 // llmlint: ignore-end[tests_assert_real_behavior]
 
 fn report_store_cost(workload: &str) {

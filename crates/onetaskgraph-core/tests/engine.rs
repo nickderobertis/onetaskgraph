@@ -6039,7 +6039,7 @@ const FIFTY_THIRD_BUNDLE_SHAPE: [(&str, u64); 138] = [
     ("StatusMapping", 0x8254754ba020e7f3),
     ("StatusReconciled", 0x16438df195c9c354),
     ("StatusesReconciled", 0x4bebf9c7ad070539),
-    ("SweepReport", 0xce1c11c45eb98784),
+    ("SweepReport", 0x3888feaaa28035f6),
     ("Task", 0x4552c888ea064e07),
     ("TaskAssetNames", 0xc964f4e9ef203e23),
     ("TaskContentSet", 0x7a9b8ebd343b650c),

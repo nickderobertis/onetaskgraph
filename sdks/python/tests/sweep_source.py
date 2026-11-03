@@ -13,7 +13,7 @@ none of the SDK's own models.
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 KIND = "sweep-source"
 PROTOCOL_VERSION = 2
@@ -33,29 +33,58 @@ CAPABILITIES = {
 }
 
 
-def _held(store: Path) -> dict[str, Any]:
-    # The peer's own file: a request count and a list of tasks, as `_answer` writes them.
+class Status(TypedDict):
+    """A task's status on the wire (§4.4)."""
+
+    category: str
+    name: str
+
+
+class Task(TypedDict):
+    """A task as this peer holds it and sends it (§4.4)."""
+
+    id: str
+    title: str
+    content: str | None
+    status: Status
+    labels: list[dict[str, str]]
+    project: str | None
+    url: str | None
+    location: dict[str, str] | None
+    created_at: str | None
+    updated_at: str | None
+
+
+class Held(TypedDict):
+    """The peer's own file: how many requests it has answered, and its tasks."""
+
+    requests: int
+    tasks: list[Task]
+
+
+def _held(store: Path) -> Held:
     return json.loads(store.read_text(encoding="utf-8"))
 
 
-def _matches(task: dict[str, object], query: dict[str, object]) -> bool:
+def _matches(task: Task, query: dict[str, Any]) -> bool:
     text = query.get("text")
     if not isinstance(text, dict):
         return True
     wanted = str(text.get("terms", "")).lower()
-    fields = text.get("fields")
-    title = str(task.get("title") or "").lower()
-    content = str(task.get("content") or "").lower()
-    if fields == "title":
-        return wanted in title
-    if fields == "content":
-        return wanted in content
-    return wanted in title or wanted in content
+    title = task["title"].lower()
+    content = (task["content"] or "").lower()
+    match text.get("fields"):
+        case "title":
+            return wanted in title
+        case "content":
+            return wanted in content
+        case _:
+            return wanted in title or wanted in content
 
 
 def _answer(store: Path, method: str, params: dict[str, object]) -> dict[str, object]:
     held = _held(store)
-    tasks: list[dict[str, Any]] = held["tasks"]
+    tasks = held["tasks"]
     if method != "initialize":
         held["requests"] = held["requests"] + 1
         store.write_text(json.dumps(held), encoding="utf-8")

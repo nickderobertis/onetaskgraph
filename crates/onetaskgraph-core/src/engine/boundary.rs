@@ -744,7 +744,7 @@ fn answer_problem(input: &PublicSanitizeInput, answer: &SanitizeVerdict) -> Opti
             .zip(&input.locators)
             .any(|(answered, sent)| match answered {
                 Locator::Plain(value) => value != &sent.value,
-                Locator::Redacted { kind, .. } => *kind != sent.kind,
+                Locator::Redacted { kind, ordinal } => *kind != sent.kind || *ordinal == 0,
             })
     {
         return Some("the policy answered locators that do not match those sent");
@@ -760,7 +760,9 @@ fn answer_problem(input: &PublicSanitizeInput, answer: &SanitizeVerdict) -> Opti
             (SanitizeSurface::Text, true) => input.fixed.text.len(),
             (SanitizeSurface::Path, true) => input.fixed.paths.len(),
             (SanitizeSurface::Metadata, true) => input.fixed.metadata.len(),
-            (SanitizeSurface::Locators, _) => input.locators.len(),
+            (SanitizeSurface::Locators, true) => input.locators.len(),
+            // A locator is never rewritten, so one named unfixed but rewritable is no locator.
+            (SanitizeSurface::Locators, false) => 0,
         };
         usize::try_from(unfixed.index).is_ok_and(|index| index < length)
     };
@@ -2598,9 +2600,61 @@ impl StoredTask {
     }
 }
 
-/// A task as sanitising it would write it, each comment with its new body, and the field words
-/// of what changed.
-pub(super) type SanitisedTask = (Task, Vec<(Comment, String)>, Vec<String>);
+/// One field or comment of a task a sanitisation changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ChangedField {
+    Content,
+    Title,
+    Label,
+    /// The value under one metadata key.
+    Metadata(String),
+    /// One comment, by its id.
+    Comment(NativeId),
+}
+
+/// A task as sanitising it would write it, each comment with its new body, and what changed.
+pub(super) type SanitisedTask = (Task, Vec<(Comment, String)>, Vec<ChangedField>);
+
+/// One kind of field replacement cannot fix, as a refusal names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnfixableKind {
+    /// The item's `repositories`.
+    Repositories,
+    /// An id the item carries.
+    Id,
+    /// An identifier a diagnostic would print.
+    Identifier,
+    /// A term with no replacement declared for it.
+    Unreplaced,
+}
+
+impl std::fmt::Display for UnfixableKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Repositories => "repositories",
+            Self::Id => "an id",
+            Self::Identifier => "an identifier",
+            Self::Unreplaced => "a term no replacement is declared for",
+        })
+    }
+}
+
+/// The kinds of field a refusal names as beyond replacement, in the order first met; never
+/// empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnfixableKinds(Vec<UnfixableKind>);
+
+impl std::fmt::Display for UnfixableKinds {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, kind) in self.0.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str(", ")?;
+            }
+            kind.fmt(formatter)?;
+        }
+        Ok(())
+    }
+}
 
 /// The fields and comments of `task` that `rewrite` changes, each with the record as it should
 /// then be written; `None` when it changes none.
@@ -2613,17 +2667,17 @@ pub(super) fn sanitised_task(
     rewrite.task(&mut rewritten);
     let mut fields = Vec::new();
     if rewritten.content != task.content {
-        fields.push("content".to_owned());
+        fields.push(ChangedField::Content);
     }
     if rewritten.title != task.title {
-        fields.push("title".to_owned());
+        fields.push(ChangedField::Title);
     }
     if rewritten.labels != task.labels {
-        fields.push("label".to_owned());
+        fields.push(ChangedField::Label);
     }
     for (key, value) in &rewritten.metadata {
         if task.metadata.get(key) != Some(value) {
-            fields.push(format!("metadata:{key}"));
+            fields.push(ChangedField::Metadata(key.clone()));
         }
     }
     let edited: Vec<(Comment, String)> = comments
@@ -2634,14 +2688,19 @@ pub(super) fn sanitised_task(
         })
         .collect();
     for (comment, _) in &edited {
-        fields.push(format!("comment:{}", comment.id));
+        fields.push(ChangedField::Comment(comment.id.clone()));
     }
     (!fields.is_empty()).then_some((rewritten, edited, fields))
 }
 
-/// The screened form of one field word: a fixed word as it is, and a `metadata:` or `comment:`
-/// field by its screened key or id.
-pub(super) fn screened_field(field: &str, exposure: &Exposure, answered: &[Locator]) -> Locator {
+/// How a report names one changed field: a fixed word as it is — `content`, `title`, `label` —
+/// and a metadata key or a comment id by its screened form, `metadata:<key>` or
+/// `comment:<id>` where it passed.
+pub(super) fn screened_field(
+    field: &ChangedField,
+    exposure: &Exposure,
+    answered: &[Locator],
+) -> Locator {
     let screened = |kind: LocatorKind, value: &str, prefix: &str| {
         exposure
             .locators
@@ -2649,19 +2708,19 @@ pub(super) fn screened_field(field: &str, exposure: &Exposure, answered: &[Locat
             .position(|locator| locator.kind == kind && locator.value == value)
             .and_then(|index| answered.get(index))
             .map_or_else(
-                || Locator::Plain(field.to_owned()),
+                || Locator::Plain(format!("{prefix}{value}")),
                 |locator| match locator {
                     Locator::Plain(value) => Locator::Plain(format!("{prefix}{value}")),
                     redacted @ Locator::Redacted { .. } => redacted.clone(),
                 },
             )
     };
-    if let Some(key) = field.strip_prefix("metadata:") {
-        screened(LocatorKind::MetadataKey, key, "metadata:")
-    } else if let Some(id) = field.strip_prefix("comment:") {
-        screened(LocatorKind::Comment, id, "comment:")
-    } else {
-        Locator::Plain(field.to_owned())
+    match field {
+        ChangedField::Content => Locator::Plain("content".to_owned()),
+        ChangedField::Title => Locator::Plain("title".to_owned()),
+        ChangedField::Label => Locator::Plain("label".to_owned()),
+        ChangedField::Metadata(key) => screened(LocatorKind::MetadataKey, key, "metadata:"),
+        ChangedField::Comment(id) => screened(LocatorKind::Comment, id.as_str(), "comment:"),
     }
 }
 
@@ -2820,7 +2879,7 @@ impl Engine {
                 let mut unfixable = Vec::new();
                 for unfixed in &answer.unfixed {
                     let kind = match (unfixed.surface, unfixed.fixed) {
-                        (SanitizeSurface::Locators, _) => "an identifier",
+                        (SanitizeSurface::Locators, _) => UnfixableKind::Identifier,
                         (SanitizeSurface::Metadata, true) => {
                             let at = usize::try_from(unfixed.index).unwrap_or(usize::MAX);
                             let value = whole.fixed.metadata.get(at);
@@ -2829,13 +2888,13 @@ impl Engine {
                                     .iter()
                                     .any(|repository| repository.as_str() == value)
                             }) {
-                                "repositories"
+                                UnfixableKind::Repositories
                             } else {
-                                "an id"
+                                UnfixableKind::Id
                             }
                         }
-                        (_, true) => "an id",
-                        (_, false) => "a term no replacement is declared for",
+                        (_, true) => UnfixableKind::Id,
+                        (_, false) => UnfixableKind::Unreplaced,
                     };
                     if !unfixable.contains(&kind) {
                         unfixable.push(kind);
@@ -2849,11 +2908,11 @@ impl Engine {
                     destination: screened(LocatorKind::Source, destination.name().as_str())
                         .to_string(),
                     reason: reason.clone(),
-                    unfixable: if unfixable.is_empty() {
-                        "a term no replacement is declared for".to_owned()
+                    unfixable: UnfixableKinds(if unfixable.is_empty() {
+                        vec![UnfixableKind::Unreplaced]
                     } else {
-                        unfixable.join(", ")
-                    },
+                        unfixable
+                    }),
                 })
             }
             WriteVerdict::Unavailable { .. } => Err(refusal(destination, item, &whole, &answer)),
@@ -2921,7 +2980,7 @@ impl Engine {
         task: &Task,
         sanitised: SanitisedTask,
         dry_run: bool,
-    ) -> Result<(Vec<String>, Option<Task>), EngineError> {
+    ) -> Result<(Vec<ChangedField>, Option<Task>), EngineError> {
         let (mut rewritten, mut edited, mut fields) = sanitised;
         if !dry_run {
             let fresh = self.read_held_task(destination, id).await?;

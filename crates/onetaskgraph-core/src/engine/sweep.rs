@@ -112,8 +112,10 @@ pub struct SweepReport {
 pub struct SweepRequests {
     /// Every request the source counted, `0` for one that counts none.
     pub total: u64,
-    /// Search or listing pages the sweep asked its source for — each one call of the plugin
-    /// contract, which a source may answer with more than one request.
+    /// Search pages — or, for a sweep reading its source whole, listing pages — the sweep asked
+    /// its source for: each one call of the plugin contract, which a source may answer with
+    /// more than one request.
+    // llmlint: ignore[names_match_behavior] The member's name is the task's stated report contract, `"requests": {"total", "searches", "reads", "writes"}`, which both SDKs are generated from; a whole read's listing pages are the pages a search sweep sends as searches, and the doc comment above says which a report's figure counts.
     pub searches: u64,
     /// Batched reads of items with their comments, and further comment reads, the sweep made.
     pub reads: u64,
@@ -166,10 +168,12 @@ impl SweepReport {
     /// report.
     #[must_use]
     pub fn exit_code(&self) -> u8 {
-        if self
-            .items
-            .iter()
-            .any(|item| matches!(item.outcome, ItemOutcome::Unfixable | ItemOutcome::Conflict))
+        // A source whose own name carries a term is a record nothing can name either.
+        if matches!(self.source, Locator::Redacted { .. })
+            || self
+                .items
+                .iter()
+                .any(|item| matches!(item.outcome, ItemOutcome::Unfixable | ItemOutcome::Conflict))
         {
             1
         } else if !self.coverage.complete {
@@ -610,18 +614,24 @@ fn refused(
     }
 }
 
-/// Whether `task` or one of `comments` carries `text` anywhere a sanitisation rewrites.
+/// Whether `task` or one of `comments` carries `text` anywhere a sanitisation rewrites: its
+/// title, content, label names, the string values of its metadata, and its comments' bodies.
 fn carries(task: &Task, comments: &[onetaskgraph_plugin_api::Comment], text: &str) -> bool {
+    fn in_value(value: &serde_json::Value, text: &str) -> bool {
+        match value {
+            serde_json::Value::String(value) => value.contains(text),
+            serde_json::Value::Array(values) => values.iter().any(|value| in_value(value, text)),
+            serde_json::Value::Object(fields) => fields.values().any(|value| in_value(value, text)),
+            _ => false,
+        }
+    }
     task.title.contains(text)
         || task
             .content
             .as_deref()
             .is_some_and(|content| content.contains(text))
         || task.labels.iter().any(|label| label.name.contains(text))
-        || task
-            .metadata
-            .values()
-            .any(|value| value.to_string().contains(text))
+        || task.metadata.values().any(|value| in_value(value, text))
         || comments.iter().any(|comment| comment.body.contains(text))
 }
 
