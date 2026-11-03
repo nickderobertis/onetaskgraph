@@ -2243,3 +2243,66 @@ fn a_repeat_copy_behind_the_cache_of_a_link_to_a_project_heading_writes_nothing(
         task.content(&sandbox)
     );
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback board.
+#[test]
+fn a_same_record_link_in_angle_brackets_and_one_naming_no_heading_are_each_handled() {
+    // A body whose only links name its own record: one in angle brackets, written in GitHub's
+    // form, and one naming no heading it holds, carried as written and counted.
+    let sandbox = Sandbox::new();
+    let config = empty_folder(&sandbox, "plans");
+    let root = root_of(&sandbox, "plans");
+    for folder in ["projects", "tasks"] {
+        std::fs::create_dir_all(root.join(folder)).expect("a folder");
+    }
+    std::fs::write(
+        root.join("projects/P.md"),
+        "---\ntitle: Plan\nstatus: todo\n---\nThe plan.\n",
+    )
+    .expect("the project");
+    // Each task's only link names its own record.
+    for (task, body) in [
+        ("A", "## Budgets\n\nSee [the budgets](<#budgets>).\n"),
+        ("B", "## Budgets\n\nSee [gone](#nowhere).\n"),
+    ] {
+        std::fs::write(
+            root.join(format!("tasks/{task}.md")),
+            format!("---\ntitle: {task}\nstatus: todo\nproject: P\n---\n{body}"),
+        )
+        .expect("the task");
+    }
+    let (_, board_config) = store(&sandbox, "github-projects", "board", None);
+    configure(
+        &sandbox,
+        &[
+            ("plans", &json!({"plugin": "local-md", "config": config})),
+            ("board", &board_config),
+        ],
+    );
+    let reported = outcomes(&ok(
+        &sandbox,
+        &["project", "copy", "plans:P", "--to", "board", "--json"],
+    ));
+    let content = |key: &str| {
+        Landed {
+            verb: "task",
+            id: reported[key]["destination"].as_str().unwrap().to_owned(),
+        }
+        .content(&sandbox)
+    };
+    assert_eq!(
+        content("plans:A").trim_end(),
+        "## Budgets\n\nSee [the budgets](<#user-content-budgets>).",
+    );
+    assert_eq!(reported["plans:A"].get("section_links_unresolved"), None);
+    assert_eq!(
+        content("plans:B").trim_end(),
+        "## Budgets\n\nSee [gone](#nowhere)."
+    );
+    assert_eq!(
+        reported["plans:B"]["section_links_unresolved"],
+        json!(1),
+        "{:#}",
+        reported["plans:B"]
+    );
+}

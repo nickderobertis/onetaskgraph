@@ -174,6 +174,7 @@ fn heading_text(line: &str) -> Option<String> {
     Some(text.to_owned())
 }
 
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The task contract this module implements requires each destination kind's form to be "one entry per destination kind" chosen "in one place in onetaskgraph-core", and the slug rules implemented there once; no plugin may depend on the engine (AGENTS.md), so a plugin cannot own a form the engine reads, and GitHub's anchor markup reaches the GitHub plugin only as the `BodyMarkup` this entry hands it.
 /// GitHub's slug of one heading text, before repeats are told apart: lowercased, every
 /// character that is not a letter, a digit, a space, `-` or `_` removed, and each space
 /// replaced by `-`. `### Step 2.b: retry (once)` is `step-2b-retry-once`.
@@ -268,7 +269,6 @@ pub fn linear_section_form() -> LinearSectionForm {
 }
 
 /// One destination kind's section form: the one entry each kind has.
-// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The task contract this module implements requires each destination kind's form to be "one entry per destination kind" chosen "in one place in onetaskgraph-core", and the slug rules implemented there once; no plugin may depend on the engine (AGENTS.md), so a plugin cannot own a form the engine reads, and GitHub's anchor markup reaches the GitHub plugin only as the `BodyMarkup` this entry hands it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionForm {
     /// A folder of Markdown: the path relative to the linking record's own file, then

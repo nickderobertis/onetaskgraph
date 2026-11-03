@@ -662,12 +662,20 @@ fn delimited(content: &str, at: usize, location: &str) -> bool {
     super::delimited_at(content, at, location)
 }
 
-/// Every Markdown link destination `content` holds, with where it starts.
+/// Every Markdown link destination `content` holds, with where it starts — one written in
+/// angle brackets without them, as [`BodyLinks::render`] reads it.
 fn destinations(content: &str) -> impl Iterator<Item = (usize, &str)> {
     content.match_indices("](").map(move |(at, _)| {
-        let start = at + 2;
+        let angled = content[at + 2..].starts_with('<');
+        let start = at + 2 + usize::from(angled);
         let end = content[start..]
-            .find(|c: char| c == ')' || c.is_whitespace())
+            .find(|c: char| {
+                if angled {
+                    c == '>'
+                } else {
+                    c == ')' || c.is_whitespace()
+                }
+            })
             .map_or(content.len(), |found| start + found);
         (start, &content[start..end])
     })
