@@ -3,7 +3,7 @@
 
 use onetaskgraph_core::section_links::{
     Heading, LinearSectionForm, RecordHeadings, SectionForm, Written, github_slug, github_slugs,
-    headings, linear_slug, relative_path, resolve_relative,
+    headings, linear_slug, relative_path, resolve_relative, same_path,
 };
 use onetaskgraph_plugin_api::StoredHeading;
 
@@ -180,16 +180,26 @@ fn relative_paths_are_written_and_read_from_the_linking_file() {
         relative_path("/a/documents/d.md", "/a/tasks/p/t.md"),
         "../tasks/p/t.md"
     );
-    assert_eq!(
-        resolve_relative("/a/documents/d.md", "../tasks/p/t.md").as_deref(),
-        Some("/a/tasks/p/t.md")
-    );
-    assert_eq!(
-        resolve_relative("/a/documents/d.md", "./my%20file.md").as_deref(),
-        Some("/a/documents/my file.md")
-    );
+    // A resolved path is spelled with the platform's separator, as a folder's own reported
+    // location is, so it is held to the file it names rather than to `/`-separated bytes.
+    let resolved = |from: &str, target: &str| resolve_relative(from, target).unwrap_or_default();
+    let tasks = resolved("/a/documents/d.md", "../tasks/p/t.md");
+    assert!(same_path(&tasks, "/a/tasks/p/t.md"), "{tasks}");
+    let spaced = resolved("/a/documents/d.md", "./my%20file.md");
+    assert!(same_path(&spaced, "/a/documents/my file.md"), "{spaced}");
+    assert!(!same_path(&tasks, "/a/tasks/t.md"));
     assert_eq!(resolve_relative("/a/d.md", "https://x/y"), None);
     assert_eq!(resolve_relative("/a/d.md", "#slug"), None);
+}
+
+/// A Windows folder whose root was configured with `/` reports `C:/plans\tasks\t.md`, and a
+/// link resolved from one of its records names that file in the platform's own spelling.
+#[cfg(windows)]
+#[test]
+fn a_windows_location_with_mixed_separators_names_the_file_a_relative_link_resolves_to() {
+    let resolved = resolve_relative(r"C:/plans\documents\d.md", "../tasks/t.md").unwrap();
+    assert_eq!(resolved, r"C:\plans\tasks\t.md");
+    assert!(same_path(&resolved, r"C:/plans\tasks\t.md"));
 }
 
 #[test]

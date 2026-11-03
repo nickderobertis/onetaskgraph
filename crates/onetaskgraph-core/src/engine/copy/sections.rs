@@ -17,7 +17,9 @@ use onetaskgraph_plugin_api::{NativeId, StoredHeading};
 
 use super::{Counted, FRAGMENT, Level, stops_a_location};
 use crate::GlobalId;
-use crate::section_links::{RecordHeadings, SectionForm, Written, relative_path, resolve_relative};
+use crate::section_links::{
+    RecordHeadings, SectionForm, Written, relative_path, resolve_relative, same_path,
+};
 
 /// The section-link figures of one body's rendering, which the copy reports per record.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -253,7 +255,7 @@ impl BodyLinks {
             && own.is_some_and(|own| {
                 destinations(content).any(|(_, target)| {
                     let path = target.split(FRAGMENT).next().unwrap_or_default();
-                    resolve_relative(own, path).as_deref() == Some(location)
+                    resolve_relative(own, path).is_some_and(|at| same_path(&at, location))
                 })
             })
     }
@@ -270,7 +272,7 @@ impl BodyLinks {
                     || (self.from == Some(SectionForm::LocalMd)
                         && destinations(&self.original).any(|(_, target)| {
                             let path = target.split(FRAGMENT).next().unwrap_or_default();
-                            resolve_relative(own, path).as_deref() == Some(own)
+                            resolve_relative(own, path).is_some_and(|at| same_path(&at, own))
                         }))
             })
     }
@@ -427,8 +429,13 @@ impl BodyLinks {
         let referent = self
             .referents
             .iter()
-            .find(|referent| referent.location == resolved);
-        if referent.is_none() && self.own_location.as_deref() != Some(resolved.as_str()) {
+            .find(|referent| same_path(&referent.location, &resolved));
+        if referent.is_none()
+            && !self
+                .own_location
+                .as_deref()
+                .is_some_and(|own| same_path(own, &resolved))
+        {
             return None;
         }
         Some(Occurrence {

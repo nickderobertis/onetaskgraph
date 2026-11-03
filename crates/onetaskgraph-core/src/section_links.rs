@@ -530,6 +530,15 @@ pub fn resolve_relative(from: &str, target: &str) -> Option<String> {
     path.to_str().map(str::to_owned)
 }
 
+/// Whether two local paths name one file, compared by their parts rather than their bytes:
+/// a path [`resolve_relative`] builds is spelled with the platform's separator, while a
+/// folder's reported location keeps whatever separator its configured root was written
+/// with — `C:/plans\tasks\t.md` on Windows names the same file as `C:\plans\tasks\t.md`.
+#[must_use]
+pub fn same_path(a: &str, b: &str) -> bool {
+    Path::new(a) == Path::new(b)
+}
+
 /// `text` with each `%XX` escape decoded, when every escape is one and the result is UTF-8.
 fn percent_decoded(text: &str) -> Option<String> {
     let bytes = text.as_bytes();
