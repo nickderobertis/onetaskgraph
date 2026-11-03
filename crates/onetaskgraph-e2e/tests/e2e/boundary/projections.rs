@@ -3329,3 +3329,48 @@ fn a_new_linear_views_link_to_its_own_heading_names_the_id_its_create_was_answer
         "a repeat copy writes Linear nothing"
     );
 }
+
+#[test]
+fn a_refused_update_finishing_a_new_views_link_takes_the_whole_copy_back() {
+    // Linear refuses the write that finishes a new view's link to its own heading: the copy
+    // fails, and no view it created is left behind.
+    let mut handle = None;
+    let store = Store::laid(Some(registered), |sandbox| {
+        let (mut config, workspace) = crate::fixtures::linear_workspace_failing(
+            sandbox,
+            crate::fixtures::dataset(),
+            &[onetaskgraph_linear::graphql::ISSUE_REWRITE],
+        );
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        handle = Some(workspace);
+        sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+        json!({
+            "tracker": {"plugin": "linear", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "tracker"}]},
+        })
+    });
+    let workspace = handle.expect("the workspace");
+    private_rollout(&store);
+    store.record(
+        "plan",
+        "tasks",
+        "sectioned",
+        &format!(
+            "title: Retry the widget once\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"
+        ),
+        "See [the retry](#step-2b-retry-once) below.\n\n### Step 2.b: retry (once)\n\nOnce.",
+    );
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(
+        workspace.issue_titled("Retry the widget once"),
+        None,
+        "the view the copy created is taken back: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

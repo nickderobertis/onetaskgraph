@@ -1263,6 +1263,8 @@ struct Journal {
     sections: HashMap<GlobalId, SectionLinks>,
     /// Each comment written with links not addressable yet, finished with the rest.
     comments_pending: Vec<CommentPending>,
+    /// What each copied task's carried comments could not do for their section links.
+    comment_sections: HashMap<GlobalId, sections::SectionCounts>,
     /// One entry per copied item whose `onetaskgraph.copies` link this copy wrote, in that
     /// order.
     ///
@@ -1778,6 +1780,9 @@ struct Planned {
     /// Each carried comment whose links were not all addressable when it was planned, by its
     /// id at the source: finished once the task has landed.
     comment_links: Vec<(NativeId, sections::BodyLinks, Vec<sections::Pending>)>,
+    /// What its carried comments could not do for their section links, for the comments with
+    /// nothing left to finish.
+    comment_sections: sections::SectionCounts,
 }
 
 impl Planned {
@@ -2493,9 +2498,16 @@ impl Engine {
         let diverged = self.follow_up(journal).await?;
         self.written_results(&mut items, &levels).await;
         for outcome in &mut items {
-            if let Some(figures) = journal.sections.get(&outcome.source) {
-                outcome.sections = *figures;
+            let mut figures = journal
+                .sections
+                .get(&outcome.source)
+                .copied()
+                .unwrap_or_default();
+            if let Some(comments) = journal.comment_sections.get(&outcome.source) {
+                figures.section_links_unresolved += comments.unresolved;
+                figures.section_links_unaddressable += comments.unaddressable;
             }
+            outcome.sections = figures;
         }
         for (source, error) in &diverged {
             for outcome in items.iter_mut().filter(|outcome| &outcome.source == source) {
@@ -4506,7 +4518,11 @@ impl Engine {
                     }
                     let rendered = links.render(&planning, sections::Pass::Provisional);
                     comment.body = rendered.content;
-                    if !rendered.pending.is_empty() {
+                    if rendered.pending.is_empty() {
+                        // A comment with nothing left to finish reports what it could not do now;
+                        // one finished later reports it then.
+                        item.comment_sections.add(rendered.sections);
+                    } else {
                         item.comment_links
                             .push((comment.id.clone(), links, rendered.pending));
                     }
@@ -6924,6 +6940,7 @@ impl Engine {
             links: None,
             pending: Vec::new(),
             comment_links: Vec::new(),
+            comment_sections: sections::SectionCounts::default(),
         })
     }
 
@@ -7651,8 +7668,18 @@ impl Engine {
             }
         }
         if let Some(plan) = &item.comment_plan {
-            let (plan, pending) =
+            journal
+                .comment_sections
+                .entry(item.source.clone())
+                .or_default()
+                .add(item.comment_sections);
+            let (plan, pending, finished_counts) =
                 self.finished_comments(destination, item, &written.native, plan, journal);
+            journal
+                .comment_sections
+                .entry(item.source.clone())
+                .or_default()
+                .add(finished_counts);
             let landed = self
                 .write_comments(destination, &item.source, &written.native, &plan, journal)
                 .await?;
@@ -7698,11 +7725,16 @@ impl Engine {
         task: &NativeId,
         plan: &comments::CommentPlan,
         journal: &Journal,
-    ) -> (comments::CommentPlan, Vec<CommentLinks>) {
+    ) -> (
+        comments::CommentPlan,
+        Vec<CommentLinks>,
+        sections::SectionCounts,
+    ) {
         let mut plan = plan.clone();
         let mut pending_after = Vec::new();
+        let mut finished_counts = sections::SectionCounts::default();
         if item.comment_links.is_empty() {
-            return (plan, pending_after);
+            return (plan, pending_after, finished_counts);
         }
         let knows = Writing {
             destination,
@@ -7735,11 +7767,13 @@ impl Engine {
             if let Ok(body) = onetaskgraph_plugin_api::CommentBody::new(finished) {
                 copy.body = body;
             }
-            if !still.is_empty() {
+            if still.is_empty() {
+                finished_counts.add(links.render(&knows, sections::Pass::Final).sections);
+            } else {
                 pending_after.push((copy.origin.id.clone(), links.clone(), still));
             }
         }
-        (plan, pending_after)
+        (plan, pending_after, finished_counts)
     }
 
     /// Make one destination task's comments what `plan` decided, recording how to take each
@@ -9183,6 +9217,11 @@ impl Engine {
                 &knows,
                 sections::Pass::Final,
             );
+            journal
+                .comment_sections
+                .entry(held.source.clone())
+                .or_default()
+                .add(held.links.render(&knows, sections::Pass::Final).sections);
             if finished == held.copy.body.as_str() {
                 continue;
             }

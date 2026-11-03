@@ -7423,3 +7423,38 @@ fn a_null_or_undecodable_editor_state_answers_no_headings() {
         .expect("the issue is answered");
     assert_eq!(issue.1, None, "a null state answers no headings");
 }
+
+/// A source that read a record's headings forgets them when a later answer about that record
+/// carries no state, so it never answers ids the record may no longer hold — over real HTTP.
+#[tokio::test]
+async fn a_later_answer_with_no_editor_state_forgets_the_headings_an_earlier_one_carried() {
+    use onetaskgraph_plugin_api::MetadataRecord;
+    let sample: serde_json::Value = serde_json::from_str(include_str!(
+        "fixtures/editor-state/spike-plain-document.json"
+    ))
+    .unwrap();
+    let document = |state: serde_json::Value| {
+        serde_json::json!({"document":{"id":"D","title":"Design","content":"## What",
+            "contentState":state,"url":"https://linear.app/acme/document/d","createdAt":null,
+            "updatedAt":null,"archivedAt":null,"project":null}})
+    };
+    let (endpoint, _) = response_server(vec![
+        document(sample["state"].clone()),
+        document(serde_json::Value::Null),
+    ]);
+    let source = source(&endpoint);
+    source.get_document(&"D".into()).await.unwrap();
+    assert_eq!(
+        source
+            .stored_headings(MetadataRecord::Document, &"D".into())
+            .map(|headings| headings.len()),
+        Some(5),
+        "the first answer's headings"
+    );
+    source.get_document(&"D".into()).await.unwrap();
+    assert_eq!(
+        source.stored_headings(MetadataRecord::Document, &"D".into()),
+        None,
+        "forgotten once an answer carries no state"
+    );
+}

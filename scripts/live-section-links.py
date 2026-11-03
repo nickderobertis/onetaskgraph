@@ -378,7 +378,7 @@ def main() -> int:
         return 1
 
 
-# llmlint: ignore-block[changed_behavior_has_e2e] This orchestrator is itself the credentialed live check, run by hand and by no gate by the manager's ruling on node onetaskgraph-section-links, so no journey can drive it against the real trackers it exists to observe. Its paths were exercised by its runs on 2026-11-02: failed checks reported on stderr with a non-zero exit (runs 1 and 6), a stopped run reporting its cause (run 2), and a whole run passing (runs 3, 4, 5, 7, 8). After every run the dispatch verified the cleanup against the trackers: each issue it created answers 410, its board copy no longer resolves, and its Linear records read back trashed.
+# llmlint: ignore-block[changed_behavior_has_e2e] This orchestrator is itself the credentialed live check, run by hand and by no gate by the manager's ruling on node onetaskgraph-section-links, so no journey can drive it against the real trackers it exists to observe; the section-link journeys in `crates/onetaskgraph-e2e` hold the behaviour it observes.
 def observe() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", required=True)

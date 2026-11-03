@@ -29,6 +29,14 @@ pub(super) struct SectionCounts {
     pub(super) unaddressable: u64,
 }
 
+impl SectionCounts {
+    /// Fold `other` into these.
+    pub(super) fn add(&mut self, other: Self) {
+        self.unresolved += other.unresolved;
+        self.unaddressable += other.unaddressable;
+    }
+}
+
 /// Where one referent's counterpart is, as the copy knows it.
 #[derive(Debug, Clone)]
 pub(super) enum Counterpart {

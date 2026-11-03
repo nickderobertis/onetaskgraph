@@ -1387,7 +1387,7 @@ fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_f
                 "{held}\n## Comments\n\n<!-- onetaskgraph:comment id=\"c1\" \
                  created_at=\"2026-11-02T12:00:00Z\" updated_at=\"2026-11-02T12:00:00Z\" -->\n\
                  ### comment — 2026-11-02T12:00:00Z\n\nThe bar is [the second \
-                 budgets](T.md#budgets-1).\n\n<!-- /onetaskgraph:comment -->\n"
+                 budgets](T.md#budgets-1), not [gone](T.md#nowhere).\n\n<!-- /onetaskgraph:comment -->\n"
             ),
         )
         .expect("the comment");
@@ -1411,6 +1411,13 @@ fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_f
                 .to_owned(),
         };
         let (target, comments_on) = (landed("T"), landed("U"));
+        // The comment's fragment naming no heading is counted on the task it is a comment on.
+        assert_eq!(
+            reported["plans:U"]["section_links_unresolved"],
+            json!(1),
+            "{kind}: {:#}",
+            reported["plans:U"]
+        );
         let expected = destination.link(&sandbox, &comments_on, Some(&target), HEADINGS[4], 1);
         let listed: Value = serde_json::from_str(&ok(
             &sandbox,
