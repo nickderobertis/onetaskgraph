@@ -290,6 +290,14 @@ NOT_METHODS = {
         "not a message: the paragraph after §4's method table says it crosses as the "
         "`stored_content` member of a content write's result, which §4.9 specifies"
     ),
+    "stored_headings": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "answers none, so a copy into one carries a section link's fragment unchanged"
+    ),
+    "attach_body_markup": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "ignores it, so the engine writes no anchor markup into its bodies"
+    ),
     "version_coverage": CACHE_ONLY_REASON,
     "project_version_coverage": CACHE_ONLY_REASON,
     "document_version_coverage": CACHE_ONLY_REASON,

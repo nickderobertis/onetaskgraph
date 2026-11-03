@@ -521,6 +521,13 @@ method: it crosses as the `stored_content` member of a content write's result (�
 §4.12), from a plugin that declared `stored_forms` (§3.16), and the engine reads it exactly as
 it reads `TaskSource::stored_content` of a source built in process.
 
+The section-link methods are not carried either. `stored_headings` — the ids a backend stored
+a record's headings under, which a destination's section form may name — is answered as the
+trait's default does, with none, and `attach_body_markup` — the markup the engine hands a
+source to write before each heading — is ignored as the default ignores it. A stdio plugin is a
+destination kind with no section form, so a copy into one carries each section link's fragment
+unchanged after the counterpart's location, and writes no markup into its bodies.
+
 ### 4.1 Common parameter shapes
 
 **`PageRequest`** — every paged method takes one under `page`:

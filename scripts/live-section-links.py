@@ -2,7 +2,7 @@
 """Observe copied section links on the real trackers: run once by hand, never by a gate.
 
 The credentialed check of README "Section links", by the manager's ruling on node
-`onetaskgraph-section-links`: it drives the real binary (`target/debug/onetaskgraph`) within the
+`onetaskgraph-section-links`: it drives the real binary, named by `--binary`, within the
 live lane's write rules and reports what it observed as evidence. Nothing selects it; `just` and
 Nx never run it.
 
@@ -26,10 +26,10 @@ Nx never run it.
 6. Deletes everything it created — the issues, the board copy, the Linear records — however it
    ended, and names on stderr anything it could not.
 
-Run from the repository root, after building the binary:
+Run from the repository root, after building the binary, naming the file the build wrote:
 
     uv run --no-project --with playwright --with pycrdt python -I scripts/live-section-links.py \\
-        --out <directory> --linear-env <a .env holding LINEAR_API_KEY and LINEAR_WRITE_TEAM>
+        --binary <the built onetaskgraph> --out <directory> --linear-env <a .env holding LINEAR_API_KEY and LINEAR_WRITE_TEAM>
 
 Quiet on success but for one summary line; each failed check goes to stderr. Writes
 `observations.json` into `--out`, and exits non-zero when a check failed or anything it created
@@ -57,8 +57,6 @@ import time
 import urllib.parse
 import urllib.request
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-BINARY = ROOT / "target" / "debug" / "onetaskgraph"
 PREFIX = "onetaskgraph live cleanup "
 SCRATCH = "nickderobertis/onetaskgraph-live-scratch"
 GITHUB_ISSUES = f"https://github.com/{SCRATCH}/issues/"
@@ -397,9 +395,13 @@ def main() -> int:
 # llmlint: ignore-block[changed_behavior_has_e2e] This orchestrator is itself the credentialed live check, run by hand and by no gate by the manager's ruling on node onetaskgraph-section-links, so no journey can drive it against the real trackers it exists to observe; the section-link journeys in `crates/onetaskgraph-e2e` hold the behaviour it observes.
 def observe() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--binary", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--linear-env", required=True)
     args = parser.parse_args()
+    program = pathlib.Path(args.binary).resolve()
+    if not program.is_file():
+        raise Failure(f"{args.binary} is not a file; next: build the binary and name the file the build wrote")
     out = pathlib.Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     token = required("GH_PROJECTS_TOKEN")
@@ -479,7 +481,7 @@ def observe() -> int:
         environment.update({"XDG_CONFIG_HOME": str(sandbox / "config"), "LINEAR_API_KEY": key, "GH_PROJECTS_TOKEN": token})
 
         def binary(*arguments: str) -> dict:
-            done = subprocess.run([str(BINARY), "--json", *arguments], cwd=sandbox, env=environment, capture_output=True, text=True)
+            done = subprocess.run([str(program), "--json", *arguments], cwd=sandbox, env=environment, capture_output=True, text=True)
             if done.returncode != 0:
                 raise Failure(f"onetaskgraph {' '.join(arguments)} exited {done.returncode}: {done.stderr}next: fix what it names, then run again")
             return json.loads(done.stdout)

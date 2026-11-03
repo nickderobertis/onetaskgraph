@@ -64,6 +64,11 @@ skip = [
   # thiserror 2.
   { crate = "thiserror:1", reason = "reached only through graphql-parser 0.4.1, which was already in this lockfile as a dev-dependency; removable the day graphql-parser moves to thiserror 2, and not before" },
   { crate = "thiserror-impl:1", reason = "the derive half of thiserror 1, reached only through the crate skipped above; removable on the same day and for the same reason" },
+  # The third. `yrs`, the maintained Yjs implementation the Linear plugin decodes a record's
+  # stored editor state with (its heading ids, for section links), depends on dashmap 6,
+  # whose newest release still pins hashbrown 0.14 while `jsonschema` is on 0.17. Decoding
+  # Yjs by hand instead is what the section-links work was told not to do.
+  { crate = "hashbrown:0.14", reason = "reached only through yrs -> dashmap 6.2, which pins hashbrown 0.14; removable the day dashmap moves to a newer hashbrown, and not before" },
 ]
 
 # The engine compensates for a missing capability transiently: it holds at most one source
