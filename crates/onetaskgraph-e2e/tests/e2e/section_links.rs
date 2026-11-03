@@ -1820,7 +1820,7 @@ fn a_destination_with_no_section_form_receives_every_fragment_as_written() {
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
 #[test]
-fn links_that_run_in_a_cycle_through_bodies_and_a_comment_all_land_and_a_repeat_writes_nothing() {
+fn cyclic_links_through_bodies_and_a_comment_land_and_repeats_refresh_only_the_copy_record() {
     // Two tasks whose bodies link each other's heading, and a comment on the first linking the
     // second: whichever lands first, each link is finished once its target has landed, and each
     // finishing write — the comment's and the body's — is counted on the task it finishes.
