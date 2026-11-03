@@ -841,6 +841,27 @@ fn drive(
         json!({"id": undone[0]}),
     );
     evidence!("the undone project reads back as {gone}");
+    // Linear's listings can still answer a project for a moment after it is trashed — one run's
+    // origin lookup did, and the re-copy then wrote to it and was refused `Entity is trashed` —
+    // so the re-copy waits until Linear lists it no more, as a person copying again later would.
+    let mut listed = true;
+    for attempt in 0..READS {
+        listed = stamped(runtime, key, team_id, stamp)
+            .unwrap_or_else(|problem| panic!("{problem}"))
+            .iter()
+            .any(|(_, id, _)| *id == undone[0]);
+        if !listed {
+            break;
+        }
+        if attempt + 1 < READS {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+    assert!(
+        !listed,
+        "Linear still lists the project the undo trashed after {READS} reads: {}",
+        undone[0]
+    );
     let output = third.command().args(copy).output().unwrap();
     let report = succeeded(&copy, &output);
     let landed = outcome(&report, &source);
