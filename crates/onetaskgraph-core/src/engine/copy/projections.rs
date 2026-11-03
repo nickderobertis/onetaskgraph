@@ -1783,6 +1783,35 @@ impl Engine {
     }
 }
 
+/// What a public view's rendering knows: the view's own counterpart, when it is updated, and
+/// the heading ids the destination's read of it answered.
+struct ViewKnows<'a> {
+    /// The public destination.
+    destination: &'a ResolvedSource,
+    /// The view already there, and where its destination says it is.
+    own: Option<(NativeId, String)>,
+}
+
+impl super::sections::Knows for ViewKnows<'_> {
+    fn landed(&self, _referent: &super::sections::Linked) -> Option<(NativeId, String)> {
+        None
+    }
+
+    fn stored(
+        &self,
+        level: Level,
+        id: &NativeId,
+    ) -> Option<Vec<onetaskgraph_plugin_api::StoredHeading>> {
+        self.destination
+            .source()
+            .stored_headings(level.record(), id)
+    }
+
+    fn own(&self) -> Option<(NativeId, String)> {
+        self.own.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2025,34 +2054,5 @@ mod tests {
                 "{html}"
             );
         }
-    }
-}
-
-/// What a public view's rendering knows: the view's own counterpart, when it is updated, and
-/// the heading ids the destination's read of it answered.
-struct ViewKnows<'a> {
-    /// The public destination.
-    destination: &'a ResolvedSource,
-    /// The view already there, and where its destination says it is.
-    own: Option<(NativeId, String)>,
-}
-
-impl super::sections::Knows for ViewKnows<'_> {
-    fn landed(&self, _referent: &super::sections::Linked) -> Option<(NativeId, String)> {
-        None
-    }
-
-    fn stored(
-        &self,
-        level: Level,
-        id: &NativeId,
-    ) -> Option<Vec<onetaskgraph_plugin_api::StoredHeading>> {
-        self.destination
-            .source()
-            .stored_headings(level.record(), id)
-    }
-
-    fn own(&self) -> Option<(NativeId, String)> {
-        self.own.clone()
     }
 }

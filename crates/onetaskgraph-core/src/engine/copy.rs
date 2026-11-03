@@ -2025,6 +2025,16 @@ impl Counterparts {
             .push((id.clone(), located(Some(location))));
     }
 
+    /// What one referent's occurrences become by its own qualified id alone — for a referent
+    /// the copy itself writes, whose counterpart is the record copied from it.
+    fn resolve_own(&self, referent: &Referent) -> Resolution {
+        let own = Referent {
+            origin: None,
+            ..referent.clone()
+        };
+        self.resolve(&own)
+    }
+
     /// What one referent's occurrences become, by the two-key rule.
     ///
     /// Where the correspondence cannot be established **confidently**, the text is left
@@ -4414,7 +4424,16 @@ impl Engine {
                             location: location.clone(),
                         },
                         Some(_) => sections::Counterpart::InCopy,
-                        None => match counterparts.resolve(referent) {
+                        // A member of the copied set is found by its own id alone: the origin it
+                        // records names an ancestor, whose other copies — a fan-out landed here
+                        // before — are not the counterpart this copy writes it to.
+                        None => match if referent.level != Level::Document
+                            && copied.contains(&referent.id)
+                        {
+                            counterparts.resolve_own(referent)
+                        } else {
+                            counterparts.resolve(referent)
+                        } {
                             Resolution::Rewrite(id, location) => {
                                 sections::Counterpart::At { id, location }
                             }

@@ -1426,10 +1426,6 @@ fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_f
             "{kind}: the carried comment names the destination's heading: {bodies:#?}"
         );
         let root = (kind == "local-md").then(|| root_of(&sandbox, "dest"));
-        // A `--comments` copy out of a folder of Markdown brings each copy record up to date once
-        // — the copy's own link write moved the source file's token after it was recorded — with
-        // or without section links; from then on a repeat writes nothing.
-        ok(&sandbox, &copy);
         let mark = destination.mark(root.as_deref());
         ok(&sandbox, &copy);
         assert_eq!(
@@ -1438,4 +1434,80 @@ fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_f
             "{kind}: a repeat copy writes nothing"
         );
     }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown, one loopback board and the loopback Linear workspace.
+#[test]
+fn links_linear_stores_in_angle_brackets_are_finished_and_a_fan_out_names_its_own_copies() {
+    // What the live check observed of TES2: every link destination stored in angle brackets.
+    // A link finished after its record was first written is finished there all the same.
+    let sandbox = Sandbox::new();
+    let (authored_config, _) = authored(&sandbox, "authored");
+    let (board, board_config) = store(&sandbox, "github-projects", "board", None);
+    let (linear, linear_config) = store(&sandbox, "linear", "linear", None);
+    configure(
+        &sandbox,
+        &[
+            ("authored", &authored_config),
+            ("board", &board_config),
+            ("linear", &linear_config),
+        ],
+    );
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::Angled);
+    let authored = authored_ids("authored");
+    let (direct, _) = copy_plan(&sandbox, &authored, "linear");
+    let angled = |at: &Landed, to: Option<&Landed>, heading: HeadingForms, ordinal: usize| {
+        format!("](<{}>)", linear.link(&sandbox, at, to, heading, ordinal))
+    };
+    let target = direct["T"].content(&sandbox);
+    assert!(
+        target.contains(&angled(&direct["T"], None, HEADINGS[4], 1)),
+        "the same-record link is finished inside its angle brackets: {target}"
+    );
+    let project = direct["P"].content(&sandbox);
+    assert!(
+        project.contains(&angled(&direct["P"], Some(&direct["T"]), HEADINGS[0], 0)),
+        "{project}"
+    );
+    let design = direct["D"].content(&sandbox);
+    assert!(
+        design.contains(&angled(&direct["D"], None, OVERVIEW, 0)),
+        "{design}"
+    );
+
+    // The same project reaching that workspace a second way, through the board: every link of
+    // that hop names the records that hop writes, never the first hop's copies, which the
+    // board's records name only through the origin they share with them.
+    let (on_board, _) = copy_plan(&sandbox, &authored, "board");
+    holds_the_form(
+        &sandbox,
+        "the board",
+        &board,
+        &on_board,
+        &authored_target_of(&sandbox),
+    );
+    let (onward, _) = copy_plan(&sandbox, &on_board, "linear");
+    assert_ne!(
+        onward["T"].id, direct["T"].id,
+        "the board's copy is a record of its own"
+    );
+    for key in ["P", "U", "D"] {
+        let content = onward[key].content(&sandbox);
+        assert!(
+            content.contains(&onward["T"].location(&sandbox))
+                && !content.contains(&direct["T"].location(&sandbox)),
+            "{key} names the target this hop wrote: {content}"
+        );
+    }
+}
+
+/// The absolute path of the authored target task of the folder `authored`.
+fn authored_target_of(sandbox: &Sandbox) -> String {
+    root_of(sandbox, "authored")
+        .join("tasks/T.md")
+        .display()
+        .to_string()
 }

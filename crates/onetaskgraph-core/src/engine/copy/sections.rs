@@ -256,9 +256,15 @@ impl BodyLinks {
         let mut at = 0;
         while at < content.len() {
             if content[at..].starts_with("](") {
-                rendered.content.push_str("](");
-                at += 2;
-                if let Some(occurrence) = self.in_destination(content, at) {
+                // A destination may be written in angle brackets, as Linear stores every one.
+                let opening = if content[at..].starts_with("](<") {
+                    "](<"
+                } else {
+                    "]("
+                };
+                rendered.content.push_str(opening);
+                at += opening.len();
+                if let Some(occurrence) = self.in_destination(content, at, opening.len() == 3) {
                     at = self.write(&occurrence, content, at, knows, last, &mut rendered);
                 }
                 continue;
@@ -321,12 +327,14 @@ impl BodyLinks {
         while at < written.len() {
             let found = replacements.iter().find(|(placeholder, _)| {
                 if placeholder.linked {
-                    written[..at].ends_with("](")
-                        && written[at..].starts_with(&placeholder.text)
-                        && written[at + placeholder.text.len()..]
-                            .chars()
-                            .next()
-                            .is_none_or(|c| c == ')' || c.is_whitespace())
+                    // As it was sent, or as a destination that writes every link destination in
+                    // angle brackets stores it.
+                    written[at..].starts_with(&placeholder.text) && {
+                        let next = written[at + placeholder.text.len()..].chars().next();
+                        (written[..at].ends_with("](")
+                            && next.is_none_or(|c| c == ')' || c.is_whitespace()))
+                            || (written[..at].ends_with("](<") && next == Some('>'))
+                    }
                 } else {
                     delimited(written, at, &placeholder.text)
                 }
@@ -354,9 +362,20 @@ impl BodyLinks {
     /// The occurrence a Markdown link destination starting at `at` holds, when it is a
     /// fragment of the body's own record or a path relative to the body's own file. Every
     /// other destination is left to [`Self::spelled`].
-    fn in_destination<'a>(&'a self, content: &'a str, at: usize) -> Option<Occurrence<'a>> {
+    fn in_destination<'a>(
+        &'a self,
+        content: &'a str,
+        at: usize,
+        angled: bool,
+    ) -> Option<Occurrence<'a>> {
         let end = content[at..]
-            .find(|c: char| c == ')' || c.is_whitespace())
+            .find(|c: char| {
+                if angled {
+                    c == '>'
+                } else {
+                    c == ')' || c.is_whitespace()
+                }
+            })
             .map_or(content.len(), |found| at + found);
         let target = &content[at..end];
         if let Some(fragment) = target.strip_prefix(FRAGMENT) {

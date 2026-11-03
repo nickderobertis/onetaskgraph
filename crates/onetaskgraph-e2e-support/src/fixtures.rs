@@ -6181,6 +6181,10 @@ pub enum LinearMarkdown {
     /// line into `+ ` and every `+ ` into `* `: a backend that does not hold its own stored
     /// content stable, so a follow-up write of what it stored is stored otherwise again.
     Unstable,
+    /// Stores every Markdown link destination in angle brackets — `[text](<target>)` — as the
+    /// section-links live check observed TES2 storing every link of an issue, a project and a
+    /// document on 2026-11-02, and stores what it stored as it was sent.
+    Angled,
 }
 
 /// `written` as the workspace `data` stores a long form, by what it was told with
@@ -6207,8 +6211,32 @@ fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
                 .join("\n");
             json!(stored)
         }
+        Some("angled") => json!(linear_angled(text)),
         _ => json!(text),
     }
+}
+
+/// `text` with every Markdown link destination not in angle brackets put in them.
+fn linear_angled(text: &str) -> String {
+    let mut stored = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("](") {
+        let (before, after) = rest.split_at(at + 2);
+        stored.push_str(before);
+        if after.starts_with('<') {
+            rest = after;
+            continue;
+        }
+        let end = after
+            .find(|c: char| c == ')' || c.is_whitespace())
+            .unwrap_or(after.len());
+        stored.push('<');
+        stored.push_str(&after[..end]);
+        stored.push('>');
+        rest = &after[end..];
+    }
+    stored.push_str(rest);
+    stored
 }
 // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
@@ -6647,6 +6675,7 @@ impl LinearWorkspace {
             LinearMarkdown::Verbatim => "verbatim",
             LinearMarkdown::Measured => "measured",
             LinearMarkdown::Unstable => "unstable",
+            LinearMarkdown::Angled => "angled",
         });
     }
 
