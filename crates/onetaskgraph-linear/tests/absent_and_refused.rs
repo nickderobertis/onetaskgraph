@@ -856,3 +856,158 @@ async fn an_issue_and_a_document_land_under_the_next_id_or_finish_their_earlier_
         }
     }
 }
+
+/// One `record` as Linear answers it under `id`: the create document, its payload's root and
+/// field, the read document, and the item.
+fn answered(
+    record: MetadataRecord,
+    id: &str,
+) -> (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    Value,
+) {
+    let page = json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+    match record {
+        MetadataRecord::Task => (
+            graphql::ISSUE_CREATE,
+            "issueCreate",
+            "issue",
+            graphql::ISSUE,
+            json!({"id":id,"identifier":"ENG-1","title":"Draft the rollout","description":"body",
+                "url":null,"createdAt":null,"updatedAt":null,"archivedAt":null,
+                "state":{"name":"Todo","type":"unstarted"},"priority":0,"labels":{"nodes":[]},
+                "project":null,"relations":page}),
+        ),
+        MetadataRecord::Project => (
+            graphql::PROJECT_CREATE,
+            "projectCreate",
+            "project",
+            graphql::PROJECT,
+            held_project(id),
+        ),
+        MetadataRecord::Document => (
+            graphql::DOCUMENT_CREATE,
+            "documentCreate",
+            "document",
+            graphql::DOCUMENT,
+            json!({"id":id,"title":"Rollout notes","content":"body","url":null,"createdAt":null,
+                "updatedAt":null,"archivedAt":null,"project":null}),
+        ),
+    }
+}
+
+fn kind_of(record: MetadataRecord) -> &'static str {
+    match record {
+        MetadataRecord::Task => "Issue",
+        MetadataRecord::Project => "Project",
+        MetadataRecord::Document => "Document",
+    }
+}
+
+const RECORDS: [MetadataRecord; 3] = [
+    MetadataRecord::Task,
+    MetadataRecord::Project,
+    MetadataRecord::Document,
+];
+
+#[tokio::test]
+async fn a_retry_finds_every_item_held_under_any_of_its_keys_ids() {
+    // Two readable items under one key's ids is a duplicate the engine refuses by name, so a
+    // look across the generations answers both rather than the first it meets.
+    let ids = onetaskgraph_linear::linear_ids_of_key(KEY).unwrap();
+    for record in RECORDS {
+        let held = [ids[0].clone(), ids[2].clone()];
+        let readable = held.clone();
+        let (endpoint, _) = loopback(move |query, variables| {
+            let (_, _, field, read, _) = answered(record, "");
+            let asked = variables["id"].as_str().unwrap_or_default();
+            if query == read && readable.iter().any(|id| id == asked) {
+                return (200, json!({"data":{field:answered(record, asked).4}}));
+            }
+            (400, not_found(kind_of(record)))
+        });
+        let target = WriteTarget::New {
+            repositories: &[],
+            project: None,
+        };
+        let found = source(&endpoint)
+            .created_with_key(record, KEY, None, &target)
+            .await
+            .unwrap();
+        assert_eq!(
+            found,
+            held.iter().cloned().map(NativeId).collect::<Vec<_>>(),
+            "{record:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_create_under_a_later_id_answered_as_another_is_refused_for_every_record() {
+    let ids = onetaskgraph_linear::linear_ids_of_key(KEY).unwrap();
+    for record in RECORDS {
+        let burnt = ids[0].clone();
+        let (endpoint, _) = loopback(move |query, variables| {
+            let (create, root, field, _, _) = answered(record, "");
+            if query == create {
+                let id = variables["input"]["id"].as_str().unwrap_or_default();
+                if id == burnt {
+                    return (200, id_conflict(kind_of(record), id));
+                }
+                // Landed, but under an id the create was not sent with.
+                let elsewhere = answered(record, ABSENT).4;
+                return (200, json!({"data":{root:{"success":true,field:elsewhere}}}));
+            }
+            if query == graphql::RESOLUTION {
+                return (200, resolution());
+            }
+            (400, not_found(kind_of(record)))
+        });
+        let source = source(&endpoint);
+        let failed = match record {
+            MetadataRecord::Task => {
+                let task: Task = serde_json::from_value(keyed(json!({"id":"plan:T",
+                    "title":"Draft the rollout","content":"body",
+                    "status":{"category":"todo","name":"Todo"},"labels":[],"repositories":[]})))
+                .unwrap();
+                source
+                    .write_task(&ItemWrite {
+                        target: None,
+                        item: task,
+                        depends_on: vec![],
+                    })
+                    .await
+            }
+            MetadataRecord::Project => {
+                source
+                    .write_project(&ItemWrite {
+                        target: None,
+                        item: keyed_project(),
+                        depends_on: vec![],
+                    })
+                    .await
+            }
+            MetadataRecord::Document => {
+                let document: Document = serde_json::from_value(keyed(json!({"id":"plan:D",
+                    "title":"Rollout notes","content":"body","labels":[],"repositories":[]})))
+                .unwrap();
+                source
+                    .write_document(&ItemWrite {
+                        target: None,
+                        item: document,
+                        depends_on: vec![],
+                    })
+                    .await
+            }
+        }
+        .expect_err("an item Linear filed under another id is not this create's");
+        let message = failed.to_string();
+        assert!(
+            message.contains(&ids[1]) && message.contains(ABSENT) && message.contains("not the id"),
+            "{record:?}: names the id it was sent and the one it was answered: {message}"
+        );
+    }
+}
