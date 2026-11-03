@@ -30,7 +30,6 @@ pub(super) struct SectionCounts {
 }
 
 impl SectionCounts {
-    /// Fold `other` into these.
     pub(super) fn add(&mut self, other: Self) {
         self.unresolved += other.unresolved;
         self.unaddressable += other.unaddressable;

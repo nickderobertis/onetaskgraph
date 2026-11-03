@@ -7398,10 +7398,16 @@ fn a_base64_state_that_is_not_a_yjs_update_answers_no_headings() {
     let whole = engine.decode(sample["state"].as_str().unwrap()).unwrap();
     for (case, bytes) in [
         ("bytes that were never an update", vec![0xff; 24]),
-        ("a captured state cut short", whole[..whole.len() / 2].to_vec()),
+        (
+            "a captured state cut short",
+            whole[..whole.len() / 2].to_vec(),
+        ),
     ] {
         let state = engine.encode(&bytes);
-        assert!(engine.decode(&state).is_ok(), "{case}: the base64 itself is valid");
+        assert!(
+            engine.decode(&state).is_ok(),
+            "{case}: the base64 itself is valid"
+        );
         assert_eq!(
             onetaskgraph_linear::headings::decoded(&state),
             None,

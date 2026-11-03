@@ -11033,7 +11033,6 @@ fn content_of(item: &Item) -> Option<&str> {
     }
 }
 
-/// `item` holding `content`.
 fn set_content(item: &mut Item, content: String) {
     match item {
         Item::Task(task) => task.content = Some(content),
@@ -11042,7 +11041,6 @@ fn set_content(item: &mut Item, content: String) {
     }
 }
 
-/// The metadata `item` holds.
 fn metadata_ref(item: &Item) -> &BTreeMap<String, Value> {
     match item {
         Item::Task(task) => &task.metadata,
@@ -11051,7 +11049,6 @@ fn metadata_ref(item: &Item) -> &BTreeMap<String, Value> {
     }
 }
 
-/// Where the source says `item` is.
 fn location_of(item: &Item) -> Option<&Location> {
     match item {
         Item::Task(task) => task.location.as_ref(),

@@ -59,8 +59,16 @@ pub(super) struct CommentPlan {
     pub(super) after: Vec<Value>,
 }
 
-/// A copy's origin, by its task and id: [`key`].
-pub(super) type OriginKey = (String, String);
+/// The identity a carried comment is matched on: the qualified task its origin names, and
+/// that comment's id there. Two named fields rather than a pair of strings, so the task and
+/// the comment cannot be passed the wrong way round.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct OriginKey {
+    /// The qualified id of the task the comment was first written on.
+    task: String,
+    /// The comment's id in that task's source.
+    comment: NativeId,
+}
 
 /// The origin one source comment's copy carries: the origin it was itself copied from, or —
 /// for a comment written at the source — the comment there.
@@ -77,7 +85,10 @@ pub(super) fn origin_of(source: &GlobalId, comment: &Comment) -> CommentOrigin {
 
 /// The identity a copy is matched on: its origin's task and id.
 pub(super) fn key(origin: &CommentOrigin) -> OriginKey {
-    (origin.task.clone(), origin.id.0.clone())
+    OriginKey {
+        task: origin.task.clone(),
+        comment: origin.id.clone(),
+    }
 }
 
 /// Decide what makes `held` — the destination task's comments, `destination` its qualified id
@@ -114,14 +125,14 @@ pub(super) fn plan(
     vouched.extend(recorded.map(ToString::to_string));
     vouched.extend(wanted.iter().map(|copy| copy.origin.task.clone()));
 
-    let mut copies: BTreeMap<(String, String), &Comment> = BTreeMap::new();
+    let mut copies: BTreeMap<OriginKey, &Comment> = BTreeMap::new();
     for comment in held {
         if let Some(origin) = &comment.origin {
             copies.entry(key(origin)).or_insert(comment);
         }
     }
     let mut plan = CommentPlan::default();
-    let wanted_keys: Vec<(String, String)> = wanted.iter().map(|copy| key(&copy.origin)).collect();
+    let wanted_keys: Vec<OriginKey> = wanted.iter().map(|copy| key(&copy.origin)).collect();
     // What the destination reads as afterwards: everything it holds that this plan keeps, in
     // the order it holds it, then the copies this plan adds.
     for comment in held {
