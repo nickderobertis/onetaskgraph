@@ -690,3 +690,152 @@ async fn a_create_whose_hold_passed_to_another_attempt_is_not_sent_under_another
         creates.lock().unwrap()
     );
 }
+
+/// What one record's keyed create meets: a deleted or foreign record holding the key's first id,
+/// or its own earlier attempt's item there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Held {
+    ByAnother,
+    ByEarlierAttempt,
+}
+
+#[tokio::test]
+async fn an_issue_and_a_document_land_under_the_next_id_or_finish_their_earlier_attempt() {
+    let ids = onetaskgraph_linear::linear_ids_of_key(KEY).unwrap();
+    for record in [MetadataRecord::Task, MetadataRecord::Document] {
+        for case in [Held::ByAnother, Held::ByEarlierAttempt] {
+            let at = format!("{record:?}, held {case:?}");
+            let (create, read, rewrite, created, updated, field, kind) = match record {
+                MetadataRecord::Task => (
+                    graphql::ISSUE_CREATE,
+                    graphql::ISSUE,
+                    graphql::ISSUE_REWRITE,
+                    "issueCreate",
+                    "issueUpdate",
+                    "issue",
+                    "Issue",
+                ),
+                _ => (
+                    graphql::DOCUMENT_CREATE,
+                    graphql::DOCUMENT,
+                    graphql::DOCUMENT_UPDATE,
+                    "documentCreate",
+                    "documentUpdate",
+                    "document",
+                    "Document",
+                ),
+            };
+            let item = move |id: &str| match record {
+                MetadataRecord::Task => {
+                    let page =
+                        json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+                    json!({"id":id,"identifier":"ENG-1","title":"Draft the rollout",
+                        "description":"body","url":null,"createdAt":null,"updatedAt":null,
+                        "archivedAt":null,"state":{"name":"Todo","type":"unstarted"},"priority":0,
+                        "labels":{"nodes":[]},"project":null,"relations":page})
+                }
+                _ => json!({"id":id,"title":"Rollout notes","content":"body","url":null,
+                    "createdAt":null,"updatedAt":null,"archivedAt":null,"project":null}),
+            };
+            let held: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(
+                (case == Held::ByEarlierAttempt).then(|| ids[0].clone()),
+            ));
+            let burnt = ids[0].clone();
+            let creates: Sent = Arc::default();
+            let rewrites: Sent = Arc::default();
+            let (record_creates, record_rewrites, holding) = (
+                Arc::clone(&creates),
+                Arc::clone(&rewrites),
+                Arc::clone(&held),
+            );
+            let (endpoint, _) = loopback(move |query, variables| {
+                let mut holding = holding.lock().unwrap();
+                if query == create {
+                    let id = variables["input"]["id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned();
+                    record_creates.lock().unwrap().push(id.clone());
+                    if id == burnt || holding.as_deref() == Some(id.as_str()) {
+                        let refused =
+                            json!({"errors":[{"message":"Entity with this id already exists"}]});
+                        return (400, refused);
+                    }
+                    *holding = Some(id.clone());
+                    return (
+                        200,
+                        json!({"data":{created:{"success":true,field:item(&id)}}}),
+                    );
+                }
+                let asked = variables["id"].as_str().unwrap_or_default();
+                let holds = holding.as_deref() == Some(asked);
+                if query == read && holds {
+                    return (200, json!({"data":{field:item(asked)}}));
+                }
+                if query == rewrite && holds {
+                    record_rewrites.lock().unwrap().push(asked.to_owned());
+                    return (
+                        200,
+                        json!({"data":{updated:{"success":true,field:item(asked)}}}),
+                    );
+                }
+                if query == graphql::RESOLUTION {
+                    return (200, resolution());
+                }
+                (400, not_found(kind))
+            });
+            let source = source(&endpoint);
+            let landed = match record {
+                MetadataRecord::Task => {
+                    let task: Task = serde_json::from_value(keyed(json!({"id":"plan:T",
+                        "title":"Draft the rollout","content":"body",
+                        "status":{"category":"todo","name":"Todo"},"labels":[],
+                        "repositories":[]})))
+                    .unwrap();
+                    source
+                        .write_task(&ItemWrite {
+                            target: None,
+                            item: task,
+                            depends_on: vec![],
+                        })
+                        .await
+                }
+                _ => {
+                    let document: Document = serde_json::from_value(keyed(json!({
+                        "id":"plan:D","title":"Rollout notes","content":"body","labels":[],
+                        "repositories":[]})))
+                    .unwrap();
+                    source
+                        .write_document(&ItemWrite {
+                            target: None,
+                            item: document,
+                            depends_on: vec![],
+                        })
+                        .await
+                }
+            }
+            .unwrap_or_else(|error| panic!("{at}: the create lands: {error}"));
+            let target = WriteTarget::New {
+                repositories: &[],
+                project: None,
+            };
+            let found = source
+                .created_with_key(record, KEY, None, &target)
+                .await
+                .unwrap();
+            match case {
+                Held::ByAnother => {
+                    assert_eq!(landed.0, ids[1], "{at}: under the next id");
+                    assert_eq!(*creates.lock().unwrap(), ids[..2].to_vec(), "{at}");
+                    assert!(rewrites.lock().unwrap().is_empty(), "{at}");
+                }
+                Held::ByEarlierAttempt => {
+                    assert_eq!(landed.0, ids[0], "{at}: the earlier attempt's item");
+                    assert_eq!(*creates.lock().unwrap(), ids[..1].to_vec(), "{at}");
+                    assert_eq!(*rewrites.lock().unwrap(), ids[..1].to_vec(), "{at}");
+                }
+            }
+            assert_eq!(found, vec![landed], "{at}: a retry finds that one item");
+        }
+    }
+}
