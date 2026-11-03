@@ -26,6 +26,20 @@ const LINEAR: &str = "https://api.linear.app/graphql";
 /// Reads after a write that may still answer from before it, and their spacing.
 const READS: u32 = 20;
 
+/// One line of what Linear answered this journey, written to the process's own standard error
+/// rather than through `eprintln!`, which the test harness captures and shows only for a failing
+/// test: so the credentialed lane's log carries what Linear said on a passing run as well.
+macro_rules! evidence {
+    ($($line:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "live project create: {}",
+            format_args!($($line)*)
+        );
+    }};
+}
+
 /// What the relay is told to do, and what it saw.
 #[derive(Default)]
 struct Relay {
@@ -344,7 +358,7 @@ fn cleanup(
     let (listed, mut all) = match stamped(runtime, key, team_id, stamp) {
         Ok(listed) => (listed, true),
         Err(problem) => {
-            eprintln!("live project create: {problem}");
+            evidence!("{problem}");
             (Vec::new(), false)
         }
     };
@@ -369,7 +383,7 @@ fn cleanup(
         };
         let answer = graphql(runtime, key, query, json!({"id": id}));
         if answer["data"][root]["success"] != true && !already_gone(runtime, key, kind, &id) {
-            eprintln!("live project create: could not remove {kind} {id}: {answer}");
+            evidence!("could not remove {kind} {id}: {answer}");
             all = false;
         }
     }
@@ -401,7 +415,7 @@ fn already_gone(runtime: &tokio::runtime::Runtime, key: &str, kind: &str, id: &s
         .as_array()
         .is_some_and(|errors| errors.iter().any(|error| error["message"] == missing));
     let trashed = read["data"][root]["archivedAt"].is_string();
-    eprintln!("live project create: {kind} {id} reads back as {read}");
+    evidence!("{kind} {id} reads back as {read}");
     not_found || trashed
 }
 
@@ -515,7 +529,7 @@ pub(crate) fn live_project_create(
             runtime, key, team, &team_id, &mapping, &stamp, &endpoint, &relayed,
         );
     }));
-    eprintln!("live project create: {}", seen(&relayed));
+    evidence!("{}", seen(&relayed));
     let created = lock(&relayed).created.clone();
     let cleaned = cleanup(runtime, key, &team_id, &stamp, &created);
     if let Err(panic) = journey {
@@ -754,7 +768,7 @@ fn drive(
         onetaskgraph_linear::graphql::PROJECT,
         json!({"id": undone[0]}),
     );
-    eprintln!("live project create: the undone project reads back as {gone}");
+    evidence!("the undone project reads back as {gone}");
     let output = third.command().args(copy).output().unwrap();
     let report = succeeded(&copy, &output);
     let landed = outcome(&report, &source);
@@ -782,7 +796,7 @@ fn drive(
         .iter()
         .position(|id| linked == format!("dest:{id}"))
         .unwrap_or_else(|| panic!("{linked} is one of the key's ids: {generations:?}"));
-    eprintln!("live project create: the re-copy landed under generation {generation}");
+    evidence!("the re-copy landed under generation {generation}");
     let expected = vec![task_title(&title, 0), task_title(&title, 1)];
     assert_eq!(
         titles(&tasks_of(&third, &linked, &expected)),
