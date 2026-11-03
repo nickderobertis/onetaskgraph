@@ -1042,8 +1042,9 @@ impl PassedInput {
     }
 }
 
-/// What the screened writes of one command replaced, and what sanitise-on-refusal changed.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// What the screened writes of one command replaced, and what sanitise-on-refusal changed:
+/// the `sanitization` member a write's answer carries when it is not empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Sanitization {
     /// Spans the writes' own sanitisations rewrote.
     pub replaced: u32,
@@ -1060,17 +1061,11 @@ impl Sanitization {
         self.replaced == 0 && self.side_effect.is_empty()
     }
 
-    /// The `sanitization` member of a write's answer.
+    /// The `sanitization` member of a write's answer, as the `Sanitization` schema root
+    /// describes it.
     #[must_use]
     pub fn to_json(&self) -> Value {
-        serde_json::json!({
-            "replaced": self.replaced,
-            "side_effect": self.side_effect.iter().map(|effect| serde_json::json!({
-                "item": effect.item,
-                "field": effect.field,
-            })).collect::<Vec<_>>(),
-            "dry_run": self.dry_run,
-        })
+        serde_json::to_value(self).expect("a sanitisation serializes")
     }
 }
 
@@ -1090,12 +1085,26 @@ impl SanitizationLog {
 }
 
 /// One field or comment of an item a sanitisation changed, named by screened locators.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct SideEffect {
     /// The item, by its qualified id as screened.
+    #[schemars(with = "Value")]
     pub item: Locator,
     /// The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.
+    #[schemars(with = "Value")]
     pub field: Locator,
+}
+
+/// What a write run with `--sanitize-dry-run` answers when it would have sanitised its item
+/// first: nothing written, whether the write would then pass, and what would change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct SanitizeDryRun {
+    /// Always `false`: a dry run writes nothing.
+    pub written: bool,
+    /// Whether the write would pass once its item was sanitised.
+    pub would_pass: bool,
+    /// What sanitising the item would change.
+    pub sanitization: Sanitization,
 }
 
 impl Default for Boundary {
@@ -2752,6 +2761,55 @@ pub(super) fn sanitised_task(
         fields.push(ChangedField::Comment(comment.id.clone()));
     }
     (!fields.is_empty()).then_some((rewritten, edited, fields))
+}
+
+/// The field of `task` — or the comment of `comments` — the `index`th entry of `surface` was,
+/// in the layout [`StoredTask::of`] sends: the content then each comment's body as prose; the
+/// title, each label's name, then each metadata value's strings, key by key, as short fields;
+/// and those strings that read as paths, key by key, as paths.
+pub(super) fn stored_field(
+    task: &Task,
+    comments: &[Comment],
+    surface: SanitizeSurface,
+    index: usize,
+) -> Option<ChangedField> {
+    fn strings(value: &Value, paths: bool) -> usize {
+        match value {
+            Value::String(text) => usize::from(!paths || text.contains('/') || text.contains('\\')),
+            Value::Array(values) => values.iter().map(|value| strings(value, paths)).sum(),
+            Value::Object(fields) => fields.values().map(|value| strings(value, paths)).sum(),
+            _ => 0,
+        }
+    }
+    let by_key = |mut index: usize, paths: bool| {
+        for (key, value) in &task.metadata {
+            let count = strings(value, paths);
+            if index < count {
+                return Some(ChangedField::Metadata(key.clone()));
+            }
+            index -= count;
+        }
+        None
+    };
+    match surface {
+        SanitizeSurface::Text => {
+            let offset = usize::from(task.content.is_some());
+            if index < offset {
+                Some(ChangedField::Content)
+            } else {
+                comments
+                    .get(index - offset)
+                    .map(|comment| ChangedField::Comment(comment.id.clone()))
+            }
+        }
+        SanitizeSurface::Metadata => match index {
+            0 => Some(ChangedField::Title),
+            index if index <= task.labels.len() => Some(ChangedField::Label),
+            index => by_key(index - 1 - task.labels.len(), false),
+        },
+        SanitizeSurface::Path => by_key(index, true),
+        SanitizeSurface::Locators => None,
+    }
 }
 
 /// How a report names one changed field: a fixed word as it is — `content`, `title`, `label` —

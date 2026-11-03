@@ -272,6 +272,13 @@ pub fn schema_bundle() -> Value {
     // each item it landed.
     roots.insert("SourceRoute", schema_for!(SourceRoute));
     roots.insert("SweepReport", schema_for!(crate::SweepReport));
+    // The member a write's answer carries when it replaced or sanitised anything, and what a
+    // sanitisation dry run answers instead of the write.
+    roots.insert("Sanitization", schema_for!(crate::boundary::Sanitization));
+    roots.insert(
+        "SanitizeDryRun",
+        schema_for!(crate::boundary::SanitizeDryRun),
+    );
     roots.insert("Placement", schema_for!(Placement));
     roots.insert("Setting", schema_for!(Setting));
     roots.insert("Origin", schema_for!(Origin));

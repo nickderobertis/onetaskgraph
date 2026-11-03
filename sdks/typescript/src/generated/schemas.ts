@@ -17306,6 +17306,125 @@ export const runtimeSchemas = {
       }
     }
   },
+  "Sanitization": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Sanitization",
+    "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+    "type": "object",
+    "properties": {
+      "replaced": {
+        "description": "Spans the writes' own sanitisations rewrote.",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "side_effect": {
+        "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/SideEffect"
+        }
+      },
+      "dry_run": {
+        "description": "Whether nothing was written, the changes only reported.",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "replaced",
+      "side_effect",
+      "dry_run"
+    ],
+    "$defs": {
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
+      }
+    }
+  },
+  "SanitizeDryRun": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "SanitizeDryRun",
+    "description": "What a write run with `--sanitize-dry-run` answers when it would have sanitised its item\nfirst: nothing written, whether the write would then pass, and what would change.",
+    "type": "object",
+    "properties": {
+      "written": {
+        "description": "Always `false`: a dry run writes nothing.",
+        "type": "boolean"
+      },
+      "would_pass": {
+        "description": "Whether the write would pass once its item was sanitised.",
+        "type": "boolean"
+      },
+      "sanitization": {
+        "description": "What sanitising the item would change.",
+        "$ref": "#/$defs/Sanitization"
+      }
+    },
+    "required": [
+      "written",
+      "would_pass",
+      "sanitization"
+    ],
+    "$defs": {
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
+      }
+    }
+  },
   "SearchHit": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "SearchHit",

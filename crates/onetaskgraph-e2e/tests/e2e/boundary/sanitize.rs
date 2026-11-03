@@ -1944,6 +1944,17 @@ elif how == "two-ways":
         if value in seen:
             answer["metadata"][index] = value + " again"
         seen.add(value)
+elif how == "pass-exit-one":
+    print(json.dumps(answer))
+    sys.exit(1)
+elif how == "refuse-exit-zero":
+    answer.update(verdict="refuse", surface="text",
+                  unfixed=[{"surface": "text", "index": 0, "fixed": False}])
+    print(json.dumps(answer))
+    sys.exit(0)
+elif how == "killed":
+    import os, signal
+    os.kill(os.getpid(), signal.SIGKILL)
 elif how == "unsent-index":
     answer.update(verdict="refuse", surface="text",
                   unfixed=[{"surface": "text", "index": 99, "fixed": False}])
@@ -1972,6 +1983,9 @@ fn a_policy_answer_that_does_not_match_what_was_sent_is_never_a_pass() {
         "passed-unfixed",
         "passed-redacted",
         "two-ways",
+        "pass-exit-one",
+        "refuse-exit-zero",
+        "killed",
         "unsent-index",
     ] {
         repolicy(&store, |policy| {
@@ -2935,4 +2949,98 @@ fn a_project_and_a_document_re_rendered_with_a_term_in_an_answer_land_replaced()
         "{held}"
     );
     assert!(!held.contains(TERM), "{held}");
+}
+
+#[test]
+fn a_write_s_sanitization_member_and_a_dry_run_s_answer_validate_against_the_emitted_schema() {
+    let (store, _record) = sanitizing(replaced());
+    let bundle: Value = serde_json::from_str(&store.ok(&["schema"])).expect("the bundle");
+    let validator = |root: &str| {
+        jsonschema::validator_for(&bundle["roots"][root])
+            .unwrap_or_else(|error| panic!("{root} compiles: {error}"))
+    };
+    let created: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "create",
+        "site",
+        "--project",
+        "p",
+        "--title",
+        &format!("Port {TERM}"),
+        "--body-file",
+        &store.body(PLAIN),
+        "--json",
+    ]))
+    .expect("the task");
+    let member = &created["sanitization"];
+    assert!(member.is_object(), "{created}");
+    assert!(validator("Sanitization").is_valid(member), "{member}");
+
+    stage_older(&store);
+    let answer: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "priority",
+        "set",
+        "site:older",
+        "high",
+        "--json",
+        "--sanitize-dry-run",
+    ]))
+    .expect("the dry run");
+    let errors: Vec<String> = validator("SanitizeDryRun")
+        .iter_errors(&answer)
+        .map(|error| error.to_string())
+        .collect();
+    assert!(errors.is_empty(), "{answer}: {errors:?}");
+}
+
+#[test]
+fn a_sweep_names_each_field_a_term_no_replacement_covers_is_left_in() {
+    let (store, _record) = sanitizing(replaced());
+    // `hiddenco`, the owner onevcs derives, has no replacement.
+    store.record(
+        "site",
+        "tasks",
+        "owned",
+        "title: Owned by hiddenco\nstatus: todo\nproject: p",
+        &format!(
+            "{PLAIN}\n\n## Comments\n\n{}",
+            comment("20260913T151107Z-1", "Ask hiddenco.")
+        ),
+    );
+    let (code, report, out, err) = sweep(&store, "site", &[]);
+    assert_eq!(code, Some(1), "{out}{err}");
+    let named: Vec<&str> = entry(&report, "site:owned")["fields"]
+        .as_array()
+        .expect("fields")
+        .iter()
+        .map(|field| field["field"].as_str().expect("a plain field"))
+        .collect();
+    assert_eq!(named, ["comment:20260913T151107Z-1", "title"], "{report}");
+    assert!(
+        !out.contains("hiddenco") && !err.contains("hiddenco"),
+        "{out}{err}"
+    );
+}
+
+#[test]
+fn a_replacement_setting_addressed_by_no_index_or_of_no_list_shape_is_refused_at_load() {
+    let (store, _record) = sanitizing(json!([]));
+    for (setting, said) in [
+        ("write_policy.replacements.first.term=x", "is not one"),
+        ("write_policy.replacements=x", "is a list"),
+    ] {
+        let output = store.run(&["task", "list", "--set", setting]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{setting}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("write_policy") && stderr(&output).contains(said),
+            "{setting}: {}",
+            stderr(&output)
+        );
+    }
 }

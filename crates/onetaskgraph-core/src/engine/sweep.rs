@@ -24,9 +24,9 @@ use schemars::JsonSchema;
 use serde::Serialize;
 
 use super::boundary::{
-    Exposure, Locator, LocatorKind, Rewrite, SanitizeSurface, SanitizeVerdict, StoredTask,
-    TermsRequest, WriteVerdict, every_comment, refusal, sanitised_task, screened_field,
-    screened_locator,
+    ChangedField, Exposure, Locator, LocatorKind, Rewrite, SanitizeSurface, SanitizeVerdict,
+    StoredTask, TermsRequest, WriteVerdict, every_comment, refusal, sanitised_task, screened_field,
+    screened_locator, stored_field,
 };
 use super::{Engine, EngineError};
 use crate::resolve::ResolvedSource;
@@ -519,9 +519,28 @@ impl Engine {
                 });
                 return Ok(());
             }
-            if fields.is_empty() {
+            // Each rewritable field the policy says still carries a term, named as a written
+            // one is; a field it could not place is the item's content, the one it always has.
+            let mut named: Vec<ChangedField> = answer
+                .unfixed
+                .iter()
+                .filter(|unfixed| !unfixed.fixed)
+                .filter_map(|unfixed| {
+                    stored_field(
+                        &task,
+                        &comments,
+                        unfixed.surface,
+                        usize::try_from(unfixed.index).ok()?,
+                    )
+                })
+                .collect();
+            named.dedup();
+            if named.is_empty() && fields.is_empty() {
+                named.push(ChangedField::Content);
+            }
+            for field in named {
                 fields.push(SweepField {
-                    field: Locator::Plain("content".to_owned()),
+                    field: screened_field(&field, &stored.exposure, &answer.locators),
                     outcome: FieldOutcome::Unfixable {
                         why: "carries a term no replacement is declared for".to_owned(),
                     },

@@ -212,15 +212,15 @@ fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
         let done = sanitization();
         let rendered = match output {
             OutputFormat::Json => json(
-                &serde_json::json!({
-                    "written": false,
-                    "would_pass": FAILED_WOULD_PASS
+                &onetaskgraph_core::boundary::SanitizeDryRun {
+                    written: false,
+                    would_pass: FAILED_WOULD_PASS
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .take()
                         .unwrap_or(false),
-                    "sanitization": done.to_json(),
-                }),
+                    sanitization: done,
+                },
                 "the dry run",
             )
             .unwrap_or_default(),

@@ -5922,7 +5922,7 @@ const FIFTY_SECOND_BUNDLE_SHAPE: [(&str, u64); 137] = [
 ];
 
 /// Version 53: `WritePolicyConfig` gains `sanitize_command`, `terms_command` and `replacements`.
-const FIFTY_THIRD_BUNDLE_SHAPE: [(&str, u64); 138] = [
+const FIFTY_THIRD_BUNDLE_SHAPE: [(&str, u64); 140] = [
     ("Asset", 0x3861b2a394973652),
     ("AssetContentType", 0x045a0ea0dface7ec),
     ("AssetName", 0x0f5aa03142270839),
@@ -6020,6 +6020,8 @@ const FIFTY_THIRD_BUNDLE_SHAPE: [(&str, u64); 138] = [
     ("Repository", 0x98147ade92ced0f0),
     ("RepositoryVisibility", 0x97913706150bdd17),
     ("ResolvedCredential", 0x14a23b081a4e8d10),
+    ("Sanitization", 0xd1d7ca73e2dcd1c7),
+    ("SanitizeDryRun", 0xa03c9b5b1fcb51aa),
     ("SearchHit", 0x813451b94db1b728),
     ("SearchKind", 0xc4d2cd105ad4b849),
     ("SecretsReport", 0x245d50b08721b73d),

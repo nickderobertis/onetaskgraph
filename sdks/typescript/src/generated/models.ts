@@ -10267,6 +10267,95 @@ resolved_from: ("environment" | "secrets-file")
 
 }
 export type ResolvedCredential = GeneratedResolvedCredential.ResolvedCredential;
+export namespace GeneratedSanitization {
+/**
+ * What the screened writes of one command replaced, and what sanitise-on-refusal changed:
+ * the `sanitization` member a write's answer carries when it is not empty.
+ */
+export interface Sanitization {
+/**
+ * Spans the writes' own sanitisations rewrote.
+ */
+replaced: number
+/**
+ * Each field or comment of an item sanitisation changed beyond the write itself.
+ */
+side_effect: SideEffect[]
+/**
+ * Whether nothing was written, the changes only reported.
+ */
+dry_run: boolean
+[k: string]: any
+}
+/**
+ * One field or comment of an item a sanitisation changed, named by screened locators.
+ */
+export interface SideEffect {
+/**
+ * The item, by its qualified id as screened.
+ */
+item: unknown
+/**
+ * The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.
+ */
+field: unknown
+[k: string]: any
+}
+
+}
+export type Sanitization = GeneratedSanitization.Sanitization;
+export namespace GeneratedSanitizeDryRun {
+/**
+ * What a write run with `--sanitize-dry-run` answers when it would have sanitised its item
+ * first: nothing written, whether the write would then pass, and what would change.
+ */
+export interface SanitizeDryRun {
+/**
+ * Always `false`: a dry run writes nothing.
+ */
+written: boolean
+/**
+ * Whether the write would pass once its item was sanitised.
+ */
+would_pass: boolean
+sanitization: Sanitization
+[k: string]: any
+}
+/**
+ * What sanitising the item would change.
+ */
+export interface Sanitization {
+/**
+ * Spans the writes' own sanitisations rewrote.
+ */
+replaced: number
+/**
+ * Each field or comment of an item sanitisation changed beyond the write itself.
+ */
+side_effect: SideEffect[]
+/**
+ * Whether nothing was written, the changes only reported.
+ */
+dry_run: boolean
+[k: string]: any
+}
+/**
+ * One field or comment of an item a sanitisation changed, named by screened locators.
+ */
+export interface SideEffect {
+/**
+ * The item, by its qualified id as screened.
+ */
+item: unknown
+/**
+ * The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.
+ */
+field: unknown
+[k: string]: any
+}
+
+}
+export type SanitizeDryRun = GeneratedSanitizeDryRun.SanitizeDryRun;
 export namespace GeneratedSearchHit {
 /**
  * One hit of a search that may cross entities.
