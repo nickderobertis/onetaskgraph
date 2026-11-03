@@ -17357,13 +17357,9 @@ export const runtimeSchemas = {
   "SanitizeDryRun": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "SanitizeDryRun",
-    "description": "What a write run with `--sanitize-dry-run` answers when it would have sanitised its item\nfirst: nothing written, whether the write would then pass, and what would change.",
+    "description": "What a write run with `--sanitize-dry-run` answers when it would have sanitised its item\nfirst, having written nothing: whether the write would then pass, and what would change.",
     "type": "object",
     "properties": {
-      "written": {
-        "description": "Always `false`: a dry run writes nothing.",
-        "type": "boolean"
-      },
       "would_pass": {
         "description": "Whether the write would pass once its item was sanitised.",
         "type": "boolean"
@@ -17374,7 +17370,6 @@ export const runtimeSchemas = {
       }
     },
     "required": [
-      "written",
       "would_pass",
       "sanitization"
     ],

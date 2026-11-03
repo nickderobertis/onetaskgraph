@@ -6021,7 +6021,7 @@ const FIFTY_THIRD_BUNDLE_SHAPE: [(&str, u64); 140] = [
     ("RepositoryVisibility", 0x97913706150bdd17),
     ("ResolvedCredential", 0x14a23b081a4e8d10),
     ("Sanitization", 0xd1d7ca73e2dcd1c7),
-    ("SanitizeDryRun", 0xa03c9b5b1fcb51aa),
+    ("SanitizeDryRun", 0x6d23f882492b0689),
     ("SearchHit", 0x813451b94db1b728),
     ("SearchKind", 0xc4d2cd105ad4b849),
     ("SecretsReport", 0x245d50b08721b73d),

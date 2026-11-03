@@ -868,7 +868,7 @@ fn a_sanitising_write_s_dry_run_writes_nothing_and_says_what_it_would_change() {
     ]))
     .expect("the answer");
     assert_eq!(tree(&store.folder("site")), before, "nothing was written");
-    assert_eq!(answer["written"], json!(false), "{answer}");
+    assert!(answer.get("written").is_none(), "{answer}");
     assert_eq!(answer["would_pass"], json!(true), "{answer}");
     assert_eq!(answer["sanitization"]["dry_run"], json!(true), "{answer}");
     assert_eq!(

@@ -2578,8 +2578,8 @@ version the read answered — a task that moved meanwhile is read again once and
 that fresh record, keeping what changed; one that moves again is refused as
 `sanitize-conflict`, nothing overwritten — and each field and comment changed is named under
 `side_effect`, a human answer adding one `sanitised <item> <field>` line per change after
-today's line. `--sanitize-dry-run` writes nothing and answers `{"written": false,
-"would_pass", "sanitization"}`. A term replacement cannot fix is refused saying it was already on
+today's line. `--sanitize-dry-run` writes nothing and answers `{"would_pass",
+"sanitization"}`. A term replacement cannot fix is refused saying it was already on
 the item before this write and which kind of field replacement cannot fix (`repositories`, an
 id, a term no replacement is declared for). An item whose stored `repositories` already name a
 private repository is private, and a narrow write of it to a source not declared private keeps

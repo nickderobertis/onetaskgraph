@@ -143,8 +143,13 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
                     _move(state, task)
             return {"result": {"task": None if task is None else _shown(state, task)}}
         case "query_tasks":
-            text = params.get("query", {}).get("text")
-            wanted = str(text.get("terms", "")).lower() if isinstance(text, dict) else None
+            match params.get("query"):
+                case {"text": {"terms": str(terms)}}:
+                    wanted = terms.lower()
+                case {"text": None} | dict():
+                    wanted = None
+                case _:
+                    return _malformed("query_tasks carries its query as an object")
             items = [
                 _shown(state, task)
                 for task in state["tasks"]
@@ -155,11 +160,13 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             held = state["comments"].get(params.get("task"))
             if held is None:
                 return {"result": {"page": None}}
-            page = params.get("page", {})
-            cursor, limit = page.get("cursor"), page.get("limit", 100)
-            if not (cursor is None or str(cursor).isdigit()) or not isinstance(limit, int):
-                return _malformed("task_comments pages by this peer's own cursor and a limit")
-            start = int(cursor or 0)
+            match params.get("page"):
+                case {"cursor": None, "limit": int(limit)}:
+                    start = 0
+                case {"cursor": str(cursor), "limit": int(limit)} if cursor.isdigit():
+                    start = int(cursor)
+                case _:
+                    return _malformed("task_comments pages by this peer's own cursor and a limit")
             end = start + limit
             following = str(end) if end < len(held) else None
             return {"result": {"page": {"items": held[start:end], "next": following}}}
@@ -214,43 +221,66 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             }
 
 
+def _is_task(task: object) -> bool:
+    """Whether `task` holds every member this peer reads or writes, of its type."""
+    match task:
+        case {
+            "id": str(),
+            "title": str(),
+            "content": str() | None,
+            "status": dict(),
+            "priority": str(),
+            "labels": list(labels),
+            "metadata": dict(),
+            "version": str(version),
+        }:
+            return version.isdigit() and all(isinstance(label, dict) for label in labels)
+        case _:
+            return False
+
+
+def _is_edit(edit: object) -> bool:
+    """Whether `edit` is one another writer's edit: each member it names a string."""
+    return isinstance(edit, dict) and all(
+        key in {"label", "content", "paragraph", "comment", "comment_id"}
+        and isinstance(value, str)
+        for key, value in edit.items()
+    )
+
+
 def _well_formed(held: object) -> bool:
-    """Whether `held` is this peer's own state: every member `State` names, of its type, and
-    each task an object with a string id and version."""
+    """Whether `held` is this peer's own state: every member `State` names, of its type, each
+    task, comment and edit whole."""
     match held:
         case {
             "tasks": list(tasks),
-            "comments": dict(),
-            "reads": dict(),
-            "moves": dict(),
-            "edits": dict(),
-            "index": dict(),
-            "edges": dict(),
+            "comments": dict(comments),
+            "reads": dict(reads),
+            "moves": dict(moves),
+            "edits": dict(edits),
+            "index": dict(index),
+            "edges": dict(edges),
             "log": list(),
         }:
             return (
-                all(
-                    isinstance(task, dict)
-                    and isinstance(task.get("id"), str)
-                    and isinstance(task.get("version"), str)
-                    for task in tasks
-                )
-                and all(isinstance(count, int) for count in held["reads"].values())
+                all(_is_task(task) for task in tasks)
+                and all(isinstance(count, int) for count in reads.values())
                 and all(
-                    isinstance(reads, list) and all(isinstance(read, int) for read in reads)
-                    for reads in held["moves"].values()
+                    isinstance(at, list) and all(isinstance(read, int) for read in at)
+                    for at in moves.values()
                 )
-                and all(isinstance(edit, dict) for edit in held["edits"].values())
-                and all(isinstance(text, str) for text in held["index"].values())
+                and all(_is_edit(edit) for edit in edits.values())
+                and all(isinstance(text, str) for text in index.values())
+                and all(isinstance(held_edges, list) for held_edges in edges.values())
                 and all(
-                    isinstance(comments, list)
+                    isinstance(held_comments, list)
                     and all(
                         isinstance(comment, dict)
                         and isinstance(comment.get("id"), str)
                         and isinstance(comment.get("body"), str)
-                        for comment in comments
+                        for comment in held_comments
                     )
-                    for comments in held["comments"].values()
+                    for held_comments in comments.values()
                 )
             )
         case _:

@@ -213,7 +213,6 @@ fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
         let rendered = match output {
             OutputFormat::Json => json(
                 &onetaskgraph_core::boundary::SanitizeDryRun {
-                    written: false,
                     would_pass: FAILED_WOULD_PASS
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)

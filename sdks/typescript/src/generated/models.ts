@@ -10307,13 +10307,9 @@ export type Sanitization = GeneratedSanitization.Sanitization;
 export namespace GeneratedSanitizeDryRun {
 /**
  * What a write run with `--sanitize-dry-run` answers when it would have sanitised its item
- * first: nothing written, whether the write would then pass, and what would change.
+ * first, having written nothing: whether the write would then pass, and what would change.
  */
 export interface SanitizeDryRun {
-/**
- * Always `false`: a dry run writes nothing.
- */
-written: boolean
 /**
  * Whether the write would pass once its item was sanitised.
  */

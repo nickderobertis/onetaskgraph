@@ -157,7 +157,13 @@ def _answer(store: Path, method: str, params: dict[str, object]) -> dict[str, ob
                             "message": "write_task carries a write of a whole task",
                         }
                     }
-            target = str(write.get("target") or identifier)
+            match write.get("target"):
+                case None:
+                    target = identifier
+                case str(named):
+                    target = named
+                case _:
+                    return {"error": {"kind": "malformed", "message": "a write's target is an id"}}
             written: Task = {
                 "id": target,
                 "title": title,

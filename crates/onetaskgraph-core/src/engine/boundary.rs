@@ -1096,11 +1096,9 @@ pub struct SideEffect {
 }
 
 /// What a write run with `--sanitize-dry-run` answers when it would have sanitised its item
-/// first: nothing written, whether the write would then pass, and what would change.
+/// first, having written nothing: whether the write would then pass, and what would change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct SanitizeDryRun {
-    /// Always `false`: a dry run writes nothing.
-    pub written: bool,
     /// Whether the write would pass once its item was sanitised.
     pub would_pass: bool,
     /// What sanitising the item would change.
