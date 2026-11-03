@@ -340,7 +340,7 @@ async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result
             };
             let engine = engine(loaded);
             let report = match engine
-                .sanitize_source(&source, args.dry_run, args.complete)
+                .sanitize_tasks(&source, args.dry_run, args.complete)
                 .await
             {
                 Ok(report) => report,

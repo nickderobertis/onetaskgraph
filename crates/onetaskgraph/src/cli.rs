@@ -304,7 +304,7 @@ pub enum SourcesCommand {
     /// Reads configuration alone, never a source: the destination is the source a route
     /// sends an item with these repositories to, or SOURCE itself when none matches.
     Route(RouteArgs),
-    /// Find the items of one source already carrying a declared private term, and rewrite
+    /// Find the tasks of one source already carrying a declared private term, and rewrite
     /// every field and comment the policy's replacements can fix.
     ///
     /// Asks the policy's `terms_command` for the terms, then searches the source once per term

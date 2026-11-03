@@ -1033,6 +1033,19 @@ export class OnetaskgraphClient {
     source: string,
     options: { dryRun?: boolean; complete?: boolean } = {},
   ): Promise<SweepReport> {
+    if (typeof source !== "string") {
+      throw new TypeError(
+        "sourcesSanitize: source is not a string; next: name a configured source",
+      );
+    }
+    for (const [name, value] of [
+      ["dryRun", options.dryRun],
+      ["complete", options.complete],
+    ] as const) {
+      if (value !== undefined && typeof value !== "boolean") {
+        throw new TypeError(`sourcesSanitize: ${name} is not a boolean; next: pass true or false`);
+      }
+    }
     return this.run("sources sanitize", [
       source,
       ...(options.dryRun ? ["--dry-run"] : []),

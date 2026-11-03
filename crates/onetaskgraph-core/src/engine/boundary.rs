@@ -230,6 +230,7 @@ impl SanitizeSurface {
 }
 
 /// One entry still carrying a term after replacement: where it is, never what.
+// llmlint: ignore[invalid_states_unrepresentable] The shape is onevcs's pinned `Unfixed`, field for field, which the reconciliation journey holds to the released schema; a locator entry with `fixed: false` is refused by `answer_problem` rather than made unrepresentable here, because a type of its own would no longer be that schema's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Unfixed {
@@ -246,6 +247,7 @@ pub struct Unfixed {
 /// `text`, `paths` and `metadata` are the input's rewritable entries after replacement, the
 /// same length and order; `locators` the input's locators screened, the same length and order,
 /// and empty when the policy could not decide.
+// llmlint: ignore[invalid_states_unrepresentable] Contract 5 states this struct's fields exactly — a `WriteVerdict` beside the rewritten entries — and `op-link-sanitize` implements it from there; a verdict contradicting its payload is refused by `answer_problem` for every policy rather than unrepresentable, because reshaping it would break the agreed interface.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SanitizeVerdict {
     /// Whether what is answered may be written.

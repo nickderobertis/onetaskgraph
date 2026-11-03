@@ -123,6 +123,7 @@ pub struct SweepRequests {
 
 /// Which classes of record a sweep could not establish.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+// llmlint: ignore[invalid_states_unrepresentable] The report's JSON is the task's stated contract, `{"complete": bool, "uncovered": [...]}`, and both SDKs are generated from it; the one constructor, `sanitize_tasks`, sets `complete` exactly when `uncovered` is empty.
 pub struct SweepCoverage {
     /// Whether it covered every class.
     pub complete: bool,
@@ -201,8 +202,9 @@ impl SweepReport {
 const IDENTIFIER: &str = privateterms::LOCATOR_UNFIXABLE_REASON;
 
 impl Engine {
-    /// Sweep `source`: find its items already carrying a declared private term, and rewrite
-    /// every field and comment replacement can fix, unless `dry_run`.
+    /// Sweep the tasks of `source`: find those already carrying a declared private term, and
+    /// rewrite every field and comment of theirs replacement can fix, unless `dry_run`. Its
+    /// projects and documents are not read, and `complete` is coverage of its tasks.
     ///
     /// # Errors
     ///
@@ -211,7 +213,7 @@ impl Engine {
     /// `terms_command`; [`EngineError::BoundaryUnavailable`] when the policy could not decide,
     /// every locator redacted; and [`EngineError::SourceRefused`] when the source refuses a
     /// read or a write.
-    pub async fn sanitize_source(
+    pub async fn sanitize_tasks(
         &self,
         source: &SourceName,
         dry_run: bool,
