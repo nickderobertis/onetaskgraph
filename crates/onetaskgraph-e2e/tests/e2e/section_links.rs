@@ -1999,3 +1999,54 @@ fn a_comment_linking_a_linear_record_the_copy_does_not_write_names_its_stored_he
         "the comment names the stored id: {listed:#}"
     );
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback board.
+#[test]
+fn a_boards_content_write_and_update_store_the_anchors_and_read_back_as_authored() {
+    // A task's content replaced on its own, and through `task update`, with a body holding
+    // headings: the board holds an anchor before each heading, and a read gives the body back.
+    let sandbox = Sandbox::new();
+    let (authored_config, _) = authored(&sandbox, "plans");
+    let (board, config) = store(&sandbox, "github-projects", "board", None);
+    configure(&sandbox, &[("plans", &authored_config), ("board", &config)]);
+    let (landed, _) = copy_plan(&sandbox, &authored_ids("plans"), "board");
+    let target = &landed["T"];
+    for (verb, body) in [
+        ("content", "## Plan\n\nThe plan.\n\n## Plan\n\nAgain.\n"),
+        (
+            "update",
+            "## Risks\n\nNone.\n\n```md\n## Not a heading\n```\n",
+        ),
+    ] {
+        let file = sandbox.project().join(format!("{verb}.md"));
+        std::fs::write(&file, body).expect("the body");
+        let file = file.display().to_string();
+        match verb {
+            "content" => ok(
+                &sandbox,
+                &["task", "content", "set", &target.id, "--file", &file],
+            ),
+            _ => ok(
+                &sandbox,
+                &["task", "update", &target.id, "--body-file", &file],
+            ),
+        };
+        let raw = board.raw(target);
+        let expected = match verb {
+            "content" => {
+                "<a id=\"plan\"></a>\n## Plan\n\nThe plan.\n\n<a id=\"plan-1\"></a>\n## Plan\n\nAgain.\n"
+            }
+            _ => "<a id=\"risks\"></a>\n## Risks\n\nNone.\n\n```md\n## Not a heading\n```\n",
+        };
+        assert_eq!(
+            raw.trim_end(),
+            expected.trim_end(),
+            "{verb}: the stored body"
+        );
+        assert_eq!(
+            target.content(&sandbox).trim_end(),
+            body.trim_end(),
+            "{verb}: read back as written"
+        );
+    }
+}

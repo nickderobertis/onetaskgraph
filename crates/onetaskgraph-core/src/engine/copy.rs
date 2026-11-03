@@ -1256,7 +1256,7 @@ struct Journal {
     entries: Vec<Undo>,
     /// Every item this copy landed, by interface and source id, and the id it landed under —
     /// which a later body's link to it names.
-    landed: HashMap<(Level, String), NativeId>,
+    landed: HashMap<(Level, GlobalId), NativeId>,
     /// Each item written with links not addressable yet, its latest write alone.
     sections_pending: Vec<SectionsPending>,
     /// Each copied item's section-link figures, as its last rendering left them.
@@ -4376,7 +4376,7 @@ impl Engine {
                     Target::Create => None,
                 };
                 (
-                    (item.to.clone(), item.item.level(), item.source.to_string()),
+                    (item.to.clone(), item.item.level(), item.source.clone()),
                     at,
                 )
             })
@@ -4387,7 +4387,7 @@ impl Engine {
         let mut wanted: BTreeMap<SourceName, Vec<&Referent>> = BTreeMap::new();
         for (item, referents) in planned.iter().zip(&named) {
             for referent in referents {
-                if written.contains_key(&(item.to.clone(), referent.level, referent.id.to_string()))
+                if written.contains_key(&(item.to.clone(), referent.level, referent.id.clone()))
                 {
                     continue;
                 }
@@ -4436,7 +4436,7 @@ impl Engine {
                     linked.counterpart = match written.get(&(
                         item.to.clone(),
                         referent.level,
-                        referent.id.to_string(),
+                        referent.id.clone(),
                     )) {
                         Some(Some((id, Some(location)))) => sections::Counterpart::At {
                             id: id.clone(),
@@ -5705,7 +5705,7 @@ impl Engine {
                         GlobalId::new(destination.name().clone(), id.clone()),
                     );
                     journal.landed.insert(
-                        (Level::Task, planned[*index].source.to_string()),
+                        (Level::Task, planned[*index].source.clone()),
                         id.clone(),
                     );
                     created.insert(*index, id);
@@ -9174,7 +9174,7 @@ impl Engine {
             .retain(|follow| !(&follow.at == destination.name() && follow.id == landed));
         journal
             .landed
-            .insert((created_kind, item.source.to_string()), landed.clone());
+            .insert((created_kind, item.source.clone()), landed.clone());
         journal
             .sections_pending
             .retain(|held| !(&held.at == destination.name() && held.id == landed));
@@ -10997,7 +10997,7 @@ fn targets_first(planned: Vec<Planned>) -> Vec<Planned> {
 }
 
 /// One item a copy call writes: the source it lands in, its interface and its source id.
-type WrittenKey = (SourceName, Level, String);
+type WrittenKey = (SourceName, Level, GlobalId);
 
 /// What a body's rendering knows while the copy is planned: where the item's own counterpart
 /// is when it is updated, and the heading ids the destination's reads so far answered.
@@ -11038,7 +11038,7 @@ struct Writing<'a> {
     /// The destination.
     destination: &'a ResolvedSource,
     /// What this copy has landed so far, by interface and source id.
-    landed: &'a HashMap<(Level, String), NativeId>,
+    landed: &'a HashMap<(Level, GlobalId), NativeId>,
     /// The item's own counterpart, once known.
     own: Option<(NativeId, String)>,
 }
@@ -11047,7 +11047,7 @@ impl sections::Knows for Writing<'_> {
     fn landed(&self, referent: &sections::Linked) -> Option<(NativeId, String)> {
         let id = self
             .landed
-            .get(&(referent.level, referent.id.to_string()))?;
+            .get(&(referent.level, referent.id.clone()))?;
         let location = located(
             self.destination
                 .source()
