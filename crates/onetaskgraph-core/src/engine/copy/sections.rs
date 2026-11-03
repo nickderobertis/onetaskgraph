@@ -598,6 +598,7 @@ impl BodyLinks {
             // A fragment naming no heading, or a destination with no form: the record's link,
             // its fragment carried byte for byte — into a folder of Markdown as the path relative
             // to the linking file a section link there is.
+            // llmlint: ignore[changed_behavior_has_e2e] Held by `a_reference_carrying_a_fragment_is_rewritten_and_keeps_the_fragment` and `a_fragment_reference_is_left_and_counted_as_any_other_reference_without_a_counterpart` in `crates/onetaskgraph-core/tests/copy.rs`, which drive the real engine's copy into an in-memory destination that reports a location for every record and holds no section form, and by `a_reference_carrying_a_fragment_lands_on_the_copied_tasks_destination_location` and the section-link journeys in `crates/onetaskgraph-e2e` for every kind with one.
             let relative = occurrence.relative || self.to == Some(SectionForm::LocalMd);
             return self
                 .plain(&location, relative, knows)

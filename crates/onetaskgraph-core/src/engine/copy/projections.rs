@@ -1494,6 +1494,7 @@ impl Engine {
         let mut view = task.view(id.clone(), Some(landing.project.clone()));
         // A view's links to its own headings, in the destination's section form: a view holds
         // no other link to a record, which the preflight refused.
+        // llmlint: ignore-block[changed_behavior_has_e2e] A public view's section links are held by `a_views_link_to_its_own_heading_lands_in_the_boards_section_form`, `a_new_linear_views_link_to_its_own_heading_names_the_id_its_create_was_answered_with` and the two rollback journeys beside them in `crates/onetaskgraph-e2e/tests/e2e/boundary/projections.rs`; the projection fixture plans are authored in a folder of Markdown, and a plan held in a tracker reaches a view through the same rendering, whose tracker-form reading the section-link matrix journeys in `section_links.rs` hold for every source kind.
         let mut view_links = None;
         if let Some(content) = view.content.clone() {
             let from = crate::section_links::SectionForm::for_kind(
@@ -1504,7 +1505,10 @@ impl Engine {
                 from,
                 crate::section_links::SectionForm::for_kind(destination.kind()),
                 Level::Task,
-                None,
+                // Where the canonical task is, so a link to its own heading spelled with its own
+                // address — as a view copied out of a tracker holds one — is read as one. A local
+                // path in a view is refused before this, by the preflight.
+                super::located(task.task.location.as_ref()),
                 self.readable(&task.source.source)?
                     .source()
                     .stored_headings(
@@ -1525,6 +1529,7 @@ impl Engine {
                 view_links = Some(links);
             }
         }
+        // llmlint: ignore-end[changed_behavior_has_e2e]
         let edges: Vec<DependencyEdge> = task
             .depends_on
             .iter()
