@@ -94,6 +94,66 @@ fn stored_priorities_and_statuses_are_fixed_and_reported_as_their_own_fields() {
     }
 }
 
+/// A stored fixed identifier refuses a narrow write without changing the source; correcting
+/// that identifier by hand lets the same write through on its next attempt.
+fn fixed_identifier_refuses_then_recovers(dirty: &str, clean: &str) {
+    let (store, record) = sanitizing(replaced());
+    let stage = |field: &str| {
+        store.record(
+            "site",
+            "tasks",
+            "held",
+            &format!("title: Plain\nstatus: todo\nproject: p\n{field}"),
+            PLAIN,
+        );
+    };
+    stage(dirty);
+    let before = tree(&store.folder("site"));
+    let calls = record.calls().len();
+    let arguments = ["task", "priority", "set", "site:held", "high", "--json"];
+    let output = store.run(&arguments);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a refusal");
+    assert_eq!(failure["failure"]["kind"], json!("boundary-refused"));
+    assert_eq!(failure["predates_write"], json!(true), "{failure}");
+    assert_eq!(ran(&record, calls, BoundaryCommand::Sanitize), 1);
+    assert_eq!(
+        tree(&store.folder("site")),
+        before,
+        "no field was rewritten"
+    );
+    assert!(!stdout(&output).contains(TERM), "{failure}");
+    assert!(!stderr(&output).contains(TERM), "{}", stderr(&output));
+
+    stage(clean);
+    let calls = record.calls().len();
+    let answer: Value = serde_json::from_str(&store.ok(&arguments)).expect("a successful retry");
+    assert_eq!(answer["priority"], json!("high"), "{answer}");
+    assert!(answer.get("sanitization").is_none(), "{answer}");
+    assert_eq!(ran(&record, calls, BoundaryCommand::Sanitize), 1);
+    let shown: Value = serde_json::from_str(&store.ok(&["task", "show", "site:held", "--json"]))
+        .expect("the stored task");
+    assert_eq!(shown["items"][0]["item"]["priority"], json!("high"));
+}
+
+#[test]
+fn a_stored_opaque_label_id_carrying_a_term_is_refused_without_rewriting_its_plain_name() {
+    fixed_identifier_refuses_then_recovers(
+        &format!("labels: [{{id: opaque-{TERM}, name: Ordinary}}]"),
+        "labels: [{id: opaque-clean, name: Ordinary}]",
+    );
+}
+
+#[test]
+fn stored_delivery_references_carrying_a_term_are_fixed_in_both_directions() {
+    for field in ["delivers", "delivered_by"] {
+        fixed_identifier_refuses_then_recovers(
+            &format!("{field}: [\"site:{TERM}-peer\"]"),
+            &format!("{field}: [\"site:clean-peer\"]"),
+        );
+    }
+}
+
 #[test]
 fn a_terms_failure_screens_the_source_name_even_when_no_item_was_read() {
     for missing in [false, true] {
