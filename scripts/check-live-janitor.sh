@@ -55,7 +55,7 @@ def constant(name, spelled=r'&str = "([^"]+)"'):
 # credentials it is given.
 CANCELLED_RUN = 'cargo run --locked -p onetaskgraph-live-janitor -- --cancelled-run'
 RELEASE_LEASES = 'cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases'
-CANCELLED_IF = "cancelled() && steps.release.outputs.tests == 'run' && !github.event.pull_request.head.repo.fork"
+CANCELLED_IF = "cancelled() && !github.event.pull_request.head.repo.fork"
 CANCELLED_ENV = {'GH_PROJECTS_TOKEN', 'GH_PROJECTS_OWNER', 'GH_PROJECTS_NUMBER', 'GH_PROJECTS_REPOSITORY'}
 RELEASE_ENV = {'LINEAR_API_KEY', 'LINEAR_WRITE_TEAM'}
 ci_steps = re.split(r'(?m)^      - (?=name:|uses:)', ci)

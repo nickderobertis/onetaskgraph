@@ -26,6 +26,12 @@ on:
 # genuinely needs more.
 permissions:
   contents: read
+  actions: read
+
+# Both Nx selection and the cache report use the event's immutable commit ids.
+env:
+  NX_BASE: ${{ github.event.pull_request.base.sha }}
+  NX_HEAD: ${{ github.event.pull_request.head.sha }}
 
 jobs:
   # The four jobs. None needs another, so all four start at once, and each runs its checks
@@ -46,6 +52,7 @@ jobs:
     # Pages build; notignored upserts its sticky comment. No other step is handed the token:
     # the checkout persists no credential.
     permissions:
+      actions: read
       contents: write # push the gh-pages gallery preview
       pull-requests: write # the visual docs and notignored sticky comments; read the PR title
       pages: read # gate on the Pages build the deploy triggers
@@ -131,10 +138,8 @@ jobs:
         id: pins
         shell: bash
         run: bash scripts/ci-tool-pins.sh
-      # Each cache is keyed on everything that produced it, so a hit is never stale: the tool
-      # caches on the pinned version, the OS and the architecture (and the pruner, which cargo
-      # builds, on the toolchain); the Nx cache on every lockfile and the toolchain, whose
-      # entries Nx itself serves only for an unchanged input hash.
+      # Tool caches use their pin, OS and architecture (and the compiled pruner its toolchain).
+      # Nx results use the sidecar below and Nx's own per-task input hashes.
       - uses: actions/cache/restore@v6
         id: release-plz-cache
         with:
@@ -147,11 +152,30 @@ jobs:
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      - uses: actions/cache@v6
+      - name: Decide cache trust and configure the sidecar
+        id: nx-cache-trust
+        shell: bash
+        run: |
+          node scripts/nx-remote-cache.mjs trust
+          token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - uses: op-nx/github-cache/start-cache-server@91839c24885842cac86567c30e23b37fb85f7e33
+        id: nx-cache
+        background: true
         with:
-          path: .nx/cache
-          key: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
-          restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
+          port: '3000'
+        env:
+          NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
+          NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
+          CACHE_READ_ONLY: ${{ steps.nx-cache-trust.outputs.read_only == 'true' && '1' || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Wait for the cache recording proxy
+        shell: bash
+        env:
+          NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
+          NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
+        run: node scripts/nx-remote-cache.mjs ready
       - name: Bootstrap
         env:
           # cargo-binstall reads GitHub's releases; anonymously a shared runner's address is
@@ -173,38 +197,10 @@ jobs:
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      # test-macos is skipped on this repository's own release-plz branch, so the release pull
-      # request spends no Mac runner (`onetaskgraph-macos-runs-per-change`). That is sound only
-      # while the branch carries release-plz's version and changelog edits alone, so the
-      # classifier reads the diff here, and a release branch carrying anything else fails lint
-      # rather than merging with no macOS run.
-      - name: Hold a release branch that skips macOS to its version and changelog edits
-        if: github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-')
-        shell: bash
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          decision="$(node .github/macos-policy.mjs classify --event "$GITHUB_EVENT_PATH" --base "$BASE" --head "$HEAD")"
-          echo "$decision"
-          if [ "$(jq -r .macosRequired <<<"$decision")" != false ]; then
-            echo "::error::this release-plz branch carries more than release versions and changelogs, so test-macos must run: $(jq -r .reason <<<"$decision"). Land the change through an ordinary branch." >&2
-            exit 1
-          fi
-      - name: Derive the comparison base
-        id: pr-base
-        shell: bash
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
       - name: Format, lint and type-check the affected projects, generated code and the supply chain
-        env:
-          NX_BASE: ${{ steps.pr-base.outputs.base }}
-          NX_HEAD: HEAD
         run: just ci-lint
       # The release pull request alone: the pass-time budget of the pool maintenance
-      # onevcs.toml declares. lint is the one of the four that runs in full there, on Linux,
+      # onevcs.toml declares. lint owns this additional policy budget on Linux,
       # already bootstrapped with the pinned pruner.
       - name: Pool-maintenance pass-time budget on the release pull request
         if: startsWith(github.head_ref, 'release-plz-')
@@ -269,6 +265,17 @@ jobs:
           matrix: ${{ steps.lane.outputs.matrix }}
           publish: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
           github-token: ${{ github.token }}
+      - name: Report cache entries and task executions
+        if: always()
+        shell: bash
+        run: node scripts/nx-remote-cache.mjs report --job "$GITHUB_JOB" --out "$RUNNER_TEMP/nx-cache-report"
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.nx-cache-trust.outputs.promotable == 'true'
+        with:
+          name: nx-cache-entries-${{ github.job }}
+          path: ${{ runner.temp }}/nx-cache-report
+          retention-days: 7
+      - cancel: nx-cache
 
   test-linux:
     if: github.event_name == 'pull_request'
@@ -291,8 +298,8 @@ jobs:
           bun-version-file: package.json
       - name: Install the workflow tooling
         run: just github-workflows-bootstrap
-      # .github/release-shortcut.mjs says when the tests need not run again, and why.
-      - name: Decide whether the release shortcut applies
+      # The classifier affects only Rust coverage; functional and SDK tasks still run.
+      - name: Decide whether Rust coverage can reuse main's proof
         id: release
         shell: bash
         env:
@@ -301,23 +308,21 @@ jobs:
         run: |
           git fetch --quiet --no-tags origin "$DEFAULT_BRANCH"
           node .github/release-shortcut.mjs decide --base "$BASE_SHA" --head HEAD --main "origin/$DEFAULT_BRANCH"
-      - name: Report the release shortcut
-        if: steps.release.outputs.tests == 'skip'
+      - name: Report the Rust coverage shortcut
+        if: steps.release.outputs.rust_coverage == 'skip'
         shell: bash
         env:
           REASON: ${{ steps.release.outputs.reason }}
-        run: echo "Tests not run ($REASON); the lint job still runs in full."
+        run: echo "Rust coverage omitted ($REASON); functional tests and SDK coverage run."
       # The instrumented build and the plain one, the live crates' whole suites included, ran
       # this runner out of disk (run 41147797634). The image's SDKs this job never uses go in
       # the background, finishing long before the builds peak, so the removal costs no time.
       - name: Free the disk the two builds need
-        if: steps.release.outputs.tests == 'run'
         shell: bash
         run: |
           df -h /
           sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: astral-sh/setup-uv@v7
-        if: steps.release.outputs.tests == 'run'
         with:
           enable-cache: true
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
@@ -327,72 +332,75 @@ jobs:
       # the only cache a new pull request can restore.
       # rust-cache hashes every installed compiler; exclude the unused floating one.
       - name: Exclude the unused floating compiler from the build cache
-        if: steps.release.outputs.tests == 'run'
         shell: bash
         run: rustup toolchain uninstall stable
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        if: steps.release.outputs.tests == 'run'
         with:
           cache-shared-key: test-linux
       - uses: taiki-e/install-action@v2
-        if: steps.release.outputs.tests == 'run'
         with:
           tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
       - name: Read the pinned bootstrap tool versions
         id: pins
-        if: steps.release.outputs.tests == 'run'
         shell: bash
         run: bash scripts/ci-tool-pins.sh
       # The caches, keyed as lint's are and for the same reasons.
       - uses: actions/cache/restore@v6
         id: release-plz-cache
-        if: steps.release.outputs.tests == 'run'
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/restore@v6
         id: prune-superseded-cache
-        if: steps.release.outputs.tests == 'run'
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      - uses: actions/cache@v6
-        if: steps.release.outputs.tests == 'run'
+      - name: Decide cache trust and configure the sidecar
+        id: nx-cache-trust
+        shell: bash
+        run: |
+          node scripts/nx-remote-cache.mjs trust
+          token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - uses: op-nx/github-cache/start-cache-server@91839c24885842cac86567c30e23b37fb85f7e33
+        id: nx-cache
+        background: true
         with:
-          path: .nx/cache
-          key: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
-          restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
+          port: '3000'
+        env:
+          NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
+          NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
+          CACHE_READ_ONLY: ${{ steps.nx-cache-trust.outputs.read_only == 'true' && '1' || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Wait for the cache recording proxy
+        shell: bash
+        env:
+          NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
+          NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
+        run: node scripts/nx-remote-cache.mjs ready
       - name: Bootstrap
-        if: steps.release.outputs.tests == 'run'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: just bootstrap --outputStyle=static
       # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
-        if: steps.release.outputs.tests == 'run' && steps.release-plz-cache.outputs.cache-hit != 'true'
+        if: steps.release-plz-cache.outputs.cache-hit != 'true'
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/save@v6
-        if: steps.release.outputs.tests == 'run' && steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        if: steps.prune-superseded-cache.outputs.cache-hit != 'true'
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      - name: Derive the comparison base
-        id: pr-base
-        if: steps.release.outputs.tests == 'run'
-        shell: bash
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
       - name: Test the affected projects
-        if: steps.release.outputs.tests == 'run'
         env:
+          ONETASKGRAPH_SKIP_RUST_COVERAGE: ${{ steps.release.outputs.rust_coverage == 'skip' && '1' || '' }}
           # This run's one live session. GH_PROJECTS_TOKEN rather than GITHUB_PROJECTS_TOKEN,
           # which GitHub refuses as a secret name; nominations in the open, because a lane
           # writes only where it is pointed and refuses to pick a target itself.
@@ -411,8 +419,6 @@ jobs:
           LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
           # llmlint: ignore[live_tier_compiles_and_requires_credential] `0` on a fork pull request alone, which GitHub hands no secrets; every other run demands the credential.
           ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
-          NX_BASE: ${{ steps.pr-base.outputs.base }}
-          NX_HEAD: HEAD
         # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] These suites run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just ci-test-linux
       # A cancelled run's live journeys die before their own cleanup, leaving their board
@@ -421,7 +427,7 @@ jobs:
       # hourly janitor takes anything left once the run reads completed.
       # scripts/check-live-janitor.sh holds both steps to that shape.
       - name: Remove this run's live artifacts after a cancellation
-        if: cancelled() && steps.release.outputs.tests == 'run' && !github.event.pull_request.head.repo.fork
+        if: cancelled() && !github.event.pull_request.head.repo.fork
         timeout-minutes: 15
         env:
           GH_PROJECTS_TOKEN: ${{ secrets.GH_PROJECTS_TOKEN }}
@@ -434,12 +440,23 @@ jobs:
       # six and a half hours: exactly the leases this job recorded, each only while it still
       # reads back as recorded. scripts/check-live-janitor.sh holds this step to that shape.
       - name: Release this run's Linear leases after a cancellation
-        if: cancelled() && steps.release.outputs.tests == 'run' && !github.event.pull_request.head.repo.fork
+        if: cancelled() && !github.event.pull_request.head.repo.fork
         timeout-minutes: 15
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
         run: cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases
+      - name: Report cache entries and task executions
+        if: always()
+        shell: bash
+        run: node scripts/nx-remote-cache.mjs report --job "$GITHUB_JOB" --out "$RUNNER_TEMP/nx-cache-report"
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.nx-cache-trust.outputs.promotable == 'true'
+        with:
+          name: nx-cache-entries-${{ github.job }}
+          path: ${{ runner.temp }}/nx-cache-report
+          retention-days: 7
+      - cancel: nx-cache
 
   test-windows:
     if: github.event_name == 'pull_request'
@@ -478,97 +495,79 @@ jobs:
           bun-version-file: package.json
       - name: Install the workflow tooling
         run: just github-workflows-bootstrap
-      # .github/release-shortcut.mjs says when the tests need not run again, and why.
-      - name: Decide whether the release shortcut applies
-        id: release
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          git fetch --quiet --no-tags origin "$DEFAULT_BRANCH"
-          node .github/release-shortcut.mjs decide --base "$BASE_SHA" --head HEAD --main "origin/$DEFAULT_BRANCH"
-      - name: Report the release shortcut
-        if: steps.release.outputs.tests == 'skip'
-        shell: bash
-        env:
-          REASON: ${{ steps.release.outputs.reason }}
-        run: echo "Tests not run ($REASON); the lint job still runs in full."
       - uses: astral-sh/setup-uv@v7
-        if: steps.release.outputs.tests == 'run'
         with:
           enable-cache: true
       # rust-cache hashes every installed compiler; exclude the unused floating one.
       - name: Exclude the unused floating compiler from the build cache
-        if: steps.release.outputs.tests == 'run'
         shell: bash
         run: rustup toolchain uninstall stable
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        if: steps.release.outputs.tests == 'run'
         with:
           cache-shared-key: test-windows
       - uses: taiki-e/install-action@v2
-        if: steps.release.outputs.tests == 'run'
         with:
           tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
       - name: Read the pinned bootstrap tool versions
         id: pins
-        if: steps.release.outputs.tests == 'run'
         shell: bash
         run: bash scripts/ci-tool-pins.sh
       # The caches, keyed as lint's are and for the same reasons.
       - uses: actions/cache/restore@v6
         id: release-plz-cache
-        if: steps.release.outputs.tests == 'run'
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/restore@v6
         id: prune-superseded-cache
-        if: steps.release.outputs.tests == 'run'
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      - uses: actions/cache@v6
-        if: steps.release.outputs.tests == 'run'
+      - name: Decide cache trust and configure the sidecar
+        id: nx-cache-trust
+        shell: bash
+        run: |
+          node scripts/nx-remote-cache.mjs trust
+          token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - uses: op-nx/github-cache/start-cache-server@91839c24885842cac86567c30e23b37fb85f7e33
+        id: nx-cache
+        background: true
         with:
-          path: .nx/cache
-          key: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
-          restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
+          port: '3000'
+        env:
+          NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
+          NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
+          CACHE_READ_ONLY: ${{ steps.nx-cache-trust.outputs.read_only == 'true' && '1' || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Wait for the cache recording proxy
+        shell: bash
+        env:
+          NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
+          NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
+        run: node scripts/nx-remote-cache.mjs ready
       - name: Bootstrap
-        if: steps.release.outputs.tests == 'run'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: just bootstrap --outputStyle=static
       # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
-        if: steps.release.outputs.tests == 'run' && steps.release-plz-cache.outputs.cache-hit != 'true'
+        if: steps.release-plz-cache.outputs.cache-hit != 'true'
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/save@v6
-        if: steps.release.outputs.tests == 'run' && steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        if: steps.prune-superseded-cache.outputs.cache-hit != 'true'
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      - name: Derive the comparison base
-        id: pr-base
-        if: steps.release.outputs.tests == 'run'
-        shell: bash
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
       # llmlint: ignore-block[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials, so this job cannot demand one; and the uncredentialed service suites run behind affected selection, as in test-linux, only when their own plugin changed.
       - name: Test the affected projects
-        if: steps.release.outputs.tests == 'run'
-        env:
-          NX_BASE: ${{ steps.pr-base.outputs.base }}
-          NX_HEAD: HEAD
         run: just ci-test-windows
       # llmlint: ignore-end[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier]
 
@@ -576,8 +575,20 @@ jobs:
   # spends no Mac runner (`onetaskgraph-macos-runs-per-change`); a skipped job satisfies a
   # required check. lint goes red when that branch carries more than the version and changelog
   # edits, because it classifies the diff itself.
+      - name: Report cache entries and task executions
+        if: always()
+        shell: bash
+        run: node scripts/nx-remote-cache.mjs report --job "$GITHUB_JOB" --out "$RUNNER_TEMP/nx-cache-report"
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.nx-cache-trust.outputs.promotable == 'true'
+        with:
+          name: nx-cache-entries-${{ github.job }}
+          path: ${{ runner.temp }}/nx-cache-report
+          retention-days: 7
+      - cancel: nx-cache
+
   test-macos:
-    if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-'))
+    if: github.event_name == 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 40
     env:
@@ -595,96 +606,89 @@ jobs:
           bun-version-file: package.json
       - name: Install the workflow tooling
         run: just github-workflows-bootstrap
-      # .github/release-shortcut.mjs says when the tests need not run again, and why.
-      - name: Decide whether the release shortcut applies
-        id: release
-        shell: bash
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          git fetch --quiet --no-tags origin "$DEFAULT_BRANCH"
-          node .github/release-shortcut.mjs decide --base "$BASE_SHA" --head HEAD --main "origin/$DEFAULT_BRANCH"
-      - name: Report the release shortcut
-        if: steps.release.outputs.tests == 'skip'
-        shell: bash
-        env:
-          REASON: ${{ steps.release.outputs.reason }}
-        run: echo "Tests not run ($REASON); the lint job still runs in full."
       - uses: astral-sh/setup-uv@v7
-        if: steps.release.outputs.tests == 'run'
         with:
           enable-cache: true
       # rust-cache hashes every installed compiler; exclude the unused floating one.
       - name: Exclude the unused floating compiler from the build cache
-        if: steps.release.outputs.tests == 'run'
         shell: bash
         run: rustup toolchain uninstall stable
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        if: steps.release.outputs.tests == 'run'
         with:
           cache-shared-key: test-macos
       - uses: taiki-e/install-action@v2
-        if: steps.release.outputs.tests == 'run'
         with:
           tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
       - name: Read the pinned bootstrap tool versions
         id: pins
-        if: steps.release.outputs.tests == 'run'
         shell: bash
         run: bash scripts/ci-tool-pins.sh
       # The caches, keyed as lint's are and for the same reasons.
       - uses: actions/cache/restore@v6
         id: release-plz-cache
-        if: steps.release.outputs.tests == 'run'
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/restore@v6
         id: prune-superseded-cache
-        if: steps.release.outputs.tests == 'run'
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      - uses: actions/cache@v6
-        if: steps.release.outputs.tests == 'run'
+      - name: Decide cache trust and configure the sidecar
+        id: nx-cache-trust
+        shell: bash
+        run: |
+          node scripts/nx-remote-cache.mjs trust
+          token="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - uses: op-nx/github-cache/start-cache-server@91839c24885842cac86567c30e23b37fb85f7e33
+        id: nx-cache
+        background: true
         with:
-          path: .nx/cache
-          key: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-${{ github.sha }}
-          restore-keys: nx-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'bun.lock', 'uv.lock', 'sdks/python/uv.lock', '.github/bun.lock', 'rust-toolchain.toml') }}-
+          port: '3000'
+        env:
+          NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
+          NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
+          CACHE_READ_ONLY: ${{ steps.nx-cache-trust.outputs.read_only == 'true' && '1' || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Wait for the cache recording proxy
+        shell: bash
+        env:
+          NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
+          NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
+        run: node scripts/nx-remote-cache.mjs ready
       - name: Bootstrap
-        if: steps.release.outputs.tests == 'run'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: just bootstrap --outputStyle=static
       # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
-        if: steps.release.outputs.tests == 'run' && steps.release-plz-cache.outputs.cache-hit != 'true'
+        if: steps.release-plz-cache.outputs.cache-hit != 'true'
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/save@v6
-        if: steps.release.outputs.tests == 'run' && steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        if: steps.prune-superseded-cache.outputs.cache-hit != 'true'
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      - name: Derive the comparison base
-        id: pr-base
-        if: steps.release.outputs.tests == 'run'
-        shell: bash
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
       # llmlint: ignore-block[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials, so this job cannot demand one; and the uncredentialed service suites run behind affected selection, as in test-linux, only when their own plugin changed.
       - name: Test the affected projects
-        if: steps.release.outputs.tests == 'run'
-        env:
-          NX_BASE: ${{ steps.pr-base.outputs.base }}
-          NX_HEAD: HEAD
         run: just ci-test-macos
       # llmlint: ignore-end[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier]
+      - name: Report cache entries and task executions
+        if: always()
+        shell: bash
+        run: node scripts/nx-remote-cache.mjs report --job "$GITHUB_JOB" --out "$RUNNER_TEMP/nx-cache-report"
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.nx-cache-trust.outputs.promotable == 'true'
+        with:
+          name: nx-cache-entries-${{ github.job }}
+          path: ${{ runner.temp }}/nx-cache-report
+          retention-days: 7
+      - cancel: nx-cache

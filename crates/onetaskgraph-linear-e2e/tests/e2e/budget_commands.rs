@@ -147,10 +147,16 @@ fn the_telemetry_the_journeys_write_is_what_test_declares_and_budgets_hashes() {
     let targets = &project["targets"];
     assert_eq!(
         targets["test"]["outputs"],
-        serde_json::json!([format!(
-            "{{workspaceRoot}}/target/debug/{}",
-            telemetry::BELOW_BUILD
-        )]),
+        serde_json::json!([
+            format!(
+                "{{workspaceRoot}}/target/debug/{}/*.json",
+                telemetry::BELOW_BUILD
+            ),
+            format!(
+                "{{workspaceRoot}}/target/debug/{}/live/*/linear-live-documents-*.json",
+                telemetry::BELOW_BUILD
+            )
+        ]),
         "a cache hit of `test` restores the telemetry `budgets` reads"
     );
     let hashed = format!("**/{}/*.json", telemetry::BELOW_BUILD);

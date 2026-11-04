@@ -7,6 +7,7 @@
 # in seconds. The Windows recipe, and the macOS recipe outside the cases that read what its
 # phases ran with, are driven through `--select-only`.
 set -euo pipefail
+export ONETASKGRAPH_SKIP_RUST_COVERAGE=0
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Absolute, because every case runs it from inside the scratch clone, where a relative PATH
@@ -576,22 +577,22 @@ tip="$(git -C "$work" rev-parse HEAD)"
 git -C "$work" push --quiet origin main
 git -C "$work" checkout --quiet -b feature "$fork"
 git -C "$work" commit --quiet --allow-empty -m "the pull request"
-: >"$scratch/base-output"
-derived="$(cd "$work" && GITHUB_OUTPUT="$scratch/base-output" bash "$REPO/scripts/ci-pr-base.sh" main "$tip" 2>&1)" \
-  && derived_status=0 || derived_status=$?
-[ "$derived_status" -eq 0 ] && [ "$(cat "$scratch/base-output")" = "base=$fork" ] \
-  || fail "the comparison base was not the fork point $fork: exit $derived_status, $derived, output $(cat "$scratch/base-output")"
-derived="$(cd "$work" && bash "$REPO/scripts/ci-pr-base.sh" main "$(printf '%040d' 0)" 2>&1)" \
-  && derived_status=0 || derived_status=$?
-[ "$derived_status" -ne 0 ] && grep -qF "share no merge base" <<<"$derived" \
-  || fail "a base sha the checkout does not hold did not fail the comparison base: exit $derived_status, $derived"
-for arguments in "--all $tip" "main..feature $tip" "main ${tip:0:12}" "main HEAD" "main"; do
-  # shellcheck disable=SC2086 # each case is two words, or deliberately one
-  derived="$(cd "$work" && bash "$REPO/scripts/ci-pr-base.sh" $arguments 2>&1)" \
-    && derived_status=0 || derived_status=$?
-  [ "$derived_status" -eq 2 ] && grep -qF "usage: scripts/ci-pr-base.sh" <<<"$derived" \
-    || fail "the comparison base accepted '$arguments' rather than refusing it before git: exit $derived_status, $derived"
-done
+head="$(git -C "$work" rev-parse HEAD)"
+normalised="$(cd "$work" && NX_WORKSPACE_ROOT_PATH="$work" node - "$ROOT/node_modules/nx/dist/src/utils/command-line-utils.js" "$tip" "$head" <<'JS'
+const { splitArgsIntoNxArgsAndOverrides } = require(process.argv[2]);
+const { nxArgs } = splitArgsIntoNxArgsAndOverrides(
+  { base: process.argv[3], head: process.argv[4] }, "affected", { printWarnings: false }, {},
+);
+console.log(nxArgs.base);
+JS
+)"
+[ "$normalised" = "$fork" ] \
+  || fail "Nx did not normalise the event base to the behind-main PR's fork point: $normalised"
+# On the merge checkout the event base is also the retired helper's comparison base.
+git -C "$work" checkout --quiet main
+git -C "$work" merge --quiet --no-ff feature -m "the pull request merge ref"
+[ "$(git -C "$work" merge-base "$tip" HEAD)" = "$tip" ] \
+  || fail "the live selector's event base differs from the previous merge-checkout base"
 
 if [ "$failures" -ne 0 ]; then
   echo "check-ci-recipes: $failures expectation(s) about the pull-request job recipes failed — see above." >&2
