@@ -3,7 +3,7 @@
   "name": "github-workflow-policy",
   "projectType": "library",
   "tags": ["lang:javascript", "layer:workspace"],
-  "//": "Nx gives a file to the project whose root holds it, so the workflow policy journeys and the macOS budgets live under this root: a crate or SDK edit selects github-workflows' CD journeys without them. tests/inventory.test.mjs reconciles both projects' commands, read sets, inventory and selection, here, where any .github edit selects it. llmlint: ignore-file[external_service_suite_stays_out_of_the_affected_tier] rust-cache-action's journey reads the pinned rust-cache revision's public source from GitHub anonymously — the read every workflow run that uses the action makes — with no credential and no write, so it is not a hosted service suite; it moved here unchanged from github-workflows' test target, which carries the same reasoned exception, and AGENTS.md keeps tests that reach something real inside the required check rather than in a tier a merge does not wait on. JSON has no comment to scope this to that one target.",
+  "//": "Nx gives a file to the project whose root holds it, so the workflow policy journeys and the macOS budgets live under this root: a crate or SDK edit selects github-workflows' CD journeys without them. tests/inventory.test.mjs reconciles the workflow projects' commands, read sets, inventory and selection, here, where any .github edit selects it. llmlint: ignore-file[external_service_suite_stays_out_of_the_affected_tier] rust-cache-action's journey reads the pinned rust-cache revision's public source from GitHub anonymously — the read every workflow run that uses the action makes — with no credential and no write, so it is not a hosted service suite; it moved here unchanged from github-workflows' test target, which carries the same reasoned exception, and AGENTS.md keeps tests that reach something real inside the required check rather than in a tier a merge does not wait on. JSON has no comment to scope this to that one target.",
   "namedInputs": {
     "default": [
       "{projectRoot}/**/*",
@@ -15,7 +15,6 @@
       "{workspaceRoot}/screencomp.toml",
       "{workspaceRoot}/scripts/product_versions.py",
       "{workspaceRoot}/scripts/release_products.py",
-      "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/rust-toolchain.toml",
       "{workspaceRoot}/scripts/ci-job.sh",
       "{workspaceRoot}/scripts/project.json",
@@ -33,7 +32,11 @@
       "{workspaceRoot}/scripts/check-release-tooling-selection.sh",
       "{workspaceRoot}/scripts/check-real-release-preparation.sh",
       "{workspaceRoot}/scripts/check-npm-publish.sh",
-      "{workspaceRoot}/scripts/check-fixture-discrimination.sh"
+      "{workspaceRoot}/scripts/check-fixture-discrimination.sh",
+      "versionFreeNpm",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/scripts/nx-version-free-inputs.mjs",
+      "{workspaceRoot}/.github/nx-policy/version-inputs.mjs"
     ],
     "releaseTail": [
       "{workspaceRoot}/.github/workflows/release.yml",
@@ -43,14 +46,24 @@
       "{workspaceRoot}/.github/package.json",
       "{workspaceRoot}/.github/bun.lock",
       "{workspaceRoot}/budgets.yaml",
-      "{workspaceRoot}/package.json",
-      "{workspaceRoot}/scripts/actions-budget-figures.sh"
+      "{workspaceRoot}/scripts/actions-budget-figures.sh",
+      "{workspaceRoot}/.github/release-published-paths",
+      "versionFreeNpm",
+      "{workspaceRoot}/.github/test-setup.mjs",
+      "{workspaceRoot}/.github/fixture-environment.mjs"
     ]
   },
   "targets": {
     "bootstrap": {
       "executor": "nx:noop",
-      "dependsOn": ["github-workflows:bootstrap"]
+      "dependsOn": ["github-workflows:bootstrap"],
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "check": {
       "executor": "nx:noop",
@@ -72,7 +85,7 @@
       "executor": "nx:run-commands",
       "dependsOn": ["bootstrap"],
       "options": {
-        "command": "node --test .github/policy/tests/boundaries.test.mjs .github/policy/tests/inventory.test.mjs .github/policy/tests/policy-routing.test.mjs .github/policy/tests/policy.test.mjs .github/policy/tests/release-shortcut.test.mjs .github/policy/tests/reusable.test.mjs .github/policy/tests/rust-cache-warm.test.mjs"
+        "command": "node --test .github/policy/tests/boundaries.test.mjs .github/policy/tests/inventory.test.mjs .github/policy/tests/policy-routing.test.mjs .github/policy/tests/semantic-release.test.mjs .github/policy/tests/release-shortcut.test.mjs .github/policy/tests/reusable.test.mjs .github/policy/tests/rust-cache-warm.test.mjs"
       },
       "cache": false,
       "outputs": ["{workspaceRoot}/.github/.telemetry/macos-policy.json"]
@@ -101,7 +114,14 @@
         "command": "node --test .github/policy/tests/rust-cache.test.mjs"
       },
       "cache": false,
-      "//": "The one policy journey that runs the real rust-cache action, which also runs on the Windows and macOS runners; test-windows and test-macos run this target alone, and test-linux runs it with the rest of `test`."
+      "//": "The one policy journey that runs the real rust-cache action, which also runs on the Windows and macOS runners; test-windows and test-macos run this target alone, and test-linux runs it with the rest of `test`.",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "release-tail": {
       "executor": "nx:run-commands",
@@ -109,9 +129,17 @@
       "options": {
         "command": "node --test .github/policy/tests/release-tail.test.mjs"
       },
-      "inputs": ["releaseTail"],
+      "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
+        "releaseTail",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
       "cache": true,
-      "//": "publish's release tail: its install step and its last step run as release.yml writes them over GitHub answers recorded from this repository (tests/fixtures/release-tail/). Here, in the project no crate or SDK edit selects, and a target of its own keyed on its reads alone, because it installs onevcs and onebudgetspec from npm."
+      "//": "publish's release tail: its install step and its last step run as release.yml writes them over GitHub answers recorded from this repository (tests/fixtures/release-tail/). Here, in the project no crate or SDK edit selects, and a target of its own keyed on its reads alone, because it installs onevcs and onebudgetspec from npm.",
+      "outputs": []
     }
   }
 }

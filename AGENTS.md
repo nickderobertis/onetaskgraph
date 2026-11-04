@@ -448,16 +448,16 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   **Every path that can open a session consults the one decision**: CI's one path is
   `test-linux`'s `just ci-test-linux`, which reads it before it runs the tests, and a
   contributor's `just check` and `just gate` reach it through `just test`.
-  CI derives its base explicitly from the merge base (`scripts/ci-pr-base.sh`), because
-  an implicit base can select the wrong changes. Pushes run no repository checks;
+  CI sets `NX_BASE` and `NX_HEAD` once from the event’s base and head SHAs; Nx
+  normalises the base to the merge base, including when main has advanced. Pushes run no repository checks;
   contributors can run `NX_BASE=<ref> just check` or `just gate` manually. A push to main
   does build, testing nothing, the Rust cache `test-linux`, `test-windows` and `test-macos`
   restore (`.github/workflows/rust-cache-warm.yml`): a pull request restores only a cache
   saved on its own ref or on main, so nothing else could give a new one a warm build.
   `scripts/check-live-lane-selection.sh`, a command in `scripts:test`, holds all of that:
   it puts the five diffs to the real decision over real git states, drives a contributor's
-  two gates through the real recipes, holds every credentialed CI step's base to
-  `scripts/ci-pr-base.sh`, puts three diffs to real Nx, and ENUMERATES the paths from
+  two gates through the real recipes, holds every credentialed CI step to the shared
+  event-derived comparison, puts three diffs to real Nx, and ENUMERATES the paths from
   the workflow rather than listing them — so a path added or rewired later
   cannot silently bypass the decision. Nothing it runs has a credential and nothing it runs
   reaches an API.
@@ -1666,6 +1666,31 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   against GitHub on every gate run. `.github/tests/ci-events.test.mjs` holds which jobs run:
   a pull request's four, and on a push to main release-plz, the warmer and the canonical
   gallery, which skips the release commit.
+- **Nx results persist through the shared remote cache.** Check-tool versions come from
+  `.tool-versions` through `scripts/ci-tool-pins.sh` before
+  installation; every cached target hashes that file. Existing ecosystem locks and the
+  Rust toolchain remain the version sources for their own tools. Each CI job runs the copied
+  `nx-remote-cache.mjs` trust, readiness and report steps around its existing Nx work;
+  `.nx/cache` has no Actions-cache entry. Fork and Dependabot pull requests are read-only.
+  The existing release-plz job promotes trusted PR reports into the base scope before
+  release operations; a promotion failure never blocks release-plz. A `cache-promote/**`
+  push can promote without releasing, and every release operation requires a push to main.
+  `.github/cache-policy` owns the Linux cache journeys: real Nx and the pinned sidecar,
+  GitHub doubled at HTTP. `scripts/scratch-clone.sh` gives every shell guard clone a
+  private `RUNNER_TEMP` and removes inherited remote-cache credentials. Node fixture harnesses
+  load `.github/test-setup.mjs` first, which clears inherited recording and cache authority
+  before any helper loads. Shell/Python guard targets use the same entry contract. Cache
+  journeys supply their own recording tree and sidecar explicitly; the entry regression
+  rejects a missing setup import or runner environment setting. Real outer/nested-Nx
+  regressions audit these test tiers so fixture rows cannot enter the job's report.
+  Shared script copies stay byte-identical to their upstream pins.
+  `biome.json` excludes exactly the two upstream-owned JavaScript copies; the comment and
+  exact-path digest map in `.github/cache-policy/tests/cache.test.mjs` hold their byte identity.
+  `.github/nx-policy` owns the cached platform/output checks and the uncached real-Nx hash
+  matrix over the workspace input contracts and a fixed git baseline. Semantic manifest inputs
+  use `nx-version-free-inputs.mjs`; format checks and linters that read their text retain raw
+  inputs and re-run on a release. The workspace guard also retains raw Bun locks: its version
+  reader matches their lines as text. SDK/e2e version-reading tests keep the version in their hashes.
 - **Bump policy (pre-1.0):** `feat` → minor; `feat!` / `BREAKING CHANGE` → minor (a
   breaking change before 1.0 is *not* a major); `fix` / `perf` / `refactor` / `build` →
   patch; `chore` / `docs` / `ci` / `test` / `style` → no release. Post-1.0 a breaking
@@ -1746,36 +1771,36 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   workflows that goes around the resolver.
   The independently usable `scripts/provision-gate.sh` reports a missing or wrong
   scoped binary with the host-prerequisite marker. Pushes do not invoke provisioning.
-- **One Mac job per run, and two Mac-spending runs per single-push lifecycle.** A pull
-  request's one Mac job is the required `test-macos`, skipped at the job level on this
-  repository's own `release-plz-` branch alone; `lint` runs `.github/macos-policy.mjs` there
-  and goes red unless the branch carries release versions and changelogs alone, so a skip is
-  never a release branch merging untested source. Main pushes never schedule Mac, with one exception the user approved on 2026-10-17: the
-  build-only `warm-macos` job of `.github/workflows/rust-cache-warm.yml`, because a pull
-  request waits on its slowest job and `test-macos` restores no other cache. It skips a
-  release merge — a push `.github/semantic-release.py` reads as versions and changelogs alone,
-  which rust-cache does not store — so `onetaskgraph-macos-runs-per-change` is 3, not 2.
-  `.github/macos-policy.mjs` admits a release-only PR only from a same-repository
-  `release-plz-` branch with a semantic version/changelog-only diff; an unreadable PR requires coverage. The author is not authority: release-plz
-  uses the owner's PAT.
-  A release's one Mac job is `build-macos`, which builds the Apple Silicon wheel once and
-  uses its binary for the archive and npm carrier; Intel macOS is no longer released, and
-  the installer and npm launcher refuse it by name. Its native install/run proof precedes
-  its own publication. The production packaging journey and
-  `.github/tests/` hold payload hashes, required names, event routing and reusable calls;
-  `github-workflow-policy:test` records ignored telemetry and its `budgets` target alone applies
-  the two limits in `.github/policy/budgets.yaml` — a project of its own, so a crate edit that
-  selects `github-workflows`' CD journeys does not also run the policy proofs. No Mac work runs on schedules or downstream
-  automatic triggers.
-- **Eight budgets in the root `budgets.yaml` hold CI, CD and the local gate**, each
-  `measure: reported` and read from telemetry, never measured fresh. Seven are labelled
+- **A release tree skips only Rust instrumentation already measured on main.**
+  `.github/release-shortcut.mjs` requires a passed main tree plus only release-owned
+  version and changelog edits. Its versioned `rust_coverage` decision controls only
+  Linux's Rust coverage phase and the three budgets that consume its profiles.
+  Functional tests, SDK coverage, distribution checks and workflow budgets still run.
+  An unreadable comparison runs Rust coverage; macOS and Windows never consult this
+  decision. Raw Rust profiles and objects remain uncached because they cannot prove
+  coverage after a version change.
+- **One Mac job per run, and four Mac-spending runs per single-push lifecycle.**
+  Every pull request runs `test-macos`, including release-plz’s branch, which replays
+  proven test results through the same cache as other branches. No lint guard or branch
+  condition substitutes for that run. The lifecycle counts the change PR, main’s build-only
+  `warm-macos`, the release PR and the published release’s `build-macos`. A release-only
+  main merge still omits the build-only warmer. `.github/policy/tests/` records real
+  workflow scheduling as telemetry; its `budgets` target applies the one-job and four-run
+  bounds in `.github/policy/budgets.yaml`. No scheduled or downstream event allocates Mac.
+- **Nine budgets in the root `budgets.yaml` hold CI, CD and the local gate**, each
+  `measure: reported` and read from telemetry, never measured fresh. Eight are labelled
   `release-tail` and run `scripts/actions-budget-figures.sh` — a byte-identical copy of
-  dero-skills' create-repo source, edited only there — over onevcs's read-only host answers:
+  dero-skills' create-repo source, edited only there — over saved CI telemetry and read-only GitHub answers:
   `onetaskgraph-ci-check-time` (longest CI job of a release's pull requests, 1800 s),
   `onetaskgraph-cd-job-time` (longest CD job, 1800 s), `onetaskgraph-release-cycle-time`
-  (a pull request's checks plus its merge to the release tail, 5400 s),
+  (a carried PR's checks plus its merge to the release tail, only when its merge changes a
+  `.github/release-published-paths` path, 5400 s),
   `onetaskgraph-ci-job-count` (4) and `onetaskgraph-cd-job-count` (6), and
-  `onetaskgraph-release-read-requests` (6) and `onetaskgraph-pr-read-requests` (2). They are
+  `onetaskgraph-release-read-requests` (6), `onetaskgraph-pr-read-requests` (2), and
+  `onetaskgraph-nx-cache-use` (100% remote replay among attempt-qualified task/OS/hash
+  executions, excluding local hits). Cache-use reads saved executions and promotion receipts
+  directly through GitHub; the other figures retain onevcs. Its design threshold is revisited
+  after real release-tail observations; missing evidence never passes. They are
   checked once, after the release, by the last step of `release.yml`'s `publish` —
   `onebudgetspec check budgets.yaml --label release-tail`, after a step installing the pinned
   onevcs and onebudgetspec, under a token granted `actions`, `contents` and `pull-requests`
@@ -1783,7 +1808,7 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   its log, and nothing reads its result, so it never blocks, demotes or reverts a release. At
   pull-request time each job's `timeout-minutes` (30 for `lint`, 40 for the test jobs) is what
   fails a check that runs over.
-  The eighth, `onetaskgraph-gate-time` (1800 s), is `host-variable`: `just gate` runs its whole
+  The ninth, `onetaskgraph-gate-time` (1800 s), is `host-variable`: `just gate` runs its whole
   body inside `scripts/gate-time.sh`, which records its start and end to the gitignored
   `.gate-time.json` and checks it, **warning** when over and failing only when the
   measurement errs or the file is invalid, because a development machine's timing varies too

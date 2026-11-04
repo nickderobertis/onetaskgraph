@@ -15,9 +15,13 @@
   "namedInputs": {
     "default": [
       "{projectRoot}/**/*",
+      "!{projectRoot}/Cargo.toml",
       "sharedGlobals",
       "{workspaceRoot}/crates/onetaskgraph/**/*",
-      "{workspaceRoot}/README.md"
+      "!{workspaceRoot}/crates/onetaskgraph/CHANGELOG.md",
+      "!{workspaceRoot}/crates/onetaskgraph/Cargo.toml",
+      "{workspaceRoot}/README.md",
+      "versionFreeCargo"
     ]
   },
   "targets": {
@@ -63,7 +67,28 @@
         "command": "cargo test --quiet -p onetaskgraph-e2e --all-features --locked"
       },
       "dependsOn": ["onetaskgraph:build"],
-      "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement."
+      "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement.",
+      "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem npm --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem python --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem files --keep-version"
+        }
+      ]
     },
     "coverage": {
       "executor": "nx:run-commands",
@@ -73,7 +98,29 @@
       },
       "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
-      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. It depends on onetaskgraph:coverage because that run is what builds the instrumented binary into target/llvm-cov-target, where these journeys find it, so its lines are attributed to the union workspace:coverage holds to the floor; this run never builds the onetaskgraph package, so it cannot relink that file while it runs."
+      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. It depends on onetaskgraph:coverage because that run is what builds the instrumented binary into target/llvm-cov-target, where these journeys find it, so its lines are attributed to the union workspace:coverage holds to the floor; this run never builds the onetaskgraph package, so it cannot relink that file while it runs.",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem npm --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem python --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem files --keep-version"
+        }
+      ]
     }
   }
 }

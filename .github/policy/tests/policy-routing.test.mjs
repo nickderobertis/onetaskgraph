@@ -1,8 +1,10 @@
+import "../../test-setup.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
+import { Lexer } from "../../actions-expressions.mjs";
 import {
   digest,
   evaluate,
@@ -10,199 +12,10 @@ import {
   jobs,
   matrices,
   read,
-  resolve as resolveValue,
   root,
   workflows,
 } from "../../workflow-graph.mjs";
-import { Lexer } from "../../actions-expressions.mjs";
-import {
-  base,
-  classify,
-  event,
-  files,
-  heads,
-  history,
-  revision,
-  scratchRoot,
-} from "./policy-fixture.mjs";
-
-test("every known non-PR automatic event stays Mac-free whatever the diff", () => {
-  for (const name of [
-    "push",
-    "release",
-    "workflow_run",
-    "repository_dispatch",
-    "schedule",
-    "workflow_dispatch",
-    "merge_group",
-  ])
-    for (const head of [heads.source, heads.version, heads.dependency]) {
-      const result = classify({ event_name: name }, head, base, name);
-      assert.deepEqual(
-        [result.isReleaseOnly, result.macosRequired],
-        [false, false],
-        `${name}: ${result.reason}`,
-      );
-    }
-});
-
-test("malformed product versions, non-version uv content and empty diffs never authorize omission", () => {
-  assert.equal(classify(event("release-plz-123"), base, base).macosRequired, true);
-  for (const changed of [
-    { "pyproject.toml": files["pyproject.toml"].replace("1.2.3", "01.2.3") },
-    { "uv.lock": files["uv.lock"].replace('editable = "."', 'editable = "other"') },
-    {
-      "sdks/python/uv.lock": files["sdks/python/uv.lock"].replace(
-        'virtual = "."',
-        'virtual = "other"',
-      ),
-    },
-    { "uv.lock": "version = 1\n" },
-  ])
-    assert.equal(classify(event("release-plz-123"), revision(changed)).macosRequired, true);
-});
-
-test("repository identities and nested uv lock data fail conservatively", () => {
-  for (const identity of ["", "malformed", {}, ["owner/repo"], "owner/", "/repo"]) {
-    const payload = event("release-plz-123");
-    payload.pull_request.head.repo.full_name = identity;
-    payload.pull_request.base.repo.full_name = identity;
-    assert.equal(classify(payload).macosRequired, true);
-  }
-  for (const changed of [
-    {
-      "sdks/python/uv.lock": files["sdks/python/uv.lock"].replace(
-        'specifier = "==1.2.3"',
-        'specifier = "==1.2.3", extra = "external-change"',
-      ),
-    },
-    { "uv.lock": `${files["uv.lock"]}metadata = "invalid"\n` },
-  ])
-    assert.equal(classify(event("release-plz-123"), revision(changed)).macosRequired, true);
-});
-
-test("member changelog additions are releases; deleted changelogs and malformed refs are conservative", () => {
-  assert.equal(
-    classify(
-      event("release-plz-123"),
-      revision({ "crates/onetaskgraph-core/CHANGELOG.md": "# New release" }),
-    ).isReleaseOnly,
-    true,
-  );
-  assert.equal(
-    classify(event("release-plz-123"), revision({ "CHANGELOG.md": null })).macosRequired,
-    true,
-  );
-  const malformed = event("release-plz-123");
-  malformed.pull_request.head.ref = {};
-  assert.equal(classify(malformed).macosRequired, true);
-});
-
-// lint's guard on a release branch that skips macOS: the classifier, run as the step runs it.
-const guard = () =>
-  workflows()["ci.yml"].jobs.lint.steps.find((step) =>
-    /macos-policy\.mjs classify/.test(step.run ?? ""),
-  );
-function runGuard(payload, head) {
-  const step = guard();
-  if (typeof payload !== "string") {
-    payload.pull_request.base.sha = base;
-    payload.pull_request.head.sha = head;
-  }
-  const input = resolve(history, "event.json");
-  writeFileSync(input, typeof payload === "string" ? payload : JSON.stringify(payload));
-  const output = resolve(history, "github-output");
-  rmSync(output, { force: true });
-  const env = resolveValue(step.env, {
-    github: {
-      event: typeof payload === "string" ? { pull_request: { base: {}, head: {} } } : payload,
-    },
-  });
-  const result = spawnSync("bash", ["-c", step.run], {
-    cwd: history,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...env,
-      BASE: base,
-      HEAD: head,
-      GITHUB_EVENT_NAME: "pull_request",
-      GITHUB_EVENT_PATH: input,
-      GITHUB_OUTPUT: output,
-    },
-  });
-  return { result, output: readFileSync(output, "utf8") };
-}
-
-test("real classification composes with actual workflow routing for forged, mixed, fork and unreadable PRs", () => {
-  for (const [payload, head] of [
-    [event("feature"), heads.source],
-    [event("release-plz-123"), heads.version],
-    [event("release-plz-forged"), heads.source],
-    [event("release-plz-123"), heads.dependency],
-    [event("release-plz-123", true), heads.version],
-    ["{malformed", heads.version],
-  ]) {
-    const decision = classify(payload, head);
-    // An unreadable payload is a pull request on no branch GitHub could name.
-    const pr = typeof payload === "string" ? { head: { ref: "", repo: {} } } : payload.pull_request;
-    const scenario = {
-      event: "pull_request",
-      action: "synchronize",
-      headRef: pr.head.ref,
-      fork: pr.head.repo.fork,
-    };
-    const ci = graph(scenario, decision).find((run) => run.workflow === "ci.yml");
-    // test-macos is skipped on this repository's release-plz branch alone, and never on a
-    // pull request the classifier has not authorized to omit macOS without lint saying so:
-    // a forged release branch carrying source runs no Mac job, and lint's guard goes red.
-    const releaseBranch = !pr.head.repo.fork && pr.head.ref.startsWith("release-plz-");
-    const tested = ci.rows.some((row) => row.job === "test-macos");
-    assert.equal(tested, !releaseBranch);
-    assert.deepEqual(
-      ci.rows.map((row) => row.job).filter((job) => job !== "test-macos"),
-      ["lint", "test-linux", "test-windows"],
-    );
-    if (tested) assert.ok(decision.macosRequired);
-    // The guard runs on exactly the pull requests test-macos skips.
-    assert.equal(
-      Boolean(
-        evaluate(guard().if, {
-          github: {
-            event: {
-              pull_request: {
-                head: {
-                  repo: {
-                    full_name: pr.head.repo.fork ? "outside/repo" : "nickderobertis/onetaskgraph",
-                  },
-                },
-              },
-            },
-            repository: "nickderobertis/onetaskgraph",
-            head_ref: pr.head.ref,
-          },
-        }),
-      ),
-      !tested,
-    );
-    if (!tested) assert.equal(runGuard(payload, head).result.status === 0, !decision.macosRequired);
-  }
-});
-
-test("production classifier step uses its declared event and exact base/head environment", () => {
-  for (const [payload, head] of [
-    [event("feature"), heads.source],
-    [event("release-plz-123"), heads.version],
-    [event("release-plz-123"), heads.dependency],
-    [event("release-plz-123", true), heads.version],
-  ]) {
-    const { result, output } = runGuard(payload, head);
-    const expected = classify(payload, head);
-    assert.equal(result.status === 0, !expected.macosRequired, result.stderr);
-    if (expected.macosRequired) assert.match(result.stderr, /test-macos must run/);
-    assert.equal(output, `macosRequired=${expected.macosRequired}\nreason=${expected.reason}\n`);
-  }
-});
+import { base, files, heads, history, revision, scratchRoot, semantic } from "./policy-fixture.mjs";
 
 const publishControls = ["CARGO_PUBLISH", "PYPI_PUBLISH", "NPM_PUBLISH"];
 function validatePublishControls(definitions = workflows()) {
@@ -257,25 +70,24 @@ test("publication workload reconciles actual workflow condition variables", () =
 });
 
 const fixtureClasses = JSON.parse(read(".github/event-classes.json"));
-// The four jobs branch protection requires; test-macos is skipped on a release branch.
+// Every branch runs the same four required jobs.
 const requiredNames = ["lint", "test-linux", "test-windows", "test-macos"];
 
 test("workflow matrices, event fan-out and exact release head model record scheduling telemetry", () => {
   validatePublishControls();
   const scenarios = [];
   const lifecycles = [];
-  const classifications = new Map();
   for (const diff of ["source", "version", "dependency"])
     for (const fork of [false, true])
       for (const entry of fixtureClasses)
         for (let optional = 0; optional < 2 ** publishControls.length; optional++) {
-          const payload =
-            entry.event === "pull_request"
-              ? event(diff === "version" ? "release-plz-123" : "feature", fork)
-              : { event_name: entry.event };
-          const key = JSON.stringify([entry.event, diff, fork]);
-          if (!classifications.has(key)) classifications.set(key, classify(payload, heads[diff]));
-          const policyResult = classifications.get(key);
+          // The diff is known from this fixture's real history. Every PR allocates macOS,
+          // independently of release semantics, ownership, author and branch spelling.
+          const policyResult = {
+            isReleaseOnly: diff === "version",
+            macosRequired: entry.event === "pull_request",
+            reason: "Every pull request runs all four required jobs",
+          };
           const scenario = {
             ...entry,
             diff,
@@ -298,13 +110,7 @@ test("workflow matrices, event fan-out and exact release head model record sched
             const macs = run.rows.filter((r) => r.macos);
             if (entry.event === "pull_request") {
               const names = run.rows.map((r) => r.name);
-              if (run.workflow === "ci.yml")
-                assert.deepEqual(
-                  names,
-                  requiredNames.filter(
-                    (name) => name !== "test-macos" || policyResult.macosRequired,
-                  ),
-                );
+              if (run.workflow === "ci.yml") assert.deepEqual(names, requiredNames);
               else assert.deepEqual(names, [], `${run.workflow} runs on a pull request`);
             }
             for (const row of macs)
@@ -447,32 +253,6 @@ test("unresolved expressions, runners, calls and needs fail explicitly; actual m
 
 test.after(() => rmSync(history, { recursive: true, force: true }));
 
-test("malformed lock records and Bun inventory disagreement require coverage through the classifier", () => {
-  const malformed = [];
-  for (const path of ["Cargo.lock", "uv.lock"]) {
-    for (const packages of ["package = []", 'package = "invalid"', "package = [1]"])
-      malformed.push({ [path]: `version = 1\n${packages}\n` });
-    const prefix = files[path];
-    for (const record of [
-      'dependencies = "invalid"',
-      'metadata = "invalid"',
-      'metadata = { requires-dist = "invalid" }',
-      "metadata = { requires-dist = [1] }",
-      path === "Cargo.lock" ? "dependencies = [1]" : 'dependencies = ["invalid"]',
-    ])
-      malformed.push({ [path]: `${prefix}${record}\n` });
-  }
-  // Valid Bun syntax, but the updater's registered line patterns cannot mask
-  // compact fields; this must reach the inventory disagreement refusal.
-  malformed.push({ "bun.lock": files["bun.lock"].replace(/\n\s*/g, "") });
-  for (const changes of malformed) {
-    const result = classify(event("release-plz-123"), revision(changes));
-    assert.equal(result.isReleaseOnly, false);
-    assert.equal(result.macosRequired, true);
-    assert.equal(result.reason, "Unreadable release diff requires coverage");
-  }
-});
-
 // A push the release-merge step cannot classify still warms macOS: only a decided `true` skips it.
 const warmMacos = (revisions) =>
   graph(
@@ -545,4 +325,29 @@ test("a release-merge job that fails or reports no answer leaves warm-macos sche
   assert.equal(runs("success", { "version-only": "false" }), true);
   assert.equal(runs("success", { "version-only": "true" }), false);
   assert.equal(runs("cancelled", {}), false);
+});
+
+test("malformed lock records and Bun inventory disagreement require coverage through the semantic CLI", () => {
+  const malformed = [];
+  for (const path of ["Cargo.lock", "uv.lock"]) {
+    for (const packages of ["package = []", 'package = "invalid"', "package = [1]"])
+      malformed.push({ [path]: `version = 1\n${packages}\n` });
+    const prefix = files[path];
+    for (const record of [
+      'dependencies = "invalid"',
+      'metadata = "invalid"',
+      'metadata = { requires-dist = "invalid" }',
+      "metadata = { requires-dist = [1] }",
+      path === "Cargo.lock" ? "dependencies = [1]" : 'dependencies = ["invalid"]',
+    ])
+      malformed.push({ [path]: `${prefix}${record}\n` });
+  }
+  // Valid Bun syntax, but the updater's registered line patterns cannot mask
+  // compact fields; this must reach the inventory disagreement refusal.
+  malformed.push({ "bun.lock": files["bun.lock"].replace(/\n\s*/g, "") });
+  for (const changes of malformed) {
+    const result = semantic(revision(changes));
+    assert.equal(result.isReleaseOnly, false);
+    assert.notEqual(result.status, 0);
+  }
 });

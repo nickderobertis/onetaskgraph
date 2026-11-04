@@ -1,0 +1,29 @@
+# Files used to build the CLI archives, Cargo crates, wheels and npm packages.
+Cargo.toml
+Cargo.lock
+rust-toolchain.toml
+.python-version
+.cargo/**
+README.md
+LICENSE
+pyproject.toml
+uv.lock
+package.json
+bun.lock
+sdks/python/**
+sdks/typescript/**
+npm/**
+crates/onetaskgraph/**
+crates/onetaskgraph-core/**
+crates/onetaskgraph-github-projects/**
+crates/onetaskgraph-in-memory/**
+crates/onetaskgraph-linear/**
+crates/onetaskgraph-local-md/**
+crates/onetaskgraph-plugin-api/**
+crates/onetaskgraph-status-options/**
+# Build and packaging instructions used by the release jobs.
+scripts/release_cd.py
+scripts/release_products.py
+scripts/cli_wheel_lock.py
+scripts/release-wheel-binary.py
+scripts/nx.sh

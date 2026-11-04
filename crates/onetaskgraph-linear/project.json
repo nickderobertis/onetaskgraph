@@ -53,13 +53,22 @@
         "parallel": false
       },
       "parallelism": false,
-      "outputs": ["{workspaceRoot}/target/debug/telemetry/onetaskgraph-linear"],
+      "outputs": [
+        "{workspaceRoot}/target/debug/telemetry/onetaskgraph-linear/linear-live-documents-*.json",
+        "{workspaceRoot}/target/debug/telemetry/onetaskgraph-linear/live/*/linear-live-documents-*.json"
+      ],
       "//": "The live journey is one of the tests the first command runs; the second drives it through skipped, declined and expected-but-absent without a credential. Serial: it re-runs the binary the first builds. `parallelism: false` runs this target alone: onetaskgraph-linear-e2e's asset journey takes the same one-at-a-time Linear seat, and with both selected in one `just check` the second to start was declined, failing the required check; scripts/check-live-seat-serialised.sh proves against real Nx that no two seat-holding targets overlap. The env inputs are the cache key's, because this target's result is not a function of the files \u2014 a replay of an uncredentialed run would otherwise stand in for a credentialed one and the live tests would not run while the target reported green. `coverage` takes none of them: scripts/rust-coverage.sh clears the credentials first, which is what keeps one run to one live session.",
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "^default",
-        { "env": "ONETASKGRAPH_LINEAR_DOCUMENT_MODE" },
-        { "env": "GITHUB_ACTIONS" },
+        {
+          "env": "ONETASKGRAPH_LINEAR_DOCUMENT_MODE"
+        },
+        {
+          "env": "GITHUB_ACTIONS"
+        },
         "{workspaceRoot}/scripts/check-live-decline.sh",
         {
           "env": "LINEAR_API_KEY"
@@ -71,7 +80,12 @@
           "env": "ONETASKGRAPH_LIVE_REQUIRED"
         },
         "{workspaceRoot}/scripts/live-crate-test.sh",
-        { "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE" }
+        {
+          "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE"
+        },
+        {
+          "runtime": "node -p process.platform"
+        }
       ]
     },
     "live-documents": {
@@ -85,7 +99,18 @@
     },
     "coverage": {
       "executor": "nx:noop",
-      "//": "Its suite runs every case uninstrumented, in `test`, and contributes no line coverage: the user's decision of 2026-10-30. scripts/check-coverage-enforced.sh holds the tag, this target and workspace:coverage's dependency list to one another."
+      "//": "Its suite runs every case uninstrumented, in `test`, and contributes no line coverage: the user's decision of 2026-10-30. scripts/check-coverage-enforced.sh holds the tag, this target and workspace:coverage's dependency list to one another.",
+      "cache": false,
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        }
+      ]
     }
   }
 }

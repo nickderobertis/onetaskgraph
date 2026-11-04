@@ -20,13 +20,22 @@
       "{workspaceRoot}/.github/telemetry.ts",
       "{workspaceRoot}/.github/package.json",
       "{workspaceRoot}/.github/bun.lock",
-      "{workspaceRoot}/.github/tsconfig.json"
+      "{workspaceRoot}/.github/tsconfig.json",
+      "{workspaceRoot}/.github/test-setup.mjs",
+      "{workspaceRoot}/.github/fixture-environment.mjs"
     ]
   },
   "targets": {
     "bootstrap": {
       "executor": "nx:noop",
-      "dependsOn": ["github-workflows:bootstrap"]
+      "dependsOn": ["github-workflows:bootstrap"],
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "check": {
       "executor": "nx:noop",

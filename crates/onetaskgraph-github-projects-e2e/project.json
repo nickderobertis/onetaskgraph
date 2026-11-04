@@ -13,12 +13,23 @@
   "namedInputs": {
     "default": [
       "{projectRoot}/**/*",
+      "!{projectRoot}/Cargo.toml",
       "sharedGlobals",
       "{workspaceRoot}/crates/onetaskgraph/**/*",
+      "!{workspaceRoot}/crates/onetaskgraph/CHANGELOG.md",
+      "!{workspaceRoot}/crates/onetaskgraph/Cargo.toml",
       "{workspaceRoot}/crates/onetaskgraph-core/**/*",
+      "!{workspaceRoot}/crates/onetaskgraph-core/CHANGELOG.md",
+      "!{workspaceRoot}/crates/onetaskgraph-core/Cargo.toml",
       "{workspaceRoot}/crates/onetaskgraph-e2e-support/**/*",
+      "!{workspaceRoot}/crates/onetaskgraph-e2e-support/Cargo.toml",
       "{workspaceRoot}/crates/onetaskgraph-in-memory/**/*",
-      "{workspaceRoot}/crates/onetaskgraph-local-md/**/*"
+      "!{workspaceRoot}/crates/onetaskgraph-in-memory/CHANGELOG.md",
+      "!{workspaceRoot}/crates/onetaskgraph-in-memory/Cargo.toml",
+      "{workspaceRoot}/crates/onetaskgraph-local-md/**/*",
+      "!{workspaceRoot}/crates/onetaskgraph-local-md/CHANGELOG.md",
+      "!{workspaceRoot}/crates/onetaskgraph-local-md/Cargo.toml",
+      "versionFreeCargo"
     ]
   },
   "targets": {
@@ -72,10 +83,13 @@
       "dependsOn": ["onetaskgraph:build"],
       "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement.",
       "outputs": [
-        "{workspaceRoot}/target/debug/telemetry/onetaskgraph-github-projects-e2e",
-        "{workspaceRoot}/target/debug/telemetry/github-live-session"
+        "{workspaceRoot}/target/debug/telemetry/onetaskgraph-github-projects-e2e/*.json",
+        "{workspaceRoot}/target/debug/telemetry/github-live-session/*/main.json",
+        "{workspaceRoot}/target/debug/telemetry/github-live-session/*/assets.json"
       ],
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "^default",
         {
@@ -106,7 +120,18 @@
           "env": "GITHUB_LIVE_SOURCE_REVISION"
         },
         "{workspaceRoot}/scripts/live-crate-test.sh",
-        { "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE" }
+        {
+          "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE"
+        },
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "env": "GITHUB_RUN_ID"
+        },
+        {
+          "env": "GITHUB_RUN_ATTEMPT"
+        }
       ]
     },
     "coverage": {
@@ -123,7 +148,17 @@
       "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
       "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. It depends on onetaskgraph:coverage because that run is what builds the instrumented binary into target/llvm-cov-target, where these journeys find it, so its lines are attributed to the union workspace:coverage holds to the floor; this run never builds the onetaskgraph package, so it cannot relink that file while it runs.",
-      "// union end": "llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]"
+      "// union end": "llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        }
+      ]
     },
     "budgets": {
       "executor": "nx:run-commands",
@@ -157,9 +192,15 @@
         },
         {
           "dependentTasksOutputFiles": "**/telemetry/github-live-session/**/*.json"
-        }
+        },
+        {
+          "runtime": "node -p process.platform"
+        },
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions"
       ],
-      "//": "Reports the current complete main/assets pair and ordinary offline telemetry through onebudgetspec. Current identity inputs prevent stale-session cache reuse. Credentialless or explicitly not-selected runs print live measurement unavailable and retain offline budgets."
+      "//": "Reports the current complete main/assets pair and ordinary offline telemetry through onebudgetspec. Current identity inputs prevent stale-session cache reuse. Credentialless or explicitly not-selected runs print live measurement unavailable and retain offline budgets.",
+      "outputs": []
     },
     "budgets-host": {
       "executor": "nx:run-commands",

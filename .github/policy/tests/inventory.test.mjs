@@ -1,21 +1,26 @@
+import "../../test-setup.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 import {
   budgetJourneyFiles,
+  cacheJourneyFiles,
   cdJourneyFiles,
   GITHUB_READS,
   inputProblems,
+  inputValidationReadSet,
+  nxHashFiles,
+  nxInputFiles,
   policyJourneyFiles,
   policyJourneyReadSet,
   releaseTailFiles,
   rustCacheJourneyFiles,
 } from "../../test-inputs.mjs";
-import { parse } from "yaml";
 import { graphReadSet, read } from "../../workflow-graph.mjs";
 
 // This project's inputs are every .github file, so an edit on either side of these
@@ -31,10 +36,19 @@ test("the policy journeys are keyed on the combined read set of the tests they r
 
 test("an undeclared read in the policy journey target is refused", () => {
   const graph = graphReadSet().filter((path) => !path.startsWith(".github/"));
-  for (const path of new Set([...graph, ...policyJourneyReadSet, ".github/**/*"])) {
+  for (const path of new Set([
+    ...graph,
+    ...policyJourneyReadSet,
+    ...inputValidationReadSet,
+    ".github/**/*",
+  ])) {
     const project = load("../project.json");
     for (const [name, inputs] of Object.entries(project.namedInputs))
-      project.namedInputs[name] = inputs.filter((input) => input !== `{workspaceRoot}/${path}`);
+      project.namedInputs[name] = inputs.filter(
+        (input) =>
+          input !== `{workspaceRoot}/${path}` &&
+          !(["bun.lock", "package.json"].includes(path) && input === "versionFreeNpm"),
+      );
     assert.ok(
       inputProblems(project, "policy-tests").includes(`policy-tests is not keyed on ${path}`),
       path,
@@ -43,13 +57,19 @@ test("an undeclared read in the policy journey target is refused", () => {
   assert.equal(GITHUB_READS, "{workspaceRoot}/.github/**/*");
 });
 
-test("the two projects run every journey exactly once through its owning target", () => {
+test("the workflow projects run every journey exactly once through its owning target", () => {
   const workflows = load("../../project.json");
   const policy = load("../project.json");
+  const cache = load("../../cache-policy/project.json");
+  const nxPolicy = load("../../nx-policy/project.json");
+  assert.deepEqual(inputProblems(nxPolicy, "nx-inputs"), []);
   for (const [project, target, files] of [
     [policy, "policy-tests", policyJourneyFiles],
     [policy, "rust-cache-action", rustCacheJourneyFiles],
     [workflows, "cd-journeys", cdJourneyFiles],
+    [nxPolicy, "nx-inputs", nxInputFiles],
+    [nxPolicy, "nx-hashes", nxHashFiles],
+    [cache, "cache-journeys", cacheJourneyFiles],
     [workflows, "budget-journeys", budgetJourneyFiles],
     [policy, "release-tail", releaseTailFiles],
   ]) {
@@ -63,16 +83,20 @@ test("the two projects run every journey exactly once through its owning target"
   assert.ok(workflows.namedInputs.default.includes("!{projectRoot}/policy/**/*"));
   for (const file of [...policyJourneyFiles, ...rustCacheJourneyFiles, ...releaseTailFiles])
     assert.ok(file.startsWith(".github/policy/"), file);
-  const actual = ["tests", "policy/tests"].flatMap((directory) =>
-    readdirSync(new URL(`../../${directory}/`, import.meta.url))
-      .filter((file) => file.endsWith(".test.mjs"))
-      .map((file) => `.github/${directory}/${file}`),
+  const actual = ["tests", "policy/tests", "cache-policy/tests", "nx-policy/tests"].flatMap(
+    (directory) =>
+      readdirSync(new URL(`../../${directory}/`, import.meta.url))
+        .filter((file) => file.endsWith(".test.mjs"))
+        .map((file) => `.github/${directory}/${file}`),
   );
   assert.deepEqual(
     [
       ...policyJourneyFiles,
       ...rustCacheJourneyFiles,
       ...cdJourneyFiles,
+      ...cacheJourneyFiles,
+      ...nxInputFiles,
+      ...nxHashFiles,
       ...budgetJourneyFiles,
       ...releaseTailFiles,
     ].sort(),
@@ -82,7 +106,7 @@ test("the two projects run every journey exactly once through its owning target"
 
 // Selection by real Nx, which is what the split is for: a crate edit selects the CD journeys
 // and not the policy journeys, a policy edit the reverse, and a workflow edit both.
-test("a crate edit selects the CD journeys without the policy journeys", () => {
+test("source edits select CD journeys and project definitions also select cache journeys", () => {
   const require = createRequire(import.meta.url);
   const nx = resolve(
     dirname(require.resolve("nx/package.json")),
@@ -97,20 +121,23 @@ test("a crate edit selects the CD journeys without the policy journeys", () => {
         { cwd, encoding: "utf8" },
       ),
     );
-  for (const [file, workflows, policy] of [
+  for (const [file, workflows, policy, cache = false] of [
     ["crates/onetaskgraph-core/src/lib.rs", true, false],
-    ["sdks/python/project.json", true, false],
+    ["sdks/python/project.json", true, false, true],
     [".github/policy/tests/policy-routing.test.mjs", false, true],
-    [".github/policy/project.json", false, true],
+    [".github/policy/project.json", false, true, true],
     [".github/policy/budgets.yaml", false, true],
-    ["budgets.yaml", true, true],
-    ["scripts/actions-budget-figures.sh", false, true],
+    ["budgets.yaml", true, true, true],
+    ["scripts/actions-budget-figures.sh", false, true, true],
     [".github/test-inputs.mjs", true, true],
     [".github/tests/release-cd.test.mjs", true, true],
-    [".github/workflows/ci.yml", true, true],
+    [".github/workflows/ci.yml", true, true, true],
+    [".github/cache-policy/tests/cache.test.mjs", false, true, true],
+    ["scripts/nx-remote-cache.mjs", false, false, true],
   ]) {
     const projects = selected(file);
     assert.equal(projects.includes("github-workflows"), workflows, `${file}: github-workflows`);
+    assert.equal(projects.includes("github-cache-policy"), cache, `${file}: github-cache-policy`);
     assert.equal(
       projects.includes("github-workflow-policy"),
       policy,
@@ -227,7 +254,7 @@ test("a skip widened past Windows, or test-linux leaving distribution-check, is 
   }, /check-fixture-discrimination\.sh also skips \*linux\*/);
   refused((sources) => {
     sources["scripts/ci-job.sh"] = sources["scripts/ci-job.sh"].replace(
-      /(\n {2}test-linux\)[\s\S]*?)1 run scripts:distribution-test -\n/,
+      /(\n {2}test-linux\)[\s\S]*?)1 run scripts:distribution-test -/,
       (_, before) => before,
     );
   }, /do not run scripts:distribution-test unconditionally/);
@@ -276,6 +303,8 @@ function placementProblems(ciJob) {
   const suites = [
     ["github-workflows", "test", tagsOf("../../project.json")],
     ["github-workflow-policy", "test", tagsOf("../project.json")],
+    ["github-cache-policy", "test", tagsOf("../../cache-policy/project.json")],
+    ["github-nx-policy", "test", tagsOf("../../nx-policy/project.json")],
   ];
   for (const [project, target, tags] of suites) {
     if (!selects("test-linux", target, project, tags, ciJob))
@@ -327,7 +356,7 @@ test("a workflow suite leaving test-linux, or the rust-cache journey leaving a r
   );
   refused(
     ciJob.replace(
-      /(\n {2}test-macos\)[\s\S]*?),github-workflows,github-workflow-policy --parallel=2/,
+      /(\n {2}test-macos\)[\s\S]*?),github-workflows,github-workflow-policy,github-cache-policy,github-nx-policy --parallel=2/,
       (_, before) => `${before} --parallel=2`,
     ),
     /test-macos runs github-workflows:test/,

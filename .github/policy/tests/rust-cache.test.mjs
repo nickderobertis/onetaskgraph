@@ -1,23 +1,24 @@
+import "../../test-setup.mjs";
 import assert from "node:assert/strict";
-import { execFileSync, execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import {
-  mkdtempSync,
   mkdirSync,
+  mkdtempSync,
+  readdirSync,
   readFileSync,
-  writeFileSync,
   rmSync,
   symlinkSync,
-  readdirSync,
+  writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { test } from "node:test";
 import { promisify } from "node:util";
 import { parse } from "yaml";
+import { fixtureEnvironment } from "../../fixture-environment.mjs";
 import { HASHED_ENV_PREFIXES } from "../../rust-cache-key.mjs";
-import { read } from "../../workflow-graph.mjs";
-import { test } from "node:test";
-import { workflows } from "../../workflow-graph.mjs";
+import { read, workflows } from "../../workflow-graph.mjs";
 
 function cleanupProblems(all) {
   const problems = [];
@@ -192,7 +193,7 @@ test("the real cache action ignores floating stable but tracks the pin and lockf
         command(
           "rustup",
           ["toolchain", "install", version, "--profile", "minimal", "--no-self-update"],
-          { env: { ...process.env, RUSTUP_HOME: rustupHome } },
+          { env: { ...fixtureEnvironment(), RUSTUP_HOME: rustupHome } },
         );
         continue;
       }
@@ -210,7 +211,7 @@ test("the real cache action ignores floating stable but tracks the pin and lockf
     );
     writeFileSync(join(workspace, "src/lib.rs"), "pub fn example() {}\n");
     const env = Object.fromEntries(
-      Object.entries(process.env).filter(
+      Object.entries(fixtureEnvironment()).filter(
         ([key]) => !/^(CARGO|RUST|INPUT_|ACTIONS_|GITHUB_)/.test(key),
       ),
     );

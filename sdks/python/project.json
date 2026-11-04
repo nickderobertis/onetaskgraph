@@ -30,14 +30,31 @@
       "options": {
         "command": "uv run --frozen ruff format --check .",
         "cwd": "sdks/python"
-      }
+      },
+      "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
+        "textDefault",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "lint": {
       "executor": "nx:run-commands",
       "options": {
         "command": "uv run --frozen ruff check .",
         "cwd": "sdks/python"
-      }
+      },
+      "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
+        "textDefault",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "generate-check": {
       "executor": "nx:run-commands",
@@ -65,10 +82,27 @@
       },
       "//": "The tests spawn target/debug/onetaskgraph, on the same terms as generate-check. onebudgetspec is an input because tests/test_measure_import.py checks the import budget through it.",
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "^default",
         {
           "externalDependencies": ["@onebudgetspec/cli"]
+        },
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem npm --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem python --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem files --keep-version"
         }
       ]
     },
@@ -79,7 +113,26 @@
         "cwd": "sdks/python"
       },
       "cache": false,
-      "//": "Uncached: it syncs the lock into a scratch environment, which reads the root workspace's manifests outside this project's inputs. The instrumented pytest run cannot stand in for it on Linux."
+      "//": "Uncached: it syncs the lock into a scratch environment, which reads the root workspace's manifests outside this project's inputs. The instrumented pytest run cannot stand in for it on Linux.",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem npm --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem python --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem files --keep-version"
+        }
+      ]
     },
     "coverage": {
       "executor": "nx:run-commands",
@@ -90,12 +143,30 @@
       },
       "//": "The same tests as `test`, measured.",
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "^default",
         {
           "externalDependencies": ["@onebudgetspec/cli"]
+        },
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem npm --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem python --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem files --keep-version"
         }
-      ]
+      ],
+      "outputs": ["{projectRoot}/.coverage"]
     },
     "budgets-host": {
       "executor": "nx:run-commands",
@@ -111,5 +182,16 @@
       ],
       "//": "CPU time varies with host load, so an over host-variable reading warns here. Other host budgets and measurement errors fail; direct onebudgetspec checks remain strict."
     }
+  },
+  "namedInputs": {
+    "default": [
+      "{projectRoot}/**/*",
+      "!{projectRoot}/pyproject.toml",
+      "!{projectRoot}/src/onetaskgraph_sdk/__init__.py",
+      "sharedGlobals",
+      "versionFreePython",
+      "versionFreeFiles"
+    ],
+    "textDefault": ["{projectRoot}/**/*", "sharedGlobals", "versionFreePython"]
   }
 }

@@ -1,10 +1,12 @@
+import "../../test-setup.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { fixtureEnvironment } from "../../fixture-environment.mjs";
 import { read, root } from "../../workflow-graph.mjs";
 
 // The release-PR shortcut, driven as the three test jobs run it, over a real scratch
@@ -12,6 +14,8 @@ import { read, root } from "../../workflow-graph.mjs";
 const scratchRoot = process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir();
 const repository = mkdtempSync(resolve(scratchRoot, "release-shortcut-"));
 const program = resolve(repository, ".github/release-shortcut.mjs");
+after(() => rmSync(repository, { recursive: true, force: true }));
+const golden = JSON.parse(read(".github/policy/tests/fixtures/release-coverage-v1.json"));
 
 function git(...args) {
   return execFileSync("git", args, { cwd: repository, encoding: "utf8" }).trim();
@@ -77,21 +81,24 @@ function decide(base, head, extra = [], via = program) {
   const result = spawnSync(
     process.execPath,
     [via, "decide", "--base", base, "--head", head, "--main", "main", ...extra],
-    { cwd: repository, encoding: "utf8", env: { ...process.env, GITHUB_OUTPUT: output } },
+    { cwd: repository, encoding: "utf8", env: { ...fixtureEnvironment(), GITHUB_OUTPUT: output } },
   );
   return { ...result, output: result.status === 0 ? readFileSync(output, "utf8") : "" };
 }
-function tests(base, head) {
+function coverage(base, head) {
   const result = decide(base, head);
   assert.equal(result.status, 0, result.stderr);
   const decision = JSON.parse(result.stdout);
-  assert.equal(result.output, `tests=${decision.tests}\nreason=${decision.reason}\n`);
+  assert.equal(
+    result.output,
+    `rust_coverage=${decision.rust_coverage}\nreason=${decision.reason}\n`,
+  );
   return decision;
 }
 
-test("a tree main passed plus only release-plz's version and changelog edits skips the tests", () => {
-  const decision = tests(mainTip, release);
-  assert.equal(decision.tests, "skip");
+test("a tree main passed plus only release-plz's version and changelog edits skips only Rust coverage", () => {
+  const decision = coverage(mainTip, release);
+  assert.deepEqual(decision, golden.skip);
   assert.match(decision.reason, /main passed plus only release-plz's version and changelog edits/);
 });
 
@@ -103,42 +110,42 @@ test("the program decides when it is reached through a symlinked directory", () 
   try {
     const result = decide(mainTip, release, [], resolve(link, ".github/release-shortcut.mjs"));
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(result.stdout).tests, "skip");
-    assert.match(result.output, /^tests=skip\n/);
+    assert.equal(JSON.parse(result.stdout).rust_coverage, "skip");
+    assert.match(result.output, /^rust_coverage=skip\n/);
   } finally {
     rmSync(link, { force: true, recursive: true });
   }
 });
 
-test("a release head carrying any other change runs the tests", () => {
-  const decision = tests(mainTip, releasePlusSource);
-  assert.equal(decision.tests, "run");
+test("a release head carrying any other change runs Rust coverage", () => {
+  const decision = coverage(mainTip, releasePlusSource);
+  assert.deepEqual(decision, golden.source);
   assert.match(decision.reason, /changes more than release-owned versions/);
   // A source change alone, with no release edit at all, is not a release either.
   git("checkout", "-q", "-b", "feature", mainTip);
   const feature = commit("fix: another answer", source("45"));
   git("checkout", "-q", "main");
-  assert.equal(tests(mainTip, feature).tests, "run");
+  assert.equal(coverage(mainTip, feature).rust_coverage, "run");
   // Nor is an empty diff: nothing was released, so nothing was proven.
-  assert.equal(tests(mainTip, mainTip).tests, "run");
+  assert.equal(coverage(mainTip, mainTip).rust_coverage, "run");
 });
 
-test("a release on a base tree main never passed runs the tests", () => {
-  const decision = tests(unmerged, releaseOnUnmerged);
-  assert.equal(decision.tests, "run");
+test("a release on a base tree main never passed runs Rust coverage", () => {
+  const decision = coverage(unmerged, releaseOnUnmerged);
+  assert.equal(decision.rust_coverage, "run");
   assert.match(decision.reason, /base tree is not one main passed/);
 });
 
-test("an unreadable ref runs the tests, and a malformed invocation fails rather than skipping", () => {
-  assert.equal(tests("0".repeat(40), release).tests, "run");
-  assert.equal(tests(mainTip, "no-such-ref").tests, "run");
+test("an unreadable ref runs Rust coverage, and a malformed invocation fails rather than skipping", () => {
+  assert.deepEqual(coverage("0".repeat(40), release), golden.unreadable);
+  assert.equal(coverage(mainTip, "no-such-ref").rust_coverage, "run");
   const malformed = decide(mainTip, release, ["--extra"]);
   assert.equal(malformed.status, 1);
   assert.match(malformed.stderr, /usage: release-shortcut\.mjs decide/);
   assert.equal(malformed.output, "");
 });
 
-test("an unreadable main, or one spelled as an option, runs the tests", () => {
+test("an unreadable main, or one spelled as an option, runs Rust coverage", () => {
   // `--all` would read every branch's history, the unmerged one's included, as main's.
   for (const main of ["no-such-branch", "--all", "--branches"]) {
     const result = spawnSync(
@@ -147,11 +154,11 @@ test("an unreadable main, or one spelled as an option, runs the tests", () => {
       { cwd: repository, encoding: "utf8" },
     );
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(JSON.parse(result.stdout).tests, "run", main);
+    assert.equal(JSON.parse(result.stdout).rust_coverage, "run", main);
   }
 });
 
-test("a comparator that fails, prints malformed JSON or answers other than a boolean runs the tests", () => {
+test("a comparator that fails, prints malformed JSON or answers other than a boolean runs Rust coverage", () => {
   const comparator = resolve(repository, ".github/semantic-release.py");
   const real = readFileSync(comparator, "utf8");
   try {
@@ -162,17 +169,17 @@ test("a comparator that fails, prints malformed JSON or answers other than a boo
       "print('null')\n",
     ]) {
       writeFileSync(comparator, body);
-      const decision = tests(mainTip, release);
-      assert.equal(decision.tests, "run", body);
+      const decision = coverage(mainTip, release);
+      assert.equal(decision.rust_coverage, "run", body);
       assert.match(decision.reason, /Unreadable release diff/);
     }
   } finally {
     writeFileSync(comparator, real);
   }
-  assert.equal(tests(mainTip, release).tests, "skip");
+  assert.equal(coverage(mainTip, release).rust_coverage, "skip");
 });
 
-test("a tree only a merged branch held, never main's own, runs the tests", () => {
+test("a tree only a merged branch held, never main's own, runs Rust coverage", () => {
   // A merge brings a branch's commits into main's history as second parents, but only the
   // merge itself is a tree main's checks passed; a release cut from one of those commits
   // has not been proven by main.
@@ -185,13 +192,88 @@ test("a tree only a merged branch held, never main's own, runs the tests", () =>
   git("checkout", "-q", "-b", "release-on-side", sideTip);
   const releaseOnSide = commit("chore: release v1.2.4", released("1.2.4"));
   git("checkout", "-q", "main");
-  const decision = tests(sideTip, releaseOnSide);
-  assert.equal(decision.tests, "run");
+  const decision = coverage(sideTip, releaseOnSide);
+  assert.equal(decision.rust_coverage, "run");
   assert.match(decision.reason, /base tree is not one main passed/);
   // The merge itself is main's own, so a release on it still skips.
   const merge = git("rev-parse", "main");
   git("checkout", "-q", "-b", "release-on-merge", merge);
   const releaseOnMerge = commit("chore: release v1.2.4", released("1.2.4"));
   git("checkout", "-q", "main");
-  assert.equal(tests(merge, releaseOnMerge).tests, "skip");
+  assert.equal(coverage(merge, releaseOnMerge).rust_coverage, "skip");
+});
+
+test("the release coverage switch keeps functional and SDK tasks and omits only Rust coverage telemetry consumers", () => {
+  const select = (skip) => {
+    const result = spawnSync("bash", ["scripts/ci-job.sh", "test-linux", "--select-only"], {
+      cwd: fileURLToPath(root),
+      env: {
+        ...fixtureEnvironment(),
+        GIT_DIR: undefined,
+        GIT_WORK_TREE: undefined,
+        GIT_INDEX_FILE: undefined,
+        GIT_COMMON_DIR: undefined,
+        NX_DAEMON: "false",
+        NX_BASE: "143002fe022eca174b58ccac06497800aedc9092",
+        NX_HEAD: "HEAD",
+        ONETASKGRAPH_SKIP_RUST_COVERAGE: skip,
+      },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const selected = result.stdout
+      .match(/ci-job: test-linux: selects ([^\n]+)/)?.[1]
+      .trim()
+      .split(/\s+/);
+    assert.ok(selected?.length);
+    return selected;
+  };
+  const normal = select("0");
+  const release = select("1");
+  const budgets = [
+    "onetaskgraph-github-projects-e2e:budgets",
+    "onetaskgraph-linear-e2e:budgets",
+    "onetaskgraph-live-janitor:budgets",
+  ];
+  for (const task of [
+    "onetaskgraph-core:coverage",
+    "onetaskgraph-core:test-uncovered",
+    ...budgets,
+  ]) {
+    assert.ok(normal.includes(task), `${task}: normally selected`);
+    assert.ok(!release.includes(task), `${task}: omitted with Rust coverage`);
+  }
+  for (const task of [
+    "sdk-python:coverage",
+    "sdk-typescript:coverage",
+    "github-workflow-policy:budgets",
+    "onetaskgraph-github-projects:test",
+    "scripts:distribution-test",
+  ])
+    assert.ok(release.includes(task), `${task}: still selected on release`);
+  const omitted = normal.filter((task) => !release.includes(task));
+  assert.ok(omitted.length > budgets.length);
+  for (const task of omitted)
+    assert.ok(
+      budgets.includes(task) ||
+        task === "workspace:coverage-clear" ||
+        /:(coverage|test-uncovered)$/.test(task),
+      `${task}: functional work was omitted`,
+    );
+});
+
+test("the coverage switch refuses malformed values and use on an uninstrumented OS leg", () => {
+  for (const [job, value] of [
+    ["test-linux", "true"],
+    ["test-windows", "1"],
+    ["test-macos", "1"],
+  ]) {
+    const result = spawnSync("bash", ["scripts/ci-job.sh", job, "--select-only"], {
+      cwd: fileURLToPath(root),
+      env: { ...fixtureEnvironment(), ONETASKGRAPH_SKIP_RUST_COVERAGE: value },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 2, result.stdout + result.stderr);
+    assert.match(result.stderr, /ONETASKGRAPH_SKIP_RUST_COVERAGE/);
+  }
 });

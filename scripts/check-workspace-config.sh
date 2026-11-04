@@ -35,6 +35,8 @@ project_files = sorted(
         Path("scripts/project.json"),
         Path("screenshots/project.json"),
         Path("pool-maintenance/project.json"),
+        Path(".github/cache-policy/project.json"),
+        Path(".github/nx-policy/project.json"),
     ]
 )
 if not project_files:

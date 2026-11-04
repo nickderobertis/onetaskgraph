@@ -1,4 +1,12 @@
 # The single source of truth for the `just` floor. scripts/session-setup.sh reads this
 # file rather than restating the version, and scripts/check-workspace-config.sh fails if
 # anything starts carrying a second copy of it.
+# CI installs these exact check-tool versions before its targets run. Every cached
+# target hashes this file; ecosystem tools retain their own lock/toolchain files.
 just 1.51.0
+uv 0.13.7
+cargo-nextest 0.9.150
+cargo-llvm-cov 0.9.1
+cargo-machete 0.9.2
+cargo-deny 0.20.2
+cargo-binstall 1.26.2

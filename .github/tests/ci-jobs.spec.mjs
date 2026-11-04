@@ -1,3 +1,4 @@
+import "../test-setup.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -18,14 +19,13 @@ const TESTS = ["test-linux", "test-windows", "test-macos"];
 // Each job's execution limit. The three test jobs hold 40 minutes, by the user's decision of
 // 2026-10-31: passing runs reached 29.8 minutes against 30, so ordinary variance cancelled them.
 const TIMEOUT_MINUTES = { lint: 30, "test-linux": 40, "test-windows": 40, "test-macos": 40 };
-// Every pull request, and for test-macos every one but release-plz's own release branch, so
-// the release pull request allocates no Mac runner at all.
+// The release branch runs exactly the same four required jobs as every other branch.
 const PULL_REQUEST = "github.event_name == 'pull_request'";
 const CONDITIONS = {
   lint: PULL_REQUEST,
   "test-linux": PULL_REQUEST,
   "test-windows": PULL_REQUEST,
-  "test-macos": `${PULL_REQUEST} && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-'))`,
+  "test-macos": PULL_REQUEST,
 };
 const SCREENCOMP = [
   /^nickderobertis\/screencomp@v\d+\.\d+\.\d+$/,
@@ -58,11 +58,88 @@ const CACHES = [
       "hashFiles('rust-toolchain.toml')",
     ],
   },
-  { path: /^\.nx\/cache$/, produced: ["runner.os", "runner.arch", ...LOCKFILES] },
 ];
 
 const steps = (job) => (Array.isArray(job?.steps) ? job.steps : []);
 const uses = (step) => (typeof step?.uses === "string" ? step.uses : "");
+const exactTools = new Set(
+  readFileSync(new URL("../../.tool-versions", import.meta.url), "utf8")
+    .split(/\r?\n/)
+    .flatMap((line) => line.match(/^(\S+)\s+\d+\.\d+\.\d+$/)?.slice(1) ?? []),
+);
+
+function toolPinProblems(all) {
+  const found = [];
+  for (const [file, workflow] of Object.entries(all))
+    for (const [name, job] of Object.entries(workflow.jobs ?? {})) {
+      const list = steps(job);
+      const reader = list.findIndex(
+        (step) => step.id === "pins" && step.run === "bash scripts/ci-tool-pins.sh",
+      );
+      for (const [index, step] of list.entries()) {
+        const action = uses(step);
+        const expected = action.startsWith("extractions/setup-just@")
+          ? ["just-version", "just"]
+          : action.startsWith("astral-sh/setup-uv@")
+            ? ["version", "uv"]
+            : undefined;
+        if (expected) {
+          const [input, tool] = expected;
+          if (
+            !exactTools.has(tool) ||
+            reader < 0 ||
+            reader >= index ||
+            step.with?.[input] !== `\${{ steps.pins.outputs.${tool} }}`
+          )
+            found.push(
+              `${file}/${name}: ${tool} must read its exact tracked pin before installation`,
+            );
+        }
+        if (action.startsWith("taiki-e/install-action@"))
+          for (const tool of String(step.with?.tool ?? "").split(",")) {
+            // Only release provisioning uses this tool; no cached target runs it.
+            if (tool === "cargo-semver-checks") continue;
+            const toolName = tool.split("@")[0];
+            if (
+              !exactTools.has(toolName) ||
+              reader < 0 ||
+              reader >= index ||
+              tool !== `${toolName}@\${{ steps.pins.outputs.${toolName} }}`
+            )
+              found.push(`${file}/${name}: installed tool must read its exact tracked pin`);
+          }
+      }
+    }
+  return found;
+}
+
+test("workflow-installed check tools read exact tracked pins before installation", () => {
+  assert.deepEqual(toolPinProblems(definitions()), []);
+});
+
+test("floating installed tools and a missing pin reader are refused", () => {
+  for (const action of [
+    "extractions/setup-just@",
+    "astral-sh/setup-uv@",
+    "taiki-e/install-action@",
+  ])
+    for (const mutation of ["floating", "missing-reader"]) {
+      const changed = structuredClone(definitions());
+      const list = changed["ci.yml"].jobs.lint.steps;
+      if (mutation === "missing-reader")
+        list.splice(
+          list.findIndex((step) => step.id === "pins"),
+          1,
+        );
+      else delete list.find((step) => uses(step).startsWith(action)).with;
+      assert.ok(toolPinProblems(changed).length > 0, `${action}: ${mutation}`);
+    }
+  const untracked = structuredClone(definitions());
+  untracked["ci.yml"].jobs.lint.steps.find((step) =>
+    uses(step).startsWith("taiki-e/install-action@"),
+  ).with.tool = `cargo-untracked@\${{ steps.pins.outputs.cargo-untracked }}`;
+  assert.ok(toolPinProblems(untracked).some((problem) => problem.includes("installed tool")));
+});
 
 export function problems(all) {
   const found = [];
@@ -112,17 +189,23 @@ export function problems(all) {
   ])
     if (granted[scope] !== level) found.push(`lint does not grant itself ${scope}: ${level}`);
   for (const id of TESTS) {
+    const tested = steps(jobs[id]).findIndex((step) => step.run === `just ci-${id}`);
+    if (tested >= 0 && steps(jobs[id])[tested].if !== undefined)
+      found.push(`${id}'s functional tests must run without a release shortcut`);
     const decided = steps(jobs[id]).findIndex(
       (step) =>
         step.id === "release" &&
         String(step.run ?? "").includes(".github/release-shortcut.mjs decide"),
     );
-    const tested = steps(jobs[id]).findIndex((step) => step.run === `just ci-${id}`);
-    if (decided < 0) found.push(`${id} does not consult the release shortcut`);
-    else if (tested >= 0 && decided > tested)
-      found.push(`${id} consults the shortcut after its tests`);
-    if (tested >= 0 && steps(jobs[id])[tested].if !== "steps.release.outputs.tests == 'run'")
-      found.push(`${id}'s tests do not wait on the shortcut's answer`);
+    if (id === "test-linux") {
+      if (decided < 0 || (tested >= 0 && decided > tested))
+        found.push("test-linux must decide Rust coverage before its tasks");
+      if (
+        steps(jobs[id])[tested]?.env?.ONETASKGRAPH_SKIP_RUST_COVERAGE !==
+        `\${{ steps.release.outputs.rust_coverage == 'skip' && '1' || '' }}`
+      )
+        found.push("test-linux must pass only the classified Rust coverage switch");
+    } else if (decided >= 0) found.push(`${id} must not consult a coverage shortcut`);
   }
   // test-windows' loopback suites exhaust Windows' default dynamic port range (ci.yml says how).
   const widened = steps(jobs["test-windows"]).findIndex((step) =>
@@ -279,23 +362,31 @@ test("the visual docs capture leaving lint, or running through the reusable work
   }, /pages: read/);
 });
 
-test("a test job whose tests skip the release shortcut, or lint consulting it, is refused", () => {
-  for (const id of TESTS) {
+test("a release decision cannot skip functional tests or bypass SDK coverage", () => {
+  for (const id of TESTS)
     refuses(
       (all) => {
-        const job = all["ci.yml"].jobs[id];
-        job.steps = job.steps.filter((step) => step.id !== "release");
+        all["ci.yml"].jobs[id].steps.find((step) => step.run === `just ci-${id}`).if =
+          "steps.release.outputs.tests == 'run'";
       },
-      new RegExp(`${id} does not consult`),
+      new RegExp(`${id}'s functional tests must run`),
     );
-    refuses(
-      (all) => {
-        const step = all["ci.yml"].jobs[id].steps.find((each) => each.run === `just ci-${id}`);
-        delete step.if;
-      },
-      new RegExp(`${id}'s tests do not wait`),
+  refuses((all) => {
+    all["ci.yml"].jobs["test-linux"].steps = all["ci.yml"].jobs["test-linux"].steps.filter(
+      (step) => step.id !== "release",
     );
-  }
+  }, /must decide Rust coverage/);
+  refuses((all) => {
+    all["ci.yml"].jobs["test-linux"].steps.find(
+      (step) => step.run === "just ci-test-linux",
+    ).env.ONETASKGRAPH_SKIP_RUST_COVERAGE = "1";
+  }, /only the classified Rust coverage switch/);
+  refuses((all) => {
+    all["ci.yml"].jobs["test-windows"].steps.push({
+      id: "release",
+      run: "node .github/release-shortcut.mjs decide",
+    });
+  }, /must not consult a coverage shortcut/);
   refuses((all) => {
     all["ci.yml"].jobs.lint.steps.push({ run: "node .github/release-shortcut.mjs decide" });
   }, /lint consults/);
@@ -307,20 +398,6 @@ test("a cache key omitting the lockfile or the pinned tool version it depends on
       (step) => uses(step).startsWith("actions/cache") && pattern.test(String(step.with.path)),
     );
   for (const job of Object.keys(FOUR)) {
-    for (const lockfile of LOCKFILES)
-      refuses(
-        (all) => {
-          const step = cacheOf(all, job, /\.nx\/cache/);
-          step.with.key = step.with.key
-            .replace(`'${lockfile}', `, "")
-            .replace(`, '${lockfile}'`, "");
-        },
-        new RegExp(`${job} keys \\.nx/cache \\(key\\) without ${lockfile.replace(".", "\\.")}`),
-      );
-    refuses((all) => {
-      const step = cacheOf(all, job, /\.nx\/cache/);
-      step.with["restore-keys"] = `nx-${job}-`;
-    }, /restore-keys\) without/);
     refuses((all) => {
       const step = cacheOf(all, job, /release-plz/);
       step.with.key = `release-plz-\${{ runner.os }}-\${{ runner.arch }}`;
@@ -406,9 +483,9 @@ test("the unused floating compiler cannot invalidate a pinned build cache", () =
   }, /must exclude the unused stable toolchain before restoring the build cache/);
 });
 
-// The contract's own inputs are this directory alone: nothing outside it re-runs it, so it may
-// read nothing outside it — not by an input, and not through a module that reads the tree.
-test("the contract's target is keyed on .github alone and reads nothing outside it", () => {
+// The contract reads .github alone; its execution tools additionally require their
+// tracked version file, as every cached target does.
+test("the contract's target is keyed on .github and the required execution tool pins", () => {
   const project = JSON.parse(readFileSync(new URL("../project.json", import.meta.url), "utf8"));
   assert.deepEqual(contractInputProblems(project), []);
   const broadened = structuredClone(project);
@@ -417,6 +494,9 @@ test("the contract's target is keyed on .github alone and reads nothing outside 
   const named = structuredClone(project);
   named.targets["ci-jobs"].inputs = ["workflowGraph"];
   assert.match(contractInputProblems(named).join("\n"), /workspaceRoot/);
+  const runtime = structuredClone(project);
+  runtime.targets["ci-jobs"].inputs.push({ runtime: "cat Cargo.toml" });
+  assert.match(contractInputProblems(runtime).join("\n"), /Cargo\.toml/);
   assert.deepEqual(importProblems(import.meta.url), []);
   assert.match(
     importProblems(import.meta.url, 'import { graph } from "../workflow-graph.mjs";').join("\n"),
@@ -433,7 +513,12 @@ function contractInputProblems(project) {
         : [input],
     );
   return expand(project.targets["ci-jobs"].inputs ?? ["default"])
+    .filter(
+      (input) => JSON.stringify(input) !== JSON.stringify({ runtime: "node -p process.platform" }),
+    )
     .filter((input) => typeof input !== "string" || !/^!?\{projectRoot\}\//.test(input))
+    .filter((input) => input !== "{workspaceRoot}/.tool-versions")
+    .filter((input) => input !== "versionFreeNpm")
     .map((input) => `ci-jobs is keyed on ${JSON.stringify(input)}, outside .github`);
 }
 

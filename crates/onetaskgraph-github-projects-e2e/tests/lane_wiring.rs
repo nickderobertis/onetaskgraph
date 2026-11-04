@@ -176,14 +176,16 @@ fn real_nx_orders_both_contributions_and_keeps_one_main_task() {
                 "{name}: missing {identity}"
             );
         }
-        assert!(
-            project["targets"]["test"]["outputs"]
-                .as_array()
-                .unwrap()
-                .contains(&json!(
-                    "{workspaceRoot}/target/debug/telemetry/github-live-session"
-                ))
-        );
+        for report in ["main.json", "assets.json"] {
+            assert!(
+                project["targets"]["test"]["outputs"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!(format!(
+                        "{{workspaceRoot}}/target/debug/telemetry/github-live-session/*/{report}"
+                    )))
+            );
+        }
     }
 }
 

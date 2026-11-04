@@ -1,3 +1,4 @@
+import "../../test-setup.mjs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parse } from "yaml";
@@ -113,7 +114,7 @@ function installs(job) {
   return (job.steps ?? [])
     .filter((step) => step.uses?.startsWith("taiki-e/install-action@"))
     .flatMap((step) => String(step.with?.tool ?? "").split(","))
-    .map((tool) => tool.trim())
+    .map((tool) => tool.trim().split("@")[0])
     .filter(Boolean);
 }
 

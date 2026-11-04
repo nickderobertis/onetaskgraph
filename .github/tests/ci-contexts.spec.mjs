@@ -1,7 +1,8 @@
-import { cdJourneyReadSet, cdJourneyFiles, inputProblems } from "../test-inputs.mjs";
+import "../test-setup.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { cdJourneyFiles, cdJourneyReadSet, inputProblems } from "../test-inputs.mjs";
 import { graph, graphReadSet } from "../workflow-graph.mjs";
 import { definitions, refusals } from "./workflow-definitions.mjs";
 

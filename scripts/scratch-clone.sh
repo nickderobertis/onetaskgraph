@@ -58,6 +58,11 @@ scratch_clone() {
     echo "scratch-clone: overrides 'git -C'; call scratch_clone rather than cloning by hand." >&2
     return 1
   fi
+
+  # A guard's Nx runs prove fixtures, not the outer CI job's work. Every caller
+  # gets its own recording tree and cannot read or write the job's remote cache.
+  export RUNNER_TEMP="$dest/.nx/fixture-runner-temp"
+  unset NX_SELF_HOSTED_REMOTE_CACHE_SERVER NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN
 }
 
 # extract_tar_stream <destination>
