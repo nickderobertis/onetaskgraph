@@ -444,6 +444,7 @@ struct Validators {
     sanitize_output: jsonschema::Validator,
     terms_input: jsonschema::Validator,
     terms_output: jsonschema::Validator,
+    terms_unavailable: jsonschema::Validator,
 }
 
 static VALIDATORS: LazyLock<Validators> = LazyLock::new(|| {
@@ -458,6 +459,14 @@ static VALIDATORS: LazyLock<Validators> = LazyLock::new(|| {
         jsonschema::validator_for(schema.pointer(pointer).expect("the pinned schema has it"))
             .expect("the pinned boundary schema compiles")
     };
+    // The terms branch allows extra properties, so an accompanying verdict must
+    // independently satisfy the unavailable branch before its reason is diagnostic text.
+    let mut terms_unavailable = schema["terms"]["output"].clone();
+    terms_unavailable
+        .as_object_mut()
+        .expect("an object schema")
+        .remove("anyOf");
+    terms_unavailable["$ref"] = Value::String("#/$defs/TermsUnavailable".to_owned());
     Validators {
         inspect_input: compile("/inspect/input"),
         inspect_output: compile("/inspect/output"),
@@ -467,6 +476,8 @@ static VALIDATORS: LazyLock<Validators> = LazyLock::new(|| {
         sanitize_output: compile("/sanitize/output"),
         terms_input: compile("/terms/input"),
         terms_output: compile("/terms/output"),
+        terms_unavailable: jsonschema::validator_for(&terms_unavailable)
+            .expect("the pinned unavailable terms schema compiles"),
     }
 });
 
@@ -642,13 +653,17 @@ impl WritePolicy for CommandWritePolicy {
         // An undecided verdict is believed first, beside terms or not: no answer that says it
         // could not decide is read as having decided.
         let terms = match (code, answer) {
-            (_, Some(answer)) if answer.get("verdict").is_some() => {
+            (_, Some(answer)) if VALIDATORS.terms_unavailable.is_valid(&answer) => {
                 return Err(PolicyError::new(format!(
                     "the terms command could not decide ({})",
                     answer["reason"].as_str().unwrap_or("no reason given")
                 )));
             }
-            (Some(0), Some(answer)) if answer.get("terms").is_some() => answer["terms"].clone(),
+            (Some(0), Some(answer))
+                if answer.get("verdict").is_none() && answer.get("terms").is_some() =>
+            {
+                answer["terms"].clone()
+            }
             (code, _) => {
                 return Err(PolicyError::new(format!(
                     "the terms command {} {} without terms this store believes",

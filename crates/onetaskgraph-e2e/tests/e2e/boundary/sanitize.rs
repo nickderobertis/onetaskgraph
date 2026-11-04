@@ -3085,6 +3085,16 @@ fn a_terms_command_that_fails_or_answers_out_of_shape_is_an_undecided_policy_exi
             "could not decide (registry)",
         ),
         (
+            "terms beside an unchecked private reason",
+            "import sys; sys.stdin.read(); print('{\"terms\": [], \"verdict\": \"unavailable\", \"reason\": \"quiet-harbor-secret\"}')",
+            "without terms this store believes",
+        ),
+        (
+            "terms beside an invalid verdict",
+            "import sys; sys.stdin.read(); print('{\"terms\": [], \"verdict\": \"quiet-harbor-secret\", \"reason\": \"registry\"}')",
+            "without terms this store believes",
+        ),
+        (
             "an answer out of shape",
             "import sys; sys.stdin.read(); print('{\"terms\": [{\"term\": 7}]}')",
             "without terms this store believes",
@@ -3099,6 +3109,10 @@ fn a_terms_command_that_fails_or_answers_out_of_shape_is_an_undecided_policy_exi
         assert!(
             err.contains("was not swept") && err.contains(said),
             "{what}: {err}"
+        );
+        assert!(
+            !format!("{out}{err}").contains("quiet-harbor-secret"),
+            "{what}: diagnostic exposed private policy output"
         );
     }
 }
