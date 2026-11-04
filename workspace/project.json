@@ -25,7 +25,8 @@
     "sdk-typescript",
     "onetaskgraph-live-janitor",
     "onetaskgraph-github-live",
-    "pool-maintenance"
+    "pool-maintenance",
+    "github-cache-policy"
   ],
   "targets": {
     "bootstrap": {

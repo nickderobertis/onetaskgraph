@@ -538,3 +538,59 @@ test("the telemetry digest moves with a nested fixture's content", () => {
   }
   assert.equal(digest(), without);
 });
+
+test("published pathspecs cover every published crate, wheel and registry package", () => {
+  const patterns = read(".github/release-published-paths")
+    .split("\n")
+    .filter((line) => line && !line.startsWith("#"));
+  const tracked = (...pathspecs) =>
+    execFileSync("git", ["ls-files", "-z", "--", ...pathspecs], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GIT_DIR: undefined,
+        GIT_WORK_TREE: undefined,
+        GIT_INDEX_FILE: undefined,
+        GIT_COMMON_DIR: undefined,
+      },
+      encoding: "utf8",
+    })
+      .split("\0")
+      .filter(Boolean);
+  const crates = readdirSync(new URL("crates", root), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => tomlDocument(`crates/${name}/Cargo.toml`).package.publish !== false);
+  const artifactFiles = tracked(
+    ...crates.map((crate) => `crates/${crate}/**`),
+    "sdks/python/**",
+    "sdks/typescript/**",
+    "npm/**",
+    "Cargo.toml",
+    "Cargo.lock",
+    "pyproject.toml",
+    "uv.lock",
+    "package.json",
+    "bun.lock",
+    "rust-toolchain.toml",
+    ".cargo/**",
+    "README.md",
+    "LICENSE",
+    "scripts/release_cd.py",
+    "scripts/release_products.py",
+    "scripts/cli_wheel_lock.py",
+    "scripts/release-wheel-binary.py",
+    "scripts/nx.sh",
+  );
+  assert.ok(artifactFiles.length > 0 && crates.length > 0);
+  const missing = (selection) => {
+    const covered = new Set(tracked(...selection));
+    return artifactFiles.filter((file) => !covered.has(file));
+  };
+  assert.deepEqual(missing(patterns), []);
+  assert.ok(
+    missing(patterns.filter((pattern) => pattern !== "crates/onetaskgraph-core/**")).includes(
+      "crates/onetaskgraph-core/Cargo.toml",
+    ),
+  );
+});

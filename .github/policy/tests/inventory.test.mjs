@@ -44,14 +44,15 @@ test("an undeclared read in the policy journey target is refused", () => {
   assert.equal(GITHUB_READS, "{workspaceRoot}/.github/**/*");
 });
 
-test("the two projects run every journey exactly once through its owning target", () => {
+test("the workflow projects run every journey exactly once through its owning target", () => {
   const workflows = load("../../project.json");
   const policy = load("../project.json");
+  const cache = load("../../cache-policy/project.json");
   for (const [project, target, files] of [
     [policy, "policy-tests", policyJourneyFiles],
     [policy, "rust-cache-action", rustCacheJourneyFiles],
     [workflows, "cd-journeys", cdJourneyFiles],
-    [workflows, "cache-journeys", cacheJourneyFiles],
+    [cache, "cache-journeys", cacheJourneyFiles],
     [workflows, "budget-journeys", budgetJourneyFiles],
     [policy, "release-tail", releaseTailFiles],
   ]) {
@@ -65,7 +66,7 @@ test("the two projects run every journey exactly once through its owning target"
   assert.ok(workflows.namedInputs.default.includes("!{projectRoot}/policy/**/*"));
   for (const file of [...policyJourneyFiles, ...rustCacheJourneyFiles, ...releaseTailFiles])
     assert.ok(file.startsWith(".github/policy/"), file);
-  const actual = ["tests", "policy/tests"].flatMap((directory) =>
+  const actual = ["tests", "policy/tests", "cache-policy/tests"].flatMap((directory) =>
     readdirSync(new URL(`../../${directory}/`, import.meta.url))
       .filter((file) => file.endsWith(".test.mjs"))
       .map((file) => `.github/${directory}/${file}`),
@@ -100,20 +101,23 @@ test("a crate edit selects the CD journeys without the policy journeys", () => {
         { cwd, encoding: "utf8" },
       ),
     );
-  for (const [file, workflows, policy] of [
+  for (const [file, workflows, policy, cache = false] of [
     ["crates/onetaskgraph-core/src/lib.rs", true, false],
     ["sdks/python/project.json", true, false],
     [".github/policy/tests/policy-routing.test.mjs", false, true],
     [".github/policy/project.json", false, true],
     [".github/policy/budgets.yaml", false, true],
-    ["budgets.yaml", true, true],
-    ["scripts/actions-budget-figures.sh", false, true],
+    ["budgets.yaml", true, true, true],
+    ["scripts/actions-budget-figures.sh", false, true, true],
     [".github/test-inputs.mjs", true, true],
     [".github/tests/release-cd.test.mjs", true, true],
-    [".github/workflows/ci.yml", true, true],
+    [".github/workflows/ci.yml", true, true, true],
+    [".github/cache-policy/tests/cache.test.mjs", false, true, true],
+    ["scripts/nx-remote-cache.mjs", false, false, true],
   ]) {
     const projects = selected(file);
     assert.equal(projects.includes("github-workflows"), workflows, `${file}: github-workflows`);
+    assert.equal(projects.includes("github-cache-policy"), cache, `${file}: github-cache-policy`);
     assert.equal(
       projects.includes("github-workflow-policy"),
       policy,
@@ -279,6 +283,7 @@ function placementProblems(ciJob) {
   const suites = [
     ["github-workflows", "test", tagsOf("../../project.json")],
     ["github-workflow-policy", "test", tagsOf("../project.json")],
+    ["github-cache-policy", "test", tagsOf("../../cache-policy/project.json")],
   ];
   for (const [project, target, tags] of suites) {
     if (!selects("test-linux", target, project, tags, ciJob))
@@ -330,7 +335,7 @@ test("a workflow suite leaving test-linux, or the rust-cache journey leaving a r
   );
   refused(
     ciJob.replace(
-      /(\n {2}test-macos\)[\s\S]*?),github-workflows,github-workflow-policy --parallel=2/,
+      /(\n {2}test-macos\)[\s\S]*?),github-workflows,github-workflow-policy,github-cache-policy --parallel=2/,
       (_, before) => `${before} --parallel=2`,
     ),
     /test-macos runs github-workflows:test/,

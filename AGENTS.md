@@ -1627,6 +1627,14 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   against GitHub on every gate run. `.github/tests/ci-events.test.mjs` holds which jobs run:
   a pull request's four, and on a push to main release-plz, the warmer and the canonical
   gallery, which skips the release commit.
+- **Nx results persist through the shared remote cache.** Each CI job runs the copied
+  `nx-remote-cache.mjs` trust, readiness and report steps around its existing Nx work;
+  `.nx/cache` has no Actions-cache entry. Fork and Dependabot pull requests are read-only.
+  The existing release-plz job promotes trusted PR reports into the base scope before
+  release operations; a promotion failure never blocks release-plz. A `cache-promote/**`
+  push can promote without releasing, and every release operation requires a push to main.
+  `.github/cache-policy` owns the Linux cache journeys: real Nx and the pinned sidecar,
+  GitHub doubled at HTTP. Shared script copies stay byte-identical to their upstream pins.
 - **Bump policy (pre-1.0):** `feat` → minor; `feat!` / `BREAKING CHANGE` → minor (a
   breaking change before 1.0 is *not* a major); `fix` / `perf` / `refactor` / `build` →
   patch; `chore` / `docs` / `ci` / `test` / `style` → no release. Post-1.0 a breaking
@@ -1728,15 +1736,20 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   the two limits in `.github/policy/budgets.yaml` — a project of its own, so a crate edit that
   selects `github-workflows`' CD journeys does not also run the policy proofs. No Mac work runs on schedules or downstream
   automatic triggers.
-- **Eight budgets in the root `budgets.yaml` hold CI, CD and the local gate**, each
-  `measure: reported` and read from telemetry, never measured fresh. Seven are labelled
+- **Nine budgets in the root `budgets.yaml` hold CI, CD and the local gate**, each
+  `measure: reported` and read from telemetry, never measured fresh. Eight are labelled
   `release-tail` and run `scripts/actions-budget-figures.sh` — a byte-identical copy of
-  dero-skills' create-repo source, edited only there — over onevcs's read-only host answers:
+  dero-skills' create-repo source, edited only there — over saved CI telemetry and read-only GitHub answers:
   `onetaskgraph-ci-check-time` (longest CI job of a release's pull requests, 1800 s),
   `onetaskgraph-cd-job-time` (longest CD job, 1800 s), `onetaskgraph-release-cycle-time`
-  (a pull request's checks plus its merge to the release tail, 5400 s),
+  (a carried PR's checks plus its merge to the release tail, only when its merge changes a
+  `.github/release-published-paths` path, 5400 s),
   `onetaskgraph-ci-job-count` (4) and `onetaskgraph-cd-job-count` (6), and
-  `onetaskgraph-release-read-requests` (6) and `onetaskgraph-pr-read-requests` (2). They are
+  `onetaskgraph-release-read-requests` (6), `onetaskgraph-pr-read-requests` (2), and
+  `onetaskgraph-nx-cache-use` (100% remote replay among attempt-qualified task/OS/hash
+  executions, excluding local hits). Cache-use reads saved executions and promotion receipts
+  directly through GitHub; the other figures retain onevcs. Its design threshold is revisited
+  after real release-tail observations; missing evidence never passes. They are
   checked once, after the release, by the last step of `release.yml`'s `publish` —
   `onebudgetspec check budgets.yaml --label release-tail`, after a step installing the pinned
   onevcs and onebudgetspec, under a token granted `actions`, `contents` and `pull-requests`
@@ -1744,7 +1757,7 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   its log, and nothing reads its result, so it never blocks, demotes or reverts a release. At
   pull-request time each job's `timeout-minutes` (30 for `lint`, 40 for the test jobs) is what
   fails a check that runs over.
-  The eighth, `onetaskgraph-gate-time` (1800 s), is `host-variable`: `just gate` runs its whole
+  The ninth, `onetaskgraph-gate-time` (1800 s), is `host-variable`: `just gate` runs its whole
   body inside `scripts/gate-time.sh`, which records its start and end to the gitignored
   `.gate-time.json` and checks it, **warning** when over and failing only when the
   measurement errs or the file is invalid, because a development machine's timing varies too

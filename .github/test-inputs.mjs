@@ -5,6 +5,7 @@ import { graphReadSet } from "./workflow-graph.mjs";
 // manifests. ci-contexts.spec reconciles this inventory with the target that runs them;
 // graph-only ci-contexts retains workflow-graph.graphReadSet() alone.
 export const cdJourneyReadSet = [
+  ".github/release-published-paths",
   "config/github-interfaces.toml",
   "pyproject.toml",
   "release-plz.toml",
@@ -106,6 +107,7 @@ export const releaseTailReadSet = [
   "budgets.yaml",
   "package.json",
   "scripts/actions-budget-figures.sh",
+  ".github/release-published-paths",
 ];
 
 export const releaseTailFiles = [".github/policy/tests/release-tail.test.mjs"];
@@ -113,7 +115,7 @@ export const releaseTailFiles = [".github/policy/tests/release-tail.test.mjs"];
 // The one policy journey run on every platform, because the real action it runs does.
 export const rustCacheJourneyFiles = [".github/policy/tests/rust-cache.test.mjs"];
 
-export const cacheJourneyFiles = [".github/tests/nx-cache.test.mjs"];
+export const cacheJourneyFiles = [".github/cache-policy/tests/cache.test.mjs"];
 
 export const cdJourneyFiles = [
   ".github/tests/github-interfaces.test.mjs",

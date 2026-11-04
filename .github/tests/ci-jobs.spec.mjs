@@ -58,7 +58,6 @@ const CACHES = [
       "hashFiles('rust-toolchain.toml')",
     ],
   },
-  { path: /^\.nx\/cache$/, produced: ["runner.os", "runner.arch", ...LOCKFILES] },
 ];
 
 const steps = (job) => (Array.isArray(job?.steps) ? job.steps : []);
@@ -307,20 +306,6 @@ test("a cache key omitting the lockfile or the pinned tool version it depends on
       (step) => uses(step).startsWith("actions/cache") && pattern.test(String(step.with.path)),
     );
   for (const job of Object.keys(FOUR)) {
-    for (const lockfile of LOCKFILES)
-      refuses(
-        (all) => {
-          const step = cacheOf(all, job, /\.nx\/cache/);
-          step.with.key = step.with.key
-            .replace(`'${lockfile}', `, "")
-            .replace(`, '${lockfile}'`, "");
-        },
-        new RegExp(`${job} keys \\.nx/cache \\(key\\) without ${lockfile.replace(".", "\\.")}`),
-      );
-    refuses((all) => {
-      const step = cacheOf(all, job, /\.nx\/cache/);
-      step.with["restore-keys"] = `nx-${job}-`;
-    }, /restore-keys\) without/);
     refuses((all) => {
       const step = cacheOf(all, job, /release-plz/);
       step.with.key = `release-plz-\${{ runner.os }}-\${{ runner.arch }}`;

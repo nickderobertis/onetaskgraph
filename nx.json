@@ -21,12 +21,33 @@
       "dependsOn": ["format-check", "lint", "typecheck", "test", "coverage"],
       "cache": false
     },
-    "format-check": { "inputs": ["default"], "cache": true },
-    "lint": { "inputs": ["default", "^default"], "cache": true },
-    "typecheck": { "inputs": ["default", "^default"], "cache": true },
-    "test": { "inputs": ["default", "^default"], "cache": true },
-    "coverage": { "inputs": ["default", "^default"], "cache": true },
-    "test-uncovered": { "inputs": ["default", "^default"], "cache": true },
-    "bootstrap": { "cache": false }
-  }
+    "format-check": {
+      "inputs": ["default"],
+      "cache": true
+    },
+    "lint": {
+      "inputs": ["default", "^default"],
+      "cache": true
+    },
+    "typecheck": {
+      "inputs": ["default", "^default"],
+      "cache": true
+    },
+    "test": {
+      "inputs": ["default", "^default"],
+      "cache": true
+    },
+    "coverage": {
+      "inputs": ["default", "^default"],
+      "cache": true
+    },
+    "test-uncovered": {
+      "inputs": ["default", "^default"],
+      "cache": true
+    },
+    "bootstrap": {
+      "cache": false
+    }
+  },
+  "plugins": ["./scripts/nx-remote-cache.mjs"]
 }

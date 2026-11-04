@@ -1,0 +1,88 @@
+{
+  "provenance": {
+    "observed": "2026-11-04",
+    "pull": "GET /repos/nickderobertis/onetaskgraph/pulls?state=closed&per_page=1 (3870)",
+    "run": "GET /repos/nickderobertis/onetaskgraph/actions/workflows/ci.yml/runs?per_page=1 (41762048411)",
+    "jobs": "GET /repos/nickderobertis/onetaskgraph/actions/runs/41762048411/attempts/1/jobs",
+    "artifacts": "GET /repos/nickderobertis/onetaskgraph/actions/artifacts?per_page=1 (13221755095)",
+    "projection": "Only fields the promotion fixture supplies; values remain as observed.",
+    "release": "GET /repos/nickderobertis/onetaskgraph/releases?per_page=1",
+    "commit": "GET /repos/nickderobertis/onetaskgraph/commits/705faa9",
+    "compare": "GET /repos/nickderobertis/onetaskgraph/compare/705faa9...705faa9"
+  },
+  "pull": {
+    "number": 3870,
+    "merged_at": "2026-11-03T09:59:59Z",
+    "merge_commit_sha": "705faa9cc517af94977ddd10f82f5728d6d07725",
+    "head": {
+      "sha": "700795c2ccd3b77ec0c9a0d03f1ab498aabe73e8",
+      "repo": {
+        "full_name": "nickderobertis/onetaskgraph"
+      },
+      "ref": "release-plz-2026-11-03T09-27-39Z"
+    },
+    "base": {
+      "sha": "f8a10df1fcfd286f63e40be8c9c73947503474a0",
+      "repo": {
+        "full_name": "nickderobertis/onetaskgraph"
+      },
+      "ref": "main"
+    },
+    "user": {
+      "login": "nickderobertis"
+    }
+  },
+  "run": {
+    "id": 41762048411,
+    "run_attempt": 1,
+    "head_sha": "fb52d978310ee0d9ac4fb5a53ea0fc4ea43f2abe",
+    "event": "pull_request",
+    "conclusion": "failure",
+    "run_started_at": "2026-11-04T02:38:17Z",
+    "updated_at": "2026-11-04T03:19:22Z",
+    "head_repository": {
+      "full_name": "nickderobertis/onetaskgraph",
+      "id": 1343250630
+    },
+    "pull_requests": [
+      {
+        "number": 3875,
+        "head": {
+          "sha": "fb52d978310ee0d9ac4fb5a53ea0fc4ea43f2abe"
+        },
+        "base": {
+          "sha": "705faa9cc517af94977ddd10f82f5728d6d07725"
+        }
+      }
+    ],
+    "status": "completed",
+    "head_branch": "nick/3857/otg-boundary-sanitize"
+  },
+  "job": {
+    "name": "test-windows",
+    "conclusion": "cancelled",
+    "labels": ["windows-latest"]
+  },
+  "artifact": {
+    "id": 13221755095,
+    "name": "github-pages",
+    "expired": false,
+    "created_at": "2026-11-03T10:00:25Z",
+    "workflow_run": {
+      "id": 41615592280,
+      "head_sha": "8f56e1cc84084af99b2170a497502ef8b55b3d8d",
+      "head_repository_id": 1343250630
+    }
+  },
+  "release": {
+    "draft": false,
+    "published_at": "2026-11-03T10:00:54Z",
+    "tag_name": "v0.13.3"
+  },
+  "commit": {
+    "sha": "705faa9cc517af94977ddd10f82f5728d6d07725"
+  },
+  "compare": {
+    "status": "identical"
+  }
+}

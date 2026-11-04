@@ -48,6 +48,28 @@ const TAIL_IDS = [
 
 // The CD figures leave out the runs of the one workflow their commands name with
 // --exclude-workflow: the main-push Rust cache warmer, which builds and delivers nothing.
+function budgetDocument(source) {
+  const document = parse(source);
+  const strings = (value) =>
+    Array.isArray(value) && value.every((item) => typeof item === "string");
+  assert.ok(
+    document !== null &&
+      typeof document === "object" &&
+      !Array.isArray(document) &&
+      document.schema_version === 1 &&
+      Array.isArray(document.budgets) &&
+      document.budgets.every(
+        (budget) =>
+          budget !== null &&
+          typeof budget === "object" &&
+          typeof budget.id === "string" &&
+          strings(budget.labels) &&
+          strings(budget.command),
+      ),
+    "expected a version-one budget document with named budgets, string labels and command arguments",
+  );
+  return document;
+}
 const TAIL_BUDGETS = () =>
   parse(readFileSync(join(root, "budgets.yaml"), "utf8")).budgets.filter((budget) =>
     TAIL_IDS.includes(budget.id),
@@ -71,6 +93,8 @@ export function tailProblems(workflow) {
   if (!publish) return ["release.yml has no publish job"];
   const steps = publish.steps ?? [];
   const last = steps.at(-1);
+  if (steps.find((step) => step.uses?.startsWith("actions/checkout@"))?.with?.["fetch-depth"] !== 0)
+    problems.push("publish must fetch full history for published-path comparisons");
   if (last?.run?.trim() !== "onebudgetspec check budgets.yaml --label release-tail")
     problems.push(
       "publish's last step is not `onebudgetspec check budgets.yaml --label release-tail`",
@@ -121,6 +145,9 @@ test("publish ends in the release tail, reading-only and read by nothing", () =>
 
 test("a tail that moves, is read, may fail quietly or installs another onevcs is refused", () => {
   const cases = {
+    "fetch full history": (w) => {
+      delete w.jobs.publish.steps[0].with;
+    },
     "is not publish's last step": (w) => w.jobs.publish.steps.push({ run: "echo after" }),
     "needs publish": (w) => {
       w.jobs.after = { needs: ["publish"], "runs-on": "ubuntu-latest", steps: [{ run: "true" }] };
@@ -220,7 +247,12 @@ function loadRelease(release) {
   const pullRequests = compare.commits.map((commit) => {
     const pull = pulls.find((p) => p.merge_commit_sha === commit.sha);
     assert.ok(pull, `commit ${commit.sha} maps to a merged pull request`);
-    return { number: pull.number, head: pull.head.sha, merged: ts(pull.merged_at) };
+    return {
+      number: pull.number,
+      head: pull.head.sha,
+      merged: ts(pull.merged_at),
+      merge: pull.merge_commit_sha,
+    };
   });
   const releaseListing = `repos/${REPOSITORY}/actions/runs?per_page=100&head_sha=${releaseCommit}`;
   const atRelease = () => body(releaseListing).workflow_runs;
@@ -340,8 +372,28 @@ before(() => {
 // A checkout as publish's is: the root budgets.yaml (or a test copy of it) and the figures copy.
 function checkout(budgets = readFileSync(join(root, "budgets.yaml"), "utf8")) {
   const dir = join(scratch, `checkout-${cases++}`);
+  const clone = spawnSync("git", ["clone", "--quiet", "--shared", "--no-checkout", root, dir], {
+    env: {
+      ...process.env,
+      GIT_DIR: undefined,
+      GIT_WORK_TREE: undefined,
+      GIT_INDEX_FILE: undefined,
+      GIT_COMMON_DIR: undefined,
+    },
+    encoding: "utf8",
+  });
+  assert.equal(clone.status, 0, clone.stderr);
   mkdirSync(join(dir, "scripts"), { recursive: true });
-  writeFileSync(join(dir, "budgets.yaml"), budgets);
+  mkdirSync(join(dir, ".github"));
+  copyFileSync(
+    join(root, ".github/release-published-paths"),
+    join(dir, ".github/release-published-paths"),
+  );
+  // These historical releases predate cache receipts. The cache journey tests that CLI
+  // separately with its real executions and receipts; this replay owns the other figures.
+  const document = budgetDocument(budgets);
+  document.budgets = document.budgets.filter((budget) => budget.id !== "onetaskgraph-nx-cache-use");
+  writeFileSync(join(dir, "budgets.yaml"), stringify(document));
   copyFileSync(
     join(root, "scripts/actions-budget-figures.sh"),
     join(dir, "scripts/actions-budget-figures.sh"),
@@ -428,6 +480,29 @@ const releaseOwn = (rel) => [
   rel.releaseListing,
 ];
 
+const publishedPaths = readFileSync(join(root, ".github/release-published-paths"), "utf8")
+  .split("\n")
+  .filter((line) => line && !line.startsWith("#"));
+function changesPublishedPath(merge) {
+  assert.match(merge, /^[a-f0-9]{40}$/);
+  const diff = spawnSync(
+    "git",
+    ["-C", root, "diff", "--name-only", `${merge}^1`, merge, "--", ...publishedPaths],
+    {
+      env: {
+        ...process.env,
+        GIT_DIR: undefined,
+        GIT_WORK_TREE: undefined,
+        GIT_INDEX_FILE: undefined,
+        GIT_COMMON_DIR: undefined,
+      },
+      encoding: "utf8",
+    },
+  );
+  assert.equal(diff.status, 0, diff.stderr);
+  return diff.stdout.length > 0;
+}
+
 function expected(rel, served, now) {
   const prs = rel.pullRequests.map((pr) => {
     const runs = runsAt(rel, prListing(pr), served);
@@ -456,12 +531,14 @@ function expected(rel, served, now) {
     "onetaskgraph-ci-check-time": Math.max(...prs.flatMap((pr) => pr.jobs.map((job) => job.secs))),
     "onetaskgraph-cd-job-time": Math.max(...cdJobs.map((job) => job.secs)),
     "onetaskgraph-release-cycle-time": Math.max(
-      ...prs.map(
-        (pr) =>
-          Math.max(...pr.jobs.map((job) => job.end)) -
-          Math.min(...pr.runs.map((run) => ts(run.created_at))) +
-          (now - pr.merged),
-      ),
+      ...prs
+        .filter((pr) => changesPublishedPath(pr.merge))
+        .map(
+          (pr) =>
+            Math.max(...pr.jobs.map((job) => job.end)) -
+            Math.min(...pr.runs.map((run) => ts(run.created_at))) +
+            (now - pr.merged),
+        ),
     ),
     "onetaskgraph-ci-job-count": Math.max(...prs.map((pr) => pr.jobs.length)),
     "onetaskgraph-cd-job-count": cdJobs.length,
@@ -501,8 +578,18 @@ test("over release v0.12.13 the tail reports all seven budgets with their breakd
     assert.equal(run.results[id].verdict, figures[id] > threshold ? "over" : "within", id);
   }
   assert.equal(run.status, over.length ? 1 : 0, run.output);
-  for (const pr of V12.pullRequests)
-    assert.match(run.output, new RegExp(`#${pr.number}: checks \\d+s \\+ merge to release \\d+s`));
+  for (const pr of V12.pullRequests) {
+    if (changesPublishedPath(pr.merge))
+      assert.match(
+        run.output,
+        new RegExp(`#${pr.number}: checks \\d+s \\+ merge to release \\d+s`),
+      );
+    else assert.match(run.output, new RegExp(`#${pr.number}: left out, changes no published path`));
+  }
+  assert.ok(
+    V12.pullRequests.some((pr) => !changesPublishedPath(pr.merge)),
+    "recording exercises an omitted CI-only PR",
+  );
   assert.match(run.output, /Release \/ publish: \d+s/);
   assert.match(run.output, /longest per runner OS:/);
   assert.match(run.output, /per workflow:/);
@@ -767,7 +854,7 @@ test("the figures script is the unedited create-repo copy its header names", () 
     lines[2],
     "# source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/budgets/actions-budget-figures.sh",
   );
-  assert.equal(lines[3], "# version: 10");
+  assert.equal(lines[3], "# version: 11");
   const digest = lines[4].match(/^# sha256: ([0-9a-f]{64})$/)?.[1];
   const body = lines.slice(5).join("\n");
   assert.equal(
@@ -775,7 +862,7 @@ test("the figures script is the unedited create-repo copy its header names", () 
     digest,
     "the copy was edited in place",
   );
-  assert.equal(digest, "13ac7d79aaa3902dc7cfe87449283a05ba397fbc0612701e9b788ed59daf438d");
+  assert.equal(digest, "4e712406a1b09dac07d496be28d6a71141958de3259efb5c85f1dc23744fa5a4");
 });
 
 // The reconciliation script, against a stand-in for gh that answers each path with its
@@ -901,5 +988,27 @@ process.stdout.write(text);
     assert.equal(refused.status, 2, `${answer}: ${refused.stderr}`);
     assert.match(refused.stderr, says, answer);
     assert.match(refused.stderr, /next: sign gh in/, answer);
+  }
+});
+
+test("the release tail selects both owned budgets with their registered commands", () => {
+  const budgets = budgetDocument(readFileSync(join(root, "budgets.yaml"), "utf8")).budgets;
+  for (const [id, command] of [
+    ["onetaskgraph-nx-cache-use", ["bash", "scripts/actions-budget-figures.sh", "cache-use"]],
+    [
+      "onetaskgraph-release-cycle-time",
+      [
+        "bash",
+        "scripts/actions-budget-figures.sh",
+        "release-cycle-time",
+        "--published-paths",
+        ".github/release-published-paths",
+      ],
+    ],
+  ]) {
+    const budget = budgets.find((entry) => entry.id === id);
+    assert.ok(budget, `${id}: registered budget missing`);
+    assert.ok(budget.labels.includes("release-tail"));
+    assert.deepEqual(budget.command, command);
   }
 });
