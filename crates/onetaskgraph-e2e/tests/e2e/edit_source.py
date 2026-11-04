@@ -230,14 +230,16 @@ def _is_label(value: object) -> bool:
 
 
 def _is_endpoint(value: object) -> bool:
-    if isinstance(value, str):
-        return bool(value)
-    return (isinstance(value, dict) and value.keys() <= {"id", "kind", "designator"}
-            and isinstance(value.get("id"), str) and bool(value["id"])
-            and value.get("kind") in get_args(ItemKind)
-            and ("designator" not in value or (
-                isinstance(value["designator"], str)
-                and re.fullmatch(DESIGNATOR_PATTERN, value["designator"]) is not None)))
+    match value:
+        case str():
+            return bool(value)
+        case {"id": str(identifier), "kind": kind} if value.keys() <= {"id", "kind", "designator"}:
+            return (bool(identifier) and kind in get_args(ItemKind)
+                    and ("designator" not in value or (
+                        isinstance(value["designator"], str)
+                        and re.fullmatch(DESIGNATOR_PATTERN, value["designator"]) is not None)))
+        case _:
+            return False
 
 
 def _is_edge(value: object) -> bool:

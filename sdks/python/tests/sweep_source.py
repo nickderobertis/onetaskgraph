@@ -349,15 +349,20 @@ def _answer(store: Path, method: str, params: dict[str, object]) -> dict[str, ob
             page = _decode(PageRequest, params.get("page"))
             if page is None:
                 return _malformed("a page carries a cursor and a positive bounded limit")
-            if method == "labels":
-                labels = {label["id"]: label for task in tasks for label in task["labels"]}
-                return {"result": _page(list(labels.values()), page)}
-            identifier = params.get("task" if method == "task_comments" else "id")
+            match method:
+                case "labels":
+                    labels = {label["id"]: label for task in tasks for label in task["labels"]}
+                    return {"result": _page(list(labels.values()), page)}
+                case "task_comments":
+                    identifier = params.get("task")
+                    if not isinstance(identifier, str):
+                        return _malformed("the task id is a string")
+                    exists = any(task["id"] == identifier for task in tasks)
+                    return {"result": {"page": _page([], page) if exists else None}}
+                case _:
+                    identifier = params.get("id")
             if not isinstance(identifier, str):
                 return _malformed("the task id is a string")
-            if method == "task_comments":
-                exists = any(task["id"] == identifier for task in tasks)
-                return {"result": {"page": _page([], page) if exists else None}}
             direction = params.get("direction")
             if direction not in get_args(DependencyDirection):
                 return _malformed("the dependency direction follows protocol section 4.7")
