@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.5](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.13.4...onetaskgraph-github-projects-v0.13.5) - 2026-11-04
+
+### Added
+
+- *(plugin-api)* let a task listing carry each task's first comment page ([#3881](https://github.com/nickderobertis/onetaskgraph/pull/3881))
+
 ## [0.13.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.13.2...onetaskgraph-github-projects-v0.13.3) - 2026-11-03
 
 ### Added
