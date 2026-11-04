@@ -254,4 +254,8 @@ test("sourcesSanitize refuses arguments it cannot send, before the binary is sta
   expect(() => sanitize("site", ["--complete"])).toThrow("options is not a plain object");
   expect(() => sanitize("site", { complete: "yes" })).toThrow("complete is not a boolean");
   expect(() => sanitize("site", { dryRun: 1 })).toThrow("dryRun is not a boolean");
+  expect(() => sanitize("site", { termScope: ["invented/project"] })).toThrow(
+    "scope is derived from the source",
+  );
+  expect(() => sanitize("site", { termScope: [] })).toThrow("scope is derived from the source");
 });

@@ -1061,7 +1061,10 @@ export class OnetaskgraphClient {
   // policy's replacements fix; `complete` reads the source whole, `dryRun` writes nothing.
   sourcesSanitize(
     source: string,
-    options: Omit<WriteOptions, "sanitizeDryRun"> & { dryRun?: boolean; complete?: boolean } = {},
+    options: Omit<WriteOptions, "sanitizeDryRun" | "termScope"> & {
+      dryRun?: boolean;
+      complete?: boolean;
+    } = {},
   ): Promise<SweepReport> {
     if (typeof source !== "string") {
       throw new TypeError(
@@ -1075,6 +1078,9 @@ export class OnetaskgraphClient {
     }
     if ("sanitizeDryRun" in options) {
       throw new TypeError("sourcesSanitize: use dryRun to preview a sweep");
+    }
+    if ("termScope" in options) {
+      throw new TypeError("sourcesSanitize: scope is derived from the source");
     }
     // `as const` keeps each name the literal it is, for the message below.
     for (const [name, value] of [
