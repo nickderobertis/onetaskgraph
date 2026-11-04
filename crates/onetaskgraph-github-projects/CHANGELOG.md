@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.13.5...onetaskgraph-github-projects-v0.14.0) - 2026-11-04
+
+### Added
+
+- *(boundary)* [**breaking**] rewrite declared private terms on every screened write and sweep a source on demand ([#3875](https://github.com/nickderobertis/onetaskgraph/pull/3875))
+
 ## [0.13.5](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.13.4...onetaskgraph-github-projects-v0.13.5) - 2026-11-04
 
 ### Added
