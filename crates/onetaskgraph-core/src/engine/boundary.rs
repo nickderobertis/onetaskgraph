@@ -2937,19 +2937,11 @@ pub(super) fn screened_field(
     exposure: &Exposure,
     answered: &[Locator],
 ) -> Locator {
-    let screened = |kind: LocatorKind, value: &str, prefix: &str| {
-        exposure
-            .locators
-            .iter()
-            .position(|locator| locator.kind == kind && locator.value == value)
-            .and_then(|index| answered.get(index))
-            .map_or_else(
-                || Locator::Plain(format!("{prefix}{value}")),
-                |locator| match locator {
-                    Locator::Plain(value) => Locator::Plain(format!("{prefix}{value}")),
-                    redacted @ Locator::Redacted { .. } => redacted.clone(),
-                },
-            )
+    let screened = |kind: LocatorKind, value: &str, prefix: &str| match screened_locator(
+        exposure, answered, kind, value,
+    ) {
+        Locator::Plain(value) => Locator::Plain(format!("{prefix}{value}")),
+        redacted @ Locator::Redacted { .. } => redacted,
     };
     match field {
         ChangedField::Content => Locator::Plain("content".to_owned()),
@@ -2961,7 +2953,7 @@ pub(super) fn screened_field(
 }
 
 /// `answered`'s screening of `value` of `kind` among `exposure`'s locators, or every locator
-/// redacted when the answer screened none.
+/// redacted when the answer screened none. A value absent from the input is also redacted.
 pub(super) fn screened_locator(
     exposure: &Exposure,
     answered: &[Locator],
@@ -2978,7 +2970,7 @@ pub(super) fn screened_locator(
         .iter()
         .position(|locator| locator.kind == kind && locator.value == value)
         .and_then(|index| answered.get(index).cloned())
-        .unwrap_or_else(|| Locator::Plain(value.to_owned()))
+        .unwrap_or(Locator::Redacted { kind, ordinal: 1 })
 }
 
 impl Engine {
@@ -3555,5 +3547,50 @@ impl std::fmt::Display for ReferenceForm {
             Self::NotNative => "an id that is not the item's native id",
             Self::Unconfirmed => "an opaque id that no source this host configures can confirm",
         })
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_locators {
+    use super::{
+        ChangedField, Exposure, Locator, LocatorKind, NativeId, screened_field, screened_locator,
+    };
+
+    #[test]
+    fn an_identifier_absent_from_the_screening_cannot_be_printed_plain() {
+        let exposure = Exposure::default();
+        assert!(matches!(
+            screened_locator(&exposure, &[], LocatorKind::Item, "site:quietharbor"),
+            Locator::Redacted {
+                kind: LocatorKind::Item,
+                ..
+            }
+        ));
+        for field in [
+            ChangedField::Metadata("quietharbor".to_owned()),
+            ChangedField::Comment(NativeId("quietharbor".to_owned())),
+        ] {
+            assert!(matches!(
+                screened_field(&field, &exposure, &[]),
+                Locator::Redacted { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn a_field_without_an_answer_is_redacted_and_a_screened_field_keeps_its_prefix() {
+        let exposure = Exposure::default().locate(LocatorKind::MetadataKey, "ordinary");
+        let field = ChangedField::Metadata("ordinary".to_owned());
+        assert!(matches!(
+            screened_field(&field, &exposure, &[]),
+            Locator::Redacted {
+                kind: LocatorKind::MetadataKey,
+                ..
+            }
+        ));
+        assert_eq!(
+            screened_field(&field, &exposure, &[Locator::Plain("ordinary".to_owned())]),
+            Locator::Plain("metadata:ordinary".to_owned())
+        );
     }
 }
