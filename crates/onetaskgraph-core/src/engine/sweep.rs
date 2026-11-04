@@ -307,21 +307,52 @@ impl Engine {
         if whole {
             let mut cursor = None;
             loop {
-                let page = destination
+                let listing = PageRequest {
+                    cursor: cursor.take(),
+                    limit: 100,
+                };
+                let first_comments = PageRequest {
+                    cursor: None,
+                    // Spend the listing's existing comment connection on up to one full
+                    // page, avoiding follow-up reads for moderately active issues.
+                    limit: 100,
+                };
+                let comments = destination
                     .source()
-                    .query_tasks(
-                        &TaskQuery::default(),
-                        &PageRequest {
-                            cursor: cursor.take(),
-                            limit: 100,
-                        },
-                    )
-                    .await
-                    .map_err(|error| refused(destination, error))?;
+                    .capabilities()
+                    .comments
+                    .is_native()
+                    .then_some(&first_comments);
+                // The commented listing carries the first comment page without a second
+                // detail read. Older plugins may refuse it and retain the ordinary path.
+                let detailed = destination
+                    .source()
+                    .query_task_details(&TaskQuery::default(), &listing, comments)
+                    .await;
+                let page = match detailed {
+                    Ok(page) => page,
+                    Err(SourceError::Refused { .. }) if comments.is_some() => {
+                        let page = destination
+                            .source()
+                            .query_tasks(&TaskQuery::default(), &listing)
+                            .await
+                            .map_err(|error| refused(destination, error))?;
+                        sweep.requests.page_operations += 1;
+                        let ids = page.items.into_iter().map(|task| task.id).collect();
+                        self.sweep_batch(destination, ids, false, dry_run, &mut sweep)
+                            .await?;
+                        match page.next {
+                            Some(next) => {
+                                cursor = Some(next);
+                                continue;
+                            }
+                            None => break,
+                        }
+                    }
+                    Err(error) => return Err(refused(destination, error)),
+                };
                 sweep.requests.page_operations += 1;
-                // Each item of the page is decided, and written, before the next is asked for.
-                let ids = page.items.into_iter().map(|task| task.id).collect();
-                self.sweep_batch(destination, ids, false, dry_run, &mut sweep)
+                self.sweep_details(destination, page.items, false, dry_run, &mut sweep)
                     .await?;
                 match page.next {
                     Some(next) => cursor = Some(next),
@@ -478,10 +509,29 @@ impl Engine {
                 error: SourceError::Malformed { message },
             });
         }
-        for (id, detail) in ids.into_iter().zip(details) {
-            let Some(read) = detail.map_err(|error| refused(destination, error))? else {
-                continue;
-            };
+        let details = details
+            .into_iter()
+            .filter_map(|detail| match detail {
+                Ok(Some(read)) => Some(Ok(read)),
+                Ok(None) => None,
+                Err(error) => Some(Err(refused(destination, error))),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.sweep_details(destination, details, searched, dry_run, sweep)
+            .await
+    }
+
+    /// Decide one listing page, retaining further comments for only the current item.
+    async fn sweep_details(
+        &self,
+        destination: &ResolvedSource,
+        details: Vec<onetaskgraph_plugin_api::TaskDetailRead>,
+        searched: bool,
+        dry_run: bool,
+        sweep: &mut Sweep,
+    ) -> Result<(), EngineError> {
+        for read in details {
+            let id = read.task.id.clone();
             let mut comments = Vec::new();
             match read.comments {
                 Some(Err(error)) => return Err(refused(destination, error)),

@@ -5833,7 +5833,20 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     let nodes = board.items[offset.min(visible)..end]
         .iter()
         .filter(|item| GitHubBoard::on_board(item))
-        .map(|item| board.rendered_counted(item, Some(&tallies)))
+        .map(|item| {
+            let mut node = board.rendered_counted(item, Some(&tallies));
+            if query == onetaskgraph_github_projects::graphql::BOARD_WITH_COMMENTS
+                && !GitHubBoard::is_draft(item)
+            {
+                node["content"]["comments"] =
+                    board.comment_connection(&item["id"], &Value::Null, &variables["commentFirst"]);
+                node["content"]["blockedBy"] = json!({
+                    "nodes": board.related(item["id"].as_str().expect("an id"), false),
+                    "pageInfo": {"hasNextPage":false,"endCursor":null},
+                });
+            }
+            node
+        })
         .collect::<Vec<_>>();
     let title = board.own["title"].clone();
     json!({"owner":{"projectV2":{"id":"PVT-board","title":title,

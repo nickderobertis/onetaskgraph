@@ -1361,3 +1361,8 @@ The comment-carrying board listing adds one document to the live contract reconc
 The recorded session therefore adds one reconciliation request and 20,150 worst-case
 nodes (100 board items, each with up to 100 comments); its ordinary listing requests
 are unchanged. This is a measured session record, not a change to any request budget.
+
+The commented board listing also carries each task's first `blockedBy` page, so a
+complete sanitization sweep can screen fixed dependency IDs without a separate read
+per task. Its worst-case price is now 4 points (previously 3); task and comment
+page sizes are unchanged.

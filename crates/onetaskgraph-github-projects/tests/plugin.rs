@@ -2942,6 +2942,12 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                         .expect("comment page size") as usize,
                 );
             }
+            if query.contains("blockedBy(first:$nestedFirst)") && item.typename == "Issue" {
+                content["blockedBy"] = json!({
+                    "nodes": related_issues(&state, state.blocked_by.get(&item.content_id).cloned().unwrap_or_default()),
+                    "pageInfo": {"hasNextPage":false,"endCursor":null},
+                });
+            }
             json!({"id":item.item_id,"fieldValues":item.field_values(&options),
                    "content":content})
         })
@@ -23310,6 +23316,11 @@ async fn board_listing_pages_carry_first_comments_without_detail_requests() {
             .expect("board page with comments");
         for item in read.items {
             ids.push(item.task.id.clone());
+            let dependencies = source
+                .task_dependencies(&item.task.id, Direction::DependsOn, &page(100))
+                .await
+                .expect("dependencies carried by listing");
+            assert!(dependencies.items.is_empty());
             let comments = item
                 .comments
                 .expect("requested comments")

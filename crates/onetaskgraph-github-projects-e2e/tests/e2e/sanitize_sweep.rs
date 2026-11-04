@@ -245,8 +245,8 @@ fn a_complete_sweep_repairs_later_item_and_comment_pages_before_claiming_coverag
     let (config, backend) = github_projects_with_items(&sandbox, items);
     backend.seed_comments(
         "PAGE-0",
-        (0..25).map(|index| {
-            if index == 24 {
+        (0..130).map(|index| {
+            if index == 129 {
                 format!("Last comment names {TERM}.")
             } else {
                 format!("Comment {index}.")
@@ -254,9 +254,22 @@ fn a_complete_sweep_repairs_later_item_and_comment_pages_before_claiming_coverag
         }),
     );
     let board = Board::configured(sandbox, config, backend);
-    let (code, report, out, err, _) = board.sweep(&["--complete"]);
+    let (code, report, out, err, served) = board.sweep(&["--complete"]);
     assert_eq!(code, Some(0), "{out}{err}");
     assert_eq!(report["coverage"], json!({"complete":true,"uncovered":[]}));
+    assert!(
+        served
+            .iter()
+            .any(|request| request.starts_with(graphql::BOARD_WITH_COMMENTS)),
+        "complete sweep reads tasks with their first comments: {served:?}"
+    );
+    assert!(
+        !served
+            .iter()
+            .any(|request| request.starts_with(graphql::ISSUE_COPY_DETAILS)),
+        "listing already supplied the first comment pages: {served:?}"
+    );
+
     for id in ["PAGE-0", "PAGE-109"] {
         let body = board.board.body(id);
         assert!(
@@ -273,7 +286,7 @@ fn a_complete_sweep_repairs_later_item_and_comment_pages_before_claiming_coverag
         );
     }
     assert_eq!(
-        board.board.comments_on("PAGE-0")[24]["body"],
+        board.board.comments_on("PAGE-0")[129]["body"],
         format!("Last comment names {WITH}.")
     );
     assert!(!out.contains(TERM) && !err.contains(TERM));
@@ -422,10 +435,21 @@ impl Workload {
                     .expect("a document priced by the source's own table")
             })
             .sum();
+        let mut operations = std::collections::BTreeMap::new();
+        for (document, _) in self.board.board.served_since(mark) {
+            let name = graphql::DOCUMENTS
+                .iter()
+                .find(|(text, _)| *text == document)
+                .expect("a known provider document")
+                .1;
+            *operations.entry(name).or_insert(0_u64) += 1;
+        }
         let (total, detail) = requests(&report);
         (
             total,
-            format!("{detail}; {points} modelled worst-case GraphQL points"),
+            format!(
+                "{detail}; {points} modelled worst-case GraphQL points; operations {operations:?}"
+            ),
         )
     }
 

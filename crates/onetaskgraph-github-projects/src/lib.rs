@@ -1168,13 +1168,16 @@ pub mod graphql {
     pub const BOARD: &str = board_listing!("", "");
 
     /// A board page carrying each issue's first comment page in the same request.
-    pub const BOARD_WITH_COMMENTS: &str = board_listing!(
-        ",$commentFirst:Int!",
-        concat!(
-            "comments(first:$commentFirst){nodes{",
-            issue_comment!(),
-            "}pageInfo{hasNextPage endCursor}}"
-        )
+    pub const BOARD_WITH_COMMENTS: &str = concat!(
+        board_listing!(
+            ",$commentFirst:Int!",
+            concat!(
+                "comments(first:$commentFirst){nodes{",
+                issue_comment!(),
+                "}pageInfo{hasNextPage endCursor}} blockedBy(first:$nestedFirst){nodes{...Related}pageInfo{hasNextPage endCursor}}"
+            )
+        ),
+        related_issue!()
     );
 
     /// Every carrier of one copy origin, by two reads in one request, and nothing else of
