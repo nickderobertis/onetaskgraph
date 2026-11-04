@@ -105,7 +105,7 @@ test("the workflow projects run every journey exactly once through its owning ta
 
 // Selection by real Nx, which is what the split is for: a crate edit selects the CD journeys
 // and not the policy journeys, a policy edit the reverse, and a workflow edit both.
-test("a crate edit selects the CD journeys without the policy journeys", () => {
+test("source edits select CD journeys and project definitions also select cache journeys", () => {
   const require = createRequire(import.meta.url);
   const nx = resolve(
     dirname(require.resolve("nx/package.json")),
@@ -122,9 +122,9 @@ test("a crate edit selects the CD journeys without the policy journeys", () => {
     );
   for (const [file, workflows, policy, cache = false] of [
     ["crates/onetaskgraph-core/src/lib.rs", true, false],
-    ["sdks/python/project.json", true, false],
+    ["sdks/python/project.json", true, false, true],
     [".github/policy/tests/policy-routing.test.mjs", false, true],
-    [".github/policy/project.json", false, true],
+    [".github/policy/project.json", false, true, true],
     [".github/policy/budgets.yaml", false, true],
     ["budgets.yaml", true, true, true],
     ["scripts/actions-budget-figures.sh", false, true, true],

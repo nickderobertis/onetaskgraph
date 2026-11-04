@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { fixtureEnvironment } from "../../fixture-environment.mjs";
 import { read, root } from "../../workflow-graph.mjs";
 
 // The release-PR shortcut, driven as the three test jobs run it, over a real scratch
@@ -79,7 +80,7 @@ function decide(base, head, extra = [], via = program) {
   const result = spawnSync(
     process.execPath,
     [via, "decide", "--base", base, "--head", head, "--main", "main", ...extra],
-    { cwd: repository, encoding: "utf8", env: { ...process.env, GITHUB_OUTPUT: output } },
+    { cwd: repository, encoding: "utf8", env: { ...fixtureEnvironment(), GITHUB_OUTPUT: output } },
   );
   return { ...result, output: result.status === 0 ? readFileSync(output, "utf8") : "" };
 }
@@ -206,7 +207,7 @@ test("the release coverage switch keeps functional and SDK tasks and omits only 
     const result = spawnSync("bash", ["scripts/ci-job.sh", "test-linux", "--select-only"], {
       cwd: fileURLToPath(root),
       env: {
-        ...process.env,
+        ...fixtureEnvironment(),
         GIT_DIR: undefined,
         GIT_WORK_TREE: undefined,
         GIT_INDEX_FILE: undefined,
@@ -268,7 +269,7 @@ test("the coverage switch refuses malformed values and use on an uninstrumented 
   ]) {
     const result = spawnSync("bash", ["scripts/ci-job.sh", job, "--select-only"], {
       cwd: fileURLToPath(root),
-      env: { ...process.env, ONETASKGRAPH_SKIP_RUST_COVERAGE: value },
+      env: { ...fixtureEnvironment(), ONETASKGRAPH_SKIP_RUST_COVERAGE: value },
       encoding: "utf8",
     });
     assert.equal(result.status, 2, result.stdout + result.stderr);

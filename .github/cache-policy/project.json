@@ -7,6 +7,7 @@
     "default": [
       "{projectRoot}/**/*",
       "{workspaceRoot}/.github/workflow-graph.mjs",
+      "{workspaceRoot}/.github/fixture-environment.mjs",
       "{workspaceRoot}/.github/package.json",
       "{workspaceRoot}/.github/bun.lock",
       "{workspaceRoot}/scripts/nx-remote-cache.mjs",
@@ -19,6 +20,17 @@
       "{workspaceRoot}/.github/release-published-paths",
       "{workspaceRoot}/scripts/ci-job.sh",
       "{workspaceRoot}/scripts/check-affected-selection.sh",
+      "{workspaceRoot}/scripts/check-ci-recipes.sh",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/scripts/nx.sh",
+      "{workspaceRoot}/scripts/live-lane-selection.sh",
+      "{workspaceRoot}/scripts/ci-tool-pins.sh",
+      "{workspaceRoot}/scripts/ci_timings.py",
+      "{workspaceRoot}/scripts/script-start-log.sh",
+      "{workspaceRoot}/scripts/scoped-release-plz.sh",
+      "{workspaceRoot}/scripts/test-distribution.sh",
+      "{workspaceRoot}/scripts/check-relative-interpreter.sh",
+      "{workspaceRoot}/crates/onetaskgraph-github-projects-e2e/lane_runner.py",
       "{workspaceRoot}/scripts/plugin-crates.sh",
       "{workspaceRoot}/scripts/read-lines.sh",
       "{workspaceRoot}/scripts/scratch-clone.sh",
@@ -74,7 +86,7 @@
       "executor": "nx:run-commands",
       "dependsOn": ["bootstrap"],
       "options": {
-        "command": "node --test .github/cache-policy/tests/cache.test.mjs"
+        "command": "node --test .github/cache-policy/tests/cache.test.mjs .github/cache-policy/tests/fixture-isolation.test.mjs"
       },
       "cache": true,
       "outputs": [],

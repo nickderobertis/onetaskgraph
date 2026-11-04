@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { fixtureEnvironment } from "../../fixture-environment.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const env = {
-  ...process.env,
+  ...fixtureEnvironment(),
   GITHUB_ACTIONS: undefined,
   ONETASKGRAPH_SKIP_RUST_COVERAGE: "0",
   NX_DAEMON: "false",

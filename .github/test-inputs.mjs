@@ -128,6 +128,7 @@ export const nxHashFiles = [".github/nx-policy/tests/nx-hashes.test.mjs"];
 
 export const nxInputFiles = [".github/nx-policy/tests/nx-inputs.test.mjs"];
 export const nxInputReadSet = [
+  ".github/fixture-environment.mjs",
   ".github/nx-policy/tests/nx-inputs.test.mjs",
   ".github/nx-policy/tests/fixtures/nx-workspace-contracts.mjs",
   "nx.json",
@@ -137,7 +138,10 @@ export const nxInputReadSet = [
   "scripts/ci-job.sh",
 ];
 
-export const cacheJourneyFiles = [".github/cache-policy/tests/cache.test.mjs"];
+export const cacheJourneyFiles = [
+  ".github/cache-policy/tests/cache.test.mjs",
+  ".github/cache-policy/tests/fixture-isolation.test.mjs",
+];
 
 export const cdJourneyFiles = [
   ".github/tests/github-interfaces.test.mjs",

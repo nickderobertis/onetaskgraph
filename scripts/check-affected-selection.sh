@@ -121,10 +121,6 @@ export NX_WORKSPACE_DATA_DIRECTORY="$scratch/nx-workspace-data"
 # in this clone establishes its own root; Nx passes that root to its children for
 # recursive-loop detection.
 unset NX_INVOCATION_ROOT_PID
-# Fixture tasks are not CI work and must not enter the outer job's execution report
-# or remote store. Keep the shared hook active, but give it a private recording tree.
-export RUNNER_TEMP="$scratch/runner-temp"
-unset NX_SELF_HOSTED_REMOTE_CACHE_SERVER NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN
 
 failures=0
 

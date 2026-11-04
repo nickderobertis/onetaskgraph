@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { fixtureEnvironment } from "../../fixture-environment.mjs";
 import { canonicalInputNames } from "../version-inputs.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
@@ -26,7 +27,7 @@ const scratch = mkdtempSync(
 );
 after(() => rmSync(scratch, { recursive: true, force: true }));
 const environment = {
-  ...process.env,
+  ...fixtureEnvironment(),
   NODE_TEST_CONTEXT: undefined,
   GITHUB_ACTIONS: undefined,
   ONETASKGRAPH_SKIP_RUST_COVERAGE: "0",
