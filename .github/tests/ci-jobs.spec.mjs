@@ -18,14 +18,13 @@ const TESTS = ["test-linux", "test-windows", "test-macos"];
 // Each job's execution limit. The three test jobs hold 40 minutes, by the user's decision of
 // 2026-10-31: passing runs reached 29.8 minutes against 30, so ordinary variance cancelled them.
 const TIMEOUT_MINUTES = { lint: 30, "test-linux": 40, "test-windows": 40, "test-macos": 40 };
-// Every pull request, and for test-macos every one but release-plz's own release branch, so
-// the release pull request allocates no Mac runner at all.
+// The release branch runs exactly the same four required jobs as every other branch.
 const PULL_REQUEST = "github.event_name == 'pull_request'";
 const CONDITIONS = {
   lint: PULL_REQUEST,
   "test-linux": PULL_REQUEST,
   "test-windows": PULL_REQUEST,
-  "test-macos": `${PULL_REQUEST} && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-'))`,
+  "test-macos": PULL_REQUEST,
 };
 const SCREENCOMP = [
   /^nickderobertis\/screencomp@v\d+\.\d+\.\d+$/,

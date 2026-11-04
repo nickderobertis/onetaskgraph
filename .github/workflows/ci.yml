@@ -197,28 +197,10 @@ jobs:
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      # test-macos is skipped on this repository's own release-plz branch, so the release pull
-      # request spends no Mac runner (`onetaskgraph-macos-runs-per-change`). That is sound only
-      # while the branch carries release-plz's version and changelog edits alone, so the
-      # classifier reads the diff here, and a release branch carrying anything else fails lint
-      # rather than merging with no macOS run.
-      - name: Hold a release branch that skips macOS to its version and changelog edits
-        if: github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-')
-        shell: bash
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          decision="$(node .github/macos-policy.mjs classify --event "$GITHUB_EVENT_PATH" --base "$BASE" --head "$HEAD")"
-          echo "$decision"
-          if [ "$(jq -r .macosRequired <<<"$decision")" != false ]; then
-            echo "::error::this release-plz branch carries more than release versions and changelogs, so test-macos must run: $(jq -r .reason <<<"$decision"). Land the change through an ordinary branch." >&2
-            exit 1
-          fi
       - name: Format, lint and type-check the affected projects, generated code and the supply chain
         run: just ci-lint
       # The release pull request alone: the pass-time budget of the pool maintenance
-      # onevcs.toml declares. lint is the one of the four that runs in full there, on Linux,
+      # onevcs.toml declares. lint owns this additional policy budget on Linux,
       # already bootstrapped with the pinned pruner.
       - name: Pool-maintenance pass-time budget on the release pull request
         if: startsWith(github.head_ref, 'release-plz-')
@@ -606,7 +588,7 @@ jobs:
       - cancel: nx-cache
 
   test-macos:
-    if: github.event_name == 'pull_request' && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-'))
+    if: github.event_name == 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 40
     env:

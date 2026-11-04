@@ -1,9 +1,8 @@
-// The git history the macOS policy tests classify, built once per test file that imports it:
+// Real git history for release semantics and workflow routing, local to each test process:
 // node --test runs each file in a process of its own, side by side, and each gets its own
 // scratch history, so the files share no state.
-import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,9 +10,6 @@ import { read, root, validateEventInventory } from "../../workflow-graph.mjs";
 
 validateEventInventory(JSON.parse(read(".github/event-classes.json")));
 
-export const policy =
-  process.env.MACOS_POLICY_TEST_PROGRAM ||
-  fileURLToPath(new URL("../../macos-policy.mjs", import.meta.url));
 export const scratchRoot = process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir();
 export const history = mkdtempSync(resolve(scratchRoot, "macos-policy-"));
 export function git(...args) {
@@ -27,8 +23,8 @@ export function put(path, text) {
 git("init", "-q");
 git("config", "user.email", "policy@example.invalid");
 git("config", "user.name", "Workflow contract");
-put(".gitignore", "event.json\ngithub-output\n.github/node_modules/\n");
-for (const file of ["macos-policy.mjs", "semantic-release.py", "semantic-json.mjs"])
+put(".gitignore", "event.json\ngithub-output\n.github/node_modules/\n__pycache__/\n");
+for (const file of ["semantic-release.py", "semantic-json.mjs"])
   put(`.github/${file}`, read(`.github/${file}`));
 put("scripts/product_versions.py", read("scripts/product_versions.py"));
 symlinkSync(
@@ -138,36 +134,18 @@ export function event(ref = "feature", fork = false, author = "nickderobertis") 
     },
   };
 }
-export function classify(
-  payload,
-  head = heads.version,
-  baseRef = base,
-  authoritativeEvent = "",
-  extraEnv = {},
-) {
-  const path = resolve(history, "event.json");
-  writeFileSync(path, typeof payload === "string" ? payload : JSON.stringify(payload));
-  const output = resolve(history, "github-output");
-  rmSync(output, { force: true });
+export function semantic(head = heads.version, baseRef = base, extraEnv = {}) {
   const result = spawnSync(
-    process.execPath,
-    [policy, "classify", "--event", path, "--base", baseRef, "--head", head],
+    "python3",
+    [resolve(history, ".github/semantic-release.py"), baseRef, head],
     {
       cwd: history,
       encoding: "utf8",
-      env: {
-        ...process.env,
-        ...extraEnv,
-        GITHUB_EVENT_NAME: authoritativeEvent,
-        GITHUB_OUTPUT: output,
-      },
+      env: { ...process.env, ...extraEnv },
     },
   );
-  assert.equal(result.status, 0, result.stderr);
-  const decision = JSON.parse(result.stdout);
-  assert.equal(
-    readFileSync(output, "utf8"),
-    `macosRequired=${decision.macosRequired}\nreason=${decision.reason}\n`,
-  );
-  return decision;
+  return {
+    status: result.status,
+    isReleaseOnly: result.status === 0 && JSON.parse(result.stdout) === true,
+  };
 }

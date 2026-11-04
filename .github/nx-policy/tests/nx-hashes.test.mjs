@@ -181,7 +181,11 @@ test("Nx's own hash file details retain every original cached target's file inpu
   const currentDir = fixture("current", "HEAD", true);
   const currentIds = selected(currentDir);
   const absent = hashes(currentDir, currentIds);
-  const retiredInputs = ["scripts/ci-pr-base.sh"];
+  const retiredInputs = [
+    "scripts/ci-pr-base.sh",
+    ".github/macos-policy.mjs",
+    ".github/policy/tests/policy.test.mjs",
+  ];
   for (const file of retiredInputs) {
     assert.equal(existsSync(join(root, file)), false, `${file}: intentionally retired`);
     writeFileSync(join(currentDir, file), command(baseDir, "git", ["show", `${baseline}:${file}`]));

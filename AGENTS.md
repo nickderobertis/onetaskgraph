@@ -1730,27 +1730,14 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   An unreadable comparison runs Rust coverage; macOS and Windows never consult this
   decision. Raw Rust profiles and objects remain uncached because they cannot prove
   coverage after a version change.
-- **One Mac job per run, and two Mac-spending runs per single-push lifecycle.** A pull
-  request's one Mac job is the required `test-macos`, skipped at the job level on this
-  repository's own `release-plz-` branch alone; `lint` runs `.github/macos-policy.mjs` there
-  and goes red unless the branch carries release versions and changelogs alone, so a skip is
-  never a release branch merging untested source. Main pushes never schedule Mac, with one exception the user approved on 2026-10-17: the
-  build-only `warm-macos` job of `.github/workflows/rust-cache-warm.yml`, because a pull
-  request waits on its slowest job and `test-macos` restores no other cache. It skips a
-  release merge — a push `.github/semantic-release.py` reads as versions and changelogs alone,
-  which rust-cache does not store — so `onetaskgraph-macos-runs-per-change` is 3, not 2.
-  `.github/macos-policy.mjs` admits a release-only PR only from a same-repository
-  `release-plz-` branch with a semantic version/changelog-only diff; an unreadable PR requires coverage. The author is not authority: release-plz
-  uses the owner's PAT.
-  A release's one Mac job is `build-macos`, which builds the Apple Silicon wheel once and
-  uses its binary for the archive and npm carrier; Intel macOS is no longer released, and
-  the installer and npm launcher refuse it by name. Its native install/run proof precedes
-  its own publication. The production packaging journey and
-  `.github/tests/` hold payload hashes, required names, event routing and reusable calls;
-  `github-workflow-policy:test` records ignored telemetry and its `budgets` target alone applies
-  the two limits in `.github/policy/budgets.yaml` — a project of its own, so a crate edit that
-  selects `github-workflows`' CD journeys does not also run the policy proofs. No Mac work runs on schedules or downstream
-  automatic triggers.
+- **One Mac job per run, and four Mac-spending runs per single-push lifecycle.**
+  Every pull request runs `test-macos`, including release-plz’s branch, which replays
+  proven test results through the same cache as other branches. No lint guard or branch
+  condition substitutes for that run. The lifecycle counts the change PR, main’s build-only
+  `warm-macos`, the release PR and the published release’s `build-macos`. A release-only
+  main merge still omits the build-only warmer. `.github/policy/tests/` records real
+  workflow scheduling as telemetry; its `budgets` target applies the one-job and four-run
+  bounds in `.github/policy/budgets.yaml`. No scheduled or downstream event allocates Mac.
 - **Nine budgets in the root `budgets.yaml` hold CI, CD and the local gate**, each
   `measure: reported` and read from telemetry, never measured fresh. Eight are labelled
   `release-tail` and run `scripts/actions-budget-figures.sh` — a byte-identical copy of

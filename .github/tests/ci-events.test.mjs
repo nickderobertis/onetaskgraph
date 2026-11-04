@@ -9,9 +9,7 @@ import { definitions } from "./workflow-definitions.mjs";
 
 // Which jobs run where, as the run graph resolves the workflow files (workflow-graph.mjs). A
 // pull request's last commit runs lint, test-linux and test-windows, and test-macos on every pull
-// request but one from this repository's own `release-plz-*` branch, whose job-level condition
-// skips it — a skipped job satisfies a required check, which is how the release pull request
-// spends no Mac runner. Nothing else runs, because every other job spends a slot of the
+// request, including release-plz’s own branch. Every other job spends a slot of the
 // account-wide concurrency limit (onetaskgraph-ci-job-count);
 // a push to main runs release-plz, the Rust cache warmer that catches a main that no longer
 // builds, and the canonical gallery, which skips release-plz's own release commit. The release
@@ -53,8 +51,7 @@ export function problems(all, texts = {}) {
       found.push(`${name} changed, and this change does not name it`);
   // A pull request's last commit, from this repository, from a fork, from release-plz's own
   // branch, and from a fork's branch of that name, on every action that starts a pull request's
-  // checks: lint, test-linux and test-windows always, and test-macos but on this repository's
-  // own release-plz branch.
+  // checks: lint, test-linux and test-windows always, and test-macos on every branch.
   for (const action of ["opened", "synchronize", "reopened"])
     for (const [headRef, fork] of [
       ["feature", false],
@@ -70,8 +67,7 @@ export function problems(all, texts = {}) {
             `${workflow} runs ${rows.map((r) => r.name).join(", ")} on pull_request ${action}`,
           );
       const jobs = (runs["ci.yml"] ?? []).map((row) => row.name);
-      const expected =
-        headRef.startsWith("release-plz-") && !fork ? REQUIRED.slice(0, 3) : REQUIRED;
+      const expected = REQUIRED;
       if (JSON.stringify(jobs) !== JSON.stringify(expected))
         found.push(
           `a pull request ${action} from ${headRef}${fork ? " (fork)" : ""} runs ${jobs.join(", ")}`,
@@ -113,7 +109,7 @@ const texts = () =>
     ]),
   );
 
-test("a pull request runs lint, test-linux, test-windows and, but on release-plz's branch, test-macos; a push to main runs release-plz, the warmer and the gallery", () => {
+test("every pull request runs four jobs; main pushes run release tooling, the warmer and the gallery", () => {
   assert.deepEqual(problems(definitions(), texts()), []);
 });
 
@@ -139,17 +135,22 @@ test("another job or workflow on a pull request or on the release commit is refu
     "runs lint, test-linux, test-windows, test-macos, deny": (all) => {
       all["ci.yml"].jobs.deny = { "runs-on": "ubuntu-latest", steps: [{ run: "just deny" }] };
     },
-    "a pull request opened from release-plz-2026-10-31 runs lint, test-linux, test-windows, test-macos":
-      (all) => {
-        delete all["ci.yml"].jobs["test-macos"].if;
-      },
+    "a pull request opened from release-plz-2026-10-31 runs lint, test-linux, test-windows": (
+      all,
+    ) => {
+      all["ci.yml"].jobs["test-macos"].if =
+        "github.event_name == 'pull_request' && !startsWith(github.head_ref, 'release-plz-')";
+    },
     "a pull request opened from release-plz-2026-10-31 (fork) runs lint, test-linux, test-windows":
       (all) => {
         all["ci.yml"].jobs["test-macos"].if =
           "github.event_name == 'pull_request' && !startsWith(github.head_ref, 'release-plz-')";
       },
-    "a pull request opened from release-plz-2026-10-31 runs lint, test-linux": (all) => {
-      all["ci.yml"].jobs["test-windows"].if = all["ci.yml"].jobs["test-macos"].if;
+    "a pull request opened from release-plz-2026-10-31 runs lint, test-linux, test-macos": (
+      all,
+    ) => {
+      all["ci.yml"].jobs["test-windows"].if =
+        "github.event_name == 'pull_request' && !startsWith(github.head_ref, 'release-plz-')";
     },
     "a pull request opened from feature runs lint, test-linux, test-macos": (all) => {
       all["ci.yml"].jobs["test-windows"].if = "github.event_name == 'push'";

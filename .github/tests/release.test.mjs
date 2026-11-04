@@ -325,7 +325,6 @@ test("each platform's plan is what v0.7.1 published for its targets, at any vers
 
 test("release routing prefix agrees with the production PR builder", () => {
   assert.match(read("scripts/prepare-release-pr.sh"), /branch="release-plz-\$version"/);
-  assert.match(read(".github/macos-policy.mjs"), /startsWith\("release-plz-"\)/);
 });
 
 test("every pull-request job inherits the event comparison that Nx normalises", () => {

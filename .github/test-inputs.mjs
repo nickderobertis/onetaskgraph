@@ -72,7 +72,7 @@ export const policyJourneyFiles = [
   ".github/policy/tests/boundaries.test.mjs",
   ".github/policy/tests/inventory.test.mjs",
   ".github/policy/tests/policy-routing.test.mjs",
-  ".github/policy/tests/policy.test.mjs",
+  ".github/policy/tests/semantic-release.test.mjs",
   ".github/policy/tests/release-shortcut.test.mjs",
   ".github/policy/tests/reusable.test.mjs",
   ".github/policy/tests/rust-cache-warm.test.mjs",

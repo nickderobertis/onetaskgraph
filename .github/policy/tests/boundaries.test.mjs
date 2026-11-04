@@ -288,33 +288,6 @@ test("local Bun parser rejects unsupported CLI arguments at its real entrypoint"
   assert.equal(JSON.parse(accepted.stdout).workspaces["sdks/typescript"].name, "@onetaskgraph/sdk");
 });
 
-test("the classifier enforces invocation and actual filesystem IO failure contracts", () => {
-  const scratch = mkdtempSync(
-    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "cli-io-"),
-  );
-  try {
-    const classifier = fileURLToPath(new URL("../../macos-policy.mjs", import.meta.url));
-    const event = join(scratch, "event.json");
-    writeFileSync(event, JSON.stringify({ event_name: "push" }));
-    for (const args of [[], ["other"], ["classify", "--unknown", event]])
-      assert.notEqual(
-        spawnSync(process.execPath, [classifier, ...args], { encoding: "utf8" }).status,
-        0,
-      );
-    const outputFailure = spawnSync(
-      process.execPath,
-      [classifier, "classify", "--event", event, "--base", "missing", "--head", "missing"],
-      {
-        env: { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_OUTPUT: scratch },
-        encoding: "utf8",
-      },
-    );
-    assert.notEqual(outputFailure.status, 0);
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
-});
-
 test("reporter rejects invalid invocations and an unwritable SDK result destination", () => {
   const scratch = mkdtempSync(
     join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "reporter-io-"),
