@@ -33,7 +33,7 @@ const tree = () => {
   mkdirSync(dir);
   return dir;
 };
-function command(program, args, cwd, env = {}) {
+function command(program, args, cwd, env = {}, timeout = 120_000) {
   const result = spawnSync(program, args, {
     cwd,
     env: {
@@ -46,7 +46,7 @@ function command(program, args, cwd, env = {}) {
       ...env,
     },
     encoding: "utf8",
-    timeout: 120_000,
+    timeout,
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   return result.stdout.trim();
@@ -1251,6 +1251,89 @@ async function provePromotion({ dir, workspace, action, sourceEnv }) {
   );
   proveCacheBudget({ dir, workspace, env: sourceEnv, pr, laterPr, routes });
 }
+
+test("affected-selection nested Nx keeps fixture telemetry out of the outer job", {
+  timeout: 300_000,
+}, () => {
+  if (process.platform === "win32") return;
+  const dir = tree();
+  const workspace = join(dir, "workspace");
+  command("git", ["clone", "--quiet", "--shared", root, workspace], dir);
+  // The guard already replaces fixture task commands. Add an environment probe to
+  // those subprocess doubles while retaining its real Nx and CI job boundaries.
+  const guard = readFileSync(join(root, "scripts/check-affected-selection.sh"), "utf8");
+  const commandSite =
+    '            target["options"] = {"command": "exit 1" if failing else command}';
+  assert.ok(
+    guard.includes(commandSite),
+    "fixture command probe must reach the guard's subprocesses",
+  );
+  const probe =
+    'python3 -c \'import os; assert not os.environ.get("NX_SELF_HOSTED_REMOTE_CACHE_SERVER"); assert not os.environ.get("NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN")\'';
+  writeFileSync(
+    join(workspace, "scripts/check-affected-selection.sh"),
+    guard.replace(
+      commandSite,
+      `            command = ${JSON.stringify(probe)} + " && " + command\n${commandSite}`,
+    ),
+  );
+  cpSync(join(root, "node_modules"), join(workspace, "node_modules"), {
+    recursive: true,
+    verbatimSymlinks: true,
+  });
+  const projectPath = join(workspace, "workspace/project.json");
+  const project = JSON.parse(readFileSync(projectPath, "utf8"));
+  project.targets["fixture-isolation"] = {
+    executor: "nx:run-commands",
+    cache: false,
+    options: { command: "bash scripts/check-affected-selection.sh" },
+  };
+  writeFileSync(projectPath, JSON.stringify(project));
+  command("git", ["add", "-A"], workspace);
+  command(
+    "git",
+    [
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "user.name=fixture",
+      "-c",
+      "user.email=fixture@invalid",
+      "commit",
+      "--quiet",
+      "-m",
+      "test: nested recording fixture",
+    ],
+    workspace,
+  );
+  const runnerTemp = join(dir, "runner-temp");
+  command(
+    "node",
+    ["node_modules/nx/dist/bin/nx.js", "run", "workspace:fixture-isolation"],
+    workspace,
+    {
+      GITHUB_ACTIONS: "true",
+      GITHUB_JOB: "outer",
+      RUNNER_TEMP: runnerTemp,
+      NX_DAEMON: "false",
+      NX_INVOCATION_ROOT_PID: undefined,
+      NX_SELF_HOSTED_REMOTE_CACHE_SERVER: "http://127.0.0.1:9",
+      NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: "outer-fixture-token",
+    },
+    240_000,
+  );
+  const recording = join(runnerTemp, "nx-cache-recording/outer");
+  const rows = readFileSync(join(recording, "invocations.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.deepEqual(
+    rows.flatMap((row) => row.tasks.map((task) => task.task)),
+    ["workspace:fixture-isolation"],
+    "only the real outer task belongs to the job's telemetry",
+  );
+  assert.equal(readFileSync(join(recording, "started.jsonl"), "utf8").trim().split("\n").length, 1);
+});
 
 test("CI and release-plz promote a replay-only run, share it with a later PR, and report cache-use with simulated release selection", {
   timeout: 300_000,

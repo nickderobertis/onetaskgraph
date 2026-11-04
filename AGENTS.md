@@ -1634,7 +1634,10 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   release operations; a promotion failure never blocks release-plz. A `cache-promote/**`
   push can promote without releasing, and every release operation requires a push to main.
   `.github/cache-policy` owns the Linux cache journeys: real Nx and the pinned sidecar,
-  GitHub doubled at HTTP. Shared script copies stay byte-identical to their upstream pins.
+  GitHub doubled at HTTP. The affected-selection guard gives its nested Nx fixtures a
+  private `RUNNER_TEMP` and no remote-cache credentials, so fixture executions cannot enter
+  the outer job’s reports or store. Its real nested-Nx regression lives in that cache suite.
+  Shared script copies stay byte-identical to their upstream pins.
   `biome.json` excludes exactly the two upstream-owned JavaScript copies; the comment and
   exact-path digest map in `.github/cache-policy/tests/cache.test.mjs` hold their byte identity.
   `.github/nx-policy` owns the cached platform/output checks and the uncached real-Nx hash

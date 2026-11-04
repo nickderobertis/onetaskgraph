@@ -18,6 +18,7 @@
       "{workspaceRoot}/budgets.yaml",
       "{workspaceRoot}/.github/release-published-paths",
       "{workspaceRoot}/scripts/ci-job.sh",
+      "{workspaceRoot}/scripts/check-affected-selection.sh",
       "{workspaceRoot}/.github/project.json",
       "{workspaceRoot}/.github/workflows/*.yml",
       "{workspaceRoot}/.github/tests/ci-jobs.spec.mjs",
