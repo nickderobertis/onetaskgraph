@@ -244,6 +244,14 @@ fn the_editing_peer_refuses_malformed_pages_targets_and_tasks_without_changing_t
             "target":"t1", "item":shared.task("t1"), "depends_on":[{"from":7}]
         }}}),
     );
+    for designator in ["", "alias/short", "linear/not-a-digest"] {
+        assert!(onetaskgraph_plugin_api::Designator::try_from(designator.to_owned()).is_err());
+        requests.push(json!({"id":"bad-designator", "method":"write_task", "params":{"write":{
+            "target":"t1", "item":shared.task("t1"), "depends_on":[{
+                "from":"t1", "to":{"id":"t2","kind":"task","designator":designator}, "kind":"blocks"
+            }]
+        }}}));
+    }
     let mut incomplete = shared.task("t1");
     incomplete.as_object_mut().expect("task").remove("content");
     requests.push(
@@ -314,6 +322,26 @@ fn the_editing_peer_refuses_malformed_stored_versions_and_controls() {
         ("unversioned", json!("yes")),
         ("reads", json!({"t1":true})),
         ("moves", json!({"t1":[0]})),
+        (
+            "comments",
+            json!({"t1":[{"id":"c1","body":"Plain.","author":7}]}),
+        ),
+        (
+            "comments",
+            json!({"t1":[{"id":"c1","body":"Plain.","created_at":"yesterday"}]}),
+        ),
+        (
+            "comments",
+            json!({"t1":[{"id":"c1","body":"Plain.","updated_at":7}]}),
+        ),
+        (
+            "comments",
+            json!({"t1":[{"id":"c1","body":"Plain.","url":[]}]}),
+        ),
+        (
+            "comments",
+            json!({"t1":[{"id":"c1","body":"Plain.","origin":false}]}),
+        ),
     ] {
         let mut state = base.clone();
         if [

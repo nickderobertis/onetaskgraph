@@ -229,7 +229,9 @@ def _is_endpoint(value: object) -> bool:
         return bool(value)
     return (isinstance(value, dict) and isinstance(value.get("id"), str) and bool(value["id"])
             and value.get("kind") in get_args(ItemKind)
-            and ("designator" not in value or isinstance(value["designator"], str)))
+            and ("designator" not in value or (
+                isinstance(value["designator"], str)
+                and re.fullmatch(r"alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64}", value["designator"]) is not None)))
 
 
 def _is_edge(value: object) -> bool:
@@ -411,8 +413,12 @@ def _task_fields_valid(task: dict[str, Any]) -> bool:
         return False
     if location is not None and "path" in location and not Path(location["path"]).is_absolute():
         return False
+    return _timestamps_valid(task)
+
+
+def _timestamps_valid(record: dict[str, Any]) -> bool:
     for key in ("created_at", "updated_at"):
-        value = task.get(key)
+        value = record.get(key)
         if value is None:
             continue
         if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", value):
@@ -443,6 +449,24 @@ def _is_task(task: object) -> bool:
                     and _task_fields_valid(task))
         case _:
             return False
+
+
+def _is_comment(comment: object) -> bool:
+    """Validate every retained comment and origin field before returning the record."""
+    if not isinstance(comment, dict) or not all(isinstance(comment.get(key), str) for key in ("id", "body")):
+        return False
+    if any(comment.get(key) is not None and not isinstance(comment[key], str) for key in ("author", "url")):
+        return False
+    if not _timestamps_valid(comment):
+        return False
+    origin = comment.get("origin")
+    if origin is None:
+        return True
+    return (isinstance(origin, dict)
+            and all(isinstance(origin.get(key), str) for key in ("task", "id"))
+            and re.fullmatch(r"[a-z0-9][a-z0-9-]*:.+", origin["task"]) is not None
+            and all(origin.get(key) is None or isinstance(origin[key], str) for key in ("author", "url"))
+            and _timestamps_valid(origin))
 
 
 def _is_edit(edit: object) -> bool:
@@ -484,9 +508,7 @@ def _well_formed(held: object) -> bool:
                 and all(
                     isinstance(held_comments, list)
                     and all(
-                        isinstance(comment, dict)
-                        and isinstance(comment.get("id"), str)
-                        and isinstance(comment.get("body"), str)
+                        _is_comment(comment)
                         for comment in held_comments
                     )
                     for held_comments in comments.values()
