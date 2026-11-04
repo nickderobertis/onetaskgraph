@@ -517,7 +517,7 @@ fn run_pair(scenario: &str) {
         let probes: Vec<_> = phase[rechecked..].to_vec();
         // One probe per document reconciled — `ISSUES_BY_CREATION`, a retried copy's listing by
         // create key, among them.
-        assert_eq!(probes.len(), 30);
+        assert_eq!(probes.len(), 31);
         assert_eq!(
             probes[1].outcome,
             if scenario == "aliases" {
