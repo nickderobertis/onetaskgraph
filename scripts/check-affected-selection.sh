@@ -27,7 +27,8 @@
 # selection against them. Reading nx.json and reasoning about it does not prove anything.
 set -euo pipefail
 
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly ROOT
 
 # What this proves is a property of the Nx PROJECT GRAPH — which edit selects which
 # project — and that graph is read from nx.json and the project.json files, which are
@@ -233,6 +234,29 @@ for suite in $E2E_SUITES; do
   expect_selected "editing the engine" "$suite" "$selection"
 done
 report_on_failure "editing onetaskgraph-core" "$selection" "$before"
+# Linux reports budgets with --excludeTaskDependencies after its test phase. The asset
+# entry point requires the main entry point's current record even when only the engine
+# changed, so the test task graph must schedule both before budgets can report them.
+if ! (cd "$scratch/repo" && node_modules/.bin/nx affected -t test \
+  --base=HEAD~1 --head=HEAD --graph=stdout) > "$scratch/core-test-graph.json"; then
+  echo "check-affected-selection: Nx could not build the engine-only test graph; fix the Nx error above, then re-run this check." >&2
+  exit 1
+fi
+if ! python3 - "$scratch/core-test-graph.json" <<'PYGRAPH'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as graph_file:
+    graph = json.load(graph_file)["tasks"]
+main = "onetaskgraph-github-projects:test"
+assets = "onetaskgraph-github-projects-e2e:test"
+assert main in graph["tasks"], "engine-only test selection must run the GitHub main session"
+assert main in graph["dependencies"][assets], "GitHub assets must wait for the main session"
+PYGRAPH
+then
+  echo "check-affected-selection: restore onetaskgraph-github-projects:test in the GitHub asset test target's dependsOn, then re-run this check." >&2
+  failures=$((failures + 1))
+fi
 reset_scratch
 
 # 3. One plugin changed; its siblings are untouched.

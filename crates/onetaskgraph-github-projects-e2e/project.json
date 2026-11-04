@@ -68,8 +68,10 @@
         "command": "bash scripts/live-crate-test.sh onetaskgraph-github-projects-e2e live disposable_task_and_document_asset_copies --also-build onetaskgraph-github-projects"
       },
       "// end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]",
-      "// live order": "The main and asset credentialed journeys contribute to one session, main before assets. That order is the asset journey's own: it makes no request until the main entry point's record is complete (tests/live.rs, wait_for_current_main), so this suite's loopback binaries run beside the plugin's main session rather than after its whole test target. `budgets` still depends on both tests, so whenever this suite is selected the main session runs in the same invocation. Its `--also-build` builds the plugin's own test binaries first, which live_pair runs.",
-      "dependsOn": ["onetaskgraph:build"],
+      "// live order": "Engine-only changes select assets without the plugin. Linux budgets skip task dependencies, so test must schedule the main session first.",
+      "// session prerequisite": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] Required hosted journeys are repository policy; this prerequisite supplies the current main record the selected asset journey requires.",
+      "dependsOn": ["onetaskgraph:build", "onetaskgraph-github-projects:test"],
+      "// session prerequisite end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]",
       "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement.",
       "outputs": [
         "{workspaceRoot}/target/debug/telemetry/onetaskgraph-github-projects-e2e",
