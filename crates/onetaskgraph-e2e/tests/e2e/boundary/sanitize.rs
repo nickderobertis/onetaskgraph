@@ -229,6 +229,20 @@ fn the_editing_peer_refuses_malformed_pages_targets_and_tasks_without_changing_t
             "task":"t1", "comment":[], "body":"Plain."
         }}),
     );
+    for body in [""] {
+        requests.push(
+            json!({"id":"empty-comment", "method":"edit_comment", "params":{
+                "task":"t1", "comment":"c1", "body":body
+            }}),
+        );
+    }
+    for page in [
+        Value::Null,
+        json!({"cursor":"bad","limit":1}),
+        json!({"cursor":null,"limit":0}),
+    ] {
+        requests.push(json!({"id":"bad-label-page","method":"labels","params":{"page":page}}));
+    }
     requests.push(
         json!({"id":"bad-direction", "method":"task_dependencies", "params":{
             "id":"t1", "direction":"sideways", "page":{"cursor":null,"limit":100}

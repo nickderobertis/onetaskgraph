@@ -319,8 +319,9 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
         case "edit_comment":
             if not isinstance(params.get("comment"), str):
                 return _malformed("edit_comment names its comment by a string id")
-            if not isinstance(params.get("body"), str):
-                return _malformed("edit_comment carries the comment's new body as a string")
+            # CommentBody::new rejects empty text, preserving whitespace verbatim.
+            if not isinstance(params.get("body"), str) or not params["body"]:
+                return _malformed("edit_comment carries a nonempty string body")
             for comment in state["comments"].get(params.get("task"), []):
                 if comment["id"] == params.get("comment"):
                     comment["body"] = params["body"]
@@ -342,6 +343,8 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             state.setdefault("dependency_cursors", []).append(params["page"]["cursor"])
             return {"result": _page(state, held, params["page"])}
         case "labels":
+            if not _is_page(params.get("page")):
+                return _malformed("labels carries a page")
             return {"result": {"items": [], "next": None}}
         case "write_task" if state.get("refuse_writes"):
             return {"error": {"kind": "unavailable", "message": "the write could not be made"}}
