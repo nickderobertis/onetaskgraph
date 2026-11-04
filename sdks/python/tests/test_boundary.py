@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import subprocess
 import sys
 from collections.abc import Coroutine
 from pathlib import Path
@@ -276,16 +275,22 @@ print(json.dumps(answer))
 )
 def test_sanitizing_policy_refuses_malformed_input(received: object) -> None:
     """The policy refuses malformed wire input before recording or using it."""
-    result = subprocess.run(
-        [sys.executable, "-c", SANITIZE],
-        input=json.dumps(received),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 2
-    assert result.stdout == ""
-    assert result.stderr == ""
+
+    async def invoke() -> None:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            SANITIZE,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate(json.dumps(received).encode())
+        assert process.returncode == 2
+        assert stdout == b""
+        assert stderr == b""
+
+    run(invoke())
 
 
 def sanitizing_store(binary: Path, tmp_path: Path) -> tuple[Client, Path]:

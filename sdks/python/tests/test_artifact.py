@@ -294,7 +294,7 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
     assert emitted_bundle["version"] == 56
-    # Version 53's `write_policy` names the sanitise and terms commands and the caller's
+    # The current `write_policy` names the sanitise and terms commands and the caller's
     # replacement layer beside the two commands it already named.
     assert {"sanitize_command", "terms_command", "replacements"} <= set(
         emitted_bundle["roots"]["WritePolicyConfig"]["properties"]

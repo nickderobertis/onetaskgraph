@@ -280,7 +280,21 @@ fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
 /// Rendering and writing are separate on purpose, and every verb shares the one write:
 /// a closed reader is the same failure whichever verb was writing, and one path is one
 /// path to get right.
-async fn run(command: &Command, loaded: &Loaded, out: &mut impl Write) -> Result<u8, Failure> {
+// Compile the dispatch state machine once, outside the runtime entry point's future.
+#[inline(never)]
+fn run<'a>(
+    command: &'a Command,
+    loaded: &'a Loaded,
+    out: &'a mut impl Write,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<u8, Failure>> + 'a>> {
+    Box::pin(run_inner(command, loaded, out))
+}
+
+async fn run_inner(
+    command: &Command,
+    loaded: &Loaded,
+    out: &mut impl Write,
+) -> Result<u8, Failure> {
     // One match over every verb rather than a pre-dispatch and a second match: two
     // matches over one enum means one of them owes an answer for arms it never receives,
     // and an arm nothing can reach is an arm nothing checks. The engine is built inside
