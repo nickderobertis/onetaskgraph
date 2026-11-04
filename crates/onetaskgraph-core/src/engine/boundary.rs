@@ -3061,7 +3061,23 @@ impl Engine {
     /// the write saying the term was already on the item before it; a task already private by
     /// its own record is refused by the classification rule, naming `repositories` only when
     /// they already named a private repository.
-    async fn admit_whole_task(
+    // Keep the whole-item recovery state behind one future allocation: embedding it in
+    // every narrow-write future repeats its optimizer work in each release build.
+    #[inline(never)]
+    fn admit_whole_task<'a>(
+        &'a self,
+        destination: &'a ResolvedSource,
+        item: &'a str,
+        id: &'a NativeId,
+        task: Task,
+        exposure: &'a Exposure,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Rewrite, EngineError>> + Send + 'a>,
+    > {
+        Box::pin(self.admit_whole_task_inner(destination, item, id, task, exposure))
+    }
+
+    async fn admit_whole_task_inner(
         &self,
         destination: &ResolvedSource,
         item: &str,
