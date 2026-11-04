@@ -113,6 +113,8 @@ export const releaseTailFiles = [".github/policy/tests/release-tail.test.mjs"];
 // The one policy journey run on every platform, because the real action it runs does.
 export const rustCacheJourneyFiles = [".github/policy/tests/rust-cache.test.mjs"];
 
+export const cacheJourneyFiles = [".github/tests/nx-cache.test.mjs"];
+
 export const cdJourneyFiles = [
   ".github/tests/github-interfaces.test.mjs",
   ".github/tests/release-cd.test.mjs",

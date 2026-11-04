@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 import {
   budgetJourneyFiles,
+  cacheJourneyFiles,
   cdJourneyFiles,
   GITHUB_READS,
   inputProblems,
@@ -15,7 +17,6 @@ import {
   releaseTailFiles,
   rustCacheJourneyFiles,
 } from "../../test-inputs.mjs";
-import { parse } from "yaml";
 import { graphReadSet, read } from "../../workflow-graph.mjs";
 
 // This project's inputs are every .github file, so an edit on either side of these
@@ -50,6 +51,7 @@ test("the two projects run every journey exactly once through its owning target"
     [policy, "policy-tests", policyJourneyFiles],
     [policy, "rust-cache-action", rustCacheJourneyFiles],
     [workflows, "cd-journeys", cdJourneyFiles],
+    [workflows, "cache-journeys", cacheJourneyFiles],
     [workflows, "budget-journeys", budgetJourneyFiles],
     [policy, "release-tail", releaseTailFiles],
   ]) {
@@ -73,6 +75,7 @@ test("the two projects run every journey exactly once through its owning target"
       ...policyJourneyFiles,
       ...rustCacheJourneyFiles,
       ...cdJourneyFiles,
+      ...cacheJourneyFiles,
       ...budgetJourneyFiles,
       ...releaseTailFiles,
     ].sort(),
