@@ -142,14 +142,14 @@ const eventFile = (file) =>
   );
 
 // Biome excludes exactly these upstream-owned copies; this drift test holds them byte-identical.
-// Full-file digests, including headers: remote cache v6 from dero-skills
-// df8c475b520de2a40f7e3b55967cad1d9e7487ac; figures v11 from
+// Full-file digests, including headers: remote cache v7 from dero-skills
+// 880a80a63e8fbd106eb86cebe8f908c4d6eb75e3; figures v11 from
 // 63e071b72420bd6737226a50cb8a7a7760cc73a4; version-free inputs v3 from
 // fe20052d06406bb07869c5236147b6693489d52f (owned Cargo and Python pins).
 const copies = {
   "scripts/actions-budget-figures.sh":
     "a3606ff3d00be139d52a7cbb2905f45e2ade99383417be31cc74cc7ce6c39eba",
-  "scripts/nx-remote-cache.mjs": "0b67a164d73e14ca1fdba807ac7858cf0674179ec502ad6ae63e5026f3f415ac",
+  "scripts/nx-remote-cache.mjs": "54ae95b681b0195afbb15f9f0849cd3e555d2b5d616cb47c9fa3119d35c8ee7a",
   "scripts/nx-version-free-inputs.mjs":
     "624fed99b45a57532ef672ccb4638e4b8052dd12fdee0274fa2f23e9f2f16b60",
 };
@@ -577,6 +577,18 @@ const recordedBoundary = jsonFile(
     sha(value.comparison.merge_base_commit?.sha),
   "recorded compact association, commit membership and comparison responses",
 );
+test("quoted GitHub response data retains every decoded payload byte", () => {
+  for (const key of ["run", "membership", "comparison"]) {
+    const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    const expected = recordedBoundary.provenance[`${key}_sha256`];
+    assert.equal(digest(recordedBoundary[key]), expected, `${key}: decoded response changed`);
+    const changed = Array.isArray(recordedBoundary[key])
+      ? [...recordedBoundary[key], null]
+      : { ...recordedBoundary[key], unexpected: true };
+    assert.notEqual(digest(changed), expected, `${key}: payload mutation must be detected`);
+  }
+});
+
 function scenarioAssociation(pr) {
   const association = structuredClone(recordedBoundary.run.pull_requests[0]);
   association.number = pr.number;
