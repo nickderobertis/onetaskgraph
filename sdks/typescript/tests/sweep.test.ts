@@ -1,6 +1,8 @@
 import "./ambient.ts";
 import { afterAll, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { OnetaskgraphClient, OnetaskgraphExecutionError } from "../src/index.ts";
@@ -13,8 +15,29 @@ import { OnetaskgraphClient, OnetaskgraphExecutionError } from "../src/index.ts"
 const binary = resolve(import.meta.dir, "../../../target/debug/onetaskgraph");
 const TERM = "emberline";
 
-const TERMS = `
-const input = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+// Validate the subprocess input against the pinned policy contract before using it.
+const policySchema = JSON.parse(
+  readFileSync(
+    resolve(
+      import.meta.dir,
+      "../../../crates/onetaskgraph-core/src/engine/boundary/onevcs-boundary-schema-v4.json",
+    ),
+    "utf8",
+  ),
+);
+const ajvPath = createRequire(import.meta.url).resolve("ajv/dist/2020.js");
+const policyInput = (schema: unknown) => `
+const Ajv = require(${JSON.stringify(ajvPath)});
+const validate = new Ajv({ strict: false }).compile(${JSON.stringify(schema)});
+let input;
+try { input = JSON.parse(require("node:fs").readFileSync(0, "utf8")); }
+catch { process.exit(2); }
+if (!validate(input)) process.exit(2);
+`;
+
+const TERMS =
+  policyInput(policySchema.terms.input) +
+  `
 const rules = [...new Map((input.replacements ?? []).map((entry) => [entry.term, entry])).values()];
 console.log(JSON.stringify({ terms: rules
   .map((entry) => ({ term: entry.term, mode: "whole-word", case_sensitive: false,
@@ -22,8 +45,9 @@ console.log(JSON.stringify({ terms: rules
                      ...("with" in entry ? { with: entry.with } : {}) })) }));
 `;
 
-const SANITIZE = `
-const input = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+const SANITIZE =
+  policyInput(policySchema.sanitize.input) +
+  `
 const rules = [...new Map((input.replacements ?? []).map((entry) => [entry.term, entry])).values()];
 const terms = rules.filter((entry) => "with" in entry);
 let replaced = 0;
@@ -61,6 +85,24 @@ console.log(JSON.stringify(answer));
 `;
 
 const roots: string[] = [];
+
+test("policy subprocesses refuse malformed wire inputs before consuming them", () => {
+  for (const command of [TERMS, SANITIZE]) {
+    for (const input of [
+      [],
+      { replacements: [{}] },
+      { text: [7] },
+      { locators: [{ kind: "item", value: 7 }] },
+    ]) {
+      const result = spawnSync(process.execPath, ["-e", command], {
+        input: JSON.stringify(input),
+        encoding: "utf8",
+      });
+      expect(result.status).toBe(2);
+      expect(result.stdout).toBe("");
+    }
+  }
+});
 
 afterAll(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });

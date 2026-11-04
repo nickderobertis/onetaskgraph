@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Coroutine
 from pathlib import Path
@@ -246,7 +247,29 @@ def test_a_project_copy_records_its_public_projections_in_the_shape_the_sdk_mode
 
 SANITIZE = """
 import json, os, sys
-received = json.loads(sys.stdin.read())
+try:
+    received = json.loads(sys.stdin.read())
+except (TypeError, ValueError):
+    sys.exit(2)
+if not isinstance(received, dict):
+    sys.exit(2)
+entries = received.get("replacements", [])
+if not isinstance(entries, list) or any(
+    not isinstance(entry, dict) or not isinstance(entry.get("term"), str)
+    or not entry["term"] or not isinstance(entry.get("with"), str)
+    for entry in entries
+):
+    sys.exit(2)
+for surface in ("text", "paths", "metadata"):
+    values = received.get(surface, [])
+    if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+        sys.exit(2)
+locators = received.get("locators", [])
+if not isinstance(locators, list) or any(
+    not isinstance(locator, dict) or not isinstance(locator.get("value"), str)
+    for locator in locators
+):
+    sys.exit(2)
 with open(os.environ["BOUNDARY_RECORD"], "a", encoding="utf-8") as record:
     record.write(json.dumps(received) + "\\n")
 replaced = 0
@@ -264,6 +287,24 @@ if received.get("locators"):
     answer["locators"] = [locator["value"] for locator in received["locators"]]
 print(json.dumps(answer))
 """
+
+
+@pytest.mark.parametrize(
+    "received",
+    [[], {"replacements": [{}]}, {"text": [7]}, {"locators": [{"value": 7}]}],
+)
+def test_sanitizing_policy_refuses_malformed_input(received: object) -> None:
+    """The policy refuses malformed wire input before recording or using it."""
+    result = subprocess.run(
+        [sys.executable, "-c", SANITIZE],
+        input=json.dumps(received),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert result.stderr == ""
 
 
 def sanitizing_store(binary: Path, tmp_path: Path) -> tuple[Client, Path]:
