@@ -1350,36 +1350,33 @@ named below hold it to:
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys it names: every row of the GitHub member table below names its leg in `every_change_kind_moves_the_changed_tasks_token_and_no_other` in `crates/onetaskgraph-e2e/tests/e2e/change_tokens.rs`, which makes that change to one loopback board task and holds its token to moving (to a later one, or for a transfer to an unordered one) and both ends of a relationship with it, and in `every_change_kind_moves_a_tasks_token` and `every_facet_change_moves_a_projects_and_a_documents_token` in the GitHub Projects plugin's credentialed `tests/journey`, which re-take each live leg against GitHub; the `gh3` facet rows are held on the loopback by `a_label_or_option_renamed_or_recoloured_is_read_again_for_a_task_a_project_and_a_document`, `a_far_end_deleted_lowers_the_count_and_the_pinned_read_is_never_the_entry`, `an_items_own_kind_change_is_never_answered_with_the_entry_of_its_old_kind` and `a_far_ends_kind_flip_or_retitle_into_a_document_is_read_from_the_board_in_every_edge` in `crates/onetaskgraph-github-projects-e2e/tests/e2e/cache_kinds.rs`; every `lin1` row by `every_change_measured_or_covered_by_construction_is_read_again_pinned_to_the_new_token`, `a_relation_added_removed_or_whose_far_end_is_trashed_reads_as_an_uncached_read_does` and `a_token_linear_cannot_vouch_for_is_never_kept_or_served` in `crates/onetaskgraph-linear-e2e/tests/e2e/cache.rs` and the comment, inverse-relation and project-relation rows by `every_comment_and_relation_change_is_read_again_pinned_to_the_new_token`, `a_comment_or_edge_read_its_token_cannot_vouch_for_is_never_kept_or_served` and `a_comment_authors_renamed_display_name_is_the_one_member_served_older_than_its_token` in `cache_parts.rs` beside it, and by `every_field_change_moves_a_linear_tasks_token` in the Linear plugin's credentialed `tests/live.rs`; `a_recopy_by_query_of_unchanged_board_items_skips_each_and_sends_nothing_but_the_listing` in `crates/onetaskgraph-e2e/tests/e2e/copy_skip.rs` makes the task changes and holds the copy to reading exactly the tasks each reaches; `two_digests_of_one_task_file_are_equal_until_it_changes_and_then_incomparable` in `crates/onetaskgraph-core/tests/version.rs` holds the folder's; `two_edits_inside_one_second_are_never_served_from_a_skip` and `a_board_read_without_the_servers_clock_gives_no_token_and_is_never_skipped` in that `copy_skip.rs` hold the settling rule; `a_later_time_beside_fewer_relationship_events_is_no_version_read_after_the_other` in that `change_tokens.rs` puts a crossed pair to the engine's own ordering; `a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and_then_skipped` in that `copy_skip.rs` and `an_entry_a_release_before_gh3_left_is_read_again_rather_than_served` in that `cache_kinds.rs` hold the older spellings; and the plugin's `tests/point_cost.rs` holds the unchanged prices. The spike evidence each table cites is the two spike branches' retained session records. -->
 | Plugin | Tasks | Projects | Documents |
 | --- | --- | --- | --- |
-| `github-projects` | `gh4` (below) | `gh4` | `gh4` |
+| `github-projects` | `gh3` (below) | `gh3` | `gh3` |
 | `linear` | `lin1` (below) | `lin1` | `lin1` |
 | `local-md` | `md1\|<SHA-256 of the task file's bytes>`: everything a task is lives in its one file, so every kind is covered; two different digests say the file changed and never which came first | none | none |
 | `in-memory` | none | none | none |
 
-#### `gh4`, a GitHub board's token
+#### `gh3`, a GitHub board's token
 
-`gh4|<issue updatedAt>|<board item updatedAt>|<comment count>|<relationship events>|<facets>|<repository>`,
-every part spelled from the same list, search or detail response. Each issue now also selects
-`commentVersions:comments(first:100){nodes{id updatedAt}pageInfo{hasNextPage}}`; no read sends
-an extra request. An incomplete connection gives no token. Tasks, projects and documents are all issues on the board and share it.
+`gh3|<issue updatedAt>|<board item updatedAt>|<comment count>|<relationship events>|<facets>|<repository>`,
+every part spelled from what every list, search and detail read already selects — nothing is
+added to any request. Tasks, projects and documents are all issues on the board and share it.
 
 - **The times, the comment count, the relationship events and the repository** are exactly
   `gh2`'s, below. A token is given only once the item has settled (below), and never for a
   draft or an item with any part missing.
 - **`<facets>`** is the lowercase hex SHA-256 of the canonical JSON
-  `{"kind":<"task"|"project"|"document">,"fields":[[<field name>,<option name or text>],...],"labels":[[<id>,<name>,<color>],...],"comments":[{"id":<id>,"updated_at":<UTC timestamp>},...]}`
-  (`comments` omitted when empty),
-  each list sorted by identity (`comments` by `id`): what a person can change about an item without moving
+  `{"kind":<"task"|"project"|"document">,"fields":[[<field name>,<option name or text>],...],"labels":[[<id>,<name>,<color>],...]}`,
+  each list sorted by its first element: what a person can change about an item without moving
   either time. `kind` is the item's own kind as the plugin derives it from that response — the
   `DESIGN: ` title prefix, `subIssuesSummary{total}` above zero — rather than the raw total, so
   a project gaining a task does not move it. `fields` and `labels` come from the item's
   `fieldValues` and its `labels(first:$nestedFirst)`; a connection reporting `hasNextPage` gives
-  no token. Comment clocks must also be settled against the response clock: two edits in one
-  second cannot be distinguished before then.
+  no token.
 - **Ordering.** Two tokens whose repositories, facets or relationship counts differ are never
   ordered. Otherwise the later version is the one with the later or equal times and the
   greater or equal comment count, as `gh2` ordered them; two crossed are not ordered, and two
-  are `equal` only when every part is. A `gh1`, `gh2` or `gh3` token is never ordered, so an entry or
-  a copy record written before `gh4` refreshes or rewrites its item once, without refusal.
+  are `equal` only when every part is. A `gh1` or `gh2` token is never ordered, so an entry or
+  a copy record a release before `gh3` wrote reads its item once more.
 
 **Why `gh3` replaced `gh2`.** `spike-coverage` (branch
 `nick/otg-cache-everything-versioned-plan/spike-coverage`, sessions 1 at `a978016c` and 2 at
@@ -1419,7 +1416,7 @@ alone and holds the token to moving:
 | its own kind | the title prefix and its sub-issues | the facets | `after it gained a sub-issue` |
 | project | the issue's parent | the relationship events — `PARENT_ISSUE_ADDED_EVENT` and `PARENT_ISSUE_REMOVED_EVENT`, on the task. A project's own token does not count the sub-issue events GitHub records on it | `taken out of its project` and `filed under another project` live, each sent as the project's own `removeSubIssue` or `addSubIssue`; `filed under a project`, `moved to another project` and `taken out of its project` on the loopback |
 | dependencies | the issue's `blockedBy` | the relationship events — `BLOCKED_BY_ADDED_EVENT` and `BLOCKED_BY_REMOVED_EVENT` on the dependent task, `BLOCKING_ADDED_EVENT` and `BLOCKING_REMOVED_EVENT` on the one it depends on. A far end deleted takes its events with it, which the count says by being unordered | `a dependency added`, `a dependency removed` and `a dependency replaced`; `its native far end deleted` |
-| comments, under `--comments` | the issue's comments | the comment ids and edit clocks in the facets, and the comment count | `a comment added`, `a comment edited` and `a comment deleted` live; `a new comment`, `an edited comment` and `a deleted comment` on the loopback |
+| comments, under `--comments` | the issue's comments | the issue's `updatedAt` for one added or edited, the comment count for one deleted | `a comment added`, `a comment edited` and `a comment deleted` live; `a new comment`, `an edited comment` and `a deleted comment` on the loopback |
 | repository, when the slot names none | the issue's repository | the token itself: it carries the `owner/name` every read returns, so a transfer leaves no two tokens equal, and two tokens naming different repositories are never ordered | `a repository transfer`, on the loopback alone: the lane holds one scratch repository and refuses the core one, so it has nowhere to transfer to. What it proves needs no live leg, because the token holds the very value the read returned |
 
 A project's and a document's members are the same issue's: title, content, metadata, labels,

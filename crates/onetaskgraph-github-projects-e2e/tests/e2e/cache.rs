@@ -2460,25 +2460,18 @@ fn an_entry_missing_what_a_read_needs_is_not_served_to_it() {
     assert_eq!(sent, [ONE_READ], "the comments it lacks are read");
     assert_eq!(served_by(&shown), from_remote());
 
-    // More comment clocks than one page holds: no token is given, so the next
-    // unpinned read still reads every comment remotely.
+    // More comments than one page holds: the read could not carry them all, so the entry
+    // holds none and a pinned read of them reads.
     let long = Cached::new();
     for n in 0..101 {
         long.board.add_comment("T-4", &format!("note {n}"));
     }
     let (first, _) = long.ok(&["task", "show", "board:T-4", "--json"]);
     assert_eq!(first["comments"].as_array().unwrap().len(), 101);
-    assert!(first["items"][0]["item"]["version"].is_null());
-    let (shown, sent) = long.ok(&["task", "show", "board:T-4", "--json"]);
-    assert!(shown["items"][0]["item"]["version"].is_null());
+    let v = version_of(&first);
+    let (shown, sent) = long.ok(&["task", "show", "board:T-4", "--pin", &v, "--json"]);
     assert!(!sent.is_empty(), "the comments are read again");
-    assert_eq!(served_by(&shown)["served"], "remote");
-    assert!(
-        served_by(&shown)["bypassed"]
-            .as_str()
-            .unwrap()
-            .contains("no change token")
-    );
+    assert_eq!(served_by(&shown), from_remote());
     assert_eq!(shown["comments"].as_array().unwrap().len(), 101);
 }
 
@@ -2978,93 +2971,4 @@ fn cache_clear_removes_a_staging_file_this_remote_left_behind() {
         !abandoned.exists(),
         "this remote's abandoned staging file is removed"
     );
-}
-
-/// A comment edit can leave both the issue and board clocks unchanged on GitHub.
-#[test]
-fn a_comment_edit_without_an_issue_clock_change_is_not_served_from_cache() {
-    let cached = Cached::new();
-    let comment = cached.board.add_comment("T-3", "before the edit");
-    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
-    let before = version_of(&first);
-    cached
-        .board
-        .edit_comment_without_touching_issue(&comment, "after the edit");
-    let (listed, _) = cached.ok(&["task", "list", "--source", "board", "--json"]);
-    let after = listed["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["id"] == "board:T-3")
-        .unwrap()["item"]["version"]
-        .as_str()
-        .expect("the listed version")
-        .to_owned();
-    assert_ne!(
-        before, after,
-        "the comment edit must move the token without an issue clock change"
-    );
-    let (shown, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &after, "--json"]);
-    assert_eq!(served_by(&shown), from_remote());
-    assert_eq!(sent, [ONE_READ]);
-    assert!(
-        shown["comments"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|row| row["body"] == "after the edit")
-    );
-    let (again, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &after, "--json"]);
-    assert_eq!(served_by(&again), from_cache());
-    assert!(sent.is_empty());
-}
-
-#[test]
-fn an_incomplete_comment_clock_connection_withholds_the_token_until_it_is_whole() {
-    let cached = Cached::new();
-    let comments: Vec<_> = (0..101)
-        .map(|_| cached.board.add_comment("T-3", "a comment"))
-        .collect();
-    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
-    assert!(first["items"][0]["item"]["version"].is_null());
-    cached.board.edit_comment_without_touching_issue(
-        &comments[0],
-        "edited beyond the incomplete connection",
-    );
-    let (edited, sent) = cached.ok(&["task", "show", "board:T-3", "--json"]);
-    assert!(!sent.is_empty());
-    assert!(edited["items"][0]["item"]["version"].is_null());
-    assert!(
-        edited["comments"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|row| row["body"] == "edited beyond the incomplete connection")
-    );
-    cached.board.delete_comment(&comments[100]);
-    let (whole, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
-    assert!(version_of(&whole).starts_with(onetaskgraph_github_projects::change_token::PREFIX));
-}
-
-#[test]
-fn a_gh3_cache_entry_is_refreshed_once_without_a_refusal() {
-    let cached = Cached::new();
-    let (first, _) = cached.ok(&["task", "show", "board:T-3", "--json"]);
-    let current = version_of(&first);
-    let previous = current.replacen("gh4|", "gh3|", 1);
-    let entry = Cached::entries(&cached.default_dir())
-        .into_iter()
-        .next()
-        .expect("a task entry");
-    let mut stored: Value = serde_json::from_slice(&std::fs::read(&entry).unwrap()).unwrap();
-    // llmlint: ignore-block[tests_mirror_real_usage] The persisted envelope comes from the real CLI; the only difference from the older release is its opaque gh3 token. This one-site migration fixture avoids downloading a released binary and making the deterministic cache boundary test depend on network availability and a particular release version.
-    stored["task"]["version"] = json!(previous);
-    std::fs::write(&entry, serde_json::to_vec(&stored).unwrap()).unwrap();
-    // llmlint: ignore-end[tests_mirror_real_usage]
-    let (refreshed, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &previous, "--json"]);
-    assert_eq!(sent, [ONE_READ]);
-    assert_eq!(version_of(&refreshed), current);
-    let (again, sent) = cached.ok(&["task", "show", "board:T-3", "--pin", &current, "--json"]);
-    assert_eq!(served_by(&again), from_cache());
-    assert!(sent.is_empty());
 }

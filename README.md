@@ -1844,12 +1844,9 @@ cache never asks a source whether something changed:
 both tokens part by part with the live evidence for each, and §4.13e every read with the reason
 each remote one is remote.
 
-- A **GitHub** item's token is `gh4`: the issue's and the board item's times, its comment count,
+- A **GitHub** item's token is `gh3`: the issue's and the board item's times, its comment count,
   its relationship events, a digest of its *facets* — its own kind, its board field values and
-  its labels by name and colour, plus each comment's id and edit clock — and its repository.
-  Comment edits need not move the issue clock. No extra request is sent: every issue read
-  selects up to 100 comment clocks beside it; an incomplete or unsettled connection gives no
-  token. A stored `gh3` token costs one refresh or one copy rewrite, then normal reuse resumes. The facets are what `gh2` missed, measured
+  its labels by name and colour — and its repository. The facets are what `gh2` missed, measured
   on a real board: a label renamed or recoloured and a field option renamed left it equal, a far
   end deleted made it order the new token *earlier*, and a task gaining a sub-issue left it
   equal. It covers a task's fields and comments, a project's fields, and a document's fields

@@ -259,9 +259,10 @@
 //! [`graphql::ADD_BLOCKED_BY`]. Both additions are rows of the table below, pinned by
 //! `a_bound_recopy_adds_one_project_read_and_batches_the_dependencies_it_newly_names`.
 //!
-//! **[`DETAIL_BATCH`] stays at 24** across gh4's comment-clock addition, so callers send no
-//! extra requests. Its modeled price rises from one point to two; `tests/point_cost.rs`
-//! pins the preserved batch size and its new price, and `session-cost.md` records the cost.
+//! **[`DETAIL_BATCH`] is 24**: the largest batch of [`graphql::ISSUE_DETAILS`] the node-count
+//! model prices at one point. Each aliased item is six of GitHub's aggregate, so 24 are 144,
+//! which rounds to one point, and 25 are 150, which rounds to two; `tests/point_cost.rs`
+//! holds both halves.
 //!
 //! **An existing item is written body last.** A bound re-copy and a `task update` send its
 //! board fields first — the `Status` option and the `Priority` together, in one request — then
@@ -667,12 +668,14 @@ pub const MAX_PAGE_SIZE: u32 = 100;
 /// of 100 cost per row, and a page of fewer than 20 costs the same one point.
 pub const SEARCH_PAGE_SIZE: u32 = 20;
 /// How many items one [`graphql::ISSUE_DETAILS`] request reads, each with the first page of
-/// its comments. The batch is preserved from gh3 to avoid adding requests.
+/// its comments: the largest batch the node-count model prices at one point.
 ///
 /// Each aliased item is resolved once, and what GitHub charges for it is the connections
 /// under it — its labels, its page of board memberships, the field values of each of those
-/// three memberships, and its comments. gh4 adds a comment-clock connection; the preserved
-/// batch costs two modeled points, with no additional request (see `session-cost.md`).
+/// three memberships, and its comments: six requests' worth of the aggregate GitHub divides
+/// by a hundred and rounds. Twenty-four items come to 144, which rounds to one point;
+/// twenty-five come to 150, which rounds to two. `tests/point_cost.rs` prices the document at
+/// one point and fails if one item more would still be priced at one.
 pub const DETAIL_BATCH: usize = 24;
 /// How many issue references one [`graphql::ISSUES_BY_REFERENCE`] request reads.
 ///
@@ -682,9 +685,14 @@ pub const DETAIL_BATCH: usize = 24;
 /// one-point minimum, and the batch a landing's closures are read in costs one point per fifty
 /// issues per source. `tests/point_cost.rs` prices the document at one point.
 pub const REFERENCE_BATCH: usize = 50;
-/// How many items one [`graphql::ISSUE_COPY_DETAILS`] request reads, each with its comments
-/// and `blockedBy`. gh4 preserves this batch to avoid extra requests; the added comment-clock
-/// connection raises its modeled price from one point to two (`session-cost.md`).
+/// How many items one [`graphql::ISSUE_COPY_DETAILS`] request reads: each with the first page
+/// of its comments and its `blockedBy`, the largest batch the node-count model prices at one
+/// point.
+///
+/// The six requests' worth an item of [`DETAIL_BATCH`] costs, and its `blockedBy` connection
+/// besides: seven. Twenty-one items come to 147, which rounds to one point; twenty-two come to
+/// 154, which rounds to two. `tests/point_cost.rs` prices the document at one point and fails
+/// if one item more would still be priced at one.
 pub const COPY_DETAIL_BATCH: usize = 21;
 /// How many mutations one aliased request of a copy's creates, closes and updates carries:
 /// [`graphql::CREATE_ISSUES`], [`graphql::CLOSE_ISSUES`] and [`graphql::UPDATE_ISSUES`].
@@ -782,9 +790,10 @@ const ORIGIN_PAGE_SIZE: u32 = 3;
 /// origins at two points with a first page of three and at one with a first page of one.
 const ORIGIN_LOOKUPS_PAGE_SIZE: u32 = 1;
 
-/// How many of one project's sub-issues one [`graphql::SUB_ISSUES`] page asks for.
-/// gh4 preserves the page size to avoid extra requests; the added comment-clock connection
-/// raises its modeled price from one point to two (`session-cost.md`).
+/// How many of one project's sub-issues one [`graphql::SUB_ISSUES`] page asks for: the most
+/// one point buys, since every row carries six connections GitHub charges for once per row.
+/// `session-cost.md` derives it; `tests/point_cost.rs` prices the document at one point and
+/// fails if one row more would still be priced at one.
 pub const MEMBER_PAGE_SIZE: u32 = 23;
 
 pub use github_graphql_node_count::{NodeCountError, Variables};
@@ -957,7 +966,7 @@ pub mod graphql {
     macro_rules! board_issue {
         () => {
             concat!(
-                r#" fragment BoardIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} commentVersions:comments(first:100){nodes{id updatedAt}pageInfo{hasNextPage}} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
+                r#" fragment BoardIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
       labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}
       projectItems(first:$boardItems){nodes{id updatedAt project{id number}
         "#,
@@ -1062,9 +1071,9 @@ pub mod graphql {
     /// One project's tasks: the sub-issues of the issue that project is, each with a page of
     /// what blocks it.
     ///
-    /// Paged at `$memberFirst` — [`MEMBER_PAGE_SIZE`](super::MEMBER_PAGE_SIZE) — rather than
-    /// at `$first`. gh4 preserves that size and request count while the added comment-clock
-    /// connection raises its modeled price from one point to two.
+    /// Paged at `$memberFirst` — [`MEMBER_PAGE_SIZE`](super::MEMBER_PAGE_SIZE), the most rows
+    /// one point buys — rather than at `$first`, because every row carries six connections and
+    /// a hundred-row page cost six points to list a project of ten.
     ///
     /// The work this costs is the project's own size. Nothing about it grows as the board
     /// gains projects, or as those projects gain tasks.
@@ -1112,7 +1121,7 @@ pub mod graphql {
     macro_rules! board_item_content {
         () => {
             r#" content{
-        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} commentVersions:comments(first:100){nodes{id updatedAt}pageInfo{hasNextPage}} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
         ... on PullRequest{__typename id}
         ... on DraftIssue{__typename id title body createdAt updatedAt}
       }"#
@@ -1306,7 +1315,7 @@ pub mod graphql {
         reference_alias!(48),
         reference_alias!(49),
         "\n    }",
-        r#" fragment HeldIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} commentVersions:comments(first:100){nodes{id updatedAt}pageInfo{hasNextPage}} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
+        r#" fragment HeldIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
       projectItems(first:$boardItems){nodes{id updatedAt project{id number}
         status:fieldValueByName(name:$statusField){... on ProjectV2ItemFieldSingleSelectValue{name field{
           ... on ProjectV2SingleSelectField{id name options{id name}}
@@ -7620,12 +7629,8 @@ impl GitHubProjectsSource {
             // refused — so these are every field value and every label the item holds. A
             // response that did not select the labels at all says nothing of them, and gives
             // no facets.
-            facets: content.get("labels").and_then(|_| {
-                Some(
-                    change_token::Facets::new(kind.facet(), facet_fields(nodes), &item_labels)
-                        .with_comments(comment_versions(content)?)
-                        .digest(),
-                )
+            facets: content.get("labels").is_some().then(|| {
+                change_token::Facets::new(kind.facet(), facet_fields(nodes), &item_labels).digest()
             }),
             own_repository,
             repositories,
@@ -15326,39 +15331,6 @@ fn facet_fields(field_values: &[Value]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// A whole, settled set of comment edit clocks. A partial connection cannot vouch for edits
-/// outside its page, and a recent edit cannot vouch for another edit within the same second.
-fn comment_versions(content: &Value) -> Option<Vec<change_token::CommentVersion>> {
-    let count = content.pointer("/commentCount/totalCount")?.as_u64()?;
-    let connection = content.get("commentVersions")?;
-    if connection.pointer("/pageInfo/hasNextPage") != Some(&Value::Bool(false)) {
-        return None;
-    }
-    let nodes = connection.get("nodes")?.as_array()?;
-    if u64::try_from(nodes.len()).ok()? != count {
-        return None;
-    }
-    let mut ids = std::collections::BTreeSet::new();
-    nodes
-        .iter()
-        .map(|node| {
-            let updated = optional_time(node, "updatedAt").ok()??;
-            let served = optional_time(content, SERVED_AT).ok()??;
-            if !change_token::settled(updated, updated, served) {
-                return None;
-            }
-            let id = required_str(node, "id").ok()?;
-            if id.is_empty() || !ids.insert(id) {
-                return None;
-            }
-            Some(change_token::CommentVersion {
-                id: NativeId(id.to_owned()),
-                updated_at: updated,
-            })
-        })
-        .collect()
-}
-
 /// The digest of the facets of the issue `content`, whose board item's values are
 /// `field_values` — or `None` when the response did not carry, whole, every member they are read
 /// from: the title, the parent, the sub-issue summary and the body its kind is read from, every
@@ -15383,11 +15355,7 @@ fn facets_of(content: &Value, field_values: &Value) -> Option<change_token::Face
     );
     let labels = self::labels(&json!({"labels": labels})).ok()?;
     let nodes = field_values.get("nodes")?.as_array()?;
-    Some(
-        change_token::Facets::new(kind.facet(), facet_fields(nodes), &labels)
-            .with_comments(comment_versions(content)?)
-            .digest(),
-    )
+    Some(change_token::Facets::new(kind.facet(), facet_fields(nodes), &labels).digest())
 }
 
 /// The definition of each board field one item's values are values of, in the shape a read

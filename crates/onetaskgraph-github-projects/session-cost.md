@@ -1356,23 +1356,3 @@ here measures.
 **`session-cost.txt`** moves on one line and its node total: the `nominated board lookup` goes
 2 → **101** worst-case nodes, its `fields(first:100)` page. Requests stay **216**, and nodes go
 266,210 → **266,309**.
-
-## gh4 comment edit coverage
-
-GitHub's main session on 2026-11-04 observed an edited comment leave the issue's
-`updatedAt` unchanged. gh4 therefore digests a bounded connection of comment ids and
-edit clocks alongside every issue. A partial or unsettled connection gives no token.
-The connection adds no HTTP request, and all batch/page sizes remain unchanged.
-The modeled worst-case prices deliberately change as follows (points per request):
-
-| Read | Before | gh4 |
-| --- | --- | --- |
-| SEARCH_ISSUES | 5 | 6 |
-| BOARD, CLOSED_ITEMS | 2 | 3 |
-| SUB_ISSUES, DOCUMENT_IN_PROJECT | 1 | 2 |
-| ISSUE_DETAILS, ISSUE_COPY_DETAILS | 1 | 2 |
-
-The price goldens record these measured changes. The former largest-at-one-point
-assertions now pin the preserved batch shapes and their two-point prices: shrinking
-batches would add requests. No budget threshold changes. Stored gh3 tokens refresh
-or rewrite once because gh4 never orders them as current.
