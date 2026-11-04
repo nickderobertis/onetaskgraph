@@ -25,7 +25,13 @@
       "options": {
         "command": "bun run biome format scripts"
       },
-      "inputs": ["{workspaceRoot}/biome.json", "{workspaceRoot}/scripts/project.json"]
+      "inputs": [
+        "{workspaceRoot}/biome.json",
+        "{workspaceRoot}/scripts/project.json",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "lint": {
       "executor": "nx:run-commands",
@@ -89,7 +95,10 @@
         "{workspaceRoot}/nx.json",
         "{workspaceRoot}/.github/workflows/ci.yml",
         "{workspaceRoot}/.github/workflows/live-janitor.yml",
-        "{workspaceRoot}/.github/workflows/release-plz.yml"
+        "{workspaceRoot}/.github/workflows/release-plz.yml",
+        {
+          "runtime": "node -p process.platform"
+        }
       ],
       "//": "Uncached: scratch-clone guard journeys read git history. Extra inputs select this project when workflow, fixture or graph cases change; the crate project.json files are named because the live-seat check reads them to find the targets taking the one-at-a-time Linear seat. Commands run serially because they clone trees and nest Nx. The onetaskgraph:build task dependency supplies the relative-interpreter journey binary without adding a crate selection edge."
     },
@@ -118,7 +127,14 @@
         "parallel": false
       },
       "cache": false,
-      "//": "Outside the `check` fan-out and invoked by name from `just distribution-check`, for the same reason `workspace:deny` is: what these read is the whole publishable surface — every manifest, the release workflows, release-targets.toml, config/registry-interfaces.toml, the crate fixtures — and several of them clone this repository and drive the real release tool over its git history. No input glob describes that, so a cache hit would be a claim about a tree that has since changed and an affected-selection miss would silently stop checking a release. It runs on every gate, exactly as it did before it was a target."
+      "//": "Outside the `check` fan-out and invoked by name from `just distribution-check`, for the same reason `workspace:deny` is: what these read is the whole publishable surface — every manifest, the release workflows, release-targets.toml, config/registry-interfaces.toml, the crate fixtures — and several of them clone this repository and drive the real release tool over its git history. No input glob describes that, so a cache hit would be a claim about a tree that has since changed and an affected-selection miss would silently stop checking a release. It runs on every gate, exactly as it did before it was a target.",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "distribution-test": {
       "executor": "nx:run-commands",
@@ -132,7 +148,14 @@
         "parallel": false
       },
       "cache": false,
-      "//": "Uncached and unconditional for the same reason as distribution-check above, and one more of its own: check-npm-publish stands a registry up and publishes into it, and check-fixture-discrimination mutates a crate in a scratch copy and re-runs its real tests — neither is a function of files this tree can enumerate. test-distribution packages target/debug/onetaskgraph, so it depends on onetaskgraph:build — a task dependency, not a project-graph edge, so it selects nothing the note above refuses."
+      "//": "Uncached and unconditional for the same reason as distribution-check above, and one more of its own: check-npm-publish stands a registry up and publishes into it, and check-fixture-discrimination mutates a crate in a scratch copy and re-runs its real tests — neither is a function of files this tree can enumerate. test-distribution packages target/debug/onetaskgraph, so it depends on onetaskgraph:build — a task dependency, not a project-graph edge, so it selects nothing the note above refuses.",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     }
   }
 }

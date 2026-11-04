@@ -1,0 +1,88 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "github-cache-policy",
+  "projectType": "library",
+  "tags": ["lang:javascript", "layer:workspace"],
+  "namedInputs": {
+    "default": [
+      "{projectRoot}/**/*",
+      "{workspaceRoot}/.github/workflow-graph.mjs",
+      "{workspaceRoot}/.github/package.json",
+      "{workspaceRoot}/.github/bun.lock",
+      "{workspaceRoot}/scripts/nx-remote-cache.mjs",
+      "{workspaceRoot}/scripts/actions-budget-figures.sh",
+      "{workspaceRoot}/scripts/nx-version-free-inputs.mjs",
+      "{workspaceRoot}/rust-toolchain.toml",
+      "{workspaceRoot}/biome.json",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/budgets.yaml",
+      "{workspaceRoot}/.github/release-published-paths",
+      "{workspaceRoot}/scripts/ci-job.sh",
+      "{workspaceRoot}/.github/project.json",
+      "{workspaceRoot}/.github/workflows/*.yml",
+      "{workspaceRoot}/.github/tests/ci-jobs.spec.mjs",
+      "{workspaceRoot}/.github/tests/workflow-definitions.mjs",
+      "{workspaceRoot}/.github/actions-expressions.mjs",
+      "{workspaceRoot}/.github/telemetry.ts",
+      "versionFreeNpm"
+    ]
+  },
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:noop",
+      "dependsOn": ["github-workflows:bootstrap"]
+    },
+    "check": {
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "typecheck", "test", "coverage"]
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format --write .github/cache-policy"
+      },
+      "cache": false
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format .github/cache-policy"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome lint --error-on-warnings .github/cache-policy"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:noop"
+    },
+    "test": {
+      "executor": "nx:noop",
+      "cache": false,
+      "//": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] The journey's only network read is an anonymous clone of op-nx source pinned to an immutable commit; every GitHub API call is HTTP-doubled with no credentials. This follows the pinned-source rust-cache exception in .github/policy/project.json.",
+      "dependsOn": ["cache-journeys"]
+    },
+    "cache-journeys": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/cache-policy/tests/cache.test.mjs"
+      },
+      "cache": true,
+      "outputs": [],
+      "inputs": [
+        "default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
+      "//": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]"
+    },
+    "coverage": {
+      "executor": "nx:noop"
+    }
+  },
+  "//": "The real Nx and pinned-sidecar journeys belong to the cache workflow domain. Crate and SDK changes select the separate CD journeys, never this project; the existing test-linux phase selects its test target when cache contracts change."
+}

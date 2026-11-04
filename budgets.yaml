@@ -1,7 +1,7 @@
 # This repository's CI, CD and local-gate budgets. Every figure is read from telemetry, never
 # measured afresh, and each is checked at one place:
 #
-# - `release-tail`: the seven GitHub Actions figures, measured by scripts/actions-budget-figures.sh
+# - `release-tail`: the eight GitHub Actions figures, measured by scripts/actions-budget-figures.sh
 #   (dero-skills' create-repo copy, edited only there) from onevcs's read-only host answers. The
 #   last step of release.yml's `publish` checks them, reporting only: nothing reads its result.
 #   The CD figures leave out the main-push Rust cache warmer (`--exclude-workflow`, its workflow
@@ -53,12 +53,12 @@ budgets:
   # llmlint: ignore[budgets_track_product_owner_outcomes] The brief requires a 30-minute line per CI check and per CD job beside the 90-minute release cycle that contains them, job counts per PR push and per release, and GitHub reads per release and per pull request; each is the unit the user acts on and is enforced or reported at a different moment.
   - id: onetaskgraph-release-cycle-time
     description: >-
-      Per pull request one release carries, its last commit's checks plus its merge to the end of
-      publish; the maximum over the release's pull requests. It protects how soon a merged change
+      Per pull request one release carries whose merge changes a published artifact path, its last
+      commit's checks plus its merge to the end of publish; the maximum over the release's pull requests. It protects how soon a merged change
       reaches the people who install it.
     labels: [release-tail]
     measure: reported
-    command: [bash, scripts/actions-budget-figures.sh, release-cycle-time]
+    command: [bash, scripts/actions-budget-figures.sh, release-cycle-time, --published-paths, .github/release-published-paths]
     unit: seconds
     direction: max
     threshold: 5400
@@ -140,3 +140,18 @@ budgets:
     direction: max
     threshold: 1800
     timeout_seconds: 30
+  # Design target; the first published release after adoption supplies the first real figure.
+  # Workload: all three pushes per PR change crate inputs, five concurrent PRs, four jobs per
+  # push, up to 127 cacheable tasks per push; promotion adds a base-scope copy without deleting
+  # source scopes. About 29 merged PRs fit GitHub's seven-day unused-entry window.
+  - id: onetaskgraph-nx-cache-use
+    description: >-
+      Remote hits among attempt-qualified cacheable task/OS/hash executions, excluding local
+      hits, protect contributor and release turnaround when unchanged work is already proven.
+    labels: [release-tail]
+    measure: reported
+    command: [bash, scripts/actions-budget-figures.sh, cache-use]
+    unit: percent
+    direction: min
+    threshold: 100
+    timeout_seconds: 300

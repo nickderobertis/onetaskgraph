@@ -8,18 +8,26 @@
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",
-      "options": { "command": "cargo fetch --locked" },
+      "options": {
+        "command": "cargo fetch --locked"
+      },
       "cache": false
     },
-    "check": { "executor": "nx:noop" },
+    "check": {
+      "executor": "nx:noop"
+    },
     "format": {
       "executor": "nx:run-commands",
-      "options": { "command": "cargo fmt -p onetaskgraph-status-options" },
+      "options": {
+        "command": "cargo fmt -p onetaskgraph-status-options"
+      },
       "cache": false
     },
     "format-check": {
       "executor": "nx:run-commands",
-      "options": { "command": "cargo fmt -p onetaskgraph-status-options -- --check" }
+      "options": {
+        "command": "cargo fmt -p onetaskgraph-status-options -- --check"
+      }
     },
     "lint": {
       "executor": "nx:run-commands",
@@ -47,7 +55,17 @@
       },
       "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
-      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run."
+      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run.",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        }
+      ]
     }
   }
 }

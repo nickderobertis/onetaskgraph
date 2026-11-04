@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { isMacosRunner } from "./telemetry.ts";
 import { data, Evaluator, Lexer, Parser } from "./actions-expressions.mjs";
+import { isMacosRunner } from "./telemetry.ts";
 
 export const root = new URL("../", import.meta.url);
 // The repository the workflows run in; a fork's pull request comes from another.
@@ -232,7 +232,7 @@ export function validateEventInventory(inventory, definitions = workflows()) {
           if (
             !matching.some((entry) =>
               field === "branch"
-                ? !entry.tag && (entry.branch || "main") === selection
+                ? !entry.tag && branchMatches(selection, entry.branch || "main")
                 : entry.tag === selection,
             )
           )
@@ -359,6 +359,13 @@ export function matrices(matrix, context) {
   }
   return rows;
 }
+// The sole wildcard branch trigger this repository declares. Keep other Actions glob
+// syntax unsupported until its event workload and matching semantics are exercised.
+function branchMatches(pattern, branch) {
+  return pattern === "cache-promote/**"
+    ? branch.startsWith("cache-promote/") && branch.length > "cache-promote/".length
+    : pattern === branch;
+}
 export function triggered(workflow, scenario) {
   validatedWorkflow(workflow, "event routing");
   const on = workflow.on;
@@ -384,7 +391,12 @@ export function triggered(workflow, scenario) {
     for (const key of Object.keys(spec))
       if (!supported.has(key)) throw Error(`Unresolved event filter: ${key}`);
   for (const key of ["branches", "tags", "workflows"])
-    if (spec?.[key]?.some((pattern) => /[*!?[\\]/.test(pattern)))
+    if (
+      spec?.[key]?.some(
+        (pattern) =>
+          /[*!?[\\]/.test(pattern) && !(key === "branches" && pattern === "cache-promote/**"),
+      )
+    )
       throw Error(`Unresolved Actions glob filter: ${key}`);
   if (spec?.workflows && !spec.workflows.includes(scenario.workflow)) return false;
   if (
@@ -397,9 +409,17 @@ export function triggered(workflow, scenario) {
   if (scenario.event === "push") {
     if (scenario.tag) {
       if (spec?.tags ? !spec.tags.includes(scenario.tag) : spec?.branches) return false;
-    } else if (spec?.branches ? !spec.branches.includes(scenario.branch || "main") : spec?.tags)
+    } else if (
+      spec?.branches
+        ? !spec.branches.some((pattern) => branchMatches(pattern, scenario.branch || "main"))
+        : spec?.tags
+    )
       return false;
-  } else if (spec?.branches && !spec.branches.includes(scenario.branch || "main")) return false;
+  } else if (
+    spec?.branches &&
+    !spec.branches.some((pattern) => branchMatches(pattern, scenario.branch || "main"))
+  )
+    return false;
   return true;
 }
 function reusable(call) {

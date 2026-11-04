@@ -1,0 +1,17 @@
+{
+  "skip": {
+    "schema_version": 1,
+    "rust_coverage": "skip",
+    "reason": "The tree is one main passed plus only release-plz's version and changelog edits"
+  },
+  "source": {
+    "schema_version": 1,
+    "rust_coverage": "run",
+    "reason": "The tree changes more than release-owned versions and changelogs"
+  },
+  "unreadable": {
+    "schema_version": 1,
+    "rust_coverage": "run",
+    "reason": "Unreadable base, head or main requires Rust coverage"
+  }
+}

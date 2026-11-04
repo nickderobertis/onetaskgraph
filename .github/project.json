@@ -9,17 +9,23 @@
       "!{projectRoot}/node_modules/**/*",
       "!{projectRoot}/.telemetry/**/*",
       "!{projectRoot}/linear-documents-policy/**/*",
-      "!{projectRoot}/policy/**/*"
+      "!{projectRoot}/policy/**/*",
+      "!{projectRoot}/cache-policy/**/*",
+      "!{projectRoot}/nx-policy/**/*"
     ],
     "workflowGraph": [
       "default",
       "{workspaceRoot}/release-targets.toml",
       "{workspaceRoot}/screencomp.toml",
       "{workspaceRoot}/scripts/product_versions.py",
-      "{workspaceRoot}/scripts/release_products.py"
+      "{workspaceRoot}/scripts/release_products.py",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/scripts/nx-version-free-inputs.mjs",
+      "{workspaceRoot}/.github/nx-policy/version-inputs.mjs"
     ],
     "cdJourneys": [
       "default",
+      "{workspaceRoot}/.github/release-published-paths",
       "{workspaceRoot}/config/github-interfaces.toml",
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/release-plz.toml",
@@ -59,10 +65,9 @@
       "workflowGraph",
       "{workspaceRoot}/budgets.yaml",
       "{workspaceRoot}/justfile",
-      "{workspaceRoot}/package.json",
-      "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/scripts/gate-time.sh",
-      "{workspaceRoot}/scripts/gate-time-budget.mjs"
+      "{workspaceRoot}/scripts/gate-time-budget.mjs",
+      "versionFreeNpm"
     ]
   },
   "targets": {
@@ -70,7 +75,14 @@
       "executor": "nx:run-commands",
       "options": {
         "command": "just github-workflows-bootstrap"
-      }
+      },
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "check": {
       "executor": "nx:noop",
@@ -108,9 +120,15 @@
       "options": {
         "command": "node --test .github/tests/ci-jobs.spec.mjs"
       },
-      "inputs": ["default"],
+      "inputs": [
+        "default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
       "cache": true,
-      "//": "The pull request's four jobs, their keyed caches and the Rust cache warmer, read from the workflow files alone: keyed on this directory alone, it imports nothing that reads outside it, which the spec itself refuses. Whether the required checks are still reported needs the run graph, which reads files outside it, and is ci-contexts'."
+      "//": "The pull request's four jobs, their keyed caches and the Rust cache warmer, read from the workflow files alone: keyed on this directory alone, it imports nothing that reads outside it, which the spec itself refuses. Whether the required checks are still reported needs the run graph, which reads files outside it, and is ci-contexts'.",
+      "outputs": []
     },
     "ci-contexts": {
       "executor": "nx:run-commands",
@@ -118,9 +136,15 @@
       "options": {
         "command": "node --test .github/tests/ci-contexts.spec.mjs"
       },
-      "inputs": ["workflowGraph"],
+      "inputs": [
+        "workflowGraph",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
       "cache": true,
-      "//": "The required contexts use the workflow graph read set. This spec also reconciles this project's own journey targets with their external reads; the test-file inventory across both projects is policy/tests/inventory.test.mjs's."
+      "//": "The required contexts use the workflow graph read set. This spec also reconciles this project's own journey targets with their external reads; the test-file inventory across the workflow projects is policy/tests/inventory.test.mjs's.",
+      "outputs": []
     },
     "budget-journeys": {
       "executor": "nx:run-commands",
@@ -128,9 +152,15 @@
       "options": {
         "command": "node --test .github/tests/ci-events.test.mjs .github/tests/gate-time.test.mjs"
       },
-      "inputs": ["budgetJourneys"],
+      "inputs": [
+        "budgetJourneys",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
       "cache": true,
-      "//": "Which jobs and workflows run on a pull request and on the release commit, and the timing wrapper `just gate` runs its body inside, over the real onebudgetspec. Keyed on the workflow graph's read set and every outside file they read; ci-events also reads this repository's immutable git history."
+      "//": "Which jobs and workflows run on a pull request and on the release commit, and the timing wrapper `just gate` runs its body inside, over the real onebudgetspec. Keyed on the workflow graph's read set and every outside file they read; ci-events also reads this repository's immutable git history.",
+      "outputs": []
     },
     "test": {
       "executor": "nx:noop",
