@@ -187,6 +187,13 @@ function cacheProblems(ci, release) {
     problems.push("CI must keep exactly the four existing jobs");
   for (const name of jobs) {
     const steps = ci.jobs[name]?.steps ?? [];
+    if (
+      [ci.jobs[name].env, ...steps.map((step) => step.env)].some(
+        (env) => env?.NX_BASE !== undefined || env?.NX_HEAD !== undefined,
+      )
+    )
+      problems.push(`${name}: event comparison must not be overridden`);
+
     if ((ci.jobs[name].permissions ?? ci.permissions)?.actions !== "read")
       problems.push(`${name}: cache workflow requires actions read`);
     const trust = steps.findIndex((step) => step.id === "nx-cache-trust");
@@ -272,6 +279,19 @@ test("the four existing CI jobs share the pinned cache and promotion precedes re
 });
 test("cache shape refuses an untrusted writer, duplicate local store, invalid cancel steps and manual event", () => {
   for (const mutate of [
+    (ci) => {
+      delete ci.env.NX_BASE;
+    },
+    (ci) => {
+      ci.env.NX_HEAD = "HEAD";
+    },
+    (ci) => {
+      ci.jobs["test-linux"].env.NX_BASE = "HEAD~1";
+    },
+    (ci) => {
+      ci.jobs.lint.steps[0].env = { NX_HEAD: "HEAD" };
+    },
+
     (ci) => {
       ci.permissions.actions = "write";
     },

@@ -215,13 +215,6 @@ jobs:
             echo "::error::this release-plz branch carries more than release versions and changelogs, so test-macos must run: $(jq -r .reason <<<"$decision"). Land the change through an ordinary branch." >&2
             exit 1
           fi
-      - name: Derive the comparison base
-        id: pr-base
-        shell: bash
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
       - name: Format, lint and type-check the affected projects, generated code and the supply chain
         run: just ci-lint
       # The release pull request alone: the pass-time budget of the pool maintenance
@@ -423,13 +416,6 @@ jobs:
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      - name: Derive the comparison base
-        id: pr-base
-        shell: bash
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
       - name: Test the affected projects
         env:
           ONETASKGRAPH_SKIP_RUST_COVERAGE: ${{ steps.release.outputs.rust_coverage == 'skip' && '1' || '' }}
@@ -598,13 +584,6 @@ jobs:
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      - name: Derive the comparison base
-        id: pr-base
-        shell: bash
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
       # llmlint: ignore-block[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials, so this job cannot demand one; and the uncredentialed service suites run behind affected selection, as in test-linux, only when their own plugin changed.
       - name: Test the affected projects
         run: just ci-test-windows
@@ -716,13 +695,6 @@ jobs:
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      - name: Derive the comparison base
-        id: pr-base
-        shell: bash
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"
       # llmlint: ignore-block[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials, so this job cannot demand one; and the uncredentialed service suites run behind affected selection, as in test-linux, only when their own plugin changed.
       - name: Test the affected projects
         run: just ci-test-macos

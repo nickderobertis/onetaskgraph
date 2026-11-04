@@ -328,16 +328,15 @@ test("release routing prefix agrees with the production PR builder", () => {
   assert.match(read(".github/macos-policy.mjs"), /startsWith\("release-plz-"\)/);
 });
 
-test("every pull-request job compares against the one merge-base derivation", () => {
+test("every pull-request job inherits the event comparison that Nx normalises", () => {
   const ci = workflows()["ci.yml"];
-  const bases = ["lint", "test-linux", "test-windows", "test-macos"].map((id) =>
-    ci.jobs[id].steps.find((step) => step.id === "pr-base"),
-  );
-  // scripts/check-ci-recipes.sh drives scripts/ci-pr-base.sh over a real clone, its refusals
-  // included; every job runs it the same way, so that proof is each job's.
-  for (const step of bases) {
-    assert.equal(step.run, 'bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"');
-    assert.deepEqual(step.env, bases[0].env);
+  assert.equal(ci.env.NX_BASE, `\${{ github.event.pull_request.base.sha }}`);
+  assert.equal(ci.env.NX_HEAD, `\${{ github.event.pull_request.head.sha }}`);
+  for (const job of Object.values(ci.jobs)) {
+    for (const env of [job.env, ...job.steps.map((step) => step.env)]) {
+      assert.equal(env?.NX_BASE, undefined);
+      assert.equal(env?.NX_HEAD, undefined);
+    }
   }
   assert.match(read("justfile"), /^check:.*distribution-test/m);
 });

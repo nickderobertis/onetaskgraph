@@ -448,16 +448,16 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   **Every path that can open a session consults the one decision**: CI's one path is
   `test-linux`'s `just ci-test-linux`, which reads it before it runs the tests, and a
   contributor's `just check` and `just gate` reach it through `just test`.
-  CI derives its base explicitly from the merge base (`scripts/ci-pr-base.sh`), because
-  an implicit base can select the wrong changes. Pushes run no repository checks;
+  CI sets `NX_BASE` and `NX_HEAD` once from the event’s base and head SHAs; Nx
+  normalises the base to the merge base, including when main has advanced. Pushes run no repository checks;
   contributors can run `NX_BASE=<ref> just check` or `just gate` manually. A push to main
   does build, testing nothing, the Rust cache `test-linux`, `test-windows` and `test-macos`
   restore (`.github/workflows/rust-cache-warm.yml`): a pull request restores only a cache
   saved on its own ref or on main, so nothing else could give a new one a warm build.
   `scripts/check-live-lane-selection.sh`, a command in `scripts:test`, holds all of that:
   it puts the five diffs to the real decision over real git states, drives a contributor's
-  two gates through the real recipes, holds every credentialed CI step's base to
-  `scripts/ci-pr-base.sh`, puts three diffs to real Nx, and ENUMERATES the paths from
+  two gates through the real recipes, holds every credentialed CI step to the shared
+  event-derived comparison, puts three diffs to real Nx, and ENUMERATES the paths from
   the workflow rather than listing them — so a path added or rewired later
   cannot silently bypass the decision. Nothing it runs has a credential and nothing it runs
   reaches an API.

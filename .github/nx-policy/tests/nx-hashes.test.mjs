@@ -179,7 +179,25 @@ test("Nx's own hash file details retain every original cached target's file inpu
     "the spike baseline contains all 110 cached tasks",
   );
   const currentDir = fixture("current", "HEAD", true);
-  const current = hashes(currentDir, selected(currentDir));
+  const currentIds = selected(currentDir);
+  const absent = hashes(currentDir, currentIds);
+  const retiredInputs = ["scripts/ci-pr-base.sh"];
+  for (const file of retiredInputs) {
+    assert.equal(existsSync(join(root, file)), false, `${file}: intentionally retired`);
+    writeFileSync(join(currentDir, file), command(baseDir, "git", ["show", `${baseline}:${file}`]));
+  }
+  command(currentDir, "git", ["add", "--", ...retiredInputs]);
+  const current = hashes(currentDir, currentIds);
+  for (const file of retiredInputs) {
+    const readers = Object.keys(base).filter(
+      (id) => base[id].definition.cache === true && base[id].inputs.files.includes(file),
+    );
+    assert.ok(readers.length > 0, `${file}: baseline has real readers`);
+    for (const id of readers) {
+      assert.ok(current[id].inputs.files.includes(file), `${id}: still reads restored ${file}`);
+      assert.notEqual(current[id].hash, absent[id].hash, `${id}: restoring ${file} moves its hash`);
+    }
+  }
   const tracked = command(currentDir, "git", ["ls-files", "-z"]).split("\0").filter(Boolean);
   const literals = existsSync(join(currentDir, ".github/nx-version-files"))
     ? readFileSync(join(currentDir, ".github/nx-version-files"), "utf8")
