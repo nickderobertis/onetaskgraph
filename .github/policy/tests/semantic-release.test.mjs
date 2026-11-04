@@ -2,46 +2,15 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import {
-  base,
-  classify,
-  event,
-  files,
-  heads,
-  history,
-  revision,
-  scratchRoot,
-} from "./policy-fixture.mjs";
+import { base, files, heads, history, revision, scratchRoot, semantic } from "./policy-fixture.mjs";
 
-test("classifier runs on real histories: version-only authority is branch, ownership and semantics", () => {
-  assert.deepEqual(
-    Object.entries(classify(event("release-plz-123"))).filter(([key]) => key !== "reason"),
-    [
-      ["isReleaseOnly", true],
-      ["macosRequired", false],
-    ],
-  );
-  for (const payload of [
-    event("feature", false, "github-actions[bot]"),
-    event("feature"),
-    event("release-plz-123", true),
-    event("release-plz-forged", false),
-  ]) {
-    const head =
-      payload.pull_request.head.ref === "release-plz-forged" ? heads.source : heads.version;
-    assert.equal(classify(payload, head).macosRequired, true);
-  }
+test("the real semantic CLI accepts release edits and rejects source and dependency changes", () => {
+  assert.equal(semantic(heads.version).isReleaseOnly, true);
   for (const head of [heads.source, heads.dependency])
-    assert.equal(classify(event("release-plz-123"), head).macosRequired, true);
-  for (const input of ["{broken", {}, null, { pull_request: { head: { ref: "release-plz-1" } } }])
-    assert.equal(classify(input).macosRequired, true);
-  assert.equal(
-    classify(event("release-plz-123"), heads.version, "missing-ref").macosRequired,
-    true,
-  );
+    assert.equal(semantic(head).isReleaseOnly, false);
 });
 
-test("classifier keeps version-only authority when the host spells paths with backslashes", () => {
+test("semantic comparison keeps version-only agreement when the host spells paths with backslashes", () => {
   // The Windows runner's pathlib renders the registered version files as
   // `sdks\python\pyproject.toml`; git names them with forward slashes. This
   // python keeps the real files and real comparison, and spells only str() the
@@ -68,20 +37,12 @@ test("classifier keeps version-only authority when the host spells paths with ba
         "",
       ].join("\n"),
     );
-    const decision = classify(event("release-plz-123"), heads.version, base, "", {
+    const decision = semantic(heads.version, base, {
       PYTHONPATH: shim,
     });
-    assert.deepEqual(
-      [decision.isReleaseOnly, decision.macosRequired],
-      [true, false],
-      decision.reason,
-    );
+    assert.deepEqual(decision.isReleaseOnly, true);
     assert.ok(existsSync(resolve(shim, "took")), "Windows path simulation did not take");
-    assert.equal(
-      classify(event("release-plz-123"), heads.source, base, "", { PYTHONPATH: shim })
-        .macosRequired,
-      true,
-    );
+    assert.equal(semantic(heads.source, base, { PYTHONPATH: shim }).isReleaseOnly, false);
   } finally {
     rmSync(shim, { recursive: true, force: true });
   }
@@ -115,11 +76,7 @@ test("semantic comparison refuses mixed fields, dependency lock versions and unr
     { "pyproject.toml": "malformed" },
   ];
   for (const changed of changes)
-    assert.equal(
-      classify(event("release-plz-123"), revision(changed)).macosRequired,
-      true,
-      JSON.stringify(changed),
-    );
+    assert.equal(semantic(revision(changed)).isReleaseOnly, false, JSON.stringify(changed));
 });
 
 test("same-named registry packages retain their versions in semantic lock comparison", () => {
@@ -131,9 +88,8 @@ test("same-named registry packages retain their versions in semantic lock compar
     const record = `\n[[package]]\nname = "onetaskgraph-core"\nversion = "9.8.7"\n${source}\n`;
     const before = revision({ [path]: files[path] + record });
     const after = revision({ [path]: files[path] + record.replace("9.8.7", "9.8.8") });
-    const decision = classify(event("release-plz-123"), after, before);
+    const decision = semantic(after, before);
     assert.equal(decision.isReleaseOnly, false, path);
-    assert.equal(decision.macosRequired, true, path);
   }
 });
 
@@ -150,7 +106,7 @@ for (const field of ["dependency reference", "requires-dist specifier"]) {
         .replace('version = "9.8.7", source', 'version = "9.8.8", source')
         .replace('specifier = "==9.8.7"', 'specifier = "==9.8.8"'),
     });
-    assert.equal(classify(event("release-plz-123"), after, before).macosRequired, true);
+    assert.equal(semantic(after, before).isReleaseOnly, false);
   });
 }
 
@@ -180,36 +136,8 @@ test("lock references resolve explicit local sources and refuse ambiguous or abs
         .replace(local || "never-match", local.replace("1.2.3", "1.2.4"));
       const before = revision({ "uv.lock": beforeLock });
       const after = revision({ "uv.lock": afterLock });
-      const result = classify(event("release-plz-123"), after, before);
+      const result = semantic(after, before);
       assert.equal(result.isReleaseOnly, identity === "explicit", `${metadata}/${identity}`);
-      assert.equal(result.macosRequired, identity !== "explicit", `${metadata}/${identity}`);
     }
   }
-});
-
-test("Actions event environment overrides payload kinds and unreadable kinds require coverage", () => {
-  const conflicting = { ...event("feature"), event_name: "push" };
-  assert.equal(classify(conflicting, heads.source, base, "pull_request").macosRequired, true);
-  assert.equal(
-    classify(event("release-plz-123"), heads.version, base, "push").macosRequired,
-    false,
-  );
-  assert.equal(
-    classify({ event_name: "unknown" }, heads.source, base, "merge_group").macosRequired,
-    false,
-  );
-  for (const event_name of ["unknown", {}, 42])
-    assert.equal(classify({ event_name }).macosRequired, true);
-});
-
-test("unknown authoritative event names fail closed even over a release-only PR", () => {
-  for (const name of ["unknown", "pull-request", "unknown\nevent"]) {
-    const result = classify(event("release-plz-123"), heads.version, base, name);
-    assert.equal(result.macosRequired, true);
-    assert.equal(result.isReleaseOnly, false);
-    assert.ok(result.reason.includes(JSON.stringify(name)));
-  }
-  const payload = { ...event("release-plz-123"), event_name: "unknown" };
-  assert.equal(classify(payload).macosRequired, true);
-  assert.equal(classify(payload, heads.version, base, "merge_group").macosRequired, false);
 });

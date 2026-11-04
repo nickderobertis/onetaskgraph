@@ -25,7 +25,9 @@
     "sdk-typescript",
     "onetaskgraph-live-janitor",
     "onetaskgraph-github-live",
-    "pool-maintenance"
+    "pool-maintenance",
+    "github-cache-policy",
+    "github-nx-policy"
   ],
   "targets": {
     "bootstrap": {
@@ -59,7 +61,10 @@
         "{workspaceRoot}/workspace/**/*.json",
         "{workspaceRoot}/crates/*/project.json",
         "{workspaceRoot}/sdks/*/project.json",
-        "{workspaceRoot}/sdks/*/*.json"
+        "{workspaceRoot}/sdks/*/*.json",
+        {
+          "runtime": "node -p process.platform"
+        }
       ]
     },
     "lint": {
@@ -124,7 +129,10 @@
         "{workspaceRoot}/crates/onetaskgraph-github-projects/src/lib.rs",
         "{workspaceRoot}/scripts/check-design-prefix-spelling.sh",
         "{workspaceRoot}/scripts/check-capability-verdicts.sh",
-        "{workspaceRoot}/scripts/check-copy-pagination-guards.sh"
+        "{workspaceRoot}/scripts/check-copy-pagination-guards.sh",
+        {
+          "runtime": "node -p process.platform"
+        }
       ]
     },
     "typecheck": {
@@ -133,6 +141,8 @@
         "command": "bash scripts/check-workspace-config.sh"
       },
       "inputs": [
+        "{workspaceRoot}/**/*.py",
+        "{workspaceRoot}/**/*.ts",
         "{workspaceRoot}/nx.json",
         "{workspaceRoot}/crates/*/project.json",
         "{workspaceRoot}/sdks/*/project.json",
@@ -141,16 +151,25 @@
         "{workspaceRoot}/screenshots/project.json",
         "{workspaceRoot}/.github/workflows/*.yml",
         "{workspaceRoot}/scripts/check-workspace-config.sh",
-        "{workspaceRoot}/sdks/**/*.py",
-        "{workspaceRoot}/sdks/**/*.ts",
+        "!{workspaceRoot}/sdks/python/src/onetaskgraph_sdk/__init__.py",
+        "!{workspaceRoot}/sdks/typescript/src/index.ts",
         "{workspaceRoot}/sdks/**/*.sh",
         "{workspaceRoot}/sdks/**/*.js",
         "{workspaceRoot}/sdks/**/*.mjs",
-        "{workspaceRoot}/scripts/**/*.py",
-        "{workspaceRoot}/scripts/**/*.ts",
         "{workspaceRoot}/scripts/**/*.sh",
         "{workspaceRoot}/scripts/**/*.js",
-        "{workspaceRoot}/scripts/**/*.mjs"
+        "{workspaceRoot}/scripts/**/*.mjs",
+        {
+          "runtime": "node -p process.platform"
+        },
+        "versionFreeFiles",
+        "{workspaceRoot}/.github/cache-policy/project.json",
+        "{workspaceRoot}/.github/nx-policy/project.json",
+        "{workspaceRoot}/pool-maintenance/project.json",
+        "{workspaceRoot}/justfile",
+        "{workspaceRoot}/**/bun.lock",
+        "sharedGlobals",
+        "versionFreePython"
       ],
       "//": "The SDK and script sources are inputs because check-workspace-config.sh scans them for the files that resolve target/debug/onetaskgraph and for a cargo invocation inside one; without them a spawner added to a test would not re-run this check."
     },
@@ -215,7 +234,17 @@
         "parallel": false
       },
       "cache": false,
-      "//": "The one place the Rust line floor is enforced, over every crate's run; check-coverage-enforced.sh reconciles the list above against the crates in the tree both ways. Uncached: what it reads is the profile directory those runs just wrote, which no input describes."
+      "//": "The one place the Rust line floor is enforced, over every crate's run; check-coverage-enforced.sh reconciles the list above against the crates in the tree both ways. Uncached: what it reads is the profile directory those runs just wrote, which no input describes.",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        }
+      ]
     },
     "deny": {
       "executor": "nx:run-commands",

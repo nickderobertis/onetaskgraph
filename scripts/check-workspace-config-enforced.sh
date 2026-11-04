@@ -140,6 +140,17 @@ GITHUB_PROJECTS_PROJECT=crates/onetaskgraph-github-projects/project.json
 COVERAGE_SCRIPT=scripts/rust-coverage.sh
 CONFTEST=sdks/python/tests/conftest.py
 
+for workflow_project in .github/cache-policy/project.json .github/nx-policy/project.json; do
+  mutate "$workflow_project" 'del document["targets"]["format"]'
+  expect check-workspace-config.sh "a workflow-domain project missing its format target" \
+    "$workflow_project: is missing the 'format' target"
+  restore "$workflow_project"
+done
+mutate "$WORKSPACE_PROJECT" 'document["implicitDependencies"].remove("github-nx-policy")'
+expect check-workspace-config.sh "a workflow-domain project omitted from the workspace edges" \
+  "does not depend on 'github-nx-policy'"
+restore "$WORKSPACE_PROJECT"
+
 # --- check-workspace-config.sh: the binary is built once and never relinked under a test.
 
 mutate "$BINARY_PROJECT" 'document["targets"]["test"]["options"]["command"] = document["targets"]["test"]["options"]["command"].replace(" --all-features", "")'
