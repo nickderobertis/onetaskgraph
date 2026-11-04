@@ -353,6 +353,17 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.query_tasks(query, page).await)
     }
 
+    // llmlint: ignore[changed_behavior_has_e2e] No engine caller of this listing exists on the base yet; the sanitize sweep, which adopts it next, exercises it end to end.
+    async fn query_task_details(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+        comments: Option<&PageRequest>,
+    ) -> Result<Page<TaskDetailRead>, SourceError> {
+        self.refused()?;
+        self.noted(self.inner.query_task_details(query, page, comments).await)
+    }
+
     async fn query_projects(
         &self,
         query: &ProjectQuery,
@@ -1006,6 +1017,47 @@ mod tests {
         ) -> Result<Page<Task>, SourceError> {
             self.next().map(|()| Page::last(Vec::new()))
         }
+        async fn query_task_details(
+            &self,
+            query: &TaskQuery,
+            page: &PageRequest,
+            comments: Option<&PageRequest>,
+        ) -> Result<Page<onetaskgraph_plugin_api::TaskDetailRead>, SourceError> {
+            self.next()?;
+            assert_eq!(query.origin.as_deref(), Some("origin:T-1"));
+            assert_eq!(page.limit, 5);
+            assert_eq!(
+                page.cursor.as_ref().map(|cursor| cursor.0.as_str()),
+                Some("board:2")
+            );
+            let comments = comments.expect("the requested comments were forwarded");
+            assert_eq!(comments.limit, 20);
+            assert_eq!(comments.cursor, None);
+            let task = serde_json::from_value(serde_json::json!({
+                "id": "T-1", "title": "Listed task", "content": null,
+                "status": {"category": "todo", "name": "Todo"},
+                "labels": [], "project": null, "url": null,
+                "created_at": null, "updated_at": null, "metadata": {}
+            }))
+            .unwrap();
+            Ok(Page {
+                items: vec![onetaskgraph_plugin_api::TaskDetailRead {
+                    task,
+                    comments: Some(Ok(Some(Page::last(vec![
+                        onetaskgraph_plugin_api::Comment {
+                            id: NativeId::from("C-1"),
+                            body: "First comment".to_owned(),
+                            author: None,
+                            created_at: None,
+                            updated_at: None,
+                            url: None,
+                            origin: None,
+                        },
+                    ])))),
+                }],
+                next: Some(onetaskgraph_plugin_api::Cursor("board:3".to_owned())),
+            })
+        }
         async fn query_projects(
             &self,
             _query: &ProjectQuery,
@@ -1127,6 +1179,27 @@ mod tests {
                     ..
                 })
             ));
+            // The comment-carrying listing is held locally too, before its default
+            // could refuse unsupported comments or the plugin could send a request.
+            assert!(matches!(
+                source
+                    .query_task_details(
+                        &TaskQuery::default(),
+                        &PageRequest {
+                            limit: 5,
+                            cursor: None
+                        },
+                        Some(&PageRequest {
+                            limit: 20,
+                            cursor: None
+                        }),
+                    )
+                    .await,
+                Err(SourceError::RateLimited {
+                    retry_after_seconds: Some(20),
+                    ..
+                })
+            ));
             let batched = source
                 .get_task_details(&[id.clone(), id.clone()], None)
                 .await;
@@ -1233,7 +1306,7 @@ mod tests {
 
     #[test]
     fn a_rate_limit_answered_inside_a_batch_starts_the_hold() {
-        let (source, calls, _) = held(vec![None, limited(Some(40))]);
+        let (source, calls, clock) = held(vec![None, limited(Some(40)), None, limited(Some(10))]);
         let ids = [NativeId::from("T-1"), NativeId::from("T-2")];
         block_on(async {
             let batched = source.get_task_details(&ids, None).await;
@@ -1248,6 +1321,52 @@ mod tests {
             assert_eq!(calls.load(Atomic::SeqCst), 2);
             assert_eq!(waits(source.get_task(&ids[0]).await), Some(40));
             assert_eq!(calls.load(Atomic::SeqCst), 2, "held by the batch's answer");
+            clock.advance(40_000);
+            let query = TaskQuery {
+                origin: Some("origin:T-1".to_owned()),
+                ..TaskQuery::default()
+            };
+            let page = PageRequest {
+                limit: 5,
+                cursor: Some(onetaskgraph_plugin_api::Cursor("board:2".to_owned())),
+            };
+            let comments = PageRequest {
+                limit: 20,
+                cursor: None,
+            };
+            let listed = source
+                .query_task_details(&query, &page, Some(&comments))
+                .await
+                .unwrap();
+            assert_eq!(listed.next.unwrap().0, "board:3");
+            assert_eq!(listed.items.len(), 1);
+            let detail = listed.items.into_iter().next().unwrap();
+            assert_eq!(detail.task.id, NativeId::from("T-1"));
+            assert_eq!(detail.task.title, "Listed task");
+            let comments_read = detail.comments.unwrap().unwrap().unwrap();
+            assert_eq!(comments_read.items[0].body, "First comment");
+            assert_eq!(comments_read.items[0].id, NativeId::from("C-1"));
+            assert!(comments_read.next.is_none());
+            assert!(matches!(
+                source
+                    .query_task_details(&query, &page, Some(&comments))
+                    .await,
+                Err(SourceError::RateLimited {
+                    retry_after_seconds: Some(10),
+                    ..
+                })
+            ));
+            assert!(matches!(
+                source.get_task(&ids[0]).await,
+                Err(SourceError::RateLimited { .. })
+            ));
+            assert!(matches!(
+                source
+                    .query_task_details(&query, &page, Some(&comments))
+                    .await,
+                Err(SourceError::RateLimited { .. })
+            ));
+            assert_eq!(calls.load(Atomic::SeqCst), 4);
         });
     }
 

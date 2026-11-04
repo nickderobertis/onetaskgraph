@@ -233,6 +233,7 @@
 //! | --- | --- | --- |
 //! | one item, by its own id | [`graphql::ISSUE`] — `node(id:)`, carrying the field definitions of the boards it sits on and the far ends of its `blockedBy`, which is what a write of it needs — and, when that node is a board draft, [`graphql::DRAFT`] — the draft and the one board item it is | the item |
 //! | one task with its first page of comments, for `task show` and a comment listing | [`graphql::ISSUE_DETAIL`] — the same `node(id:)` read with the issue's `comments` | the item and a page of its comments |
+//! | one board page with each task's first comments, for `TaskSource::query_task_details` | [`graphql::BOARD_WITH_COMMENTS`] — the board's own `items`, without search completion | tasks and first comment pages in one request; board consistency, with comment-activity filtering refused |
 //! | several tasks with their comments, for `task show-many` | [`graphql::ISSUE_DETAILS`] — [`DETAIL_BATCH`] aliased `node(id:)` fields per request | each item and a page of its comments |
 //! | the board's own id and field definitions, for a write whose item does not carry them | [`graphql::BOARD_FIELDS`] — the board's `id` and `fields`, and no `items` — or, for a create that needs the repository's id too, [`graphql::CREATION_CONTEXT`], both in one request | the board's fields |
 //! | one project's tasks or documents | [`graphql::SUB_ISSUES`] — that issue's own `subIssues` | that project |
@@ -800,9 +801,9 @@ pub use github_graphql_node_count::{NodeCountError, Variables};
 
 /// The largest value this source can bind to each page-size variable its documents name.
 ///
-/// Every `first:` in [`graphql`] reads one of these six, and each is capped at the
+/// Every `first:` in [`graphql`] reads one of these seven, and each is capped at the
 /// constant above it wherever a caller's own limit could reach it — `$first` at
-/// [`MAX_PAGE_SIZE`], `$nestedFirst` at `NESTED_PAGE_SIZE`, `$boardItems` at
+/// [`MAX_PAGE_SIZE`], `$commentFirst` at [`MAX_PAGE_SIZE`], `$nestedFirst` at `NESTED_PAGE_SIZE`, `$boardItems` at
 /// `BOARD_ITEMS_PAGE_SIZE`, `$originFirst` at `ORIGIN_PAGE_SIZE`, `$lookupFirst` at
 /// `ORIGIN_LOOKUPS_PAGE_SIZE`, `$memberFirst` at [`MEMBER_PAGE_SIZE`]. So this is the worst case a caller can drive this source to,
 /// not one configuration of it, which is what makes a bound computed under it a bound on
@@ -810,6 +811,7 @@ pub use github_graphql_node_count::{NodeCountError, Variables};
 pub fn largest_page_sizes() -> Variables {
     Variables::from([
         ("first".to_owned(), MAX_PAGE_SIZE),
+        ("commentFirst".to_owned(), MAX_PAGE_SIZE),
         ("nestedFirst".to_owned(), NESTED_PAGE_SIZE),
         ("boardItems".to_owned(), BOARD_ITEMS_PAGE_SIZE),
         ("originFirst".to_owned(), ORIGIN_PAGE_SIZE),
@@ -1113,25 +1115,38 @@ pub mod graphql {
         related_issue!()
     );
 
+    /// Everything this source reads about one issue comment, wherever it reaches one.
+    ///
+    /// A macro for the reason [`board_issue!`] is one: a comment listed, a comment just added
+    /// and a comment just edited are handed to one mapper, so they are selected by one
+    /// spelling. `author` is `Actor`, which GitHub answers `null` for an account that no
+    /// longer exists, and `login` is the one member every kind of actor carries.
+    macro_rules! issue_comment {
+        () => {
+            "id author{login} createdAt updatedAt body url"
+        };
+    }
+
     /// What a read of the board's own `items` selects of each item's content.
     ///
     /// A macro for the reason [`board_item_values!`] is one: [`BOARD`] and [`ORIGIN_LOOKUP`]
     /// both walk `ProjectV2.items` and hand each item to one resolver, so they select its
     /// content by one spelling.
     macro_rules! board_item_content {
-        () => {
-            r#" content{
-        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}}
+        () => { board_item_content!("") };
+        ($comments:expr) => {
+            concat!(r#" content{
+        ... on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount} labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}"#, $comments, r#"}
         ... on PullRequest{__typename id}
         ... on DraftIssue{__typename id title body createdAt updatedAt}
-      }"#
+      }"#)
         };
     }
 
-    /// Reads the board's fields and one page of its items.
-    pub const BOARD: &str = concat!(
+    macro_rules! board_listing {
+        ($variables:expr, $comments:expr) => { concat!(
         r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$nestedFirst:Int!,$duplicates:Boolean!"#,
-        relationship_events_variable!(),
+        relationship_events_variable!(), $variables,
         r#"){
       owner:repositoryOwner(login:$owner){
         ... on ProjectV2Owner{projectV2(number:$number){...Board}}
@@ -1143,9 +1158,23 @@ pub mod graphql {
       }pageInfo{hasNextPage}}
       items(first:$first,after:$after){nodes{id updatedAt "#,
         board_item_values!(),
-        board_item_content!(),
+        board_item_content!($comments),
         r#"} pageInfo{hasNextPage endCursor}}
     }"#
+    ) };
+    }
+
+    /// Reads the board's fields and one page of its items.
+    pub const BOARD: &str = board_listing!("", "");
+
+    /// A board page carrying each issue's first comment page in the same request.
+    pub const BOARD_WITH_COMMENTS: &str = board_listing!(
+        ",$commentFirst:Int!",
+        concat!(
+            "comments(first:$commentFirst){nodes{",
+            issue_comment!(),
+            "}pageInfo{hasNextPage endCursor}}"
+        )
     );
 
     /// Every carrier of one copy origin, by two reads in one request, and nothing else of
@@ -1823,18 +1852,6 @@ pub mod graphql {
         "}"
     );
 
-    /// Everything this source reads about one issue comment, wherever it reaches one.
-    ///
-    /// A macro for the reason [`board_issue!`] is one: a comment listed, a comment just added
-    /// and a comment just edited are handed to one mapper, so they are selected by one
-    /// spelling. `author` is `Actor`, which GitHub answers `null` for an account that no
-    /// longer exists, and `login` is the one member every kind of actor carries.
-    macro_rules! issue_comment {
-        () => {
-            "id author{login} createdAt updatedAt body url"
-        };
-    }
-
     /// One task's comments: a page of its issue's own `comments` connection.
     ///
     /// **No `orderBy`, and that is what makes the page oldest first.** GitHub's only
@@ -2115,7 +2132,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 56] = [
+    pub const DOCUMENTS: [(&str, &str); 57] = [
         (
             ISSUES_BY_CREATION,
             "listing a repository's issues newest first for a create key",
@@ -2132,6 +2149,10 @@ pub mod graphql {
         ),
         (SUB_ISSUES, "reading a project's tasks"),
         (BOARD, "reading the board"),
+        (
+            BOARD_WITH_COMMENTS,
+            "reading a board page with first comments",
+        ),
         (ORIGIN_LOOKUP, "looking up the items copied from one origin"),
         (CLOSED_ITEMS, "reading the board's closed items"),
         (
@@ -13858,6 +13879,88 @@ impl TaskSource for GitHubProjectsSource {
             page.limit.min(MAX_PAGE_SIZE) as usize,
         ))
     }
+    /// Read board pages directly, at the board connection's consistency. Unlike
+    /// `query_tasks`, this does not complete a lagging board with issue search: a complete
+    /// sweep needs one request per listing page, including the first comments.
+    async fn query_task_details(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+        comments: Option<&PageRequest>,
+    ) -> Result<Page<TaskDetailRead>, SourceError> {
+        let Some(comments) = comments else {
+            let tasks = self.query_tasks(query, page).await?;
+            return Ok(Page {
+                items: tasks
+                    .items
+                    .into_iter()
+                    .map(|task| TaskDetailRead {
+                        task,
+                        comments: None,
+                    })
+                    .collect(),
+                next: tasks.next,
+            });
+        };
+        validate_page(page)?;
+        validate_page(comments)?;
+        refuse_unsearchable(query)?;
+        if comments.cursor.is_some() || query.commented_since.is_some() {
+            return Err(SourceError::Refused {
+                message: "a board listing with comments requires a first comment page and cannot filter by comment activity".into(),
+            });
+        }
+        let after = page.cursor.as_ref().map(|cursor| cursor.0.as_str());
+        let data = self
+            .graphql(
+                graphql::BOARD_WITH_COMMENTS,
+                json!({
+                    "owner":self.owner,"number":self.project_number,
+                    "first":page.limit.min(MAX_PAGE_SIZE),"after":after,
+                    "commentFirst":comments.limit.min(MAX_PAGE_SIZE),
+                    "nestedFirst":NESTED_PAGE_SIZE,"duplicates":true,
+                }),
+            )
+            .await?;
+        let connection = data
+            .pointer("/owner/projectV2/items")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| SourceError::Refused {
+                message: "GitHub project was not found or is not visible to the token".into(),
+            })?;
+        let mut items = Vec::new();
+        for node in optional_nodes(Some(connection), "board items")?
+            .into_iter()
+            .flatten()
+        {
+            let Some(item) = self.resolve(node)? else {
+                continue;
+            };
+            if item.kind != BoardKind::Work(ItemKind::Task) {
+                continue;
+            }
+            let task = item.task()?;
+            if !task_matches(&task, query, &query.project) {
+                continue;
+            }
+            let read = if item.content_kind == ContentKind::DraftIssue {
+                Err(self.draft_has_no_comments(&task.id))
+            } else {
+                self.expected.learn_comments(&task.id, &node["content"]);
+                comment_page(&node["content"], &task.id.0, None).map(Some)
+            };
+            items.push(TaskDetailRead {
+                task,
+                comments: Some(read),
+            });
+        }
+        let next = next_cursor(connection)?;
+        if let Some(next) = &next {
+            validate_cursor_progress(after, &next.0)?;
+        }
+        Ok(Page { items, next })
+    }
+
     async fn query_projects(
         &self,
         query: &ProjectQuery,

@@ -322,6 +322,7 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
             Some("/data/search"),
             Some(include_str!("fixtures/issues.json")),
         ),
+        (graphql::BOARD_WITH_COMMENTS, None, None),
         (graphql::ISSUE, None, None),
         (graphql::DOCUMENT_IN_PROJECT, None, None),
         (graphql::BOARD_FIELDS, None, None),
