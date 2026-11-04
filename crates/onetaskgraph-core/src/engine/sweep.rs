@@ -609,13 +609,18 @@ impl Engine {
                 });
                 return Ok(());
             }
-            // Each rewritable field the policy says still carries a term, named as a written
-            // one is; a field it could not place is the item's content, the one it always has.
+            // Name fixed and rewritable entries from the layout sent to the policy.
             let mut named: Vec<ChangedField> = answer
                 .unfixed
                 .iter()
-                .filter(|unfixed| !unfixed.fixed)
                 .filter_map(|unfixed| {
+                    if unfixed.fixed {
+                        return Some(if unfixed.surface == SanitizeSurface::Metadata {
+                            Exposure::task_fixed_field(&task, usize::try_from(unfixed.index).ok()?)
+                        } else {
+                            ChangedField::Id
+                        });
+                    }
                     stored_field(
                         &task,
                         &comments,
@@ -629,8 +634,12 @@ impl Engine {
                 named.push(ChangedField::Content);
             }
             for field in named {
+                let field = screened_field(&field, &stored.exposure, &answer.locators);
+                if fields.iter().any(|existing| existing.field == field) {
+                    continue;
+                }
                 fields.push(SweepField {
-                    field: screened_field(&field, &stored.exposure, &answer.locators),
+                    field,
                     outcome: FieldOutcome::Unfixable {
                         why: "carries a term no replacement is declared for".to_owned(),
                     },

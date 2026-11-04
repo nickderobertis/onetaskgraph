@@ -1175,10 +1175,7 @@ fn replacements(
 
 /// What every engine of this process replaced and sanitised since it was last asked.
 fn sanitization() -> onetaskgraph_core::boundary::Sanitization {
-    let mut whole = onetaskgraph_core::boundary::Sanitization {
-        dry_run: SANITIZE_DRY_RUN.get().copied().unwrap_or(false),
-        ..Default::default()
-    };
+    let mut whole = onetaskgraph_core::boundary::Sanitization::default();
     for log in SANITIZATION
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

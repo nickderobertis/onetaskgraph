@@ -1376,6 +1376,10 @@ impl Exposure {
         exposure
             .fixed
             .metadata
+            .push(task.priority.as_str().to_owned());
+        exposure
+            .fixed
+            .metadata
             .extend(task.project.iter().map(|id| id.0.clone()));
         exposure.fixed.metadata.extend(
             task.delivers
@@ -1384,6 +1388,60 @@ impl Exposure {
                 .map(ToString::to_string),
         );
         exposure
+    }
+
+    /// Name a fixed metadata entry by the same layout `of_task` constructs.
+    pub(super) fn task_fixed_field(task: &Task, mut index: usize) -> ChangedField {
+        let labels = task
+            .labels
+            .iter()
+            .filter(|label| label.id.as_str() != label.name)
+            .count();
+        if index < labels {
+            return ChangedField::Label;
+        }
+        index -= labels;
+        if index < task.repositories.len() {
+            return ChangedField::Repositories;
+        }
+        index -= task.repositories.len();
+        for (key, value) in &task.metadata {
+            let count = Self::of_record(
+                "",
+                None,
+                &[],
+                &BTreeMap::from([(key.clone(), value.clone())]),
+                &[],
+            )
+            .fixed
+            .metadata
+            .len();
+            if index < count {
+                return ChangedField::Metadata(key.clone());
+            }
+            index -= count;
+        }
+        match index {
+            0 => ChangedField::Status,
+            1 => ChangedField::Priority,
+            _ => {
+                index -= 2;
+                if task.project.is_some() {
+                    if index == 0 {
+                        return ChangedField::Project;
+                    }
+                    index -= 1;
+                }
+                if index < task.delivers.len() {
+                    return ChangedField::Delivers;
+                }
+                index -= task.delivers.len();
+                if index < task.delivered_by.len() {
+                    return ChangedField::DeliveredBy;
+                }
+                ChangedField::Id
+            }
+        }
     }
 
     /// Everything a project carries that a reader of it would read.
@@ -2734,6 +2792,13 @@ impl StoredTask {
 /// One field or comment of a task a sanitisation changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ChangedField {
+    Repositories,
+    Status,
+    Priority,
+    Project,
+    Delivers,
+    DeliveredBy,
+    Id,
     Content,
     Title,
     Label,
@@ -2763,8 +2828,8 @@ pub(super) enum Sanitised {
     Written {
         first: ChangedField,
         rest: Vec<ChangedField>,
-        task: Task,
-        screening: Option<(Exposure, Vec<Locator>)>,
+        task: Box<Task>,
+        screening: Option<Box<(Exposure, Vec<Locator>)>>,
     },
 }
 
@@ -2789,7 +2854,7 @@ impl Sanitised {
 
     pub(super) fn screening(&self) -> Option<&(Exposure, Vec<Locator>)> {
         match self {
-            Self::Written { screening, .. } => screening.as_ref(),
+            Self::Written { screening, .. } => screening.as_deref(),
             _ => None,
         }
     }
@@ -2944,6 +3009,13 @@ pub(super) fn screened_field(
         redacted @ Locator::Redacted { .. } => redacted,
     };
     match field {
+        ChangedField::Repositories => Locator::Plain("repositories".to_owned()),
+        ChangedField::Status => Locator::Plain("status".to_owned()),
+        ChangedField::Priority => Locator::Plain("priority".to_owned()),
+        ChangedField::Project => Locator::Plain("project".to_owned()),
+        ChangedField::Delivers => Locator::Plain("delivers".to_owned()),
+        ChangedField::DeliveredBy => Locator::Plain("delivered_by".to_owned()),
+        ChangedField::Id => Locator::Plain("id".to_owned()),
         ChangedField::Content => Locator::Plain("content".to_owned()),
         ChangedField::Title => Locator::Plain("title".to_owned()),
         ChangedField::Label => Locator::Plain("label".to_owned()),
@@ -3224,7 +3296,7 @@ impl Engine {
             }
         }
         Ok(match result {
-            Sanitised::Written { task, .. } => Some(task),
+            Sanitised::Written { task, .. } => Some(*task),
             _ => None,
         })
     }
@@ -3289,8 +3361,8 @@ impl Engine {
             return Ok(Sanitised::Written {
                 first,
                 rest: fields.collect(),
-                task: rewritten,
-                screening,
+                task: Box::new(rewritten),
+                screening: screening.map(Box::new),
             });
         }
         let mut fields = fields.into_iter();

@@ -59,6 +59,42 @@ fn a_priority_carrying_a_declared_term_is_refused_without_rewriting_it() {
 }
 
 #[test]
+fn stored_priorities_and_statuses_are_fixed_and_reported_as_their_own_fields() {
+    for (field, value) in [("priority", "high"), ("status", "todo")] {
+        let (store, _) = sanitizing(json!([{ "term": value, "with": "clean" }]));
+        store.record(
+            "site",
+            "tasks",
+            "clean",
+            &format!(
+                "title: Clean\nstatus: {}\npriority: {}",
+                if field == "status" { value } else { "todo" },
+                if field == "priority" { value } else { "low" }
+            ),
+            PLAIN,
+        );
+        let before = tree(&store.folder("site"));
+        let (code, report, out, err) = sweep(&store, "site", &["--complete"]);
+        assert_eq!(code, Some(1), "{out}{err}");
+        let item = report["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|item| item["id"] == "site:clean")
+            .expect("matched item");
+        assert!(
+            item["fields"]
+                .as_array()
+                .expect("fields")
+                .iter()
+                .any(|entry| entry["field"] == field && entry["outcome"] == "unfixable"),
+            "{report}"
+        );
+        assert_eq!(tree(&store.folder("site")), before);
+    }
+}
+
+#[test]
 fn a_terms_failure_screens_the_source_name_even_when_no_item_was_read() {
     for missing in [false, true] {
         let (store, _) = sanitizing(replaced());
@@ -222,6 +258,7 @@ fn the_editing_peer_refuses_malformed_pages_targets_and_tasks_without_changing_t
         ("delivers", json!([7])),
         ("delivered_by", json!(false)),
         ("location", json!({"path":7})),
+        ("location", json!({"path":"relative/record"})),
         ("created_at", json!("yesterday")),
         ("updated_at", json!(7)),
         ("key", json!(false)),
@@ -268,6 +305,7 @@ fn the_editing_peer_refuses_malformed_stored_versions_and_controls() {
         ("delivers", json!([7])),
         ("delivered_by", json!(false)),
         ("location", json!({"path":7})),
+        ("location", json!({"path":"relative/record"})),
         ("created_at", json!("yesterday")),
         ("updated_at", json!(7)),
         ("gone", json!(7)),
@@ -3985,4 +4023,28 @@ fn a_sanitise_dry_run_of_a_write_whose_item_needs_nothing_makes_the_write() {
     assert_eq!(answer["priority"], json!("high"), "{answer}");
     assert!(answer.get("sanitization").is_none(), "{answer}");
     assert!(text_of(&store, "site").contains("priority: high"));
+}
+
+#[test]
+fn an_incoming_replacement_that_writes_does_not_claim_to_be_a_dry_run() {
+    let (store, _) = sanitizing(replaced());
+    store.record(
+        "site",
+        "tasks",
+        "clean",
+        "title: Clean\nstatus: todo\nproject: p",
+        PLAIN,
+    );
+    let answer: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "update",
+        "site:clean",
+        "--title",
+        &format!("New {TERM}"),
+        "--json",
+        "--sanitize-dry-run",
+    ]))
+    .expect("answer");
+    assert_eq!(answer["sanitization"]["dry_run"], false, "{answer}");
+    assert!(text_of(&store, "site").contains(&format!("New {WITH}")));
 }

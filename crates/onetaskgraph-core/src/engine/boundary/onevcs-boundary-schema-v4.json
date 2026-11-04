@@ -13,9 +13,7 @@
         }
       },
       "additionalProperties": false,
-      "required": [
-        "repository"
-      ]
+      "required": ["repository"]
     },
     "output": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -29,9 +27,7 @@
         }
       },
       "additionalProperties": false,
-      "required": [
-        "visibility"
-      ],
+      "required": ["visibility"],
       "$defs": {
         "Visibility": {
           "description": "Whether a repository is public.\n\nOnly [`Public`](Visibility::Public) is: see [`effective`](Visibility::effective).",
@@ -93,19 +89,14 @@
         },
         "scope": {
           "description": "Which private repositories the terms come from.",
-          "type": [
-            "array",
-            "null"
-          ],
+          "type": ["array", "null"],
           "items": {
             "type": "string"
           }
         }
       },
       "additionalProperties": false,
-      "required": [
-        "destination"
-      ],
+      "required": ["destination"],
       "$defs": {
         "Visibility": {
           "description": "Whether a repository is public.\n\nOnly [`Public`](Visibility::Public) is: see [`effective`](Visibility::effective).",
@@ -143,9 +134,7 @@
               "const": "pass"
             }
           },
-          "required": [
-            "verdict"
-          ]
+          "required": ["verdict"]
         },
         {
           "description": "A private term was found.",
@@ -160,10 +149,7 @@
               "const": "refuse"
             }
           },
-          "required": [
-            "verdict",
-            "surface"
-          ]
+          "required": ["verdict", "surface"]
         },
         {
           "description": "The check could not decide, and the write must not go ahead.",
@@ -178,10 +164,7 @@
               "const": "unavailable"
             }
           },
-          "required": [
-            "verdict",
-            "reason"
-          ]
+          "required": ["verdict", "reason"]
         }
       ],
       "$defs": {
@@ -339,10 +322,7 @@
         },
         "scope": {
           "description": "Which private repositories the terms come from, exactly as [`BoundaryInput`]'s.",
-          "type": [
-            "array",
-            "null"
-          ],
+          "type": ["array", "null"],
           "items": {
             "type": "string"
           }
@@ -365,9 +345,7 @@
         }
       },
       "additionalProperties": false,
-      "required": [
-        "destination"
-      ],
+      "required": ["destination"],
       "$defs": {
         "Visibility": {
           "description": "Whether a repository is public.\n\nOnly [`Public`](Visibility::Public) is: see [`effective`](Visibility::effective).",
@@ -433,10 +411,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "term",
-                "with"
-              ],
+              "required": ["term", "with"],
               "additionalProperties": false
             },
             {
@@ -449,10 +424,7 @@
                   "const": true
                 }
               },
-              "required": [
-                "term",
-                "reject"
-              ],
+              "required": ["term", "reject"],
               "additionalProperties": false
             }
           ]
@@ -471,10 +443,7 @@
             }
           },
           "additionalProperties": false,
-          "required": [
-            "kind",
-            "value"
-          ]
+          "required": ["kind", "value"]
         },
         "LocatorKind": {
           "description": "What a locator names.",
@@ -573,14 +542,7 @@
               "const": "pass"
             }
           },
-          "required": [
-            "verdict",
-            "text",
-            "paths",
-            "metadata",
-            "replaced",
-            "unfixed"
-          ]
+          "required": ["verdict", "text", "paths", "metadata", "replaced", "unfixed"]
         },
         {
           "description": "A term is left after replacement, or a locator carries one: nothing may be\nwritten.",
@@ -636,15 +598,7 @@
               "const": "refuse"
             }
           },
-          "required": [
-            "verdict",
-            "surface",
-            "text",
-            "paths",
-            "metadata",
-            "replaced",
-            "unfixed"
-          ]
+          "required": ["verdict", "surface", "text", "paths", "metadata", "replaced", "unfixed"]
         },
         {
           "description": "The call could not decide, and nothing may be written. It carries no locator:\nits caller redacts every one (`privateterms::redact_all`).",
@@ -659,10 +613,7 @@
               "const": "unavailable"
             }
           },
-          "required": [
-            "verdict",
-            "reason"
-          ]
+          "required": ["verdict", "reason"]
         }
       ],
       "$defs": {
@@ -686,11 +637,7 @@
             }
           },
           "additionalProperties": false,
-          "required": [
-            "surface",
-            "index",
-            "fixed"
-          ]
+          "required": ["surface", "index", "fixed"]
         },
         "SanitizeSurface": {
           "description": "Which list an entry still carrying a term is in.",
@@ -737,11 +684,7 @@
                   "minimum": 1
                 }
               },
-              "required": [
-                "redacted",
-                "kind",
-                "ordinal"
-              ],
+              "required": ["redacted", "kind", "ordinal"],
               "additionalProperties": false
             }
           ]
@@ -853,10 +796,7 @@
       "properties": {
         "scope": {
           "description": "Which private repositories the terms come from, exactly as [`BoundaryInput`]'s.",
-          "type": [
-            "array",
-            "null"
-          ],
+          "type": ["array", "null"],
           "items": {
             "type": "string"
           }
@@ -885,10 +825,7 @@
                   "type": "string"
                 }
               },
-              "required": [
-                "term",
-                "with"
-              ],
+              "required": ["term", "with"],
               "additionalProperties": false
             },
             {
@@ -901,10 +838,7 @@
                   "const": true
                 }
               },
-              "required": [
-                "term",
-                "reject"
-              ],
+              "required": ["term", "reject"],
               "additionalProperties": false
             }
           ]
@@ -928,9 +862,7 @@
               }
             }
           },
-          "required": [
-            "terms"
-          ]
+          "required": ["terms"]
         },
         {
           "description": "The call could not decide: `{\"verdict\": \"unavailable\", \"reason\": ...}`.",
@@ -955,11 +887,7 @@
               "type": "boolean"
             }
           },
-          "required": [
-            "term",
-            "mode",
-            "case_sensitive"
-          ],
+          "required": ["term", "mode", "case_sensitive"],
           "oneOf": [
             {
               "description": "Rewritten to `with`.",
@@ -974,10 +902,7 @@
                   "const": "replace"
                 }
               },
-              "required": [
-                "action",
-                "with"
-              ]
+              "required": ["action", "with"]
             },
             {
               "description": "Refused.",
@@ -988,9 +913,7 @@
                   "const": "reject"
                 }
               },
-              "required": [
-                "action"
-              ]
+              "required": ["action"]
             }
           ]
         },
@@ -1030,10 +953,7 @@
                   "const": "unavailable"
                 }
               },
-              "required": [
-                "verdict",
-                "reason"
-              ]
+              "required": ["verdict", "reason"]
             }
           ]
         },

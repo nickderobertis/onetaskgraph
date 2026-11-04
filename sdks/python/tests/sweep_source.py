@@ -186,9 +186,9 @@ def _page[T](items: list[T], page: PageRequest) -> dict[str, object]:
 
 def _shown(task: Task) -> Task:
     # This peer issues no change tokens; a caller must compare its fresh fields instead.
-    shown = dict(task)
+    shown = task.copy()
     shown.pop("version", None)
-    return cast(Task, shown)
+    return shown
 
 
 def _valid_task(task: object) -> bool:

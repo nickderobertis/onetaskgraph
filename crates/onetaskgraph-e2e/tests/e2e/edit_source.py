@@ -409,6 +409,8 @@ def _task_fields_valid(task: dict[str, Any]) -> bool:
     if location is not None and (not isinstance(location, dict) or len(location) != 1
             or not any(key in location and isinstance(location[key], str) for key in ("url", "path"))):
         return False
+    if location is not None and "path" in location and not Path(location["path"]).is_absolute():
+        return False
     for key in ("created_at", "updated_at"):
         value = task.get(key)
         if value is None:
