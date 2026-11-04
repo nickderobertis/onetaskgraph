@@ -571,10 +571,6 @@ jobs:
         run: just ci-test-windows
       # llmlint: ignore-end[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier]
 
-  # Skipped at the job level on release-plz's own release branch, so the release pull request
-  # spends no Mac runner (`onetaskgraph-macos-runs-per-change`); a skipped job satisfies a
-  # required check. lint goes red when that branch carries more than the version and changelog
-  # edits, because it classifies the diff itself.
       - name: Report cache entries and task executions
         if: always()
         shell: bash
