@@ -3438,120 +3438,139 @@ fn a_write_finishing_a_new_view_answered_with_another_item_takes_the_whole_copy_
 #[test]
 fn a_private_linear_canonicals_public_view_keeps_its_authored_sections_without_its_address() {
     for destination_kind in ["local-md", "github-projects", "linear"] {
-        let mut public_store = None;
-        let store = Store::laid(Some(registered_with_board), |sandbox| {
-            let (_, canonical) = crate::section_links::store(sandbox, "linear", "canonical", None);
-            let (held_public, public) =
-                crate::section_links::store(sandbox, destination_kind, "public", None);
-            public_store = Some(held_public);
-            sandbox.secrets_file("LINEAR_API_KEY=fixture-key\nGITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nGITHUB_PROJECTS_FIXTURE_TOKEN_B=test-token-b\n");
-            let mut canonical = canonical;
-            canonical["visibility"] = json!("private");
-            let mut public = public;
-            public["visibility"] = json!("public");
-            json!({"canonical": canonical, "public": public,
+        for editor_state in [true, false] {
+            let mut public_store = None;
+            let store = Store::laid(Some(registered_with_board), |sandbox| {
+                let (canonical_store, canonical) =
+                    crate::section_links::store(sandbox, "linear", "canonical", None);
+                if !editor_state {
+                    let crate::section_links::Store::Linear(workspace) = canonical_store else {
+                        unreachable!()
+                    };
+                    workspace.answer_no_editor_state();
+                }
+                let (held_public, public) =
+                    crate::section_links::store(sandbox, destination_kind, "public", None);
+                public_store = Some(held_public);
+                sandbox.secrets_file("LINEAR_API_KEY=fixture-key\nGITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nGITHUB_PROJECTS_FIXTURE_TOKEN_B=test-token-b\n");
+                let mut canonical = canonical;
+                canonical["visibility"] = json!("private");
+                let mut public = public;
+                public["visibility"] = json!("public");
+                json!({"canonical": canonical, "public": public,
                 "vault": {"routes": [{"repositories": [BOARD_REPOSITORY], "to": "public"}]}})
-        });
-        private_rollout_of(&store, BOARD_REPOSITORY);
-        store.record("plan", "tasks", "sectioned", &format!("title: Sectioned work\nstatus: todo\nproject: rollout\nrepositories: [{BOARD_REPOSITORY}]"),
+            });
+            private_rollout_of(&store, BOARD_REPOSITORY);
+            store.record("plan", "tasks", "sectioned", &format!("title: Sectioned work\nstatus: todo\nproject: rollout\nrepositories: [{BOARD_REPOSITORY}]"),
             "Read [the paging budget](#budget-page-by-an-opaque-cursor-page-seconds). See [coordination](producer.md) and [public docs](https://example.org/docs).\n\n### Budget page by an opaque cursor page seconds\n\nOne page.");
-        let canonical = landed_ids(&store.ok(&[
-            "project",
-            "copy",
-            "plan:rollout",
-            "--to",
-            "canonical",
-            "--json",
-        ]));
-        let task = &canonical["plan:sectioned"];
-        let private_location = shown(&store, "task", task)["location"]["url"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let landed = landed_ids(&store.ok(&[
-            "project",
-            "copy",
-            &canonical["plan:rollout"],
-            "--to",
-            "vault",
-            "--json",
-        ]));
-        let map = projection_map(&store, &landed[&canonical["plan:rollout"]]);
-        let view = map["tasks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["task"] == landed[task])
-            .unwrap()["projection"]
-            .as_str()
-            .unwrap();
-        let body = shown(&store, "task", view)["content"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        assert!(
-            body.contains("[the paging budget](#budget-page-by-an-opaque-cursor-page-seconds)"),
-            "{destination_kind}: {body}"
-        );
-        assert!(
-            body.contains("See coordination and [public docs](https://example.org/docs)."),
-            "{destination_kind}: {body}"
-        );
-        let native = view.split_once(':').unwrap().1;
-        let raw = match public_store.as_ref().unwrap() {
-            crate::section_links::Store::Github(board) => {
-                board.body(native).as_str().unwrap().to_owned()
-            }
-            crate::section_links::Store::Linear(workspace) => {
-                workspace.long_form("tasks", native).unwrap()
-            }
-            crate::section_links::Store::Local => {
-                std::fs::read_to_string(record_file(&store, "tasks", view)).unwrap()
-            }
-        };
-        assert!(
-            !raw.contains(&private_location),
-            "{destination_kind}: stored private address: {raw}"
-        );
-        assert!(
-            raw.contains("See coordination and [public docs](https://example.org/docs)."),
-            "{destination_kind}: {raw}"
-        );
-        if let crate::section_links::Store::Linear(workspace) = public_store.as_ref().unwrap() {
-            let state = workspace
-                .editor_state(
-                    onetaskgraph_e2e_support::fixtures::LinearRecord::Task,
-                    native,
-                )
-                .unwrap();
-            let headings = onetaskgraph_e2e_support::linear_editor::stored(&state);
-            let id = &headings
-                .iter()
-                .find(|(text, _)| text == "Budget page by an opaque cursor page seconds")
+            let canonical = landed_ids(&store.ok(&[
+                "project",
+                "copy",
+                "plan:rollout",
+                "--to",
+                "canonical",
+                "--json",
+            ]));
+            let task = &canonical["plan:sectioned"];
+            let canonical_read = shown(&store, "task", task);
+            assert!(
+                canonical_read["content"]
+                    .as_str()
+                    .unwrap()
+                    .contains("[the paging budget](#budget-page-by-an-opaque-cursor-page-seconds)"),
+                "canonical read, editor_state={editor_state}: {canonical_read}"
+            );
+            let private_location = canonical_read["location"]["url"]
+                .as_str()
                 .unwrap()
-                .1;
-            let id8 = id.replace('-', "")[..8].to_owned();
-            let read = shown(&store, "task", view);
-            let url = read["location"]["url"].as_str().unwrap();
-            assert!(raw.contains(&format!("[the paging budget]({url}#heading-budget-page-by-an-opaque-cursor-page-seconds-{id8})")), "the Linear view's stored link names its own heading: {raw}");
-        }
-        if destination_kind == "github-projects" {
+                .to_owned();
+            let landed = landed_ids(&store.ok(&[
+                "project",
+                "copy",
+                &canonical["plan:rollout"],
+                "--to",
+                "vault",
+                "--json",
+            ]));
+            let map = projection_map(&store, &landed[&canonical["plan:rollout"]]);
+            let view = map["tasks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["task"] == landed[task])
+                .unwrap()["projection"]
+                .as_str()
+                .unwrap();
+            let body = shown(&store, "task", view)["content"]
+                .as_str()
+                .unwrap()
+                .to_owned();
             assert!(
-                raw.contains("[the paging budget](#budget-page-by-an-opaque-cursor-page-seconds)"),
-                "{raw}"
+                body.contains("[the paging budget](#budget-page-by-an-opaque-cursor-page-seconds)"),
+                "{destination_kind}: {body}"
             );
             assert!(
-                raw.contains("<a id=\"budget-page-by-an-opaque-cursor-page-seconds\"></a>"),
-                "{raw}"
+                body.contains("See coordination and [public docs](https://example.org/docs)."),
+                "{destination_kind}: {body}"
+            );
+            let native = view.split_once(':').unwrap().1;
+            let raw = match public_store.as_ref().unwrap() {
+                crate::section_links::Store::Github(board) => {
+                    board.body(native).as_str().unwrap().to_owned()
+                }
+                crate::section_links::Store::Linear(workspace) => {
+                    workspace.long_form("tasks", native).unwrap()
+                }
+                crate::section_links::Store::Local => {
+                    std::fs::read_to_string(record_file(&store, "tasks", view)).unwrap()
+                }
+            };
+            assert!(
+                !raw.contains(&private_location),
+                "{destination_kind}: stored private address: {raw}"
+            );
+            assert!(
+                raw.contains("See coordination and [public docs](https://example.org/docs)."),
+                "{destination_kind}: {raw}"
+            );
+            if let crate::section_links::Store::Linear(workspace) = public_store.as_ref().unwrap() {
+                let state = workspace
+                    .editor_state(
+                        onetaskgraph_e2e_support::fixtures::LinearRecord::Task,
+                        native,
+                    )
+                    .unwrap();
+                let headings = onetaskgraph_e2e_support::linear_editor::stored(&state);
+                let id = &headings
+                    .iter()
+                    .find(|(text, _)| text == "Budget page by an opaque cursor page seconds")
+                    .unwrap()
+                    .1;
+                let id8 = id.replace('-', "")[..8].to_owned();
+                let read = shown(&store, "task", view);
+                let url = read["location"]["url"].as_str().unwrap();
+                assert!(raw.contains(&format!("[the paging budget]({url}#heading-budget-page-by-an-opaque-cursor-page-seconds-{id8})")), "the Linear view's stored link names its own heading: {raw}");
+            }
+            if destination_kind == "github-projects" {
+                assert!(
+                    raw.contains(
+                        "[the paging budget](#budget-page-by-an-opaque-cursor-page-seconds)"
+                    ),
+                    "{raw}"
+                );
+                assert!(
+                    raw.contains("<a id=\"budget-page-by-an-opaque-cursor-page-seconds\"></a>"),
+                    "{raw}"
+                );
+            }
+            assert!(
+                !body.contains(&private_location),
+                "{destination_kind}: {body}"
+            );
+            assert!(
+                !body.contains(task.split_once(':').unwrap().1),
+                "{destination_kind}: {body}"
             );
         }
-        assert!(
-            !body.contains(&private_location),
-            "{destination_kind}: {body}"
-        );
-        assert!(
-            !body.contains(task.split_once(':').unwrap().1),
-            "{destination_kind}: {body}"
-        );
     }
 }

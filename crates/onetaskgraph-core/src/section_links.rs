@@ -287,8 +287,8 @@ pub enum SectionForm {
 pub enum Written {
     /// The link, in the destination's form.
     Link(String),
-    /// The record's link with no fragment: the destination holds no heading this form can
-    /// address — counted unaddressable.
+    /// A fallback when the native heading cannot be addressed — counted unaddressable.
+    /// Cross-record links name the record alone; same-record links retain the authored slug.
     Unaddressable(String),
     /// What the form needs to address the heading is not known yet: the counterpart's
     /// stored heading ids, or where the linking record is.
@@ -500,7 +500,14 @@ impl SectionForm {
                 None => Written::Unaddressable(String::new()),
             },
             Self::Linear(_) => match own {
-                Some(own) => self.cross(own, None, heading, headings, stored),
+                Some(own) => match self.cross(own, None, heading, headings, stored) {
+                    Written::Unaddressable(location) => Written::Unaddressable(
+                        headings
+                            .slug_of(heading)
+                            .map_or(location, |slug| format!("#{slug}")),
+                    ),
+                    written => written,
+                },
                 None => Written::Pending,
             },
         }

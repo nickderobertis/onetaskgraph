@@ -54,19 +54,22 @@ const HEADINGS: [HeadingForms; 5] = [
 /// The design document's own heading.
 const OVERVIEW: HeadingForms = ("Overview", "overview", "overview");
 
-/// The README's same-record format, reconciled with real writes and reads by these journeys.
-fn documented_same_record(surface: &str, slug: &str) -> String {
+/// A column of the README's format table, reconciled with real writes and reads below.
+fn documented_form(surface: &str, column: usize) -> &'static str {
     let prefix = format!("| {surface} |");
     let row = include_str!("../../../../README.md")
         .lines()
         .find(|line| line.starts_with(&prefix))
         .expect("the documented surface");
     row.split('|')
-        .nth(3)
-        .expect("the same-record column")
+        .nth(column)
+        .expect("the format column")
         .trim()
         .trim_matches('`')
-        .replace("<slug>", slug)
+}
+
+fn documented_same_record(surface: &str, slug: &str) -> String {
+    documented_form(surface, 3).replace("<slug>", slug)
 }
 
 /// The target task's content.
@@ -1414,9 +1417,11 @@ fn a_linear_heading_its_record_does_not_store_is_linked_by_the_record_alone_and_
             .to_owned(),
     };
     let content = design.content(&sandbox);
+    let cross_fallback =
+        documented_form("Linear without a stored heading id", 2).replace("<record URL>", &url);
     assert!(
-        content.contains(&format!("[first]({url})"))
-            && content.contains(&format!("[second]({url})")),
+        content.contains(&format!("[first]({cross_fallback})"))
+            && content.contains(&format!("[second]({cross_fallback})")),
         "{content}"
     );
     assert_eq!(
@@ -1427,7 +1432,7 @@ fn a_linear_heading_its_record_does_not_store_is_linked_by_the_record_alone_and_
     );
 
     // A write whose answer carries no state at all.
-    let (sandbox, _, _) = into_linear(LinearWorkspace::answer_no_editor_state);
+    let (sandbox, workspace, _) = into_linear(LinearWorkspace::answer_no_editor_state);
     let reported = outcomes(&ok(
         &sandbox,
         &["project", "copy", "plans:P", "--to", "linear", "--json"],
@@ -1440,12 +1445,17 @@ fn a_linear_heading_its_record_does_not_store_is_linked_by_the_record_alone_and_
             .to_owned(),
     };
     let content = target.content(&sandbox);
+    let fallback = documented_same_record("Linear without a stored heading id", "budgets-1");
     assert!(
-        content.contains(&format!(
-            "[the second budgets]({})",
-            target.location(&sandbox)
-        )),
+        content.contains(&format!("[the second budgets]({fallback})")),
         "{content}"
+    );
+    assert!(
+        workspace
+            .long_form(target.collection(), target.native())
+            .unwrap()
+            .contains(&format!("[the second budgets]({fallback})")),
+        "the same-record fallback is stored losslessly"
     );
     assert_eq!(
         reported["plans:T"]["section_links_unaddressable"],

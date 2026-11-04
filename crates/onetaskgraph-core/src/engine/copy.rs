@@ -489,9 +489,9 @@ pub struct SectionLinks {
     #[serde(default, skip_serializing_if = "nothing_to_report")]
     #[schemars(!skip_serializing_if)]
     pub section_links_unresolved: u64,
-    /// Section links to a heading the destination's form cannot address — a Linear record
-    /// whose stored state holds no heading of that text at that position, or no state at all —
-    /// written as the record's own link with no fragment.
+    /// Section links to a heading the destination's native form cannot address — a Linear
+    /// record with no stored id for that heading. Cross-record links fall back to the
+    /// record's URL alone; same-record links retain their authored fragment.
     #[serde(default, skip_serializing_if = "nothing_to_report")]
     #[schemars(!skip_serializing_if)]
     pub section_links_unaddressable: u64,

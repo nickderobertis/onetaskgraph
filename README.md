@@ -1381,6 +1381,7 @@ decided: it writes the form, parses it back and supplies its markup.
 | A folder of Markdown | `<path relative to the linking file>#<slug>` | `#<slug>` |
 | A GitHub Projects issue | `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` | `#<slug>` |
 | A Linear issue, project or document | `<record URL>#heading-<Linear slug>-<id8>` | the record's own URL with that fragment |
+| Linear without a stored heading id | `<record URL>` | `#<slug>` |
 | Task read (every source) | as stored | `#<slug>` |
 
 - **GitHub.** An issue page gives a heading no `id`. So the GitHub source writes
@@ -1409,6 +1410,9 @@ decided: it writes the form, parses it back and supplies its markup.
   - A link whose target is written later in the same copy is finished in the follow-up write the
     copy already sends when Linear rewrote the linking record, and otherwise in one added
     update.
+  - With no stored heading id, a same-record link keeps its authored fragment, as the fallback
+    row above records. It remains lossless for task reads and later copies. A cross-record link
+    falls back to its target's URL alone, so the record can still be opened.
   - No anchor markup is written into a Linear body, where Linear would show it as text.
   - **The form rests on Linear's undocumented editor-state heading ids and "Copy link" form**,
     which the credentialed live journey re-observes against Linear itself.
