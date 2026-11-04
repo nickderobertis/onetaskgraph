@@ -153,7 +153,9 @@ test("a search sweep answers its report on exit 3", async () => {
       visibility: "public",
       config: {
         command: resolve(uv),
-        args: ["run", "--frozen", "--project", pythonProject, "python", peer, held],
+        // The plugin environment is cleared, including CI's UV_NO_SYNC. Bootstrap already
+        // prepared this SDK environment; a peer must not rebuild the workspace CLI here.
+        args: ["run", "--frozen", "--no-sync", "--project", pythonProject, "python", peer, held],
       },
     },
   });
