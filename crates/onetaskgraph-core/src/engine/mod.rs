@@ -1986,6 +1986,33 @@ impl Drop for VisibilityHold<'_> {
     }
 }
 
+/// A read task with same-record section links restored to authored slugs.
+fn authored_task(source: &ResolvedSource, mut task: Task) -> Task {
+    if let (Some(form), Some(content)) = (
+        crate::section_links::SectionForm::for_kind(source.kind()),
+        task.content.as_deref(),
+    ) {
+        let own = task.location.as_ref().map(|location| match location {
+            onetaskgraph_plugin_api::Location::Url(url) => url.as_str(),
+            onetaskgraph_plugin_api::Location::Path(path) => path.as_str(),
+        });
+        let stored = source
+            .source()
+            .stored_headings(MetadataRecord::Task, &task.id);
+        let authored = form.read_same_record(content, own, stored.as_deref());
+        if authored != content
+            && let Some(provenance) = stored::restamped(&task.metadata, &[content], &authored)
+        {
+            task.metadata.insert(
+                crate::template::TemplateProvenance::KEY.to_owned(),
+                provenance.to_value(),
+            );
+        }
+        task.content = Some(authored);
+    }
+    task
+}
+
 /// `source`, handed the markup its kind's section form needs its bodies to carry, so a source
 /// built anywhere gets it on the way in: see
 /// [`SectionForm::markup`](crate::section_links::SectionForm::markup).
@@ -2812,7 +2839,11 @@ impl Engine {
         let Some(source) = selected.first() else {
             return answer.nothing();
         };
-        let found = source.source().get_task(&id.native).await;
+        let found = source
+            .source()
+            .get_task(&id.native)
+            .await
+            .map(|found| found.map(|task| authored_task(source, task)));
         let qualified = GlobalId::new(source.name().clone(), id.native.clone());
         answer.one(source, found, |task| {
             delivery::qualified_task(qualified, task)

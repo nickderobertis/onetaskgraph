@@ -54,6 +54,24 @@ const HEADINGS: [HeadingForms; 5] = [
 /// The design document's own heading.
 const OVERVIEW: HeadingForms = ("Overview", "overview", "overview");
 
+/// A column of the README's format table, reconciled with real writes and reads below.
+fn documented_form(surface: &str, column: usize) -> &'static str {
+    let prefix = format!("| {surface} |");
+    let row = include_str!("../../../../README.md")
+        .lines()
+        .find(|line| line.starts_with(&prefix))
+        .expect("the documented surface");
+    row.split('|')
+        .nth(column)
+        .expect("the format column")
+        .trim()
+        .trim_matches('`')
+}
+
+fn documented_same_record(surface: &str, slug: &str) -> String {
+    documented_form(surface, 3).replace("<slug>", slug)
+}
+
 /// The target task's content.
 fn target_body() -> String {
     "## What\n\nThe target. Jump to [the second budgets](#budgets-1).\n\n## Budgets\n\nFirst \
@@ -181,7 +199,17 @@ pub(crate) fn configure(sandbox: &Sandbox, sources: &[(&str, &Value)]) {
     for (name, config) in sources {
         held.insert((*name).to_owned(), (*config).clone());
     }
-    sandbox.project_document(&document(&Value::Object(held)));
+    let mut configured: Value = serde_json::from_str(&document(&Value::Object(held))).unwrap();
+    if sources
+        .iter()
+        .any(|(_, source)| source["visibility"] == "private")
+    {
+        configured["write_policy"] = json!({
+            "check_command": ["python3", "-c", "import sys; sys.stdin.read(); print('{\"verdict\":\"pass\"}')"],
+            "visibility_command": ["python3", "-c", "import sys; sys.stdin.read(); print('{\"visibility\":\"public\"}')"],
+        });
+    }
+    sandbox.project_document(&configured.to_string());
     sandbox.secrets_file(
         "GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nGITHUB_PROJECTS_FIXTURE_TOKEN_B=test-token-b\n\
          LINEAR_API_KEY=fixture-key\n",
@@ -245,7 +273,7 @@ impl Store {
                 ),
             },
             Self::Github(_) => match to {
-                None => format!("#user-content-{github}"),
+                None => documented_same_record("A GitHub Projects issue", github),
                 Some(to) => format!("{}#user-content-{github}", www(&to.location(sandbox))),
             },
             Self::Linear(workspace) => {
@@ -547,7 +575,10 @@ fn expected_bodies(
         "T",
         linked(
             target_body(),
-            vec![("#budgets-1".into(), link("T", None, 4))],
+            vec![(
+                "#budgets-1".into(),
+                documented_same_record("Task read (every source)", "budgets-1"),
+            )],
         ),
     );
     bodies.insert(
@@ -622,6 +653,10 @@ fn holds_the_form(
         Store::Github(_) => {
             // The issue page gives a heading no id: the body carries one before each.
             let raw = store.raw(&landed["T"]);
+            assert!(
+                raw.contains("[the second budgets](#user-content-budgets-1)"),
+                "{what}: the same-record link targets the written GitHub anchor: {raw}"
+            );
             for (text, slug) in [
                 ("## What", "what"),
                 ("## Budgets\n\nFirst", "budgets"),
@@ -1295,10 +1330,13 @@ fn linear_heading_ids_come_from_each_writes_own_answer_and_cost_no_request() {
     };
     let id8 = stored_id8(&workspace, &target, "Budgets", 1);
     assert!(
-        target.content(&sandbox).contains(&format!(
-            "{}#heading-budgets-{id8}",
-            target.location(&sandbox)
-        )),
+        workspace
+            .long_form(target.collection(), target.native())
+            .unwrap_or_default()
+            .contains(&format!(
+                "{}#heading-budgets-{id8}",
+                target.location(&sandbox)
+            )),
         "the same-record link names the second budgets' stored id"
     );
 
@@ -1329,8 +1367,9 @@ fn linear_heading_ids_come_from_each_writes_own_answer_and_cost_no_request() {
     assert_eq!(reported["plans:T"].get("section_link_updates"), None);
     let id8 = stored_id8(&workspace, &target, "Budgets", 1);
     assert!(
-        target
-            .content(&sandbox)
+        workspace
+            .long_form(target.collection(), target.native())
+            .unwrap_or_default()
             .contains(&format!("#heading-budgets-{id8}")),
         "{}",
         target.content(&sandbox)
@@ -1382,9 +1421,11 @@ fn a_linear_heading_its_record_does_not_store_is_linked_by_the_record_alone_and_
             .to_owned(),
     };
     let content = design.content(&sandbox);
+    let cross_fallback =
+        documented_form("Linear without a stored heading id", 2).replace("<record URL>", &url);
     assert!(
-        content.contains(&format!("[first]({url})"))
-            && content.contains(&format!("[second]({url})")),
+        content.contains(&format!("[first]({cross_fallback})"))
+            && content.contains(&format!("[second]({cross_fallback})")),
         "{content}"
     );
     assert_eq!(
@@ -1395,7 +1436,7 @@ fn a_linear_heading_its_record_does_not_store_is_linked_by_the_record_alone_and_
     );
 
     // A write whose answer carries no state at all.
-    let (sandbox, _, _) = into_linear(LinearWorkspace::answer_no_editor_state);
+    let (sandbox, workspace, _) = into_linear(LinearWorkspace::answer_no_editor_state);
     let reported = outcomes(&ok(
         &sandbox,
         &["project", "copy", "plans:P", "--to", "linear", "--json"],
@@ -1408,12 +1449,17 @@ fn a_linear_heading_its_record_does_not_store_is_linked_by_the_record_alone_and_
             .to_owned(),
     };
     let content = target.content(&sandbox);
+    let fallback = documented_same_record("Linear without a stored heading id", "budgets-1");
     assert!(
-        content.contains(&format!(
-            "[the second budgets]({})",
-            target.location(&sandbox)
-        )),
+        content.contains(&format!("[the second budgets]({fallback})")),
         "{content}"
+    );
+    assert!(
+        workspace
+            .long_form(target.collection(), target.native())
+            .unwrap()
+            .contains(&format!("[the second budgets]({fallback})")),
+        "the same-record fallback is stored losslessly"
     );
     assert_eq!(
         reported["plans:T"]["section_links_unaddressable"],
@@ -1710,7 +1756,7 @@ fn links_linear_stores_in_angle_brackets_are_finished_and_a_fan_out_names_its_ow
     let angled = |at: &Landed, to: Option<&Landed>, heading: HeadingForms, ordinal: usize| {
         format!("](<{}>)", linear.link(&sandbox, at, to, heading, ordinal))
     };
-    let target = direct["T"].content(&sandbox);
+    let target = linear.raw(&direct["T"]);
     assert!(
         target.contains(&angled(&direct["T"], None, HEADINGS[4], 1)),
         "the same-record link is finished inside its angle brackets: {target}"
@@ -2589,6 +2635,10 @@ fn a_same_record_link_in_angle_brackets_and_one_naming_no_heading_are_each_handl
     for (task, body) in [
         ("A", "## Budgets\n\nSee [the budgets](<#budgets>).\n"),
         ("B", "## Budgets\n\nSee [gone](#nowhere).\n"),
+        (
+            "C",
+            "## Budget\n\n## User content budget\n\nSee [prefixed](#user-content-budget) and [plain](#budget).\n",
+        ),
     ] {
         std::fs::write(
             root.join(format!("tasks/{task}.md")),
@@ -2617,9 +2667,14 @@ fn a_same_record_link_in_angle_brackets_and_one_naming_no_heading_are_each_handl
     };
     assert_eq!(
         content("plans:A").trim_end(),
-        "## Budgets\n\nSee [the budgets](<#user-content-budgets>).",
+        "## Budgets\n\nSee [the budgets](#budgets).",
     );
     assert_eq!(reported["plans:A"].get("section_links_unresolved"), None);
+    assert_eq!(
+        content("plans:C").trim_end(),
+        "## Budget\n\n## User content budget\n\nSee [prefixed](#user-content-budget) and [plain](#budget).",
+        "an authored slug beginning user-content- keeps its own heading"
+    );
     assert_eq!(
         content("plans:B").trim_end(),
         "## Budgets\n\nSee [gone](#nowhere)."
@@ -2690,7 +2745,8 @@ fn a_task_linking_its_own_record_and_its_comments_fragment_are_written_for_the_d
         let there = task.location(&sandbox);
         let (own_link, fragment) = match &destination {
             Store::Local => ("A.md".to_owned(), "#budgets"),
-            _ => (there.clone(), "#user-content-budgets"),
+            Store::Github(_) => (there.clone(), "#user-content-budgets"),
+            _ => (there.clone(), "#budgets"),
         };
         assert!(
             task.content(&sandbox)
@@ -2789,6 +2845,545 @@ fn a_relative_link_to_another_record_without_a_fragment_names_that_records_count
             beta.content(&sandbox),
             format!("Before [alpha]({to_alpha})."),
             "{kind}: beta links alpha's counterpart"
+        );
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Only local Markdown and loopback tracker fakes; no credentials or remote service.
+#[test]
+fn a_private_trackers_task_read_restores_its_authored_same_record_links() {
+    use sha2::{Digest as _, Sha256};
+    let hash = |body: &str| format!("sha256:{:x}", Sha256::digest(body.as_bytes()));
+    for kind in KINDS {
+        let sandbox = Sandbox::new();
+        let (plans, _) = authored(&sandbox, "plans");
+        let digest = hash(target_body().trim_end());
+        let provenance = json!({"template": "fixture", "digest": digest, "answers_digest": digest, "body_digest": digest});
+        std::fs::write(root_of(&sandbox, "plans").join("tasks/T.md"), format!("---\ntitle: Target\nstatus: todo\nproject: P\nmetadata: {{onetaskgraph.template: {provenance}}}\n---\n{}", target_body())).unwrap();
+        let (canonical, mut config) = store(&sandbox, kind, "canonical", None);
+        config["visibility"] = json!("private");
+        configure(&sandbox, &[("plans", &plans), ("canonical", &config)]);
+        let (landed, _) = copy_plan(&sandbox, &authored_ids("plans"), "canonical");
+        let task = &landed["T"];
+        let content = task.content(&sandbox);
+        let read = shown(&sandbox, "task", &task.id);
+        assert!(
+            content.contains(&format!(
+                "[the second budgets]({})",
+                documented_same_record("Task read (every source)", "budgets-1")
+            )),
+            "{kind}: the README's task-read form: {content}"
+        );
+        assert_eq!(
+            read["metadata"]["onetaskgraph.template"]["body_digest"],
+            hash(&content),
+            "{kind}: read provenance describes the authored body"
+        );
+        assert_eq!(
+            content.trim_end(),
+            target_body().trim_end(),
+            "{kind}: authored task read"
+        );
+        assert!(
+            !content.contains(&task.location(&sandbox)),
+            "{kind}: {content}"
+        );
+        let plain: Value = serde_json::from_str(&ok(
+            &sandbox,
+            &["task", "show", &task.id, "--no-comments", "--json"],
+        ))
+        .unwrap();
+        assert_eq!(
+            plain["items"][0]["item"]["content"]
+                .as_str()
+                .unwrap()
+                .trim_end(),
+            target_body().trim_end(),
+            "{kind}: task read without comments"
+        );
+        // An unrecognised fragment remains authored rather than being guessed at.
+        assert!(landed["D"].content(&sandbox).contains("#nowhere"));
+        if !matches!(canonical, Store::Local) {
+            assert!(!canonical.raw(task).is_empty());
+        }
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Only folders of Markdown and loopback tracker fakes, never live APIs.
+#[test]
+fn public_copies_keep_same_record_sections_and_remove_private_record_links_from_every_body() {
+    for home_kind in KINDS {
+        for destination_kind in KINDS {
+            let sandbox = Sandbox::new();
+            let (plans, _) = authored(&sandbox, "plans");
+            let (home, mut home_config) = store(&sandbox, home_kind, "home", None);
+            home_config["visibility"] = json!("private");
+            let (_, mut public_config) = store(&sandbox, destination_kind, "public", Some(&home));
+            public_config["visibility"] = json!("public");
+            configure(
+                &sandbox,
+                &[
+                    ("plans", &plans),
+                    ("home", &home_config),
+                    ("public", &public_config),
+                ],
+            );
+            let (canonical, _) = copy_plan(&sandbox, &authored_ids("plans"), "home");
+            let private_location = canonical["T"].location(&sandbox);
+            // A comment is authored against the real canonical record, then carried on copy.
+            let comment = sandbox.project().join("comment.md");
+            std::fs::write(&comment, format!("Read [the private budget]({private_location}#budgets) and [public docs](https://example.org/docs).")).unwrap();
+            ok(
+                &sandbox,
+                &[
+                    "task",
+                    "comment",
+                    "add",
+                    &canonical["U"].id,
+                    "--body-file",
+                    &comment.display().to_string(),
+                ],
+            );
+            let report = outcomes(&ok(
+                &sandbox,
+                &[
+                    "project",
+                    "copy",
+                    &canonical["P"].id,
+                    "--to",
+                    "public",
+                    "--comments",
+                    "--json",
+                ],
+            ));
+            let (landed, _) = copy_plan(&sandbox, &canonical, "public");
+            let context = format!("{home_kind} -> {destination_kind}");
+            assert_eq!(
+                landed["T"].content(&sandbox).trim_end(),
+                target_body().trim_end(),
+                "{context}: own sections survive"
+            );
+            for key in ["P", "U", "D"] {
+                let content = landed[key].content(&sandbox);
+                assert!(
+                    !content.contains(&private_location),
+                    "{context} {key}: {content}"
+                );
+                for label in [
+                    "the demo",
+                    "the first",
+                    "what it is",
+                    "the retry",
+                    "first",
+                    "second",
+                    "retry",
+                    "missing",
+                ] {
+                    assert!(
+                        !content.contains(&format!("[{label}](")),
+                        "{context} {key}: private link becomes text: {content}"
+                    );
+                }
+            }
+            let comments: Value = serde_json::from_str(&ok(
+                &sandbox,
+                &["task", "comment", "list", &landed["U"].id, "--json"],
+            ))
+            .unwrap();
+            let text = comments["comments"][0]["body"].as_str().unwrap();
+            assert_eq!(
+                text, "Read the private budget and [public docs](https://example.org/docs).",
+                "{context}: {comments}"
+            );
+            assert!(report.contains_key(&canonical["T"].id));
+        }
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No remote API: the board is the loopback fake and both other stores are local folders.
+#[test]
+fn a_private_source_refusing_the_address_check_prevents_a_public_copy_and_a_retry_recovers() {
+    let sandbox = Sandbox::new();
+    let (plans, _) = authored(&sandbox, "plans");
+    let (private, mut private_config) = store(&sandbox, "github-projects", "private", None);
+    private_config["visibility"] = json!("private");
+    let (_, public_config) = store(&sandbox, "local-md", "public", None);
+    configure(
+        &sandbox,
+        &[
+            ("plans", &plans),
+            ("private", &private_config),
+            ("public", &public_config),
+        ],
+    );
+    let Store::Github(board) = private else {
+        unreachable!()
+    };
+    board.refuse_once("query");
+    let before = files_under(&root_of(&sandbox, "public"));
+    let refused = sandbox
+        .command()
+        .args(["project", "copy", "plans:P", "--to", "public", "--json"])
+        .output()
+        .unwrap();
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    assert_eq!(
+        files_under(&root_of(&sandbox, "public")),
+        before,
+        "a failed private-address check publishes nothing"
+    );
+    let (landed, _) = copy_plan(&sandbox, &authored_ids("plans"), "public");
+    assert_eq!(
+        landed["T"].content(&sandbox).trim_end(),
+        target_body().trim_end()
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Only two local Markdown stores and the portable public-boundary subprocess; no remote service.
+#[test]
+fn removing_private_links_keeps_a_copied_renderings_body_digest_truthful() {
+    use sha2::{Digest as _, Sha256};
+    let digest = |body: &str| format!("sha256:{:x}", Sha256::digest(body.as_bytes()));
+    let sandbox = Sandbox::new();
+    let (mut plans, _) = authored(&sandbox, "plans");
+    plans["visibility"] = json!("private");
+    let (_, public) = store(&sandbox, "local-md", "public", None);
+    configure(&sandbox, &[("plans", &plans), ("public", &public)]);
+    let body = shown(&sandbox, "document", "plans:D")["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let hash = digest(&body);
+    let provenance =
+        json!({"template": "fixture", "digest": hash, "answers_digest": hash, "body_digest": hash});
+    std::fs::write(root_of(&sandbox, "plans").join("documents/D.md"), format!("---\ntitle: Design\nproject: P\nmetadata: {{onetaskgraph.template: {provenance}}}\n---\n{body}")).unwrap();
+    let (landed, _) = copy_plan(&sandbox, &authored_ids("plans"), "public");
+    let document = shown(&sandbox, "document", &landed["D"].id);
+    let content = document["content"].as_str().unwrap();
+    assert_ne!(content, body);
+    assert_eq!(
+        document["metadata"]["onetaskgraph.template"]["body_digest"],
+        digest(content),
+        "the copied rendering vouches for the sanitized body it wrote"
+    );
+    assert_eq!(
+        document["metadata"]["onetaskgraph.template"]["digest"],
+        provenance["digest"]
+    );
+    assert_eq!(
+        document["metadata"]["onetaskgraph.template"]["answers_digest"],
+        provenance["answers_digest"]
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Local Markdown and an in-memory source with one-row pages; no network or credentials.
+#[test]
+fn standalone_copies_remove_later_pages_private_addresses_and_preserve_similar_public_links() {
+    let sandbox = Sandbox::new();
+    let (plans, _) = authored(&sandbox, "plans");
+    let (_, public) = store(&sandbox, "local-md", "public", None);
+    let mut data = crate::fixtures::dataset();
+    for collection in ["tasks", "projects", "documents"] {
+        for record in data[collection].as_array_mut().unwrap() {
+            let location = format!(
+                "https://private.example/{collection}/{}",
+                record["id"].as_str().unwrap()
+            );
+            record["url"] = json!(location);
+            record["location"] = json!({"url": location});
+        }
+    }
+    data["tasks"][0]["location"] = json!({"path": r"C:\home\.private\T-1.md"});
+    data["capabilities"] = json!({"max_page_size": 1, "documents": "native"});
+    let private = json!({"plugin": "in-memory", "config": data, "visibility": "private"});
+    configure(
+        &sandbox,
+        &[
+            ("plans", &plans),
+            ("private", &private),
+            ("public", &public),
+        ],
+    );
+    let body = concat!(
+        r"Windows: [private heading](C:\home\.private\T-1.md#budget). ",
+        "Read [task](https://private.example/tasks/T-4#budget), [project](https://private.example/projects/P-2), and [document](https://private.example/documents/D-3#overview). [nested [label] *text*](https://private.example/tasks/T-4#budget). Bare: `https://private.example/tasks/T-4#budget`; public: [similar](https://private.example/tasks/T-40#keep).\n\nReference: [reference][private]. Auto: <https://private.example/tasks/T-4#budget>. [escaped \\[label\\]](https://private.example/tasks/T-4#budget).\n\n[private]: https://private.example/tasks/T-4#budget\n"
+    );
+    let expected = "Windows: private heading. Read task, project, and document. nested [label] *text*. Bare: ``; public: [similar](https://private.example/tasks/T-40#keep).\n\nReference: reference. Auto: . escaped \\[label\\].";
+    for (verb, folder) in [("task", "tasks"), ("document", "documents")] {
+        std::fs::write(
+            root_of(&sandbox, "plans").join(folder).join("S.md"),
+            format!(
+                "---\ntitle: Standalone\n{}---\n{body}",
+                if verb == "task" { "status: todo\n" } else { "" }
+            ),
+        )
+        .unwrap();
+        let report = outcomes(&ok(
+            &sandbox,
+            &[verb, "copy", "plans:S", "--to", "public", "--json"],
+        ));
+        let id = report["plans:S"]["destination"].as_str().unwrap();
+        assert_eq!(
+            shown(&sandbox, verb, id)["content"]
+                .as_str()
+                .unwrap()
+                .trim_end(),
+            expected,
+            "{verb}: later pages, literal fragments, and delimiters"
+        );
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The Linear workspace is a loopback fake; the source and destination are local Markdown.
+#[test]
+fn a_private_inventory_cursor_cycle_refuses_before_publication_and_a_retry_recovers() {
+    let sandbox = Sandbox::new();
+    let (plans, _) = authored(&sandbox, "plans");
+    let (mut config, workspace) =
+        crate::fixtures::linear_workspace(&sandbox, crate::fixtures::dataset());
+    config["status_mapping"] = crate::fixtures::linear_default_mapping();
+    let private = json!({"plugin": "linear", "config": config, "visibility": "private"});
+    let (_, public) = store(&sandbox, "local-md", "public", None);
+    configure(
+        &sandbox,
+        &[
+            ("plans", &plans),
+            ("private", &private),
+            ("public", &public),
+        ],
+    );
+    workspace.bend_answers(
+        |document, _| document.contains("issues(first:$first,after:$after,filter:$filter)"),
+        2,
+        |_, data| {
+            data["issues"]["pageInfo"] = json!({"hasNextPage": true, "endCursor": "T-1"});
+        },
+    );
+    let before = files_under(&root_of(&sandbox, "public"));
+    let refused = sandbox
+        .command()
+        .timeout(std::time::Duration::from_secs(10))
+        .args(["project", "copy", "plans:P", "--to", "public", "--json"])
+        .output()
+        .unwrap();
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    assert!(
+        stderr(&refused).contains("private location inventory repeated a cursor"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(files_under(&root_of(&sandbox, "public")), before);
+    let (landed, _) = copy_plan(&sandbox, &authored_ids("plans"), "public");
+    assert_eq!(
+        landed["T"].content(&sandbox).trim_end(),
+        target_body().trim_end()
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Loopback Linear and local Markdown only; malformed pages come from the real HTTP fake.
+#[test]
+fn oversized_private_inventory_pages_are_refused_before_publication_and_recover() {
+    for collection in ["issues", "projects", "documents"] {
+        let sandbox = Sandbox::new();
+        let (plans, _) = authored(&sandbox, "plans");
+        let (mut config, workspace) =
+            crate::fixtures::linear_workspace(&sandbox, crate::fixtures::dataset());
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        let private = json!({"plugin": "linear", "config": config, "visibility": "private"});
+        let (_, public) = store(&sandbox, "local-md", "public", None);
+        configure(
+            &sandbox,
+            &[
+                ("plans", &plans),
+                ("private", &private),
+                ("public", &public),
+            ],
+        );
+        workspace.bend_answers(
+            move |document, _| {
+                document.contains(&format!(
+                    "{collection}(first:$first,after:$after,filter:$filter)"
+                ))
+            },
+            1,
+            move |variables, data| {
+                let node = data[collection]["nodes"][0].clone();
+                let count = variables["first"].as_u64().unwrap() + 1;
+                data[collection]["nodes"] = Value::Array(
+                    (0..count)
+                        .map(|n| {
+                            let mut node = node.clone();
+                            node["id"] = json!(format!("excess-{n}"));
+                            node
+                        })
+                        .collect(),
+                );
+            },
+        );
+        let before = files_under(&root_of(&sandbox, "public"));
+        let refused = sandbox
+            .command()
+            .args(["project", "copy", "plans:P", "--to", "public", "--json"])
+            .output()
+            .unwrap();
+        assert_ne!(
+            refused.status.code(),
+            Some(0),
+            "{collection}: {}",
+            stdout(&refused)
+        );
+        assert!(
+            stderr(&refused).contains("rows for a page of at most"),
+            "{collection}: {}",
+            stderr(&refused)
+        );
+        assert_eq!(files_under(&root_of(&sandbox, "public")), before);
+        let (landed, _) = copy_plan(&sandbox, &authored_ids("plans"), "public");
+        assert_eq!(
+            landed["T"].content(&sandbox).trim_end(),
+            target_body().trim_end()
+        );
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Native Markdown comes from the loopback tracker fakes, never a live service.
+#[test]
+fn native_fragment_only_links_read_as_the_readme_authored_form() {
+    for kind in ["github-projects", "linear"] {
+        let sandbox = Sandbox::new();
+        let (plans, _) = authored(&sandbox, "plans");
+        let (tracker, config) = store(&sandbox, kind, "tracker", None);
+        configure(&sandbox, &[("plans", &plans), ("tracker", &config)]);
+        let (landed, _) = copy_plan(&sandbox, &authored_ids("plans"), "tracker");
+        let target = &landed["T"];
+        let native_fragment = match &tracker {
+            Store::Linear(workspace) => format!(
+                "#heading-budgets-{}",
+                stored_id8(workspace, target, "Budgets", 0)
+            ),
+            _ => "#user-content-budgets".to_owned(),
+        };
+        let body =
+            format!("## Budgets\n\nSee [native]({native_fragment}) and [unknown](#not-a-heading).");
+        let file = sandbox.project().join("native.md");
+        std::fs::write(&file, &body).unwrap();
+        ok(
+            &sandbox,
+            &[
+                "task",
+                "content",
+                "set",
+                &target.id,
+                "--file",
+                &file.display().to_string(),
+            ],
+        );
+        assert!(
+            tracker
+                .raw(target)
+                .contains(&format!("[native]({native_fragment})")),
+            "{kind}: the fake stores the native fragment as input"
+        );
+        let expected = format!(
+            "## Budgets\n\nSee [native]({}) and [unknown](#not-a-heading).",
+            documented_same_record("Task read (every source)", "budgets")
+        );
+        assert_eq!(
+            target.content(&sandbox).trim_end(),
+            expected,
+            "{kind}: native fragment restored on task read"
+        );
+        if kind == "github-projects" {
+            // A fresh public copy writes the README's destination form, independent of how
+            // this legacy fragment was spelled on its source.
+            let (_, back) = store(&sandbox, "local-md", "back", None);
+            configure(
+                &sandbox,
+                &[("plans", &plans), ("tracker", &config), ("back", &back)],
+            );
+            let report = outcomes(&ok(
+                &sandbox,
+                &["task", "copy", &target.id, "--to", "back", "--json"],
+            ));
+            let id = report[&target.id]["destination"].as_str().unwrap();
+            assert_eq!(
+                shown(&sandbox, "task", id)["content"]
+                    .as_str()
+                    .unwrap()
+                    .trim_end(),
+                expected
+            );
+        }
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Only local Markdown and the loopback Linear fake, which refuses one real HTTP query per case.
+#[test]
+fn a_private_inventory_failure_after_earlier_pages_refuses_publication_and_recovers() {
+    use onetaskgraph_linear::graphql;
+    for (collection, operation) in [
+        ("projects", graphql::PROJECTS),
+        ("documents", graphql::DOCUMENTS),
+    ] {
+        let sandbox = Sandbox::new();
+        let (plans, _) = authored(&sandbox, "plans");
+        let (mut config, workspace) = crate::fixtures::linear_workspace_failing(
+            &sandbox,
+            crate::fixtures::dataset(),
+            &[operation],
+        );
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        let private = json!({"plugin": "linear", "config": config, "visibility": "private"});
+        let (_, public) = store(&sandbox, "local-md", "public", None);
+        configure(
+            &sandbox,
+            &[
+                ("plans", &plans),
+                ("private", &private),
+                ("public", &public),
+            ],
+        );
+        let before = files_under(&root_of(&sandbox, "public"));
+        let refused = sandbox
+            .command()
+            .args(["project", "copy", "plans:P", "--to", "public", "--json"])
+            .output()
+            .unwrap();
+        assert_ne!(
+            refused.status.code(),
+            Some(0),
+            "{collection}: {}",
+            stdout(&refused)
+        );
+        assert!(
+            stderr(&refused).contains("private"),
+            "{collection}: {}",
+            stderr(&refused)
+        );
+        assert_eq!(files_under(&root_of(&sandbox, "public")), before);
+        let served = workspace.served();
+        let failed_at = served
+            .iter()
+            .position(|(document, _)| document == operation)
+            .expect("the inventory reached the refused operation");
+        assert!(
+            served[..failed_at]
+                .iter()
+                .any(|(document, _)| document == graphql::ISSUES),
+            "tasks were inventoried before {collection}: {served:?}"
+        );
+        if collection == "documents" {
+            assert!(
+                served[..failed_at]
+                    .iter()
+                    .any(|(document, _)| document == graphql::PROJECTS),
+                "projects were inventoried before documents: {served:?}"
+            );
+        }
+        let (landed, _) = copy_plan(&sandbox, &authored_ids("plans"), "public");
+        assert_eq!(
+            landed["T"].content(&sandbox).trim_end(),
+            target_body().trim_end()
         );
     }
 }

@@ -294,7 +294,7 @@ impl Engine {
             };
             let qualified = GlobalId::new(source.name().clone(), id.native.clone());
             let mut response = Answer::new().one_response(source, found, |task| {
-                delivery::qualified_task(qualified, task)
+                delivery::qualified_task(qualified, super::authored_task(source, task))
             });
             let comments = if commented && !response.items.is_empty() {
                 let walked = match first {

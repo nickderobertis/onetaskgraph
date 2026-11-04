@@ -753,6 +753,16 @@ impl Projecting {
         matches!(self, Self::Active(_))
     }
 
+    /// A view without an address cannot expose a private record's location.
+    pub(super) fn could_address(&self) -> bool {
+        self.tasks().iter().any(|task| {
+            task.task
+                .content
+                .as_deref()
+                .is_some_and(super::privacy::could_address)
+        })
+    }
+
     /// This plan, active only when it has a view to land or `project`'s destination already
     /// records a map to bring in step — so a private plan with neither reads nothing more.
     pub(super) fn settled(self, project: &Planned) -> Self {
@@ -764,6 +774,44 @@ impl Projecting {
             Self::Active(tasks) if !tasks.is_empty() || recorded => Self::Active(tasks),
             Self::Active(_) | Self::Inactive => Self::Inactive,
         }
+    }
+
+    /// Restore authored same-record links before the public boundary examines a view, and
+    /// leave private cross-record links as text alone.
+    pub(super) fn public_bodies(
+        &mut self,
+        engine: &Engine,
+        locations: &[String],
+    ) -> Result<(), EngineError> {
+        if let Self::Active(tasks) = self {
+            for task in tasks {
+                let source = engine.readable(&task.source.source)?;
+                if let Some(content) = task.task.content.as_deref() {
+                    let own = super::located(task.task.location.as_ref());
+                    let stored = source.source().stored_headings(
+                        onetaskgraph_plugin_api::MetadataRecord::Task,
+                        &task.source.native,
+                    );
+                    let authored = crate::section_links::SectionForm::for_kind(source.kind())
+                        .map_or_else(
+                            || content.to_owned(),
+                            |form| {
+                                form.read_same_record(content, own.as_deref(), stored.as_deref())
+                            },
+                        );
+                    task.task.content = Some(super::privacy::without_private_links(
+                        &authored,
+                        locations,
+                        if source.kind() == "local-md" {
+                            own.as_deref()
+                        } else {
+                            None
+                        },
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Every task this plan makes a view of.

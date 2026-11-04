@@ -170,7 +170,7 @@ for name in sorted(tasks):
 # One phase, in the background beside the job's others: its selection, then its run, each
 # recorded under its index for the summary below. run_phase <index> <kind> <targets> <excluded>.
 run_phase() {
-  local phase="$1" kind="$2" targets="$3" excluded="$4" flags="${5:-}" exclusions="" plan phase_status
+  local phase="$1" kind="$2" targets="$3" excluded="$4" flags="${5:-}" exclusions="" plan phase_status projects
   [ "$excluded" = "-" ] || exclusions="$excluded"
   if [ "$kind" = "affected" ] && [ -n "$live_exclusions" ] \
     && { [[ ",$targets," == *",test,"* ]] || [[ ",$targets," == *",budgets,"* ]]; }; then
@@ -190,6 +190,21 @@ run_phase() {
   echo "nx ${arguments[*]}" >"$scratch/command.$phase"
   if ! plan="$(selected_tasks "$phase" "${arguments[@]}" | tr -d '\r')"; then
     return 1
+  fi
+  # Assets wait for the main record inside their journey. Select its producer beside
+  # them, including Linux where budgets deliberately skip task dependencies.
+  if [[ ",$targets," == *",test,"* ]] \
+    && grep -qxF "onetaskgraph-github-projects-e2e:test" <<<"$plan" \
+    && ! grep -qxF "onetaskgraph-github-projects:test" <<<"$plan"; then
+    projects="$(printf '%s\n' "$plan" | sed -n 's/:test$//p; s/:budgets$//p' | sort -u | paste -sd, -)"
+    arguments=(run-many -t "${target_words[@]}" "--projects=$projects,onetaskgraph-github-projects")
+    if [ -n "$flags" ]; then
+      arguments+=("${flag_words[@]}")
+    fi
+    echo "nx ${arguments[*]}" >"$scratch/command.$phase"
+    if ! plan="$(selected_tasks "$phase" "${arguments[@]}" | tr -d '\r')"; then
+      return 1
+    fi
   fi
   if "$select_only"; then
     [ -z "$plan" ] || printf '%s\n' "$plan" >"$scratch/selected.$phase"

@@ -302,7 +302,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 55);
+    assert_eq!(bundle["version"], 56);
     assert!(bundle["roots"]["HumanTaskProjection"].is_object());
     assert!(bundle["roots"]["HumanTaskProjected"].is_object());
     assert!(bundle["roots"]["LocateReport"].is_object());

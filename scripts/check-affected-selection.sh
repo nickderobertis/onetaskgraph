@@ -27,7 +27,8 @@
 # selection against them. Reading nx.json and reasoning about it does not prove anything.
 set -euo pipefail
 
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly ROOT
 
 # What this proves is a property of the Nx PROJECT GRAPH — which edit selects which
 # project — and that graph is read from nx.json and the project.json files, which are
@@ -233,6 +234,82 @@ for suite in $E2E_SUITES; do
   expect_selected "editing the engine" "$suite" "$selection"
 done
 report_on_failure "editing onetaskgraph-core" "$selection" "$before"
+# Exercise each real CI job on an engine-only diff: both session contributors must
+# be selected without making the loopback suite wait behind the main session.
+for job in test-linux test-macos test-windows; do
+  if ! (cd "$scratch/repo" && NX_BASE=HEAD~1 NX_HEAD=HEAD bash scripts/ci-job.sh "$job" --select-only) > "$scratch/core-$job.txt"; then
+    echo "check-affected-selection: $job could not plan the engine-only diff; run scripts/ci-job.sh $job --select-only with NX_BASE and NX_HEAD naming that diff, then fix its Nx error." >&2
+    exit 1
+  fi
+  for task in onetaskgraph-github-projects:test onetaskgraph-github-projects-e2e:test; do
+    if ! tr ' ' '\n' < "$scratch/core-$job.txt" | grep -qxF "$task"; then
+      echo "check-affected-selection: $job must select $task beside its session contributor; restore contributor selection in scripts/ci-job.sh, then re-run this guard." >&2
+      failures=$((failures + 1))
+    fi
+  done
+done
+# Run the real Linux job with disposable target commands, keeping CI and Nx real.
+# A failure of the newly selected producer must fail the job as well.
+for outcome in success failure; do
+  (cd "$scratch/repo" && python3 - "$outcome" <<'PYTARGETS'
+import json
+import pathlib
+import subprocess
+import sys
+
+for name in subprocess.check_output(["git", "ls-files", "*project.json"], text=True).splitlines():
+    path = pathlib.Path(name)
+    project = json.loads(path.read_text(encoding="utf-8"))
+    for name, target in project.get("targets", {}).items():
+        if target.get("executor") == "nx:run-commands":
+            failing = (sys.argv[1] == "failure"
+                       and project["name"] == "onetaskgraph-github-projects"
+                       and name == "test")
+            target["options"] = {"command": "exit 1" if failing else "true"}
+            target["cache"] = False
+    path.write_text(json.dumps(project), encoding="utf-8")
+PYTARGETS
+  )
+  status=0
+  (cd "$scratch/repo" && NX_BASE=HEAD~1 NX_HEAD=HEAD bash scripts/ci-job.sh test-linux) \
+    > "$scratch/core-run-$outcome.txt" 2>&1 || status=$?
+  if [ "$outcome" = success ]; then
+    if [ "$status" -ne 0 ]; then
+      cat "$scratch/core-run-$outcome.txt" >&2
+      failures=$((failures + 1))
+    fi
+    for task in onetaskgraph-github-projects:test onetaskgraph-github-projects-e2e:test; do
+      if ! sed -n 's/^ci-job: test-linux: ran //p' "$scratch/core-run-$outcome.txt" | tr ' ' '\n' | grep -qxF "$task"; then
+        echo "check-affected-selection: Linux did not run $task; restore the run-many contributor expansion in scripts/ci-job.sh, then re-run this guard." >&2
+        failures=$((failures + 1))
+      fi
+    done
+  elif [ "$status" -eq 0 ] || ! grep -qF "onetaskgraph-github-projects:test" "$scratch/core-run-$outcome.txt"; then
+    echo "check-affected-selection: Linux accepted a failed main session; fix run_phase status propagation in scripts/ci-job.sh, then re-run this guard." >&2
+    failures=$((failures + 1))
+  fi
+done
+# Refuse a failed second planning call, rather than running the original incomplete graph.
+mv "$scratch/repo/node_modules/.bin/nx" "$scratch/repo/node_modules/.bin/nx.real"
+cat > "$scratch/repo/node_modules/.bin/nx" <<'NXWRAPPER'
+#!/usr/bin/env bash
+if [ "$1" = run-many ]; then
+  echo "induced replacement planning failure" >&2
+  exit 1
+fi
+exec "$(dirname "$0")/nx.real" "$@"
+NXWRAPPER
+chmod +x "$scratch/repo/node_modules/.bin/nx"
+if (cd "$scratch/repo" && NX_BASE=HEAD~1 NX_HEAD=HEAD bash scripts/ci-job.sh test-linux --select-only) \
+  > "$scratch/core-replan.txt" 2>&1; then
+  echo "check-affected-selection: Linux accepted failed replacement planning; return failure from run_phase when its second selected_tasks call fails, then re-run this guard." >&2
+  failures=$((failures + 1))
+fi
+if ! grep -qF "induced replacement planning failure" "$scratch/core-replan.txt"; then
+  echo "check-affected-selection: replacement planning refusal lost its cause; preserve Nx stderr in selected_tasks in scripts/ci-job.sh, then re-run this guard." >&2
+  failures=$((failures + 1))
+fi
+mv "$scratch/repo/node_modules/.bin/nx.real" "$scratch/repo/node_modules/.bin/nx"
 reset_scratch
 
 # 3. One plugin changed; its siblings are untouched.

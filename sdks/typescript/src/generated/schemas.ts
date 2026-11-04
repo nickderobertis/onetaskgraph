@@ -2635,7 +2635,7 @@ export const runtimeSchemas = {
         "default": 0
       },
       "section_links_unaddressable": {
-        "description": "Section links to a heading the destination's form cannot address — a Linear record\nwhose stored state holds no heading of that text at that position, or no state at all —\nwritten as the record's own link with no fragment.",
+        "description": "Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
         "type": "integer",
         "format": "uint64",
         "minimum": 0,
@@ -3544,7 +3544,7 @@ export const runtimeSchemas = {
             "default": 0
           },
           "section_links_unaddressable": {
-            "description": "Section links to a heading the destination's form cannot address — a Linear record\nwhose stored state holds no heading of that text at that position, or no state at all —\nwritten as the record's own link with no fragment.",
+            "description": "Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0,

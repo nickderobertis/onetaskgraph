@@ -44,6 +44,7 @@
 mod comments;
 pub(crate) mod intent;
 mod locate;
+mod privacy;
 mod projections;
 mod query;
 mod record;
@@ -488,9 +489,9 @@ pub struct SectionLinks {
     #[serde(default, skip_serializing_if = "nothing_to_report")]
     #[schemars(!skip_serializing_if)]
     pub section_links_unresolved: u64,
-    /// Section links to a heading the destination's form cannot address — a Linear record
-    /// whose stored state holds no heading of that text at that position, or no state at all —
-    /// written as the record's own link with no fragment.
+    /// Section links to a heading the destination's native form cannot address — a Linear
+    /// record with no stored id for that heading. Cross-record links fall back to the
+    /// record's URL alone; same-record links retain their authored fragment.
     #[serde(default, skip_serializing_if = "nothing_to_report")]
     #[schemars(!skip_serializing_if)]
     pub section_links_unaddressable: u64,
@@ -1446,6 +1447,8 @@ impl Journal {
 /// to answer a later query.
 #[derive(Default)]
 struct Running {
+    /// The private addresses checked by this invocation, never persisted.
+    private_locations: Option<Vec<String>>,
     /// Every item an edge of this command resolves to a destination id rather than writing as
     /// it was read: the ids named, what travels with them, and — for a member copy — each
     /// member the copy does not carry whose own recorded origin already names its
@@ -3487,6 +3490,11 @@ impl Engine {
                 unrecorded_far_end(item, unrecorded)?;
             }
         }
+        for (project, tasks, _, _) in &mut plans {
+            for item in std::iter::once(project).chain(tasks) {
+                self.prepare_public_body(item, running).await?;
+            }
+        }
         // Every item of every project held to the public boundary before any is written, so
         // a refusal leaves nothing anywhere — not even a project its tasks never reached.
         let rewrite = self
@@ -3509,7 +3517,16 @@ impl Engine {
             }
         }
         // Every public view too, before anything of any plan is written.
-        for (_, _, _, projecting) in &plans {
+        for (_, _, _, projecting) in &mut plans {
+            if projecting.lands() {
+                if projecting.could_address() && running.private_locations.is_none() {
+                    running.private_locations = Some(self.private_locations().await?);
+                }
+                projecting.public_bodies(
+                    self,
+                    running.private_locations.as_deref().unwrap_or_default(),
+                )?;
+            }
             self.preflight_projections(projecting).await?;
         }
         running.preflighted = true;
@@ -5173,6 +5190,11 @@ impl Engine {
         // of this call has been read: the destination is walked once for all of them, and
         // the content the rest of this call lands is the rewritten one — which is what
         // makes a repeat copy of an already-rewritten document report `unchanged`.
+        if !running.preflighted {
+            for item in &mut planned {
+                self.prepare_public_body(item, running).await?;
+            }
+        }
         self.rewrite_references(&mut planned, &running.resolvable, &mut running.references)
             .await?;
         // Each record a body links to is written before the body, so a link is addressable when

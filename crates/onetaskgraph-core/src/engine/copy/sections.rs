@@ -24,8 +24,8 @@ use crate::section_links::{RecordHeadings, SectionForm, Written, relative_path, 
 pub(super) struct SectionCounts {
     /// Fragments naming no heading of the record they point at, carried verbatim.
     pub(super) unresolved: u64,
-    /// Links to a heading the destination's form cannot address, written as the record's
-    /// link alone.
+    /// Links the native form cannot address, using the record URL across records or the
+    /// authored fragment within one record.
     pub(super) unaddressable: u64,
 }
 
@@ -115,7 +115,8 @@ pub(super) enum Pass {
     /// One while the copy may still learn more: a link not addressable yet is left pending.
     Provisional,
     /// The rendering that lands once nothing more will be learned: nothing is left pending,
-    /// and a link the form still cannot address is written as the record's link alone.
+    /// using the record URL across records or the authored fragment within one record
+    /// when the native heading still cannot be addressed.
     Final,
 }
 
@@ -552,7 +553,10 @@ impl BodyLinks {
             &self.own_headings,
             stored.as_deref(),
         );
-        let fallback = own.map_or_else(|| verbatim.to_owned(), |(_, location)| location);
+        let fallback = match SectionForm::LocalMd.same(None, &heading, &self.own_headings, None) {
+            Written::Link(authored) => authored,
+            _ => verbatim.to_owned(),
+        };
         settle(written, fallback, pass, rendered)
     }
 
