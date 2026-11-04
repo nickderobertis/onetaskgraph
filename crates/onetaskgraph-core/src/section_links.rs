@@ -409,8 +409,15 @@ impl SectionForm {
                 .unwrap_or(target.len());
             let destination = &target[..end];
             let heading = if let Some(fragment) = destination.strip_prefix('#') {
-                self.same_record(fragment, &headings)
-                    .or_else(|| self.heading_of(fragment, &headings, stored))
+                // Stored GitHub links carry the native prefix even when another heading's
+                // authored slug begins with that prefix. Remove exactly one on reading.
+                if self == Self::GithubProjects {
+                    self.heading_of(fragment, &headings, stored)
+                        .or_else(|| headings.by_slug(fragment))
+                } else {
+                    self.same_record(fragment, &headings)
+                        .or_else(|| self.heading_of(fragment, &headings, stored))
+                }
             } else {
                 spellings.iter().find_map(|own| {
                     destination
@@ -496,7 +503,7 @@ impl SectionForm {
                 None => Written::Unaddressable(String::new()),
             },
             Self::GithubProjects => match headings.slug_of(heading) {
-                Some(slug) => Written::Link(format!("#{slug}")),
+                Some(slug) => Written::Link(format!("#{USER_CONTENT}{slug}")),
                 None => Written::Unaddressable(String::new()),
             },
             Self::Linear(_) => match own {

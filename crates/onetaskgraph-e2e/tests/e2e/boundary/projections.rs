@@ -3554,7 +3554,7 @@ fn a_private_linear_canonicals_public_view_keeps_its_authored_sections_without_i
             if destination_kind == "github-projects" {
                 assert!(
                     raw.contains(
-                        "[the paging budget](#budget-page-by-an-opaque-cursor-page-seconds)"
+                        "[the paging budget](#user-content-budget-page-by-an-opaque-cursor-page-seconds)"
                     ),
                     "{raw}"
                 );

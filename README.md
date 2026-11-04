@@ -1379,7 +1379,7 @@ decided: it writes the form, parses it back and supplies its markup.
 | Destination | Link to another record's heading | Link to its own heading |
 | --- | --- | --- |
 | A folder of Markdown | `<path relative to the linking file>#<slug>` | `#<slug>` |
-| A GitHub Projects issue | `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` | `#<slug>` |
+| A GitHub Projects issue | `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` | `#user-content-<slug>` |
 | A Linear issue, project or document | `<record URL>#heading-<Linear slug>-<id8>` | the record's own URL with that fragment |
 | Linear without a stored heading id | `<record URL>` | `#<slug>` |
 | Task read (every source) | as stored | `#<slug>` |

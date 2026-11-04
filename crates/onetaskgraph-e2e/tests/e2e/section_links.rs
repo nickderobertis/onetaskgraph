@@ -653,6 +653,10 @@ fn holds_the_form(
         Store::Github(_) => {
             // The issue page gives a heading no id: the body carries one before each.
             let raw = store.raw(&landed["T"]);
+            assert!(
+                raw.contains("[the second budgets](#user-content-budgets-1)"),
+                "{what}: the same-record link targets the written GitHub anchor: {raw}"
+            );
             for (text, slug) in [
                 ("## What", "what"),
                 ("## Budgets\n\nFirst", "budgets"),
@@ -2741,6 +2745,7 @@ fn a_task_linking_its_own_record_and_its_comments_fragment_are_written_for_the_d
         let there = task.location(&sandbox);
         let (own_link, fragment) = match &destination {
             Store::Local => ("A.md".to_owned(), "#budgets"),
+            Store::Github(_) => (there.clone(), "#user-content-budgets"),
             _ => (there.clone(), "#budgets"),
         };
         assert!(

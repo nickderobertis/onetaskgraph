@@ -110,7 +110,7 @@ fn each_destination_writes_its_own_form() {
     );
     assert_eq!(
         SectionForm::GithubProjects.same(None, &second, &held, None),
-        Written::Link("#budgets-1".into())
+        Written::Link("#user-content-budgets-1".into())
     );
     let stored = vec![
         StoredHeading {
