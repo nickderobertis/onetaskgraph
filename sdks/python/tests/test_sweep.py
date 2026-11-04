@@ -12,14 +12,15 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import TypedDict
+from typing import TypedDict, get_args
 
 import pytest
 from pydantic import BaseModel, JsonValue, TypeAdapter
-from sweep_source import Label, Status, TaskId
+from sweep_source import DependencyDirection, Label, Status, TaskId
 
 from onetaskgraph_sdk import Client, OnetaskgraphError, StatusCategory
 
@@ -653,3 +654,26 @@ def test_a_sweep_that_cannot_run_still_raises(binary: Path, tmp_path: Path) -> N
         run(sdk.sources_sanitize("site"))
     assert refused.value.exit_code == 1
     assert "terms_command" in str(refused.value)
+
+
+def test_the_peers_dependency_directions_match_the_plugin_api() -> None:
+    """Reconcile the unexported Direction enum, including any newly added variant."""
+    # Direction has no CLI schema root. Read its authoritative declaration; unlike an
+    # example list, consuming every variant makes an API addition fail this drift check.
+    source = (
+        Path(__file__).resolve().parents[3] / "crates/onetaskgraph-plugin-api/src/work.rs"
+    ).read_text()
+    declared = re.search(
+        r'#[\[]serde\(rename_all = "kebab-case"\)[\]]\s*pub enum Direction \{([^}]+)\}', source
+    )
+    assert declared is not None, "Direction must still use the protocol's kebab-case vocabulary"
+    variants = []
+    for line in declared[1].splitlines():
+        line = line.strip()
+        if not line or line.startswith("//"):
+            continue
+        assert re.fullmatch(r"[A-Z][A-Za-z0-9]*,", line), (
+            f"review the changed Direction variant: {line}"
+        )
+        variants.append(re.sub(r"(?<!^)(?=[A-Z])", "-", line[:-1]).lower())
+    assert get_args(DependencyDirection) == tuple(variants)

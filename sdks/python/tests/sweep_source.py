@@ -11,11 +11,12 @@ file named by its one argument, so what one invocation writes the next one reads
 import json
 import sys
 from pathlib import Path
-from typing import Literal, NotRequired, TypedDict, cast
+from typing import Literal, NotRequired, TypedDict, cast, get_args
 
 from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 from onetaskgraph_sdk import StatusCategory
+from onetaskgraph_sdk._generated.document_query import TextFields
 from onetaskgraph_sdk._generated.query_response_of_qualified_edge import (
     DependencyKind,
     Designator,
@@ -26,6 +27,7 @@ from onetaskgraph_sdk._generated.task_detail import Task as WireTask
 KIND = "sweep-source"
 PROTOCOL_VERSION = 2
 MAX_PAGE_SIZE = 100
+DependencyDirection = Literal["depends-on", "depended-on-by"]
 
 CAPABILITIES = {
     "projects": "unsupported",
@@ -140,7 +142,7 @@ class TextQuery(BaseModel):
     """The three native text selectors of protocol §4.5."""
 
     terms: str
-    fields: Literal["title", "content", "title-or-content"] = "title-or-content"
+    fields: TextFields = TextFields.TextFieldsTitleOrContent
 
 
 class Held(TypedDict):
@@ -345,7 +347,7 @@ def _answer(store: Path, method: str, params: dict[str, object]) -> dict[str, ob
                 exists = any(task["id"] == identifier for task in tasks)
                 return {"result": {"page": _page([], page) if exists else None}}
             direction = params.get("direction")
-            if direction not in ("depends-on", "depended-on-by"):
+            if direction not in get_args(DependencyDirection):
                 return _malformed("the dependency direction follows protocol section 4.7")
             edges = (
                 held["edges"].get(identifier, [])
