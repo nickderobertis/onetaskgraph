@@ -1386,15 +1386,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -4361,15 +4432,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -4835,15 +4977,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -6385,15 +6598,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -7602,15 +7886,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -7812,15 +8167,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -9035,15 +9461,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -10009,15 +10506,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -12377,15 +12945,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -15945,15 +16584,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -17791,15 +18501,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -17934,15 +18715,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -18000,15 +18852,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -21093,15 +22016,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -21113,7 +22107,8 @@ export const runtimeSchemas = {
     "type": "object",
     "properties": {
       "source": {
-        "description": "The source swept, as screened."
+        "description": "The source swept, as screened.",
+        "$ref": "#/$defs/Locator"
       },
       "dry_run": {
         "description": "Whether nothing was written.",
@@ -21148,6 +22143,75 @@ export const runtimeSchemas = {
       "items"
     ],
     "$defs": {
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
+        ]
+      },
       "SweepRequests": {
         "description": "Source-counted requests and engine operations, not a partition of those requests.\nOnly `total` counts every request; one operation may send several, and guarded reads or\nindividual comment writes may be internal to an operation.",
         "type": "object",
@@ -21230,7 +22294,8 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "id": {
-            "description": "The item's qualified id, as screened."
+            "description": "The item's qualified id, as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "kind": {
             "description": "What kind of record it is.",
@@ -21305,7 +22370,8 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "field": {
-            "description": "`content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its\nkey or id as screened."
+            "description": "`content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its\nkey or id as screened.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
@@ -22080,15 +23146,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -23105,15 +24242,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -24491,15 +25699,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -25371,15 +26650,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -26906,15 +28256,86 @@ export const runtimeSchemas = {
         "type": "object",
         "properties": {
           "item": {
-            "description": "The item, by its qualified id as screened."
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
           },
           "field": {
-            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
           }
         },
         "required": [
           "item",
           "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
         ]
       }
     }
@@ -27346,7 +28767,9 @@ export const runtimeSchemas = {
       "replacements": {
         "description": "The caller's replacement layer: `{term, with}` or `{term, reject: true}`, in order.",
         "type": "array",
-        "items": true,
+        "items": {
+          "$ref": "#/$defs/Replacement"
+        },
         "default": []
       }
     },
@@ -27358,6 +28781,43 @@ export const runtimeSchemas = {
         "items": {
           "type": "string"
         }
+      },
+      "Replacement": {
+        "description": "Replace a term with a string, or reject it: exactly one.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "term": {
+                "type": "string"
+              },
+              "with": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "term",
+              "with"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "term": {
+                "type": "string"
+              },
+              "reject": {
+                "const": true
+              }
+            },
+            "required": [
+              "term",
+              "reject"
+            ],
+            "additionalProperties": false
+          }
+        ]
       }
     }
   },

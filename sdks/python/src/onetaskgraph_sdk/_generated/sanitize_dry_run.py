@@ -4,15 +4,42 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from enum import StrEnum
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
+
+
+class LocatorKind(StrEnum):
+    LocatorKindSource = "source"
+    LocatorKindItem = "item"
+    LocatorKindField = "field"
+    LocatorKindMetadataKey = "metadata-key"
+    LocatorKindComment = "comment"
+    LocatorKindPath = "path"
+    LocatorKindIdentity = "identity"
+
+
+class Locator1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    redacted: Literal[True]
+    kind: LocatorKind
+    ordinal: Annotated[int, Field(ge=1)]
+
+
+class Locator(RootModel[str | Locator1]):
+    root: Annotated[
+        str | Locator1,
+        Field(description="A screened locator: the string verbatim, or its redacted form."),
+    ]
 
 
 class SideEffect(BaseModel):
-    item: Annotated[Any, Field(description="The item, by its qualified id as screened.")]
+    item: Annotated[Locator, Field(description="The item, by its qualified id as screened.")]
     field: Annotated[
-        Any,
+        Locator,
         Field(
             description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
         ),

@@ -455,7 +455,7 @@ pub struct WritePolicyConfig {
         skip_serializing_if = "Vec::is_empty",
         deserialize_with = "replacements"
     )]
-    #[schemars(with = "Vec<Value>", !skip_serializing_if)]
+    #[schemars(!skip_serializing_if)]
     pub replacements: Vec<privateterms::Replacement>,
 }
 

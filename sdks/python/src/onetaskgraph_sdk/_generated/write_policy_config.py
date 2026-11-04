@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
@@ -13,6 +13,29 @@ class PolicyCommand(RootModel[list[str]]):
     root: Annotated[
         list[str],
         Field(description="One command line: the program, then its arguments, never empty."),
+    ]
+
+
+class Replacement1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    term: str
+    with_: Annotated[str, Field(alias="with")]
+
+
+class Replacement2(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    term: str
+    reject: Literal[True]
+
+
+class Replacement(RootModel[Replacement1 | Replacement2]):
+    root: Annotated[
+        Replacement1 | Replacement2,
+        Field(description="Replace a term with a string, or reject it: exactly one."),
     ]
 
 
@@ -41,8 +64,9 @@ class WritePolicyConfig(BaseModel):
         Field(description="The command that answers a scope's resolved terms."),
     ] = None
     replacements: Annotated[
-        list[Any],
+        list[Replacement],
         Field(
-            description="The caller's replacement layer: `{term, with}` or `{term, reject: true}`, in order."
+            description="The caller's replacement layer: `{term, with}` or `{term, reject: true}`, in order.",
+            validate_default=True,
         ),
     ] = []

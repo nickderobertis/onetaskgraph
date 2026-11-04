@@ -16,26 +16,79 @@ import re
 import sys
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import TypedDict, get_args
+from typing import NamedTuple, TypedDict, get_args
 
 import pytest
 from pydantic import BaseModel, JsonValue, TypeAdapter
-from sweep_source import DependencyDirection, Label, Status, TaskId
+from sweep_source import DependencyDirection, Task, TaskId, WireEdge, WireTask
 
 from onetaskgraph_sdk import Client, OnetaskgraphError, StatusCategory
+from onetaskgraph_sdk._generated.sweep_report import LocatorKind
+from onetaskgraph_sdk._generated.write_policy_config import WritePolicyConfig
 
-TERMS = """
+
+class ProcessResult(NamedTuple):
+    """One subprocess completion, with named output streams."""
+
+    code: int | None
+    stdout: bytes
+    stderr: bytes
+
+
+class SourceConfig(TypedDict):
+    """The file configuration seam; plugin-specific settings remain JSON."""
+
+    plugin: str
+    config: dict[str, JsonValue]
+    visibility: str
+
+
+POLICY_INPUT = (
+    "LOCATOR_KINDS = "
+    + repr(tuple(kind.value for kind in LocatorKind))
+    + "\n"
+    + """
 import json, sys
-received = json.loads(sys.stdin.read())
+try:
+    received = json.loads(sys.stdin.read())
+except (ValueError, TypeError):
+    sys.exit(2)
+if not isinstance(received, dict):
+    sys.exit(2)
+entries = received.get("replacements", [])
+if not isinstance(entries, list) or any(
+    not isinstance(entry, dict) or not isinstance(entry.get("term"), str)
+    or not entry["term"] or not isinstance(entry.get("with"), str)
+    for entry in entries
+):
+    sys.exit(2)
+for surface in ("text", "paths", "metadata"):
+    values = received.get(surface, [])
+    if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+        sys.exit(2)
+locators = received.get("locators", [])
+if not isinstance(locators, list) or any(
+    not isinstance(locator, dict) or not isinstance(locator.get("value"), str)
+    or locator.get("kind") not in LOCATOR_KINDS
+    for locator in locators
+):
+    sys.exit(2)
+"""
+)
+
+TERMS = (
+    POLICY_INPUT
+    + """
 print(json.dumps({"terms": [
     {"term": entry["term"], "mode": "whole-word", "case_sensitive": False,
      "action": "replace", "with": entry["with"]}
     for entry in received.get("replacements", []) if "with" in entry]}))
 """
+)
 
-SANITIZE = """
-import json, sys
-received = json.loads(sys.stdin.read())
+SANITIZE = (
+    POLICY_INPUT
+    + """
 terms = [(entry["term"], entry["with"]) for entry in received.get("replacements", [])]
 replaced = 0
 def rewrite(value):
@@ -67,6 +120,34 @@ if carrying:
 answer.update(verdict="pass", unfixed=[])
 print(json.dumps(answer))
 """
+)
+
+
+@pytest.mark.parametrize("command", [TERMS, SANITIZE])
+@pytest.mark.parametrize(
+    "received",
+    [[], {"replacements": [{}]}, {"text": [7]}, {"locators": [{"kind": "item", "value": 7}]}],
+)
+def test_policy_commands_refuse_malformed_wire_inputs(command: str, received: JsonValue) -> None:
+    """The real policy subprocess rejects malformed input before using its values."""
+
+    async def exchange() -> ProcessResult:
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate(json.dumps(received).encode())
+        return ProcessResult(process.returncode, stdout, stderr)
+
+    code, stdout, stderr = asyncio.run(exchange())
+    assert code == 2
+    assert stdout == b""
+    assert stderr == b""
+
 
 TERM = "emberline"
 
@@ -85,8 +166,8 @@ class PeerReply(BaseModel):
     error: PeerError
 
 
-async def peer_exchange(store: Path, request: dict[str, JsonValue]) -> tuple[int, bytes, bytes]:
-    """Exchange a typed JSON request with the peer's real subprocess."""
+async def peer_exchange(store: Path, request: dict[str, JsonValue]) -> ProcessResult:
+    """A separate process makes persisted writes observable after that invocation exits."""
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         str(Path(__file__).with_name("sweep_source.py")),
@@ -97,7 +178,7 @@ async def peer_exchange(store: Path, request: dict[str, JsonValue]) -> tuple[int
     )
     stdout, stderr = await process.communicate((json.dumps(request) + "\n").encode())
     assert process.returncode is not None
-    return process.returncode, stdout, stderr
+    return ProcessResult(process.returncode, stdout, stderr)
 
 
 async def peer_request(store: Path, request: dict[str, JsonValue]) -> PeerReply:
@@ -140,7 +221,7 @@ def test_the_search_peer_refuses_malformed_stored_state(
         ("updated_at", 7),
     ],
 )
-def test_the_search_peer_validates_every_stored_task_field(
+def test_the_search_peer_refuses_malformed_stored_task_fields(
     tmp_path: Path,
     field: str,
     value: JsonValue,
@@ -269,14 +350,38 @@ def test_the_search_peer_refuses_unknown_status_categories(tmp_path: Path) -> No
     assert json.loads(store.read_text(encoding="utf-8"))["tasks"] == tasks
 
 
-async def peer_result(store: Path, request: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    """Read a successful protocol reply without discarding any of its JSON fields."""
+class SuccessfulReply(BaseModel):
+    """The transport envelope of a successful protocol call."""
+
+    id: str
+    result: JsonValue
+
+
+class PeerPage[T](BaseModel):
+    """A paged protocol result with a concrete record model at each call."""
+
+    items: list[T]
+    next: str | None
+
+
+class PeerWritten(BaseModel):
+    """The id a successful write assigned."""
+
+    id: str
+
+
+class PeerTaskRead(BaseModel):
+    """A task read through the peer's authoritative wire model."""
+
+    task: WireTask
+
+
+async def peer_result[T](store: Path, request: dict[str, JsonValue], model: type[T]) -> T:
+    """Fail here before malformed peer replies can masquerade as store failures."""
     code, out, err = await peer_exchange(store, request)
     assert code == 0, err.decode()
-    reply = TypeAdapter(dict[str, JsonValue]).validate_json(out)
-    result = reply.get("result")
-    assert isinstance(result, dict), reply
-    return result
+    reply = SuccessfulReply.model_validate_json(out)
+    return TypeAdapter(model).validate_python(reply.result)
 
 
 @pytest.mark.parametrize("method", ["query_tasks", "task_comments", "task_dependencies", "labels"])
@@ -319,20 +424,28 @@ def test_the_peer_returns_only_the_requested_task_page(tmp_path: Path) -> None:
                 "method": "query_tasks",
                 "params": {"query": {}, "page": {"cursor": None, "limit": 1}},
             },
+            PeerPage[WireTask],
         )
     )
-    assert first == {"items": [task("t1", "First.")], "next": "1"}
+    assert first.model_dump(mode="json", by_alias=True, exclude_unset=True) == {
+        "items": [task("t1", "First.")],
+        "next": "1",
+    }
     second = run(
         peer_result(
             store,
             {
                 "id": "second",
                 "method": "query_tasks",
-                "params": {"query": {}, "page": {"cursor": first["next"], "limit": 1}},
+                "params": {"query": {}, "page": {"cursor": first.next, "limit": 1}},
             },
+            PeerPage[WireTask],
         )
     )
-    assert second == {"items": [task("t2", "Second.")], "next": None}
+    assert second.model_dump(mode="json", by_alias=True, exclude_unset=True) == {
+        "items": [task("t2", "Second.")],
+        "next": None,
+    }
 
 
 @pytest.mark.parametrize(
@@ -458,21 +571,26 @@ def test_the_peer_preserves_written_work_fields_and_dependencies(tmp_path: Path)
         "to": {"id": "other:t2", "kind": "task"},
         "kind": "blocks",
     }
-    assert run(
+    assert (
+        run(
+            peer_result(
+                store,
+                {
+                    "id": "write",
+                    "method": "write_task",
+                    "params": {"write": {"target": "t1", "item": item, "depends_on": [edge]}},
+                },
+                PeerWritten,
+            )
+        ).id
+        == "t1"
+    )
+    read = run(
         peer_result(
-            store,
-            {
-                "id": "write",
-                "method": "write_task",
-                "params": {"write": {"target": "t1", "item": item, "depends_on": [edge]}},
-            },
+            store, {"id": "read", "method": "get_task", "params": {"id": "t1"}}, PeerTaskRead
         )
-    ) == {"id": "t1"}
-    read = run(peer_result(store, {"id": "read", "method": "get_task", "params": {"id": "t1"}}))[
-        "task"
-    ]
-    assert isinstance(read, dict)
-    assert read == {**item, "id": "t1"}
+    ).task
+    assert read.model_dump(mode="json", by_alias=True, exclude_unset=True) == {**item, "id": "t1"}
     page = run(
         peer_result(
             store,
@@ -481,17 +599,21 @@ def test_the_peer_preserves_written_work_fields_and_dependencies(tmp_path: Path)
                 "method": "task_dependencies",
                 "params": {"id": "t1", "direction": "depends-on", "page": {"limit": 1}},
             },
+            PeerPage[WireEdge],
         )
     )
-    assert page == {"items": [{**edge, "from": {"id": "t1", "kind": "task"}}], "next": None}
+    assert page.model_dump(mode="json", by_alias=True, exclude_unset=True) == {
+        "items": [{**edge, "from": {"id": "t1", "kind": "task"}}],
+        "next": None,
+    }
 
 
 def run[T](call: Coroutine[object, object, T]) -> T:
-    """Drive one public async SDK call to completion."""
+    """Keep invocations in separate event loops, as independent CLI commands would be."""
     return asyncio.run(call)
 
 
-def policy(*, terms: bool = True) -> dict[str, object]:
+def policy(*, terms: bool = True) -> WritePolicyConfig:
     """A `write_policy` replacing `TERM`, listing its terms only when `terms` is set."""
     configured: dict[str, object] = {
         "check_command": [sys.executable, "-c", "import sys; sys.exit(2)"],
@@ -500,36 +622,28 @@ def policy(*, terms: bool = True) -> dict[str, object]:
     }
     if terms:
         configured["terms_command"] = [sys.executable, "-c", TERMS]
-    return configured
+    return WritePolicyConfig.model_validate(configured)
 
 
 def client(
-    binary: Path, tmp_path: Path, sources: dict[str, object], **policy_options: bool
+    binary: Path, tmp_path: Path, sources: dict[str, SourceConfig], **policy_options: bool
 ) -> Client:
-    """A client over `sources` under [`policy`]."""
+    """Persist configuration beside the records so independent invocations share a source."""
     (tmp_path / "onetaskgraph.yaml").write_text(
-        json.dumps({"write_policy": policy(**policy_options), "sources": sources}),
+        json.dumps(
+            {
+                "write_policy": policy(**policy_options).model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+                "sources": sources,
+            }
+        ),
         encoding="utf-8",
     )
     return Client(binary, cwd=tmp_path, environment=dict(os.environ))
 
 
-class Task(TypedDict):
-    """One task as `sweep_source.py` holds it and sends it (§4.4)."""
-
-    id: TaskId
-    title: str
-    content: str
-    status: Status
-    labels: list[Label]
-    project: None
-    url: None
-    location: None
-    created_at: None
-    updated_at: None
-
-
-def task(identifier: str, content: str) -> Task:
+def task(identifier: TaskId, content: str) -> Task:
     """One task as the peer holds it and sends it (§4.4)."""
     return {
         "id": identifier,
@@ -610,7 +724,9 @@ def test_a_search_sweep_answers_its_report_on_exit_three(binary: Path, tmp_path:
         "comments",
         "normalized-spellings",
     ]
-    assert [(item.id, item.outcome.value) for item in report.items] == [("tracker:t1", "rewritten")]
+    assert [(item.id.root, item.outcome.value) for item in report.items] == [
+        ("tracker:t1", "rewritten")
+    ]
     assert report.requests.total > 0
     held = json.loads(store.read_text(encoding="utf-8"))["tasks"]
     assert [entry["content"] for entry in held if entry["id"] == "t1"] == ["Retry as ember-x does."]
@@ -635,7 +751,7 @@ def test_a_sweep_leaving_an_identifier_unfixable_answers_its_report_on_exit_one(
     assert len(report.items) == 1
     unfixable = report.items[0]
     assert unfixable.outcome.value == "unfixable"
-    assert unfixable.id == {"redacted": True, "kind": "item", "ordinal": 1}
+    assert unfixable.id.model_dump(mode="json") == {"redacted": True, "kind": "item", "ordinal": 1}
     field = unfixable.fields[0].root
     assert field.outcome == "unfixable"
     assert getattr(field, "why", None) == "identifier carries a private term"

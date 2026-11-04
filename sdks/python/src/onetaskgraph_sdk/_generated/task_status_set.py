@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, JsonValue, RootModel
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel
 
 
 class GlobalId(RootModel[str]):
@@ -190,14 +190,14 @@ class BudgetSpent(BaseModel):
     ]
 
 
-class SideEffect(BaseModel):
-    item: Annotated[Any, Field(description="The item, by its qualified id as screened.")]
-    field: Annotated[
-        Any,
-        Field(
-            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
-        ),
-    ]
+class LocatorKind(StrEnum):
+    LocatorKindSource = "source"
+    LocatorKindItem = "item"
+    LocatorKindField = "field"
+    LocatorKindMetadataKey = "metadata-key"
+    LocatorKindComment = "comment"
+    LocatorKindPath = "path"
+    LocatorKindIdentity = "identity"
 
 
 class Status(BaseModel):
@@ -284,19 +284,19 @@ class Spent(BaseModel):
     ]
 
 
-class Sanitization(BaseModel):
-    replaced: Annotated[
-        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
-    ]
-    side_effect: Annotated[
-        list[SideEffect],
-        Field(
-            description="Each field or comment of an item sanitisation changed beyond the write itself."
-        ),
-    ]
-    dry_run: Annotated[
-        bool,
-        Field(description="Whether nothing was written, the changes only reported."),
+class Locator1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    redacted: Literal[True]
+    kind: LocatorKind
+    ordinal: Annotated[int, Field(ge=1)]
+
+
+class Locator(RootModel[str | Locator1]):
+    root: Annotated[
+        str | Locator1,
+        Field(description="A screened locator: the string verbatim, or its redacted form."),
     ]
 
 
@@ -332,6 +332,32 @@ class Delivered(RootModel[DeliveredWritten | DeliveredUnchanged | DeliveredLeft 
     root: Annotated[
         DeliveredWritten | DeliveredUnchanged | DeliveredLeft | DeliveredFailed,
         Field(description="What keeping one delivered task in step with one deliverer came to."),
+    ]
+
+
+class SideEffect(BaseModel):
+    item: Annotated[Locator, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Locator,
+        Field(
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+        ),
+    ]
+
+
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
+        Field(
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
+        ),
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
     ]
 
 

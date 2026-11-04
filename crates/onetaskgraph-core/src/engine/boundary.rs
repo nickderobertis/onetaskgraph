@@ -1118,10 +1118,8 @@ impl SanitizationLog {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct SideEffect {
     /// The item, by its qualified id as screened.
-    #[schemars(with = "Value")]
     pub item: Locator,
     /// The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.
-    #[schemars(with = "Value")]
     pub field: Locator,
 }
 

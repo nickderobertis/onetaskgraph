@@ -5,9 +5,19 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel
+
+
+class LocatorKind(StrEnum):
+    LocatorKindSource = "source"
+    LocatorKindItem = "item"
+    LocatorKindField = "field"
+    LocatorKindMetadataKey = "metadata-key"
+    LocatorKindComment = "comment"
+    LocatorKindPath = "path"
+    LocatorKindIdentity = "identity"
 
 
 class SweepRequests(BaseModel):
@@ -60,9 +70,30 @@ class ItemOutcome(StrEnum):
     ItemOutcomeNotAMatch = "not-a-match"
 
 
+class Locator1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    redacted: Literal[True]
+    kind: LocatorKind
+    ordinal: Annotated[int, Field(ge=1)]
+
+
+class Locator(RootModel[str | Locator1]):
+    root: Annotated[
+        str | Locator1,
+        Field(description="A screened locator: the string verbatim, or its redacted form."),
+    ]
+
+
+class SweepCoverage(BaseModel):
+    complete: Annotated[bool, Field(description="Whether it covered every class.")]
+    uncovered: Annotated[list[Uncovered], Field(description="Each class it did not cover.")]
+
+
 class SweepFieldRewritten(BaseModel):
     field: Annotated[
-        Any,
+        Locator,
         Field(
             description="`content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its\nkey or id as screened."
         ),
@@ -72,7 +103,7 @@ class SweepFieldRewritten(BaseModel):
 
 class SweepFieldWouldRewrite(BaseModel):
     field: Annotated[
-        Any,
+        Locator,
         Field(
             description="`content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its\nkey or id as screened."
         ),
@@ -82,7 +113,7 @@ class SweepFieldWouldRewrite(BaseModel):
 
 class SweepFieldUnfixable(BaseModel):
     field: Annotated[
-        Any,
+        Locator,
         Field(
             description="`content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its\nkey or id as screened."
         ),
@@ -98,13 +129,8 @@ class SweepField(RootModel[SweepFieldRewritten | SweepFieldWouldRewrite | SweepF
     ]
 
 
-class SweepCoverage(BaseModel):
-    complete: Annotated[bool, Field(description="Whether it covered every class.")]
-    uncovered: Annotated[list[Uncovered], Field(description="Each class it did not cover.")]
-
-
 class SweepItem(BaseModel):
-    id: Annotated[Any, Field(description="The item's qualified id, as screened.")]
+    id: Annotated[Locator, Field(description="The item's qualified id, as screened.")]
     kind: Annotated[SweepKind, Field(description="What kind of record it is.")]
     outcome: Annotated[ItemOutcome, Field(description="What the sweep did with it.")]
     fields: Annotated[
@@ -114,7 +140,7 @@ class SweepItem(BaseModel):
 
 
 class SweepReport(BaseModel):
-    source: Annotated[Any, Field(description="The source swept, as screened.")]
+    source: Annotated[Locator, Field(description="The source swept, as screened.")]
     dry_run: Annotated[bool, Field(description="Whether nothing was written.")]
     complete: Annotated[
         bool,

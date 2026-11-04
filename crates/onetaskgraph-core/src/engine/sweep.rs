@@ -97,7 +97,6 @@ pub enum FieldOutcome {
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct SweepReport {
     /// The source swept, as screened.
-    #[schemars(with = "serde_json::Value")]
     pub source: Locator,
     /// Whether nothing was written.
     pub dry_run: bool,
@@ -144,7 +143,6 @@ pub struct SweepCoverage {
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct SweepItem {
     /// The item's qualified id, as screened.
-    #[schemars(with = "serde_json::Value")]
     pub id: Locator,
     /// What kind of record it is.
     pub kind: SweepKind,
@@ -159,7 +157,6 @@ pub struct SweepItem {
 pub struct SweepField {
     /// `content`, `title`, `label`, `repositories`, `metadata:<key>` or `comment:<id>`, its
     /// key or id as screened.
-    #[schemars(with = "serde_json::Value")]
     pub field: Locator,
     /// What the sweep did with it.
     #[serde(flatten)]
