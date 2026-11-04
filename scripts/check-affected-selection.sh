@@ -238,12 +238,12 @@ report_on_failure "editing onetaskgraph-core" "$selection" "$before"
 # be selected without making the loopback suite wait behind the main session.
 for job in test-linux test-macos test-windows; do
   if ! (cd "$scratch/repo" && NX_BASE=HEAD~1 NX_HEAD=HEAD bash scripts/ci-job.sh "$job" --select-only) > "$scratch/core-$job.txt"; then
-    echo "check-affected-selection: $job could not plan the engine-only diff" >&2
+    echo "check-affected-selection: $job could not plan the engine-only diff; run scripts/ci-job.sh $job --select-only with NX_BASE and NX_HEAD naming that diff, then fix its Nx error." >&2
     exit 1
   fi
   for task in onetaskgraph-github-projects:test onetaskgraph-github-projects-e2e:test; do
     if ! tr ' ' '\n' < "$scratch/core-$job.txt" | grep -qxF "$task"; then
-      echo "check-affected-selection: $job must select $task beside its session contributor" >&2
+      echo "check-affected-selection: $job must select $task beside its session contributor; restore contributor selection in scripts/ci-job.sh, then re-run this guard." >&2
       failures=$((failures + 1))
     fi
   done
@@ -280,12 +280,12 @@ PYTARGETS
     fi
     for task in onetaskgraph-github-projects:test onetaskgraph-github-projects-e2e:test; do
       if ! sed -n 's/^ci-job: test-linux: ran //p' "$scratch/core-run-$outcome.txt" | tr ' ' '\n' | grep -qxF "$task"; then
-        echo "check-affected-selection: Linux did not run $task" >&2
+        echo "check-affected-selection: Linux did not run $task; restore the run-many contributor expansion in scripts/ci-job.sh, then re-run this guard." >&2
         failures=$((failures + 1))
       fi
     done
   elif [ "$status" -eq 0 ] || ! grep -qF "onetaskgraph-github-projects:test" "$scratch/core-run-$outcome.txt"; then
-    echo "check-affected-selection: Linux accepted a failed main session" >&2
+    echo "check-affected-selection: Linux accepted a failed main session; fix run_phase status propagation in scripts/ci-job.sh, then re-run this guard." >&2
     failures=$((failures + 1))
   fi
 done
@@ -302,11 +302,11 @@ NXWRAPPER
 chmod +x "$scratch/repo/node_modules/.bin/nx"
 if (cd "$scratch/repo" && NX_BASE=HEAD~1 NX_HEAD=HEAD bash scripts/ci-job.sh test-linux --select-only) \
   > "$scratch/core-replan.txt" 2>&1; then
-  echo "check-affected-selection: Linux accepted failed replacement planning" >&2
+  echo "check-affected-selection: Linux accepted failed replacement planning; return failure from run_phase when its second selected_tasks call fails, then re-run this guard." >&2
   failures=$((failures + 1))
 fi
 if ! grep -qF "induced replacement planning failure" "$scratch/core-replan.txt"; then
-  echo "check-affected-selection: replacement planning refusal lost its cause" >&2
+  echo "check-affected-selection: replacement planning refusal lost its cause; preserve Nx stderr in selected_tasks in scripts/ci-job.sh, then re-run this guard." >&2
   failures=$((failures + 1))
 fi
 mv "$scratch/repo/node_modules/.bin/nx.real" "$scratch/repo/node_modules/.bin/nx"

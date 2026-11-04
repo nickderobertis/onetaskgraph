@@ -69,9 +69,7 @@
       },
       "// end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]",
       "// live order": "The asset journey waits for the main record internally, so loopback tests run beside the main session. CI selects both contributors; budgets waits on both.",
-      "// session prerequisite": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier] Required hosted journeys are repository policy; this prerequisite supplies the current main record the selected asset journey requires.",
       "dependsOn": ["onetaskgraph:build"],
-      "// session prerequisite end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]",
       "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement.",
       "outputs": [
         "{workspaceRoot}/target/debug/telemetry/onetaskgraph-github-projects-e2e",
