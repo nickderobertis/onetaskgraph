@@ -89,22 +89,63 @@ fn a_terms_failure_screens_the_source_name_even_when_no_item_was_read() {
 }
 
 #[test]
-fn the_editing_peers_status_vocabulary_is_the_emitted_contract() {
+fn the_editing_peers_vocabularies_and_task_fields_are_the_emitted_contract() {
     let shared = Shared::new(&[("t1", PLAIN)], json!({}), json!({}));
     let bundle: Value = serde_json::from_str(&shared.store.ok(&["schema"])).expect("schema");
     let output = std::process::Command::new("python3")
-        .args(["-c", "import json, runpy, sys, typing; print(json.dumps(typing.get_args(runpy.run_path(sys.argv[1])['StatusCategory'])))"])
+        .args(["-c", "import json, runpy, sys, typing; p=runpy.run_path(sys.argv[1]); print(json.dumps({**{n:list(typing.get_args(p[n])) for n in ['StatusCategory','Priority','ItemKind','DependencyKind','TextFields','Direction','Classification']}, 'Task':sorted(p['Task'].__annotations__)}))"])
         .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/edit_source.py"))
         .output().expect("peer vocabulary");
     assert!(output.status.success(), "{}", stderr(&output));
     let declared: Value = serde_json::from_str(&stdout(&output)).expect("category values");
-    let expected: Vec<Value> = bundle["roots"]["StatusCategory"]["oneOf"]
-        .as_array()
-        .expect("the category alternatives")
-        .iter()
-        .map(|category| category["const"].clone())
+    for name in [
+        "StatusCategory",
+        "Priority",
+        "ItemKind",
+        "DependencyKind",
+        "TextFields",
+        "Classification",
+    ] {
+        let roots = bundle["roots"].as_object().expect("roots");
+        let schema = roots
+            .get(name)
+            .or_else(|| roots.values().find_map(|root| root["$defs"].get(name)))
+            .expect("a declared schema");
+        let expected: Vec<Value> = schema["oneOf"]
+            .as_array()
+            .expect("alternatives")
+            .iter()
+            .map(|variant| variant["const"].clone())
+            .collect();
+        assert_eq!(declared[name], json!(expected), "{name}");
+    }
+    // Direction is not a CLI schema root. Exhaustive matching makes a new API variant
+    // fail compilation until this peer's accepted vocabulary is deliberately reconciled.
+    use onetaskgraph_plugin_api::Direction;
+    let direction_word = |direction| match direction {
+        Direction::DependsOn => "depends-on",
+        Direction::DependedOnBy => "depended-on-by",
+    };
+    assert_eq!(
+        declared["Direction"],
+        json!([
+            direction_word(Direction::DependsOn),
+            direction_word(Direction::DependedOnBy)
+        ])
+    );
+    let schema = bundle["roots"]
+        .as_object()
+        .expect("roots")
+        .values()
+        .find_map(|root| root["$defs"].get("Task"))
+        .expect("Task schema");
+    let mut fields: Vec<_> = schema["properties"]
+        .as_object()
+        .expect("task properties")
+        .keys()
         .collect();
-    assert_eq!(declared, json!(expected));
+    fields.sort();
+    assert_eq!(declared["Task"], json!(fields));
 }
 
 #[test]
@@ -174,6 +215,27 @@ fn the_editing_peer_refuses_malformed_pages_targets_and_tasks_without_changing_t
             "target":"t1", "item":incomplete, "depends_on":[]
         }}}),
     );
+    for (field, value) in [
+        ("repositories", json!([7])),
+        ("classification", json!("internal")),
+        ("project", json!(7)),
+        ("delivers", json!([7])),
+        ("delivered_by", json!(false)),
+        ("location", json!({"path":7})),
+        ("created_at", json!("yesterday")),
+        ("updated_at", json!(7)),
+        ("key", json!(false)),
+        ("url", json!([])),
+    ] {
+        let mut item = shared.task("t1");
+        item[field] = value;
+        requests.push(json!({"id":field,"method":"write_task","params":{"write":{
+            "target":"t1", "item":item, "depends_on":[]
+        }}}));
+    }
+    for method in ["health", "initialize"] {
+        requests.push(json!({"id":"bad-params","method":method,"params":[1]}));
+    }
     for request in requests {
         let mut child = Command::new(crate::document_store::interpreter())
             .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/edit_source.py"))
@@ -200,6 +262,14 @@ fn the_editing_peer_refuses_malformed_stored_versions_and_controls() {
     let base = shared.state();
     for (key, value) in [
         ("version", json!("²")),
+        ("repositories", json!([7])),
+        ("classification", json!("internal")),
+        ("project", json!(7)),
+        ("delivers", json!([7])),
+        ("delivered_by", json!(false)),
+        ("location", json!({"path":7})),
+        ("created_at", json!("yesterday")),
+        ("updated_at", json!(7)),
         ("gone", json!(7)),
         ("answer_ids", json!([])),
         ("log", json!([7])),
@@ -208,8 +278,20 @@ fn the_editing_peer_refuses_malformed_stored_versions_and_controls() {
         ("moves", json!({"t1":[0]})),
     ] {
         let mut state = base.clone();
-        if key == "version" {
-            state["tasks"][0]["version"] = value;
+        if [
+            "version",
+            "repositories",
+            "classification",
+            "project",
+            "delivers",
+            "delivered_by",
+            "location",
+            "created_at",
+            "updated_at",
+        ]
+        .contains(&key)
+        {
+            state["tasks"][0][key] = value;
         } else {
             state[key] = value;
         }
@@ -3839,6 +3921,45 @@ fn a_comment_edited_without_moving_its_task_is_sanitised_from_what_it_now_says()
         "the person's edit is kept and sanitised: {comments}"
     );
     assert_eq!(shared.task("t1")["priority"], json!("high"));
+}
+
+#[test]
+fn a_clean_comment_that_acquires_a_term_without_moving_its_task_is_sanitised() {
+    let shared = Shared::new(
+        &[("t1", &with_term())],
+        json!({"t1": [2]}),
+        json!({"t1": {"comment_target": "c1", "comment_body": format!("Ask {TERM}, and a person's note."), "silent": "yes"}}),
+    );
+    shared.comment("t1", "c1", "Nothing private.");
+    let output = shared
+        .store
+        .ok(&["task", "priority", "set", "shared:t1", "high"]);
+    assert_eq!(
+        shared.state()["comments"]["t1"][0]["body"],
+        json!(format!("Ask {WITH}, and a person's note."))
+    );
+    assert_eq!(shared.task("t1")["priority"], json!("high"));
+    assert!(output.contains("sanitised"), "{output}");
+}
+
+#[test]
+fn a_sweep_screens_a_term_bearing_source_even_when_its_read_fails() {
+    for switch in ["query_fails", "comments_fail", "later_comments_fail"] {
+        let shared = Shared::named(TERM, &[("t1", &with_term())], json!({}), json!({}));
+        let mut state = shared.state();
+        state["comments"]["t1"] = json!(
+            (0..130)
+                .map(|n| json!({"id":format!("c{n}"),"body":"Plain."}))
+                .collect::<Vec<_>>()
+        );
+        state[switch] = json!(true);
+        std::fs::write(&shared.state, state.to_string()).expect("state");
+        let (code, _, out, err) = sweep(&shared.store, TERM, &["--complete"]);
+        assert_eq!(code, Some(1), "{out}{err}");
+        assert!(err.contains("<redacted source 1>"), "{switch}: {err}");
+        spelled_nowhere(&shared.store, &[&out, &err]);
+        assert_eq!(shared.writes(), 0);
+    }
 }
 
 #[test]

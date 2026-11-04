@@ -229,6 +229,40 @@ impl Engine {
         complete: bool,
     ) -> Result<SweepReport, EngineError> {
         let destination = self.built(source)?;
+        match self
+            .sweep_tasks(destination, source, dry_run, complete)
+            .await
+        {
+            Err(EngineError::SourceRefused { error, .. }) => {
+                // A failed read may precede the first item's screening. Screen its source
+                // on this failure path only; no extra policy call is added to a passing sweep.
+                let exposure = Exposure::default().locate(LocatorKind::Source, source.as_str());
+                let answer = self.screen(&exposure).await;
+                if matches!(answer.verdict, WriteVerdict::Unavailable { .. }) {
+                    return Err(refusal(destination, "the source", &exposure, &answer));
+                }
+                Err(EngineError::SourceRefused {
+                    name: screened_locator(
+                        &exposure,
+                        &answer.locators,
+                        LocatorKind::Source,
+                        source.as_str(),
+                    )
+                    .to_string(),
+                    error,
+                })
+            }
+            result => result,
+        }
+    }
+
+    async fn sweep_tasks(
+        &self,
+        destination: &ResolvedSource,
+        source: &SourceName,
+        dry_run: bool,
+        complete: bool,
+    ) -> Result<SweepReport, EngineError> {
         let terms = self
             .boundary_policy()
             .declared_terms(&TermsRequest {

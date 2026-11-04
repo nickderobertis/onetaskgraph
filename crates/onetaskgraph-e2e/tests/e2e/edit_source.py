@@ -17,9 +17,11 @@ It is spawned with a cleared environment (§3.1), so it imports only the standar
 """
 
 import json
+import re
+from datetime import datetime
 import sys
 from pathlib import Path
-from typing import Any, Generic, Literal, TypeAlias, TypeVar, TypedDict, cast, get_args
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, TypedDict, NotRequired, cast, get_args
 
 KIND = "edit-source"
 PROTOCOL_VERSION = 2
@@ -44,6 +46,13 @@ TaskId: TypeAlias = str
 CommentId: TypeAlias = str
 VersionToken: TypeAlias = str
 StatusCategory: TypeAlias = Literal["draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"]
+Priority: TypeAlias = Literal["none", "urgent", "high", "medium", "low"]
+ItemKind: TypeAlias = Literal["task", "project"]
+DependencyKind: TypeAlias = Literal["blocks", "related"]
+TextFields: TypeAlias = Literal["title", "content", "title-or-content"]
+Direction: TypeAlias = Literal["depends-on", "depended-on-by"]
+Classification: TypeAlias = Literal["public", "private"]
+
 
 
 class Status(TypedDict):
@@ -104,6 +113,16 @@ class Task(TypedDict):
     # Caller-defined metadata holds any JSON value under each key (§4.4): `Any` is JSON here.
     metadata: dict[str, Any]
     version: VersionToken
+    key: NotRequired[str | None]
+    project: str | None
+    url: str | None
+    location: dict[str, str] | None
+    created_at: str | None
+    updated_at: str | None
+    repositories: NotRequired[list[str]]
+    delivers: NotRequired[list[str]]
+    delivered_by: NotRequired[list[str]]
+    classification: NotRequired[Classification]
 
 
 class Comment(TypedDict):
@@ -197,7 +216,7 @@ def _page(state: State, items: list[T], page: PageRequest) -> Page[T]:
 
 
 def _is_priority(value: object) -> bool:
-    return isinstance(value, str) and value in ("none", "urgent", "high", "medium", "low")
+    return isinstance(value, str) and value in get_args(Priority)
 
 
 def _is_label(value: object) -> bool:
@@ -209,13 +228,13 @@ def _is_endpoint(value: object) -> bool:
     if isinstance(value, str):
         return bool(value)
     return (isinstance(value, dict) and isinstance(value.get("id"), str) and bool(value["id"])
-            and value.get("kind") in ("task", "project")
+            and value.get("kind") in get_args(ItemKind)
             and ("designator" not in value or isinstance(value["designator"], str)))
 
 
 def _is_edge(value: object) -> bool:
     return (isinstance(value, dict) and _is_endpoint(value.get("from"))
-            and _is_endpoint(value.get("to")) and value.get("kind") in ("blocks", "related"))
+            and _is_endpoint(value.get("to")) and value.get("kind") in get_args(DependencyKind))
 
 
 # A request's params and a response are JSON objects whose members each method names (§2), so
@@ -258,7 +277,7 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             if not _is_page(params.get("page")):
                 return _malformed("query_tasks carries a page with a positive limit")
             match params.get("query"):
-                case {"text": {"terms": str(terms), "fields": str(fields)}} if fields in ("title", "content", "title-or-content"):
+                case {"text": {"terms": str(terms), "fields": str(fields)}} if fields in get_args(TextFields):
                     wanted = terms.lower()
                     index = state["index"] if fields == "title-or-content" else state[f"{fields}_index"]
                 case dict(query) if query.get("text") is None:
@@ -313,7 +332,7 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             return {"result": {"comment": None}}
         case "task_dependencies":
             if (not isinstance(params.get("id"), str)
-                    or params.get("direction") not in ("depends-on", "depended-on-by")
+                    or params.get("direction") not in get_args(Direction)
                     or not _is_page(params.get("page"))):
                 return _malformed("task_dependencies carries an id, direction and page")
             forward = params.get("direction") == "depends-on"
@@ -364,6 +383,45 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             }
 
 
+def _task_fields_valid(task: dict[str, Any]) -> bool:
+    """Validate every retained optional work field against the protocol's scalar shapes."""
+    for key in ("key", "project", "url"):
+        if task.get(key) is not None and not isinstance(task[key], str):
+            return False
+    if task.get("classification", "public") not in get_args(Classification):
+        return False
+    for key in ("repositories", "delivers", "delivered_by"):
+        values = task.get(key, [])
+        if not isinstance(values, list) or not all(isinstance(value, str) and value for value in values):
+            return False
+        if len(set(values)) != len(values):
+            return False
+        for value in values:
+            if key == "repositories":
+                if ("://" in value or value.endswith(".git") or any(c.isspace() for c in value)
+                        or len(value.split("/")) < 3 or any(part in ("", ".", "..") for part in value.split("/"))):
+                    return False
+            elif ":" in value:
+                source, native = value.split(":", 1)
+                if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", source) or not native:
+                    return False
+    location = task.get("location")
+    if location is not None and (not isinstance(location, dict) or len(location) != 1
+            or not any(key in location and isinstance(location[key], str) for key in ("url", "path"))):
+        return False
+    for key in ("created_at", "updated_at"):
+        value = task.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})", value):
+            return False
+        try:
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+    return True
+
+
 def _is_task(task: object) -> bool:
     """Whether `task` holds every member this peer reads or writes, of its type."""
     match task:
@@ -377,9 +435,10 @@ def _is_task(task: object) -> bool:
             "metadata": dict(),
             "version": str(version),
         }:
-            return (_is_ordinal(version) and (priority is None or _is_priority(priority))
+            return (_is_ordinal(version) and _is_priority(priority)
                     and category in get_args(StatusCategory)
-                    and all(_is_label(label) for label in labels))
+                    and all(_is_label(label) for label in labels)
+                    and _task_fields_valid(task))
         case _:
             return False
 
@@ -489,7 +548,8 @@ def _main() -> None:
         state = _state(store)
         if method != "initialize":
             state["log"].append(method)
-        answer = _answer(state, method, params if isinstance(params, dict) else {})
+        answer = (_answer(state, method, params or {}) if params is None or isinstance(params, dict)
+                  else _malformed("request params is an object"))
         store.write_text(json.dumps(state), encoding="utf-8")
         sys.stdout.write(json.dumps({"id": identifier, **answer}) + "\n")
         sys.stdout.flush()

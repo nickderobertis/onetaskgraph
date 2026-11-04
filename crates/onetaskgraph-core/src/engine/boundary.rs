@@ -2749,6 +2749,7 @@ pub(super) type SanitisedTask = (
     Vec<(Comment, String)>,
     Vec<ChangedField>,
     Vec<onetaskgraph_plugin_api::DependencyEdge>,
+    Vec<Comment>,
 );
 
 /// What a sanitising write wrote, or would: the fields it changed, the task as written, and —
@@ -2870,7 +2871,13 @@ pub(super) fn sanitised_task(
     for (comment, _) in &edited {
         fields.push(ChangedField::Comment(comment.id.clone()));
     }
-    (!fields.is_empty()).then_some((rewritten, edited, fields, depends_on.to_vec()))
+    (!fields.is_empty()).then_some((
+        rewritten,
+        edited,
+        fields,
+        depends_on.to_vec(),
+        comments.to_vec(),
+    ))
 }
 
 /// The field of `task` — or the comment of `comments` — the `index`th entry of `surface` was,
@@ -3246,31 +3253,18 @@ impl Engine {
         sanitised: SanitisedTask,
         dry_run: bool,
     ) -> Result<Sanitised, EngineError> {
-        let (mut rewritten, mut edited, mut fields, mut depends_on) = sanitised;
+        let (mut rewritten, mut edited, mut fields, mut depends_on, original_comments) = sanitised;
         let mut screening = None;
         if !dry_run {
             let fresh = self.read_held_task(destination, id).await?;
-            // A source with no version token moves too, and a comment may be edited without
-            // moving its task's: what it holds, and each comment about to be rewritten, are
-            // compared as well.
-            let fresh_comments = if edited.is_empty() {
-                Vec::new()
-            } else {
-                every_comment(destination, id).await?
-            };
-            let comment_moved = edited.iter().any(|(comment, _)| {
-                fresh_comments
-                    .iter()
-                    .find(|held| held.id == comment.id)
-                    .is_none_or(|held| held.body != comment.body)
-            });
-            if fresh.version != task.version || !holds_as_written(&fresh, task) || comment_moved {
-                // Moved once: sanitise the record as it now stands, keeping what changed.
-                let comments = if edited.is_empty() {
-                    every_comment(destination, id).await?
-                } else {
-                    fresh_comments
-                };
+            // A comment can change without moving its task, including one that was clean
+            // at screening. Compare the entire comment snapshot before rebuilding once.
+            let fresh_comments = every_comment(destination, id).await?;
+            if fresh.version != task.version
+                || !holds_as_written(&fresh, task)
+                || fresh_comments != original_comments
+            {
+                let comments = fresh_comments;
                 let stored = StoredTask::read(destination, item, &fresh, &comments).await?;
                 let answer = self.screen(&stored.exposure).await;
                 if answer.verdict != WriteVerdict::Pass {
@@ -3281,7 +3275,7 @@ impl Engine {
                 else {
                     return Ok(Sanitised::Unchanged);
                 };
-                (rewritten, edited, fields, depends_on) = again;
+                (rewritten, edited, fields, depends_on, _) = again;
                 screening = Some((stored.exposure, answer.locators));
                 let latest = self.read_held_task(destination, id).await?;
                 let latest_comments = every_comment(destination, id).await?;
