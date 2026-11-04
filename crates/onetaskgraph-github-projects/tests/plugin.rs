@@ -23558,3 +23558,79 @@ async fn comment_listing_reports_missing_boards_and_malformed_pages_without_losi
         Err(SourceError::Malformed { .. })
     ));
 }
+
+#[tokio::test]
+async fn listed_comment_pages_authorize_writes_only_when_the_page_is_complete() {
+    for comment_limit in [1, 100] {
+        let fixture = board(vec![Item::issue("I_task", "work")]);
+        let first = fixture.commented("I_task", Some("writer"), "first");
+        let second = fixture.commented("I_task", Some("writer"), "second");
+        let reader = source(&fixture);
+        let listed = reader
+            .query_task_details(
+                &TaskQuery::default(),
+                &page(100),
+                Some(&page(comment_limit)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.items.len(), 1);
+        let detail = &listed.items[0];
+        let comments = detail
+            .comments
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap();
+        assert_eq!(comments.next.is_some(), comment_limit == 1);
+
+        // A later writer takes the context through the public plugin contract. A partial
+        // page must not tell it that the second comment is absent from this issue.
+        let context = reader.write_context(&detail.task.id).unwrap();
+        let writer = source(&fixture);
+        assert!(writer.prime_write(&detail.task.id, &context, None));
+        let edited = writer
+            .edit_comment(&detail.task.id, &native(&second), &comment_body("edited"))
+            .await
+            .unwrap()
+            .expect("the second comment exists even if the page omitted it");
+        assert_eq!(edited.id, native(&second));
+        assert_eq!(edited.body, "edited");
+        assert!(
+            writer
+                .edit_comment(&detail.task.id, &native("missing"), &comment_body("never"))
+                .await
+                .unwrap()
+                .is_none(),
+            "an absent comment never authorizes a mutation"
+        );
+        let held = fixture.comments_on("I_task");
+        assert_eq!(held.len(), 2);
+        assert_eq!(
+            held.iter()
+                .find(|comment| comment.id == first)
+                .unwrap()
+                .body,
+            "first"
+        );
+        assert_eq!(
+            held.iter()
+                .find(|comment| comment.id == second)
+                .unwrap()
+                .body,
+            "edited"
+        );
+        assert_eq!(fixture.requests("updateIssueComment"), 1);
+        assert_eq!(
+            fixture
+                .documents()
+                .iter()
+                .filter(|document| *document == graphql::COMMENT_ISSUE)
+                .count(),
+            if comment_limit == 1 { 2 } else { 0 },
+            "only a complete page can replace the ownership reads, including for an absent comment"
+        );
+    }
+}
