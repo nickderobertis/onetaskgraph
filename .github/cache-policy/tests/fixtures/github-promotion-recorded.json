@@ -2,8 +2,8 @@
   "provenance": {
     "observed": "2026-11-04",
     "pull": "GET /repos/nickderobertis/onetaskgraph/pulls?state=closed&per_page=1 (3870)",
-    "run": "GET /repos/nickderobertis/onetaskgraph/actions/workflows/ci.yml/runs?per_page=1 (41762048411)",
-    "jobs": "GET /repos/nickderobertis/onetaskgraph/actions/runs/41762048411/attempts/1/jobs",
+    "run": "GET /repos/nickderobertis/onetaskgraph/actions/runs/41792623446",
+    "jobs": "GET /repos/nickderobertis/onetaskgraph/actions/runs/41792623446/jobs?per_page=100",
     "artifacts": "GET /repos/nickderobertis/onetaskgraph/actions/artifacts?per_page=1 (13221755095)",
     "projection": "Only fields the promotion fixture supplies; values remain as observed.",
     "release": "GET /repos/nickderobertis/onetaskgraph/releases?per_page=1",
@@ -33,35 +33,116 @@
     }
   },
   "run": {
-    "id": 41762048411,
+    "id": 41792623446,
     "run_attempt": 1,
-    "head_sha": "fb52d978310ee0d9ac4fb5a53ea0fc4ea43f2abe",
+    "head_sha": "5b6f893f6a97895c60c5e39ca4907e5f780f465a",
     "event": "pull_request",
-    "conclusion": "failure",
-    "run_started_at": "2026-11-04T02:38:17Z",
-    "updated_at": "2026-11-04T03:19:22Z",
+    "conclusion": "success",
+    "run_started_at": "2026-11-04T07:29:31Z",
+    "updated_at": "2026-11-04T07:59:41Z",
     "head_repository": {
+      "id": 1343250630,
+      "node_id": "R_kgDOUBBgxg",
+      "name": "onetaskgraph",
       "full_name": "nickderobertis/onetaskgraph",
-      "id": 1343250630
+      "private": false,
+      "owner": {
+        "login": "nickderobertis",
+        "id": 19440155,
+        "node_id": "MDQ6VXNlcjE5NDQwMTU1",
+        "avatar_url": "https://avatars.githubusercontent.com/u/19440155?v=4",
+        "gravatar_id": "",
+        "url": "https://api.github.com/users/nickderobertis",
+        "html_url": "https://github.com/nickderobertis",
+        "followers_url": "https://api.github.com/users/nickderobertis/followers",
+        "following_url": "https://api.github.com/users/nickderobertis/following{/other_user}",
+        "gists_url": "https://api.github.com/users/nickderobertis/gists{/gist_id}",
+        "starred_url": "https://api.github.com/users/nickderobertis/starred{/owner}{/repo}",
+        "subscriptions_url": "https://api.github.com/users/nickderobertis/subscriptions",
+        "organizations_url": "https://api.github.com/users/nickderobertis/orgs",
+        "repos_url": "https://api.github.com/users/nickderobertis/repos",
+        "events_url": "https://api.github.com/users/nickderobertis/events{/privacy}",
+        "received_events_url": "https://api.github.com/users/nickderobertis/received_events",
+        "type": "User",
+        "user_view_type": "public",
+        "site_admin": false
+      },
+      "html_url": "https://github.com/nickderobertis/onetaskgraph",
+      "description": "Unified SDK and CLI for project-management ticketing systems: a Rust core with a plugin interface, Python and TypeScript wrappers, and pluggable task sources (local Markdown, Linear, GitHub Projects, in-memory).",
+      "fork": false,
+      "url": "https://api.github.com/repos/nickderobertis/onetaskgraph",
+      "forks_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/forks",
+      "keys_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/keys{/key_id}",
+      "collaborators_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/collaborators{/collaborator}",
+      "teams_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/teams",
+      "hooks_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/hooks",
+      "issue_events_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/issues/events{/number}",
+      "events_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/events",
+      "assignees_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/assignees{/user}",
+      "branches_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/branches{/branch}",
+      "tags_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/tags",
+      "blobs_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/git/blobs{/sha}",
+      "git_tags_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/git/tags{/sha}",
+      "git_refs_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/git/refs{/sha}",
+      "trees_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/git/trees{/sha}",
+      "statuses_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/statuses/{sha}",
+      "languages_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/languages",
+      "stargazers_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/stargazers",
+      "contributors_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/contributors",
+      "subscribers_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/subscribers",
+      "subscription_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/subscription",
+      "commits_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/commits{/sha}",
+      "git_commits_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/git/commits{/sha}",
+      "comments_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/comments{/number}",
+      "issue_comment_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/issues/comments{/number}",
+      "contents_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/contents/{+path}",
+      "compare_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/compare/{base}...{head}",
+      "merges_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/merges",
+      "archive_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/{archive_format}{/ref}",
+      "downloads_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/downloads",
+      "issues_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/issues{/number}",
+      "pulls_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/pulls{/number}",
+      "milestones_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/milestones{/number}",
+      "notifications_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/notifications{?since,all,participating}",
+      "labels_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/labels{/name}",
+      "releases_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/releases{/id}",
+      "deployments_url": "https://api.github.com/repos/nickderobertis/onetaskgraph/deployments"
     },
     "pull_requests": [
       {
-        "number": 3875,
+        "url": "https://api.github.com/repos/nickderobertis/onetaskgraph/pulls/3877",
+        "id": 5150043379,
+        "number": 3877,
         "head": {
-          "sha": "fb52d978310ee0d9ac4fb5a53ea0fc4ea43f2abe"
+          "ref": "nick/3871/onetaskgraph-test-cache",
+          "sha": "5b6f893f6a97895c60c5e39ca4907e5f780f465a",
+          "repo": {
+            "id": 1343250630,
+            "url": "https://api.github.com/repos/nickderobertis/onetaskgraph",
+            "name": "onetaskgraph"
+          }
         },
         "base": {
-          "sha": "705faa9cc517af94977ddd10f82f5728d6d07725"
+          "ref": "main",
+          "sha": "705faa9cc517af94977ddd10f82f5728d6d07725",
+          "repo": {
+            "id": 1343250630,
+            "url": "https://api.github.com/repos/nickderobertis/onetaskgraph",
+            "name": "onetaskgraph"
+          }
         }
       }
     ],
     "status": "completed",
-    "head_branch": "nick/3857/otg-boundary-sanitize"
+    "head_branch": "nick/3871/onetaskgraph-test-cache"
   },
   "job": {
-    "name": "test-windows",
-    "conclusion": "cancelled",
-    "labels": ["windows-latest"]
+    "name": "lint",
+    "conclusion": "success",
+    "labels": ["ubuntu-latest"],
+    "status": "completed",
+    "started_at": "2026-11-04T07:29:34Z",
+    "completed_at": "2026-11-04T07:37:07Z"
   },
   "artifact": {
     "id": 13221755095,

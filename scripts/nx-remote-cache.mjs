@@ -1,11 +1,12 @@
 // Copied from dero-skills' create-repo skill; edit only the source.
 // source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/ci/nx-remote-cache.mjs
-// version: 1
-// sha256: 33d3d3e3056854956c3268bc726053121b5fe3bf78fc3e28b8ee18b0153f31df
+// version: 6
+// sha256: 4f8c6453390a78485d0ca44438d82e5331ded65eded366afca764144531901cc
 import {
   appendFileSync,
   readFileSync,
   writeFileSync,
+  renameSync,
   mkdirSync,
   existsSync,
   readdirSync,
@@ -104,7 +105,10 @@ function options(args, allowed, required = []) {
 export async function preTasksExecution(_options, context) {
   if (!env.GITHUB_ACTIONS) return;
   try {
-    append(join(state(), 'started.jsonl'), { id: context.id });
+    append(join(state(), 'started.jsonl'), {
+      id: context.id,
+      argv: context.argv,
+    });
   } catch (error) {
     warning(`Nx telemetry start unavailable: ${error.message}`);
   }
@@ -325,15 +329,18 @@ async function proxy() {
     req.pipe(upstream);
   });
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
-  save(join(state(), 'proxy.json'), {
+  const proxyPath = join(state(), 'proxy.json');
+  const temporaryPath = `${proxyPath}.${randomUUID()}.tmp`;
+  save(temporaryPath, {
     url: `http://127.0.0.1:${server.address().port}`,
     secret: env.NX_RECORDING_SECRET,
   });
+  renameSync(temporaryPath, proxyPath);
 }
 
 function validateExecutions(doc) {
   check(
-    doc?.schema === 1 &&
+    [1, 2].includes(doc?.schema) &&
       typeof doc.repository === 'string' &&
       typeof doc.ref === 'string' &&
       (doc.pr === null || integer(doc.pr)) &&
@@ -358,6 +365,17 @@ function validateExecutions(doc) {
     Array.isArray(doc.tasks) && Array.isArray(doc.store_attempts),
     'missing tasks or store_attempts',
   );
+  if (doc.schema === 2)
+    check(
+      Array.isArray(doc.cancelled_invocations ?? []) &&
+        (doc.cancelled_invocations ?? []).every(
+          (invocation) =>
+            typeof invocation.id === 'string' &&
+            Array.isArray(invocation.argv) &&
+            invocation.argv.every((arg) => typeof arg === 'string'),
+        ),
+      'invalid cancelled invocations',
+    );
   for (const t of doc.tasks)
     check(
       typeof t.task === 'string' &&
@@ -440,13 +458,18 @@ async function report(opts) {
       'Nx run telemetry is incomplete',
     );
     const invocations = lines(join(state(), 'invocations.jsonl'));
-    check(invocations.length > 0, 'Nx run telemetry is unavailable');
     const begun = lines(join(state(), 'started.jsonl'));
     check(
-      begun.length === invocations.length &&
-        begun.every((b) => invocations.some((i) => i.id === b.id)),
-      'Nx run telemetry is incomplete',
+      invocations.length > 0 || begun.length > 0,
+      'Nx run telemetry is unavailable',
     );
+    const incomplete =
+      invocations.length === 0 ||
+      begun.length !== invocations.length ||
+      begun.some((b) => !invocations.some((i) => i.id === b.id));
+    const cancelledInvocations = begun
+      .filter((b) => !invocations.some((i) => i.id === b.id))
+      .map((b) => ({ id: b.id, argv: b.argv || [] }));
     const event = json(env.GITHUB_EVENT_PATH);
     const tasks = [],
       attempts = [];
@@ -516,7 +539,10 @@ async function report(opts) {
           });
       }
     const doc = {
-      schema: 1,
+      schema: incomplete ? 2 : 1,
+      ...(cancelledInvocations.length
+        ? { cancelled_invocations: cancelledInvocations }
+        : {}),
       repository: env.GITHUB_REPOSITORY,
       ref: env.GITHUB_REF,
       pr: event.pull_request?.number ?? null,
@@ -533,6 +559,12 @@ async function report(opts) {
     };
     validateExecutions(doc);
     save(join(opts.out, 'executions.json'), doc);
+    check(
+      !incomplete,
+      invocations.length
+        ? 'Nx run telemetry is incomplete'
+        : 'Nx run telemetry is unavailable',
+    );
   } catch (error) {
     warning(`Nx cache report missing data: ${error.message}`);
     try {
@@ -560,6 +592,7 @@ class Github {
     this.repo = repo;
     this.requests = 0;
     this.downloads = 0;
+    this.selectionComparisons = new Set();
     this.root = join(
       env.RUNNER_TEMP || '.nx',
       'nx-cache-evidence',
@@ -736,7 +769,7 @@ function attemptRun(gh, id, attempt) {
   );
   return run;
 }
-function artifactsFor(gh, run) {
+function artifactsFor(gh, run, detail = []) {
   const all = gh.pages(
     `repos/${gh.repo}/actions/runs/${run.id}/artifacts`,
     'artifacts',
@@ -746,10 +779,6 @@ function artifactsFor(gh, run) {
       a.name.startsWith('nx-cache-entries-') &&
       Date.parse(a.created_at) >= Date.parse(run.run_started_at) &&
       Date.parse(a.created_at) <= Date.parse(run.updated_at),
-  );
-  check(
-    selected.length > 0,
-    `missing artifact for run ${run.id}/${run.run_attempt}: no nx-cache-entries reports`,
   );
   const jobs = gh.pages(
     `repos/${gh.repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`,
@@ -768,10 +797,21 @@ function artifactsFor(gh, run) {
   );
   const records = [];
   for (const job of expected) {
+    const cancelled =
+      job.conclusion === 'cancelled' ||
+      (run.conclusion === 'cancelled' &&
+        job.conclusion !== 'failure' &&
+        job.conclusion !== 'skipped');
     check(job.conclusion !== 'skipped', `missing expected job ${job.name}`);
     const candidates = selected.filter(
       (a) => a.name === `nx-cache-entries-${job.name}`,
     );
+    if (cancelled && candidates.length === 0) {
+      detail.push(
+        `cancelled run ${run.id}/${run.run_attempt} job ${job.name}: no artifact`,
+      );
+      continue;
+    }
     check(
       candidates.length > 0,
       `missing artifact for ${run.id}/${run.run_attempt}/${job.name}`,
@@ -782,7 +822,26 @@ function artifactsFor(gh, run) {
       const files = zipFiles(
         gh.read(`repos/${gh.repo}/actions/artifacts/${artifact.id}/zip`, true),
       );
+      if (
+        cancelled &&
+        !files.has('executions.json') &&
+        files.has('unavailable.json')
+      ) {
+        detail.push(
+          `cancelled run ${run.id}/${run.run_attempt} job ${job.name}: telemetry unavailable`,
+        );
+        continue;
+      }
       const execution = validateExecutions(fileJson(files, 'executions.json'));
+      check(
+        execution.schema !== 2 || cancelled,
+        'Nx run telemetry is incomplete',
+      );
+      if (execution.schema === 2)
+        for (const invocation of execution.cancelled_invocations ?? [])
+          detail.push(
+            `cancelled run ${run.id}/${run.run_attempt} job ${job.name} invocation ${invocation.id} argv ${JSON.stringify(invocation.argv)}: unfinished tasks are not individually known; excluded from numerator and denominator`,
+          );
       validateSelection(gh, execution, run);
       check(
         execution.repository === gh.repo &&
@@ -796,7 +855,7 @@ function artifactsFor(gh, run) {
       check(
         associatedPrs(gh, run).some(
           (pr) =>
-            pr.number === execution.pr && pr.head.sha === execution.head_sha,
+            pr.number === execution.pr,
         ),
         'execution PR mismatches source workflow',
       );
@@ -865,7 +924,7 @@ function artifactsFor(gh, run) {
         );
       record = { execution, manifest, files };
     }
-    records.push(record);
+    if (record) records.push(record);
   }
   return records;
 }
@@ -1123,7 +1182,6 @@ function associatedPrs(gh, run) {
     .filter(
       (pr) =>
         pr.merged_at &&
-        pr.head.sha === run.head_sha &&
         trusted(pr, gh.repo) &&
         pr.head.repo.full_name === run.head_repository.full_name &&
         pr.user.login === run.actor?.login,
@@ -1145,14 +1203,49 @@ function validateSelection(gh, doc, run) {
   );
   const pr = associatedPrs(gh, run).find((pr) => pr.number === doc.pr);
   check(
-    pr && pr.head.sha === selection.head_sha,
-    'selection does not cover the source PR head',
+    pr &&
+      (run.pull_requests.length
+        ? pr.head?.repo?.url === `https://api.github.com/repos/${gh.repo}` &&
+          pr.base?.repo?.url === `https://api.github.com/repos/${gh.repo}`
+        : pr.head?.repo?.full_name === gh.repo &&
+          pr.base?.repo?.full_name === gh.repo),
+    'untrusted source PR repository',
+  );
+  const membership = gh.pages(`repos/${gh.repo}/commits/${run.head_sha}/pulls`);
+  check(
+    membership.some(
+      (p) =>
+        p.number === doc.pr &&
+        p.head?.repo?.full_name === gh.repo &&
+        p.base?.repo?.full_name === gh.repo,
+    ),
+    'run head is not a commit of the source PR',
   );
   if (run.pull_requests.length) {
-    check(
-      pr.base.sha === selection.base_sha,
-      'selection does not cover the source PR base/head',
-    );
+    // The run's commit and the base branch retain ancestry after later pushes;
+    // the live association's head/base SHAs do not describe this run anymore.
+    for (const [tip, message] of [
+      [run.head_sha, 'selection base is not an ancestor of the run head'],
+      [pr.base.ref, 'selection base is not on the source PR base branch'],
+    ]) {
+      check(
+        typeof tip === 'string' && tip.length > 0,
+        'missing selection ancestry tip',
+      );
+      const endpoint = `repos/${gh.repo}/compare/${selection.base_sha}...${encodeURIComponent(tip)}`;
+      const ancestry = gh.read(endpoint);
+      gh.selectionComparisons.add(endpoint);
+      if (tip === run.head_sha && ['behind', 'diverged'].includes(ancestry.status)) {
+        // Nx selects from this merge-base when the event base is newer than
+        // the PR's branch point. GitHub supplies it in the same bounded read.
+        check(
+          /^[a-f0-9]{40}$/.test(ancestry.merge_base_commit?.sha),
+          'missing effective selection merge-base',
+        );
+      } else {
+        check(['ahead', 'identical'].includes(ancestry.status), message);
+      }
+    }
   } else {
     const merge = gh.read(`repos/${gh.repo}/commits/${pr.merge_commit_sha}`);
     const parent = merge.parents?.[0]?.sha;
@@ -1352,7 +1445,7 @@ async function cacheUse(opts) {
     } else for (const r of attempts) r.observe = r.in_interval;
     check(attempts.length > 0, `missing CI attempts for #${pr.number}`);
     for (const run of attempts)
-      for (const record of artifactsFor(gh, run)) {
+      for (const record of artifactsFor(gh, run, detail)) {
         validateSelection(gh, record.execution, run);
         storedBytes += record.manifest.stored_bytes;
         evidence.push({
@@ -1544,6 +1637,8 @@ async function cacheUse(opts) {
     }
   check(eligible > 0, 'zero eligible executions');
   const value = (100 * hits) / eligible;
+  for (const endpoint of gh.selectionComparisons)
+    detail.push(`selection evidence: GET ${endpoint}`);
   detail.push(`aggregate: ${hits}/${eligible} remote hits (${value}%)`);
   for (const [name, g] of Object.entries(groups))
     detail.push(

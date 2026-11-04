@@ -142,13 +142,14 @@ const eventFile = (file) =>
   );
 
 // Biome excludes exactly these upstream-owned copies; this drift test holds them byte-identical.
-// Full-file digests, including headers: remote cache and figures from dero-skills
+// Full-file digests, including headers: remote cache v6 from dero-skills
+// df8c475b520de2a40f7e3b55967cad1d9e7487ac; figures v11 from
 // 63e071b72420bd6737226a50cb8a7a7760cc73a4; version-free inputs v3 from
 // fe20052d06406bb07869c5236147b6693489d52f (owned Cargo and Python pins).
 const copies = {
   "scripts/actions-budget-figures.sh":
     "a3606ff3d00be139d52a7cbb2905f45e2ade99383417be31cc74cc7ce6c39eba",
-  "scripts/nx-remote-cache.mjs": "4445c0d8d5f6045bb2b14b19cd03f9600b6b98f88dc689421d98d3ef996664b6",
+  "scripts/nx-remote-cache.mjs": "0b67a164d73e14ca1fdba807ac7858cf0674179ec502ad6ae63e5026f3f415ac",
   "scripts/nx-version-free-inputs.mjs":
     "624fed99b45a57532ef672ccb4638e4b8052dd12fdee0274fa2f23e9f2f16b60",
 };
@@ -555,6 +556,73 @@ test("promotion HTTP fixtures reject drift from the recorded GitHub response fie
   );
 });
 
+// Unmodified GitHub response bodies; scenario identities and outcomes below are derived
+// explicitly, while compact associations retain GitHub's repo URL (not full_name) shape.
+const recordedBoundary = jsonFile(
+  join(root, ".github/cache-policy/tests/fixtures/github-cache-boundary-recorded.json"),
+  (value) =>
+    object(value) &&
+    object(value.provenance) &&
+    Object.values(value.provenance).every(text) &&
+    object(value.run) &&
+    Array.isArray(value.run.pull_requests) &&
+    value.run.pull_requests.length > 0 &&
+    text(value.run.pull_requests[0].head?.repo?.url) &&
+    text(value.run.pull_requests[0].base?.repo?.url) &&
+    Array.isArray(value.membership) &&
+    value.membership.length > 0 &&
+    prIdentity(value.membership[0]) &&
+    object(value.comparison) &&
+    text(value.comparison.status) &&
+    sha(value.comparison.merge_base_commit?.sha),
+  "recorded compact association, commit membership and comparison responses",
+);
+function scenarioAssociation(pr) {
+  const association = structuredClone(recordedBoundary.run.pull_requests[0]);
+  association.number = pr.number;
+  for (const side of ["head", "base"]) {
+    association[side].sha = pr[side].sha;
+    association[side].ref = pr[side].ref ?? association[side].ref;
+    association[side].repo.id = 1;
+    association[side].repo.url = `https://api.github.com/repos/${pr[side].repo.full_name}`;
+    association[side].repo.name = pr[side].repo.full_name.split("/")[1];
+  }
+  observedShape(recordedBoundary.run.pull_requests[0], association);
+  return association;
+}
+function scenarioMembership(pr) {
+  const observed = structuredClone(recordedBoundary.membership[0]);
+  const result = { ...observed, ...pr };
+  for (const side of ["head", "base"])
+    result[side] = {
+      ...observed[side],
+      ...pr[side],
+      repo: { ...observed[side].repo, ...pr[side].repo, id: 1 },
+    };
+  // These scenarios model the PR after merge, as the promotion command reads it.
+  if (pr.merged_at) {
+    result.state = "closed";
+    result.closed_at = pr.merged_at;
+  }
+  return [result];
+}
+function selectionRoutes(answers, repository, pr, execution, run) {
+  const prefix = `/repos/${repository}`;
+  const endpoint = `${prefix}/commits/${run.head_sha}/pulls`;
+  const members = answers[endpoint] ?? [];
+  const index = members.findIndex((item) => item.number === pr.number);
+  const member = scenarioMembership(pr)[0];
+  if (index < 0) members.push(member);
+  else members[index] = member;
+  answers[endpoint] = members;
+  run.pull_requests = [scenarioAssociation(pr)];
+  for (const tip of [run.head_sha, run.pull_requests[0].base.ref])
+    answers[`${prefix}/compare/${execution.selection.base_sha}...${encodeURIComponent(tip)}`] = {
+      ...structuredClone(recordedBoundary.comparison),
+      status: "ahead",
+    };
+}
+
 // Release selection is simulated; executions, task hashes, cache payloads and the
 // promotion receipt below are produced by this journey's real Nx/sidecar/CLI runs.
 function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes }) {
@@ -592,13 +660,7 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes }) {
       event: "pull_request",
       conclusion: "success",
       head_repository: { full_name: repository, id: 1 },
-      pull_requests: [
-        {
-          number: selected.number,
-          head: { sha: selected.head.sha },
-          base: { sha: selected.base.sha },
-        },
-      ],
+      pull_requests: [scenarioAssociation(selected)],
       run_started_at: execution.tasks[0].started_at,
       updated_at: new Date(Math.max(...times.map(Date.parse)) + 1).toISOString(),
     };
@@ -682,6 +744,14 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes }) {
       fixture_file: `budget-report-${index}.zip`,
     };
   }
+  for (let index = 0; index < runs.length; index++)
+    selectionRoutes(
+      baseline,
+      repository,
+      index === 2 ? releasePr : sourcePr,
+      reports[index].execution,
+      runs[index],
+    );
   observedShape(recordedPromotion.pull, sourcePr);
   observedShape(recordedPromotion.pull, releasePr);
   for (const candidate of runs) observedShape(recordedPromotion.run, candidate);
@@ -785,7 +855,9 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes }) {
       );
     if (scenario === "later-push") {
       const head = "6".repeat(40);
-      answers[`${prefix}/commits/${sourcePr.merge_commit_sha}/pulls`][0].head.sha = head;
+      answers[`${prefix}/commits/${sourcePr.merge_commit_sha}/pulls`].find(
+        (item) => item.number === sourcePr.number,
+      ).head.sha = head;
       const changed = answers[`${prefix}/actions/runs/2/attempts/1`];
       changed.head_sha = head;
       changed.pull_requests[0].head.sha = head;
@@ -797,6 +869,20 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes }) {
       answers[`${prefix}/actions/runs/2/artifacts`].artifacts[0].workflow_run.head_sha = head;
       documents[1].execution.head_sha = head;
       documents[1].execution.selection.head_sha = head;
+    }
+    for (let index = 0; index < runs.length; index++) {
+      const run = answers[`${prefix}/actions/runs/${runs[index].id}/attempts/1`];
+      const selected =
+        index === 2
+          ? releasePr
+          : answers[`${prefix}/commits/${sourcePr.merge_commit_sha}/pulls`].find(
+              (item) => item.number === sourcePr.number,
+            );
+      selectionRoutes(answers, repository, selected, documents[index].execution, run);
+      const listed = answers[`${prefix}/actions/workflows/ci.yml/runs`].workflow_runs.find(
+        (item) => item.id === run.id,
+      );
+      listed.pull_requests = structuredClone(run.pull_requests);
     }
     if (scenario === "missing-job")
       answers[`${prefix}/actions/runs/3/attempts/1/jobs`].jobs.push({
@@ -900,7 +986,7 @@ async function provePromotion({ dir, workspace, action, sourceEnv }) {
   const pr = {
     number: 1,
     head: { sha: execution.head_sha, repo: { full_name: repository } },
-    base: { sha: execution.selection.base_sha, repo: { full_name: repository } },
+    base: { ref: "main", sha: execution.selection.base_sha, repo: { full_name: repository } },
     user: { login: "contributor" },
     merged_at: new Date().toISOString(),
     merge_commit_sha: command("git", ["rev-parse", "705faa9"], workspace),
@@ -912,7 +998,7 @@ async function provePromotion({ dir, workspace, action, sourceEnv }) {
     event: "pull_request",
     conclusion: "success",
     head_repository: { full_name: repository, id: 1 },
-    pull_requests: [{ number: pr.number, head: { sha: pr.head.sha }, base: { sha: pr.base.sha } }],
+    pull_requests: [scenarioAssociation(pr)],
     run_started_at: execution.tasks[0].started_at,
     updated_at: new Date().toISOString(),
   };
@@ -959,6 +1045,7 @@ async function provePromotion({ dir, workspace, action, sourceEnv }) {
     },
     [`/repos/${repository}/actions/artifacts/1/zip`]: { fixture_file: "source.zip" },
   };
+  selectionRoutes(routes, repository, pr, execution, run);
   observedShape(recordedPromotion.pull, pr);
   observedShape(recordedPromotion.run, run);
   observedShape(
@@ -1034,6 +1121,7 @@ async function provePromotion({ dir, workspace, action, sourceEnv }) {
     const sourcePr = structuredClone(pr);
     if (reason === "fork") sourcePr.head.repo.full_name = "contributor/fork";
     if (reason === "dependabot") sourcePr.user.login = "dependabot[bot]";
+    selectionRoutes(routes, repository, sourcePr, execution, run);
     routes[`/repos/${repository}/pulls/1`] = sourcePr;
     routes[`/repos/${repository}/commits/${pr.merge_commit_sha}/pulls`] = [sourcePr];
     const artifactRoute = `/repos/${repository}/actions/runs/2/artifacts`;
