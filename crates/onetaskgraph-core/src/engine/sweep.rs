@@ -780,3 +780,8 @@ macro_rules! spelled {
 
 spelled!(Uncovered);
 spelled!(ItemOutcome);
+
+/// The sweep domain's published response roots.
+pub(crate) fn schemas() -> [(&'static str, schemars::Schema); 1] {
+    [("SweepReport", schemars::schema_for!(SweepReport))]
+}

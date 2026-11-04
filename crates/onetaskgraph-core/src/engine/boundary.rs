@@ -3620,6 +3620,14 @@ impl std::fmt::Display for ReferenceForm {
     }
 }
 
+/// The boundary domain's published sanitisation response roots.
+pub(crate) fn schemas() -> [(&'static str, schemars::Schema); 2] {
+    [
+        ("Sanitization", schemars::schema_for!(Sanitization)),
+        ("SanitizeDryRun", schemars::schema_for!(SanitizeDryRun)),
+    ]
+}
+
 #[cfg(test)]
 mod diagnostic_locators {
     use super::{

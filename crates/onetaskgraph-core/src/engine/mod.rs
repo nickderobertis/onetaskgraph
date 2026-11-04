@@ -37,6 +37,7 @@ mod rendered;
 mod resume;
 mod stored;
 mod sweep;
+pub(crate) use sweep::schemas as sweep_schemas;
 mod update;
 
 use std::collections::BTreeMap;

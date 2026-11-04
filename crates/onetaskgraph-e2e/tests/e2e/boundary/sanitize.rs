@@ -155,7 +155,7 @@ fn the_editing_peers_vocabularies_and_task_fields_are_the_emitted_contract() {
             .collect();
         assert_eq!(declared[name], json!(expected), "{name}");
     }
-    // Direction is not a CLI schema root. Exhaustive matching makes a new API variant
+    // Exhaustive matching makes a new API variant
     // fail compilation until this peer's accepted vocabulary is deliberately reconciled.
     use onetaskgraph_plugin_api::Direction;
     let direction_word = |direction| match direction {
@@ -3092,6 +3092,45 @@ fn a_sanitising_write_refuses_a_private_term_in_a_preserved_dependency_endpoint(
         "no sanitizing write crosses an unscreened edge"
     );
     assert_eq!(shared.state()["edges"], state["edges"]);
+}
+
+#[test]
+fn a_complete_sweep_writes_each_page_before_reading_the_next() {
+    let shared = Shared::new(
+        &[("t1", &with_term()), ("t2", &with_term())],
+        json!({}),
+        json!({}),
+    );
+    let mut state = shared.state();
+    state["page_size"] = json!(1);
+    std::fs::write(&shared.state, state.to_string()).expect("state");
+    let (code, report, out, err) = sweep(&shared.store, "shared", &["--complete"]);
+    assert_eq!(code, Some(0), "{report}{out}{err}");
+    let state = shared.state();
+    let log = state["log"].as_array().expect("peer calls");
+    let pages: Vec<_> = log
+        .iter()
+        .enumerate()
+        .filter_map(|(index, method)| (method == "query_tasks").then_some(index))
+        .collect();
+    assert_eq!(pages.len(), 2, "{state}");
+    assert!(
+        log[pages[0] + 1..pages[1]]
+            .iter()
+            .any(|method| method == "write_task"),
+        "first page must be written before the second read: {state}"
+    );
+    assert!(
+        log[pages[1] + 1..]
+            .iter()
+            .any(|method| method == "write_task"),
+        "second page must also be written: {state}"
+    );
+    assert_eq!(
+        report["items"].as_array().map(Vec::len),
+        Some(2),
+        "{report}"
+    );
 }
 
 #[test]

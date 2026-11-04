@@ -149,10 +149,10 @@ fn a_search_sweep_rewrites_what_it_finds_reads_nothing_else_and_names_what_it_ca
             );
         }
     }
-    assert!(
-        report["requests"]["total"]
-            .as_u64()
-            .is_some_and(|total| total > 0)
+    assert_eq!(
+        report["requests"]["total"].as_u64(),
+        Some(served.len() as u64),
+        "reported requests match the loopback server ledger: {served:?}"
     );
     assert!(
         board.board.comments_on("X-902")[0]["body"]

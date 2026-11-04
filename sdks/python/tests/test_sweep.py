@@ -790,9 +790,8 @@ def test_a_sweep_that_cannot_run_still_raises(binary: Path, tmp_path: Path) -> N
 
 
 def test_the_peers_dependency_directions_match_the_plugin_api() -> None:
-    """Reconcile the unexported Direction enum, including any newly added variant."""
-    # Direction has no CLI schema root. Read its authoritative declaration; unlike an
-    # example list, consuming every variant makes an API addition fail this drift check.
+    """Reconcile every dependency direction against its plugin API declaration."""
+    # Consuming every variant makes an API addition fail this drift check.
     source = (
         Path(__file__).resolve().parents[3] / "crates/onetaskgraph-plugin-api/src/work.rs"
     ).read_text()

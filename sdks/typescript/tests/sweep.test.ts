@@ -125,8 +125,9 @@ test("per-call replacement and rejection overrides support a sanitization previe
 });
 
 test("a search sweep answers its report on exit 3", async () => {
-  const python = Bun.which("python3");
-  if (python === null) throw new Error("python3 is needed to run the metered peer");
+  const uv = Bun.which("uv");
+  if (uv === null) throw new Error("uv is needed to run the metered Python SDK peer");
+  const pythonProject = resolve(import.meta.dir, "../../python");
   const [, root] = store({});
   const held = resolve(root, "tracker.json");
   const task = (id: string, content: string) => ({
@@ -150,7 +151,10 @@ test("a search sweep answers its report on exit 3", async () => {
     tracker: {
       plugin: "subprocess",
       visibility: "public",
-      config: { command: resolve(python), args: [peer, held] },
+      config: {
+        command: resolve(uv),
+        args: ["run", "--frozen", "--project", pythonProject, "python", peer, held],
+      },
     },
   });
   const report = await client.sourcesSanitize("tracker");

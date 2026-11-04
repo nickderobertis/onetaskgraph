@@ -118,12 +118,15 @@ def test_a_verb_builds_its_own_models_and_an_unused_export_builds_on_first_impor
         ["plan:load", "Load the rows", "in-progress"],
         ["plan:parse", "Parse the feed", "todo"],
     ]
-    # It imported its own model's module and none of the others the package exports.
+    # The response union loads the verb model and its sanitisation preview model.
     assert seen["after_verb"] == sorted(
-        [*seen["at_import"], f"{GENERATED}query_response_of_qualified_task"]
+        [
+            *seen["at_import"],
+            f"{GENERATED}query_response_of_qualified_task",
+            f"{GENERATED}sanitize_dry_run",
+        ]
     )
     assert f"{GENERATED}copy_report" not in seen["after_verb"]
-    # Importing an export the verb never used imports that one module, through the package.
     assert seen["after_import"] == sorted([*seen["after_verb"], f"{GENERATED}copy_report"])
     assert seen["copied"] == [["plan:parse", "created", "into:parse"]]
     assert seen["same_class"]
