@@ -1356,3 +1356,8 @@ here measures.
 **`session-cost.txt`** moves on one line and its node total: the `nominated board lookup` goes
 2 → **101** worst-case nodes, its `fields(first:100)` page. Requests stay **216**, and nodes go
 266,210 → **266,309**.
+
+The comment-carrying board listing adds one document to the live contract reconciliation.
+The recorded session therefore adds one reconciliation request and 20,150 worst-case
+nodes (100 board items, each with up to 100 comments); its ordinary listing requests
+are unchanged. This is a measured session record, not a change to any request budget.

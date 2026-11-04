@@ -2726,3 +2726,23 @@ fn a_source_that_declares_nothing_more_keeps_reverse_and_project_edges_remote() 
         Some("v|t-1".to_owned())
     );
 }
+
+#[tokio::test]
+async fn a_source_without_comment_listings_refuses_the_request_and_still_lists_without_it() {
+    let source: &dyn TaskSource = &Silent("silent");
+    let page = PageRequest {
+        limit: 20,
+        cursor: None,
+    };
+    let failure = source
+        .query_task_details(&TaskQuery::default(), &page, Some(&page))
+        .await
+        .expect_err("comments must not be silently omitted");
+    assert!(matches!(failure, SourceError::Refused { .. }));
+    let listed = source
+        .query_task_details(&TaskQuery::default(), &page, None)
+        .await
+        .expect("ordinary listing remains available");
+    assert!(listed.items.is_empty());
+    assert!(listed.next.is_none());
+}
