@@ -590,6 +590,14 @@ test("over release v0.12.13 the tail reports all seven budgets with their breakd
     V12.pullRequests.some((pr) => !changesPublishedPath(pr.merge)),
     "recording exercises an omitted CI-only PR",
   );
+  const outside = V12.ok
+    .find((recording) => pathOf(recording).includes("/pulls?"))
+    .response.body.find((pull) => pull.number === 3809);
+  assert.ok(outside, "the closed-pull recording includes the older published-path PR");
+  assert.ok(changesPublishedPath(outside.merge_commit_sha));
+  assert.ok(!V12.pullRequests.some((pull) => pull.number === outside.number));
+  assert.doesNotMatch(run.output, new RegExp(`#${outside.number}:`));
+  assert.ok(!servedPaths.includes(prListing({ head: outside.head.sha })));
   assert.match(run.output, /Release \/ publish: \d+s/);
   assert.match(run.output, /longest per runner OS:/);
   assert.match(run.output, /per workflow:/);
