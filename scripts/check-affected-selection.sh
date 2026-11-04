@@ -117,6 +117,10 @@ git -C "$scratch/repo" config user.name "check-affected-selection"
 export NX_DAEMON=false
 export NX_CACHE_DIRECTORY="$scratch/nx-cache"
 export NX_WORKSPACE_DATA_DIRECTORY="$scratch/nx-workspace-data"
+# The caller's invocation chain belongs to another workspace. Each independent phase
+# in this clone establishes its own root; Nx passes that root to its children for
+# recursive-loop detection.
+unset NX_INVOCATION_ROOT_PID
 
 failures=0
 
@@ -265,7 +269,11 @@ for name in subprocess.check_output(["git", "ls-files", "*project.json"], text=T
             failing = (sys.argv[1] == "failure"
                        and project["name"] == "onetaskgraph-github-projects"
                        and name == "test")
-            target["options"] = {"command": "exit 1" if failing else "true"}
+            # Keep the shared build alive while both real CI phases reach it. The
+            # fixture must exercise concurrent consumers, as the production job does.
+            build = project["name"] == "onetaskgraph" and name == "build"
+            command = "python3 -c 'import time; time.sleep(1)'" if build else "true"
+            target["options"] = {"command": "exit 1" if failing else command}
             target["cache"] = False
     path.write_text(json.dumps(project), encoding="utf-8")
 PYTARGETS

@@ -9,6 +9,9 @@ files:
   # No `include`: llmlint lints the whole tree (exclude + .gitignore honored).
   # List committed files that shouldn't be judged (lock files, generated output).
   exclude:
+    # Upstream-owned copies, held byte-identical to the pinned dero-skills revisions by the drift test.
+    - "scripts/nx-remote-cache.mjs"
+    - "scripts/nx-version-free-inputs.mjs"
     - "**/.git/**"
     # Generated from the binary's schema; generator drift is checked deterministically.
     - "sdks/typescript/src/generated/**"

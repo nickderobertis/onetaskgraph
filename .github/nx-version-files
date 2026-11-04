@@ -1,0 +1,3 @@
+# Tracked source literals rewritten by scripts/set-version.sh.
+sdks/python/src/onetaskgraph_sdk/__init__.py
+sdks/typescript/src/index.ts

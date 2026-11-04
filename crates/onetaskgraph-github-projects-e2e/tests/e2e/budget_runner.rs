@@ -1152,7 +1152,7 @@ fn nx_tracks_the_reporter_telemetry_directory() {
     assert!(actual.ends_with(suffix));
     assert_eq!(
         project["targets"]["test"]["outputs"][0],
-        format!("{{workspaceRoot}}/target/debug/{suffix}")
+        format!("{{workspaceRoot}}/target/debug/{suffix}/*.json")
     );
     assert_eq!(
         project["targets"]["budgets"]["inputs"][2]["dependentTasksOutputFiles"],

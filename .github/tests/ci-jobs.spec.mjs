@@ -18,14 +18,13 @@ const TESTS = ["test-linux", "test-windows", "test-macos"];
 // Each job's execution limit. The three test jobs hold 40 minutes, by the user's decision of
 // 2026-10-31: passing runs reached 29.8 minutes against 30, so ordinary variance cancelled them.
 const TIMEOUT_MINUTES = { lint: 30, "test-linux": 40, "test-windows": 40, "test-macos": 40 };
-// Every pull request, and for test-macos every one but release-plz's own release branch, so
-// the release pull request allocates no Mac runner at all.
+// The release branch runs exactly the same four required jobs as every other branch.
 const PULL_REQUEST = "github.event_name == 'pull_request'";
 const CONDITIONS = {
   lint: PULL_REQUEST,
   "test-linux": PULL_REQUEST,
   "test-windows": PULL_REQUEST,
-  "test-macos": `${PULL_REQUEST} && !(github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release-plz-'))`,
+  "test-macos": PULL_REQUEST,
 };
 const SCREENCOMP = [
   /^nickderobertis\/screencomp@v\d+\.\d+\.\d+$/,
@@ -58,7 +57,6 @@ const CACHES = [
       "hashFiles('rust-toolchain.toml')",
     ],
   },
-  { path: /^\.nx\/cache$/, produced: ["runner.os", "runner.arch", ...LOCKFILES] },
 ];
 
 const steps = (job) => (Array.isArray(job?.steps) ? job.steps : []);
@@ -112,17 +110,23 @@ export function problems(all) {
   ])
     if (granted[scope] !== level) found.push(`lint does not grant itself ${scope}: ${level}`);
   for (const id of TESTS) {
+    const tested = steps(jobs[id]).findIndex((step) => step.run === `just ci-${id}`);
+    if (tested >= 0 && steps(jobs[id])[tested].if !== undefined)
+      found.push(`${id}'s functional tests must run without a release shortcut`);
     const decided = steps(jobs[id]).findIndex(
       (step) =>
         step.id === "release" &&
         String(step.run ?? "").includes(".github/release-shortcut.mjs decide"),
     );
-    const tested = steps(jobs[id]).findIndex((step) => step.run === `just ci-${id}`);
-    if (decided < 0) found.push(`${id} does not consult the release shortcut`);
-    else if (tested >= 0 && decided > tested)
-      found.push(`${id} consults the shortcut after its tests`);
-    if (tested >= 0 && steps(jobs[id])[tested].if !== "steps.release.outputs.tests == 'run'")
-      found.push(`${id}'s tests do not wait on the shortcut's answer`);
+    if (id === "test-linux") {
+      if (decided < 0 || (tested >= 0 && decided > tested))
+        found.push("test-linux must decide Rust coverage before its tasks");
+      if (
+        steps(jobs[id])[tested]?.env?.ONETASKGRAPH_SKIP_RUST_COVERAGE !==
+        `\${{ steps.release.outputs.rust_coverage == 'skip' && '1' || '' }}`
+      )
+        found.push("test-linux must pass only the classified Rust coverage switch");
+    } else if (decided >= 0) found.push(`${id} must not consult a coverage shortcut`);
   }
   // test-windows' loopback suites exhaust Windows' default dynamic port range (ci.yml says how).
   const widened = steps(jobs["test-windows"]).findIndex((step) =>
@@ -279,23 +283,31 @@ test("the visual docs capture leaving lint, or running through the reusable work
   }, /pages: read/);
 });
 
-test("a test job whose tests skip the release shortcut, or lint consulting it, is refused", () => {
-  for (const id of TESTS) {
+test("a release decision cannot skip functional tests or bypass SDK coverage", () => {
+  for (const id of TESTS)
     refuses(
       (all) => {
-        const job = all["ci.yml"].jobs[id];
-        job.steps = job.steps.filter((step) => step.id !== "release");
+        all["ci.yml"].jobs[id].steps.find((step) => step.run === `just ci-${id}`).if =
+          "steps.release.outputs.tests == 'run'";
       },
-      new RegExp(`${id} does not consult`),
+      new RegExp(`${id}'s functional tests must run`),
     );
-    refuses(
-      (all) => {
-        const step = all["ci.yml"].jobs[id].steps.find((each) => each.run === `just ci-${id}`);
-        delete step.if;
-      },
-      new RegExp(`${id}'s tests do not wait`),
+  refuses((all) => {
+    all["ci.yml"].jobs["test-linux"].steps = all["ci.yml"].jobs["test-linux"].steps.filter(
+      (step) => step.id !== "release",
     );
-  }
+  }, /must decide Rust coverage/);
+  refuses((all) => {
+    all["ci.yml"].jobs["test-linux"].steps.find(
+      (step) => step.run === "just ci-test-linux",
+    ).env.ONETASKGRAPH_SKIP_RUST_COVERAGE = "1";
+  }, /only the classified Rust coverage switch/);
+  refuses((all) => {
+    all["ci.yml"].jobs["test-windows"].steps.push({
+      id: "release",
+      run: "node .github/release-shortcut.mjs decide",
+    });
+  }, /must not consult a coverage shortcut/);
   refuses((all) => {
     all["ci.yml"].jobs.lint.steps.push({ run: "node .github/release-shortcut.mjs decide" });
   }, /lint consults/);
@@ -307,20 +319,6 @@ test("a cache key omitting the lockfile or the pinned tool version it depends on
       (step) => uses(step).startsWith("actions/cache") && pattern.test(String(step.with.path)),
     );
   for (const job of Object.keys(FOUR)) {
-    for (const lockfile of LOCKFILES)
-      refuses(
-        (all) => {
-          const step = cacheOf(all, job, /\.nx\/cache/);
-          step.with.key = step.with.key
-            .replace(`'${lockfile}', `, "")
-            .replace(`, '${lockfile}'`, "");
-        },
-        new RegExp(`${job} keys \\.nx/cache \\(key\\) without ${lockfile.replace(".", "\\.")}`),
-      );
-    refuses((all) => {
-      const step = cacheOf(all, job, /\.nx\/cache/);
-      step.with["restore-keys"] = `nx-${job}-`;
-    }, /restore-keys\) without/);
     refuses((all) => {
       const step = cacheOf(all, job, /release-plz/);
       step.with.key = `release-plz-\${{ runner.os }}-\${{ runner.arch }}`;
@@ -417,6 +415,9 @@ test("the contract's target is keyed on .github alone and reads nothing outside 
   const named = structuredClone(project);
   named.targets["ci-jobs"].inputs = ["workflowGraph"];
   assert.match(contractInputProblems(named).join("\n"), /workspaceRoot/);
+  const runtime = structuredClone(project);
+  runtime.targets["ci-jobs"].inputs.push({ runtime: "cat Cargo.toml" });
+  assert.match(contractInputProblems(runtime).join("\n"), /Cargo\.toml/);
   assert.deepEqual(importProblems(import.meta.url), []);
   assert.match(
     importProblems(import.meta.url, 'import { graph } from "../workflow-graph.mjs";').join("\n"),
@@ -433,6 +434,9 @@ function contractInputProblems(project) {
         : [input],
     );
   return expand(project.targets["ci-jobs"].inputs ?? ["default"])
+    .filter(
+      (input) => JSON.stringify(input) !== JSON.stringify({ runtime: "node -p process.platform" }),
+    )
     .filter((input) => typeof input !== "string" || !/^!?\{projectRoot\}\//.test(input))
     .map((input) => `ci-jobs is keyed on ${JSON.stringify(input)}, outside .github`);
 }
