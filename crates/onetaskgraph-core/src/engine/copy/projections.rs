@@ -766,6 +766,44 @@ impl Projecting {
         }
     }
 
+    /// Restore authored same-record links before the public boundary examines a view, and
+    /// leave private cross-record links as text alone.
+    pub(super) fn public_bodies(
+        &mut self,
+        engine: &Engine,
+        locations: &[String],
+    ) -> Result<(), EngineError> {
+        if let Self::Active(tasks) = self {
+            for task in tasks {
+                let source = engine.readable(&task.source.source)?;
+                if let Some(content) = task.task.content.as_deref() {
+                    let own = super::located(task.task.location.as_ref());
+                    let stored = source.source().stored_headings(
+                        onetaskgraph_plugin_api::MetadataRecord::Task,
+                        &task.source.native,
+                    );
+                    let authored = crate::section_links::SectionForm::for_kind(source.kind())
+                        .map_or_else(
+                            || content.to_owned(),
+                            |form| {
+                                form.read_same_record(content, own.as_deref(), stored.as_deref())
+                            },
+                        );
+                    task.task.content = Some(super::privacy::without_private_links(
+                        &authored,
+                        locations,
+                        if source.kind() == "local-md" {
+                            own.as_deref()
+                        } else {
+                            None
+                        },
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Every task this plan makes a view of.
     fn tasks(&self) -> &[Projected] {
         match self {

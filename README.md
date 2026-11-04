@@ -1367,7 +1367,8 @@ destination is `<path>#<slug>`:
   `budgets-1`. `### Step 2.b: retry (once)` is `step-2b-retry-once`, and
   `### Budget <id>` is `budget-<id>`. GitHub's file view and VS Code's preview read the same
   rule.
-- A link to a heading of the same record is `#<slug>` alone.
+- A link to a heading of the same record is `#<slug>` alone. Task reads use the authored
+  same-record form for every source, as the final row of the table below records.
 - The authored form carries no anchor markup (`<a id>`, `<a name>`). A destination that needs
   some is the copy's to write.
 
@@ -1378,8 +1379,9 @@ decided: it writes the form, parses it back and supplies its markup.
 | Destination | Link to another record's heading | Link to its own heading |
 | --- | --- | --- |
 | A folder of Markdown | `<path relative to the linking file>#<slug>` | `#<slug>` |
-| A GitHub Projects issue | `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` | `#user-content-<slug>` |
+| A GitHub Projects issue | `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` | `#<slug>` |
 | A Linear issue, project or document | `<record URL>#heading-<Linear slug>-<id8>` | the record's own URL with that fragment |
+| Task read (every source) | as stored | `#<slug>` |
 
 - **GitHub.** An issue page gives a heading no `id`. So the GitHub source writes
   `<a id="<slug>"></a>` on its own line before every heading of every body it writes, which

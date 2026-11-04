@@ -1,0 +1,268 @@
+//! Private record addresses are removed before a public copy is rendered.
+
+use std::collections::BTreeSet;
+
+use super::{
+    Engine, EngineError, Level, Planned, Running, content_of, could_name, fits, located,
+    location_of, metadata_of, metadata_ref, refused, set_content, stops_a_location,
+};
+use crate::config::SourceVisibility;
+use crate::section_links::SectionForm;
+use onetaskgraph_plugin_api::{
+    DocumentQuery, PageRequest, ProjectQuery, SourceError, Support, TaskQuery,
+};
+
+impl Engine {
+    /// Remove private addresses before the boundary check sees a public body's content.
+    pub(super) async fn prepare_public_body(
+        &self,
+        item: &mut Planned,
+        running: &mut Running,
+    ) -> Result<(), EngineError> {
+        if self.declared(&item.to) == SourceVisibility::Private {
+            return Ok(());
+        }
+        if !content_of(&item.item).is_some_and(could_name)
+            && !item
+                .carried
+                .iter()
+                .flatten()
+                .any(|comment| could_name(&comment.body))
+        {
+            return Ok(());
+        }
+        if running.private_locations.is_none() {
+            running.private_locations = Some(self.private_locations().await?);
+        }
+        let source = self.readable(&item.source.source)?;
+        let form = SectionForm::for_kind(source.kind());
+        let own = located(location_of(&item.item));
+        let stored = source
+            .source()
+            .stored_headings(item.item.level().record(), &item.source.native);
+        if let Some(content) = content_of(&item.item) {
+            let authored = form.map_or_else(
+                || content.to_owned(),
+                |form| form.read_same_record(content, own.as_deref(), stored.as_deref()),
+            );
+            let clean = without_private_links(
+                &authored,
+                running.private_locations.as_deref().unwrap_or_default(),
+                (form == Some(SectionForm::LocalMd))
+                    .then_some(own.as_deref())
+                    .flatten(),
+            );
+            if clean != content
+                && let Some(provenance) =
+                    super::stored::restamped(metadata_ref(&item.item), &[content], &clean)
+            {
+                metadata_of(&mut item.item).insert(
+                    crate::template::TemplateProvenance::KEY.to_owned(),
+                    provenance.to_value(),
+                );
+            }
+            set_content(&mut item.item, clean);
+        }
+        if let Some(comments) = &mut item.carried {
+            for comment in comments {
+                comment.body = without_private_links(
+                    &comment.body,
+                    running.private_locations.as_deref().unwrap_or_default(),
+                    (form == Some(SectionForm::LocalMd))
+                        .then_some(own.as_deref())
+                        .flatten(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Reported locations only, held for this copy invocation. A failed inventory refuses
+    /// the copy before it can publish a body whose links have not been checked.
+    pub(super) async fn private_locations(&self) -> Result<Vec<String>, EngineError> {
+        let mut locations = Vec::new();
+        for configured in self
+            .sources
+            .iter()
+            .filter(|source| self.declared(source.name()) == SourceVisibility::Private)
+        {
+            let source = self.readable(configured.name())?;
+            for level in [Level::Task, Level::Project, Level::Document] {
+                if (level == Level::Document
+                    && source.source().capabilities().documents == Support::Unsupported)
+                    || (level == Level::Project
+                        && source.source().capabilities().projects == Support::Unsupported)
+                {
+                    continue;
+                }
+                let mut page = PageRequest {
+                    cursor: None,
+                    limit: source.source().capabilities().max_page_size.clamp(1, 100),
+                };
+                let mut visited = BTreeSet::new();
+                loop {
+                    let (held, next) = match level {
+                        Level::Task => {
+                            let read = source
+                                .source()
+                                .query_tasks(&TaskQuery::default(), &page)
+                                .await
+                                .map_err(|error| refused(source, error))?;
+                            fits(read.items.len(), page.limit)
+                                .map_err(|error| refused(source, error))?;
+                            (
+                                read.items
+                                    .into_iter()
+                                    .flat_map(|item| {
+                                        item.location.into_iter().chain(
+                                            item.url.map(onetaskgraph_plugin_api::Location::Url),
+                                        )
+                                    })
+                                    .collect::<Vec<_>>(),
+                                read.next,
+                            )
+                        }
+                        Level::Project => {
+                            let read = source
+                                .source()
+                                .query_projects(&ProjectQuery::default(), &page)
+                                .await
+                                .map_err(|error| refused(source, error))?;
+                            fits(read.items.len(), page.limit)
+                                .map_err(|error| refused(source, error))?;
+                            (
+                                read.items
+                                    .into_iter()
+                                    .flat_map(|item| {
+                                        item.location.into_iter().chain(
+                                            item.url.map(onetaskgraph_plugin_api::Location::Url),
+                                        )
+                                    })
+                                    .collect(),
+                                read.next,
+                            )
+                        }
+                        Level::Document => {
+                            let read = source
+                                .source()
+                                .query_documents(&DocumentQuery::default(), &page)
+                                .await
+                                .map_err(|error| refused(source, error))?;
+                            fits(read.items.len(), page.limit)
+                                .map_err(|error| refused(source, error))?;
+                            (
+                                read.items
+                                    .into_iter()
+                                    .flat_map(|item| {
+                                        item.location.into_iter().chain(
+                                            item.url.map(onetaskgraph_plugin_api::Location::Url),
+                                        )
+                                    })
+                                    .collect(),
+                                read.next,
+                            )
+                        }
+                    };
+                    for location in held {
+                        if let Some(location) = located(Some(&location)) {
+                            locations.extend(SectionForm::for_kind(source.kind()).map_or_else(
+                                || vec![location.clone()],
+                                |form| form.spellings(&location),
+                            ));
+                        }
+                    }
+                    let Some(next) = next else { break };
+                    if !visited.insert(next.0.clone()) {
+                        return Err(refused(
+                            source,
+                            SourceError::Malformed {
+                                message: "private location inventory repeated a cursor".to_owned(),
+                            },
+                        ));
+                    }
+                    page.cursor = Some(next);
+                }
+            }
+        }
+        locations.sort();
+        locations.dedup();
+        Ok(locations)
+    }
+}
+
+/// Keep link text, without the Markdown destination, for any private record address.
+/// Literal addresses are removed too; fragments must never leave a private id behind.
+pub(super) fn without_private_links(
+    content: &str,
+    locations: &[String],
+    own: Option<&str>,
+) -> String {
+    let private = |target: &str| {
+        let path = target.split('#').next().unwrap_or_default();
+        let resolved = own.and_then(|own| crate::section_links::resolve_relative(own, path));
+        locations.iter().any(|location| {
+            target == location
+                || resolved.as_ref() == Some(location)
+                || target
+                    .strip_prefix(location)
+                    .is_some_and(|rest| rest.starts_with('#'))
+        })
+    };
+    let parser = pulldown_cmark::Parser::new(content);
+    let mut replacements = parser
+        .reference_definitions()
+        .iter()
+        .filter(|(_, definition)| private(&definition.dest))
+        .map(|(_, definition)| (definition.span.clone(), String::new()))
+        .collect::<Vec<_>>();
+    for (event, range) in parser.into_offset_iter() {
+        if let pulldown_cmark::Event::Start(pulldown_cmark::Tag::Link { dest_url, .. }) = event
+            && private(&dest_url)
+        {
+            let link = &content[range.clone()];
+            replacements.push((range, link_label(link).to_owned()));
+        }
+    }
+    replacements.sort_by_key(|(range, _)| range.start);
+    let mut out = content.to_owned();
+    for (range, text) in replacements.into_iter().rev() {
+        out.replace_range(range, &text);
+    }
+    for location in locations {
+        while let Some(at) = out
+            .match_indices(location)
+            .map(|(at, _)| at)
+            .find(|at| super::delimited_at(&out, *at, location))
+        {
+            let end = out[at + location.len()..]
+                .find(|c: char| stops_a_location(Some(c)))
+                .map_or(out.len(), |end| at + location.len() + end);
+            out.replace_range(at..end, "");
+        }
+    }
+    out
+}
+
+/// The authored label, including inline formatting and escaped or nested brackets. An
+/// autolink's label is its private address itself, so none of that address is retained.
+fn link_label(link: &str) -> &str {
+    let Some(rest) = link.strip_prefix('[') else {
+        return "";
+    };
+    let mut nested = 0;
+    let mut escaped = false;
+    for (at, character) in rest.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match character {
+            '\\' => escaped = true,
+            '[' => nested += 1,
+            ']' if nested == 0 => return &rest[..at],
+            ']' => nested -= 1,
+            _ => {}
+        }
+    }
+    ""
+}
