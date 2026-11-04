@@ -907,7 +907,10 @@ async fn a_sweep_refuses_missing_extra_and_misidentified_batch_details() {
         let inner = onetaskgraph_in_memory::Plugin
             .build(
                 &name("batch"),
-                &json!({"tasks":[task_value("T-1"),task_value("T-2")]}),
+                // This older source refuses commented listings, so the sweep must
+                // validate its fallback batch read rather than use a plain listing.
+                &json!({"capabilities":{"comments":"native"},
+                    "tasks":[task_value("T-1"),task_value("T-2")]}),
                 &NoSecrets,
             )
             .expect("source");
