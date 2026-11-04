@@ -1,3 +1,4 @@
+import "../test-setup.mjs";
 // The CD jobs' recipes, driven the way the release workflow drives them: the real
 // `just release-<job>` recipes, the real maturin, npm, uv, pip and cargo, and
 // scripts/loopback-release-registries.py standing in for the GitHub Release, PyPI, npm and

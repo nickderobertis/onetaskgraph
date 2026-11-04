@@ -71,7 +71,13 @@
           "bash scripts/check-visual-tools.sh",
           "bash scripts/check-visual-guard-detached.sh"
         ],
-        "parallel": false
+        "parallel": false,
+        "env": {
+          "GITHUB_ACTIONS": "",
+          "RUNNER_TEMP": ".nx/fixture-runner-temp",
+          "NX_SELF_HOSTED_REMOTE_CACHE_SERVER": "",
+          "NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN": ""
+        }
       },
       "cache": false,
       "inputs": [

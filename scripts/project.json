@@ -81,7 +81,13 @@
           "bash scripts/check-warm-rust-cache-reuse-enforced.sh",
           "bash scripts/check-warm-rust-cache-reuse-real.sh"
         ],
-        "parallel": false
+        "parallel": false,
+        "env": {
+          "GITHUB_ACTIONS": "",
+          "RUNNER_TEMP": ".nx/fixture-runner-temp",
+          "NX_SELF_HOSTED_REMOTE_CACHE_SERVER": "",
+          "NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN": ""
+        }
       },
       "cache": false,
       "inputs": [

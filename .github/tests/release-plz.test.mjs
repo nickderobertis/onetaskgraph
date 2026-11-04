@@ -1,3 +1,4 @@
+import "../test-setup.mjs";
 // The release-plz job's own steps, run as the workflow runs them: each `run` body is read out
 // of .github/workflows/release-plz.yml and handed to bash with the environment its step
 // declares. The guard decides from the two secrets; the auto-merge step talks to

@@ -8,6 +8,7 @@
       "{projectRoot}/**/*",
       "{workspaceRoot}/.github/workflow-graph.mjs",
       "{workspaceRoot}/.github/fixture-environment.mjs",
+      "{workspaceRoot}/.github/test-setup.mjs",
       "{workspaceRoot}/.github/package.json",
       "{workspaceRoot}/.github/bun.lock",
       "{workspaceRoot}/scripts/nx-remote-cache.mjs",
@@ -86,7 +87,7 @@
       "executor": "nx:run-commands",
       "dependsOn": ["bootstrap"],
       "options": {
-        "command": "node --test .github/cache-policy/tests/cache.test.mjs .github/cache-policy/tests/fixture-isolation.test.mjs"
+        "command": "node --test .github/cache-policy/tests/cache.test.mjs .github/cache-policy/tests/fixture-isolation.test.mjs .github/cache-policy/tests/fixture-entry.test.mjs"
       },
       "cache": true,
       "outputs": [],

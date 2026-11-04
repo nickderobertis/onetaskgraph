@@ -8,6 +8,8 @@ import { graphReadSet } from "./workflow-graph.mjs";
 // manifests. ci-contexts.spec reconciles this inventory with the target that runs them;
 // graph-only ci-contexts retains workflow-graph.graphReadSet() alone.
 export const cdJourneyReadSet = [
+  ".github/test-setup.mjs",
+  ".github/fixture-environment.mjs",
   ".github/release-published-paths",
   "config/github-interfaces.toml",
   "pyproject.toml",
@@ -103,6 +105,8 @@ export const budgetJourneyFiles = [
 // run graph. A target of github-workflow-policy's, which no crate edit selects, because it
 // installs both tools from npm.
 export const releaseTailReadSet = [
+  ".github/test-setup.mjs",
+  ".github/fixture-environment.mjs",
   ".github/workflows/release.yml",
   ".github/workflows/rust-cache-warm.yml",
   ".github/package.json",
@@ -128,6 +132,7 @@ export const nxHashFiles = [".github/nx-policy/tests/nx-hashes.test.mjs"];
 
 export const nxInputFiles = [".github/nx-policy/tests/nx-inputs.test.mjs"];
 export const nxInputReadSet = [
+  ".github/test-setup.mjs",
   ".github/fixture-environment.mjs",
   ".github/nx-policy/tests/nx-inputs.test.mjs",
   ".github/nx-policy/tests/fixtures/nx-workspace-contracts.mjs",
@@ -141,6 +146,7 @@ export const nxInputReadSet = [
 export const cacheJourneyFiles = [
   ".github/cache-policy/tests/cache.test.mjs",
   ".github/cache-policy/tests/fixture-isolation.test.mjs",
+  ".github/cache-policy/tests/fixture-entry.test.mjs",
 ];
 
 export const cdJourneyFiles = [

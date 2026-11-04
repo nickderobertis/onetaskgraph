@@ -51,7 +51,13 @@
     "test": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bash pool-maintenance/check-measure.sh"
+        "command": "bash pool-maintenance/check-measure.sh",
+        "env": {
+          "GITHUB_ACTIONS": "",
+          "RUNNER_TEMP": ".nx/fixture-runner-temp",
+          "NX_SELF_HOSTED_REMOTE_CACHE_SERVER": "",
+          "NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN": ""
+        }
       },
       "inputs": [
         "default",

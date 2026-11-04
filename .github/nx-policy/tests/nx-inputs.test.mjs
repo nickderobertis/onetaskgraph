@@ -1,3 +1,4 @@
+import "../../test-setup.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";

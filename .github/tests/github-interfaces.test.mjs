@@ -1,3 +1,4 @@
+import "../test-setup.mjs";
 // The release's GitHub calls and the double that stands GitHub in, held to
 // config/github-interfaces.toml by .github/tests/github_interfaces.py. Each drift
 // below is written into a copy of the pin, so the gate is watched refusing it

@@ -1636,8 +1636,10 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   `.github/cache-policy` owns the Linux cache journeys: real Nx and the pinned sidecar,
   GitHub doubled at HTTP. `scripts/scratch-clone.sh` gives every shell guard clone a
   private `RUNNER_TEMP` and removes inherited remote-cache credentials. Node fixture harnesses
-  use `.github/fixture-environment.mjs`, disabling inherited recording and cache authority;
-  cache journeys supply their own recording tree and sidecar explicitly. Real outer/nested-Nx
+  load `.github/test-setup.mjs` first, which clears inherited recording and cache authority
+  before any helper loads. Shell/Python guard targets use the same entry contract. Cache
+  journeys supply their own recording tree and sidecar explicitly; the entry regression
+  rejects a missing setup import or runner environment setting. Real outer/nested-Nx
   regressions audit these test tiers so fixture rows cannot enter the job's report.
   Shared script copies stay byte-identical to their upstream pins.
   `biome.json` excludes exactly the two upstream-owned JavaScript copies; the comment and

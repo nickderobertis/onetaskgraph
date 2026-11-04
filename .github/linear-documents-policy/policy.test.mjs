@@ -1,9 +1,10 @@
+import "../test-setup.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { read, workflows } from "../workflow-graph.mjs";
 
 // No lock serialises the live suites: every session works only on its own run's board copy

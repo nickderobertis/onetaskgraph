@@ -1,3 +1,4 @@
+import "../../test-setup.mjs";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";

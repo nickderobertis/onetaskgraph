@@ -9,6 +9,7 @@
       "{workspaceRoot}/.github/nx-policy/tests/fixtures/nx-workspace-contracts.mjs",
       "{workspaceRoot}/nx.json",
       "{workspaceRoot}/.github/fixture-environment.mjs",
+      "{workspaceRoot}/.github/test-setup.mjs",
       "{workspaceRoot}/**/project.json",
       "{workspaceRoot}/scripts/ci-job.sh",
       "versionFreeNpm"
@@ -18,6 +19,7 @@
       "{projectRoot}/tests/fixtures/nx-workspace-contracts.mjs",
       "{workspaceRoot}/nx.json",
       "{workspaceRoot}/.github/fixture-environment.mjs",
+      "{workspaceRoot}/.github/test-setup.mjs",
       "{workspaceRoot}/**/project.json",
       "{workspaceRoot}/scripts/nx-version-free-inputs.mjs",
       "{workspaceRoot}/scripts/nx-remote-cache.mjs",

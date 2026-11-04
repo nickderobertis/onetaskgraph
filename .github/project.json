@@ -25,6 +25,8 @@
     ],
     "cdJourneys": [
       "default",
+      "{workspaceRoot}/.github/test-setup.mjs",
+      "{workspaceRoot}/.github/fixture-environment.mjs",
       "{workspaceRoot}/.github/release-published-paths",
       "{workspaceRoot}/config/github-interfaces.toml",
       "{workspaceRoot}/pyproject.toml",

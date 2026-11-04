@@ -1,3 +1,4 @@
+import "../../test-setup.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
@@ -41,8 +42,10 @@ function command(program, args, cwd, env = {}) {
 }
 
 const tiers = [
-  ["affected-selection", "bash scripts/check-affected-selection.sh"],
-  ["ci-recipes", "bash scripts/check-ci-recipes.sh"],
+  ["shell-clone", "bash fixture-shell-clone.sh"],
+  ["shell-entry", "bash fixture-shell-entry.sh"],
+  ["python-entry", "python3 fixture-python-entry.py"],
+  ["node-entry", "node --test fixture-entry-probe.test.mjs"],
   ["node-environment", "node fixture-environment-probe.mjs"],
   ["node-owned-recording", "node fixture-environment-probe.mjs"],
 ];
@@ -74,27 +77,6 @@ for (const [name, tierCommand] of tiers) {
       recursive: true,
       verbatimSymlinks: true,
     });
-    if (name === "affected-selection" || name === "ci-recipes") {
-      // These guards already double fixture task commands. Keep their real Nx
-      // and job boundaries and make every successful task probe credential removal.
-      const path = join(workspace, `scripts/check-${name}.sh`);
-      const original = readFileSync(path, "utf8");
-      const site =
-        name === "affected-selection"
-          ? '            target["options"] = {"command": "exit 1" if failing else command}'
-          : '        definition["options"] = {"command": "exit 1" if task == failing else "true"}';
-      assert.ok(
-        original.includes(site),
-        "environment probe must reach the real guard's fixture commands",
-      );
-      const probe =
-        'python3 -c \'import os; assert not os.environ.get("NX_SELF_HOSTED_REMOTE_CACHE_SERVER"); assert not os.environ.get("NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN")\'';
-      const replacement =
-        name === "affected-selection"
-          ? `            command = ${JSON.stringify(probe)} + " && " + command\n${site}`
-          : `        definition["options"] = {"command": "exit 1" if task == failing else ${JSON.stringify(probe)}}`;
-      writeFileSync(path, original.replace(site, replacement));
-    }
     writeFileSync(
       join(workspace, "fixture-environment-probe.mjs"),
       `
@@ -110,18 +92,81 @@ assert.equal(result.status, 0);
 ${name === "node-owned-recording" ? `assert.ok(existsSync('.nx/owned-fixture/nx-cache-recording/outer/invocations.jsonl'));` : ""}
 `,
     );
+    writeFileSync(
+      join(workspace, "fixture-entry-probe.test.mjs"),
+      `
+import './.github/test-setup.mjs';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+writeFileSync('fixture-entry-location.json', JSON.stringify({temp:process.env.RUNNER_TEMP}));
+assert.equal(process.env.NX_SELF_HOSTED_REMOTE_CACHE_SERVER, undefined);
+assert.equal(process.env.NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN, undefined);
+const result = spawnSync(process.execPath, ['node_modules/nx/dist/bin/nx.js', 'run', 'workspace:environment-probe'], {stdio: 'inherit'});
+assert.equal(result.status, 0);
+`,
+    );
+    writeFileSync(
+      join(workspace, "fixture-shell-entry.sh"),
+      `
+set -eu
+for key in GITHUB_ACTIONS NX_SELF_HOSTED_REMOTE_CACHE_SERVER NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN; do
+  value="$(printenv "$key" || true)"
+  test -z "$value"
+done
+node node_modules/nx/dist/bin/nx.js run workspace:environment-probe
+`,
+    );
+    writeFileSync(
+      join(workspace, "fixture-python-entry.py"),
+      `
+import os, subprocess
+for key in ['GITHUB_ACTIONS','NX_SELF_HOSTED_REMOTE_CACHE_SERVER','NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN']:
+    assert not os.environ.get(key), key
+subprocess.run(['node','node_modules/nx/dist/bin/nx.js','run','workspace:environment-probe'],check=True)
+`,
+    );
+    writeFileSync(
+      join(workspace, "fixture-shell-clone.sh"),
+      `
+set -eu
+source scripts/scratch-clone.sh
+scratch_clone "$PWD" "$PWD/../clone"
+cp -a node_modules "$PWD/../clone/node_modules"
+unset NX_INVOCATION_ROOT_PID
+export NX_DAEMON=false
+cd "$PWD/../clone"
+node node_modules/nx/dist/bin/nx.js run workspace:environment-probe
+test -s "$RUNNER_TEMP/nx-cache-recording/outer/invocations.jsonl"
+`,
+    );
     const projectPath = join(workspace, "workspace/project.json");
     const project = JSON.parse(readFileSync(projectPath, "utf8"));
     project.targets["fixture-isolation"] = {
       executor: "nx:run-commands",
       cache: false,
-      options: { command: tierCommand },
+      options: {
+        command: tierCommand,
+        ...(["shell-entry", "python-entry"].includes(name)
+          ? {
+              env: JSON.parse(
+                readFileSync(
+                  join(
+                    root,
+                    name === "shell-entry" ? "scripts/project.json" : "workspace/project.json",
+                  ),
+                  "utf8",
+                ),
+              ).targets.test.options.env,
+            }
+          : {}),
+      },
     };
     project.targets["environment-probe"] = {
       executor: "nx:run-commands",
       cache: false,
       options: {
-        command: `node -e 'for (const key of ${JSON.stringify(name === "node-owned-recording" ? ["NX_SELF_HOSTED_REMOTE_CACHE_SERVER", "NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN"] : ["GITHUB_ACTIONS", "NX_SELF_HOSTED_REMOTE_CACHE_SERVER", "NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN"])}) if (process.env[key]) throw Error(key + " leaked")'`,
+        command: `node -e 'for (const key of ${JSON.stringify(["node-owned-recording", "shell-clone"].includes(name) ? ["NX_SELF_HOSTED_REMOTE_CACHE_SERVER", "NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN"] : ["GITHUB_ACTIONS", "NX_SELF_HOSTED_REMOTE_CACHE_SERVER", "NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN"])}) if (process.env[key]) throw Error(key + " leaked")'`,
       },
     };
     writeFileSync(projectPath, JSON.stringify(project));
@@ -179,6 +224,23 @@ ${name === "node-owned-recording" ? `assert.ok(existsSync('.nx/owned-fixture/nx-
       `${name}: ${rows.length} invocation(s), ${tasks.length} outer recording row(s); child status ${result.status}`,
     );
     assert.equal(result.status, 0, result.stdout + result.stderr);
+    if (name === "node-entry") {
+      const { temp } = JSON.parse(
+        readFileSync(join(workspace, "fixture-entry-location.json"), "utf8"),
+      );
+      assert.equal(typeof temp, "string");
+      assert.equal(
+        dirname(temp),
+        process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(),
+        "setup allocates beneath the selected scratch root",
+      );
+      assert.notEqual(temp, runnerTemp, "setup must replace the inherited recording location");
+      assert.equal(
+        existsSync(temp),
+        false,
+        "the private directory is removed when the test process exits",
+      );
+    }
     assert.deepEqual(
       tasks,
       ["workspace:fixture-isolation"],
