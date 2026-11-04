@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import socket
 from pathlib import Path
 import tempfile
 import unittest
@@ -46,26 +47,37 @@ fn waits_for_release() {
             )
             diagnostic = (await lock.communicate())[0].decode("utf-8", errors="replace")
             self.assertEqual(lock.returncode, 0, diagnostic)
+            command = ["bash", str(ROOT / "scripts/rust-coverage.sh"), "coverage-progress"]
+            if os.name == "nt":
+                process = await asyncio.create_subprocess_exec(
+                    *command, cwd=tree, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                output = (await process.communicate())[0].decode("utf-8", errors="replace")
+                self.assertEqual(process.returncode, 0, output)
+                self.assertIn("skipped on Windows", output)
+                return
             for fails in (False, True):
                 gate = tree / f"release-{fails}"
                 environment = dict(os.environ, COVERAGE_PROGRESS_GATE=str(gate))
                 if fails:
                     environment["COVERAGE_PROGRESS_FAIL"] = "1"
+                # Nx supplies a socket for subprocess output. It cannot be reopened via
+                # /dev/stderr, although writing the inherited descriptor works.
+                parent, child = socket.socketpair()
+                parent.setblocking(False)
+                reader, writer = await asyncio.open_connection(sock=parent)
                 process = await asyncio.create_subprocess_exec(
-                    "bash", str(ROOT / "scripts/rust-coverage.sh"), "coverage-progress",
-                    cwd=tree, env=environment, stdout=asyncio.subprocess.PIPE,
+                    *command, cwd=tree, env=environment, stdout=child,
                     stderr=asyncio.subprocess.STDOUT,
                 )
+                child.close()
                 output = ""
-                if os.name == "nt":
-                    output = (await process.communicate())[0].decode("utf-8", errors="replace")
-                    self.assertEqual(process.returncode, 0, output)
-                    self.assertIn("skipped on Windows", output)
-                    return
                 try:
                     async with asyncio.timeout(120):
-                        while line := await process.stdout.readline():
+                        while line := await reader.readline():
                             output += line.decode("utf-8", errors="replace")
+                            self.assertNotIn("tee:", output)
                             try:
                                 event = json.loads(line)
                             except ValueError:
@@ -77,12 +89,15 @@ fn waits_for_release() {
                                 break
                         else:
                             self.fail(f"no test start was streamed: {output}")
-                        output += (await process.communicate())[0].decode("utf-8", errors="replace")
+                        output += (await reader.read()).decode("utf-8", errors="replace")
+                        await process.wait()
                 finally:
                     gate.touch(exist_ok=True)
                     if process.returncode is None:
                         process.terminate()
                         await process.wait()
+                    writer.close()
+                    await writer.wait_closed()
                 self.assertEqual(process.returncode, 1 if fails else 0, output)
                 self.assertIn("FAIL" if fails else "PASS", output)
                 if fails:

@@ -89,7 +89,7 @@ try:
         coverage = handle.read()
 except (OSError, ValueError) as error:
     sys.exit(f"pr-build-commands: scripts/rust-coverage.sh could not be read ({error}); next: restore it, which holds the instrumented run")
-run = re.search(r'run="\$\((cargo llvm-cov\b.*?) 2>&1 \| tee /dev/stderr\)"', coverage, re.S)
+run = re.search(r'run="\$\((cargo llvm-cov\b.*?) 2>&1 \| tee >\(cat >&2\)\)"', coverage, re.S)
 if not run or '"$CRATE"' not in run.group(1):
     sys.exit("pr-build-commands: scripts/rust-coverage.sh has no streamed instrumented run; next: point this at its cargo llvm-cov command piped through tee")
 instrumented = " ".join(run.group(1).replace("\\\n", " ").split())

@@ -180,7 +180,7 @@ if ! run="$(cargo llvm-cov \
   nextest \
   --package "$CRATE" \
   --all-features \
-  --locked 2>&1 | tee /dev/stderr)"; then
+  --locked 2>&1 | tee >(cat >&2))"; then
   printf '%s\n' "$run" >&2
   echo "rust-coverage: $CRATE's tests failed under instrumentation — fix the failures named above, then re-run." >&2
   exit 1
