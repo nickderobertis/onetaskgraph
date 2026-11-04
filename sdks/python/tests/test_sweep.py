@@ -5,6 +5,10 @@ when its search could not cover every class of record — and refuses with a fai
 only when it could not run. Every call drives the real binary, under a `write_policy` of two
 small commands: one listing the store's own replacements as the terms, and one rewriting them
 and refusing any identifier that carries one, the way onevcs's sanitise command does.
+
+`test_transport_models_accept_the_real_binary_protocol` is the transport drift gate: it
+strictly parses actual `plugin-serve` replies, refusing unknown or missing envelope and
+result fields, rather than trusting the handwritten peer as its own authority.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from pathlib import Path
 from typing import NamedTuple, TypedDict, get_args
 
 import pytest
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from sweep_source import DependencyDirection, Task, TaskId, WireEdge, WireTask
 
 from onetaskgraph_sdk import Client, OnetaskgraphError, StatusCategory
@@ -155,12 +159,16 @@ TERM = "emberline"
 class PeerError(BaseModel):
     """The protocol peer's refused-request payload."""
 
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     kind: str
     message: str
 
 
 class PeerReply(BaseModel):
     """A refused response from the real peer subprocess."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     id: str
     error: PeerError
@@ -353,12 +361,16 @@ def test_the_search_peer_refuses_unknown_status_categories(tmp_path: Path) -> No
 class SuccessfulReply(BaseModel):
     """The transport envelope of a successful protocol call."""
 
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     id: str
     result: JsonValue
 
 
 class PeerPage[T](BaseModel):
     """A paged protocol result with a concrete record model at each call."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     items: list[T]
     next: str | None
@@ -367,11 +379,16 @@ class PeerPage[T](BaseModel):
 class PeerWritten(BaseModel):
     """The id a successful write assigned."""
 
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     id: str
+    stored_content: str | None = None
 
 
 class PeerTaskRead(BaseModel):
     """A task read through the peer's authoritative wire model."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     task: WireTask
 
@@ -381,7 +398,7 @@ async def peer_result[T](store: Path, request: dict[str, JsonValue], model: type
     code, out, err = await peer_exchange(store, request)
     assert code == 0, err.decode()
     reply = SuccessfulReply.model_validate_json(out)
-    return TypeAdapter(model).validate_python(reply.result)
+    return TypeAdapter(model).validate_json(json.dumps(reply.result), strict=True)
 
 
 @pytest.mark.parametrize("method", ["query_tasks", "task_comments", "task_dependencies", "labels"])
@@ -793,3 +810,98 @@ def test_the_peers_dependency_directions_match_the_plugin_api() -> None:
         )
         variants.append(re.sub(r"(?<!^)(?=[A-Z])", "-", line[:-1]).lower())
     assert get_args(DependencyDirection) == tuple(variants)
+
+
+def test_transport_models_accept_the_real_binary_protocol(binary: Path, tmp_path: Path) -> None:
+    """Keep fixture transport types tied to the compiled protocol server's actual replies."""
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    (tasks / "t1.md").write_text("---\ntitle: Plain\nstatus: todo\n---\nPlain.", encoding="utf-8")
+    requests = [
+        {
+            "id": "init",
+            "method": "initialize",
+            "params": {
+                "protocol_version": 2,
+                "engine": {"name": "test", "version": "0.1.0"},
+                "source_name": "fixture",
+                "config": {"root": str(tmp_path)},
+                "secrets": {},
+            },
+        },
+        {
+            "id": "query",
+            "method": "query_tasks",
+            "params": {
+                "query": {
+                    "labels": {"any_of": [], "all_of": [], "none_of": []},
+                    "statuses": [],
+                    "project": "any",
+                },
+                "page": {"limit": 10},
+            },
+        },
+        {"id": "read", "method": "get_task", "params": {"id": "t1"}},
+        {
+            "id": "write",
+            "method": "write_task",
+            "params": {
+                "write": {
+                    "target": "t1",
+                    "item": task("t1", "Changed."),
+                    "depends_on": [],
+                }
+            },
+        },
+        {"id": "bad", "method": "get_task", "params": {"id": 7}},
+    ]
+
+    async def exchange() -> ProcessResult:
+        process = await asyncio.create_subprocess_exec(
+            str(binary),
+            "plugin-serve",
+            "local-md",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate(
+            ("\n".join(json.dumps(request) for request in requests) + "\n").encode()
+        )
+        return ProcessResult(process.returncode, stdout, stderr)
+
+    completed = run(exchange())
+    assert completed.code == 0, completed.stderr.decode()
+    lines = completed.stdout.splitlines()
+    assert len(lines) == len(requests)
+    queried = SuccessfulReply.model_validate_json(lines[1])
+    page = PeerPage[WireTask].model_validate_json(json.dumps(queried.result))
+    assert [item.id.root for item in page.items] == ["t1"]
+    read = SuccessfulReply.model_validate_json(lines[2])
+    assert PeerTaskRead.model_validate_json(json.dumps(read.result)).task.id.root == "t1"
+    written = SuccessfulReply.model_validate_json(lines[3])
+    assert PeerWritten.model_validate_json(json.dumps(written.result)).id == "t1"
+    assert PeerReply.model_validate_json(lines[4]).error.kind == "malformed"
+
+    models: list[BaseModel] = [
+        queried,
+        page,
+        read,
+        PeerTaskRead.model_validate_json(json.dumps(read.result)),
+        written,
+        PeerWritten.model_validate_json(json.dumps(written.result)),
+        PeerReply.model_validate_json(lines[4]),
+        PeerReply.model_validate_json(lines[4]).error,
+    ]
+    for model in models:
+        value = model.model_dump(mode="json", by_alias=True, exclude_unset=True)
+        with pytest.raises(ValidationError):
+            type(model).model_validate_json(
+                json.dumps({**value, "unexpected_protocol_field": True})
+            )
+        required = next(
+            key for key, field in type(model).model_fields.items() if field.is_required()
+        )
+        value.pop(required)
+        with pytest.raises(ValidationError):
+            type(model).model_validate_json(json.dumps(value))
