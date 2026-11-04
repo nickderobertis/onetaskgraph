@@ -170,12 +170,17 @@ fi
 # that subprocess, so its coverage is attributed rather than lost. A failing test is the
 # only failure here; the floor is the report's. Doctests are not run: nextest has none,
 # and cargo-llvm-cov leaves them uninstrumented anyway.
+# Keep each test's start and result visible while the suite runs, including when the
+# job ends before nextest can print its summary. Preserve the captured failure diagnostic.
+export NEXTEST_STATUS_LEVEL=all
+export NEXTEST_EXPERIMENTAL_LIBTEST_JSON=1
+export NEXTEST_MESSAGE_FORMAT=libtest-json-plus
 if ! run="$(cargo llvm-cov \
   --no-report \
   nextest \
   --package "$CRATE" \
   --all-features \
-  --locked 2>&1)"; then
+  --locked 2>&1 | tee /dev/stderr)"; then
   printf '%s\n' "$run" >&2
   echo "rust-coverage: $CRATE's tests failed under instrumentation — fix the failures named above, then re-run." >&2
   exit 1
