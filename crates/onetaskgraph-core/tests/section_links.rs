@@ -124,6 +124,16 @@ fn each_destination_writes_its_own_form() {
     ];
     let linear = SectionForm::Linear(LinearSectionForm::HeadingLink);
     assert_eq!(
+        linear.same(
+            Some("https://linear.app/w/issue/T-1"),
+            &second,
+            &held,
+            Some(&[])
+        ),
+        Written::Unaddressable("#budgets-1".into()),
+        "a missing same-record heading id preserves the authored slug",
+    );
+    assert_eq!(
         linear.cross(
             "https://linear.app/w/issue/T-1",
             None,

@@ -287,8 +287,8 @@ pub enum SectionForm {
 pub enum Written {
     /// The link, in the destination's form.
     Link(String),
-    /// The record's link with no fragment: the destination holds no heading this form can
-    /// address — counted unaddressable.
+    /// A fallback when the native heading cannot be addressed — counted unaddressable.
+    /// Cross-record links name the record alone; same-record links retain the authored slug.
     Unaddressable(String),
     /// What the form needs to address the heading is not known yet: the counterpart's
     /// stored heading ids, or where the linking record is.
@@ -369,14 +369,78 @@ impl SectionForm {
     }
 
     /// The heading a same-record link — a Markdown link destination of `#<fragment>` alone —
-    /// names in this kind's own form, when it is one. Linear's same-record link is the record's
-    /// own URL with a fragment, which [`Self::heading_of`] reads.
+    /// names in authored form or this kind's native fragment form. Linear's native link is
+    /// the record's own URL with a fragment, which [`Self::heading_of`] reads.
     #[must_use]
     pub fn same_record(self, fragment: &str, headings: &RecordHeadings) -> Option<Heading> {
         match self {
-            Self::LocalMd | Self::GithubProjects => self.heading_of(fragment, headings, None),
-            Self::Linear(_) => None,
+            Self::LocalMd | Self::Linear(_) => headings.by_slug(fragment),
+            Self::GithubProjects => headings
+                .by_slug(fragment)
+                .or_else(|| self.heading_of(fragment, headings, None)),
         }
+    }
+
+    /// Restore same-record Markdown section destinations to their authored slugs. Unknown
+    /// fragments and links to other records are preserved, including their angle brackets.
+    pub(crate) fn read_same_record(
+        self,
+        content: &str,
+        own: Option<&str>,
+        stored: Option<&[StoredHeading]>,
+    ) -> String {
+        let headings = RecordHeadings::of(content);
+        let spellings = own.map(|own| self.spellings(own)).unwrap_or_default();
+        let mut out = String::with_capacity(content.len());
+        let mut rest = content;
+        while let Some(at) = rest.find("](") {
+            out.push_str(&rest[..at + 2]);
+            rest = &rest[at + 2..];
+            let angled = rest.starts_with('<');
+            let target = if angled { &rest[1..] } else { rest };
+            let end = target
+                .find(|c: char| {
+                    if angled {
+                        c == '>'
+                    } else {
+                        c == ')' || c.is_whitespace()
+                    }
+                })
+                .unwrap_or(target.len());
+            let destination = &target[..end];
+            let heading = if let Some(fragment) = destination.strip_prefix('#') {
+                // Stored GitHub links carry the native prefix even when another heading's
+                // authored slug begins with that prefix. Remove exactly one on reading.
+                if self == Self::GithubProjects {
+                    self.heading_of(fragment, &headings, stored)
+                        .or_else(|| headings.by_slug(fragment))
+                } else {
+                    self.same_record(fragment, &headings)
+                        .or_else(|| self.heading_of(fragment, &headings, stored))
+                }
+            } else {
+                spellings.iter().find_map(|own| {
+                    destination
+                        .strip_prefix(own)?
+                        .strip_prefix('#')
+                        .and_then(|fragment| self.heading_of(fragment, &headings, stored))
+                })
+            };
+            if let Some(slug) = heading.and_then(|heading| headings.slug_of(&heading)) {
+                out.push('#');
+                out.push_str(&slug);
+                rest = &target[end..];
+                if angled {
+                    rest = rest.strip_prefix('>').unwrap_or(rest);
+                }
+            } else {
+                let consumed = usize::from(angled) + end;
+                out.push_str(&rest[..consumed]);
+                rest = &rest[consumed..];
+            }
+        }
+        out.push_str(rest);
+        out
     }
 
     /// A link from a record at `from` to the `heading` of the record at `location`, whose
@@ -443,7 +507,14 @@ impl SectionForm {
                 None => Written::Unaddressable(String::new()),
             },
             Self::Linear(_) => match own {
-                Some(own) => self.cross(own, None, heading, headings, stored),
+                Some(own) => match self.cross(own, None, heading, headings, stored) {
+                    Written::Unaddressable(location) => Written::Unaddressable(
+                        headings
+                            .slug_of(heading)
+                            .map_or(location, |slug| format!("#{slug}")),
+                    ),
+                    written => written,
+                },
                 None => Written::Pending,
             },
         }

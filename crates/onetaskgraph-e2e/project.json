@@ -13,7 +13,12 @@
     "onetaskgraph-status-options"
   ],
   "namedInputs": {
-    "default": ["{projectRoot}/**/*", "sharedGlobals", "{workspaceRoot}/crates/onetaskgraph/**/*"]
+    "default": [
+      "{projectRoot}/**/*",
+      "sharedGlobals",
+      "{workspaceRoot}/crates/onetaskgraph/**/*",
+      "{workspaceRoot}/README.md"
+    ]
   },
   "targets": {
     "bootstrap": {
