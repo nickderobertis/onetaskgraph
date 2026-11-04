@@ -7,6 +7,7 @@
 # in seconds. The Windows recipe, and the macOS recipe outside the cases that read what its
 # phases ran with, are driven through `--select-only`.
 set -euo pipefail
+export ONETASKGRAPH_SKIP_RUST_COVERAGE=0
 
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Absolute, because every case runs it from inside the scratch clone, where a relative PATH

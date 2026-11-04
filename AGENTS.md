@@ -1722,6 +1722,14 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   workflows that goes around the resolver.
   The independently usable `scripts/provision-gate.sh` reports a missing or wrong
   scoped binary with the host-prerequisite marker. Pushes do not invoke provisioning.
+- **A release tree skips only Rust instrumentation already measured on main.**
+  `.github/release-shortcut.mjs` requires a passed main tree plus only release-owned
+  version and changelog edits. Its versioned `rust_coverage` decision controls only
+  Linux's Rust coverage phase and the three budgets that consume its profiles.
+  Functional tests, SDK coverage, distribution checks and workflow budgets still run.
+  An unreadable comparison runs Rust coverage; macOS and Windows never consult this
+  decision. Raw Rust profiles and objects remain uncached because they cannot prove
+  coverage after a version change.
 - **One Mac job per run, and two Mac-spending runs per single-push lifecycle.** A pull
   request's one Mac job is the required `test-macos`, skipped at the job level on this
   repository's own `release-plz-` branch alone; `lint` runs `.github/macos-policy.mjs` there

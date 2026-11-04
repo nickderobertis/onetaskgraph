@@ -187,6 +187,8 @@ function cacheProblems(ci, release) {
     problems.push("CI must keep exactly the four existing jobs");
   for (const name of jobs) {
     const steps = ci.jobs[name]?.steps ?? [];
+    if ((ci.jobs[name].permissions ?? ci.permissions)?.actions !== "read")
+      problems.push(`${name}: cache workflow requires actions read`);
     const trust = steps.findIndex((step) => step.id === "nx-cache-trust");
     const sidecar = steps.findIndex((step) => step.id === "nx-cache");
     const ready = steps.findIndex((step) => step.run?.endsWith("nx-remote-cache.mjs ready"));
@@ -270,6 +272,12 @@ test("the four existing CI jobs share the pinned cache and promotion precedes re
 });
 test("cache shape refuses an untrusted writer, duplicate local store, invalid cancel steps and manual event", () => {
   for (const mutate of [
+    (ci) => {
+      ci.permissions.actions = "write";
+    },
+    (ci) => {
+      delete ci.jobs.lint.permissions.actions;
+    },
     (ci) => {
       ci.jobs.lint.steps.find((step) => step.id === "nx-cache").env.CACHE_READ_ONLY = "";
     },

@@ -111,17 +111,23 @@ export function problems(all) {
   ])
     if (granted[scope] !== level) found.push(`lint does not grant itself ${scope}: ${level}`);
   for (const id of TESTS) {
+    const tested = steps(jobs[id]).findIndex((step) => step.run === `just ci-${id}`);
+    if (tested >= 0 && steps(jobs[id])[tested].if !== undefined)
+      found.push(`${id}'s functional tests must run without a release shortcut`);
     const decided = steps(jobs[id]).findIndex(
       (step) =>
         step.id === "release" &&
         String(step.run ?? "").includes(".github/release-shortcut.mjs decide"),
     );
-    const tested = steps(jobs[id]).findIndex((step) => step.run === `just ci-${id}`);
-    if (decided < 0) found.push(`${id} does not consult the release shortcut`);
-    else if (tested >= 0 && decided > tested)
-      found.push(`${id} consults the shortcut after its tests`);
-    if (tested >= 0 && steps(jobs[id])[tested].if !== "steps.release.outputs.tests == 'run'")
-      found.push(`${id}'s tests do not wait on the shortcut's answer`);
+    if (id === "test-linux") {
+      if (decided < 0 || (tested >= 0 && decided > tested))
+        found.push("test-linux must decide Rust coverage before its tasks");
+      if (
+        steps(jobs[id])[tested]?.env?.ONETASKGRAPH_SKIP_RUST_COVERAGE !==
+        `\${{ steps.release.outputs.rust_coverage == 'skip' && '1' || '' }}`
+      )
+        found.push("test-linux must pass only the classified Rust coverage switch");
+    } else if (decided >= 0) found.push(`${id} must not consult a coverage shortcut`);
   }
   // test-windows' loopback suites exhaust Windows' default dynamic port range (ci.yml says how).
   const widened = steps(jobs["test-windows"]).findIndex((step) =>
@@ -278,23 +284,31 @@ test("the visual docs capture leaving lint, or running through the reusable work
   }, /pages: read/);
 });
 
-test("a test job whose tests skip the release shortcut, or lint consulting it, is refused", () => {
-  for (const id of TESTS) {
+test("a release decision cannot skip functional tests or bypass SDK coverage", () => {
+  for (const id of TESTS)
     refuses(
       (all) => {
-        const job = all["ci.yml"].jobs[id];
-        job.steps = job.steps.filter((step) => step.id !== "release");
+        all["ci.yml"].jobs[id].steps.find((step) => step.run === `just ci-${id}`).if =
+          "steps.release.outputs.tests == 'run'";
       },
-      new RegExp(`${id} does not consult`),
+      new RegExp(`${id}'s functional tests must run`),
     );
-    refuses(
-      (all) => {
-        const step = all["ci.yml"].jobs[id].steps.find((each) => each.run === `just ci-${id}`);
-        delete step.if;
-      },
-      new RegExp(`${id}'s tests do not wait`),
+  refuses((all) => {
+    all["ci.yml"].jobs["test-linux"].steps = all["ci.yml"].jobs["test-linux"].steps.filter(
+      (step) => step.id !== "release",
     );
-  }
+  }, /must decide Rust coverage/);
+  refuses((all) => {
+    all["ci.yml"].jobs["test-linux"].steps.find(
+      (step) => step.run === "just ci-test-linux",
+    ).env.ONETASKGRAPH_SKIP_RUST_COVERAGE = "1";
+  }, /only the classified Rust coverage switch/);
+  refuses((all) => {
+    all["ci.yml"].jobs["test-windows"].steps.push({
+      id: "release",
+      run: "node .github/release-shortcut.mjs decide",
+    });
+  }, /must not consult a coverage shortcut/);
   refuses((all) => {
     all["ci.yml"].jobs.lint.steps.push({ run: "node .github/release-shortcut.mjs decide" });
   }, /lint consults/);

@@ -7,6 +7,7 @@ const root = fileURLToPath(new URL("../../../", import.meta.url));
 const env = {
   ...process.env,
   GITHUB_ACTIONS: undefined,
+  ONETASKGRAPH_SKIP_RUST_COVERAGE: "0",
   NX_DAEMON: "false",
   NX_ISOLATE_PLUGINS: "false",
   GIT_DIR: undefined,

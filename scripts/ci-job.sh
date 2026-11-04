@@ -41,6 +41,21 @@ for argument in "$@"; do
   esac
 done
 
+case "${ONETASKGRAPH_SKIP_RUST_COVERAGE:-0}" in
+  "" | 0) skip_rust_coverage=false ;;
+  1)
+    if [ "$JOB" != test-linux ]; then
+      echo "ci-job: ONETASKGRAPH_SKIP_RUST_COVERAGE=1 is only valid for test-linux" >&2
+      exit 2
+    fi
+    skip_rust_coverage=true
+    ;;
+  *)
+    echo "ci-job: ONETASKGRAPH_SKIP_RUST_COVERAGE must be 0 or 1; unset it for normal CI" >&2
+    exit 2
+    ;;
+esac
+
 # One phase per line: the group it runs in, `affected|run`, the comma-separated targets or
 # task, the projects that phase excludes (or `-`), and optionally Nx flags of its own,
 # comma-separated. Groups run in order, and the phases of one group at once: they select
@@ -74,11 +89,18 @@ case "$JOB" in
     # and the cache cannot answer for telemetry its key never saw.
     phases="1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e
 1 affected test *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
-1 affected test-uncovered,coverage tag:layer:sdk,tag:coverage:uninstrumented
 1 affected test-uncovered,coverage *,!tag:layer:sdk
 1 run scripts:distribution-check -
-1 run scripts:distribution-test -
-2 affected budgets - --excludeTaskDependencies,--skipNxCache"
+1 run scripts:distribution-test -"
+    if "$skip_rust_coverage"; then
+      coverage_budget_exclusions="onetaskgraph-github-projects-e2e,onetaskgraph-linear-e2e,onetaskgraph-live-janitor"
+    else
+      phases="$phases
+1 affected test-uncovered,coverage tag:layer:sdk,tag:coverage:uninstrumented"
+      coverage_budget_exclusions="-"
+    fi
+    phases="$phases
+2 affected budgets $coverage_budget_exclusions --excludeTaskDependencies,--skipNxCache"
     ;;
   test-macos)
     # Every suite once, uninstrumented: coverage is Linux's. `budgets` reads what `test`

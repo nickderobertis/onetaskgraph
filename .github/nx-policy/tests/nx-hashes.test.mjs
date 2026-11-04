@@ -28,6 +28,7 @@ const environment = {
   ...process.env,
   NODE_TEST_CONTEXT: undefined,
   GITHUB_ACTIONS: undefined,
+  ONETASKGRAPH_SKIP_RUST_COVERAGE: "0",
   NX_DAEMON: "false",
   NX_ISOLATE_PLUGINS: "false",
   GIT_DIR: undefined,
@@ -520,5 +521,41 @@ test("both GitHub Projects targets include run and attempt nonces on every OS", 
         initial[id].definition.inputs.some((input) => input?.env === key),
         `${id}: direct ${key} input`,
       );
+  }
+});
+
+test("real Nx preserves baseline affected routing for every manifest and lockfile, including release-only edits", () => {
+  const before = fixture("selection-base", baseline);
+  const after = fixture("selection-current", "HEAD", true);
+  const names = new Set(Object.values(canonicalInputNames()).flat());
+  const manifests = command(before, "git", ["ls-files"])
+    .trim()
+    .split("\n")
+    .filter((path) => names.has(path.split("/").at(-1)));
+  const releaseFiles = command(root, "git", ["diff", "--name-only", prerelease, baseline])
+    .trim()
+    .split("\n");
+  function affected(dir, paths) {
+    rmSync(join(dir, ".nx"), { recursive: true, force: true });
+    const projects = JSON.parse(
+      command(dir, process.execPath, [
+        "node_modules/.bin/nx",
+        "show",
+        "projects",
+        "--affected",
+        `--files=${paths.join(",")}`,
+        "--json",
+      ]),
+    );
+    assert.ok(Array.isArray(projects) && projects.every((name) => typeof name === "string"));
+    return new Set(projects);
+  }
+  // Nx routes changed paths before hashing their contents. Dependency and feature
+  // mutations are checked above; here every canonicalized path must keep that routing.
+  for (const paths of [...manifests.map((path) => [path]), releaseFiles]) {
+    const expected = affected(before, paths);
+    const actual = affected(after, paths);
+    for (const project of expected)
+      assert.ok(actual.has(project), `${paths.join(",")}: lost affected project ${project}`);
   }
 });

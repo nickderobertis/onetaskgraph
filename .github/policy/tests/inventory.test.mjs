@@ -253,7 +253,7 @@ test("a skip widened past Windows, or test-linux leaving distribution-check, is 
   }, /check-fixture-discrimination\.sh also skips \*linux\*/);
   refused((sources) => {
     sources["scripts/ci-job.sh"] = sources["scripts/ci-job.sh"].replace(
-      /(\n {2}test-linux\)[\s\S]*?)1 run scripts:distribution-test -\n/,
+      /(\n {2}test-linux\)[\s\S]*?)1 run scripts:distribution-test -/,
       (_, before) => before,
     );
   }, /do not run scripts:distribution-test unconditionally/);
