@@ -47,7 +47,7 @@ const PRICES: &[(&str, u64)] = &[
     // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The price is the instrument, not a threshold: the module documentation records that GitHub publishes no per-call point limit to sweep against, so the pin is the check that a document's price moved. This change moved it deliberately, and `session-cost.md` says why.
     (graphql::SUB_ISSUES, 1),
     (graphql::BOARD, 2),
-    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] As at SUB_ISSUES above: this pins the pricing model's measurement for the new document, not a budget threshold. The inventory sweep requires a price for every document; session-cost.md records the additional reconciliation read. Both listing and comment limits are at their maxima here.
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] Pins the new document's measured price, as the inventory requires.
     (graphql::BOARD_WITH_COMMENTS, 3),
     (graphql::ORIGIN_LOOKUP, 1),
     // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. `task status reconcile` reads the board's closed items and `task status complete` reads issues by reference, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; the second's one point per fifty references is what the `github-landing-closure-points` budget's figure rests on, and onebudgetspec judges that budget.
