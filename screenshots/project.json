@@ -26,6 +26,8 @@
         "command": "bun run biome format screenshots"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "{workspaceRoot}/biome.json",
         "{workspaceRoot}/screenshots/project.json",
         {
@@ -39,6 +41,8 @@
         "command": "bash scripts/check-visual-docs.sh"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "{workspaceRoot}/screencomp.toml",
         "{workspaceRoot}/rust-toolchain.toml",

@@ -111,12 +111,19 @@ jobs:
       - name: Comment the suppressions this change adds
         if: github.event.pull_request.head.repo.full_name == github.repository
         uses: nickderobertis/notignored@v0
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
       - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ steps.pins.outputs.just }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
       - uses: astral-sh/setup-uv@v7
         with:
+          version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
       # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit. An
@@ -133,11 +140,7 @@ jobs:
       # than build it from source.
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
-      - name: Read the pinned bootstrap tool versions
-        id: pins
-        shell: bash
-        run: bash scripts/ci-tool-pins.sh
+          tool: cargo-llvm-cov@${{ steps.pins.outputs.cargo-llvm-cov }},cargo-nextest@${{ steps.pins.outputs.cargo-nextest }},cargo-machete@${{ steps.pins.outputs.cargo-machete }},cargo-deny@${{ steps.pins.outputs.cargo-deny }},cargo-binstall@${{ steps.pins.outputs.cargo-binstall }}
       # Tool caches use their pin, OS and architecture (and the compiled pruner its toolchain).
       # Nx results use the sidecar below and Nx's own per-task input hashes.
       - uses: actions/cache/restore@v6
@@ -292,7 +295,13 @@ jobs:
           # The merge base, the release shortcut and main's history all need the full history.
           fetch-depth: 0
           persist-credentials: false
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
       - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ steps.pins.outputs.just }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
@@ -324,6 +333,7 @@ jobs:
           sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: astral-sh/setup-uv@v7
         with:
+          version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
       # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit. A
@@ -339,11 +349,7 @@ jobs:
           cache-shared-key: test-linux
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
-      - name: Read the pinned bootstrap tool versions
-        id: pins
-        shell: bash
-        run: bash scripts/ci-tool-pins.sh
+          tool: cargo-llvm-cov@${{ steps.pins.outputs.cargo-llvm-cov }},cargo-nextest@${{ steps.pins.outputs.cargo-nextest }},cargo-machete@${{ steps.pins.outputs.cargo-machete }},cargo-deny@${{ steps.pins.outputs.cargo-deny }},cargo-binstall@${{ steps.pins.outputs.cargo-binstall }}
       # The caches, keyed as lint's are and for the same reasons.
       - uses: actions/cache/restore@v6
         id: release-plz-cache
@@ -489,7 +495,13 @@ jobs:
       - name: Widen the dynamic port range the loopback suites connect from
         shell: pwsh
         run: netsh int ipv4 set dynamicport tcp start=10000 num=55535
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
       - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ steps.pins.outputs.just }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
@@ -497,6 +509,7 @@ jobs:
         run: just github-workflows-bootstrap
       - uses: astral-sh/setup-uv@v7
         with:
+          version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
       # rust-cache hashes every installed compiler; exclude the unused floating one.
       - name: Exclude the unused floating compiler from the build cache
@@ -507,11 +520,7 @@ jobs:
           cache-shared-key: test-windows
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
-      - name: Read the pinned bootstrap tool versions
-        id: pins
-        shell: bash
-        run: bash scripts/ci-tool-pins.sh
+          tool: cargo-llvm-cov@${{ steps.pins.outputs.cargo-llvm-cov }},cargo-nextest@${{ steps.pins.outputs.cargo-nextest }},cargo-machete@${{ steps.pins.outputs.cargo-machete }},cargo-deny@${{ steps.pins.outputs.cargo-deny }},cargo-binstall@${{ steps.pins.outputs.cargo-binstall }}
       # The caches, keyed as lint's are and for the same reasons.
       - uses: actions/cache/restore@v6
         id: release-plz-cache
@@ -596,7 +605,13 @@ jobs:
           # The merge base, the release shortcut and main's history all need the full history.
           fetch-depth: 0
           persist-credentials: false
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
       - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ steps.pins.outputs.just }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
@@ -604,6 +619,7 @@ jobs:
         run: just github-workflows-bootstrap
       - uses: astral-sh/setup-uv@v7
         with:
+          version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
       # rust-cache hashes every installed compiler; exclude the unused floating one.
       - name: Exclude the unused floating compiler from the build cache
@@ -614,11 +630,7 @@ jobs:
           cache-shared-key: test-macos
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-llvm-cov,cargo-nextest,cargo-machete,cargo-deny,cargo-binstall
-      - name: Read the pinned bootstrap tool versions
-        id: pins
-        shell: bash
-        run: bash scripts/ci-tool-pins.sh
+          tool: cargo-llvm-cov@${{ steps.pins.outputs.cargo-llvm-cov }},cargo-nextest@${{ steps.pins.outputs.cargo-nextest }},cargo-machete@${{ steps.pins.outputs.cargo-machete }},cargo-deny@${{ steps.pins.outputs.cargo-deny }},cargo-binstall@${{ steps.pins.outputs.cargo-binstall }}
       # The caches, keyed as lint's are and for the same reasons.
       - uses: actions/cache/restore@v6
         id: release-plz-cache

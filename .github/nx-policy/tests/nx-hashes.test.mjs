@@ -295,7 +295,7 @@ test("every canonical ecosystem and named raw input invalidates real Nx hashes o
           : file === ".python-version"
             ? (body) => body.replace("3.13", "3.14")
             : file === ".tool-versions"
-              ? (body) => body.replace("just 1.51.0", "just 1.51.1")
+              ? (body) => body.replace("cargo-nextest 0.9.150", "cargo-nextest 0.9.151")
               : file === "rust-toolchain.toml"
                 ? (body) => body.replace('channel = "1.97.1"', 'channel = "1.97.0"')
                 : (body) => `${body}\n# Nx input mutation\n`,

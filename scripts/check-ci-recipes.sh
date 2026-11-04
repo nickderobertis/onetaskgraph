@@ -542,9 +542,10 @@ pins() {
 sed -i.bak 's/^readonly RELEASE_PLZ_VERSION=.*/readonly RELEASE_PLZ_VERSION=9.8.7/' "$REPO/scripts/scoped-release-plz.sh"
 sed -i.bak 's/^prune_superseded_version := .*/prune_superseded_version := "6.5.4"/' "$REPO/justfile"
 pins
-[ "$PINS_STATUS" -eq 0 ] && [ "$(cat "$scratch/pins-output")" = "release-plz=9.8.7
-prune-superseded=6.5.4" ] \
-  || fail "the tool pins did not follow the moved pins to \$GITHUB_OUTPUT: exit $PINS_STATUS, $PINS"
+if [ "$PINS_STATUS" -ne 0 ] || ! grep -qxF 'release-plz=9.8.7' "$scratch/pins-output" \
+  || ! grep -qxF 'prune-superseded=6.5.4' "$scratch/pins-output"; then
+  fail "the tool pins did not follow the moved pins to \$GITHUB_OUTPUT: exit $PINS_STATUS, $PINS"
+fi
 for broken in "" "9.8" "9.8.7 9.8.8" "--all" "9..8.7" "9.8.7."; do
   : >"$scratch/pins-output"
   if [ -z "$broken" ]; then

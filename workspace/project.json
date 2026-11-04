@@ -54,6 +54,8 @@
         "command": "bun run biome format nx.json biome.json package.json .claude workspace crates sdks"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "{workspaceRoot}/biome.json",
         "{workspaceRoot}/nx.json",
         "{workspaceRoot}/package.json",
@@ -89,6 +91,8 @@
         "parallel": false
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "{workspaceRoot}/biome.json",
         "{workspaceRoot}/nx.json",
         "{workspaceRoot}/package.json",
@@ -141,6 +145,8 @@
         "command": "bash scripts/check-workspace-config.sh"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "{workspaceRoot}/**/*.py",
         "{workspaceRoot}/**/*.ts",
         "{workspaceRoot}/nx.json",

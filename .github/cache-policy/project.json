@@ -92,6 +92,8 @@
       "cache": true,
       "outputs": [],
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         {
           "runtime": "node -p process.platform"

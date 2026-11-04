@@ -62,6 +62,84 @@ const CACHES = [
 
 const steps = (job) => (Array.isArray(job?.steps) ? job.steps : []);
 const uses = (step) => (typeof step?.uses === "string" ? step.uses : "");
+const exactTools = new Set(
+  readFileSync(new URL("../../.tool-versions", import.meta.url), "utf8")
+    .split(/\r?\n/)
+    .flatMap((line) => line.match(/^(\S+)\s+\d+\.\d+\.\d+$/)?.slice(1) ?? []),
+);
+
+function toolPinProblems(all) {
+  const found = [];
+  for (const [file, workflow] of Object.entries(all))
+    for (const [name, job] of Object.entries(workflow.jobs ?? {})) {
+      const list = steps(job);
+      const reader = list.findIndex(
+        (step) => step.id === "pins" && step.run === "bash scripts/ci-tool-pins.sh",
+      );
+      for (const [index, step] of list.entries()) {
+        const action = uses(step);
+        const expected = action.startsWith("extractions/setup-just@")
+          ? ["just-version", "just"]
+          : action.startsWith("astral-sh/setup-uv@")
+            ? ["version", "uv"]
+            : undefined;
+        if (expected) {
+          const [input, tool] = expected;
+          if (
+            !exactTools.has(tool) ||
+            reader < 0 ||
+            reader >= index ||
+            step.with?.[input] !== `\${{ steps.pins.outputs.${tool} }}`
+          )
+            found.push(
+              `${file}/${name}: ${tool} must read its exact tracked pin before installation`,
+            );
+        }
+        if (action.startsWith("taiki-e/install-action@"))
+          for (const tool of String(step.with?.tool ?? "").split(",")) {
+            // Only release provisioning uses this tool; no cached target runs it.
+            if (tool === "cargo-semver-checks") continue;
+            const toolName = tool.split("@")[0];
+            if (
+              !exactTools.has(toolName) ||
+              reader < 0 ||
+              reader >= index ||
+              tool !== `${toolName}@\${{ steps.pins.outputs.${toolName} }}`
+            )
+              found.push(`${file}/${name}: installed tool must read its exact tracked pin`);
+          }
+      }
+    }
+  return found;
+}
+
+test("workflow-installed check tools read exact tracked pins before installation", () => {
+  assert.deepEqual(toolPinProblems(definitions()), []);
+});
+
+test("floating installed tools and a missing pin reader are refused", () => {
+  for (const action of [
+    "extractions/setup-just@",
+    "astral-sh/setup-uv@",
+    "taiki-e/install-action@",
+  ])
+    for (const mutation of ["floating", "missing-reader"]) {
+      const changed = structuredClone(definitions());
+      const list = changed["ci.yml"].jobs.lint.steps;
+      if (mutation === "missing-reader")
+        list.splice(
+          list.findIndex((step) => step.id === "pins"),
+          1,
+        );
+      else delete list.find((step) => uses(step).startsWith(action)).with;
+      assert.ok(toolPinProblems(changed).length > 0, `${action}: ${mutation}`);
+    }
+  const untracked = structuredClone(definitions());
+  untracked["ci.yml"].jobs.lint.steps.find((step) =>
+    uses(step).startsWith("taiki-e/install-action@"),
+  ).with.tool = `cargo-untracked@\${{ steps.pins.outputs.cargo-untracked }}`;
+  assert.ok(toolPinProblems(untracked).some((problem) => problem.includes("installed tool")));
+});
 
 export function problems(all) {
   const found = [];
@@ -405,9 +483,9 @@ test("the unused floating compiler cannot invalidate a pinned build cache", () =
   }, /must exclude the unused stable toolchain before restoring the build cache/);
 });
 
-// The contract's own inputs are this directory alone: nothing outside it re-runs it, so it may
-// read nothing outside it — not by an input, and not through a module that reads the tree.
-test("the contract's target is keyed on .github alone and reads nothing outside it", () => {
+// The contract reads .github alone; its execution tools additionally require their
+// tracked version file, as every cached target does.
+test("the contract's target is keyed on .github and the required execution tool pins", () => {
   const project = JSON.parse(readFileSync(new URL("../project.json", import.meta.url), "utf8"));
   assert.deepEqual(contractInputProblems(project), []);
   const broadened = structuredClone(project);
@@ -439,6 +517,8 @@ function contractInputProblems(project) {
       (input) => JSON.stringify(input) !== JSON.stringify({ runtime: "node -p process.platform" }),
     )
     .filter((input) => typeof input !== "string" || !/^!?\{projectRoot\}\//.test(input))
+    .filter((input) => input !== "{workspaceRoot}/.tool-versions")
+    .filter((input) => input !== "versionFreeNpm")
     .map((input) => `ci-jobs is keyed on ${JSON.stringify(input)}, outside .github`);
 }
 

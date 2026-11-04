@@ -8,6 +8,8 @@ import { graphReadSet } from "./workflow-graph.mjs";
 // manifests. ci-contexts.spec reconciles this inventory with the target that runs them;
 // graph-only ci-contexts retains workflow-graph.graphReadSet() alone.
 export const cdJourneyReadSet = [
+  ".tool-versions",
+  "scripts/ci-tool-pins.sh",
   ".github/test-setup.mjs",
   ".github/fixture-environment.mjs",
   ".github/release-published-paths",
@@ -132,6 +134,10 @@ export const nxHashFiles = [".github/nx-policy/tests/nx-hashes.test.mjs"];
 
 export const nxInputFiles = [".github/nx-policy/tests/nx-inputs.test.mjs"];
 export const nxInputReadSet = [
+  ".tool-versions",
+  "justfile",
+  "scripts/ci-tool-pins.sh",
+  "scripts/scoped-release-plz.sh",
   ".github/test-setup.mjs",
   ".github/fixture-environment.mjs",
   ".github/nx-policy/tests/nx-inputs.test.mjs",
@@ -163,9 +169,8 @@ export const GITHUB_READS = "{workspaceRoot}/.github/**/*";
 // What a journey target's inputs get wrong against the read set of the tests it runs: every
 // outside read it is not keyed on, and every workspace input its tests do not read.
 export function inputProblems(project, target) {
-  const rootInputs = JSON.parse(
-    readFileSync(new URL("../nx.json", import.meta.url), "utf8"),
-  ).namedInputs;
+  const rootDefinition = JSON.parse(readFileSync(new URL("../nx.json", import.meta.url), "utf8"));
+  const rootInputs = rootDefinition.namedInputs;
   assert.ok(
     rootInputs &&
       typeof rootInputs === "object" &&
@@ -187,6 +192,10 @@ export function inputProblems(project, target) {
     throw Error("the graph reads no outside file, so this proves nothing");
   const outside = [
     ...new Set([
+      // Execution tools are inputs as well as the data each test reads.
+      ...((project.targets[target].cache ?? rootDefinition.targetDefaults[target]?.cache) === true
+        ? [".tool-versions"]
+        : []),
       ...graph,
       ...(target === "cd-journeys"
         ? cdJourneyReadSet

@@ -63,6 +63,8 @@
     },
     "format-check": {
       "inputs": [
+        "{workspaceRoot}/.tool-versions",
+        "versionFreeNpm",
         "default",
         {
           "runtime": "node -p process.platform"
@@ -73,6 +75,8 @@
     },
     "lint": {
       "inputs": [
+        "{workspaceRoot}/.tool-versions",
+        "versionFreeNpm",
         "default",
         "^default",
         {
@@ -84,6 +88,8 @@
     },
     "typecheck": {
       "inputs": [
+        "{workspaceRoot}/.tool-versions",
+        "versionFreeNpm",
         "default",
         "^default",
         {
@@ -95,6 +101,8 @@
     },
     "test": {
       "inputs": [
+        "{workspaceRoot}/.tool-versions",
+        "versionFreeNpm",
         "default",
         "^default",
         {
@@ -106,6 +114,8 @@
     },
     "coverage": {
       "inputs": [
+        "{workspaceRoot}/.tool-versions",
+        "versionFreeNpm",
         "default",
         "^default",
         {
@@ -117,6 +127,8 @@
     },
     "test-uncovered": {
       "inputs": [
+        "{workspaceRoot}/.tool-versions",
+        "versionFreeNpm",
         "default",
         "^default",
         {

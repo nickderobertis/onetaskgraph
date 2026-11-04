@@ -26,6 +26,8 @@
         "command": "bun run biome format pool-maintenance"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "{workspaceRoot}/biome.json",
         "{workspaceRoot}/pool-maintenance/project.json",
         {
@@ -60,6 +62,8 @@
         }
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "{workspaceRoot}/justfile",
         {

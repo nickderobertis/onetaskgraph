@@ -5,6 +5,10 @@
   "tags": ["lang:javascript", "layer:workspace"],
   "namedInputs": {
     "default": [
+      "{workspaceRoot}/.tool-versions",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/scripts/ci-tool-pins.sh",
+      "{workspaceRoot}/scripts/scoped-release-plz.sh",
       "{workspaceRoot}/.github/nx-policy/tests/nx-inputs.test.mjs",
       "{workspaceRoot}/.github/nx-policy/tests/fixtures/nx-workspace-contracts.mjs",
       "{workspaceRoot}/nx.json",
@@ -55,6 +59,8 @@
         "command": "bun run biome format .github/nx-policy"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "{projectRoot}/**/*",
         "{workspaceRoot}/biome.json",
         {
@@ -68,6 +74,8 @@
         "command": "bun run biome lint --error-on-warnings .github/nx-policy"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "{projectRoot}/**/*",
         "{workspaceRoot}/biome.json",
         {
@@ -91,6 +99,8 @@
       },
       "cache": true,
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         {
           "runtime": "node -p process.platform"

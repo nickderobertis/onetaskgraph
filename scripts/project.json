@@ -26,6 +26,8 @@
         "command": "bun run biome format scripts"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "{workspaceRoot}/biome.json",
         "{workspaceRoot}/scripts/project.json",
         {

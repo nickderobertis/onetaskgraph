@@ -1627,7 +1627,10 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   against GitHub on every gate run. `.github/tests/ci-events.test.mjs` holds which jobs run:
   a pull request's four, and on a push to main release-plz, the warmer and the canonical
   gallery, which skips the release commit.
-- **Nx results persist through the shared remote cache.** Each CI job runs the copied
+- **Nx results persist through the shared remote cache.** Check-tool versions come from
+  `.tool-versions` through `scripts/ci-tool-pins.sh` before
+  installation; every cached target hashes that file. Existing ecosystem locks and the
+  Rust toolchain remain the version sources for their own tools. Each CI job runs the copied
   `nx-remote-cache.mjs` trust, readiness and report steps around its existing Nx work;
   `.nx/cache` has no Actions-cache entry. Fork and Dependabot pull requests are read-only.
   The existing release-plz job promotes trusted PR reports into the base scope before

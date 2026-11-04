@@ -32,6 +32,8 @@
         "cwd": "sdks/python"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "textDefault",
         {
           "runtime": "node -p process.platform"
@@ -45,6 +47,8 @@
         "cwd": "sdks/python"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "textDefault",
         "^default",
         {
@@ -78,6 +82,8 @@
       },
       "//": "The tests spawn target/debug/onetaskgraph, on the same terms as generate-check. onebudgetspec is an input because tests/test_measure_import.py checks the import budget through it.",
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "^default",
         {
@@ -137,6 +143,8 @@
       },
       "//": "The same tests as `test`, measured.",
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "^default",
         {
@@ -184,6 +192,6 @@
       "versionFreePython",
       "versionFreeFiles"
     ],
-    "textDefault": ["{projectRoot}/**/*", "sharedGlobals"]
+    "textDefault": ["{projectRoot}/**/*", "sharedGlobals", "versionFreePython"]
   }
 }

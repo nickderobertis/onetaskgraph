@@ -20,8 +20,16 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with: { target: x86_64-unknown-linux-gnu }
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
       - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ steps.pins.outputs.uv }}
       - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ steps.pins.outputs.just }}
       - name: Build, package and test-install the Linux artifacts
         run: just release-linux build --tag "$TAG"
       - name: Upload the Linux archive to the GitHub Release
@@ -54,8 +62,16 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with: { target: aarch64-unknown-linux-gnu }
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
       - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ steps.pins.outputs.uv }}
       - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ steps.pins.outputs.just }}
       - name: Build, package and test-install the Linux arm64 artifacts
         run: just release-linux-arm64 build --tag "$TAG"
       - name: Upload the Linux arm64 archive to the GitHub Release
@@ -88,8 +104,16 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with: { target: aarch64-apple-darwin }
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
       - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ steps.pins.outputs.uv }}
       - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ steps.pins.outputs.just }}
       - name: Build, package and test-install the macOS artifacts
         run: just release-macos build --tag "$TAG"
       - name: Upload the macOS archive to the GitHub Release
@@ -122,8 +146,16 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with: { target: x86_64-pc-windows-msvc }
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
       - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ steps.pins.outputs.uv }}
       - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ steps.pins.outputs.just }}
       - name: Build, package and test-install the Windows artifacts
         run: just release-windows build --tag "$TAG"
       - name: Upload the Windows archive to the GitHub Release
@@ -161,9 +193,17 @@ jobs:
         with:
           fetch-depth: 0
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
       - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ steps.pins.outputs.uv }}
       - uses: oven-sh/setup-bun@v2
       - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ steps.pins.outputs.just }}
       # Nothing platform-independent is published until every platform is: the launcher
       # resolves a carrier at its own exact version, and the SDKs pin the CLI they drive.
       - name: Confirm the GitHub Release serves the archive of every platform

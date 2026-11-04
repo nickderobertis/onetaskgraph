@@ -1,6 +1,9 @@
 import "../../test-setup.mjs";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { fixtureEnvironment } from "../../fixture-environment.mjs";
@@ -66,6 +69,10 @@ function problems(graph) {
     const [project, name] = id.split(":");
     const target = graph[project]?.targets[name];
     assert.ok(object(target), `${id}: selected task must exist in Nx's effective graph`);
+    if (target.cache === true && !target.inputs?.includes("{workspaceRoot}/.tool-versions"))
+      failures.push(`${id}: cached tasks require the exact installed tool versions`);
+    if (target.cache === true && !target.inputs?.includes("versionFreeNpm"))
+      failures.push(`${id}: cached tasks require the locked Nx and JavaScript tools`);
     if (
       target.cache === true &&
       (!Array.isArray(target.outputs) || !target.outputs.every(outputAllowed))
@@ -124,4 +131,65 @@ test("an uncached target on multiple OS legs also requires its platform input", 
   assert.deepEqual(problems(edited), [
     "onetaskgraph:build: multiple OS legs require process.platform",
   ]);
+});
+
+test("a cached target that loses the tool version file is refused", () => {
+  const edited = structuredClone(projects);
+  edited["onetaskgraph-core"].targets.test.inputs = edited[
+    "onetaskgraph-core"
+  ].targets.test.inputs.filter((input) => input !== "{workspaceRoot}/.tool-versions");
+  assert.deepEqual(problems(edited), [
+    "onetaskgraph-core:test: cached tasks require the exact installed tool versions",
+  ]);
+});
+
+test("the CI pin reader emits exact file versions and refuses missing, ranged or duplicate pins", () => {
+  const dir = mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "tool-pins-"));
+  try {
+    mkdirSync(join(dir, "scripts"));
+    for (const file of [
+      ".tool-versions",
+      "justfile",
+      "scripts/scoped-release-plz.sh",
+      "scripts/ci-tool-pins.sh",
+    ])
+      copyFileSync(join(root, file), join(dir, file));
+    const output = join(dir, "outputs");
+    const original = readFileSync(join(dir, ".tool-versions"), "utf8");
+    const run = () => {
+      writeFileSync(output, "");
+      return spawnSync("bash", ["scripts/ci-tool-pins.sh"], {
+        cwd: dir,
+        env: { ...env, GITHUB_OUTPUT: output },
+        encoding: "utf8",
+      });
+    };
+    const result = run();
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const pins = Object.fromEntries(
+      readFileSync(output, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => line.split("=")),
+    );
+    for (const line of original.split(/\r?\n/).filter((line) => line && !line.startsWith("#"))) {
+      const [tool, version] = line.split(/\s+/);
+      assert.equal(pins[tool], version, `${tool}: emitted tracked exact version`);
+    }
+    assert.equal(pins["cargo-nextest"], "0.9.150");
+    for (const changed of [
+      original.replace(/^cargo-nextest .*\n/m, ""),
+      original.replace("cargo-nextest 0.9.150", "cargo-nextest >=0.9.150"),
+      original.replace("cargo-nextest 0.9.150", "cargo-nextest 0.9.150 0.9.151"),
+      `${original}cargo-nextest 0.9.150\n`,
+    ]) {
+      writeFileSync(join(dir, ".tool-versions"), changed);
+      const refused = run();
+      assert.notEqual(refused.status, 0);
+      assert.match(refused.stderr, /no single pinned version for cargo-nextest/);
+      assert.equal(readFileSync(output, "utf8"), "", "no partial install outputs");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

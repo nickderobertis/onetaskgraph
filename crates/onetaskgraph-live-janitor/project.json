@@ -89,6 +89,8 @@
       },
       "cache": true,
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "^default",
         {

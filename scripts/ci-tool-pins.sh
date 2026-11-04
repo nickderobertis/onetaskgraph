@@ -5,9 +5,10 @@
 # than a stale hit.
 set -euo pipefail
 
-readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly ROOT
 release_plz="$(sed -n 's/^readonly RELEASE_PLZ_VERSION=//p' "$ROOT/scripts/scoped-release-plz.sh" | tr -d '\r')"
-prune_superseded="$(cd "$ROOT" && just --evaluate prune_superseded_version | tr -d '\r')"
+prune_superseded="$(sed -n 's/^prune_superseded_version := "\([^"]*\)"$/\1/p' "$ROOT/justfile" | tr -d '\r')"
 # One version each, so a key is one value and $GITHUB_OUTPUT gains exactly one record.
 single_version() {
   case "$2" in
@@ -19,11 +20,18 @@ single_version() {
       ;;
   esac
   echo "ci-tool-pins: no single pinned version for $1 where it is pinned (read '$2')." >&2
-  echo "ci-tool-pins: next: restore RELEASE_PLZ_VERSION in scripts/scoped-release-plz.sh and prune_superseded_version in the justfile." >&2
+  echo "ci-tool-pins: next: restore the named exact version in .tool-versions, scripts/scoped-release-plz.sh or the justfile." >&2
   exit 1
 }
 single_version release-plz "$release_plz"
 single_version prune-superseded "$prune_superseded"
 pins="release-plz=$release_plz prune-superseded=$prune_superseded"
-[ -z "${GITHUB_OUTPUT:-}" ] || printf '%s\n' $pins >>"$GITHUB_OUTPUT"
+for tool in just uv cargo-nextest cargo-llvm-cov cargo-machete cargo-deny cargo-binstall; do
+  version="$(awk -v tool="$tool" '$1 == tool { if (NF == 2) print $2; else print "invalid tool entry" }' "$ROOT/.tool-versions" | tr -d '\r')"
+  single_version "$tool" "$version"
+  pins="$pins $tool=$version"
+done
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+  printf '%s\n' "$pins" | tr ' ' '\n' >>"$GITHUB_OUTPUT"
+fi
 echo "ci-tool-pins: $pins"

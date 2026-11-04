@@ -78,7 +78,14 @@ jobs:
       # side; without uv on PATH the release pull request could not carry a uv.lock that
       # agrees with the version it proposes. v7 is the newest floating major tag this action
       # publishes.
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.guard.outputs.enabled == 'true'
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
       - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ steps.pins.outputs.uv }}
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.guard.outputs.enabled == 'true'
       # cargo-binstall rather than release-plz itself: the pinned release-plz is provisioned
       # by scripts/scoped-release-plz.sh into the repository-scoped tool location every
@@ -92,7 +99,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.guard.outputs.enabled == 'true'
         with:
-          tool: cargo-semver-checks,cargo-binstall
+          tool: cargo-semver-checks,cargo-binstall@${{ steps.pins.outputs.cargo-binstall }}
       - name: Provision the pinned release-plz into the repository-scoped tool location
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.guard.outputs.enabled == 'true'
         env:

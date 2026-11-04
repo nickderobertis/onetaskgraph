@@ -177,7 +177,20 @@ test("shared scripts remain byte-identical to the agreed upstream commit", () =>
     assert.ok(config.files.includes.includes(`!${file}`));
 });
 
-const workflow = (name) => workflows()[`${name}.yml`];
+const workflowDefinitions = workflows();
+const workflow = (name) => structuredClone(workflowDefinitions[`${name}.yml`]);
+
+function stageTimer() {
+  const started = performance.now();
+  let previous = started;
+  return (stage) => {
+    const now = performance.now();
+    console.info(
+      `cache journey: ${stage}: stage ${Math.round(now - previous)}ms; elapsed ${Math.round(now - started)}ms`,
+    );
+    previous = now;
+  };
+}
 function cacheProblems(ci, release) {
   const problems = [];
   const jobs = ["lint", "test-linux", "test-windows", "test-macos"];
@@ -639,7 +652,7 @@ function selectionRoutes(answers, repository, pr, execution, run) {
 
 // Release selection is simulated; executions, task hashes, cache payloads and the
 // promotion receipt below are produced by this journey's real Nx/sidecar/CLI runs.
-function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes }) {
+function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
   const repository = env.GITHUB_REPOSITORY;
   const prefix = `/repos/${repository}`;
   const end = new Date(Date.now() + 60_000).toISOString();
@@ -705,14 +718,13 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes }) {
     created_at: created,
     workflow_run: { id: run.id, head_sha: run.head_sha, head_repository_id: 1 },
   });
-  const zip = (folder, filename) =>
+  const zip = (folders) =>
     command(
       "python3",
       [
         "-c",
-        "import pathlib,sys,zipfile\nroot=pathlib.Path(sys.argv[1])\nwith zipfile.ZipFile(sys.argv[2], 'w') as archive:\n for file in root.rglob('*'):\n  if file.is_file(): archive.write(file,file.relative_to(root))",
-        folder,
-        join(dir, filename),
+        "import json,pathlib,sys,zipfile\nfor folder,filename in json.loads(sys.argv[1]):\n root=pathlib.Path(folder)\n with zipfile.ZipFile(filename, 'w') as archive:\n  for file in root.rglob('*'):\n   if file.is_file(): archive.write(file,file.relative_to(root))",
+        JSON.stringify(folders),
       ],
       workspace,
     );
@@ -790,6 +802,16 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes }) {
     specification,
     JSON.stringify({ schema_version: document.schema_version, budgets: [budget] }),
   );
+  // Each scenario rewrites every document before the CLI reads it. The unchanged
+  // payload archives are copied once; all four ZIPs share one Python invocation.
+  const budgetFolders = reports.map((record, index) => {
+    const folder = join(dir, `budget-report-${index}`);
+    cpSync(record.path, folder, { recursive: true });
+    return folder;
+  });
+  const receiptFolder = join(dir, "budget-receipt");
+  mkdirSync(receiptFolder);
+  stage("budget fixture prepared");
   for (const scenario of [
     "replayed",
     "evicted",
@@ -919,18 +941,17 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes }) {
         for (const task of doc.execution.tasks) task.result = "local_hit";
       }
     }
-    for (const [index, record] of reports.entries()) {
-      const folder = join(dir, `budget-${scenario}-${index}`);
-      cpSync(record.path, folder, { recursive: true });
+    for (const [index, folder] of budgetFolders.entries()) {
       writeFileSync(join(folder, "executions.json"), JSON.stringify(documents[index].execution));
       writeFileSync(join(folder, "manifest.json"), JSON.stringify(documents[index].manifest));
-      zip(folder, `budget-report-${index}.zip`);
     }
-    const receiptFolder = join(dir, `budget-${scenario}-receipt`);
-    mkdirSync(receiptFolder);
     writeFileSync(join(receiptFolder, "receipt.json"), JSON.stringify(currentReceipt));
-    zip(receiptFolder, "budget-receipt.zip");
+    zip([
+      ...budgetFolders.map((folder, index) => [folder, join(dir, `budget-report-${index}.zip`)]),
+      [receiptFolder, join(dir, "budget-receipt.zip")],
+    ]);
     writeFileSync(join(dir, "routes.json"), JSON.stringify(answers));
+    stage(`budget ${scenario} archives`);
     const result = spawnSync(
       process.execPath,
       [join(root, "node_modules/@onebudgetspec/cli/bin/onebudgetspec.js"), "check", specification],
@@ -948,6 +969,7 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes }) {
       },
     );
     const output = result.stdout + result.stderr;
+    stage(`budget ${scenario} CLI`);
     if (
       [
         "missing-job",
@@ -993,7 +1015,7 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes }) {
   }
 }
 
-async function provePromotion({ dir, workspace, action, sourceEnv }) {
+async function provePromotion({ dir, workspace, action, sourceEnv, stage }) {
   const repository = "nickderobertis/onetaskgraph";
   const reportDir = join(dir, "replay/nx-cache-report");
   const execution = executionFile(join(reportDir, "executions.json"));
@@ -1070,6 +1092,7 @@ async function provePromotion({ dir, workspace, action, sourceEnv }) {
     recordedPromotion.artifact,
     routes[`/repos/${repository}/actions/runs/2/artifacts`].artifacts[0],
   );
+  stage("promotion fixture prepared");
   const writeRoutes = () => writeFileSync(join(dir, "routes.json"), JSON.stringify(routes));
   const releaseSteps = workflow("release-plz").jobs["release-plz"].steps;
   const promote = releaseSteps.find((step) => step.run?.includes("nx-remote-cache.mjs promote"));
@@ -1213,6 +1236,7 @@ async function provePromotion({ dir, workspace, action, sourceEnv }) {
       },
     );
     routes[artifactRoute] = artifacts;
+    stage(`promotion ${reason}`);
   }
   writeFileSync(
     join(dir, "bases.json"),
@@ -1251,12 +1275,14 @@ async function provePromotion({ dir, workspace, action, sourceEnv }) {
       );
     },
   );
-  proveCacheBudget({ dir, workspace, env: sourceEnv, pr, laterPr, routes });
+  stage("later PR replay");
+  proveCacheBudget({ dir, workspace, env: sourceEnv, pr, laterPr, routes, stage });
 }
 
 test("CI and release-plz promote a replay-only run, share it with a later PR, and report cache-use with simulated release selection", {
   timeout: 300_000,
 }, async () => {
+  const stage = stageTimer();
   const dir = tree();
   const workspace = join(dir, "workspace");
   command("git", ["clone", "--quiet", "--shared", root, workspace], dir);
@@ -1275,9 +1301,16 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
   }
   symlinkSync(join(root, "node_modules"), join(workspace, "node_modules"), "dir");
   symlinkSync(join(root, ".github/node_modules"), join(workspace, ".github/node_modules"), "dir");
+  stage("workspace prepared");
   const action = join(dir, "action");
-  command("git", ["clone", "--quiet", "https://github.com/op-nx/github-cache.git", action], dir);
-  command("git", ["checkout", "--quiet", OP_NX_COMMIT], action);
+  command("git", ["init", "--quiet", action], dir);
+  command(
+    "git",
+    ["fetch", "--quiet", "--depth=1", "https://github.com/op-nx/github-cache.git", OP_NX_COMMIT],
+    action,
+  );
+  command("git", ["checkout", "--quiet", "--detach", OP_NX_COMMIT], action);
+  stage("real sidecar checked out");
   const github = spawn(
     "python3",
     [join(root, ".github/cache-policy/tests/fixtures/nx-cache-http.py"), dir],
@@ -1289,6 +1322,7 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
     await until(() => existsSync(join(dir, "url")) || github.exitCode !== null);
     const url = readFileSync(join(dir, "url"), "utf8");
     assert.ok(loopback(url), "fixture server must use loopback HTTP");
+    stage("GitHub HTTP double ready");
     let sourceEnv;
     const steps = workflow("ci").jobs.lint.steps;
     const trust = steps.find((step) => step.id === "nx-cache-trust");
@@ -1357,6 +1391,7 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
         env[name] = evaluate(expression, { github: { event: record.event } });
       command("bash", ["-eo", "pipefail", "-c", trust.run], workspace, env);
       const outputs = envFile(env.GITHUB_OUTPUT);
+      stage(`${identity} trust`);
       assert.equal(outputs.read_only, String(expectedReadOnly));
       env.CACHE_READ_ONLY = evaluate(sidecar.env.CACHE_READ_ONLY, {
         steps: { "nx-cache-trust": { outputs } },
@@ -1382,6 +1417,7 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
         command("bash", ["-eo", "pipefail", "-c", ready.run], workspace, env);
         assert.ok(existsSync(env.GITHUB_ENV), logs);
         Object.assign(env, envFile(env.GITHUB_ENV));
+        stage(`${identity} sidecar ready`);
         // Nx 23 keeps cache records in workspace-data as well as cache payloads.
         rmSync(join(workspace, ".nx"), { recursive: true, force: true });
         const result = command(
@@ -1397,6 +1433,7 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
           env,
         );
         assert.match(result, /the finished workflows hold the four jobs/);
+        stage(`${identity} real Nx`);
         command("bash", ["-eo", "pipefail", "-c", report.run], workspace, env);
         const manifest = manifestFile(join(runDir, "nx-cache-report/manifest.json"));
         assert.equal(
@@ -1411,6 +1448,7 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
         if (identity === "replay")
           assert.ok(manifest.entries.every((entry) => entry.source === "replayed"));
         const executions = executionFile(join(runDir, "nx-cache-report/executions.json"));
+        stage(`${identity} report`);
         assert.deepEqual(executions.selection, {
           mode: "affected",
           base_sha: pr.base.sha,
@@ -1433,7 +1471,7 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
         await stop(sidecarProcess);
       }
     }
-    await provePromotion({ dir, workspace, action, sourceEnv });
+    await provePromotion({ dir, workspace, action, sourceEnv, stage });
   } finally {
     const exited = new Promise((resolve) => github.once("exit", resolve));
     if (github.exitCode === null) {

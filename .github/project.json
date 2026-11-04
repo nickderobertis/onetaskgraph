@@ -24,6 +24,8 @@
       "{workspaceRoot}/.github/nx-policy/version-inputs.mjs"
     ],
     "cdJourneys": [
+      "{workspaceRoot}/.tool-versions",
+      "{workspaceRoot}/scripts/ci-tool-pins.sh",
       "default",
       "{workspaceRoot}/.github/test-setup.mjs",
       "{workspaceRoot}/.github/fixture-environment.mjs",
@@ -123,6 +125,8 @@
         "command": "node --test .github/tests/ci-jobs.spec.mjs"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         {
           "runtime": "node -p process.platform"
@@ -139,6 +143,8 @@
         "command": "node --test .github/tests/ci-contexts.spec.mjs"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "workflowGraph",
         {
           "runtime": "node -p process.platform"
@@ -155,6 +161,8 @@
         "command": "node --test .github/tests/ci-events.test.mjs .github/tests/gate-time.test.mjs"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "budgetJourneys",
         {
           "runtime": "node -p process.platform"

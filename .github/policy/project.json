@@ -130,6 +130,8 @@
         "command": "node --test .github/policy/tests/release-tail.test.mjs"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "releaseTail",
         {
           "runtime": "node -p process.platform"

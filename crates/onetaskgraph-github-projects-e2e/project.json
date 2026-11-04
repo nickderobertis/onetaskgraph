@@ -88,6 +88,8 @@
         "{workspaceRoot}/target/debug/telemetry/github-live-session/*/assets.json"
       ],
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "^default",
         {
@@ -168,6 +170,8 @@
       },
       "cache": true,
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "^default",
         {

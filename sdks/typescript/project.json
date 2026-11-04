@@ -61,6 +61,8 @@
         "command": "bun run biome format sdks/typescript"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "textDefault",
         {
           "runtime": "node -p process.platform"
@@ -73,6 +75,8 @@
         "command": "bun run biome lint --error-on-warnings sdks/typescript"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "textDefault",
         "^default",
         {
@@ -94,6 +98,8 @@
         "cwd": "sdks/typescript"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "^default",
         {
@@ -121,6 +127,8 @@
         "cwd": "sdks/typescript"
       },
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
         "^default",
         {
