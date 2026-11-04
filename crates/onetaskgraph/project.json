@@ -26,7 +26,14 @@
       "options": {
         "command": "cargo test --quiet -p onetaskgraph --all-features --locked --no-run"
       },
-      "//": "The one build of target/debug/onetaskgraph, which every target that spawns the file depends on. It is the test command with --no-run because `cargo build` of this package links a different unit — dev-dependencies widen the features its dependencies are built with — and every switch replaces the file. scripts/check-workspace-config.sh holds the arrangement."
+      "//": "The one build of target/debug/onetaskgraph, which every target that spawns the file depends on. It is the test command with --no-run because `cargo build` of this package links a different unit — dev-dependencies widen the features its dependencies are built with — and every switch replaces the file. scripts/check-workspace-config.sh holds the arrangement.",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "format": {
       "executor": "nx:run-commands",

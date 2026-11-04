@@ -54,7 +54,14 @@
   "targets": {
     "bootstrap": {
       "executor": "nx:noop",
-      "dependsOn": ["github-workflows:bootstrap"]
+      "dependsOn": ["github-workflows:bootstrap"],
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "check": {
       "executor": "nx:noop",
@@ -105,7 +112,14 @@
         "command": "node --test .github/policy/tests/rust-cache.test.mjs"
       },
       "cache": false,
-      "//": "The one policy journey that runs the real rust-cache action, which also runs on the Windows and macOS runners; test-windows and test-macos run this target alone, and test-linux runs it with the rest of `test`."
+      "//": "The one policy journey that runs the real rust-cache action, which also runs on the Windows and macOS runners; test-windows and test-macos run this target alone, and test-linux runs it with the rest of `test`.",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "release-tail": {
       "executor": "nx:run-commands",

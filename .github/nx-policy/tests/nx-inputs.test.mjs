@@ -64,8 +64,10 @@ function problems(graph) {
     const [project, name] = id.split(":");
     const target = graph[project]?.targets[name];
     assert.ok(object(target), `${id}: selected task must exist in Nx's effective graph`);
-    if (target.cache !== true) continue;
-    if (!Array.isArray(target.outputs) || !target.outputs.every(outputAllowed))
+    if (
+      target.cache === true &&
+      (!Array.isArray(target.outputs) || !target.outputs.every(outputAllowed))
+    )
       failures.push(`${id}: outputs must name only profile, report or telemetry files`);
     const osLegs = jobs.filter((job) => job !== "lint" && selected[job].includes(id));
     if (
@@ -80,7 +82,7 @@ function problems(graph) {
   return failures;
 }
 
-test("every cached task selected by the four jobs stores named files and keeps its OS input", () => {
+test("every selected task keeps its OS input and cached tasks store named files", () => {
   assert.ok(
     allTasks.length >= 147,
     "the real CI selection must include the original task inventory",
@@ -109,5 +111,15 @@ test("a directory, whole-directory glob or binary output anywhere and a lost pla
   );
   assert.deepEqual(problems(edited), [
     "onetaskgraph-core:test: multiple OS legs require process.platform",
+  ]);
+});
+
+test("an uncached target on multiple OS legs also requires its platform input", () => {
+  const edited = structuredClone(projects);
+  edited.onetaskgraph.targets.build.inputs = (
+    edited.onetaskgraph.targets.build.inputs ?? []
+  ).filter((input) => !object(input) || input.runtime !== "node -p process.platform");
+  assert.deepEqual(problems(edited), [
+    "onetaskgraph:build: multiple OS legs require process.platform",
   ]);
 });

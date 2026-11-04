@@ -75,7 +75,14 @@
       "executor": "nx:run-commands",
       "options": {
         "command": "just github-workflows-bootstrap"
-      }
+      },
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "check": {
       "executor": "nx:noop",

@@ -26,7 +26,14 @@
   "targets": {
     "bootstrap": {
       "executor": "nx:noop",
-      "dependsOn": ["github-workflows:bootstrap"]
+      "dependsOn": ["github-workflows:bootstrap"],
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "check": {
       "executor": "nx:noop",
