@@ -117,6 +117,9 @@ git -C "$scratch/repo" config user.name "check-affected-selection"
 export NX_DAEMON=false
 export NX_CACHE_DIRECTORY="$scratch/nx-cache"
 export NX_WORKSPACE_DATA_DIRECTORY="$scratch/nx-workspace-data"
+# These disposable CI runs are independent roots. An inherited root PID makes
+# their parallel Nx phases look like recursive calls of the outer workspace task.
+unset NX_INVOCATION_ROOT_PID
 
 failures=0
 

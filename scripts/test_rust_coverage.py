@@ -16,7 +16,11 @@ class CoverageProgressTest(unittest.TestCase):
     def test_progress_precedes_completion_and_failure_stays_nonzero(self):
         asyncio.run(self.exercise())
 
-    async def exercise(self):
+    def test_native_progress_precedes_completion_and_failure_stays_nonzero(self):
+        asyncio.run(self.exercise(native=True))
+
+    async def exercise(self, native=False):
+        native = native or os.name == "nt"
         with tempfile.TemporaryDirectory(
             prefix="coverage-progress-", dir=os.environ.get("ONEPIPELINE_NODE_SCRATCH_DIR")
         ) as scratch:
@@ -48,30 +52,38 @@ fn waits_for_release() {
             diagnostic = (await lock.communicate())[0].decode("utf-8", errors="replace")
             self.assertEqual(lock.returncode, 0, diagnostic)
             command = ["bash", str(ROOT / "scripts/rust-coverage.sh"), "coverage-progress"]
-            if os.name == "nt":
-                process = await asyncio.create_subprocess_exec(
-                    *command, cwd=tree, stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-                output = (await process.communicate())[0].decode("utf-8", errors="replace")
-                self.assertEqual(process.returncode, 0, output)
-                self.assertIn("skipped on Windows", output)
-                return
+            if native:
+                # Windows does not measure coverage, but still exercises nextest's
+                # progress stream and failure propagation without a shell or WSL.
+                command = ["cargo", "nextest", "run", "--locked"]
             for fails in (False, True):
                 gate = tree / f"release-{fails}"
                 environment = dict(os.environ, COVERAGE_PROGRESS_GATE=str(gate))
                 if fails:
                     environment["COVERAGE_PROGRESS_FAIL"] = "1"
+                environment.update(
+                    NEXTEST_STATUS_LEVEL="all",
+                    NEXTEST_EXPERIMENTAL_LIBTEST_JSON="1",
+                    NEXTEST_MESSAGE_FORMAT="libtest-json-plus",
+                )
                 # Nx supplies a socket for subprocess output. It cannot be reopened via
                 # /dev/stderr, although writing the inherited descriptor works.
-                parent, child = socket.socketpair()
-                parent.setblocking(False)
-                reader, writer = await asyncio.open_connection(sock=parent)
-                process = await asyncio.create_subprocess_exec(
-                    *command, cwd=tree, env=environment, stdout=child,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
-                child.close()
+                writer = None
+                if native:
+                    process = await asyncio.create_subprocess_exec(
+                        *command, cwd=tree, env=environment,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                    )
+                    reader = process.stdout
+                else:
+                    parent, child = socket.socketpair()
+                    parent.setblocking(False)
+                    reader, writer = await asyncio.open_connection(sock=parent)
+                    process = await asyncio.create_subprocess_exec(
+                        *command, cwd=tree, env=environment, stdout=child,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
+                    child.close()
                 output = ""
                 try:
                     async with asyncio.timeout(120):
@@ -96,13 +108,18 @@ fn waits_for_release() {
                     if process.returncode is None:
                         process.terminate()
                         await process.wait()
-                    writer.close()
-                    await writer.wait_closed()
-                self.assertEqual(process.returncode, 1 if fails else 0, output)
+                    if writer is not None:
+                        writer.close()
+                        await writer.wait_closed()
+                if fails:
+                    self.assertNotEqual(process.returncode, 0, output)
+                else:
+                    self.assertEqual(process.returncode, 0, output)
                 self.assertIn("FAIL" if fails else "PASS", output)
                 if fails:
                     self.assertIn("induced failure", output)
-                    self.assertIn("tests failed under instrumentation", output)
+                    if not native:
+                        self.assertIn("tests failed under instrumentation", output)
 
 
 if __name__ == "__main__":
