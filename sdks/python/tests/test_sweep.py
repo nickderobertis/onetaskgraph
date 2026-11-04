@@ -782,7 +782,13 @@ def test_transport_models_accept_the_real_binary_protocol(binary: Path, tmp_path
     """Keep fixture transport types tied to the compiled protocol server's actual replies."""
     tasks = tmp_path / "tasks"
     tasks.mkdir()
-    (tasks / "t1.md").write_text("---\ntitle: Plain\nstatus: todo\n---\nPlain.", encoding="utf-8")
+    designator = "linear/" + "a" * 64
+    (tasks / "t1.md").write_text(
+        "---\ntitle: Plain\nstatus: todo\ndepends_on:\n  - t2\n"
+        f"  - {{designator: {designator}, id: L-9, item: task}}\n---\nPlain.",
+        encoding="utf-8",
+    )
+    (tasks / "t2.md").write_text("---\ntitle: Other\nstatus: todo\n---\nOther.", encoding="utf-8")
     requests = [
         {
             "id": "init",
@@ -808,6 +814,11 @@ def test_transport_models_accept_the_real_binary_protocol(binary: Path, tmp_path
             },
         },
         {"id": "read", "method": "get_task", "params": {"id": "t1"}},
+        {
+            "id": "deps",
+            "method": "task_dependencies",
+            "params": {"id": "t1", "direction": "depends-on", "page": {"limit": 10}},
+        },
         {
             "id": "write",
             "method": "write_task",
@@ -842,22 +853,35 @@ def test_transport_models_accept_the_real_binary_protocol(binary: Path, tmp_path
     assert len(lines) == len(requests)
     queried = SuccessfulReply.model_validate_json(lines[1])
     page = PeerPage[WireTask].model_validate_json(json.dumps(queried.result))
-    assert [item.id.root for item in page.items] == ["t1"]
+    assert sorted(item.id.root for item in page.items) == ["t1", "t2"]
     read = SuccessfulReply.model_validate_json(lines[2])
     assert PeerTaskRead.model_validate_json(json.dumps(read.result)).task.id.root == "t1"
-    written = SuccessfulReply.model_validate_json(lines[3])
+    dependencies = SuccessfulReply.model_validate_json(lines[3])
+    edges = PeerPage[WireEdge].model_validate_json(json.dumps(dependencies.result))
+    assert [(edge.from_.id.root, edge.to.id.root) for edge in edges.items] == [
+        ("t1", "t2"),
+        ("t1", "L-9"),
+    ]
+    assert edges.items[0].to.designator is None
+    assert edges.items[1].to.designator is not None
+    assert edges.items[1].to.designator.root == designator
+    written = SuccessfulReply.model_validate_json(lines[4])
     assert PeerWritten.model_validate_json(json.dumps(written.result)).id == "t1"
-    assert PeerReply.model_validate_json(lines[4]).error.kind == "malformed"
+    assert PeerReply.model_validate_json(lines[5]).error.kind == "malformed"
 
     models: list[BaseModel] = [
         queried,
         page,
         read,
         PeerTaskRead.model_validate_json(json.dumps(read.result)),
+        dependencies,
+        edges,
+        *edges.items,
+        *(endpoint for edge in edges.items for endpoint in (edge.from_, edge.to)),
         written,
         PeerWritten.model_validate_json(json.dumps(written.result)),
-        PeerReply.model_validate_json(lines[4]),
-        PeerReply.model_validate_json(lines[4]).error,
+        PeerReply.model_validate_json(lines[5]),
+        PeerReply.model_validate_json(lines[5]).error,
     ]
     for model in models:
         value = model.model_dump(mode="json", by_alias=True, exclude_unset=True)
@@ -866,7 +890,9 @@ def test_transport_models_accept_the_real_binary_protocol(binary: Path, tmp_path
                 json.dumps({**value, "unexpected_protocol_field": True})
             )
         required = next(
-            key for key, field in type(model).model_fields.items() if field.is_required()
+            field.alias or key
+            for key, field in type(model).model_fields.items()
+            if field.is_required()
         )
         value.pop(required)
         with pytest.raises(ValidationError):

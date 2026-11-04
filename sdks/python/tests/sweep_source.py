@@ -13,7 +13,15 @@ import sys
 from pathlib import Path
 from typing import Literal, NotRequired, TypedDict, cast, get_args
 
-from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 
 from onetaskgraph_sdk import StatusCategory
 from onetaskgraph_sdk._generated.document_query import TextFields
@@ -98,11 +106,15 @@ class Task(TypedDict):
 class WireEndpoint(QualifiedEndpoint):
     """The native wire endpoint also accepts the protocol's opaque designator (§4.7)."""
 
+    model_config = ConfigDict(extra="forbid")
+
     designator: Designator | None = None
 
 
 class WireEdge(BaseModel):
     """A native edge, using the generated endpoint and relationship vocabularies."""
+
+    model_config = ConfigDict(extra="forbid")
 
     from_: WireEndpoint = Field(alias="from")
     to: WireEndpoint
