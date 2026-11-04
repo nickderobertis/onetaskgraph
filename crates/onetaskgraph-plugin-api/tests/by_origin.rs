@@ -15,6 +15,7 @@ use serde_json::json;
 /// asks for — or, as `paging` says, listed the way a defective source lists them. One holding
 /// no documents records none at all, and refuses a document listing as such a source does.
 struct Listing {
+    tasks: Vec<Task>,
     projects: Vec<Project>,
     documents: Vec<Document>,
     paging: Paging,
@@ -39,6 +40,7 @@ enum Paging {
 impl Listing {
     fn of(projects: Vec<Project>, documents: Vec<Document>, paging: Paging) -> Self {
         Self {
+            tasks: Vec::new(),
             projects,
             documents,
             paging,
@@ -155,9 +157,9 @@ impl TaskSource for Listing {
     async fn query_tasks(
         &self,
         _query: &TaskQuery,
-        _page: &PageRequest,
+        page: &PageRequest,
     ) -> Result<Page<Task>, SourceError> {
-        Ok(Page::last(Vec::new()))
+        Ok(self.page(&self.tasks, page))
     }
     async fn query_projects(
         &self,
@@ -372,4 +374,48 @@ async fn a_listing_that_overruns_its_page_or_repeats_its_cursor_is_refused_by_ei
             );
         }
     }
+}
+
+#[tokio::test]
+async fn default_task_details_keep_tasks_and_continuations_without_requesting_comments() {
+    let mut listing = Listing::of(Vec::new(), Vec::new(), Paging::Honest);
+    let task: Task = serde_json::from_value(json!({
+        "id":"T", "title":"work", "labels":[], "status":{"category":"todo","name":"Todo"}
+    }))
+    .expect("a task with defaulted fields");
+    listing.tasks = vec![task.clone(), task.clone(), task];
+    let source: &dyn TaskSource = &listing;
+    let page = PageRequest {
+        limit: 2,
+        cursor: None,
+    };
+    let first = source
+        .query_task_details(&TaskQuery::default(), &page, None)
+        .await
+        .unwrap();
+    assert_eq!(first.items.len(), 2);
+    assert_eq!(first.items[0].task, listing.tasks[0]);
+    assert!(first.items.iter().all(|item| item.comments.is_none()));
+    let next = PageRequest {
+        limit: 2,
+        cursor: Some(first.next.expect("remaining task")),
+    };
+    let second = source
+        .query_task_details(&TaskQuery::default(), &next, None)
+        .await
+        .unwrap();
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(second.items[0].task, listing.tasks[2]);
+    assert!(second.next.is_none());
+    assert!(
+        source
+            .query_task_details(&TaskQuery::default(), &page, Some(&page))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        listing.pages.load(Ordering::SeqCst),
+        2,
+        "comment request refused before IO"
+    );
 }

@@ -96,6 +96,10 @@ NOT_METHODS = {
         "not a message: §4.4 says the engine answers it for a hosted source from `get_task` "
         "and `task_comments`, which carry everything it reads"
     ),
+    "query_task_details": (
+        "not a message: §4.4 says a hosted source uses the default, delegating to "
+        "`query_tasks` without comments and refusing when comments are requested"
+    ),
     "order_versions": (
         "not carried: §4.13d says the protocol carries no ordering method, so a hosted "
         "plugin's tokens are compared for equality alone"
