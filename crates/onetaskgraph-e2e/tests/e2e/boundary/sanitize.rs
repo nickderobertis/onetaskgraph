@@ -2554,6 +2554,7 @@ elif how == "locator-rewritable":
     answer.update(verdict="refuse", surface="locators",
                   unfixed=[{"surface": "locators", "index": 0, "fixed": False}])
 elif how == "pass-exit-one":
+    answer["reason"] = "quiet-harbor-secret"
     print(json.dumps(answer))
     sys.exit(1)
 elif how == "refuse-exit-zero":
@@ -2625,6 +2626,7 @@ fn a_policy_answer_that_does_not_match_what_was_sent_is_never_a_pass() {
             "myapp.doc=\"docs/plain.md\"",
         ]);
         assert_eq!(kind, "boundary-unavailable", "{how}: {said}");
+        assert!(!said.contains("quiet-harbor-secret"), "{how}: {said}");
         assert_eq!(
             tree(&store.folder("site")),
             before,

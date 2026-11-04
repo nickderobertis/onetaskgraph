@@ -870,13 +870,14 @@ pub fn sanitize_verdict(
         ));
     };
     let verdict = answer["verdict"].as_str().unwrap_or_default();
-    if verdict == "unavailable"
-        || !matches!((code, verdict), (Some(0), "pass") | (Some(1), "refuse"))
-    {
+    if verdict == "unavailable" {
         return unavailable(format!(
             "the check could not decide ({})",
             answer["reason"].as_str().unwrap_or("no reason given")
         ));
+    }
+    if !matches!((code, verdict), (Some(0), "pass") | (Some(1), "refuse")) {
+        return unavailable("the sanitise command's exit status disagrees with its verdict");
     }
     let strings = |name: &str| -> Vec<String> {
         answer[name]
