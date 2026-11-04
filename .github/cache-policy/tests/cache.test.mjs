@@ -142,14 +142,15 @@ const eventFile = (file) =>
   );
 
 // Biome excludes exactly these upstream-owned copies; this drift test holds them byte-identical.
-// Full-file digests from dero-skills PR #150's merge commit
-// 63e071b72420bd6737226a50cb8a7a7760cc73a4, rather than the header's body digest.
+// Full-file digests, including headers: remote cache and figures from dero-skills
+// 63e071b72420bd6737226a50cb8a7a7760cc73a4; version-free inputs v3 from
+// fe20052d06406bb07869c5236147b6693489d52f (owned Cargo and Python pins).
 const copies = {
   "scripts/actions-budget-figures.sh":
     "a3606ff3d00be139d52a7cbb2905f45e2ade99383417be31cc74cc7ce6c39eba",
   "scripts/nx-remote-cache.mjs": "4445c0d8d5f6045bb2b14b19cd03f9600b6b98f88dc689421d98d3ef996664b6",
   "scripts/nx-version-free-inputs.mjs":
-    "fdd4f59fc98a0073dbefdbaa0f08f4b58432bbf8e55d315865f951e0151b19b2",
+    "624fed99b45a57532ef672ccb4638e4b8052dd12fdee0274fa2f23e9f2f16b60",
 };
 function drift(file, bytes) {
   return createHash("sha256").update(bytes).digest("hex") !== copies[file];
@@ -228,8 +229,8 @@ function cacheProblems(ci, release) {
     )
       problems.push(`${name}: local Nx cache must not use Actions cache`);
     const stop = steps.find((step) => step.cancel === "nx-cache");
-    if (stop?.if !== "always()" || stop?.["continue-on-error"] !== true)
-      problems.push(`${name}: teardown must always run and cannot fail the job`);
+    if (JSON.stringify(stop) !== JSON.stringify({ cancel: "nx-cache" }))
+      problems.push(`${name}: teardown must be a bare cancel step`);
   }
   if (
     release.on.workflow_dispatch ||
@@ -242,6 +243,11 @@ function cacheProblems(ci, release) {
   const sidecar = steps.find((step) => step.id === "nx-cache");
   if (sidecar?.uses !== `op-nx/github-cache/start-cache-server@${OP_NX_COMMIT}`)
     problems.push("promotion sidecar must match the shared script pin");
+  if (
+    JSON.stringify(steps.find((step) => step.cancel === "nx-cache")) !==
+    JSON.stringify({ cancel: "nx-cache" })
+  )
+    problems.push("promotion teardown must be a bare cancel step");
   const promote = steps.findIndex((step) => step.run?.includes("nx-remote-cache.mjs promote"));
   if (promote < 0) problems.push("release-plz must promote first");
   for (const [index, step] of steps.entries()) {
@@ -262,7 +268,7 @@ function cacheProblems(ci, release) {
 test("the four existing CI jobs share the pinned cache and promotion precedes release-plz", () => {
   assert.deepEqual(cacheProblems(workflow("ci"), workflow("release-plz")), []);
 });
-test("cache shape refuses an untrusted writer, duplicate local store, failed teardown and manual event", () => {
+test("cache shape refuses an untrusted writer, duplicate local store, invalid cancel steps and manual event", () => {
   for (const mutate of [
     (ci) => {
       ci.jobs.lint.steps.find((step) => step.id === "nx-cache").env.CACHE_READ_ONLY = "";
@@ -272,6 +278,17 @@ test("cache shape refuses an untrusted writer, duplicate local store, failed tea
     },
     (ci) => {
       ci.jobs.lint.steps.find((step) => step.cancel === "nx-cache")["continue-on-error"] = false;
+    },
+    (ci) => {
+      ci.jobs.lint.steps.find((step) => step.cancel === "nx-cache").if = "always()";
+    },
+    (_ci, release) => {
+      release.jobs["release-plz"].steps.find((step) => step.cancel === "nx-cache").if = "always()";
+    },
+    (_ci, release) => {
+      release.jobs["release-plz"].steps.find((step) => step.cancel === "nx-cache")[
+        "continue-on-error"
+      ] = true;
     },
     (_ci, release) => {
       release.jobs["release-plz"].steps.find((step) => step.id === "nx-cache").uses =

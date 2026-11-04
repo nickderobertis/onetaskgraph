@@ -72,8 +72,6 @@ jobs:
           path: ${{ runner.temp }}/nx-cache-promotion
           retention-days: 7
       - cancel: nx-cache
-        if: always()
-        continue-on-error: true
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.guard.outputs.enabled == 'true'
       # scripts/prepare-release-pr.sh runs scripts/set-version.sh, which relocks the Python

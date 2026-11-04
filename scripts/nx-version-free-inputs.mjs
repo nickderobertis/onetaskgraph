@@ -1,11 +1,11 @@
 // Copied from dero-skills' create-repo skill; edit only the source.
 // source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/ci/nx-version-free-inputs.mjs
-// version: 1
-// sha256: 72a6b39be03813a81f5f86067a236b53cd41a450b5121f8586db23843573d5ff
+// version: 3
+// sha256: 728c0ec689c6d0a9dc5cff041a3e3fca2af9aabf413a5c1d3986400578da1634
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { basename } from 'node:path';
+import { basename, posix } from 'node:path';
 
 const args = process.argv.slice(2);
 const ecosystemAt = args.indexOf('--ecosystem');
@@ -260,7 +260,70 @@ const scalar = (table, key) =>
 const own = new Map();
 const manifestNames = new Map();
 const ownedManifests = new Set();
+const cargoPackages = new Map();
+function cargoIdentities() {
+  const manifests = new Map(
+    tracked
+      .filter((p) => basename(p) === 'Cargo.toml')
+      .map((p) => [p, tables(readFileSync(p, 'utf8'))]),
+  );
+  const root = manifests.get('Cargo.toml');
+  assert(root, 'no root Cargo.toml');
+  const workspaceVersion = scalar(
+    root.find((t) => t.name === 'workspace.package'),
+    'version',
+  );
+  const workspace = root.find((t) => t.name === 'workspace');
+  function patterns(key) {
+    const value = workspace?.lines.join('\n').match(
+      new RegExp(`^\\s*${key}\\s*=\\s*(\\[[\\s\\S]*?\\])`, 'm'),
+    )?.[1];
+    if (!value) return [];
+    const strings = [...value.matchAll(/["']([^"']*)["']/g)].map((m) => m[1]);
+    assert(
+      value.replace(/["'][^"']*["']/g, '').replace(/[\s\[\],]/g, '') === '',
+      'unsupported workspace members',
+    );
+    return strings.map((s) => new RegExp('^' + s.replace(/\/$/, '')
+      .split('/')
+      .map((part) => part === '**' ? '.*' : part.split('*')
+        .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('[^/]*'))
+      .join('/') + '$'));
+  }
+  const members = patterns('members');
+  const excluded = patterns('exclude');
+  const pending = ['Cargo.toml', ...[...manifests.keys()].filter((p) => {
+    const dir = posix.dirname(p);
+    return members.some((r) => r.test(dir)) && !excluded.some((r) => r.test(dir));
+  })];
+  while (pending.length) {
+    const path = pending.shift();
+    if (ownedManifests.has(path)) continue;
+    const ts = manifests.get(path);
+    if (!ts) continue;
+    ownedManifests.add(path);
+    const pkg = ts.find((t) => t.name === 'package');
+    const name = scalar(pkg, 'name');
+    const version = scalar(pkg, 'version') ??
+      (/version\.workspace\s*=\s*true/.test(pkg?.lines.join('\n') ?? '')
+        ? workspaceVersion : undefined);
+    if (name && version) {
+      own.set(name, version);
+      cargoPackages.set(path, { name, version });
+    }
+    for (const table of ts.filter((t) => t.name.includes('dependencies'))) {
+      for (const line of table.lines) {
+        const dependencyPath = line.match(/\bpath\s*=\s*["']([^"']+)["']/)?.[1];
+        if (dependencyPath)
+          pending.push(posix.join(posix.dirname(path), dependencyPath, 'Cargo.toml'));
+      }
+    }
+  }
+}
+
 function identities() {
+  if (ecosystem === 'cargo') return cargoIdentities();
   if (ecosystem === 'files') {
     for (const name of ['Cargo.toml', 'package.json', 'pyproject.toml']) {
       if (!tracked.includes(name)) continue;
@@ -376,6 +439,36 @@ function jsonWithoutComments(text) {
   }
   return JSON.parse(out);
 }
+function pythonRequirements(table) {
+  let depth = 0;
+  table.lines = table.lines.map((line) => {
+    const assignment = line.match(/^\s*([\w.-]+|"[^"]+"|'[^']+')\s*=\s*\[/);
+    const dependency = depth > 0 || (
+      assignment && (
+        (table.name === 'project' && assignment[1] === 'dependencies') ||
+        ['project.optional-dependencies', 'dependency-groups'].includes(table.name)
+      )
+    );
+    if (!dependency) return line;
+    const result = line.replace(/"(?:\\.|[^"\\])*"|'[^']*'|#[^\n]*/g, (quoted) => {
+      if (quoted.startsWith('#')) return quoted;
+      const value = quoted.slice(1, -1);
+      const requirement = value.match(/^(\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]+\])?\s*(?:===|==|~=|>=|<=|!=|>|<)\s*)([^\s;,]+)(\s*(?:;.*)?)$/);
+      if (!requirement) return quoted;
+      const [, prefix, name, version, suffix] = requirement;
+      const canonical = (s) => s.toLowerCase().replace(/[-_.]+/g, '-');
+      const owned = [...own].filter(([n]) => canonical(n) === canonical(name));
+      if (owned.length !== 1 || owned[0][1] !== version) return quoted;
+      return quoted[0] + prefix + '<version>' + suffix + quoted.at(-1);
+    });
+    const structure = line
+      .replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, '').split('#')[0];
+    depth += [...structure].filter((c) => c === '[').length -
+      [...structure].filter((c) => c === ']').length;
+    return result;
+  });
+}
+
 function normalizeJson(doc, path) {
   if (basename(path) === 'package.json') {
     if (ownedManifests.has(path) && typeof doc.version === 'string')
@@ -453,6 +546,7 @@ try {
       } else {
         const ts = tables(text);
         for (const table of ts) {
+          if (ecosystem === 'python') pythonRequirements(table);
           const name = scalar(table, 'name'),
             version = scalar(table, 'version');
           const manifest =
@@ -485,7 +579,14 @@ try {
           }
           table.lines = table.lines.map((line) => {
             for (const [member, v] of own) {
-              const escaped = member.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              const dependencyKey = ecosystem === 'cargo'
+                ? line.match(/^\s*(?:"([^"]+)"|([\w.-]+))\s*=/)?.slice(1).find(Boolean)
+                : member;
+              const packageName = line.match(
+                /\bpackage\s*=\s*["']([^"']+)["']/,
+              )?.[1] ?? dependencyKey;
+              if (ecosystem === 'cargo' && packageName !== member) continue;
+              const escaped = dependencyKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
               if (
                 new RegExp(`^\\s*(?:"${escaped}"|${escaped})\\s*=`).test(
                   line,
@@ -493,7 +594,24 @@ try {
                 (table.name.includes('dependencies') ||
                   /^\s*\{/.test(line.split('=')[1] ?? ''))
               )
-                line = line.replaceAll('"' + v + '"', '"<version>"');
+                if (ecosystem === 'cargo') {
+                  const dependencyPath = line.match(/\bpath\s*=\s*["']([^"']+)["']/)?.[1];
+                  if (dependencyPath) {
+                    const target = cargoPackages.get(
+                      posix.join(posix.dirname(path), dependencyPath, 'Cargo.toml'),
+                    );
+                    if (target?.name !== member || target.version !== v) continue;
+                  }
+                  const escapedVersion = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                  line = line.replace(
+                    new RegExp(
+                      `((?:version\\s*=\\s*|^\\s*(?:"${escaped}"|${escaped})\\s*=\\s*)["'])([=^~<>]{0,2}\\s*)${escapedVersion}(["'])`,
+                    ),
+                    '$1$2<version>$3',
+                  );
+                } else {
+                  line = line.replaceAll('"' + v + '"', '"<version>"');
+                }
             }
             return line;
           });
