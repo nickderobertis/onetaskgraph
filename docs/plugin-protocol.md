@@ -688,6 +688,12 @@ to reach it.
 a message either: for a hosted source the engine answers it exactly as `get_task_details`, so it
 crosses as the same `get_task_detail` or `get_task` and `task_comments` requests.
 
+`TaskSource::query_task_details` is not a message: a hosted source inherits the trait's
+default. With no comment page requested it delegates to `query_tasks` and wraps each task
+in a `TaskDetailRead` with comments absent. When a comment page is requested it refuses
+before reading any tasks. Declaring `task_details` does not enable comments in listings;
+that handshake field enables only the individual `get_task_detail` read (§4.4a).
+
 Nor are the three a copy and `project list --origin` reach for: `TaskSource::query_projects_by_origin`
 and `TaskSource::query_documents_by_origin` — the projects, or documents, whose
 `onetaskgraph.origin` is exactly one qualified id — and `TaskSource::read_ahead_for_copy`, which
