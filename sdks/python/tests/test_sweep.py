@@ -23,11 +23,11 @@ from pathlib import Path
 from typing import NamedTuple, TypedDict, get_args
 
 import pytest
+from policy_input import policy_input
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from sweep_source import DependencyDirection, Task, TaskId, WireEdge, WireTask
 
 from onetaskgraph_sdk import Client, OnetaskgraphError, StatusCategory
-from onetaskgraph_sdk._generated.sweep_report import LocatorKind
 from onetaskgraph_sdk._generated.write_policy_config import WritePolicyConfig
 
 
@@ -47,41 +47,8 @@ class SourceConfig(TypedDict):
     visibility: str
 
 
-POLICY_INPUT = (
-    "LOCATOR_KINDS = "
-    + repr(tuple(kind.value for kind in LocatorKind))
-    + "\n"
-    + """
-import json, sys
-try:
-    received = json.loads(sys.stdin.read())
-except (ValueError, TypeError):
-    sys.exit(2)
-if not isinstance(received, dict):
-    sys.exit(2)
-entries = received.get("replacements", [])
-if not isinstance(entries, list) or any(
-    not isinstance(entry, dict) or not isinstance(entry.get("term"), str)
-    or not entry["term"] or not isinstance(entry.get("with"), str)
-    for entry in entries
-):
-    sys.exit(2)
-for surface in ("text", "paths", "metadata"):
-    values = received.get(surface, [])
-    if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
-        sys.exit(2)
-locators = received.get("locators", [])
-if not isinstance(locators, list) or any(
-    not isinstance(locator, dict) or not isinstance(locator.get("value"), str)
-    or locator.get("kind") not in LOCATOR_KINDS
-    for locator in locators
-):
-    sys.exit(2)
-"""
-)
-
 TERMS = (
-    POLICY_INPUT
+    policy_input("terms")
     + """
 print(json.dumps({"terms": [
     {"term": entry["term"], "mode": "whole-word", "case_sensitive": False,
@@ -91,7 +58,7 @@ print(json.dumps({"terms": [
 )
 
 SANITIZE = (
-    POLICY_INPUT
+    policy_input("sanitize")
     + """
 terms = [(entry["term"], entry["with"]) for entry in received.get("replacements", [])]
 replaced = 0

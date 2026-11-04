@@ -128,6 +128,19 @@ fn a_terms_failure_screens_the_source_name_even_when_no_item_was_read() {
 fn the_editing_peers_vocabularies_and_task_fields_are_the_emitted_contract() {
     let shared = Shared::new(&[("t1", PLAIN)], json!({}), json!({}));
     let bundle: Value = serde_json::from_str(&shared.store.ok(&["schema"])).expect("schema");
+    // Any change to a retained field's type, requiredness, nullability or referenced
+    // definition requires reconciling the peer's validators and this fixture together.
+    let frozen: serde_json::Map<String, Value> =
+        serde_json::from_str(include_str!("../edit_source_schema.json"))
+            .expect("the peer's schema fixture");
+    let roots = bundle["roots"].as_object().expect("roots");
+    for (name, expected) in frozen {
+        let actual = roots
+            .get(&name)
+            .or_else(|| roots.values().find_map(|root| root["$defs"].get(&name)))
+            .expect("a retained definition");
+        assert_eq!(actual, &expected, "reconcile the peer's {name} validator");
+    }
     let output = std::process::Command::new("python3")
         .args(["-c", "import json, runpy, sys, typing; p=runpy.run_path(sys.argv[1]); print(json.dumps({**{n:list(typing.get_args(p[n])) for n in ['StatusCategory','Priority','ItemKind','DependencyKind','TextFields','Direction','Classification']}, 'Task':sorted(p['Task'].__annotations__)}))"])
         .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/edit_source.py"))

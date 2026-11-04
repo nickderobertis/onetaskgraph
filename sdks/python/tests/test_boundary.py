@@ -16,6 +16,7 @@ from collections.abc import Coroutine
 from pathlib import Path
 
 import pytest
+from policy_input import policy_input
 
 from onetaskgraph_sdk import Client, OnetaskgraphError
 
@@ -245,31 +246,10 @@ def test_a_project_copy_records_its_public_projections_in_the_shape_the_sdk_mode
         PublicProjections.model_validate({"schema_version": 2, "tasks": []})
 
 
-SANITIZE = """
-import json, os, sys
-try:
-    received = json.loads(sys.stdin.read())
-except (TypeError, ValueError):
-    sys.exit(2)
-if not isinstance(received, dict):
-    sys.exit(2)
-entries = received.get("replacements", [])
-if not isinstance(entries, list) or any(
-    not isinstance(entry, dict) or not isinstance(entry.get("term"), str)
-    or not entry["term"] or not isinstance(entry.get("with"), str)
-    for entry in entries
-):
-    sys.exit(2)
-for surface in ("text", "paths", "metadata"):
-    values = received.get(surface, [])
-    if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
-        sys.exit(2)
-locators = received.get("locators", [])
-if not isinstance(locators, list) or any(
-    not isinstance(locator, dict) or not isinstance(locator.get("value"), str)
-    for locator in locators
-):
-    sys.exit(2)
+SANITIZE = (
+    policy_input("sanitize")
+    + """
+import os
 with open(os.environ["BOUNDARY_RECORD"], "a", encoding="utf-8") as record:
     record.write(json.dumps(received) + "\\n")
 replaced = 0
@@ -287,6 +267,7 @@ if received.get("locators"):
     answer["locators"] = [locator["value"] for locator in received["locators"]]
 print(json.dumps(answer))
 """
+)
 
 
 @pytest.mark.parametrize(

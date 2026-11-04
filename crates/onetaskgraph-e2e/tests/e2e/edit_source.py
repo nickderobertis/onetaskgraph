@@ -23,6 +23,11 @@ import sys
 from pathlib import Path
 from typing import Any, Generic, Literal, TypeAlias, TypeVar, TypedDict, NotRequired, cast, get_args
 
+# The schema fixture is reconciled with the real binary by the peer's contract journey,
+# including referenced definitions, field types, requiredness and nullability.
+WORK_SCHEMA = json.loads(Path(__file__).with_name("edit_source_schema.json").read_text(encoding="utf-8"))
+DESIGNATOR_PATTERN = WORK_SCHEMA["Designator"]["pattern"]
+
 KIND = "edit-source"
 PROTOCOL_VERSION = 2
 
@@ -231,7 +236,7 @@ def _is_endpoint(value: object) -> bool:
             and value.get("kind") in get_args(ItemKind)
             and ("designator" not in value or (
                 isinstance(value["designator"], str)
-                and re.fullmatch(r"alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64}", value["designator"]) is not None)))
+                and re.fullmatch(DESIGNATOR_PATTERN, value["designator"]) is not None)))
 
 
 def _is_edge(value: object) -> bool:
