@@ -23,18 +23,12 @@
         "properties": {
           "author": {
             "description": "Who wrote it there, in that source's spelling of a person.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": ["string", "null"]
           },
           "created_at": {
             "description": "When the origin says it was written.",
             "format": "date-time",
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": ["string", "null"]
           },
           "id": {
             "$ref": "#/$defs/NativeId",
@@ -47,23 +41,14 @@
           "updated_at": {
             "description": "When the origin says it last changed.",
             "format": "date-time",
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": ["string", "null"]
           },
           "url": {
             "description": "Where a person can open it at its origin.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": ["string", "null"]
           }
         },
-        "required": [
-          "task",
-          "id"
-        ],
+        "required": ["task", "id"],
         "type": "object"
       },
       "NativeId": {
@@ -76,10 +61,7 @@
     "properties": {
       "author": {
         "description": "Who wrote it, in the source's own spelling of a person.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "body": {
         "description": "What it says, byte for byte as it was written \u2014 a trailing newline included.",
@@ -88,10 +70,7 @@
       "created_at": {
         "description": "When the source says it was written.",
         "format": "date-time",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "id": {
         "$ref": "#/$defs/NativeId",
@@ -111,23 +90,14 @@
       "updated_at": {
         "description": "When the source says it last changed.",
         "format": "date-time",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "url": {
         "description": "Where a person can open it.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       }
     },
-    "required": [
-      "id",
-      "body"
-    ],
+    "required": ["id", "body"],
     "title": "Comment",
     "type": "object"
   },
@@ -136,18 +106,12 @@
     "properties": {
       "author": {
         "description": "Who wrote it there, in that source's spelling of a person.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "created_at": {
         "description": "When the origin says it was written.",
         "format": "date-time",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "id": {
         "$ref": "#/$defs/NativeId",
@@ -160,23 +124,14 @@
       "updated_at": {
         "description": "When the origin says it last changed.",
         "format": "date-time",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "url": {
         "description": "Where a person can open it at its origin.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       }
     },
-    "required": [
-      "task",
-      "id"
-    ],
+    "required": ["task", "id"],
     "type": "object"
   },
   "DependencyEdge": {
@@ -196,17 +151,11 @@
                 "type": "string"
               },
               "kind": {
-                "enum": [
-                  "task",
-                  "project"
-                ],
+                "enum": ["task", "project"],
                 "type": "string"
               }
             },
-            "required": [
-              "id",
-              "kind"
-            ],
+            "required": ["id", "kind"],
             "type": "object"
           },
           {
@@ -221,18 +170,11 @@
                 "type": "string"
               },
               "kind": {
-                "enum": [
-                  "task",
-                  "project"
-                ],
+                "enum": ["task", "project"],
                 "type": "string"
               }
             },
-            "required": [
-              "designator",
-              "id",
-              "kind"
-            ],
+            "required": ["designator", "id", "kind"],
             "type": "object"
           }
         ]
@@ -269,11 +211,7 @@
         "description": "The item the edge points at, and the one that must finish first."
       }
     },
-    "required": [
-      "from",
-      "to",
-      "kind"
-    ],
+    "required": ["from", "to", "kind"],
     "title": "DependencyEdge",
     "type": "object"
   },
@@ -293,17 +231,11 @@
             "type": "string"
           },
           "kind": {
-            "enum": [
-              "task",
-              "project"
-            ],
+            "enum": ["task", "project"],
             "type": "string"
           }
         },
-        "required": [
-          "id",
-          "kind"
-        ],
+        "required": ["id", "kind"],
         "type": "object"
       },
       {
@@ -318,18 +250,11 @@
             "type": "string"
           },
           "kind": {
-            "enum": [
-              "task",
-              "project"
-            ],
+            "enum": ["task", "project"],
             "type": "string"
           }
         },
-        "required": [
-          "designator",
-          "id",
-          "kind"
-        ],
+        "required": ["designator", "id", "kind"],
         "type": "object"
       }
     ],
@@ -369,10 +294,7 @@
     "properties": {
       "color": {
         "description": "The source's own colour for the label, when it has one.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "id": {
         "$ref": "#/$defs/NativeId",
@@ -383,10 +305,7 @@
         "type": "string"
       }
     },
-    "required": [
-      "id",
-      "name"
-    ],
+    "required": ["id", "name"],
     "title": "Label",
     "type": "object"
   },
@@ -402,9 +321,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "url"
-        ],
+        "required": ["url"],
         "type": "object"
       },
       {
@@ -415,9 +332,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "path"
-        ],
+        "required": ["path"],
         "type": "object"
       }
     ],
@@ -527,10 +442,7 @@
         "type": "string"
       }
     },
-    "required": [
-      "category",
-      "name"
-    ],
+    "required": ["category", "name"],
     "title": "Status",
     "type": "object"
   },
@@ -603,10 +515,7 @@
         "properties": {
           "color": {
             "description": "The source's own colour for the label, when it has one.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": ["string", "null"]
           },
           "id": {
             "$ref": "#/$defs/NativeId",
@@ -617,10 +526,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "id",
-          "name"
-        ],
+        "required": ["id", "name"],
         "type": "object"
       },
       "Location": {
@@ -634,9 +540,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "url"
-            ],
+            "required": ["url"],
             "type": "object"
           },
           {
@@ -647,9 +551,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "path"
-            ],
+            "required": ["path"],
             "type": "object"
           }
         ]
@@ -704,10 +606,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "category",
-          "name"
-        ],
+        "required": ["category", "name"],
         "type": "object"
       },
       "StatusCategory": {
@@ -770,18 +669,12 @@
       },
       "content": {
         "description": "The long-form body, when the source has one.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "created_at": {
         "description": "When the source says the task was created.",
         "format": "date-time",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "delivered_by": {
         "default": [],
@@ -806,10 +699,7 @@
       "key": {
         "default": null,
         "description": "The short handle the backend shows people, beside [`id`](Self::id) and never\ninstead of it \u2014 a Linear issue's `ENG-123`, a GitHub issue's `1043`.\n\n**It is human-facing and it may change.** A Linear issue moved between teams gets a\nnew identifier and a GitHub issue transferred between repositories gets a new\nnumber, so nothing stores this in place of [`id`](Self::id) and nothing matches on\nit: `id` is what everything stores and matches on, and this is what a person says\nout loud.\n\nAbsent by default, so a source that predates this field \u2014 and every source with no\nseparate handle of its own \u2014 reads as `None`, which means *this backend has no\nshort handle for this task* rather than *the handle is the id*. A source never\ncopies [`id`](Self::id) here.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a\ntask arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,\nand a destination ignores it.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "labels": {
         "description": "Inline rather than by id: a source returning a task already knows them.",
@@ -871,32 +761,18 @@
       "updated_at": {
         "description": "When the source says the task last changed.",
         "format": "date-time",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "url": {
         "description": "Where a human can open this task.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       },
       "version": {
         "description": "The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** \u2014 its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` \u00a74.13d.\n\nOpaque to every caller: nothing compares one but for equality, and the one reader that\nlooks inside is the source that gave it, through\n[`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it.",
-        "type": [
-          "string",
-          "null"
-        ]
+        "type": ["string", "null"]
       }
     },
-    "required": [
-      "id",
-      "title",
-      "status",
-      "labels"
-    ],
+    "required": ["id", "title", "status", "labels"],
     "title": "Task",
     "type": "object"
   },

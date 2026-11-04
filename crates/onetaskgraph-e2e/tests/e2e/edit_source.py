@@ -232,7 +232,8 @@ def _is_label(value: object) -> bool:
 def _is_endpoint(value: object) -> bool:
     if isinstance(value, str):
         return bool(value)
-    return (isinstance(value, dict) and isinstance(value.get("id"), str) and bool(value["id"])
+    return (isinstance(value, dict) and value.keys() <= {"id", "kind", "designator"}
+            and isinstance(value.get("id"), str) and bool(value["id"])
             and value.get("kind") in get_args(ItemKind)
             and ("designator" not in value or (
                 isinstance(value["designator"], str)

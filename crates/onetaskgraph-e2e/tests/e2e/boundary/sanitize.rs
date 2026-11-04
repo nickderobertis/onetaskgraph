@@ -242,13 +242,11 @@ fn the_editing_peer_refuses_malformed_pages_targets_and_tasks_without_changing_t
             "task":"t1", "comment":[], "body":"Plain."
         }}),
     );
-    for body in [""] {
-        requests.push(
-            json!({"id":"empty-comment", "method":"edit_comment", "params":{
-                "task":"t1", "comment":"c1", "body":body
-            }}),
-        );
-    }
+    requests.push(
+        json!({"id":"empty-comment", "method":"edit_comment", "params":{
+            "task":"t1", "comment":"c1", "body":""
+        }}),
+    );
     for page in [
         Value::Null,
         json!({"cursor":"bad","limit":1}),
@@ -278,6 +276,18 @@ fn the_editing_peer_refuses_malformed_pages_targets_and_tasks_without_changing_t
                 "from":"t1", "to":{"id":"t2","kind":"task","designator":designator}, "kind":"blocks"
             }]
         }}}));
+    }
+    for endpoint in [
+        json!({"id":"t2","kind":"task","extra":true}),
+        json!({"id":"t2","kind":"task","designator":format!("alias/{}", "a".repeat(16)),"extra":true}),
+    ] {
+        requests.push(
+            json!({"id":"extra-endpoint-field", "method":"write_task", "params":{"write":{
+                "target":"t1", "item":shared.task("t1"), "depends_on":[{
+                    "from":"t1", "to":endpoint, "kind":"blocks"
+                }]
+            }}}),
+        );
     }
     let mut incomplete = shared.task("t1");
     incomplete.as_object_mut().expect("task").remove("content");

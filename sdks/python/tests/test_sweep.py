@@ -370,7 +370,16 @@ async def peer_result[T](store: Path, request: dict[str, JsonValue], model: type
 
 @pytest.mark.parametrize("method", ["query_tasks", "task_comments", "task_dependencies", "labels"])
 @pytest.mark.parametrize(
-    "page", [None, [], {"limit": 0}, {"limit": True}, {"limit": 101}, {"limit": 1, "cursor": "bad"}]
+    "page",
+    [
+        None,
+        [],
+        {"limit": 0},
+        {"limit": True},
+        {"limit": 101},
+        {"limit": 1, "cursor": "bad"},
+        {"limit": 1, "cursor": "9" * 5000},
+    ],
 )
 def test_the_peer_refuses_malformed_pages_for_every_paged_read(
     tmp_path: Path, method: str, page: JsonValue
