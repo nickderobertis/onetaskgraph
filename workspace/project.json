@@ -26,7 +26,8 @@
     "onetaskgraph-live-janitor",
     "onetaskgraph-github-live",
     "pool-maintenance",
-    "github-cache-policy"
+    "github-cache-policy",
+    "github-nx-policy"
   ],
   "targets": {
     "bootstrap": {
@@ -60,7 +61,10 @@
         "{workspaceRoot}/workspace/**/*.json",
         "{workspaceRoot}/crates/*/project.json",
         "{workspaceRoot}/sdks/*/project.json",
-        "{workspaceRoot}/sdks/*/*.json"
+        "{workspaceRoot}/sdks/*/*.json",
+        {
+          "runtime": "node -p process.platform"
+        }
       ]
     },
     "lint": {
@@ -125,7 +129,10 @@
         "{workspaceRoot}/crates/onetaskgraph-github-projects/src/lib.rs",
         "{workspaceRoot}/scripts/check-design-prefix-spelling.sh",
         "{workspaceRoot}/scripts/check-capability-verdicts.sh",
-        "{workspaceRoot}/scripts/check-copy-pagination-guards.sh"
+        "{workspaceRoot}/scripts/check-copy-pagination-guards.sh",
+        {
+          "runtime": "node -p process.platform"
+        }
       ]
     },
     "typecheck": {
@@ -151,7 +158,10 @@
         "{workspaceRoot}/scripts/**/*.ts",
         "{workspaceRoot}/scripts/**/*.sh",
         "{workspaceRoot}/scripts/**/*.js",
-        "{workspaceRoot}/scripts/**/*.mjs"
+        "{workspaceRoot}/scripts/**/*.mjs",
+        {
+          "runtime": "node -p process.platform"
+        }
       ],
       "//": "The SDK and script sources are inputs because check-workspace-config.sh scans them for the files that resolve target/debug/onetaskgraph and for a cargo invocation inside one; without them a spawner added to a test would not re-run this check."
     },

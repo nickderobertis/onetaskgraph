@@ -73,7 +73,12 @@
       },
       "cache": true,
       "outputs": [],
-      "inputs": ["default"],
+      "inputs": [
+        "default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
       "//": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]"
     },
     "coverage": {

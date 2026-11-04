@@ -72,8 +72,9 @@
       "dependsOn": ["onetaskgraph:build"],
       "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement.",
       "outputs": [
-        "{workspaceRoot}/target/debug/telemetry/onetaskgraph-github-projects-e2e",
-        "{workspaceRoot}/target/debug/telemetry/github-live-session"
+        "{workspaceRoot}/target/debug/telemetry/onetaskgraph-github-projects-e2e/*.json",
+        "{workspaceRoot}/target/debug/telemetry/github-live-session/*/main.json",
+        "{workspaceRoot}/target/debug/telemetry/github-live-session/*/assets.json"
       ],
       "inputs": [
         "default",
@@ -106,7 +107,12 @@
           "env": "GITHUB_LIVE_SOURCE_REVISION"
         },
         "{workspaceRoot}/scripts/live-crate-test.sh",
-        { "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE" }
+        {
+          "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE"
+        },
+        {
+          "runtime": "node -p process.platform"
+        }
       ]
     },
     "coverage": {
@@ -157,9 +163,13 @@
         },
         {
           "dependentTasksOutputFiles": "**/telemetry/github-live-session/**/*.json"
+        },
+        {
+          "runtime": "node -p process.platform"
         }
       ],
-      "//": "Reports the current complete main/assets pair and ordinary offline telemetry through onebudgetspec. Current identity inputs prevent stale-session cache reuse. Credentialless or explicitly not-selected runs print live measurement unavailable and retain offline budgets."
+      "//": "Reports the current complete main/assets pair and ordinary offline telemetry through onebudgetspec. Current identity inputs prevent stale-session cache reuse. Credentialless or explicitly not-selected runs print live measurement unavailable and retain offline budgets.",
+      "outputs": []
     },
     "budgets-host": {
       "executor": "nx:run-commands",

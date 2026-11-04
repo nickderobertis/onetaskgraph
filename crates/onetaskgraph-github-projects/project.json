@@ -100,9 +100,17 @@
           "env": "GITHUB_LIVE_SOURCE_REVISION"
         },
         "{workspaceRoot}/scripts/live-crate-test.sh",
-        { "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE" }
+        {
+          "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE"
+        },
+        {
+          "runtime": "node -p process.platform"
+        }
       ],
-      "outputs": ["{workspaceRoot}/target/debug/telemetry/github-live-session"]
+      "outputs": [
+        "{workspaceRoot}/target/debug/telemetry/github-live-session/*/main.json",
+        "{workspaceRoot}/target/debug/telemetry/github-live-session/*/assets.json"
+      ]
     },
     "coverage": {
       "executor": "nx:run-commands",

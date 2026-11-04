@@ -402,6 +402,9 @@ test("the contract's target is keyed on .github alone and reads nothing outside 
   const named = structuredClone(project);
   named.targets["ci-jobs"].inputs = ["workflowGraph"];
   assert.match(contractInputProblems(named).join("\n"), /workspaceRoot/);
+  const runtime = structuredClone(project);
+  runtime.targets["ci-jobs"].inputs.push({ runtime: "cat Cargo.toml" });
+  assert.match(contractInputProblems(runtime).join("\n"), /Cargo\.toml/);
   assert.deepEqual(importProblems(import.meta.url), []);
   assert.match(
     importProblems(import.meta.url, 'import { graph } from "../workflow-graph.mjs";').join("\n"),
@@ -418,6 +421,9 @@ function contractInputProblems(project) {
         : [input],
     );
   return expand(project.targets["ci-jobs"].inputs ?? ["default"])
+    .filter(
+      (input) => JSON.stringify(input) !== JSON.stringify({ runtime: "node -p process.platform" }),
+    )
     .filter((input) => typeof input !== "string" || !/^!?\{projectRoot\}\//.test(input))
     .map((input) => `ci-jobs is keyed on ${JSON.stringify(input)}, outside .github`);
 }

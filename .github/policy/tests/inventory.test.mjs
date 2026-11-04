@@ -12,6 +12,7 @@ import {
   cdJourneyFiles,
   GITHUB_READS,
   inputProblems,
+  nxInputFiles,
   policyJourneyFiles,
   policyJourneyReadSet,
   releaseTailFiles,
@@ -48,10 +49,13 @@ test("the workflow projects run every journey exactly once through its owning ta
   const workflows = load("../../project.json");
   const policy = load("../project.json");
   const cache = load("../../cache-policy/project.json");
+  const nxPolicy = load("../../nx-policy/project.json");
+  assert.deepEqual(inputProblems(nxPolicy, "nx-inputs"), []);
   for (const [project, target, files] of [
     [policy, "policy-tests", policyJourneyFiles],
     [policy, "rust-cache-action", rustCacheJourneyFiles],
     [workflows, "cd-journeys", cdJourneyFiles],
+    [nxPolicy, "nx-inputs", nxInputFiles],
     [cache, "cache-journeys", cacheJourneyFiles],
     [workflows, "budget-journeys", budgetJourneyFiles],
     [policy, "release-tail", releaseTailFiles],
@@ -66,10 +70,11 @@ test("the workflow projects run every journey exactly once through its owning ta
   assert.ok(workflows.namedInputs.default.includes("!{projectRoot}/policy/**/*"));
   for (const file of [...policyJourneyFiles, ...rustCacheJourneyFiles, ...releaseTailFiles])
     assert.ok(file.startsWith(".github/policy/"), file);
-  const actual = ["tests", "policy/tests", "cache-policy/tests"].flatMap((directory) =>
-    readdirSync(new URL(`../../${directory}/`, import.meta.url))
-      .filter((file) => file.endsWith(".test.mjs"))
-      .map((file) => `.github/${directory}/${file}`),
+  const actual = ["tests", "policy/tests", "cache-policy/tests", "nx-policy/tests"].flatMap(
+    (directory) =>
+      readdirSync(new URL(`../../${directory}/`, import.meta.url))
+        .filter((file) => file.endsWith(".test.mjs"))
+        .map((file) => `.github/${directory}/${file}`),
   );
   assert.deepEqual(
     [
@@ -77,6 +82,7 @@ test("the workflow projects run every journey exactly once through its owning ta
       ...rustCacheJourneyFiles,
       ...cdJourneyFiles,
       ...cacheJourneyFiles,
+      ...nxInputFiles,
       ...budgetJourneyFiles,
       ...releaseTailFiles,
     ].sort(),
@@ -284,6 +290,7 @@ function placementProblems(ciJob) {
     ["github-workflows", "test", tagsOf("../../project.json")],
     ["github-workflow-policy", "test", tagsOf("../project.json")],
     ["github-cache-policy", "test", tagsOf("../../cache-policy/project.json")],
+    ["github-nx-policy", "test", tagsOf("../../nx-policy/project.json")],
   ];
   for (const [project, target, tags] of suites) {
     if (!selects("test-linux", target, project, tags, ciJob))
@@ -335,7 +342,7 @@ test("a workflow suite leaving test-linux, or the rust-cache journey leaving a r
   );
   refused(
     ciJob.replace(
-      /(\n {2}test-macos\)[\s\S]*?),github-workflows,github-workflow-policy,github-cache-policy --parallel=2/,
+      /(\n {2}test-macos\)[\s\S]*?),github-workflows,github-workflow-policy,github-cache-policy,github-nx-policy --parallel=2/,
       (_, before) => `${before} --parallel=2`,
     ),
     /test-macos runs github-workflows:test/,

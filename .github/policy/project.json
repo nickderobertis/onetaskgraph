@@ -110,9 +110,15 @@
       "options": {
         "command": "node --test .github/policy/tests/release-tail.test.mjs"
       },
-      "inputs": ["releaseTail"],
+      "inputs": [
+        "releaseTail",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
       "cache": true,
-      "//": "publish's release tail: its install step and its last step run as release.yml writes them over GitHub answers recorded from this repository (tests/fixtures/release-tail/). Here, in the project no crate or SDK edit selects, and a target of its own keyed on its reads alone, because it installs onevcs and onebudgetspec from npm."
+      "//": "publish's release tail: its install step and its last step run as release.yml writes them over GitHub answers recorded from this repository (tests/fixtures/release-tail/). Here, in the project no crate or SDK edit selects, and a target of its own keyed on its reads alone, because it installs onevcs and onebudgetspec from npm.",
+      "outputs": []
     }
   }
 }

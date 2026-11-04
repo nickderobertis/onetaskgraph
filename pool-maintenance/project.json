@@ -25,7 +25,13 @@
       "options": {
         "command": "bun run biome format pool-maintenance"
       },
-      "inputs": ["{workspaceRoot}/biome.json", "{workspaceRoot}/pool-maintenance/project.json"]
+      "inputs": [
+        "{workspaceRoot}/biome.json",
+        "{workspaceRoot}/pool-maintenance/project.json",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "lint": {
       "executor": "nx:run-commands",
@@ -50,7 +56,12 @@
       "inputs": [
         "default",
         "{workspaceRoot}/justfile",
-        { "externalDependencies": ["@onebudgetspec/cli"] }
+        {
+          "externalDependencies": ["@onebudgetspec/cli"]
+        },
+        {
+          "runtime": "node -p process.platform"
+        }
       ],
       "//": "Runs the measurement over a scratch workspace of three tiny crates, never this repository's own target directory, so it costs seconds and can sit on the per-change path `budgets-host` stays off. The justfile is an input because the pruner's pin and the recipe the measurement runs are there."
     },
@@ -64,7 +75,12 @@
         "command": "bun run onebudgetspec check pool-maintenance/budgets.yaml --label host"
       },
       "cache": false,
-      "inputs": ["default", { "externalDependencies": ["@onebudgetspec/cli"] }],
+      "inputs": [
+        "default",
+        {
+          "externalDependencies": ["@onebudgetspec/cli"]
+        }
+      ],
       "//": "Wall-clock time on the host that runs it, so never cached. Not a dependency of `check` and not a target `just test` selects. Its settings are declared here rather than as nx.json target defaults: Nx treats any nx.json edit as touching every project, which would open the live lanes for a change to this project alone. There is no cached `budgets` target here, because `just test` selects that name on every affected project and this project's only budget is host-labelled."
     }
   }

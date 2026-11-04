@@ -25,7 +25,13 @@
       "options": {
         "command": "bun run biome format screenshots"
       },
-      "inputs": ["{workspaceRoot}/biome.json", "{workspaceRoot}/screenshots/project.json"]
+      "inputs": [
+        "{workspaceRoot}/biome.json",
+        "{workspaceRoot}/screenshots/project.json",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "lint": {
       "executor": "nx:run-commands",
@@ -46,7 +52,10 @@
         "{workspaceRoot}/scripts/screenshots.sh",
         "{workspaceRoot}/scripts/screenshots-freeze.sh",
         "{workspaceRoot}/scripts/screenshots-bless.sh",
-        "{workspaceRoot}/scripts/check-visual-docs.sh"
+        "{workspaceRoot}/scripts/check-visual-docs.sh",
+        {
+          "runtime": "node -p process.platform"
+        }
       ],
       "//": "The static half: it reconciles every version this capture restates, the scene inventory against the committed baseline, and every image the README embeds. It needs neither screencomp nor the renderer, so it runs in CI's check job like every other lint, and the workspaceRoot inputs select this project as well as hash it. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] those inputs select `test` too, because Nx selects a project rather than a target, and no expensive tier sits behind that edge: both checks clone with `git clone --shared` and the target finishes in under two seconds."
     },

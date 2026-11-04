@@ -90,7 +90,7 @@ case "$JOB" in
     # The workflow and workflow-policy suites check workflow files whose production runs are
     # Linux jobs, so test-linux runs them; of them only the real rust-cache action also runs on
     # this runner, and so does its journey (.github/policy/tests/inventory.test.mjs holds both).
-    phases="1 affected test,budgets onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows,github-workflow-policy,github-cache-policy --parallel=2
+    phases="1 affected test,budgets onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows,github-workflow-policy,github-cache-policy,github-nx-policy --parallel=2
 1 affected test,budgets *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 affected rust-cache-action -
 1 run scripts:distribution-check -
@@ -104,7 +104,7 @@ case "$JOB" in
     # here, where it is slowest, and so does scripts:test, the job's last task, its guards'.
     export ONETASKGRAPH_DISTRIBUTION_TIMINGS=1
     script_timings=true
-    phases="1 affected test,budgets onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows,github-workflow-policy,github-cache-policy --parallel=3
+    phases="1 affected test,budgets onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows,github-workflow-policy,github-cache-policy,github-nx-policy --parallel=3
 1 affected test,budgets *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 affected rust-cache-action -
 1 run scripts:distribution-check -

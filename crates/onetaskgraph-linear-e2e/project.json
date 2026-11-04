@@ -66,15 +66,33 @@
       "inputs": [
         "default",
         "^default",
-        { "env": "ONETASKGRAPH_LINEAR_DOCUMENT_MODE" },
-        { "env": "GITHUB_ACTIONS" },
-        { "env": "LINEAR_API_KEY" },
-        { "env": "LINEAR_WRITE_TEAM" },
-        { "env": "ONETASKGRAPH_LIVE_REQUIRED" },
+        {
+          "env": "ONETASKGRAPH_LINEAR_DOCUMENT_MODE"
+        },
+        {
+          "env": "GITHUB_ACTIONS"
+        },
+        {
+          "env": "LINEAR_API_KEY"
+        },
+        {
+          "env": "LINEAR_WRITE_TEAM"
+        },
+        {
+          "env": "ONETASKGRAPH_LIVE_REQUIRED"
+        },
         "{workspaceRoot}/scripts/live-crate-test.sh",
-        { "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE" }
+        {
+          "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE"
+        },
+        {
+          "runtime": "node -p process.platform"
+        }
       ],
-      "outputs": ["{workspaceRoot}/target/debug/telemetry/onetaskgraph-linear-e2e"]
+      "outputs": [
+        "{workspaceRoot}/target/debug/telemetry/onetaskgraph-linear-e2e/*.json",
+        "{workspaceRoot}/target/debug/telemetry/onetaskgraph-linear-e2e/live/*/linear-live-documents-*.json"
+      ]
     },
     "budgets": {
       "executor": "nx:run-commands",
@@ -87,9 +105,17 @@
       "inputs": [
         "default",
         "^default",
-        { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear-e2e/*.json" },
-        { "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear/*.json" }
-      ]
+        {
+          "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear-e2e/*.json"
+        },
+        {
+          "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-linear/*.json"
+        },
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
+      "outputs": []
     },
     "live-documents": {
       "executor": "nx:run-commands",

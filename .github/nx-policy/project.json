@@ -1,0 +1,66 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "github-nx-policy",
+  "projectType": "library",
+  "tags": ["lang:javascript", "layer:workspace"],
+  "namedInputs": {
+    "default": [
+      "{workspaceRoot}/.github/nx-policy/tests/nx-inputs.test.mjs",
+      "{workspaceRoot}/.github/nx-policy/tests/fixtures/nx-workspace-contracts.mjs",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/**/project.json",
+      "{workspaceRoot}/package.json",
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/scripts/ci-job.sh"
+    ]
+  },
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:noop",
+      "dependsOn": ["github-workflows:bootstrap"]
+    },
+    "check": {
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "typecheck", "test", "coverage"]
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format .github/nx-policy"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome lint --error-on-warnings .github/nx-policy"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:noop"
+    },
+    "test": {
+      "executor": "nx:noop",
+      "cache": false,
+      "dependsOn": ["nx-inputs"]
+    },
+    "nx-inputs": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/nx-policy/tests/nx-inputs.test.mjs"
+      },
+      "cache": true,
+      "inputs": [
+        "default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
+      "outputs": []
+    },
+    "coverage": {
+      "executor": "nx:noop"
+    }
+  },
+  "//": "Workspace-wide Nx input contracts have their own project so project-definition edits select these checks without selecting the CD or sidecar journeys."
+}

@@ -115,6 +115,17 @@ export const releaseTailFiles = [".github/policy/tests/release-tail.test.mjs"];
 // The one policy journey run on every platform, because the real action it runs does.
 export const rustCacheJourneyFiles = [".github/policy/tests/rust-cache.test.mjs"];
 
+export const nxInputFiles = [".github/nx-policy/tests/nx-inputs.test.mjs"];
+export const nxInputReadSet = [
+  ".github/nx-policy/tests/nx-inputs.test.mjs",
+  ".github/nx-policy/tests/fixtures/nx-workspace-contracts.mjs",
+  "nx.json",
+  "**/project.json",
+  "package.json",
+  "bun.lock",
+  "scripts/ci-job.sh",
+];
+
 export const cacheJourneyFiles = [".github/cache-policy/tests/cache.test.mjs"];
 
 export const cdJourneyFiles = [
@@ -138,9 +149,10 @@ export function inputProblems(project, target) {
         : [input],
     );
   // The release tail imports nothing of the run graph, so it is keyed on its own reads alone.
-  const graph =
-    target === "release-tail" ? [] : graphReadSet().filter((path) => !path.startsWith(".github/"));
-  if (!graph.length && target !== "release-tail")
+  const graph = ["release-tail", "nx-inputs"].includes(target)
+    ? []
+    : graphReadSet().filter((path) => !path.startsWith(".github/"));
+  if (!graph.length && !["release-tail", "nx-inputs"].includes(target))
     throw Error("the graph reads no outside file, so this proves nothing");
   const outside = [
     ...new Set([
@@ -151,9 +163,11 @@ export function inputProblems(project, target) {
           ? policyJourneyReadSet
           : target === "budget-journeys"
             ? budgetJourneyReadSet
-            : target === "release-tail"
-              ? releaseTailReadSet
-              : []),
+            : target === "nx-inputs"
+              ? nxInputReadSet
+              : target === "release-tail"
+                ? releaseTailReadSet
+                : []),
     ]),
   ];
   const inputs = expand(project.targets[target].inputs ?? ["default"]);

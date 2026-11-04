@@ -22,28 +22,69 @@
       "cache": false
     },
     "format-check": {
-      "inputs": ["default"],
-      "cache": true
+      "inputs": [
+        "default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
+      "cache": true,
+      "outputs": []
     },
     "lint": {
-      "inputs": ["default", "^default"],
-      "cache": true
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
+      "cache": true,
+      "outputs": []
     },
     "typecheck": {
-      "inputs": ["default", "^default"],
-      "cache": true
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
+      "cache": true,
+      "outputs": []
     },
     "test": {
-      "inputs": ["default", "^default"],
-      "cache": true
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
+      "cache": true,
+      "outputs": []
     },
     "coverage": {
-      "inputs": ["default", "^default"],
-      "cache": true
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
+      "cache": true,
+      "outputs": []
     },
     "test-uncovered": {
-      "inputs": ["default", "^default"],
-      "cache": true
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
+      "cache": true,
+      "outputs": []
     },
     "bootstrap": {
       "cache": false

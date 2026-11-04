@@ -25,7 +25,13 @@
       "options": {
         "command": "bun run biome format scripts"
       },
-      "inputs": ["{workspaceRoot}/biome.json", "{workspaceRoot}/scripts/project.json"]
+      "inputs": [
+        "{workspaceRoot}/biome.json",
+        "{workspaceRoot}/scripts/project.json",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "lint": {
       "executor": "nx:run-commands",

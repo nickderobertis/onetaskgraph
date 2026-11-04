@@ -69,6 +69,9 @@
         "^default",
         {
           "externalDependencies": ["@onebudgetspec/cli"]
+        },
+        {
+          "runtime": "node -p process.platform"
         }
       ]
     },
@@ -94,8 +97,12 @@
         "^default",
         {
           "externalDependencies": ["@onebudgetspec/cli"]
+        },
+        {
+          "runtime": "node -p process.platform"
         }
-      ]
+      ],
+      "outputs": ["{projectRoot}/.coverage"]
     },
     "budgets-host": {
       "executor": "nx:run-commands",
