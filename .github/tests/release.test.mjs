@@ -573,6 +573,7 @@ test("published pathspecs cover every published crate, wheel and registry packag
     "package.json",
     "bun.lock",
     "rust-toolchain.toml",
+    ".python-version",
     ".cargo/**",
     "README.md",
     "LICENSE",

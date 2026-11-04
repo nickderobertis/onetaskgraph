@@ -12,6 +12,8 @@ import {
   cdJourneyFiles,
   GITHUB_READS,
   inputProblems,
+  inputValidationReadSet,
+  nxHashFiles,
   nxInputFiles,
   policyJourneyFiles,
   policyJourneyReadSet,
@@ -33,10 +35,19 @@ test("the policy journeys are keyed on the combined read set of the tests they r
 
 test("an undeclared read in the policy journey target is refused", () => {
   const graph = graphReadSet().filter((path) => !path.startsWith(".github/"));
-  for (const path of new Set([...graph, ...policyJourneyReadSet, ".github/**/*"])) {
+  for (const path of new Set([
+    ...graph,
+    ...policyJourneyReadSet,
+    ...inputValidationReadSet,
+    ".github/**/*",
+  ])) {
     const project = load("../project.json");
     for (const [name, inputs] of Object.entries(project.namedInputs))
-      project.namedInputs[name] = inputs.filter((input) => input !== `{workspaceRoot}/${path}`);
+      project.namedInputs[name] = inputs.filter(
+        (input) =>
+          input !== `{workspaceRoot}/${path}` &&
+          !(["bun.lock", "package.json"].includes(path) && input === "versionFreeNpm"),
+      );
     assert.ok(
       inputProblems(project, "policy-tests").includes(`policy-tests is not keyed on ${path}`),
       path,
@@ -56,6 +67,7 @@ test("the workflow projects run every journey exactly once through its owning ta
     [policy, "rust-cache-action", rustCacheJourneyFiles],
     [workflows, "cd-journeys", cdJourneyFiles],
     [nxPolicy, "nx-inputs", nxInputFiles],
+    [nxPolicy, "nx-hashes", nxHashFiles],
     [cache, "cache-journeys", cacheJourneyFiles],
     [workflows, "budget-journeys", budgetJourneyFiles],
     [policy, "release-tail", releaseTailFiles],
@@ -83,6 +95,7 @@ test("the workflow projects run every journey exactly once through its owning ta
       ...cdJourneyFiles,
       ...cacheJourneyFiles,
       ...nxInputFiles,
+      ...nxHashFiles,
       ...budgetJourneyFiles,
       ...releaseTailFiles,
     ].sort(),

@@ -36,7 +36,9 @@
     },
     "build": {
       "executor": "nx:run-commands",
-      "options": { "command": "bun run --cwd sdks/typescript build" }
+      "options": {
+        "command": "bun run --cwd sdks/typescript build"
+      }
     },
     "format": {
       "executor": "nx:run-commands",
@@ -50,13 +52,26 @@
       "executor": "nx:run-commands",
       "options": {
         "command": "bun run biome format sdks/typescript"
-      }
+      },
+      "inputs": [
+        "textDefault",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "lint": {
       "executor": "nx:run-commands",
       "options": {
         "command": "bun run biome lint --error-on-warnings sdks/typescript"
-      }
+      },
+      "inputs": [
+        "textDefault",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "typecheck": {
       "executor": "nx:run-commands",
@@ -70,7 +85,26 @@
       "options": {
         "command": "bun scripts/test.ts",
         "cwd": "sdks/typescript"
-      }
+      },
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem npm --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem python --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem files --keep-version"
+        }
+      ]
     },
     "coverage": {
       "executor": "nx:run-commands",
@@ -78,12 +112,44 @@
       "options": {
         "command": "bun scripts/test.ts --coverage --coverage-threshold=0.95",
         "cwd": "sdks/typescript"
-      }
+      },
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem npm --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem python --keep-version"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem files --keep-version"
+        }
+      ]
     },
     "pack": {
       "executor": "nx:run-commands",
       "dependsOn": ["build", "generate-check"],
-      "options": { "command": "bash sdks/typescript/scripts/test-packed.sh" }
+      "options": {
+        "command": "bash sdks/typescript/scripts/test-packed.sh"
+      }
     }
+  },
+  "namedInputs": {
+    "default": [
+      "{projectRoot}/**/*",
+      "!{projectRoot}/package.json",
+      "!{projectRoot}/src/index.ts",
+      "sharedGlobals",
+      "versionFreeNpm",
+      "versionFreeFiles"
+    ],
+    "textDefault": ["{projectRoot}/**/*", "sharedGlobals"]
   }
 }

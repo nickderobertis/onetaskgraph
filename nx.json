@@ -2,8 +2,45 @@
   "$schema": "./node_modules/nx/schemas/nx-schema.json",
   "defaultBase": "origin/main",
   "namedInputs": {
-    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "default": [
+      "{projectRoot}/**/*",
+      "!{projectRoot}/Cargo.toml",
+      "!{projectRoot}/CHANGELOG.md",
+      "sharedGlobals"
+    ],
     "sharedGlobals": [
+      "{workspaceRoot}/.python-version",
+      "{workspaceRoot}/.tool-versions",
+      "{workspaceRoot}/rust-toolchain.toml",
+      "{workspaceRoot}/.cargo/config.toml",
+      "{workspaceRoot}/clippy.toml",
+      "{workspaceRoot}/rustfmt.toml",
+      "{workspaceRoot}/deny.toml",
+      "{workspaceRoot}/biome.json",
+      "versionFreeCargo",
+      "versionFreeNpm"
+    ],
+    "versionFreeCargo": [
+      {
+        "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo"
+      }
+    ],
+    "versionFreeNpm": [
+      {
+        "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem npm"
+      }
+    ],
+    "versionFreePython": [
+      {
+        "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem python"
+      }
+    ],
+    "versionFreeFiles": [
+      {
+        "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem files"
+      }
+    ],
+    "selectionGlobals": [
       "{workspaceRoot}/Cargo.toml",
       "{workspaceRoot}/Cargo.lock",
       "{workspaceRoot}/rust-toolchain.toml",
@@ -13,13 +50,16 @@
       "{workspaceRoot}/deny.toml",
       "{workspaceRoot}/biome.json",
       "{workspaceRoot}/package.json",
-      "{workspaceRoot}/bun.lock"
+      "{workspaceRoot}/bun.lock",
+      "{workspaceRoot}/.python-version",
+      "{workspaceRoot}/.tool-versions"
     ]
   },
   "targetDefaults": {
     "check": {
       "dependsOn": ["format-check", "lint", "typecheck", "test", "coverage"],
-      "cache": false
+      "cache": false,
+      "inputs": ["selectionGlobals"]
     },
     "format-check": {
       "inputs": [

@@ -9,9 +9,31 @@
       "{workspaceRoot}/.github/nx-policy/tests/fixtures/nx-workspace-contracts.mjs",
       "{workspaceRoot}/nx.json",
       "{workspaceRoot}/**/project.json",
+      "{workspaceRoot}/scripts/ci-job.sh",
+      "versionFreeNpm"
+    ],
+    "hashContracts": [
+      "{projectRoot}/tests/nx-hashes.test.mjs",
+      "{projectRoot}/tests/fixtures/nx-workspace-contracts.mjs",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/**/project.json",
+      "{workspaceRoot}/scripts/nx-version-free-inputs.mjs",
+      "{workspaceRoot}/scripts/nx-remote-cache.mjs",
+      "{workspaceRoot}/scripts/ci-job.sh",
+      "{workspaceRoot}/.github/nx-version-files",
+      "{workspaceRoot}/.github/workflows/ci.yml",
+      "{workspaceRoot}/Cargo.toml",
+      "{workspaceRoot}/Cargo.lock",
       "{workspaceRoot}/package.json",
       "{workspaceRoot}/bun.lock",
-      "{workspaceRoot}/scripts/ci-job.sh"
+      "{workspaceRoot}/pyproject.toml",
+      "{workspaceRoot}/uv.lock",
+      "{workspaceRoot}/crates/*/Cargo.toml",
+      "{workspaceRoot}/sdks/*/pyproject.toml",
+      "{workspaceRoot}/sdks/*/package.json",
+      "{workspaceRoot}/rust-toolchain.toml",
+      "{workspaceRoot}/.cargo/config.toml",
+      "{projectRoot}/version-inputs.mjs"
     ]
   },
   "targets": {
@@ -27,13 +49,27 @@
       "executor": "nx:run-commands",
       "options": {
         "command": "bun run biome format .github/nx-policy"
-      }
+      },
+      "inputs": [
+        "{projectRoot}/**/*",
+        "{workspaceRoot}/biome.json",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "lint": {
       "executor": "nx:run-commands",
       "options": {
         "command": "bun run biome lint --error-on-warnings .github/nx-policy"
-      }
+      },
+      "inputs": [
+        "{projectRoot}/**/*",
+        "{workspaceRoot}/biome.json",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "typecheck": {
       "executor": "nx:noop"
@@ -41,7 +77,7 @@
     "test": {
       "executor": "nx:noop",
       "cache": false,
-      "dependsOn": ["nx-inputs"]
+      "dependsOn": ["nx-inputs", "nx-hashes"]
     },
     "nx-inputs": {
       "executor": "nx:run-commands",
@@ -60,6 +96,23 @@
     },
     "coverage": {
       "executor": "nx:noop"
+    },
+    "nx-hashes": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/nx-policy/tests/nx-hashes.test.mjs"
+      },
+      "inputs": ["hashContracts"],
+      "cache": false,
+      "//": "Uncached: compares the current tree and a fixed historical baseline through real Nx, including source bytes outside the selection read set. Only workflow and workspace input contracts select this matrix."
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bun run biome format --write .github/nx-policy"
+      },
+      "cache": false
     }
   },
   "//": "Workspace-wide Nx input contracts have their own project so project-definition edits select these checks without selecting the CD or sidecar journeys."

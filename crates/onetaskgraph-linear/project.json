@@ -98,7 +98,17 @@
     "coverage": {
       "executor": "nx:noop",
       "//": "Its suite runs every case uninstrumented, in `test`, and contributes no line coverage: the user's decision of 2026-10-30. scripts/check-coverage-enforced.sh holds the tag, this target and workspace:coverage's dependency list to one another.",
-      "cache": false
+      "cache": false,
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        }
+      ]
     }
   }
 }

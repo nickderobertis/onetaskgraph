@@ -58,7 +58,17 @@
       },
       "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
-      "// end": "llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]"
+      "// end": "llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        }
+      ]
     },
     "build": {
       "executor": "nx:run-commands",

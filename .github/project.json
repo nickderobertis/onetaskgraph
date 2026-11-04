@@ -18,7 +18,10 @@
       "{workspaceRoot}/release-targets.toml",
       "{workspaceRoot}/screencomp.toml",
       "{workspaceRoot}/scripts/product_versions.py",
-      "{workspaceRoot}/scripts/release_products.py"
+      "{workspaceRoot}/scripts/release_products.py",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/scripts/nx-version-free-inputs.mjs",
+      "{workspaceRoot}/.github/nx-policy/version-inputs.mjs"
     ],
     "cdJourneys": [
       "default",
@@ -62,10 +65,9 @@
       "workflowGraph",
       "{workspaceRoot}/budgets.yaml",
       "{workspaceRoot}/justfile",
-      "{workspaceRoot}/package.json",
-      "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/scripts/gate-time.sh",
-      "{workspaceRoot}/scripts/gate-time-budget.mjs"
+      "{workspaceRoot}/scripts/gate-time-budget.mjs",
+      "versionFreeNpm"
     ]
   },
   "targets": {

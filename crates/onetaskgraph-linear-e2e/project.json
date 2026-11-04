@@ -8,11 +8,20 @@
   "namedInputs": {
     "default": [
       "{projectRoot}/**/*",
+      "!{projectRoot}/Cargo.toml",
       "sharedGlobals",
       "{workspaceRoot}/crates/onetaskgraph/**/*",
+      "!{workspaceRoot}/crates/onetaskgraph/CHANGELOG.md",
+      "!{workspaceRoot}/crates/onetaskgraph/Cargo.toml",
       "{workspaceRoot}/crates/onetaskgraph-core/**/*",
+      "!{workspaceRoot}/crates/onetaskgraph-core/CHANGELOG.md",
+      "!{workspaceRoot}/crates/onetaskgraph-core/Cargo.toml",
       "{workspaceRoot}/crates/onetaskgraph-e2e-support/**/*",
-      "{workspaceRoot}/crates/onetaskgraph-local-md/**/*"
+      "!{workspaceRoot}/crates/onetaskgraph-e2e-support/Cargo.toml",
+      "{workspaceRoot}/crates/onetaskgraph-local-md/**/*",
+      "!{workspaceRoot}/crates/onetaskgraph-local-md/CHANGELOG.md",
+      "!{workspaceRoot}/crates/onetaskgraph-local-md/Cargo.toml",
+      "versionFreeCargo"
     ]
   },
   "targets": {
@@ -135,7 +144,17 @@
       },
       "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
       "cache": false,
-      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. It depends on onetaskgraph:coverage because that run is what builds the instrumented binary into target/llvm-cov-target, where these journeys find it, so its lines are attributed to the union workspace:coverage holds to the floor; this run never builds the onetaskgraph package, so it cannot relink that file while it runs."
+      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. It depends on onetaskgraph:coverage because that run is what builds the instrumented binary into target/llvm-cov-target, where these journeys find it, so its lines are attributed to the union workspace:coverage holds to the floor; this run never builds the onetaskgraph package, so it cannot relink that file while it runs.",
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+        }
+      ]
     }
   }
 }

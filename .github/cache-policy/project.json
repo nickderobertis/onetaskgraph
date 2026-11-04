@@ -19,13 +19,12 @@
       "{workspaceRoot}/.github/release-published-paths",
       "{workspaceRoot}/scripts/ci-job.sh",
       "{workspaceRoot}/.github/project.json",
-      "{workspaceRoot}/package.json",
-      "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/.github/workflows/*.yml",
       "{workspaceRoot}/.github/tests/ci-jobs.spec.mjs",
       "{workspaceRoot}/.github/tests/workflow-definitions.mjs",
       "{workspaceRoot}/.github/actions-expressions.mjs",
-      "{workspaceRoot}/.github/telemetry.ts"
+      "{workspaceRoot}/.github/telemetry.ts",
+      "versionFreeNpm"
     ]
   },
   "targets": {

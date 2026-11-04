@@ -1635,6 +1635,13 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   push can promote without releasing, and every release operation requires a push to main.
   `.github/cache-policy` owns the Linux cache journeys: real Nx and the pinned sidecar,
   GitHub doubled at HTTP. Shared script copies stay byte-identical to their upstream pins.
+  `biome.json` excludes exactly the two upstream-owned JavaScript copies; the comment and
+  exact-path digest map in `.github/cache-policy/tests/cache.test.mjs` hold their byte identity.
+  `.github/nx-policy` owns the cached platform/output checks and the uncached real-Nx hash
+  matrix over the workspace input contracts and a fixed git baseline. Semantic manifest inputs
+  use `nx-version-free-inputs.mjs`; format checks and linters that read their text retain raw
+  inputs and re-run on a release. The workspace guard also retains raw Bun locks: its version
+  reader matches their lines as text. SDK/e2e version-reading tests keep the version in their hashes.
 - **Bump policy (pre-1.0):** `feat` → minor; `feat!` / `BREAKING CHANGE` → minor (a
   breaking change before 1.0 is *not* a major); `fix` / `perf` / `refactor` / `build` →
   patch; `chore` / `docs` / `ci` / `test` / `style` → no release. Post-1.0 a breaking

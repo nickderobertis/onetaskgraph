@@ -15,7 +15,6 @@
       "{workspaceRoot}/screencomp.toml",
       "{workspaceRoot}/scripts/product_versions.py",
       "{workspaceRoot}/scripts/release_products.py",
-      "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/rust-toolchain.toml",
       "{workspaceRoot}/scripts/ci-job.sh",
       "{workspaceRoot}/scripts/project.json",
@@ -33,7 +32,11 @@
       "{workspaceRoot}/scripts/check-release-tooling-selection.sh",
       "{workspaceRoot}/scripts/check-real-release-preparation.sh",
       "{workspaceRoot}/scripts/check-npm-publish.sh",
-      "{workspaceRoot}/scripts/check-fixture-discrimination.sh"
+      "{workspaceRoot}/scripts/check-fixture-discrimination.sh",
+      "versionFreeNpm",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/scripts/nx-version-free-inputs.mjs",
+      "{workspaceRoot}/.github/nx-policy/version-inputs.mjs"
     ],
     "releaseTail": [
       "{workspaceRoot}/.github/workflows/release.yml",
@@ -43,9 +46,9 @@
       "{workspaceRoot}/.github/package.json",
       "{workspaceRoot}/.github/bun.lock",
       "{workspaceRoot}/budgets.yaml",
-      "{workspaceRoot}/package.json",
       "{workspaceRoot}/scripts/actions-budget-figures.sh",
-      "{workspaceRoot}/.github/release-published-paths"
+      "{workspaceRoot}/.github/release-published-paths",
+      "versionFreeNpm"
     ]
   },
   "targets": {
