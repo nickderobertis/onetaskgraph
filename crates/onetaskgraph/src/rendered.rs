@@ -63,13 +63,18 @@ pub(crate) async fn create_task(
         .map_err(|error| Failure::from(&error))?;
     let id = created.task.id;
     match loaded.config.output() {
-        OutputFormat::Text => emit(out, &id.to_string(), "the task's id")?,
+        OutputFormat::Text => emit(
+            out,
+            &crate::sanitized(id.to_string(), OutputFormat::Text)?,
+            "the task's id",
+        )?,
         OutputFormat::Json => {
             let detail = engine
                 .task_detail(&id)
                 .await
                 .map_err(|error| Failure::from(&error))?;
-            emit(out, &json(&detail, "the task")?, "the task")?;
+            let rendered = crate::sanitized(json(&detail, "the task")?, OutputFormat::Json)?;
+            emit(out, &rendered, "the task")?;
         }
     }
     Ok(delivery_exit(&created.delivered))
@@ -105,13 +110,18 @@ pub(crate) async fn create_document(
         .await
         .map_err(|error| Failure::from(&error))?;
     match loaded.config.output() {
-        OutputFormat::Text => emit(out, &created.id.to_string(), "the document's id")?,
+        OutputFormat::Text => emit(
+            out,
+            &crate::sanitized(created.id.to_string(), OutputFormat::Text)?,
+            "the document's id",
+        )?,
         OutputFormat::Json => {
             let detail = engine
                 .document_detail(&created.id)
                 .await
                 .map_err(|error| Failure::from(&error))?;
-            emit(out, &json(&detail, "the document")?, "the document")?;
+            let rendered = crate::sanitized(json(&detail, "the document")?, OutputFormat::Json)?;
+            emit(out, &rendered, "the document")?;
         }
     }
     Ok(EXIT_OK)
@@ -135,13 +145,18 @@ pub(crate) async fn create_project(
         .await
         .map_err(|error| Failure::from(&error))?;
     match loaded.config.output() {
-        OutputFormat::Text => emit(out, &created.id.to_string(), "the project's id")?,
+        OutputFormat::Text => emit(
+            out,
+            &crate::sanitized(created.id.to_string(), OutputFormat::Text)?,
+            "the project's id",
+        )?,
         OutputFormat::Json => {
             let response = engine
                 .project(&created.id)
                 .await
                 .map_err(|error| Failure::from(&error))?;
-            emit(out, &json(&response, "the project")?, "the project")?;
+            let rendered = crate::sanitized(json(&response, "the project")?, OutputFormat::Json)?;
+            emit(out, &rendered, "the project")?;
         }
     }
     Ok(EXIT_OK)
@@ -239,11 +254,15 @@ async fn regenerated(
     let regenerated = engine
         .regenerate(&regeneration, &answers, args.dry_run)
         .await
-        .map_err(refusal)?;
+        .map_err(|error| match refusal(error.clone()) {
+            Refusal::Failed(_) => Refusal::Failed(crate::write_failed(&engine, &error)),
+            other => other,
+        })?;
     let rendered = match loaded.config.output() {
         OutputFormat::Text => render::regenerated(&regenerated, args.dry_run),
         OutputFormat::Json => json(&regenerated, "the rendering")?,
     };
+    let rendered = crate::sanitized(rendered, loaded.config.output())?;
     emit(out, rendered.trim_end(), "the rendering")?;
     Ok(())
 }

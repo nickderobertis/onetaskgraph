@@ -10,6 +10,17 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, RootModel
 
 
+class StatusCategory(StrEnum):
+    StatusCategoryDraft = "draft"
+    StatusCategoryBacklog = "backlog"
+    StatusCategoryTodo = "todo"
+    StatusCategoryQueued = "queued"
+    StatusCategoryInProgress = "in-progress"
+    StatusCategoryDone = "done"
+    StatusCategoryCancelled = "cancelled"
+    StatusCategoryUnknown = "unknown"
+
+
 class FailureClass(StrEnum):
     FailureClassRefused = "refused"
     FailureClassTransient = "transient"
@@ -25,21 +36,10 @@ class SourceName(RootModel[str]):
     ]
 
 
-class StatusCategory(StrEnum):
-    StatusCategoryDraft = "draft"
-    StatusCategoryBacklog = "backlog"
-    StatusCategoryTodo = "todo"
-    StatusCategoryQueued = "queued"
-    StatusCategoryInProgress = "in-progress"
-    StatusCategoryDone = "done"
-    StatusCategoryCancelled = "cancelled"
-    StatusCategoryUnknown = "unknown"
-
-
 class DeliveryOutcomeWritten(BaseModel):
     from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
-    outcome: Literal["written"]
     to: Annotated[StatusCategory, Field(description="The category written.")]
+    outcome: Literal["written"]
 
 
 class DeliveryOutcomeUnchanged(BaseModel):
@@ -66,6 +66,10 @@ class Failure(BaseModel):
             description="What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`."
         ),
     ]
+    source: Annotated[
+        SourceName | None,
+        Field(description="The configured source the failure came from, or `null` when none did."),
+    ]
     message: Annotated[
         str,
         Field(
@@ -79,23 +83,19 @@ class Failure(BaseModel):
             ge=0,
         ),
     ]
-    source: Annotated[
-        SourceName | None,
-        Field(description="The configured source the failure came from, or `null` when none did."),
-    ]
 
 
 class DeliveryOutcomeFailed(BaseModel):
+    from_: Annotated[
+        StatusCategory | None,
+        Field(alias="from", description="The category it read, when it could be read."),
+    ] = None
     failure: Annotated[
         Failure,
         Field(
             description="Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
         ),
     ]
-    from_: Annotated[
-        StatusCategory | None,
-        Field(alias="from", description="The category it read, when it could be read."),
-    ] = None
     outcome: Literal["failed"]
 
 

@@ -10,31 +10,6 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel
 
 
-class BudgetSpent(BaseModel):
-    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
-    budget: Annotated[
-        str,
-        Field(description="The budget, as the source names it — `graphql`, `rest`."),
-    ]
-    lower_bound: Annotated[
-        bool,
-        Field(
-            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
-        ),
-    ]
-    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
-
-
-class Classification(StrEnum):
-    ClassificationPublic = "public"
-    ClassificationPrivate = "private"
-
-
-class FailureClass(StrEnum):
-    FailureClassRefused = "refused"
-    FailureClassTransient = "transient"
-
-
 class GlobalId(RootModel[str]):
     root: Annotated[
         str,
@@ -42,6 +17,43 @@ class GlobalId(RootModel[str]):
             description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
         ),
     ]
+
+
+class NativeId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true."
+        ),
+    ]
+
+
+class StatusCategory(StrEnum):
+    StatusCategoryDraft = "draft"
+    StatusCategoryBacklog = "backlog"
+    StatusCategoryTodo = "todo"
+    StatusCategoryQueued = "queued"
+    StatusCategoryInProgress = "in-progress"
+    StatusCategoryDone = "done"
+    StatusCategoryCancelled = "cancelled"
+    StatusCategoryUnknown = "unknown"
+
+
+class Priority(StrEnum):
+    PriorityNone = "none"
+    PriorityUrgent = "urgent"
+    PriorityHigh = "high"
+    PriorityMedium = "medium"
+    PriorityLow = "low"
+
+
+class Label(BaseModel):
+    id: Annotated[NativeId, Field(description="The source's own opaque identifier.")]
+    name: Annotated[str, Field(description="What a user filtering across sources actually types.")]
+    color: Annotated[
+        str | None,
+        Field(description="The source's own colour for the label, when it has one."),
+    ] = None
 
 
 class Location1(BaseModel):
@@ -67,23 +79,6 @@ class Location(RootModel[Location1 | Location2]):
     ]
 
 
-class NativeId(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true."
-        ),
-    ]
-
-
-class Priority(StrEnum):
-    PriorityNone = "none"
-    PriorityUrgent = "urgent"
-    PriorityHigh = "high"
-    PriorityMedium = "medium"
-    PriorityLow = "low"
-
-
 class Repository(RootModel[str]):
     root: Annotated[
         str,
@@ -93,43 +88,6 @@ class Repository(RootModel[str]):
     ]
 
 
-class SourceName(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="The name a configuration document gives one configured source.",
-            pattern="^[a-z0-9][a-z0-9-]*$",
-        ),
-    ]
-
-
-class Spent(BaseModel):
-    budgets: Annotated[
-        list[BudgetSpent],
-        Field(
-            description="What those requests spent, one entry per budget and unit, ordered by budget name."
-        ),
-    ]
-    requests: Annotated[
-        int,
-        Field(
-            description="How many HTTP requests those sources sent for this command.",
-            ge=0,
-        ),
-    ]
-
-
-class StatusCategory(StrEnum):
-    StatusCategoryDraft = "draft"
-    StatusCategoryBacklog = "backlog"
-    StatusCategoryTodo = "todo"
-    StatusCategoryQueued = "queued"
-    StatusCategoryInProgress = "in-progress"
-    StatusCategoryDone = "done"
-    StatusCategoryCancelled = "cancelled"
-    StatusCategoryUnknown = "unknown"
-
-
 class TaskRef(RootModel[str]):
     root: Annotated[
         str,
@@ -137,6 +95,11 @@ class TaskRef(RootModel[str]):
             description="One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`."
         ),
     ]
+
+
+class Classification(StrEnum):
+    ClassificationPublic = "public"
+    ClassificationPrivate = "private"
 
 
 class UpdatedField(StrEnum):
@@ -149,58 +112,139 @@ class UpdatedField(StrEnum):
     UpdatedFieldDependsOn = "depends-on"
 
 
-class WriteFallback(BaseModel):
-    read: Annotated[bool, Field(description="Always `true`: the write made one read.")]
-    reason: Annotated[
-        str, Field(description="Why it could not take what it needed from the cache.")
+class DeliveredWritten(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    deliverer: Annotated[
+        GlobalId,
+        Field(
+            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+        ),
+    ]
+    pruned: Annotated[
+        list[GlobalId],
+        Field(
+            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            validate_default=True,
+        ),
+    ] = []
+    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
+    to: Annotated[StatusCategory, Field(description="The category written.")]
+    outcome: Literal["written"]
+
+
+class DeliveredUnchanged(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    deliverer: Annotated[
+        GlobalId,
+        Field(
+            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+        ),
+    ]
+    pruned: Annotated[
+        list[GlobalId],
+        Field(
+            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            validate_default=True,
+        ),
+    ] = []
+    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
+    outcome: Literal["unchanged"]
+
+
+class DeliveredLeft(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    deliverer: Annotated[
+        GlobalId,
+        Field(
+            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+        ),
+    ]
+    pruned: Annotated[
+        list[GlobalId],
+        Field(
+            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            validate_default=True,
+        ),
+    ] = []
+    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
+    outcome: Literal["left"]
+
+
+class FailureClass(StrEnum):
+    FailureClassRefused = "refused"
+    FailureClassTransient = "transient"
+
+
+class SourceName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
+        ),
+    ]
+
+
+class BudgetSpent(BaseModel):
+    budget: Annotated[
+        str,
+        Field(description="The budget, as the source names it — `graphql`, `rest`."),
+    ]
+    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
+    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
+    lower_bound: Annotated[
+        bool,
+        Field(
+            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
+        ),
     ]
 
 
 class WritePartLanded(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
     part: Annotated[
         str,
         Field(
             description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
         ),
+    ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
     ]
     outcome: Literal["landed"]
 
 
 class WritePartRejected(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
     part: Annotated[
         str,
         Field(
             description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
         ),
     ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
     error: Annotated[str, Field(description="What the backend said.")]
-    outcome: Literal["rejected"]
     stale: Annotated[
         bool,
         Field(
             description="Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read."
         ),
     ] = False
+    outcome: Literal["rejected"]
 
 
 class WritePartUnknown(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
     part: Annotated[
         str,
         Field(
             description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
         ),
+    ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
     ]
     error: Annotated[str, Field(description="What went wrong.")]
     outcome: Literal["unknown"]
@@ -213,62 +257,29 @@ class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown
     ]
 
 
-class DeliveredWritten(BaseModel):
-    deliverer: Annotated[
-        GlobalId,
-        Field(
-            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
-        ),
+class WriteFallback(BaseModel):
+    read: Annotated[bool, Field(description="Always `true`: the write made one read.")]
+    reason: Annotated[
+        str, Field(description="Why it could not take what it needed from the cache.")
     ]
-    pruned: Annotated[
-        list[GlobalId],
-        Field(
-            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
-            validate_default=True,
-        ),
-    ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
-    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
-    outcome: Literal["written"]
-    to: Annotated[StatusCategory, Field(description="The category written.")]
 
 
-class DeliveredUnchanged(BaseModel):
-    deliverer: Annotated[
-        GlobalId,
-        Field(
-            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
-        ),
+class LocatorKind(StrEnum):
+    LocatorKindSource = "source"
+    LocatorKindItem = "item"
+    LocatorKindField = "field"
+    LocatorKindMetadataKey = "metadata-key"
+    LocatorKindComment = "comment"
+    LocatorKindPath = "path"
+    LocatorKindIdentity = "identity"
+
+
+class Status(BaseModel):
+    category: Annotated[
+        StatusCategory,
+        Field(description="The normalised value filters compare against."),
     ]
-    pruned: Annotated[
-        list[GlobalId],
-        Field(
-            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
-            validate_default=True,
-        ),
-    ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
-    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
-    outcome: Literal["unchanged"]
-
-
-class DeliveredLeft(BaseModel):
-    deliverer: Annotated[
-        GlobalId,
-        Field(
-            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
-        ),
-    ]
-    pruned: Annotated[
-        list[GlobalId],
-        Field(
-            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
-            validate_default=True,
-        ),
-    ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
-    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
-    outcome: Literal["left"]
+    name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
 class Failure(BaseModel):
@@ -285,6 +296,10 @@ class Failure(BaseModel):
             description="What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`."
         ),
     ]
+    source: Annotated[
+        SourceName | None,
+        Field(description="The configured source the failure came from, or `null` when none did."),
+    ]
     message: Annotated[
         str,
         Field(
@@ -298,47 +313,121 @@ class Failure(BaseModel):
             ge=0,
         ),
     ]
-    source: Annotated[
-        SourceName | None,
-        Field(description="The configured source the failure came from, or `null` when none did."),
+
+
+class Spent(BaseModel):
+    requests: Annotated[
+        int,
+        Field(
+            description="How many HTTP requests those sources sent for this command.",
+            ge=0,
+        ),
+    ]
+    budgets: Annotated[
+        list[BudgetSpent],
+        Field(
+            description="What those requests spent, one entry per budget and unit, ordered by budget name."
+        ),
     ]
 
 
-class Label(BaseModel):
-    color: Annotated[
+class WriteResult(BaseModel):
+    version: Annotated[
         str | None,
-        Field(description="The source's own colour for the label, when it has one."),
+        Field(
+            description="The item's version after the write, where the write's responses determine it."
+        ),
     ] = None
-    id: Annotated[NativeId, Field(description="The source's own opaque identifier.")]
-    name: Annotated[str, Field(description="What a user filtering across sources actually types.")]
+    parts: Annotated[
+        list[WritePart] | None,
+        Field(
+            description="One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`."
+        ),
+    ] = None
+    status: Annotated[
+        Status | None,
+        Field(
+            description="The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
+        ),
+    ] = None
+    priority: Annotated[
+        Priority | None,
+        Field(
+            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+        ),
+    ] = None
 
 
-class Status(BaseModel):
-    category: Annotated[
-        StatusCategory,
-        Field(description="The normalised value filters compare against."),
+class Locator1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    redacted: Literal[True]
+    kind: LocatorKind
+    ordinal: Annotated[int, Field(ge=1)]
+
+
+class Locator(RootModel[str | Locator1]):
+    root: Annotated[
+        str | Locator1,
+        Field(description="A screened locator: the string verbatim, or its redacted form."),
     ]
-    name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
 class Task(BaseModel):
-    classification: Annotated[
-        Classification,
+    id: Annotated[NativeId, Field(description="The source's own opaque identifier.")]
+    key: Annotated[
+        str | None,
         Field(
-            description="Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
+            description="The short handle the backend shows people, beside [`id`](Self::id) and never\ninstead of it — a Linear issue's `ENG-123`, a GitHub issue's `1043`.\n\n**It is human-facing and it may change.** A Linear issue moved between teams gets a\nnew identifier and a GitHub issue transferred between repositories gets a new\nnumber, so nothing stores this in place of [`id`](Self::id) and nothing matches on\nit: `id` is what everything stores and matches on, and this is what a person says\nout loud.\n\nAbsent by default, so a source that predates this field — and every source with no\nseparate handle of its own — reads as `None`, which means *this backend has no\nshort handle for this task* rather than *the handle is the id*. A source never\ncopies [`id`](Self::id) here.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a\ntask arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,\nand a destination ignores it."
         ),
-    ] = Classification.ClassificationPublic
+    ] = None
+    title: Annotated[str, Field(description="The one-line summary a user recognises the task by.")]
     content: Annotated[
         str | None, Field(description="The long-form body, when the source has one.")
+    ] = None
+    status: Annotated[Status, Field(description="The source's status, normalised and preserved.")]
+    priority: Annotated[
+        Priority,
+        Field(
+            description="The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
+        ),
+    ] = Priority.PriorityNone
+    labels: Annotated[
+        list[Label],
+        Field(
+            description="Inline rather than by id: a source returning a task already knows them."
+        ),
+    ]
+    project: Annotated[
+        NativeId | None,
+        Field(description="`None` is a first-class case — an orphan task — not an edge case."),
+    ] = None
+    url: Annotated[str | None, Field(description="Where a human can open this task.")] = None
+    location: Annotated[
+        Location | None,
+        Field(
+            description="Where this task is, when the source says (see [`Location`]).\n\nAbsent by default, so a source that predates this field — and every source that\nsimply does not say — reads as `None`, which means *the source did not say where\nthis is* rather than *this is nowhere*. It neither replaces nor derives from\n[`url`](Self::url), which goes on meaning exactly what it always did."
+        ),
     ] = None
     created_at: Annotated[
         AwareDatetime | None,
         Field(description="When the source says the task was created."),
     ] = None
-    delivered_by: Annotated[
-        list[TaskRef],
+    updated_at: Annotated[
+        AwareDatetime | None,
+        Field(description="When the source says the task last changed."),
+    ] = None
+    metadata: Annotated[
+        dict[str, JsonValue],
         Field(
-            description="Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
+            description="Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it."
+        ),
+    ] = {}
+    repositories: Annotated[
+        list[Repository],
+        Field(
+            description="Normalized repository origins this task concerns, in source order and without\nrepeats.",
             validate_default=True,
         ),
     ] = []
@@ -349,91 +438,29 @@ class Task(BaseModel):
             validate_default=True,
         ),
     ] = []
-    id: Annotated[NativeId, Field(description="The source's own opaque identifier.")]
-    key: Annotated[
-        str | None,
+    delivered_by: Annotated[
+        list[TaskRef],
         Field(
-            description="The short handle the backend shows people, beside [`id`](Self::id) and never\ninstead of it — a Linear issue's `ENG-123`, a GitHub issue's `1043`.\n\n**It is human-facing and it may change.** A Linear issue moved between teams gets a\nnew identifier and a GitHub issue transferred between repositories gets a new\nnumber, so nothing stores this in place of [`id`](Self::id) and nothing matches on\nit: `id` is what everything stores and matches on, and this is what a person says\nout loud.\n\nAbsent by default, so a source that predates this field — and every source with no\nseparate handle of its own — reads as `None`, which means *this backend has no\nshort handle for this task* rather than *the handle is the id*. A source never\ncopies [`id`](Self::id) here.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a\ntask arriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's key,\nand a destination ignores it."
-        ),
-    ] = None
-    labels: Annotated[
-        list[Label],
-        Field(
-            description="Inline rather than by id: a source returning a task already knows them."
-        ),
-    ]
-    location: Annotated[
-        Location | None,
-        Field(
-            description="Where this task is, when the source says (see [`Location`]).\n\nAbsent by default, so a source that predates this field — and every source that\nsimply does not say — reads as `None`, which means *the source did not say where\nthis is* rather than *this is nowhere*. It neither replaces nor derives from\n[`url`](Self::url), which goes on meaning exactly what it always did."
-        ),
-    ] = None
-    metadata: Annotated[
-        dict[str, JsonValue],
-        Field(
-            description="Caller-defined attributes, preserving their JSON types.\n\nKeys are free-form, with two reserved prefixes: `onetaskgraph.` belongs to this\nproduct — [`Repository::METADATA_KEY`] and [`DependencyEdge::RECORDED_KEY`] are\nthe two every source honours, and [`ItemKind::METADATA_KEY`] is one plugin's —\nand `onepipeline.` belongs to that consumer. Every other key is the caller's, and\na source returns it exactly as it holds it."
-        ),
-    ] = {}
-    priority: Annotated[
-        Priority,
-        Field(
-            description="The task's priority; `none` means none is set, and a source that cannot hold one\nreports `none`.\n\nDefaulted when a document omits it, so a task written before this field existed —\nand every task of a plugin that predates it — reads as [`Priority::None`]. Always\nwritten, so a reader never has to tell an absent member from a `none` one. Whether a\nsource can hold one at all is [`Capabilities::priority`](crate::Capabilities::priority),\nand the engine never hands a source declaring it cannot a priority other than `none`."
-        ),
-    ] = Priority.PriorityNone
-    project: Annotated[
-        NativeId | None,
-        Field(description="`None` is a first-class case — an orphan task — not an edge case."),
-    ] = None
-    repositories: Annotated[
-        list[Repository],
-        Field(
-            description="Normalized repository origins this task concerns, in source order and without\nrepeats.",
+            description="Every task that delivers this one, by qualified id: the reverse of [`Self::delivers`].\n\n**Owned by the store, not by a source record and not by a copy.** The engine keeps it\nin step whenever it writes a task's `delivers`, through\n[`TaskSource::set_delivered_by`](crate::TaskSource::set_delivered_by); a source holds\nand reports it, and a copy keeps the destination's own rather than taking the\nsource's. Empty by default and left out of the wire when empty, as `delivers` is.",
             validate_default=True,
         ),
     ] = []
-    status: Annotated[Status, Field(description="The source's status, normalised and preserved.")]
-    title: Annotated[str, Field(description="The one-line summary a user recognises the task by.")]
-    updated_at: Annotated[
-        AwareDatetime | None,
-        Field(description="When the source says the task last changed."),
-    ] = None
-    url: Annotated[str | None, Field(description="Where a human can open this task.")] = None
     version: Annotated[
         str | None,
         Field(
             description="The task's change token: an opaque value its source gives so a reader can tell whether\nthe task changed without reading it whole.\n\n**Two equal versions of one task from one source mean nothing in it has changed** — its\ntitle, body, status, priority, labels, project fields, metadata, edges and comments,\ncomments added, edited and deleted included. A source that cannot promise all of that\nfor a task leaves this absent, which means *always read it*. What each plugin keys its\ntoken on, and which change kinds it covers, is stated per plugin in\n`docs/plugin-protocol.md` §4.13d.\n\nOpaque to every caller: nothing compares one but for equality, and the one reader that\nlooks inside is the source that gave it, through\n[`TaskSource::order_versions`](crate::TaskSource::order_versions). Absent by default and left out of the wire when absent, so a source written\nbefore it existed is read as giving none.\n\n**Read-only.** A source derives it on a read and never stores one it is handed: a task\narriving on an [`ItemWrite`](crate::ItemWrite) may still hold its source's token, and a\ndestination ignores it."
         ),
     ] = None
-
-
-class WriteResult(BaseModel):
-    parts: Annotated[
-        list[WritePart] | None,
+    classification: Annotated[
+        Classification,
         Field(
-            description="One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`."
+            description="Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
         ),
-    ] = None
-    priority: Annotated[
-        Priority | None,
-        Field(
-            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
-        ),
-    ] = None
-    status: Annotated[
-        Status | None,
-        Field(
-            description="The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
-        ),
-    ] = None
-    version: Annotated[
-        str | None,
-        Field(
-            description="The item's version after the write, where the write's responses determine it."
-        ),
-    ] = None
+    ] = Classification.ClassificationPublic
 
 
 class DeliveredFailed(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     deliverer: Annotated[
         GlobalId,
         Field(
@@ -447,17 +474,16 @@ class DeliveredFailed(BaseModel):
             validate_default=True,
         ),
     ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    from_: Annotated[
+        StatusCategory | None,
+        Field(alias="from", description="The category it read, when it could be read."),
+    ] = None
     failure: Annotated[
         Failure,
         Field(
             description="Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
         ),
     ]
-    from_: Annotated[
-        StatusCategory | None,
-        Field(alias="from", description="The category it read, when it could be read."),
-    ] = None
     outcome: Literal["failed"]
 
 
@@ -468,38 +494,34 @@ class Delivered(RootModel[DeliveredWritten | DeliveredUnchanged | DeliveredLeft 
     ]
 
 
-class TaskUpdated(BaseModel):
-    delivered: Annotated[
-        list[Delivered],
+class SideEffect(BaseModel):
+    item: Annotated[Locator, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Locator,
         Field(
-            description="As `set_task_status` reports it; re-evaluated whenever `status` or `delivers` was\nnamed, empty otherwise."
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
         ),
     ]
-    fallback: Annotated[
-        WriteFallback | None,
+
+
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
         Field(
-            description="That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
         ),
-    ] = None
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
+    ]
+
+
+class TaskUpdated(BaseModel):
     id: Annotated[GlobalId, Field(description="The task updated.")]
-    projection: Annotated[
-        GlobalId | None,
-        Field(
-            description="The public projection a written status category was mirrored to — absent when the\nupdate wrote no status, and for a task with no projection."
-        ),
-    ] = None
-    result: Annotated[
-        WriteResult | None,
-        Field(
-            description="What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
-        ),
-    ] = None
-    spent: Annotated[
-        Spent | None,
-        Field(
-            description="What the source's meter says this call spent, as `CopyReport::spent` — and absent,\nnever zero, when the source does not meter its own requests."
-        ),
-    ] = None
     task: Annotated[
         Task,
         Field(
@@ -510,3 +532,34 @@ class TaskUpdated(BaseModel):
         list[UpdatedField],
         Field(description="The fields the source actually wrote — empty when nothing differed."),
     ]
+    delivered: Annotated[
+        list[Delivered],
+        Field(
+            description="As `set_task_status` reports it; re-evaluated whenever `status` or `delivers` was\nnamed, empty otherwise."
+        ),
+    ]
+    spent: Annotated[
+        Spent | None,
+        Field(
+            description="What the source's meter says this call spent, as `CopyReport::spent` — and absent,\nnever zero, when the source does not meter its own requests."
+        ),
+    ] = None
+    result: Annotated[
+        WriteResult | None,
+        Field(
+            description="What each mutation an expected write sent came to — present when the write was made\nwith `--expect` on a source that reports its writes' parts."
+        ),
+    ] = None
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That an expected write read its target first, and why — absent when it sent only its\nmutations, and for a write made without `--expect`."
+        ),
+    ] = None
+    projection: Annotated[
+        GlobalId | None,
+        Field(
+            description="The public projection a written status category was mirrored to — absent when the\nupdate wrote no status, and for a task with no projection."
+        ),
+    ] = None
+    sanitization: Sanitization | None = None

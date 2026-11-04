@@ -192,6 +192,9 @@ test("Nx's own hash file details retain every original cached target's file inpu
     "scripts/ci-pr-base.sh",
     ".github/macos-policy.mjs",
     ".github/policy/tests/policy.test.mjs",
+    // Upstream PR #3875 replaces v1 with v4. Restore v1 only in this hash
+    // fixture to prove its original path is still covered; v4 is mutated below.
+    "crates/onetaskgraph-core/src/engine/boundary/onevcs-boundary-schema-v1.json",
   ];
   for (const file of retiredInputs) {
     assert.equal(existsSync(join(root, file)), false, `${file}: intentionally retired`);
@@ -301,8 +304,15 @@ test("every canonical ecosystem and named raw input invalidates real Nx hashes o
                 : (body) => `${body}\n# Nx input mutation\n`,
       };
     });
+  const schema = "crates/onetaskgraph-core/src/engine/boundary/onevcs-boundary-schema-v4.json";
+  assert.ok(initial["onetaskgraph-core:test"].inputs.files.includes(schema));
   assert.ok(definition.namedInputs.default.includes("{projectRoot}/**/*"));
   cases.push(
+    {
+      file: schema,
+      rule: "current boundary schema",
+      edit: (body) => `${body}\n`,
+    },
     {
       file: "crates/onetaskgraph-core/src/lib.rs",
       rule: "{projectRoot}/**/*",

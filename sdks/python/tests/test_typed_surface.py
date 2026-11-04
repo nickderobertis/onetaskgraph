@@ -67,6 +67,7 @@ from onetaskgraph_sdk import (
     Regenerated,
     RenderedTemplate,
     RepositoryVisibility,
+    SanitizeDryRun,
     SourceCacheConfig,
     SourceFailure,
     SourceListing,
@@ -78,6 +79,7 @@ from onetaskgraph_sdk import (
     StatusMapping,
     StatusNamesReport,
     StatusOptionsReport,
+    SweepReport,
     TaskAssetNames,
     TaskContentSet,
     TaskDetail,
@@ -224,6 +226,9 @@ from onetaskgraph_sdk._generated.models import (
     RepositoryVisibility as ModelsRepositoryVisibility,
 )
 from onetaskgraph_sdk._generated.models import (
+    SanitizeDryRun as ModelsSanitizeDryRun,
+)
+from onetaskgraph_sdk._generated.models import (
     SourceCacheConfig as ModelsSourceCacheConfig,
 )
 from onetaskgraph_sdk._generated.models import (
@@ -255,6 +260,9 @@ from onetaskgraph_sdk._generated.models import (
 )
 from onetaskgraph_sdk._generated.models import (
     StatusOptionsReport as ModelsStatusOptionsReport,
+)
+from onetaskgraph_sdk._generated.models import (
+    SweepReport as ModelsSweepReport,
 )
 from onetaskgraph_sdk._generated.models import (
     TaskAssetNames as ModelsTaskAssetNames,
@@ -375,6 +383,7 @@ FROM_ROOT: dict[str, object] = {
     "Regenerated": Regenerated,
     "RenderedTemplate": RenderedTemplate,
     "RepositoryVisibility": RepositoryVisibility,
+    "SanitizeDryRun": SanitizeDryRun,
     "SourceCacheConfig": SourceCacheConfig,
     "SourceFailure": SourceFailure,
     "SourceListing": SourceListing,
@@ -386,6 +395,7 @@ FROM_ROOT: dict[str, object] = {
     "StatusNamesReport": StatusNamesReport,
     "StatusOptionsReport": StatusOptionsReport,
     "StatusesReconciled": StatusesReconciled,
+    "SweepReport": SweepReport,
     "TaskAssetNames": TaskAssetNames,
     "TaskContentSet": TaskContentSet,
     "TaskDetail": TaskDetail,
@@ -448,6 +458,7 @@ FROM_MODELS: dict[str, object] = {
     "Regenerated": ModelsRegenerated,
     "RenderedTemplate": ModelsRenderedTemplate,
     "RepositoryVisibility": ModelsRepositoryVisibility,
+    "SanitizeDryRun": ModelsSanitizeDryRun,
     "SourceCacheConfig": ModelsSourceCacheConfig,
     "SourceFailure": ModelsSourceFailure,
     "SourceListing": ModelsSourceListing,
@@ -459,6 +470,7 @@ FROM_MODELS: dict[str, object] = {
     "StatusNamesReport": ModelsStatusNamesReport,
     "StatusOptionsReport": ModelsStatusOptionsReport,
     "StatusesReconciled": ModelsStatusesReconciled,
+    "SweepReport": ModelsSweepReport,
     "TaskAssetNames": ModelsTaskAssetNames,
     "TaskContentSet": ModelsTaskContentSet,
     "TaskDetail": ModelsTaskDetail,
@@ -585,6 +597,7 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "QueryResponseOfSearchHit": QueryResponseOfSearchHit,
     "Regenerated": Regenerated,
     "RenderedTemplate": RenderedTemplate,
+    "SanitizeDryRun": SanitizeDryRun,
     "SourceCacheConfig": SourceCacheConfig,
     "SourceFailure": SourceFailure,
     "SourceListing": SourceListing,
@@ -594,6 +607,7 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "StatusNamesReport": StatusNamesReport,
     "StatusOptionsReport": StatusOptionsReport,
     "StatusesReconciled": StatusesReconciled,
+    "SweepReport": SweepReport,
     "TaskAssetNames": TaskAssetNames,
     "TaskContentSet": TaskContentSet,
     "TaskDetail": TaskDetail,
@@ -650,6 +664,7 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "QueryResponseOfSearchHit": ModelsQueryResponseOfSearchHit,
     "Regenerated": ModelsRegenerated,
     "RenderedTemplate": ModelsRenderedTemplate,
+    "SanitizeDryRun": ModelsSanitizeDryRun,
     "SourceCacheConfig": ModelsSourceCacheConfig,
     "SourceFailure": ModelsSourceFailure,
     "SourceListing": ModelsSourceListing,
@@ -659,6 +674,7 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "StatusNamesReport": ModelsStatusNamesReport,
     "StatusOptionsReport": ModelsStatusOptionsReport,
     "StatusesReconciled": ModelsStatusesReconciled,
+    "SweepReport": ModelsSweepReport,
     "TaskAssetNames": ModelsTaskAssetNames,
     "TaskContentSet": ModelsTaskContentSet,
     "TaskDetail": ModelsTaskDetail,

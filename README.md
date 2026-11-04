@@ -2532,6 +2532,117 @@ references among `paths` — and **passes it only by exiting 0 with `{"verdict":
 refusal names where the check stopped and never what it found; no command, a failure, or any
 other answer is unavailable, which never passes.
 
+**Replacing a declared term instead of refusing it.** With a `sanitize_command`, every write
+the boundary screens is put to it **in place of** `check_command` — the same one call, no second
+process — and what it answers is what is written:
+
+```yaml
+write_policy:
+  visibility_command: [onevcs, boundary, inspect, --input, "-"]
+  check_command: [onevcs, boundary, check, --destination, public, --input, "-"]
+  sanitize_command: [onevcs, boundary, sanitize, --input, "-"]
+  terms_command: [onevcs, boundary, terms, --input, "-"]
+  replacements:
+    - {term: old-name, with: a private repository}
+    - {term: other-name, reject: true}
+```
+
+The command is handed the write split into what may be rewritten — content and bodies, titles,
+label names, comment bodies, metadata string values and rendering answers' string values — and,
+under `fixed`, what is checked and never rewritten: `repositories`, status, priority, every id
+(a project, a parent, `delivers`, `delivered_by`, a dependency's far end), metadata keys and
+asset names. A term left in a fixed entry refuses the write, nothing written; a destination
+declared private receives the original text. An id a create makes up from a title, or a copy
+from its source's id, is made up as written, and the store's own `onetaskgraph.origin` and
+`onetaskgraph.copies` values are written replaced like any other: a re-copy of an item whose id
+carries a replaced term finds the item it copied before by its link, or — when the origin
+search for the id as it stands finds nothing — by one more sanitisation of that origin and a
+search for its replaced spelling, made only under a configured `sanitize_command`. The store matches no term itself: onevcs folds the caller's layer
+over every declaration level it reads.
+
+`replacements` is the store's own replacement layer, sent with every sanitisation above every
+declaration level, a later entry winning. It takes every layer — the document,
+`ONETASKGRAPH_WRITE_POLICY__REPLACEMENTS__<n>__TERM` / `__WITH` / `__REJECT`, and `--set` — and
+`config show` names each entry's layer. Two global flags append entries after it for one
+invocation: `--replace TERM=WITH`, split at the first `=`, and `--reject TERM`, each repeatable
+and kept in the order typed. `replacements`, `--replace` or `--reject` with no
+`sanitize_command` is refused at load, naming the key, so nobody believes replacement is on
+when it is not; with no `sanitize_command` every write is screened exactly as before, through
+`check_command`.
+
+A write that replaced anything answers, under `--json`, a `sanitization` member beside what it
+already answered — `{"replaced": <spans>, "side_effect": [{"item", "field"}], "dry_run": false}`
+— absent when nothing was replaced or sanitised, so every other answer is byte for byte what it
+was.
+
+**A term already on the item.** While the policy can rewrite — a `sanitize_command`, or a
+linking caller's own policy — a narrow write to an existing task (`priority set`, `status set`,
+`content set`, `metadata set`, `update`, a comment) is screened in its one call together with
+the task and every comment on it as stored. A term an older store left there is rewritten
+before the write is made: the task and its comments are written back, conditional on the
+version the read answered — a task that moved meanwhile is read again once and sanitised from
+that fresh record, keeping what changed; one that moves again is refused as
+`sanitize-conflict` — and each field and comment changed is named under
+`side_effect`, a human answer adding one `sanitised <item> <field>` line per change after
+today's line. This guard reads immediately before writing; the plugin interface supplies no
+atomic compare-and-set. An edit arriving between that final read and the write can still be
+overwritten. `--sanitize-dry-run` writes nothing and answers `{"would_pass",
+"sanitization"}`. A term replacement cannot fix is refused saying it was already on
+the item before this write and which kind of field replacement cannot fix (`repositories`, an
+id, a term no replacement is declared for). An item whose stored `repositories` already name a
+private repository is private, and a narrow write of it to a source not declared private keeps
+the classification refusal's kind and words and adds that its `repositories` already named a
+private repository before this write, that replacement cannot fix `repositories`, and the two
+remedies: remove that repository from its `repositories`, or move it to a source declared
+private. Both refusals' failure documents carry `"predates_write": true`, absent otherwise; no
+sanitisation is attempted for the classification refusal.
+
+**Sweeping a source: `onetaskgraph sources sanitize <SOURCE> [--dry-run] [--complete]
+[--json]`.** It asks `terms_command` for the scope's terms — refused, naming it, without one —
+and covers tasks and their comments. It does not enumerate projects or documents; their
+ordinary screened writes still sanitise them. It **searches rather than lists**: one narrowing
+text search per term over the source's tasks,
+reading only the items those return, each with its comments, putting each to one sanitisation
+before rewriting it through the same version-checked write. A search cannot establish three
+classes — a hit only in stored metadata (the store's own `onetaskgraph.origin` and
+`onetaskgraph.copies` values included), one only in a comment, and a spelling the policy matches
+(an NFKC variant, a zero-width character inside a term) that a backend's index does not — so the
+report lists each it did not cover under `coverage.uncovered`, and the sweep **exits 3** rather
+than claim clean task coverage. `--complete` reads every task once, a page at a time, each
+page's items decided and written before the next is asked for, covering all three; a source
+whose requests spend no quota, a folder of Markdown, is always read whole; one whose request
+count cannot be read is searched, as one spending a shared allowance is. `--dry-run` sends
+every search and read and no write. These are source-plugin API pages: GitHub's provider
+may prefetch HTTP pages into its per-command cache before returning its first caller page.
+
+```json
+{"source": "plans", "dry_run": false, "complete": false,
+ "requests": {"total": 30, "page_operations": 12, "detail_operations": 9, "rewrite_operations": 9},
+ "coverage": {"complete": false, "uncovered": ["metadata", "comments", "normalized-spellings"]},
+ "items": [{"id": "plans:PVTI_x", "kind": "task", "outcome": "rewritten",
+            "fields": [{"field": "content", "outcome": "rewritten"}]}]}
+```
+
+`outcome` is `rewritten`, `would-rewrite`, `unchanged`, `unfixable`, `conflict` or `not-a-match`
+(a hit the policy does not confirm). There is an entry for every item a search returned and for
+every item a whole read found carrying a term, and none for a term-free item read whole. Exit 0
+when coverage is complete and everything matched was fixed or needed nothing; 1 when anything is
+left unfixable or in conflict; 2 when the policy could not decide; 3 when coverage is incomplete
+and nothing else failed. `requests.total` is the source's own request accounting, zero for a
+folder. The three operation counters count search/list pages, detail batches or comment walks,
+and rewritten items; they do not partition that total. Guard reads and individual comment
+writes can send additional requests inside those operations. No term, nor any query built
+from one, is written to the report, standard error, a log or the cache.
+
+**Diagnostics name records by screened locators.** The source's name, a qualified item id, a
+metadata key and a comment id are put to the write's own sanitisation as `locators` and never
+rewritten; one that passes prints verbatim, and one carrying a term prints only as
+`{"redacted": true, "kind": "item", "ordinal": 2}` — `<redacted item 2>` in a human answer —
+ordinals counted from 1 per report or answer, its record `unfixable` with `"why": "identifier
+carries a private term"`, and the command exits 1. A policy that cannot decide redacts every
+locator, and the sweep exits 2. A linking caller's policy that implements only the two methods
+that existed before cannot say which entry it stopped at, so its refusal redacts every locator.
+
 **A task owns its classification.** Who may read a task is its own declaration and every
 repository it names, and nothing else: all-public repositories leave it public unless it says
 `private`, and any private or unknown one makes it private. The project it is filed under never

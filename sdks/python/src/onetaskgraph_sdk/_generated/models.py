@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from .regenerated import Regenerated as Regenerated
     from .rendered_template import RenderedTemplate as RenderedTemplate
     from .repository_visibility import RepositoryVisibility as RepositoryVisibility
+    from .sanitize_dry_run import SanitizeDryRun as SanitizeDryRun
     from .source_cache_config import SourceCacheConfig as SourceCacheConfig
     from .source_failure import SourceFailure as SourceFailure
     from .source_listing import SourceListing as SourceListing
@@ -62,6 +63,7 @@ if TYPE_CHECKING:
     from .status_names_report import StatusNamesReport as StatusNamesReport
     from .status_options_report import StatusOptionsReport as StatusOptionsReport
     from .statuses_reconciled import StatusesReconciled as StatusesReconciled
+    from .sweep_report import SweepReport as SweepReport
     from .task_asset_names import TaskAssetNames as TaskAssetNames
     from .task_content_set import TaskContentSet as TaskContentSet
     from .task_detail import TaskDetail as TaskDetail
@@ -127,6 +129,7 @@ __all__ = [
     "Regenerated",
     "RenderedTemplate",
     "RepositoryVisibility",
+    "SanitizeDryRun",
     "SourceCacheConfig",
     "SourceFailure",
     "SourceListing",
@@ -138,6 +141,7 @@ __all__ = [
     "StatusNamesReport",
     "StatusOptionsReport",
     "StatusesReconciled",
+    "SweepReport",
     "TaskAssetNames",
     "TaskContentSet",
     "TaskDetail",
@@ -199,6 +203,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "Regenerated": ("regenerated", "Regenerated"),
     "RenderedTemplate": ("rendered_template", "RenderedTemplate"),
     "RepositoryVisibility": ("repository_visibility", "RepositoryVisibility"),
+    "SanitizeDryRun": ("sanitize_dry_run", "SanitizeDryRun"),
     "SourceCacheConfig": ("source_cache_config", "SourceCacheConfig"),
     "SourceFailure": ("source_failure", "SourceFailure"),
     "SourceListing": ("source_listing", "SourceListing"),
@@ -210,6 +215,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "StatusNamesReport": ("status_names_report", "StatusNamesReport"),
     "StatusOptionsReport": ("status_options_report", "StatusOptionsReport"),
     "StatusesReconciled": ("statuses_reconciled", "StatusesReconciled"),
+    "SweepReport": ("sweep_report", "SweepReport"),
     "TaskAssetNames": ("task_asset_names", "TaskAssetNames"),
     "TaskContentSet": ("task_content_set", "TaskContentSet"),
     "TaskDetail": ("task_detail", "TaskDetail"),

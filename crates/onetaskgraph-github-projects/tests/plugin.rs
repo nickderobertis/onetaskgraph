@@ -2931,8 +2931,25 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     let nodes = shown[offset.min(end)..end]
         .iter()
         .map(|item| {
+            let mut content = item.content(asked);
+            if query.contains("comments(first:$commentFirst)") && item.typename == "Issue" {
+                content["comments"] = comment_connection(
+                    &state,
+                    &item.content_id,
+                    &Value::Null,
+                    variables["commentFirst"]
+                        .as_u64()
+                        .expect("comment page size") as usize,
+                );
+            }
+            if query.contains("blockedBy(first:$nestedFirst)") && item.typename == "Issue" {
+                content["blockedBy"] = json!({
+                    "nodes": related_issues(&state, state.blocked_by.get(&item.content_id).cloned().unwrap_or_default()),
+                    "pageInfo": {"hasNextPage":false,"endCursor":null},
+                });
+            }
             json!({"id":item.item_id,"fieldValues":item.field_values(&options),
-                   "content":item.content(asked)})
+                   "content":content})
         })
         .collect::<Vec<_>>();
     json!({"owner":{"projectV2":{"id":"PVT_board","title":"Roadmap","fields":state.fields(),
@@ -23268,4 +23285,363 @@ async fn a_held_update_goes_out_before_the_next_request_and_a_second_lands_after
         "third",
         "the later update landed last"
     );
+}
+
+#[tokio::test]
+async fn board_listing_pages_carry_first_comments_without_detail_requests() {
+    let fixture = board(
+        (0..205)
+            .map(|n| Item::issue(&format!("I_{n}"), "work"))
+            .collect(),
+    );
+    for n in 0..205 {
+        fixture
+            .state
+            .lock()
+            .unwrap()
+            .comment(&format!("I_{n}"), Some("writer"), "first");
+        fixture
+            .state
+            .lock()
+            .unwrap()
+            .comment(&format!("I_{n}"), Some("writer"), "second");
+    }
+    let source = source(&fixture);
+    let mut listing = page(100);
+    let mut ids = Vec::new();
+    loop {
+        let read = source
+            .query_task_details(&TaskQuery::default(), &listing, Some(&page(1)))
+            .await
+            .expect("board page with comments");
+        for item in read.items {
+            ids.push(item.task.id.clone());
+            let dependencies = source
+                .task_dependencies(&item.task.id, Direction::DependsOn, &page(100))
+                .await
+                .expect("dependencies carried by listing");
+            assert!(dependencies.items.is_empty());
+            let comments = item
+                .comments
+                .expect("requested comments")
+                .expect("read comments")
+                .expect("task exists");
+            assert_eq!(comments.items.len(), 1);
+            assert_eq!(comments.items[0].body.as_str(), "first");
+            assert!(
+                comments.next.is_some(),
+                "the caller can continue this task's comments"
+            );
+        }
+        listing.cursor = read.next;
+        if listing.cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(
+        ids,
+        (0..205)
+            .map(|n| NativeId(format!("I_{n}")))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(fixture.requests("board"), 3);
+    assert_eq!(
+        fixture.state.lock().unwrap().documents.len(),
+        3,
+        "listing pages are the only requests"
+    );
+}
+
+#[tokio::test]
+async fn comment_listings_refuse_unsupported_requests_and_recover_with_a_draft_failure_beside_the_task()
+ {
+    let fixture = board(vec![
+        Item::draft("D_note", "note"),
+        Item::issue("I_work", "work"),
+    ]);
+    let source = source(&fixture);
+    let later_comments = PageRequest {
+        limit: 20,
+        cursor: Some(Cursor("20".into())),
+    };
+    let failure = source
+        .query_task_details(&TaskQuery::default(), &page(100), Some(&later_comments))
+        .await
+        .expect_err("a listing cannot resume every task at one comment cursor");
+    assert!(matches!(failure, SourceError::Refused { .. }));
+    let active = TaskQuery {
+        commented_since: Some(chrono::Utc::now()),
+        ..TaskQuery::default()
+    };
+    assert!(matches!(
+        source
+            .query_task_details(&active, &page(100), Some(&page(20)))
+            .await,
+        Err(SourceError::Refused { .. })
+    ));
+    assert!(
+        fixture.state.lock().unwrap().documents.is_empty(),
+        "refused before any read"
+    );
+    let read = source
+        .query_task_details(&TaskQuery::default(), &page(100), Some(&page(20)))
+        .await
+        .expect("a fresh listing is still possible");
+    assert_eq!(read.items.len(), 2);
+    assert_eq!(read.items[0].task.id.0, "D_note");
+    assert!(matches!(
+        read.items[0].comments,
+        Some(Err(SourceError::Refused { .. }))
+    ));
+    assert!(
+        read.items[1]
+            .comments
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    assert_eq!(fixture.requests("board"), 1);
+}
+
+#[tokio::test]
+async fn comment_listing_filters_can_leave_an_empty_page_with_a_continuation() {
+    let fixture = board(vec![
+        Item::issue("I_other", "other"),
+        Item::pull_request("PR_first"),
+        Item::issue("I_second", "wanted"),
+    ]);
+    let source = source(&fixture);
+    let query = TaskQuery {
+        text: Some(TextQuery {
+            terms: "wanted".into(),
+            fields: TextFields::Title,
+        }),
+        ..TaskQuery::default()
+    };
+    let first = source
+        .query_task_details(&query, &page(2), Some(&page(20)))
+        .await
+        .unwrap();
+    assert!(first.items.is_empty());
+    let next = PageRequest {
+        limit: 1,
+        cursor: Some(first.next.expect("unread board page")),
+    };
+    let second = source
+        .query_task_details(&query, &next, Some(&page(20)))
+        .await
+        .unwrap();
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(second.items[0].task.id.0, "I_second");
+    assert!(second.next.is_none());
+    assert_eq!(fixture.requests("board"), 2);
+    let ordinary = source
+        .query_tasks(&TaskQuery::default(), &page(1))
+        .await
+        .unwrap();
+    let details = source
+        .query_task_details(&TaskQuery::default(), &page(1), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        details
+            .items
+            .iter()
+            .map(|item| &item.task)
+            .collect::<Vec<_>>(),
+        ordinary.items.iter().collect::<Vec<_>>()
+    );
+    assert!(ordinary.next.is_some());
+    assert_eq!(details.next, ordinary.next);
+    assert!(details.items.iter().all(|item| item.comments.is_none()));
+}
+
+#[tokio::test]
+async fn comment_listing_validates_before_io_and_reads_at_board_consistency() {
+    let fixture = board(vec![
+        Item::issue("I_visible", "visible"),
+        Item::issue("I_lagging", "lagging"),
+    ]);
+    fixture.state.lock().unwrap().items_connection_behind_from = Some(1);
+    let source = source(&fixture);
+    for (tasks, comments, query) in [
+        (page(0), page(20), TaskQuery::default()),
+        (page(100), page(0), TaskQuery::default()),
+        (
+            page(100),
+            page(20),
+            TaskQuery {
+                text: Some(TextQuery {
+                    terms: "!!!".into(),
+                    fields: TextFields::Title,
+                }),
+                ..TaskQuery::default()
+            },
+        ),
+    ] {
+        assert!(
+            source
+                .query_task_details(&query, &tasks, Some(&comments))
+                .await
+                .is_err()
+        );
+    }
+    assert!(fixture.documents().is_empty());
+    let read = source
+        .query_task_details(&TaskQuery::default(), &page(100), Some(&page(20)))
+        .await
+        .unwrap();
+    assert_eq!(read.items.len(), 1);
+    assert_eq!(read.items[0].task.id.0, "I_visible");
+    assert_eq!(fixture.requests("search"), 0);
+    let ordinary = source
+        .query_tasks(&TaskQuery::default(), &page(100))
+        .await
+        .unwrap();
+    assert_eq!(
+        ordinary.items.len(),
+        2,
+        "ordinary listing still completes the lagging board with search"
+    );
+}
+
+#[tokio::test]
+async fn comment_listing_reports_missing_boards_and_malformed_pages_without_losing_tasks() {
+    let missing = raw_server("200 OK", r#"{"data":{"owner":null}}"#);
+    assert!(matches!(
+        configured(&missing, json!({}))
+            .query_task_details(&TaskQuery::default(), &page(100), Some(&page(20)))
+            .await,
+        Err(SourceError::Refused { .. })
+    ));
+    let mut board: Value = serde_json::from_str(include_str!("fixtures/project.json")).unwrap();
+    let nodes = board
+        .pointer_mut("/data/owner/projectV2/items/nodes")
+        .unwrap()
+        .as_array_mut()
+        .unwrap();
+    // The committed board includes real tasks and projects. Missing comment connections
+    // must stay failures on the tasks, rather than becoming successful empty comments.
+    for node in nodes {
+        node["content"]["comments"] = json!({"nodes":[],"pageInfo":{"hasNextPage":false}});
+    }
+    let nodes = board
+        .pointer_mut("/data/owner/projectV2/items/nodes")
+        .unwrap()
+        .as_array_mut()
+        .unwrap();
+    let broken = nodes
+        .iter_mut()
+        .find(|node| node["content"]["id"] == "I_task")
+        .unwrap();
+    broken["content"]
+        .as_object_mut()
+        .unwrap()
+        .remove("comments");
+    let endpoint = raw_server("200 OK", &board.to_string());
+    let read = configured(&endpoint, json!({}))
+        .query_task_details(&TaskQuery::default(), &page(100), Some(&page(20)))
+        .await
+        .unwrap();
+    assert!(read.items.iter().any(|item| item.task.id.0 == "I_task"
+        && matches!(item.comments, Some(Err(SourceError::Malformed { .. })))));
+    assert!(
+        read.items
+            .iter()
+            .any(|item| matches!(item.comments, Some(Ok(Some(_)))))
+    );
+    board["data"]["owner"]["projectV2"]["items"]["pageInfo"] =
+        json!({"hasNextPage":true,"endCursor":"same"});
+    let endpoint = raw_server("200 OK", &board.to_string());
+    let request = PageRequest {
+        limit: 100,
+        cursor: Some(Cursor("same".into())),
+    };
+    assert!(matches!(
+        configured(&endpoint, json!({}))
+            .query_task_details(&TaskQuery::default(), &request, Some(&page(20)))
+            .await,
+        Err(SourceError::Malformed { .. })
+    ));
+}
+
+#[tokio::test]
+async fn listed_comment_pages_authorize_writes_only_when_the_page_is_complete() {
+    for comment_limit in [1, 100] {
+        let fixture = board(vec![Item::issue("I_task", "work")]);
+        let first = fixture.commented("I_task", Some("writer"), "first");
+        let second = fixture.commented("I_task", Some("writer"), "second");
+        let reader = source(&fixture);
+        let listed = reader
+            .query_task_details(
+                &TaskQuery::default(),
+                &page(100),
+                Some(&page(comment_limit)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(listed.items.len(), 1);
+        let detail = &listed.items[0];
+        let comments = detail
+            .comments
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap();
+        assert_eq!(comments.next.is_some(), comment_limit == 1);
+
+        // A later writer takes the context through the public plugin contract. A partial
+        // page must not tell it that the second comment is absent from this issue.
+        let context = reader.write_context(&detail.task.id).unwrap();
+        let writer = source(&fixture);
+        assert!(writer.prime_write(&detail.task.id, &context, None));
+        let edited = writer
+            .edit_comment(&detail.task.id, &native(&second), &comment_body("edited"))
+            .await
+            .unwrap()
+            .expect("the second comment exists even if the page omitted it");
+        assert_eq!(edited.id, native(&second));
+        assert_eq!(edited.body, "edited");
+        assert!(
+            writer
+                .edit_comment(&detail.task.id, &native("missing"), &comment_body("never"))
+                .await
+                .unwrap()
+                .is_none(),
+            "an absent comment never authorizes a mutation"
+        );
+        let held = fixture.comments_on("I_task");
+        assert_eq!(held.len(), 2);
+        assert_eq!(
+            held.iter()
+                .find(|comment| comment.id == first)
+                .unwrap()
+                .body,
+            "first"
+        );
+        assert_eq!(
+            held.iter()
+                .find(|comment| comment.id == second)
+                .unwrap()
+                .body,
+            "edited"
+        );
+        assert_eq!(fixture.requests("updateIssueComment"), 1);
+        assert_eq!(
+            fixture
+                .documents()
+                .iter()
+                .filter(|document| *document == graphql::COMMENT_ISSUE)
+                .count(),
+            if comment_limit == 1 { 2 } else { 0 },
+            "only a complete page can replace the ownership reads, including for an absent comment"
+        );
+    }
 }

@@ -20,6 +20,7 @@ class SourceName(RootModel[str]):
 
 
 class ClearedCache(BaseModel):
+    source: Annotated[SourceName, Field(description="The source whose cache it is.")]
     dir: Annotated[str, Field(description="The directory it lives in.")]
     entries: Annotated[
         int,
@@ -28,7 +29,6 @@ class ClearedCache(BaseModel):
             ge=0,
         ),
     ]
-    source: Annotated[SourceName, Field(description="The source whose cache it is.")]
 
 
 class CacheCleared(BaseModel):

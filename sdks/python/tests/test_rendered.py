@@ -232,7 +232,7 @@ def test_a_loader_document_names_the_template_and_body_with_answers_is_refused(
         run(client.document_create("notes", "P-1", "Both", body_file="b.md", body="x"))
     with pytest.raises(TypeError, match="body is a int, not a string"):
         # Deliberately outside the declared type, as a caller whose values reached it untyped.
-        run(client.task_create("notes", "P-1", "Typed", body=7))  # ty: ignore[invalid-argument-type]
+        run(client.task_create("notes", "P-1", "Typed", body=7))  # ty: ignore[no-matching-overload]
     with pytest.raises(TypeError, match="body and answers both go to standard input"):
         run(
             client.task_create(

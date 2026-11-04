@@ -7,7 +7,52 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel
+
+
+class IssueRef(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="One issue of one repository, as `owner/name#N`.",
+            pattern="^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]{0,18}$",
+        ),
+    ]
+
+
+class SourceName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
+        ),
+    ]
+
+
+class GlobalId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
+        ),
+    ]
+
+
+class ItemKind(StrEnum):
+    ItemKindTask = "task"
+    ItemKindProject = "project"
+
+
+class StatusCategory(StrEnum):
+    StatusCategoryDraft = "draft"
+    StatusCategoryBacklog = "backlog"
+    StatusCategoryTodo = "todo"
+    StatusCategoryQueued = "queued"
+    StatusCategoryInProgress = "in-progress"
+    StatusCategoryDone = "done"
+    StatusCategoryCancelled = "cancelled"
+    StatusCategoryUnknown = "unknown"
 
 
 class CompleteAction(StrEnum):
@@ -24,52 +69,8 @@ class FailureClass(StrEnum):
     FailureClassTransient = "transient"
 
 
-class GlobalId(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
-        ),
-    ]
-
-
-class IssueRef(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="One issue of one repository, as `owner/name#N`.",
-            pattern="^[A-Za-z0-9-]+/[A-Za-z0-9._-]+#[1-9][0-9]{0,18}$",
-        ),
-    ]
-
-
-class ItemKind(StrEnum):
-    ItemKindTask = "task"
-    ItemKindProject = "project"
-
-
-class SourceName(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="The name a configuration document gives one configured source.",
-            pattern="^[a-z0-9][a-z0-9-]*$",
-        ),
-    ]
-
-
-class StatusCategory(StrEnum):
-    StatusCategoryDraft = "draft"
-    StatusCategoryBacklog = "backlog"
-    StatusCategoryTodo = "todo"
-    StatusCategoryQueued = "queued"
-    StatusCategoryInProgress = "in-progress"
-    StatusCategoryDone = "done"
-    StatusCategoryCancelled = "cancelled"
-    StatusCategoryUnknown = "unknown"
-
-
 class DeliveredWritten(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     deliverer: Annotated[
         GlobalId,
         Field(
@@ -83,13 +84,13 @@ class DeliveredWritten(BaseModel):
             validate_default=True,
         ),
     ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
-    outcome: Literal["written"]
     to: Annotated[StatusCategory, Field(description="The category written.")]
+    outcome: Literal["written"]
 
 
 class DeliveredUnchanged(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     deliverer: Annotated[
         GlobalId,
         Field(
@@ -103,12 +104,12 @@ class DeliveredUnchanged(BaseModel):
             validate_default=True,
         ),
     ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
     outcome: Literal["unchanged"]
 
 
 class DeliveredLeft(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     deliverer: Annotated[
         GlobalId,
         Field(
@@ -122,9 +123,26 @@ class DeliveredLeft(BaseModel):
             validate_default=True,
         ),
     ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
     outcome: Literal["left"]
+
+
+class LocatorKind(StrEnum):
+    LocatorKindSource = "source"
+    LocatorKindItem = "item"
+    LocatorKindField = "field"
+    LocatorKindMetadataKey = "metadata-key"
+    LocatorKindComment = "comment"
+    LocatorKindPath = "path"
+    LocatorKindIdentity = "identity"
+
+
+class Status(BaseModel):
+    category: Annotated[
+        StatusCategory,
+        Field(description="The normalised value filters compare against."),
+    ]
+    name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
 class Failure(BaseModel):
@@ -141,6 +159,10 @@ class Failure(BaseModel):
             description="What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`."
         ),
     ]
+    source: Annotated[
+        SourceName | None,
+        Field(description="The configured source the failure came from, or `null` when none did."),
+    ]
     message: Annotated[
         str,
         Field(
@@ -154,21 +176,10 @@ class Failure(BaseModel):
             ge=0,
         ),
     ]
-    source: Annotated[
-        SourceName | None,
-        Field(description="The configured source the failure came from, or `null` when none did."),
-    ]
-
-
-class Status(BaseModel):
-    category: Annotated[
-        StatusCategory,
-        Field(description="The normalised value filters compare against."),
-    ]
-    name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
 class DeliveredFailed(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     deliverer: Annotated[
         GlobalId,
         Field(
@@ -182,17 +193,16 @@ class DeliveredFailed(BaseModel):
             validate_default=True,
         ),
     ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    from_: Annotated[
+        StatusCategory | None,
+        Field(alias="from", description="The category it read, when it could be read."),
+    ] = None
     failure: Annotated[
         Failure,
         Field(
             description="Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
         ),
     ]
-    from_: Annotated[
-        StatusCategory | None,
-        Field(alias="from", description="The category it read, when it could be read."),
-    ] = None
     outcome: Literal["failed"]
 
 
@@ -203,36 +213,24 @@ class Delivered(RootModel[DeliveredWritten | DeliveredUnchanged | DeliveredLeft 
     ]
 
 
-class IssueCompleted(BaseModel):
-    action: Annotated[CompleteAction, Field(description="What became of it.")]
-    delivered: Annotated[
-        list[Delivered],
-        Field(
-            description="Every task the written task delivers, kept in step with it exactly as `task status set`\nkeeps them — left out when it delivers none, which a project never does.",
-            validate_default=True,
-        ),
-    ] = []
-    error: Annotated[
-        Failure | None,
-        Field(
-            description="Why it failed — the failure object a failure document carries — present only then."
-        ),
-    ] = None
-    from_: Annotated[
-        str | None,
-        Field(alias="from", description="The option the task's card sat at, or `null`."),
-    ] = None
-    issue: Annotated[IssueRef, Field(description="The issue, as `owner/name#N`.")]
-    kind: Annotated[
-        ItemKind,
-        Field(
-            description="What the held item is: `task`, or `project` for a project's own card — a plan's home.\n`task` when nothing is held, and for a reference the source could not be asked about."
-        ),
+class Locator1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    redacted: Literal[True]
+    kind: LocatorKind
+    ordinal: Annotated[int, Field(ge=1)]
+
+
+class Locator(RootModel[str | Locator1]):
+    root: Annotated[
+        str | Locator1,
+        Field(description="A screened locator: the string verbatim, or its redacted form."),
     ]
-    reason: Annotated[
-        str | None,
-        Field(description="Why it was skipped — `closed as <reason>` — present only then."),
-    ] = None
+
+
+class IssueCompleted(BaseModel):
+    issue: Annotated[IssueRef, Field(description="The issue, as `owner/name#N`.")]
     source: Annotated[SourceName, Field(description="The source asked.")]
     task: Annotated[
         GlobalId | None,
@@ -240,12 +238,66 @@ class IssueCompleted(BaseModel):
             description="The item that source holds for the issue, by its qualified id whichever its kind —\n`null` when it holds none."
         ),
     ] = None
+    kind: Annotated[
+        ItemKind,
+        Field(
+            description="What the held item is: `task`, or `project` for a project's own card — a plan's home.\n`task` when nothing is held, and for a reference the source could not be asked about."
+        ),
+    ]
+    from_: Annotated[
+        str | None,
+        Field(alias="from", description="The option the task's card sat at, or `null`."),
+    ] = None
     to: Annotated[
         Status | None,
         Field(
             description="The status the task reads at once written, would read under a dry run, or already\nreads — `null` when nothing is held or the closure says otherwise."
         ),
     ] = None
+    action: Annotated[CompleteAction, Field(description="What became of it.")]
+    reason: Annotated[
+        str | None,
+        Field(description="Why it was skipped — `closed as <reason>` — present only then."),
+    ] = None
+    error: Annotated[
+        Failure | None,
+        Field(
+            description="Why it failed — the failure object a failure document carries — present only then."
+        ),
+    ] = None
+    delivered: Annotated[
+        list[Delivered],
+        Field(
+            description="Every task the written task delivers, kept in step with it exactly as `task status set`\nkeeps them — left out when it delivers none, which a project never does.",
+            validate_default=True,
+        ),
+    ] = []
+
+
+class SideEffect(BaseModel):
+    item: Annotated[Locator, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Locator,
+        Field(
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+        ),
+    ]
+
+
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
+        Field(
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
+        ),
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
+    ]
 
 
 class IssuesCompleted(BaseModel):
@@ -261,3 +313,4 @@ class IssuesCompleted(BaseModel):
             description="Every source that would have been asked and holds no item by issue reference — its\nstatus is its closure, or its plugin does not declare `complete_by_issue` — each sent\nno request."
         ),
     ]
+    sanitization: Sanitization | None = None

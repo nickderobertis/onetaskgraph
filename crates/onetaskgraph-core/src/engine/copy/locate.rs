@@ -318,6 +318,7 @@ impl Engine {
                     pending: Vec::new(),
                     comment_links: Vec::new(),
                     comment_sections: super::sections::SectionCounts::default(),
+                    rewrite: super::Rewrite::default(),
                 };
                 // A dry run's filing lookup, so it creates no member project; what it would have
                 // written is nothing, and the journal is dropped with nothing in it to undo.

@@ -78,6 +78,7 @@
           "bash scripts/check-github-workflows-bootstrap-serialised.sh",
           "python3 scripts/test_cli_wheel_lock.py",
           "python3 scripts/test_ci_timings.py",
+          "python3 scripts/test_rust_coverage.py",
           "bash scripts/check-ci-recipes.sh",
           "bash scripts/check-warm-rust-cache.sh",
           "bash scripts/check-warm-rust-cache-reuse-enforced.sh",

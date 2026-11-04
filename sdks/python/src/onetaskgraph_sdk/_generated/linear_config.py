@@ -10,16 +10,6 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
-class LinearProjectId(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="The id of one Linear project, which a scoped source holds alone.",
-            min_length=1,
-        ),
-    ]
-
-
 class LinearTeam(RootModel[str]):
     root: Annotated[str, Field(description="A Linear team's key or id.", min_length=1)]
 
@@ -46,6 +36,16 @@ class StatusName(RootModel[str]):
     ]
 
 
+class LinearProjectId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The id of one Linear project, which a scoped source holds alone.",
+            min_length=1,
+        ),
+    ]
+
+
 class StatusNames1(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -64,8 +64,8 @@ class StatusNames3(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    project: StatusName
     task: StatusName
+    project: StatusName
 
 
 class StatusNames(RootModel[StatusName | StatusNames1 | StatusNames2 | StatusNames3]):
@@ -93,16 +93,14 @@ class LinearConfig(BaseModel):
     api_key_env: Annotated[str, Field(description="Environment variable resolved by the host.")] = (
         "LINEAR_API_KEY"
     )
+    team: Annotated[
+        LinearTeam | None,
+        Field(description="Linear team key/id used to narrow reads and required for item writes."),
+    ] = None
     endpoint: Annotated[
         str,
         Field(description="GraphQL endpoint override, primarily for fixture servers."),
     ] = "https://api.linear.app/graphql"
-    project: Annotated[
-        LinearProjectId | None,
-        Field(
-            description="The id of one Linear project of the configured team, scoping this source to it.\n\nWhen set, every task read is narrowed to that project's issues, project and document\nreads return only that project and its documents, a task or a document written with\nno project is placed in it, and one naming another project is refused. Absent, the\nsource reads and writes team-wide."
-        ),
-    ] = None
     status_mapping: Annotated[
         StatusMapping,
         Field(
@@ -110,7 +108,9 @@ class LinearConfig(BaseModel):
             validate_default=True,
         ),
     ] = StatusMapping({})
-    team: Annotated[
-        LinearTeam | None,
-        Field(description="Linear team key/id used to narrow reads and required for item writes."),
+    project: Annotated[
+        LinearProjectId | None,
+        Field(
+            description="The id of one Linear project of the configured team, scoping this source to it.\n\nWhen set, every task read is narrowed to that project's issues, project and document\nreads return only that project and its documents, a task or a document written with\nno project is placed in it, and one naming another project is refused. Absent, the\nsource reads and writes team-wide."
+        ),
     ] = None

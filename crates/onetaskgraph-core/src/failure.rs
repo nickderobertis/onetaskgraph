@@ -72,6 +72,12 @@ pub struct FailureDocument {
     /// `target-task-origin`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<crate::cache::WriteResult>,
+    /// `true` when the write was refused for something already on its item before it — a
+    /// private repository among its `repositories`, or a term sanitising it could not fix —
+    /// and absent otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[schemars(!skip_serializing_if)]
+    pub predates_write: bool,
 }
 
 /// Why one command failed.
@@ -316,6 +322,14 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
             configured(destination),
             None,
         ),
+        EngineError::NotPrivateDestinationPredates { .. } => {
+            ("not-private-destination".to_owned(), None, None)
+        }
+        EngineError::BoundaryRefusedPredates { .. } => ("boundary-refused".to_owned(), None, None),
+        EngineError::SanitizeDryRun { .. } => ("sanitize-dry-run".to_owned(), None, None),
+        EngineError::SanitizeConflict { .. } => ("sanitize-conflict".to_owned(), None, None),
+        EngineError::TermsUnlisted { .. } => ("terms-unlisted".to_owned(), None, None),
+        EngineError::TermsUndecided { .. } => ("boundary-unavailable".to_owned(), None, None),
         EngineError::DestinationNotPrivate { destination, .. } => (
             "destination-not-private".to_owned(),
             configured(destination),

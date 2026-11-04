@@ -18,6 +18,12 @@ if TYPE_CHECKING:
     from ._generated.failure_document import Failure
 
 
+REPORTING_EXITS: dict[tuple[str, ...], frozenset[int]] = {
+    ("sources", "sanitize"): frozenset({1, 3})
+}
+"""The exits beyond 0 and 4 on which a command still answers its own document."""
+
+
 class OnetaskgraphError(RuntimeError):
     """The command could not produce a response."""
 
@@ -104,6 +110,19 @@ class Client(GeneratedClient):
         # command that would prompt refuses what it was not given instead of waiting.
         arguments.extend(("--json", "--no-interactive"))
         completed = await self._invoke_process(arguments, stdin)
+        # A sweep answers its report on exit 1 (something left unfixable or in conflict) and
+        # exit 3 (coverage incomplete): the report says which. Any other document there — a
+        # refusal's failure document — is not that report, and fails below as a refusal.
+        if (
+            tuple(command) in REPORTING_EXITS
+            and completed.returncode in REPORTING_EXITS[tuple(command)]
+        ):
+            try:
+                # As below: TypeAdapter validates `model`; its dynamic constructor cannot
+                # preserve T.
+                return cast(T, TypeAdapter(model).validate_json(completed.stdout))
+            except ValidationError:
+                pass
         if completed.returncode not in {0, 4}:
             raise OnetaskgraphError(
                 completed.stderr.strip(),

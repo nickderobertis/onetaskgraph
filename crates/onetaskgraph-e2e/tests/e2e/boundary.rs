@@ -31,6 +31,9 @@ mod projections;
 // commands, and the dependency edges it withholds.
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The same edge `mod boundary` sits behind in `main.rs`, for its reason: no credential and no network, folders of Markdown and a loopback Linear stand-in, in seconds; what they prove — the copy's screening and its withheld edges — is the engine's, which AGENTS.md forbids any plugin crate to depend on, so no plugin's edge is narrower.
 mod screening;
+// Replacement on every screened write, through the released onevcs's sanitise command.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The same edge `mod boundary` sits behind in `main.rs`, for its reason: no credential and no network, folders of Markdown and the pinned onevcs release, in seconds; what they prove — the store's replacement of declared terms on every write — is the engine's, which AGENTS.md forbids any plugin crate to depend on, so no plugin's edge is narrower.
+mod sanitize;
 
 /// A private repository, its owner and name as a term check matches them.
 const A: &str = "github.com/hiddenco/quietharbor";

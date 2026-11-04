@@ -147,14 +147,16 @@ impl Engine {
                 kind: source.kind().to_owned(),
             });
         }
-        self.admit_existing(
-            source,
-            &id.to_string(),
-            &id.native,
-            Held::Task,
-            &Exposure::text(content),
-        )
-        .await?;
+        let rewrite = self
+            .admit_existing(
+                source,
+                &id.to_string(),
+                &id.native,
+                Held::Task,
+                &Exposure::text(content),
+            )
+            .await?;
+        let content = &rewrite.text(content);
         super::stored::forget(source, MetadataRecord::Task, &id.native);
         source
             .source()

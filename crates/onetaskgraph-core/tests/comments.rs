@@ -736,14 +736,21 @@ async fn task_details_answer_each_id_as_one_task_detail_does_in_the_order_asked(
     }
 }
 
-/// A source that answers a detail read with the wrong number of details: its own reads are
-/// the in-memory source's, and its batch drops the last id's answer.
-struct ShortDetails {
+enum DetailAnswer {
+    Normal,
+    Missing,
+    Extra,
+    Mismatched,
+}
+
+/// A real in-memory source whose batch answer can violate the source contract.
+struct MalformedDetails {
     inner: Box<dyn TaskSource>,
+    answer: DetailAnswer,
 }
 
 #[async_trait::async_trait]
-impl TaskSource for ShortDetails {
+impl TaskSource for MalformedDetails {
     fn kind(&self) -> &'static str {
         self.inner.kind()
     }
@@ -798,7 +805,22 @@ impl TaskSource for ShortDetails {
         comments: Option<&PageRequest>,
     ) -> Vec<Result<Option<onetaskgraph_plugin_api::TaskDetailRead>, SourceError>> {
         let mut read = self.inner.get_task_details(ids, comments).await;
-        read.pop();
+        match self.answer {
+            DetailAnswer::Normal => {}
+            DetailAnswer::Missing => {
+                read.pop();
+            }
+            DetailAnswer::Extra => {
+                if let Some(first) = read.first().cloned() {
+                    read.push(first);
+                }
+            }
+            DetailAnswer::Mismatched => {
+                if let Some(Ok(Some(first))) = read.first_mut() {
+                    first.task.id = NativeId::from("other");
+                }
+            }
+        }
         read
     }
 }
@@ -815,7 +837,10 @@ async fn a_source_answering_the_wrong_number_of_details_fails_every_id_it_was_as
     let engine = Engine::new(
         vec![ConfiguredSource::Ready(ResolvedSource::adopt(
             name("short"),
-            Box::new(ShortDetails { inner }),
+            Box::new(MalformedDetails {
+                inner,
+                answer: DetailAnswer::Missing,
+            }),
         ))],
         vec![name("short")],
     );
@@ -835,5 +860,91 @@ async fn a_source_answering_the_wrong_number_of_details_fails_every_id_it_was_as
                 if message.contains("answered 1 task details for the 2 ids")),
             "{detail:?}"
         );
+    }
+}
+
+/// A linking caller able to list an empty declaration set, sufficient for a complete sweep.
+struct ListingPolicy;
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for ListingPolicy {
+    async fn repository_visibility(
+        &self,
+        _: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        Ok(onetaskgraph_core::boundary::RepositoryVisibility::Public)
+    }
+    async fn check_public_write(
+        &self,
+        _: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        Ok(onetaskgraph_core::boundary::WriteVerdict::Pass)
+    }
+    async fn declared_terms(
+        &self,
+        _: &onetaskgraph_core::boundary::TermsRequest,
+    ) -> Result<
+        Option<Vec<onetaskgraph_core::boundary::DeclaredTerm>>,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        Ok(Some(Vec::new()))
+    }
+}
+
+#[tokio::test]
+async fn a_sweep_refuses_missing_extra_and_misidentified_batch_details() {
+    for answer in [
+        DetailAnswer::Normal,
+        DetailAnswer::Missing,
+        DetailAnswer::Extra,
+        DetailAnswer::Mismatched,
+    ] {
+        let healthy = matches!(answer, DetailAnswer::Normal);
+        let inner = onetaskgraph_in_memory::Plugin
+            .build(
+                &name("batch"),
+                // This older source refuses commented listings, so the sweep must
+                // validate its fallback batch read rather than use a plain listing.
+                &json!({"capabilities":{"comments":"native"},
+                    "tasks":[task_value("T-1"),task_value("T-2")]}),
+                &NoSecrets,
+            )
+            .expect("source");
+        let engine = Engine::new(
+            vec![ConfiguredSource::Ready(ResolvedSource::adopt(
+                name("batch"),
+                Box::new(MalformedDetails { inner, answer }),
+            ))],
+            vec![name("batch")],
+        )
+        .with_write_policy(std::sync::Arc::new(ListingPolicy));
+        let result = engine.sanitize_tasks(&name("batch"), false, true).await;
+        if healthy {
+            assert!(result.expect("complete sweep").coverage.complete);
+        } else {
+            let error = result.expect_err("a malformed batch is no clean sweep");
+            assert!(
+                matches!(
+                    error,
+                    EngineError::SourceRefused {
+                        error: SourceError::Malformed { .. },
+                        ..
+                    }
+                ),
+                "{error}"
+            );
+        }
+        for native in ["T-1", "T-2"] {
+            let response = engine
+                .task(&id(&format!("batch:{native}")))
+                .await
+                .expect("task");
+            assert_eq!(response.items[0].item.title, native);
+            assert_eq!(response.items[0].item.content, None);
+        }
     }
 }

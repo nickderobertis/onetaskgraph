@@ -462,6 +462,49 @@ pub trait TaskSource: Send + Sync {
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError>;
 
+    /// One page of tasks, optionally carrying each task's first comment page.
+    ///
+    /// With `comments` absent this answers exactly [`Self::query_tasks`], with no
+    /// comments requested. With it present, every returned item must carry
+    /// [`TaskDetailRead::comments`], including a per-item refusal for a task that
+    /// cannot have comments. The comment request must have no cursor: subsequent
+    /// pages belong to individual tasks and are read through [`Self::task_comments`].
+    ///
+    /// Sources may return fewer tasks than the limit, including an empty page with a
+    /// continuation cursor when the underlying page contains only non-task items. Cursors
+    /// belong to this method and must not be exchanged with ordinary listing cursors.
+    /// A source may document the backend enumeration's consistency separately from its
+    /// ordinary listing, but must apply every predicate it declares native or refuse it.
+    ///
+    /// # Errors
+    ///
+    /// A source that cannot include comments refuses the listing rather than silently
+    /// omitting them. The default refuses before reading any tasks when asked for comments.
+    async fn query_task_details(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+        comments: Option<&PageRequest>,
+    ) -> Result<Page<TaskDetailRead>, SourceError> {
+        if comments.is_some() {
+            return Err(SourceError::Refused {
+                message: format!("the {} plugin cannot list tasks with comments", self.kind()),
+            });
+        }
+        let tasks = self.query_tasks(query, page).await?;
+        Ok(Page {
+            items: tasks
+                .items
+                .into_iter()
+                .map(|task| TaskDetailRead {
+                    task,
+                    comments: None,
+                })
+                .collect(),
+            next: tasks.next,
+        })
+    }
+
     /// One page of the projects matching `query`.
     ///
     /// # Errors

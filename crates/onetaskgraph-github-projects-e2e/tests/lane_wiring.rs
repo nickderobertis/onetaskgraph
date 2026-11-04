@@ -204,6 +204,11 @@ fn budget_adapter_uses_the_real_checker_and_never_substitutes_missing_live_evide
         command
             .arg(&runner)
             .arg("budgets")
+            .args([
+                "github-asset-requests-per-new-asset",
+                "github-plan-copy-seconds-first",
+                "github-live-session-points",
+            ])
             .env("GITHUB_ASSET_TELEMETRY_DIR", root.join("missing-offline"))
             .env("GITHUB_LIVE_SESSION_DIR", root.join("missing-live"))
             .env("GITHUB_LIVE_SESSION_ID", "adapter-fixture")
@@ -219,6 +224,14 @@ fn budget_adapter_uses_the_real_checker_and_never_substitutes_missing_live_evide
             "missing telemetry must never produce a successful measurement"
         );
         let received = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !received.contains("budget sanitize-sweep-requests:"),
+            "{received}"
+        );
+        assert!(
+            !received.contains("budget sanitize-complete-sweep-requests:"),
+            "{received}"
+        );
         assert!(
             received.contains("budget github-asset-requests-per-new-asset:"),
             "{received}"

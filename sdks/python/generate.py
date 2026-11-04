@@ -65,6 +65,8 @@ RESPONSE_ROOTS = {
     "sources_fields": "FieldsReport",
     # Where an item written to a source would land, read from configuration alone.
     "sources_route": "SourceRoute",
+    # What one sweep of a source for declared private terms found, rewrote and could not.
+    "sources_sanitize": "SweepReport",
     "config_show": "EffectiveConfig",
     # What emptying the local cache of one source, or of every source, emptied.
     "cache_clear": "CacheCleared",
@@ -137,6 +139,7 @@ CONTRACT_ROOTS = {
     "RepositoryVisibility",
     "PublicWriteInput",
     "WriteVerdict",
+    "SanitizeDryRun",
     # The map a private destination project records from each canonical task to its public
     # projection, which a caller reading a coordination project models by name.
     "PublicProjections",
@@ -226,6 +229,11 @@ OPTION_TYPES = {
     "search": "str",
     "search_path": "list[str] | tuple[str, ...]",
     "set": "list[str] | tuple[str, ...]",
+    # The caller's replacement layer for one invocation: `TERM=WITH` entries and terms to
+    # refuse, appended after the store's own `write_policy.replacements`.
+    "replace": "list[str] | tuple[str, ...]",
+    "reject": "list[str] | tuple[str, ...]",
+    "sanitize_dry_run": "bool",
     "source": "list[str] | tuple[str, ...]",
     "status": "choice_list",
     "status_name": "str",
@@ -302,6 +310,9 @@ OPTION_PLACEHOLDERS = {
     "search": "TEXT",
     "search_path": "DIR",
     "set": "PATH=VALUE",
+    "replace": "TERM=WITH",
+    "reject": "TERM",
+    "sanitize_dry_run": None,
     "source": "S",
     "status": "S",
     "status_name": "NAME",
@@ -826,7 +837,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
     match command:
         case ("search",):
             return ("text",)
-        case ("sources", "status-options" | "fields" | "route"):
+        case ("sources", "status-options" | "fields" | "route" | "sanitize"):
             return ("source",)
         case ("task" | "document", "copy") | ("task", "show-many" | "locate"):
             return ("ids",)
@@ -952,7 +963,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "import json",
         "from collections.abc import Mapping",
         "from functools import cache",
-        "from typing import TYPE_CHECKING, Literal",
+        "from typing import TYPE_CHECKING, Literal, overload",
         "",
         "from pydantic import JsonValue, TypeAdapter",
         "",
@@ -967,7 +978,14 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
             f"        {root},"
             for root in sorted(
                 response_roots()
-                | {"GlobalId", "NativeId", "Priority", "SourceName", "StatusCategory"}
+                | {
+                    "GlobalId",
+                    "NativeId",
+                    "Priority",
+                    "SourceName",
+                    "StatusCategory",
+                    "SanitizeDryRun",
+                }
             )
         ],
         "    )",
@@ -1195,6 +1213,36 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
                 passed.append(f"stdin=_stdin({name!r}, None, answers)")
         elif body:
             passed.append("stdin=body")
+        if "sanitize_dry_run" in keywords:
+            ordinary = [
+                parameter.replace(
+                    "sanitize_dry_run: bool | None = None",
+                    "sanitize_dry_run: Literal[False] | None = None",
+                )
+                for parameter in parameters
+            ]
+            preview = [
+                parameter.replace(
+                    "sanitize_dry_run: bool | None = None", "sanitize_dry_run: Literal[True]"
+                )
+                for parameter in parameters
+            ]
+            lines.extend(
+                [
+                    "    @overload",
+                    f"    async def {name}(self, {', '.join(ordinary)}) -> {return_type}: ...",
+                    "",
+                    "    @overload",
+                    f"    async def {name}(self, {', '.join(preview)})"
+                    f" -> {return_type} | SanitizeDryRun: ...",
+                    "",
+                    "    @overload",
+                    f"    async def {name}(self, {', '.join(parameters)})"
+                    f" -> {return_type} | SanitizeDryRun: ...",
+                    "",
+                ]
+            )
+            return_type = f"{return_type} | SanitizeDryRun"
         lines.extend(
             [
                 f"    async def {name}(self, {', '.join(parameters)}) -> {return_type}:",

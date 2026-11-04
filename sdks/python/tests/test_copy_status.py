@@ -125,12 +125,12 @@ def test_a_category_the_binary_does_not_know_is_refused_naming_the_flag(
     client = Client(binary, cwd=store)
     with pytest.raises(OnetaskgraphError) as refused:
         asyncio.run(
-            client.task_copy(
+            client.task_copy(  # ty: ignore[no-matching-overload] Deliberately invalid category tests the binary's refusal.
                 [],
                 source=["plan"],
                 # A board's option name where a category belongs is the mistake under test, so
                 # the type checker's refusal of it is the point rather than a defect here.
-                status=["shipped"],  # ty: ignore[invalid-argument-type]
+                status=["shipped"],
                 to="snap",
             )
         )

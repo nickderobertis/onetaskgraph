@@ -9,21 +9,31 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
+class GlobalId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
+        ),
+    ]
+
+
+class SourceName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
+        ),
+    ]
+
+
 class Allocation(RootModel[str]):
     root: Annotated[
         str,
         Field(
             description="The random nonce a public projection project is created carrying.",
             pattern="^[0-9a-f]{32}$",
-        ),
-    ]
-
-
-class GlobalId(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
         ),
     ]
 
@@ -41,24 +51,14 @@ class PublicProjection(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    projection: Annotated[
-        GlobalId,
-        Field(
-            description="Its public counterpart, qualified: a view in a source not declared private."
-        ),
-    ]
     task: Annotated[
         GlobalId,
         Field(description="The canonical task, qualified: the one the private destination holds."),
     ]
-
-
-class SourceName(RootModel[str]):
-    root: Annotated[
-        str,
+    projection: Annotated[
+        GlobalId,
         Field(
-            description="The name a configuration document gives one configured source.",
-            pattern="^[a-z0-9][a-z0-9-]*$",
+            description="Its public counterpart, qualified: a view in a source not declared private."
         ),
     ]
 
@@ -67,6 +67,7 @@ class PublicProjectAllocation(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
+    source: Annotated[SourceName, Field(description="The public source the project is in.")]
     allocation: Annotated[
         Allocation,
         Field(
@@ -77,20 +78,12 @@ class PublicProjectAllocation(BaseModel):
         NativeId | None,
         Field(description="The id the source assigned the project, once it answered with one."),
     ] = None
-    source: Annotated[SourceName, Field(description="The public source the project is in.")]
 
 
 class PublicProjections(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    projects: Annotated[
-        list[PublicProjectAllocation],
-        Field(
-            description="One entry per public source the plan's views are filed in, unique by source: the\nallocation its public projection project is created under, and the id that source\nassigned it once it answered.",
-            validate_default=True,
-        ),
-    ] = []
     schema_version: Annotated[
         int,
         Field(description="The version of this shape; 1 is the only one.", ge=1, le=1),
@@ -101,3 +94,10 @@ class PublicProjections(BaseModel):
             description="One entry per canonical task that has a public projection, unique by both ids."
         ),
     ]
+    projects: Annotated[
+        list[PublicProjectAllocation],
+        Field(
+            description="One entry per public source the plan's views are filed in, unique by source: the\nallocation its public projection project is created under, and the id that source\nassigned it once it answered.",
+            validate_default=True,
+        ),
+    ] = []

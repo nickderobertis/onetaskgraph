@@ -10,9 +10,22 @@ from typing import Annotated
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel
 
 
-class Classification(StrEnum):
-    ClassificationPublic = "public"
-    ClassificationPrivate = "private"
+class NativeId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true."
+        ),
+    ]
+
+
+class Label(BaseModel):
+    id: Annotated[NativeId, Field(description="The source's own opaque identifier.")]
+    name: Annotated[str, Field(description="What a user filtering across sources actually types.")]
+    color: Annotated[
+        str | None,
+        Field(description="The source's own colour for the label, when it has one."),
+    ] = None
 
 
 class Location1(BaseModel):
@@ -38,15 +51,6 @@ class Location(RootModel[Location1 | Location2]):
     ]
 
 
-class NativeId(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true."
-        ),
-    ]
-
-
 class Repository(RootModel[str]):
     root: Annotated[
         str,
@@ -56,33 +60,37 @@ class Repository(RootModel[str]):
     ]
 
 
-class Label(BaseModel):
-    color: Annotated[
-        str | None,
-        Field(description="The source's own colour for the label, when it has one."),
-    ] = None
-    id: Annotated[NativeId, Field(description="The source's own opaque identifier.")]
-    name: Annotated[str, Field(description="What a user filtering across sources actually types.")]
+class Classification(StrEnum):
+    ClassificationPublic = "public"
+    ClassificationPrivate = "private"
 
 
 class Document(BaseModel):
-    classification: Annotated[
-        Classification,
-        Field(
-            description="Who may read this document, as it was declared, on the terms of\n[`Task::classification`] — except that a document filed under a private project is\nprivate, however this reads."
-        ),
-    ] = Classification.ClassificationPublic
+    id: Annotated[NativeId, Field(description="The source's own opaque identifier.")]
+    title: Annotated[str, Field(description="The one-line summary a person recognises it by.")]
     content: Annotated[
         str | None, Field(description="The long-form body, when the source has one.")
+    ] = None
+    project: Annotated[
+        NativeId | None,
+        Field(
+            description="The project it lives in; `None` is an orphan document, exactly as it is on a\n[`Task`]."
+        ),
+    ] = None
+    labels: Annotated[list[Label], Field(description="Inline, on the same terms as a [`Task`]'s.")]
+    url: Annotated[
+        str | None,
+        Field(description="Where a person can open it, on the same terms as a [`Task`]'s."),
+    ] = None
+    location: Annotated[
+        Location | None,
+        Field(description="Where it is, when the source says (see [`Location`])."),
     ] = None
     created_at: Annotated[
         AwareDatetime | None, Field(description="When the source says it was created.")
     ] = None
-    id: Annotated[NativeId, Field(description="The source's own opaque identifier.")]
-    labels: Annotated[list[Label], Field(description="Inline, on the same terms as a [`Task`]'s.")]
-    location: Annotated[
-        Location | None,
-        Field(description="Where it is, when the source says (see [`Location`])."),
+    updated_at: Annotated[
+        AwareDatetime | None, Field(description="When the source says it last changed.")
     ] = None
     metadata: Annotated[
         dict[str, JsonValue],
@@ -90,12 +98,6 @@ class Document(BaseModel):
             description="Caller-defined attributes, preserving their JSON types, with the same reserved\nprefixes [`Task::metadata`] carries."
         ),
     ] = {}
-    project: Annotated[
-        NativeId | None,
-        Field(
-            description="The project it lives in; `None` is an orphan document, exactly as it is on a\n[`Task`]."
-        ),
-    ] = None
     repositories: Annotated[
         list[Repository],
         Field(
@@ -103,17 +105,15 @@ class Document(BaseModel):
             validate_default=True,
         ),
     ] = []
-    title: Annotated[str, Field(description="The one-line summary a person recognises it by.")]
-    updated_at: Annotated[
-        AwareDatetime | None, Field(description="When the source says it last changed.")
-    ] = None
-    url: Annotated[
-        str | None,
-        Field(description="Where a person can open it, on the same terms as a [`Task`]'s."),
-    ] = None
     version: Annotated[
         str | None,
         Field(
             description="The document's change token, on exactly the terms of [`Task::version`] and of what its\nsource's [`DocumentVersionCoverage`](crate::DocumentVersionCoverage) covers. Absent by\ndefault and left out of the wire when absent."
         ),
     ] = None
+    classification: Annotated[
+        Classification,
+        Field(
+            description="Who may read this document, as it was declared, on the terms of\n[`Task::classification`] — except that a document filed under a private project is\nprivate, however this reads."
+        ),
+    ] = Classification.ClassificationPublic

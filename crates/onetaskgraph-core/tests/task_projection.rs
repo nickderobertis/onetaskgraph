@@ -101,10 +101,17 @@ fn exported_projection_schemas_come_from_the_domain_declaration() {
             "HumanTaskProjection",
             schemars::schema_for!(HumanTaskProjection),
         ),
-        (
-            "HumanTaskProjected",
-            schemars::schema_for!(HumanTaskProjected),
-        ),
+        ("HumanTaskProjected", {
+            let payload = schemars::schema_for!(HumanTaskProjected);
+            let mut answer =
+                schemars::schema_for!(onetaskgraph_core::boundary::WriteAnswer<HumanTaskProjected>);
+            for key in ["title", "description"] {
+                if let Some(value) = payload.get(key) {
+                    answer.insert(key.to_owned(), value.clone());
+                }
+            }
+            answer
+        }),
     ] {
         assert_eq!(
             bundle["roots"][name],

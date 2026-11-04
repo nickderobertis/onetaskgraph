@@ -522,15 +522,20 @@ impl Engine {
         comment: &NewComment,
     ) -> Result<Comment, EngineError> {
         let source = self.writable_comments(&task.source)?;
-        self.admit_existing(
-            source,
-            &task.to_string(),
-            &task.native,
-            Held::Task,
-            &Exposure::text(comment.body.as_str())
-                .and(Exposure::metadata(comment.author.iter().cloned())),
-        )
-        .await?;
+        let rewrite = self
+            .admit_existing(
+                source,
+                &task.to_string(),
+                &task.native,
+                Held::Task,
+                &Exposure::text(comment.body.as_str())
+                    .and(Exposure::metadata(comment.author.iter().cloned())),
+            )
+            .await?;
+        let comment = &NewComment {
+            body: rewritten_body(source, &rewrite, &comment.body)?,
+            author: comment.author.clone(),
+        };
         match source.source().add_comment(&task.native, comment).await {
             Ok(Some(added)) => Ok(added),
             Ok(None) => Err(no_such_task(task)),
@@ -551,14 +556,16 @@ impl Engine {
         body: &CommentBody,
     ) -> Result<Comment, EngineError> {
         let source = self.writable_comments(&task.source)?;
-        self.admit_existing(
-            source,
-            &task.to_string(),
-            &task.native,
-            Held::Task,
-            &Exposure::text(body.as_str()),
-        )
-        .await?;
+        let rewrite = self
+            .admit_existing(
+                source,
+                &task.to_string(),
+                &task.native,
+                Held::Task,
+                &Exposure::text(body.as_str()),
+            )
+            .await?;
+        let body = &rewritten_body(source, &rewrite, body)?;
         match source
             .source()
             .edit_comment(&task.native, comment, body)
@@ -842,4 +849,14 @@ fn failed(source: &ResolvedSource, error: SourceError) -> EngineError {
         name: source.name().to_string(),
         error,
     }
+}
+
+/// `body` as a sanitisation passed it, refused — nothing written — when the replacement left
+/// it empty, which no source takes as a comment.
+fn rewritten_body(
+    source: &ResolvedSource,
+    rewrite: &super::boundary::Rewrite,
+    body: &CommentBody,
+) -> Result<CommentBody, EngineError> {
+    CommentBody::new(rewrite.text(body.as_str())).map_err(|error| failed(source, error))
 }

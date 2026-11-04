@@ -10,17 +10,10 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Field, RootModel
 
 
-class CredentialLayer(StrEnum):
-    CredentialLayerEnvironment = "environment"
-    CredentialLayerSecretsFile = "secrets-file"
-
-
-class CredentialName(RootModel[str]):
+class SettingPath(RootModel[str]):
     root: Annotated[
         str,
-        Field(
-            description="The name of an environment variable a credential arrives under.\n\nA newtype rather than a `String` because the domain is real and narrow — what a\nshell could have exported — and a report naming something outside it would be\nreporting a credential that no layer could ever resolve. [`CredentialName::new`] is\nthe only way to make one, so that report cannot be built."
-        ),
+        Field(description="A dotted path to one setting, such as `sources.work.config.root`."),
     ]
 
 
@@ -29,13 +22,13 @@ class OriginDefault(BaseModel):
 
 
 class OriginFile(BaseModel):
-    layer: Literal["file"]
     path: Annotated[str, Field(description="The document that set it.")]
+    layer: Literal["file"]
 
 
 class OriginEnvironment(BaseModel):
-    layer: Literal["environment"]
     variable: Annotated[str, Field(description="The variable that set it.")]
+    layer: Literal["environment"]
 
 
 class OriginFlag(BaseModel):
@@ -52,30 +45,18 @@ class Origin(RootModel[OriginDefault | OriginFile | OriginEnvironment | OriginFl
     ]
 
 
-class ResolvedCredential(BaseModel):
-    resolved_from: Annotated[
-        CredentialLayer,
-        Field(description="The layer whose value a plugin would receive."),
-    ]
-    variable: Annotated[CredentialName, Field(description="The variable's name. Never its value.")]
-
-
-class SecretsReport(BaseModel):
-    path: Annotated[
-        str | None,
-        Field(description="The file that was looked for, whether or not it was there."),
-    ] = None
-    variables: Annotated[
-        list[ResolvedCredential],
-        Field(description="Every name the file defines, in order."),
-    ]
-
-
-class SettingPath(RootModel[str]):
+class CredentialName(RootModel[str]):
     root: Annotated[
         str,
-        Field(description="A dotted path to one setting, such as `sources.work.config.root`."),
+        Field(
+            description="The name of an environment variable a credential arrives under.\n\nA newtype rather than a `String` because the domain is real and narrow — what a\nshell could have exported — and a report naming something outside it would be\nreporting a credential that no layer could ever resolve. [`CredentialName::new`] is\nthe only way to make one, so that report cannot be built."
+        ),
     ]
+
+
+class CredentialLayer(StrEnum):
+    CredentialLayerEnvironment = "environment"
+    CredentialLayerSecretsFile = "secrets-file"
 
 
 class SourceName(RootModel[str]):
@@ -90,12 +71,38 @@ class SourceName(RootModel[str]):
 
 class Setting(BaseModel):
     key: Annotated[SettingPath, Field(description="The dotted path of the setting.")]
-    origin: Annotated[Origin, Field(description="Where the value came from.")]
     # A setting is arbitrary JSON by the emitted wire contract.
     value: Annotated[Any, Field(description="Its value.")]
+    origin: Annotated[Origin, Field(description="Where the value came from.")]
+
+
+class ResolvedCredential(BaseModel):
+    variable: Annotated[CredentialName, Field(description="The variable's name. Never its value.")]
+    resolved_from: Annotated[
+        CredentialLayer,
+        Field(description="The layer whose value a plugin would receive."),
+    ]
+
+
+class SecretsReport(BaseModel):
+    path: Annotated[
+        str | None,
+        Field(description="The file that was looked for, whether or not it was there."),
+    ] = None
+    variables: Annotated[
+        list[ResolvedCredential],
+        Field(description="Every name the file defines, in order."),
+    ]
 
 
 class EffectiveConfig(BaseModel):
+    settings: Annotated[list[Setting], Field(description="Every setting, in key order.")]
+    secrets: Annotated[
+        SecretsReport,
+        Field(
+            description="What the credentials file supplied, by name, and which layer answers for each.\n\nBeside the settings because it is the same question — where does this value\ncome from — asked of the one kind of value that may never be printed. So the\nname and the layer are reported and the value never is."
+        ),
+    ]
     incomplete_sources: Annotated[
         list[SourceName],
         Field(
@@ -103,10 +110,3 @@ class EffectiveConfig(BaseModel):
             validate_default=True,
         ),
     ] = []
-    secrets: Annotated[
-        SecretsReport,
-        Field(
-            description="What the credentials file supplied, by name, and which layer answers for each.\n\nBeside the settings because it is the same question — where does this value\ncome from — asked of the one kind of value that may never be printed. So the\nname and the layer are reported and the value never is."
-        ),
-    ]
-    settings: Annotated[list[Setting], Field(description="Every setting, in key order.")]

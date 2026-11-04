@@ -10,22 +10,38 @@ from typing import Annotated
 from pydantic import BaseModel, Field, RootModel
 
 
-class ColumnName(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="The name of a `Status` single-select option on the board.\n\nValidated on the way in rather than checked later, so a blank option name — which\nnothing on a board can be — is a state this type cannot hold.",
-            min_length=1,
-        ),
-    ]
-
-
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
         Field(
             description="The name a configuration document gives one configured source.",
             pattern="^[a-z0-9][a-z0-9-]*$",
+        ),
+    ]
+
+
+class StatusOptionsOutcome(StrEnum):
+    StatusOptionsOutcomePlanned = "planned"
+    StatusOptionsOutcomeUnchanged = "unchanged"
+    StatusOptionsOutcomeApplied = "applied"
+
+
+class StatusOptionId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="A GitHub single-select option's opaque GraphQL node identifier.",
+            min_length=1,
+        ),
+    ]
+
+
+class ColumnName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name of a `Status` single-select option on the board.\n\nValidated on the way in rather than checked later, so a blank option name — which\nnothing on a board can be — is a state this type cannot hold.",
+            min_length=1,
         ),
     ]
 
@@ -41,39 +57,23 @@ class StatusOptionColor(StrEnum):
     StatusOptionColorPink = "PINK"
 
 
-class StatusOptionId(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="A GitHub single-select option's opaque GraphQL node identifier.",
-            min_length=1,
-        ),
-    ]
-
-
-class StatusOptionsOutcome(StrEnum):
-    StatusOptionsOutcomePlanned = "planned"
-    StatusOptionsOutcomeUnchanged = "unchanged"
-    StatusOptionsOutcomeApplied = "applied"
-
-
 class StatusOption(BaseModel):
+    id: Annotated[StatusOptionId, Field(description="GitHub's stable id.")]
+    name: Annotated[ColumnName, Field(description="The visible option name.")]
     color: Annotated[StatusOptionColor, Field(description="GitHub's single-select color token.")]
     description: Annotated[
         str, Field(description="The option description, including an empty one.")
     ]
-    id: Annotated[StatusOptionId, Field(description="GitHub's stable id.")]
-    name: Annotated[ColumnName, Field(description="The visible option name.")]
 
 
 class StatusOptionsReport(BaseModel):
-    existing: Annotated[
-        list[StatusOption],
-        Field(description="The complete option list observed before any mutation."),
-    ]
+    source: Annotated[SourceName, Field(description="The configured source name.")]
     missing: Annotated[
         list[str],
         Field(description="Configured option names absent before the operation."),
     ]
     outcome: Annotated[StatusOptionsOutcome, Field(description="What the requested operation did.")]
-    source: Annotated[SourceName, Field(description="The configured source name.")]
+    existing: Annotated[
+        list[StatusOption],
+        Field(description="The complete option list observed before any mutation."),
+    ]

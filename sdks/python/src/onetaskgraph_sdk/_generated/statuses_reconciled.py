@@ -7,12 +7,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, RootModel
-
-
-class FailureClass(StrEnum):
-    FailureClassRefused = "refused"
-    FailureClassTransient = "transient"
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
 class GlobalId(RootModel[str]):
@@ -29,6 +24,22 @@ class ItemKind(StrEnum):
     ItemKindProject = "project"
 
 
+class StatusCategory(StrEnum):
+    StatusCategoryDraft = "draft"
+    StatusCategoryBacklog = "backlog"
+    StatusCategoryTodo = "todo"
+    StatusCategoryQueued = "queued"
+    StatusCategoryInProgress = "in-progress"
+    StatusCategoryDone = "done"
+    StatusCategoryCancelled = "cancelled"
+    StatusCategoryUnknown = "unknown"
+
+
+class FailureClass(StrEnum):
+    FailureClassRefused = "refused"
+    FailureClassTransient = "transient"
+
+
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -39,15 +50,22 @@ class SourceName(RootModel[str]):
     ]
 
 
-class StatusCategory(StrEnum):
-    StatusCategoryDraft = "draft"
-    StatusCategoryBacklog = "backlog"
-    StatusCategoryTodo = "todo"
-    StatusCategoryQueued = "queued"
-    StatusCategoryInProgress = "in-progress"
-    StatusCategoryDone = "done"
-    StatusCategoryCancelled = "cancelled"
-    StatusCategoryUnknown = "unknown"
+class LocatorKind(StrEnum):
+    LocatorKindSource = "source"
+    LocatorKindItem = "item"
+    LocatorKindField = "field"
+    LocatorKindMetadataKey = "metadata-key"
+    LocatorKindComment = "comment"
+    LocatorKindPath = "path"
+    LocatorKindIdentity = "identity"
+
+
+class Status(BaseModel):
+    category: Annotated[
+        StatusCategory,
+        Field(description="The normalised value filters compare against."),
+    ]
+    name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
 class Failure(BaseModel):
@@ -64,6 +82,10 @@ class Failure(BaseModel):
             description="What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`."
         ),
     ]
+    source: Annotated[
+        SourceName | None,
+        Field(description="The configured source the failure came from, or `null` when none did."),
+    ]
     message: Annotated[
         str,
         Field(
@@ -77,21 +99,32 @@ class Failure(BaseModel):
             ge=0,
         ),
     ]
-    source: Annotated[
-        SourceName | None,
-        Field(description="The configured source the failure came from, or `null` when none did."),
-    ]
 
 
-class Status(BaseModel):
-    category: Annotated[
-        StatusCategory,
-        Field(description="The normalised value filters compare against."),
+class Locator1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    redacted: Literal[True]
+    kind: LocatorKind
+    ordinal: Annotated[int, Field(ge=1)]
+
+
+class Locator(RootModel[str | Locator1]):
+    root: Annotated[
+        str | Locator1,
+        Field(description="A screened locator: the string verbatim, or its redacted form."),
     ]
-    name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
 class StatusReconciledUpdated(BaseModel):
+    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
+    kind: Annotated[
+        ItemKind,
+        Field(
+            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
+        ),
+    ]
     from_: Annotated[
         str | None,
         Field(
@@ -99,13 +132,6 @@ class StatusReconciledUpdated(BaseModel):
             description="The option its card sat at, or `null` for a card with none.",
         ),
     ] = None
-    kind: Annotated[
-        ItemKind,
-        Field(
-            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
-        ),
-    ]
-    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
     to: Annotated[
         Status,
         Field(description="The status its closure implies, which its card was moved to."),
@@ -114,6 +140,13 @@ class StatusReconciledUpdated(BaseModel):
 
 
 class StatusReconciledWouldUpdate(BaseModel):
+    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
+    kind: Annotated[
+        ItemKind,
+        Field(
+            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
+        ),
+    ]
     from_: Annotated[
         str | None,
         Field(
@@ -121,13 +154,6 @@ class StatusReconciledWouldUpdate(BaseModel):
             description="The option its card sat at, or `null` for a card with none.",
         ),
     ] = None
-    kind: Annotated[
-        ItemKind,
-        Field(
-            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
-        ),
-    ]
-    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
     to: Annotated[
         Status,
         Field(description="The status its closure implies, which its card was moved to."),
@@ -136,6 +162,13 @@ class StatusReconciledWouldUpdate(BaseModel):
 
 
 class StatusReconciledFailed(BaseModel):
+    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
+    kind: Annotated[
+        ItemKind,
+        Field(
+            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
+        ),
+    ]
     from_: Annotated[
         str | None,
         Field(
@@ -143,22 +176,15 @@ class StatusReconciledFailed(BaseModel):
             description="The option its card sat at, or `null` for a card with none.",
         ),
     ] = None
-    kind: Annotated[
-        ItemKind,
-        Field(
-            description="What the item is: `task`, or `project` for a project's own card — a plan's home."
-        ),
-    ]
-    source: Annotated[GlobalId, Field(description="The item, by its qualified id.")]
     to: Annotated[
         Status,
         Field(description="The status its closure implies, which its card was moved to."),
     ]
-    action: Literal["failed"]
     error: Annotated[
         Failure,
         Field(description="Why — the failure object a failure document carries."),
     ]
+    action: Literal["failed"]
 
 
 class StatusReconciled(
@@ -172,6 +198,32 @@ class StatusReconciled(
     ]
 
 
+class SideEffect(BaseModel):
+    item: Annotated[Locator, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Locator,
+        Field(
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+        ),
+    ]
+
+
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
+        Field(
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
+        ),
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
+    ]
+
+
 class StatusesReconciled(BaseModel):
     items: Annotated[
         list[StatusReconciled],
@@ -179,3 +231,4 @@ class StatusesReconciled(BaseModel):
             description="One entry per item whose card contradicted its closure, in the order the source read\nthem. Empty for a source with nothing out of line, and for one that does not declare\n`reconcile_status`."
         ),
     ]
+    sanitization: Sanitization | None = None

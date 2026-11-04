@@ -10,26 +10,6 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, RootModel
 
 
-class DependencyKind(StrEnum):
-    DependencyKindBlocks = "blocks"
-    DependencyKindRelated = "related"
-
-
-class Designator(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
-            pattern="^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
-        ),
-    ]
-
-
-class FailureClass(StrEnum):
-    FailureClassRefused = "refused"
-    FailureClassTransient = "transient"
-
-
 class GlobalId(RootModel[str]):
     root: Annotated[
         str,
@@ -44,11 +24,26 @@ class ItemKind(StrEnum):
     ItemKindProject = "project"
 
 
+class DependencyKind(StrEnum):
+    DependencyKindBlocks = "blocks"
+    DependencyKindRelated = "related"
+
+
 class PageToken(RootModel[str]):
     root: Annotated[
         str,
         Field(
             description="The engine's own resume token: one plugin cursor per source stream, opaque to the\ncaller exactly as a plugin's cursor is opaque to the engine.\n\nRendered as lower-case hex, which is not obfuscation — the inside is not a secret —\nbut the one property a token a person copies off a terminal has to have: it survives\na shell. The document underneath holds a plugin's own cursor, and a cursor may hold\nanything at all, so a token spelled as the raw JSON would carry quotes, braces and\nspaces straight into the next command line. Hex has no character a shell reads.\n\n# What a token is and is not checked for\n\nBoth ways in go through [`parse`](Self::parse) — including deserialising one — and\nwhat that establishes is **structural**: the string is hex, the bytes are this\nengine's own resume document, and every state in it is well formed. It does not, and\ncannot, establish that this engine is the one that wrote it. A token is not a\ncredential and carries nothing secret; forging one buys a caller nothing they could\nnot have asked for outright, since every cursor inside is handed straight back to the\nsource that issued it and is validated there.\n\nWhat a forged token *could* do is name a stream this configuration has no source for,\nor resume further into a page than the engine ever pages. Both are refused where the\ntoken meets the query it is resuming, by\n[`Engine`](crate::Engine) — see `EngineError::Token` — because only the engine knows\nwhich sources are configured and what page ceiling each declares."
+        ),
+    ]
+
+
+class SourceName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
         ),
     ]
 
@@ -67,51 +62,43 @@ class Predicate(StrEnum):
     PredicateReverseDependencies = "reverse-dependencies"
 
 
-class QualifiedEndpoint(BaseModel):
-    id: Annotated[
-        GlobalId,
-        Field(description="`<source>:<native>`, preserved when a plugin reports another source."),
-    ]
-    kind: Annotated[ItemKind, Field(description="Whether this endpoint names a task or project.")]
-
-
 class SourceErrorConfig(BaseModel):
-    kind: Literal["config"]
     message: Annotated[str, Field(description="What is wrong, in a form a user can act on.")]
+    kind: Literal["config"]
 
 
 class SourceErrorAuth(BaseModel):
-    kind: Literal["auth"]
     message: Annotated[str, Field(description="What failed. Never contains the credential itself.")]
+    kind: Literal["auth"]
 
 
 class SourceErrorRefused(BaseModel):
-    kind: Literal["refused"]
     message: Annotated[str, Field(description="The source's own reason.")]
+    kind: Literal["refused"]
 
 
 class SourceErrorRateLimited(BaseModel):
-    kind: Literal["rate-limited"]
+    retry_after_seconds: Annotated[
+        int | None,
+        Field(description="How long the source asked us to wait, when it said.", ge=0),
+    ] = None
     message: Annotated[
         str | None,
         Field(
             description="What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential."
         ),
     ] = None
-    retry_after_seconds: Annotated[
-        int | None,
-        Field(description="How long the source asked us to wait, when it said.", ge=0),
-    ] = None
+    kind: Literal["rate-limited"]
 
 
 class SourceErrorUnavailable(BaseModel):
-    kind: Literal["unavailable"]
     message: Annotated[str, Field(description="What went wrong reaching it.")]
+    kind: Literal["unavailable"]
 
 
 class SourceErrorMalformed(BaseModel):
-    kind: Literal["malformed"]
     message: Annotated[str, Field(description="What could not be represented.")]
+    kind: Literal["malformed"]
 
 
 class SourceError(
@@ -137,17 +124,42 @@ class SourceError(
     ]
 
 
-class SourceName(RootModel[str]):
+class FailureClass(StrEnum):
+    FailureClassRefused = "refused"
+    FailureClassTransient = "transient"
+
+
+class Designator(RootModel[str]):
     root: Annotated[
         str,
         Field(
-            description="The name a configuration document gives one configured source.",
-            pattern="^[a-z0-9][a-z0-9-]*$",
+            description="A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+            pattern="^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
         ),
     ]
 
 
+class UnresolvedReason(StrEnum):
+    UnresolvedReasonNot_Configured_On_This_Host = "not configured on this host"
+
+
+class QualifiedEndpoint(BaseModel):
+    id: Annotated[
+        GlobalId,
+        Field(description="`<source>:<native>`, preserved when a plugin reports another source."),
+    ]
+    kind: Annotated[ItemKind, Field(description="Whether this endpoint names a task or project.")]
+
+
 class SourcePlan(BaseModel):
+    source: Annotated[SourceName, Field(description="The configured source this describes.")]
+    kind: Annotated[str, Field(description="The plugin kind behind it.")]
+    pushed_down: Annotated[
+        list[Predicate],
+        Field(
+            description="Predicates the source applied itself.\n\nThe four predicate vectors below partition one set of outcomes, and nothing in\nthe type says so: a `Predicate` could appear in two of them at once, or in none.\nOne `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that\nunrepresentable. See the directive below for why it stays as it is."
+        ),
+    ]
     applied_locally: Annotated[
         list[Predicate],
         Field(description="Predicates the engine applied in memory over a wider result set."),
@@ -156,7 +168,12 @@ class SourcePlan(BaseModel):
         list[Predicate],
         Field(description="Predicates the engine answered by a bounded scan of the source."),
     ]
-    kind: Annotated[str, Field(description="The plugin kind behind it.")]
+    unavailable: Annotated[
+        list[Predicate],
+        Field(
+            description="Predicates neither side could answer, so the result is unconstrained.\n\nNever [`Predicate::ReverseDependencies`]: `DependencySupport` has no\nunsupported variant, so a reverse-dependency read is answered natively or\nemulated by the engine's bounded scan, never abandoned. The type cannot say\nso — see the directive below."
+        ),
+    ]
     pages_fetched: Annotated[
         int,
         Field(
@@ -164,23 +181,25 @@ class SourcePlan(BaseModel):
             ge=0,
         ),
     ]
-    pushed_down: Annotated[
-        list[Predicate],
+
+
+class SourceFailure(BaseModel):
+    source: Annotated[SourceName, Field(description="The source that failed.")]
+    error: Annotated[SourceError, Field(description="Why.")]
+    class_: Annotated[
+        FailureClass,
         Field(
-            description="Predicates the source applied itself.\n\nThe four predicate vectors below partition one set of outcomes, and nothing in\nthe type says so: a `Predicate` could appear in two of them at once, or in none.\nOne `Vec<(Predicate, Outcome)>` — or a map keyed by predicate — would make that\nunrepresentable. See the directive below for why it stays as it is."
-        ),
-    ]
-    source: Annotated[SourceName, Field(description="The configured source this describes.")]
-    unavailable: Annotated[
-        list[Predicate],
-        Field(
-            description="Predicates neither side could answer, so the result is unconstrained.\n\nNever [`Predicate::ReverseDependencies`]: `DependencySupport` has no\nunsupported variant, so a reverse-dependency read is answered natively or\nemulated by the engine's bounded scan, never abandoned. The type cannot say\nso — see the directive below."
+            alias="class",
+            description="Whether repeating the request unchanged could change this source's answer.",
         ),
     ]
 
 
-class UnresolvedReason(StrEnum):
-    UnresolvedReasonNot_Configured_On_This_Host = "not configured on this host"
+class UnresolvedDesignator(BaseModel):
+    designator: Annotated[
+        Designator, Field(description="The designator the far end was recorded under.")
+    ]
+    reason: Annotated[UnresolvedReason, Field(description="Why it was not resolved.")]
 
 
 class QualifiedEdge(BaseModel):
@@ -191,36 +210,17 @@ class QualifiedEdge(BaseModel):
             description="The item the edge starts at, and the one that **depends on** the other.\n\nThe direction a caller asked in says which end they named, not which end the edge\nstarts at: a forward read and the matching reverse read report the same edge.",
         ),
     ]
-    kind: Annotated[DependencyKind, Field(description="What the edge means.")]
     to: Annotated[
         QualifiedEndpoint,
         Field(description="The item the edge points at, and the one that must finish first."),
     ]
+    kind: Annotated[DependencyKind, Field(description="What the edge means.")]
 
 
 class QueryPlan(BaseModel):
     per_source: Annotated[
         list[SourcePlan], Field(description="One entry per source the query reached.")
     ]
-
-
-class SourceFailure(BaseModel):
-    class_: Annotated[
-        FailureClass,
-        Field(
-            alias="class",
-            description="Whether repeating the request unchanged could change this source's answer.",
-        ),
-    ]
-    error: Annotated[SourceError, Field(description="Why.")]
-    source: Annotated[SourceName, Field(description="The source that failed.")]
-
-
-class UnresolvedDesignator(BaseModel):
-    designator: Annotated[
-        Designator, Field(description="The designator the far end was recorded under.")
-    ]
-    reason: Annotated[UnresolvedReason, Field(description="Why it was not resolved.")]
 
 
 class Unanswered(RootModel[SourceFailure | UnresolvedDesignator]):
@@ -231,10 +231,6 @@ class Unanswered(RootModel[SourceFailure | UnresolvedDesignator]):
 
 
 class QueryResponse(BaseModel):
-    errors: Annotated[
-        list[SourceFailure],
-        Field(description="Sources that failed. One failure never fails the whole query."),
-    ]
     items: Annotated[
         list[QualifiedEdge],
         Field(description="This page's items, already qualified and merged across sources."),
@@ -246,6 +242,10 @@ class QueryResponse(BaseModel):
     plan: Annotated[
         QueryPlan,
         Field(description="What each source was asked to do, and what the engine did instead."),
+    ]
+    errors: Annotated[
+        list[SourceFailure],
+        Field(description="Sources that failed. One failure never fails the whole query."),
     ]
     unanswered: Annotated[
         list[Unanswered],

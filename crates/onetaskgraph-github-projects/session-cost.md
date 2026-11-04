@@ -1356,3 +1356,17 @@ here measures.
 **`session-cost.txt`** moves on one line and its node total: the `nominated board lookup` goes
 2 → **101** worst-case nodes, its `fields(first:100)` page. Requests stay **216**, and nodes go
 266,210 → **266,309**.
+
+The comment-carrying board listing adds one document to the live contract reconciliation.
+The recorded session therefore adds one reconciliation request and 20,150 worst-case
+nodes (100 board items, each with up to 100 comments); its ordinary listing requests
+are unchanged. This is a measured session record, not a change to any request budget.
+
+The commented board listing also carries each task's first `blockedBy` page, so a
+complete sanitization sweep can screen fixed dependency IDs without a separate read
+per task. Its worst-case price is now 4 points (previously 3); task and comment
+page sizes are unchanged.
+The session record includes those dependency connections: 5,000 additional worst-case
+nodes in that reconciliation call (100 tasks with 50 dependency nodes each), raising
+the document from 20,150 to 25,150 nodes and the session total from 295,892 to 300,892.
+The session still sends 241 requests; this updates its measured record, not a budget.

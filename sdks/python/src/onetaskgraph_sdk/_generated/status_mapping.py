@@ -50,8 +50,8 @@ class StatusNames3(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    project: StatusName
     task: StatusName
+    project: StatusName
 
 
 class StatusNames(RootModel[StatusName | StatusNames1 | StatusNames2 | StatusNames3]):

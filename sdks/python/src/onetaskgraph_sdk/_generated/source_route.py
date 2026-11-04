@@ -20,15 +20,10 @@ class SourceName(RootModel[str]):
 
 
 class SourceRoute(BaseModel):
+    source: Annotated[SourceName, Field(description="The source the item would be written to.")]
     destination: Annotated[
         SourceName,
         Field(description="The source the item lands in: the routed one, or the source itself."),
-    ]
-    reachable: Annotated[
-        list[SourceName],
-        Field(
-            description="Every source an item written to `source` could land in, whatever its repositories and\nclassification: `source` itself first, then each source its routes name as `to`, in\nthe order they are written, each once — the set a routed copy reads ahead from."
-        ),
     ]
     route: Annotated[
         int | None,
@@ -37,4 +32,9 @@ class SourceRoute(BaseModel):
             ge=0,
         ),
     ] = None
-    source: Annotated[SourceName, Field(description="The source the item would be written to.")]
+    reachable: Annotated[
+        list[SourceName],
+        Field(
+            description="Every source an item written to `source` could land in, whatever its repositories and\nclassification: `source` itself first, then each source its routes name as `to`, in\nthe order they are written, each once — the set a routed copy reads ahead from."
+        ),
+    ]
