@@ -307,10 +307,13 @@ pub enum SourcesCommand {
     /// Find the tasks of one source already carrying a declared private term, and rewrite
     /// every field and comment the policy's replacements can fix.
     ///
+    /// Coverage includes tasks and their comments. Projects and documents are sanitised on
+    /// ordinary screened writes, but this sweep does not enumerate them.
+    ///
     /// Asks the policy's `terms_command` for the terms, then searches the source once per term
     /// — never listing it — and puts every item a search returns to the policy's sanitisation
     /// before rewriting it. A search cannot reach every class of record, and the report names
-    /// each one it did not cover; `--complete` reads the source whole once instead. A folder of
+    /// each one it did not cover; `--complete` reads every task once instead. A folder of
     /// Markdown is always read whole. Exits 0 when everything matched was fixed and coverage is
     /// complete, 1 when anything is left unfixable or in conflict, 2 when the policy could not
     /// decide, and 3 when coverage is incomplete and nothing else failed.

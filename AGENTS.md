@@ -1476,6 +1476,8 @@ HTTP requests. The page bound is on engine-held work: provider-owned per-command
 caches may retain records until command end; releasing them per page needs its own source
 seam and request-budget verification. GitHub may prefetch its HTTP pages before returning
 the first caller page; the ordering guarantee is over the engine's source-API pages.
+Sweep coverage includes tasks and their comments; it does not enumerate projects or
+documents, whose ordinary screened writes still sanitise them.
 
 - **No production dependency on onevcs.** The command adapter speaks onevcs's versioned
   boundary schema, pinned at `engine/boundary/onevcs-boundary-schema-v4.json`; the release the

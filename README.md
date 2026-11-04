@@ -2593,14 +2593,16 @@ sanitisation is attempted for the classification refusal.
 
 **Sweeping a source: `onetaskgraph sources sanitize <SOURCE> [--dry-run] [--complete]
 [--json]`.** It asks `terms_command` for the scope's terms — refused, naming it, without one —
-and **searches rather than lists**: one narrowing text search per term over the source's items,
+and covers tasks and their comments. It does not enumerate projects or documents; their
+ordinary screened writes still sanitise them. It **searches rather than lists**: one narrowing
+text search per term over the source's tasks,
 reading only the items those return, each with its comments, putting each to one sanitisation
 before rewriting it through the same version-checked write. A search cannot establish three
 classes — a hit only in stored metadata (the store's own `onetaskgraph.origin` and
 `onetaskgraph.copies` values included), one only in a comment, and a spelling the policy matches
 (an NFKC variant, a zero-width character inside a term) that a backend's index does not — so the
 report lists each it did not cover under `coverage.uncovered`, and the sweep **exits 3** rather
-than claim a clean source. `--complete` reads the source whole once, a page at a time, each
+than claim clean task coverage. `--complete` reads every task once, a page at a time, each
 page's items decided and written before the next is asked for, covering all three; a source
 whose requests spend no quota, a folder of Markdown, is always read whole; one whose request
 count cannot be read is searched, as one spending a shared allowance is. `--dry-run` sends
