@@ -1,3 +1,6 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { canonicalInputNames } from "./nx-policy/version-inputs.mjs";
 import { graphReadSet } from "./workflow-graph.mjs";
 
 // Repository files read by each journey target, beyond the workflow graph.
@@ -5,6 +8,7 @@ import { graphReadSet } from "./workflow-graph.mjs";
 // manifests. ci-contexts.spec reconciles this inventory with the target that runs them;
 // graph-only ci-contexts retains workflow-graph.graphReadSet() alone.
 export const cdJourneyReadSet = [
+  ".github/release-published-paths",
   "config/github-interfaces.toml",
   "pyproject.toml",
   "release-plz.toml",
@@ -68,7 +72,7 @@ export const policyJourneyFiles = [
   ".github/policy/tests/boundaries.test.mjs",
   ".github/policy/tests/inventory.test.mjs",
   ".github/policy/tests/policy-routing.test.mjs",
-  ".github/policy/tests/policy.test.mjs",
+  ".github/policy/tests/semantic-release.test.mjs",
   ".github/policy/tests/release-shortcut.test.mjs",
   ".github/policy/tests/reusable.test.mjs",
   ".github/policy/tests/rust-cache-warm.test.mjs",
@@ -106,12 +110,34 @@ export const releaseTailReadSet = [
   "budgets.yaml",
   "package.json",
   "scripts/actions-budget-figures.sh",
+  ".github/release-published-paths",
 ];
 
 export const releaseTailFiles = [".github/policy/tests/release-tail.test.mjs"];
 
 // The one policy journey run on every platform, because the real action it runs does.
 export const rustCacheJourneyFiles = [".github/policy/tests/rust-cache.test.mjs"];
+
+export const inputValidationReadSet = [
+  "nx.json",
+  "scripts/nx-version-free-inputs.mjs",
+  ".github/nx-policy/version-inputs.mjs",
+];
+
+export const nxHashFiles = [".github/nx-policy/tests/nx-hashes.test.mjs"];
+
+export const nxInputFiles = [".github/nx-policy/tests/nx-inputs.test.mjs"];
+export const nxInputReadSet = [
+  ".github/nx-policy/tests/nx-inputs.test.mjs",
+  ".github/nx-policy/tests/fixtures/nx-workspace-contracts.mjs",
+  "nx.json",
+  "**/project.json",
+  "package.json",
+  "bun.lock",
+  "scripts/ci-job.sh",
+];
+
+export const cacheJourneyFiles = [".github/cache-policy/tests/cache.test.mjs"];
 
 export const cdJourneyFiles = [
   ".github/tests/github-interfaces.test.mjs",
@@ -127,16 +153,27 @@ export const GITHUB_READS = "{workspaceRoot}/.github/**/*";
 // What a journey target's inputs get wrong against the read set of the tests it runs: every
 // outside read it is not keyed on, and every workspace input its tests do not read.
 export function inputProblems(project, target) {
+  const rootInputs = JSON.parse(
+    readFileSync(new URL("../nx.json", import.meta.url), "utf8"),
+  ).namedInputs;
+  assert.ok(
+    rootInputs &&
+      typeof rootInputs === "object" &&
+      !Array.isArray(rootInputs) &&
+      Object.values(rootInputs).every(Array.isArray),
+    "Nx named inputs are arrays",
+  );
   const expand = (inputs) =>
     inputs.flatMap((input) =>
-      typeof input === "string" && project.namedInputs?.[input]
-        ? expand(project.namedInputs[input])
+      typeof input === "string" && (project.namedInputs?.[input] ?? rootInputs[input])
+        ? expand(project.namedInputs?.[input] ?? rootInputs[input])
         : [input],
     );
   // The release tail imports nothing of the run graph, so it is keyed on its own reads alone.
-  const graph =
-    target === "release-tail" ? [] : graphReadSet().filter((path) => !path.startsWith(".github/"));
-  if (!graph.length && target !== "release-tail")
+  const graph = ["release-tail", "nx-inputs"].includes(target)
+    ? []
+    : [...graphReadSet().filter((path) => !path.startsWith(".github/")), ...inputValidationReadSet];
+  if (!graph.length && !["release-tail", "nx-inputs"].includes(target))
     throw Error("the graph reads no outside file, so this proves nothing");
   const outside = [
     ...new Set([
@@ -147,20 +184,32 @@ export function inputProblems(project, target) {
           ? policyJourneyReadSet
           : target === "budget-journeys"
             ? budgetJourneyReadSet
-            : target === "release-tail"
-              ? releaseTailReadSet
-              : []),
+            : target === "nx-inputs"
+              ? nxInputReadSet
+              : target === "release-tail"
+                ? releaseTailReadSet
+                : []),
     ]),
   ];
   const inputs = expand(project.targets[target].inputs ?? ["default"]);
+  const semanticNames = canonicalInputNames();
+  const semantic = inputs.flatMap((input) => {
+    const ecosystem =
+      typeof input?.runtime === "string"
+        ? input.runtime.match(
+            /^node scripts\/nx-version-free-inputs\.mjs --ecosystem (cargo|npm|python)(?: --keep-version)?$/,
+          )?.[1]
+        : undefined;
+    return ecosystem ? semanticNames[ecosystem] : [];
+  });
+  const covered = (path) =>
+    inputs.includes(`{workspaceRoot}/${path}`) || semantic.includes(path.split("/").at(-1));
   const github = target === "policy-tests" ? [GITHUB_READS] : [];
   return [
     ...github
       .filter((entry) => !inputs.includes(entry))
       .map((entry) => `${target} is not keyed on ${entry.slice("{workspaceRoot}/".length)}`),
-    ...outside
-      .filter((path) => !inputs.includes(`{workspaceRoot}/${path}`))
-      .map((path) => `${target} is not keyed on ${path}`),
+    ...outside.filter((path) => !covered(path)).map((path) => `${target} is not keyed on ${path}`),
     ...inputs
       .filter((entry) => String(entry).startsWith("{workspaceRoot}/"))
       .filter((input) => !github.includes(input))

@@ -325,19 +325,17 @@ test("each platform's plan is what v0.7.1 published for its targets, at any vers
 
 test("release routing prefix agrees with the production PR builder", () => {
   assert.match(read("scripts/prepare-release-pr.sh"), /branch="release-plz-\$version"/);
-  assert.match(read(".github/macos-policy.mjs"), /startsWith\("release-plz-"\)/);
 });
 
-test("every pull-request job compares against the one merge-base derivation", () => {
+test("every pull-request job inherits the event comparison that Nx normalises", () => {
   const ci = workflows()["ci.yml"];
-  const bases = ["lint", "test-linux", "test-windows", "test-macos"].map((id) =>
-    ci.jobs[id].steps.find((step) => step.id === "pr-base"),
-  );
-  // scripts/check-ci-recipes.sh drives scripts/ci-pr-base.sh over a real clone, its refusals
-  // included; every job runs it the same way, so that proof is each job's.
-  for (const step of bases) {
-    assert.equal(step.run, 'bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"');
-    assert.deepEqual(step.env, bases[0].env);
+  assert.equal(ci.env.NX_BASE, `\${{ github.event.pull_request.base.sha }}`);
+  assert.equal(ci.env.NX_HEAD, `\${{ github.event.pull_request.head.sha }}`);
+  for (const job of Object.values(ci.jobs)) {
+    for (const env of [job.env, ...job.steps.map((step) => step.env)]) {
+      assert.equal(env?.NX_BASE, undefined);
+      assert.equal(env?.NX_HEAD, undefined);
+    }
   }
   assert.match(read("justfile"), /^check:.*distribution-test/m);
 });
@@ -537,4 +535,61 @@ test("the telemetry digest moves with a nested fixture's content", () => {
     rmSync(nested, { force: true });
   }
   assert.equal(digest(), without);
+});
+
+test("published pathspecs cover every published crate, wheel and registry package", () => {
+  const patterns = read(".github/release-published-paths")
+    .split("\n")
+    .filter((line) => line && !line.startsWith("#"));
+  const tracked = (...pathspecs) =>
+    execFileSync("git", ["ls-files", "-z", "--", ...pathspecs], {
+      cwd: root,
+      env: {
+        ...process.env,
+        GIT_DIR: undefined,
+        GIT_WORK_TREE: undefined,
+        GIT_INDEX_FILE: undefined,
+        GIT_COMMON_DIR: undefined,
+      },
+      encoding: "utf8",
+    })
+      .split("\0")
+      .filter(Boolean);
+  const crates = readdirSync(new URL("crates", root), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => tomlDocument(`crates/${name}/Cargo.toml`).package.publish !== false);
+  const artifactFiles = tracked(
+    ...crates.map((crate) => `crates/${crate}/**`),
+    "sdks/python/**",
+    "sdks/typescript/**",
+    "npm/**",
+    "Cargo.toml",
+    "Cargo.lock",
+    "pyproject.toml",
+    "uv.lock",
+    "package.json",
+    "bun.lock",
+    "rust-toolchain.toml",
+    ".python-version",
+    ".cargo/**",
+    "README.md",
+    "LICENSE",
+    "scripts/release_cd.py",
+    "scripts/release_products.py",
+    "scripts/cli_wheel_lock.py",
+    "scripts/release-wheel-binary.py",
+    "scripts/nx.sh",
+  );
+  assert.ok(artifactFiles.length > 0 && crates.length > 0);
+  const missing = (selection) => {
+    const covered = new Set(tracked(...selection));
+    return artifactFiles.filter((file) => !covered.has(file));
+  };
+  assert.deepEqual(missing(patterns), []);
+  assert.ok(
+    missing(patterns.filter((pattern) => pattern !== "crates/onetaskgraph-core/**")).includes(
+      "crates/onetaskgraph-core/Cargo.toml",
+    ),
+  );
 });

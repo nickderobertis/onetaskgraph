@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-  readdirSync,
   cpSync,
   mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,10 +22,10 @@ import {
   graph,
   jobs,
   matrices,
-  triggered,
-  validateEventInventory,
   read,
   root,
+  triggered,
+  validateEventInventory,
   workflows,
 } from "../../workflow-graph.mjs";
 
@@ -186,6 +186,15 @@ test("trigger filters discriminate event types, branches and tags and refuse uns
   assert.equal(triggered(workflow, { event: "release", action: "created" }), false);
   assert.equal(triggered(workflow, { event: "release", action: "published" }), true);
   assert.equal(triggered(workflow, { event: "workflow_run", workflow: "other" }), false);
+  const promotion = { ...workflow, on: { push: { branches: ["cache-promote/**"] } } };
+  for (const [branch, expected] of [
+    ["cache-promote/123", true],
+    ["cache-promote/nested/123", true],
+    ["cache-promote-wrong/123", false],
+    ["feature", false],
+    ["main", false],
+  ])
+    assert.equal(triggered(promotion, { event: "push", branch }), expected);
   const combined = { ...workflow, on: { push: { branches: ["main"], tags: ["v1.2.4"] } } };
   for (const [scenario, expected] of [
     [{ event: "push", branch: "main" }, true],
@@ -277,33 +286,6 @@ test("local Bun parser rejects unsupported CLI arguments at its real entrypoint"
   });
   assert.equal(accepted.status, 0, accepted.stderr);
   assert.equal(JSON.parse(accepted.stdout).workspaces["sdks/typescript"].name, "@onetaskgraph/sdk");
-});
-
-test("the classifier enforces invocation and actual filesystem IO failure contracts", () => {
-  const scratch = mkdtempSync(
-    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "cli-io-"),
-  );
-  try {
-    const classifier = fileURLToPath(new URL("../../macos-policy.mjs", import.meta.url));
-    const event = join(scratch, "event.json");
-    writeFileSync(event, JSON.stringify({ event_name: "push" }));
-    for (const args of [[], ["other"], ["classify", "--unknown", event]])
-      assert.notEqual(
-        spawnSync(process.execPath, [classifier, ...args], { encoding: "utf8" }).status,
-        0,
-      );
-    const outputFailure = spawnSync(
-      process.execPath,
-      [classifier, "classify", "--event", event, "--base", "missing", "--head", "missing"],
-      {
-        env: { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_OUTPUT: scratch },
-        encoding: "utf8",
-      },
-    );
-    assert.notEqual(outputFailure.status, 0);
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
 });
 
 test("reporter rejects invalid invocations and an unwritable SDK result destination", () => {

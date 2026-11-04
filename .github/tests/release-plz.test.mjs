@@ -57,10 +57,15 @@ test("the guard enables the job exactly when both release secrets are present, a
     });
     assert.equal(result.status, 0, name);
     assert.equal(readFileSync(output, "utf8"), `enabled=${expected}\n`, name);
-    // Every later step reads the guard's answer, so a disabled job does nothing at all.
-    for (const later of job().steps.slice(1))
+    // Release operations need both secrets; cache promotion remains independent.
+    for (const later of job().steps.filter((entry) =>
+      entry.if?.includes("steps.guard.outputs.enabled"),
+    ))
       assert.equal(
-        evaluate(later.if, { steps: { guard: { outputs: { enabled: expected } } } }),
+        evaluate(later.if, {
+          github: { event_name: "push", ref: "refs/heads/main" },
+          steps: { guard: { outputs: { enabled: expected } } },
+        }),
         expected === "true",
         `${name}: ${later.name || later.uses}`,
       );

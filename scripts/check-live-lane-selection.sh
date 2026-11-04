@@ -655,7 +655,7 @@ def consults(command, where):
 
 # The workflow's steps, split the way scripts/check-live-lane.sh splits them.
 workflow = read(WORKFLOW, "the workflow that runs the required check")
-steps = re.split(r"(?m)^      - (?=name:|uses:)", workflow)
+steps = re.split(r"(?m)^      - (?=name:|uses:)", workflow)[1:]
 # Less the janitor's cleanups of a cancelled run, which open no session and so have no
 # decision to consult; scripts/check-live-janitor.sh holds those steps to their whole shape, and
 # exactly a step running one of these commands is left out.
@@ -682,14 +682,9 @@ for step in credentialed:
     where = f"{WORKFLOW.as_posix()} step {named.group(1)!r}" if named else WORKFLOW.as_posix()
     run = re.search(r"(?ms)^\s*run:\s*(.*?)(?=\n\s*(?:-\s|\w+:)|\Z)", step)
     consults(run.group(1) if run else "", where)
-    # An implicit base is how affected selection quietly starts comparing against the wrong
-    # commit, and on the default branch it compares against this very commit and selects
-    # nothing at all. Every credentialed step names the base it derived.
-    if not re.search(r"(?m)^\s*NX_BASE:", step):
-        problems.append(
-            f"{where}: can open a live session and sets no NX_BASE, so both Nx and the "
-            "decision fall back to a default base rather than the commit this run is about"
-        )
+    # A local override would make live selection and the report compare different trees.
+    if re.search(r"(?m)^\s*(?:NX_BASE|NX_HEAD):", step):
+        problems.append(f"{where}: overrides the shared event-derived selection")
 
 if problems:
     print("check-live-lane-selection: a path can reach a live session without consulting the decision.", file=sys.stderr)
@@ -831,55 +826,38 @@ drive gate-generated "$BASE"
 expect_unconditional_targets
 reset_fixture
 
-# 6. The base those paths derive.
-#
-# Case 5 hands each path a base; this is where CI's comes from. Every credentialed step names
-# its NX_BASE (case 4), and that base must be the output of a step running
-# scripts/ci-pr-base.sh, the one derivation the pull-request jobs share — which
-# scripts/check-ci-recipes.sh drives over a real clone, its refusals included. An implicit or
-# hand-rolled base is how affected selection quietly starts comparing against the wrong commit.
+# 6. Every Nx and live step inherits the event's immutable comparison pair. Nx normalises
+# the event base to its merge base; check-ci-recipes proves the behind-main case.
 if ! (cd "$REPO" && "$PYTHON" - <<'PY'
 import re
 import sys
 from pathlib import Path
 
 workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
-steps = re.split(r"(?m)^      - (?=name:|uses:)", workflow)
-problems = []
-for step in steps:
-    base = re.search(r"(?m)^\s*NX_BASE:\s*\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.base\s*\}\}\s*$", step)
-    if not re.search(r"(?m)^\s*NX_BASE:", step):
-        continue
-    named = re.search(r"(?m)^\s*name:\s*(.+?)\s*$", step)
-    where = f"step {named.group(1)!r}" if named else "a step"
-    if not base:
-        problems.append(f"{where} sets NX_BASE from no step's `base` output")
-        continue
-    declaring = [
-        candidate
-        for candidate in steps
-        if re.search(rf"(?m)^\s*id:\s*{re.escape(base.group(1))}\s*$", candidate)
-    ]
-    if not declaring or not all(
-        re.search(r'(?m)^\s*run:\s*bash scripts/ci-pr-base\.sh "\$BASE_REF" "\$BASE_SHA"\s*$', candidate)
-        for candidate in declaring
-    ):
-        problems.append(
-            f"{where} takes NX_BASE from steps.{base.group(1)}, which does not run "
-            "`bash scripts/ci-pr-base.sh \"$BASE_REF\" \"$BASE_SHA\"`"
-        )
-if problems:
-    for problem in problems:
-        print(f"check-live-lane-selection: {problem}.", file=sys.stderr)
-    print(
-        "check-live-lane-selection: next: derive the base with scripts/ci-pr-base.sh, as every "
-        "pull-request job does.",
-        file=sys.stderr,
-    )
+
+def valid_selection(text):
+    declarations = re.findall(r"(?m)^( +)(NX_BASE|NX_HEAD):\s*(.*?)\s*$", text)
+    return declarations == [
+        ("  ", "NX_BASE", "${{ github.event.pull_request.base.sha }}"),
+        ("  ", "NX_HEAD", "${{ github.event.pull_request.head.sha }}"),
+    ] and re.search(
+        r"(?m)^env:\n  NX_BASE: [^\n]+\n  NX_HEAD: [^\n]+$", text
+    ) is not None
+
+if not valid_selection(workflow):
+    print("check-live-lane-selection: require one workflow-global event base/head pair with no override.", file=sys.stderr)
     raise SystemExit(1)
+for broken in [
+    workflow.replace("  NX_BASE: ${{ github.event.pull_request.base.sha }}\n", ""),
+    workflow.replace("pull_request.base.sha", "pull_request.head.sha"),
+    workflow + "\n        NX_BASE: HEAD~1\n",
+    workflow + "\n      NX_HEAD: HEAD\n",
+]:
+    if valid_selection(broken):
+        raise AssertionError("an absent, wrong or overridden selection was accepted")
 PY
 ) 2>"$scratch/base-step-error"; then
-  fail "the workflow's base derivation is not scripts/ci-pr-base.sh: $(cat "$scratch/base-step-error")"
+  fail "the workflow's event-derived comparison is invalid: $(cat "$scratch/base-step-error")"
 fi
 
 # 1. Real Nx over real repository states.

@@ -2,21 +2,11 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// Whether a pull request's platform test jobs may succeed without running their tests.
-//
-// They may only when the tree under test is a tree `main` already passed plus nothing but
-// release-plz's version and changelog edits — the release pull request, whose checks would
-// otherwise prove again what main's already proved. The decision is the tree comparison
-// alone: a branch name, a title or an author says nothing about what the tree holds, so none
-// of them is read.
-//
-// "A tree main passed" is a tree of a commit on `main`'s first-parent history: branch
-// protection admits a commit there only once its required checks concluded success.
-//
-// Any question this cannot answer is `run`, because running the tests is the direction a
-// wrong answer is recoverable in.
+// Rust coverage may be omitted only when main already proved the same source tree.
+// Functional tests and SDK coverage still run. Unknown history or edits require coverage.
 const RUN = "run";
 const SKIP = "skip";
+const decision = (rust_coverage, reason) => ({ schema_version: 1, rust_coverage, reason });
 
 function git(args, cwd) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
@@ -37,10 +27,9 @@ export function decide({ base, head, main, cwd = process.cwd() }) {
     const tip = git(["rev-parse", "--verify", "--end-of-options", `${main}^{commit}`], cwd);
     passed = new Set(git(["log", "--first-parent", "--format=%T", tip, "--"], cwd).split("\n"));
   } catch {
-    return { tests: RUN, reason: "Unreadable base, head or main requires the tests" };
+    return decision(RUN, "Unreadable base, head or main requires Rust coverage");
   }
-  if (!passed.has(baseTree))
-    return { tests: RUN, reason: `The base tree is not one ${main} passed` };
+  if (!passed.has(baseTree)) return decision(RUN, `The base tree is not one ${main} passed`);
   try {
     const comparator = fileURLToPath(new URL("./semantic-release.py", import.meta.url));
     const releaseOnly = JSON.parse(
@@ -51,18 +40,15 @@ export function decide({ base, head, main, cwd = process.cwd() }) {
       }),
     );
     if (releaseOnly === true)
-      return {
-        tests: SKIP,
-        reason: `The tree is one ${main} passed plus only release-plz's version and changelog edits`,
-      };
+      return decision(
+        SKIP,
+        `The tree is one ${main} passed plus only release-plz's version and changelog edits`,
+      );
     if (releaseOnly === false)
-      return {
-        tests: RUN,
-        reason: "The tree changes more than release-owned versions and changelogs",
-      };
+      return decision(RUN, "The tree changes more than release-owned versions and changelogs");
     throw Error("Invalid semantic classifier result");
   } catch {
-    return { tests: RUN, reason: "Unreadable release diff requires the tests" };
+    return decision(RUN, "Unreadable release diff requires Rust coverage");
   }
 }
 
@@ -87,7 +73,10 @@ if (
     const result = decide({ base: args[2], head: args[4], main: args[6] });
     console.log(JSON.stringify(result));
     if (process.env.GITHUB_OUTPUT)
-      appendFileSync(process.env.GITHUB_OUTPUT, `tests=${result.tests}\nreason=${result.reason}\n`);
+      appendFileSync(
+        process.env.GITHUB_OUTPUT,
+        `rust_coverage=${result.rust_coverage}\nreason=${result.reason}\n`,
+      );
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;
