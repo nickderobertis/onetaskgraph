@@ -3506,7 +3506,7 @@ impl Engine {
         // Every public view too, before anything of any plan is written.
         for (_, _, _, projecting) in &mut plans {
             if projecting.lands() {
-                if running.private_locations.is_none() {
+                if projecting.could_address() && running.private_locations.is_none() {
                     running.private_locations = Some(self.private_locations().await?);
                 }
                 projecting.public_bodies(

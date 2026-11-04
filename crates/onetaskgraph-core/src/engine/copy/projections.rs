@@ -753,6 +753,16 @@ impl Projecting {
         matches!(self, Self::Active(_))
     }
 
+    /// A view without an address cannot expose a private record's location.
+    pub(super) fn could_address(&self) -> bool {
+        self.tasks().iter().any(|task| {
+            task.task
+                .content
+                .as_deref()
+                .is_some_and(super::privacy::could_address)
+        })
+    }
+
     /// This plan, active only when it has a view to land or `project`'s destination already
     /// records a map to bring in step — so a private plan with neither reads nothing more.
     pub(super) fn settled(self, project: &Planned) -> Self {

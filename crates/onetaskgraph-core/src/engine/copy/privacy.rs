@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use super::{
-    Engine, EngineError, Level, Planned, Running, content_of, could_name, fits, located,
-    location_of, metadata_of, metadata_ref, refused, set_content, stops_a_location,
+    Engine, EngineError, Level, Planned, Running, content_of, fits, located, location_of,
+    metadata_of, metadata_ref, refused, set_content, stops_a_location,
 };
 use crate::config::SourceVisibility;
 use crate::section_links::SectionForm;
@@ -22,12 +22,12 @@ impl Engine {
         if self.declared(&item.to) == SourceVisibility::Private {
             return Ok(());
         }
-        if !content_of(&item.item).is_some_and(could_name)
+        if !content_of(&item.item).is_some_and(could_address)
             && !item
                 .carried
                 .iter()
                 .flatten()
-                .any(|comment| could_name(&comment.body))
+                .any(|comment| could_address(&comment.body))
         {
             return Ok(());
         }
@@ -190,6 +190,19 @@ impl Engine {
     }
 }
 
+/// Reported record locations are URLs or absolute paths. A slash inside ordinary prose
+/// (including a repository name) is not evidence that an unrelated private store must be read.
+pub(super) fn could_address(content: &str) -> bool {
+    content.contains("](")
+        || content.contains("]:")
+        || content.contains("://")
+        || content.char_indices().any(|(at, character)| {
+            (character == '/' || character == '\\')
+                && super::stops_a_location(content[..at].chars().next_back())
+                || character == ':' && content[at + 1..].starts_with(['/', '\\'])
+        })
+}
+
 /// Keep link text, without the Markdown destination, for any private record address.
 /// Literal addresses are removed too; fragments must never leave a private id behind.
 pub(super) fn without_private_links(
@@ -197,10 +210,24 @@ pub(super) fn without_private_links(
     locations: &[String],
     own: Option<&str>,
 ) -> String {
+    // Markdown unescapes backslashes before punctuation, including the `\.` in a
+    // Windows temporary directory. Compare destinations in the parser's own spelling too.
+    let parsed_locations = locations
+        .iter()
+        .filter_map(|location| {
+            let link = format!("[record](<{location}>)");
+            pulldown_cmark::Parser::new(&link).find_map(|event| match event {
+                pulldown_cmark::Event::Start(pulldown_cmark::Tag::Link { dest_url, .. }) => {
+                    Some(dest_url.into_string())
+                }
+                _ => None,
+            })
+        })
+        .collect::<Vec<_>>();
     let private = |target: &str| {
         let path = target.split('#').next().unwrap_or_default();
         let resolved = own.and_then(|own| crate::section_links::resolve_relative(own, path));
-        locations.iter().any(|location| {
+        locations.iter().chain(&parsed_locations).any(|location| {
             target == location
                 || resolved.as_ref() == Some(location)
                 || target

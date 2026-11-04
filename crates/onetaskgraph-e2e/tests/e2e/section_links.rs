@@ -3088,6 +3088,7 @@ fn standalone_copies_remove_later_pages_private_addresses_and_preserve_similar_p
             record["location"] = json!({"url": location});
         }
     }
+    data["tasks"][0]["location"] = json!({"path": r"C:\home\.private\T-1.md"});
     data["capabilities"] = json!({"max_page_size": 1, "documents": "native"});
     let private = json!({"plugin": "in-memory", "config": data, "visibility": "private"});
     configure(
@@ -3098,8 +3099,11 @@ fn standalone_copies_remove_later_pages_private_addresses_and_preserve_similar_p
             ("public", &public),
         ],
     );
-    let body = "Read [task](https://private.example/tasks/T-4#budget), [project](https://private.example/projects/P-2), and [document](https://private.example/documents/D-3#overview). [nested [label] *text*](https://private.example/tasks/T-4#budget). Bare: `https://private.example/tasks/T-4#budget`; public: [similar](https://private.example/tasks/T-40#keep).\n\nReference: [reference][private]. Auto: <https://private.example/tasks/T-4#budget>. [escaped \\[label\\]](https://private.example/tasks/T-4#budget).\n\n[private]: https://private.example/tasks/T-4#budget\n";
-    let expected = "Read task, project, and document. nested [label] *text*. Bare: ``; public: [similar](https://private.example/tasks/T-40#keep).\n\nReference: reference. Auto: . escaped \\[label\\].";
+    let body = concat!(
+        r"Windows: [private heading](C:\home\.private\T-1.md#budget). ",
+        "Read [task](https://private.example/tasks/T-4#budget), [project](https://private.example/projects/P-2), and [document](https://private.example/documents/D-3#overview). [nested [label] *text*](https://private.example/tasks/T-4#budget). Bare: `https://private.example/tasks/T-4#budget`; public: [similar](https://private.example/tasks/T-40#keep).\n\nReference: [reference][private]. Auto: <https://private.example/tasks/T-4#budget>. [escaped \\[label\\]](https://private.example/tasks/T-4#budget).\n\n[private]: https://private.example/tasks/T-4#budget\n"
+    );
+    let expected = "Windows: private heading. Read task, project, and document. nested [label] *text*. Bare: ``; public: [similar](https://private.example/tasks/T-40#keep).\n\nReference: reference. Auto: . escaped \\[label\\].";
     for (verb, folder) in [("task", "tasks"), ("document", "documents")] {
         std::fs::write(
             root_of(&sandbox, "plans").join(folder).join("S.md"),
