@@ -1123,6 +1123,7 @@ fn a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and
         .splitn(6, '|')
         .collect();
     assert_eq!(parts.len(), 6, "a GitHub token's six parts: {recorded}");
+    let gh3 = recorded.replacen(change_token::PREFIX, "gh3|", 1);
     let gh2 = format!("gh2|{}|{}", parts[..4].join("|"), parts[5]);
     let gh1 = format!("gh1|{}", parts[..3].join("|"));
     let file = stores
@@ -1133,7 +1134,8 @@ fn a_destination_recorded_under_the_tokens_older_spelling_is_read_again_once_and
             "{}.md",
             note.strip_prefix("notes:").expect("a folder id")
         ));
-    for older in [gh2, gh1] {
+    // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] This loopback journey owns the engine's copied_version migration into local-md as well as token comparison; it exercises that shared engine boundary without a hosted session.
+    for older in [gh3, gh2, gh1] {
         let text = std::fs::read_to_string(&file).expect("the copy's file");
         assert_eq!(text.matches(&recorded).count(), 1, "{text}");
         std::fs::write(&file, text.replace(&recorded, &older)).expect("the copy's file");

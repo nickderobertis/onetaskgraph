@@ -110,6 +110,7 @@ fn a_response_is_whole_only_when_it_carries_every_member_the_issue_fragment_sele
     // without any of them has no version, and so no whole task.
     let token = [
         "commentCount",
+        "commentVersions",
         "relationshipEvents",
         "updatedAt",
         "projectItems",

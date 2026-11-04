@@ -289,3 +289,9 @@ session spent 212, and a copy adds a handful of one-point requests to that.
 Merged onto `main`'s #3838, whose own record was 233 requests and 275,937 worst-case nodes,
 the same board-copy additions and removals land on top of it: 240 requests and 275,742
 worst-case nodes.
+
+The gh4 comment-clock connection keeps this same journey at 240 outgoing requests and
+raises its modeled worst-case node total from 275,742 to 409,842. The checked-in record
+was taken from the real loopback run, not from a real GitHub bill. The comment connection
+covers edits whose issue clock did not move; no batch or page size changed. The per-read
+point increases are listed in the plugin's `session-cost.md`.

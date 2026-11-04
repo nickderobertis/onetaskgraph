@@ -59,24 +59,29 @@ fn every_document_this_source_sends_stays_under_githubs_node_limit() {
 #[test]
 fn the_documents_that_reach_an_issue_under_a_page_are_the_ones_with_least_headroom() {
     let count = |document: &str| worst_case_node_count(document).expect("a countable document");
-    assert_eq!(count(graphql::SEARCH_ISSUES), 20_400);
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] Measured node-count golden, not a ceiling; the separate sweep enforces GitHub's node limit. See session-cost.md.
+    assert_eq!(count(graphql::SEARCH_ISSUES), 30_400);
     // The search's count, plus a page of `$nestedFirst` blockers under each of its hundred
     // issues: what lets a project's tasks answer their own forward edges.
     // And the project issue itself, with its own page of blockers: what lets the read of the
     // project that follows its tasks' be answered by this one.
     // Paged at `MEMBER_PAGE_SIZE` rather than a hundred, so twenty-three sub-issues carry it.
     // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] This figure is not a threshold but the instrument this test exists to be, as its own documentation says: the worst-case count recomputed from the production text, pinned so a change to a document is a number a reviewer sees move. This change moved it deliberately, and `session-cost.md` says why.
-    assert_eq!(count(graphql::SUB_ISSUES), 6_095);
-    assert_eq!(count(graphql::BOARD), 10_150);
+    assert_eq!(count(graphql::SUB_ISSUES), 8_495);
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] Measured node-count golden, not a ceiling; the separate sweep enforces GitHub's node limit. See session-cost.md.
+    assert_eq!(count(graphql::BOARD), 20_150);
     assert_eq!(count(graphql::ISSUE_BOARD_ITEMS), 5_100);
     // One issue with its board half, the field definitions of the boards it sits on and the
     // far ends of its `blockedBy`: what a write of it needs, read with it.
-    assert_eq!(count(graphql::ISSUE), 456);
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] Measured node-count golden, not a ceiling; the separate sweep enforces GitHub's node limit. See session-cost.md.
+    assert_eq!(count(graphql::ISSUE), 556);
     // The item and its first page of comments, and a batch of those, one per alias.
-    assert_eq!(count(graphql::ISSUE_DETAIL), 303);
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] Measured node-count golden, not a ceiling; the separate sweep enforces GitHub's node limit. See session-cost.md.
+    assert_eq!(count(graphql::ISSUE_DETAIL), 403);
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] Measured node-count golden, not a ceiling; the separate sweep enforces GitHub's node limit. See session-cost.md.
     assert_eq!(
         count(graphql::ISSUE_DETAILS),
-        303 * onetaskgraph_github_projects::DETAIL_BATCH as u64
+        403 * onetaskgraph_github_projects::DETAIL_BATCH as u64
     );
     assert_eq!(count(graphql::ISSUE_DEPENDENCIES), 200);
     // A task's comments hang off one issue rather than off a page of them, so nothing

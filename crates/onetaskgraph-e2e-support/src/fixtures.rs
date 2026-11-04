@@ -2508,6 +2508,20 @@ impl GitHubBoardFields {
         board.touch_issue(&issue);
     }
 
+    /// Edit a comment without moving the issue clock, as GitHub's comment mutation can do.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] This is a control of the shared loopback GitHub board's private comments, beside add_comment and edit_comment. AGENTS.md keeps this board here so the engine and plugin journeys drive one fake; the suite cannot change its private state from its own crate.
+    pub fn edit_comment_without_touching_issue(&self, comment: &str, body: &str) {
+        let mut board = self.board.lock().unwrap();
+        let at = board.tick();
+        let held = board
+            .comments
+            .iter_mut()
+            .find(|held| held["id"] == json!(comment))
+            .expect("the comment to edit");
+        held["body"] = json!(body);
+        held["updatedAt"] = json!(at);
+    }
+
     /// Delete one comment, as its author deleting it on GitHub would — which moves the
     /// issue's comment count and neither of its times.
     pub fn delete_comment(&self, comment: &str) {
@@ -3161,6 +3175,7 @@ impl GitHubBoard {
                "number":github_number(item["id"].as_str().unwrap()),
                "url":self.issue_url(item["id"].as_str().unwrap(), item["repo"].as_str().unwrap()),
                "createdAt":item["createdAt"],"updatedAt":item["updatedAt"],
+               "commentVersions":self.comment_versions(&item["id"], tallies),
                "commentCount":{"totalCount":tallies.map_or_else(
                    || self.comment_count(&item["id"]),
                    |tallies| tallies.comments(&item["id"]))},
@@ -3177,6 +3192,22 @@ impl GitHubBoard {
                                       "color":pair.get(2).cloned().unwrap_or(Value::Null)}))
                    .collect::<Vec<_>>(),
                    "pageInfo":{"hasNextPage":item["more_labels"] == json!(true)}}})
+    }
+
+    /// The bounded edit-clock connection selected alongside each issue.
+    fn comment_versions(&self, id: &Value, tallies: Option<&Tallies>) -> Value {
+        let count = tallies.map_or_else(|| self.comment_count(id), |tallies| tallies.comments(id));
+        let nodes: Vec<Value> = if count == 0 {
+            Vec::new()
+        } else {
+            self.comments
+                .iter()
+                .filter(|row| row["issue"] == *id)
+                .take(100)
+                .map(|row| json!({"id":row["id"],"updatedAt":row["updatedAt"]}))
+                .collect()
+        };
+        json!({"nodes":nodes,"pageInfo":{"hasNextPage":count > 100}})
     }
 
     // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
@@ -4368,6 +4399,7 @@ impl GitHubBoard {
                 "id": token("id"),
                 "updatedAt": token("updatedAt"),
                 "commentCount": token("commentCount"),
+                "commentVersions": token("commentVersions"),
                 "relationshipEvents": token("relationshipEvents"),
                 "repository": token("repository"),
                 // What the token's facets are read from: the item's own kind — its title, its

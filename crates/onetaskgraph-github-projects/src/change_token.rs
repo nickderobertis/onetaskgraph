@@ -7,7 +7,7 @@
 //! change kinds each covers member by member, and why a token waits for its item to settle. What
 //! is here is how this module holds to it. Each part is selected by every list, search and
 //! detail read already, so the token costs no request; an item missing any part — a draft, an
-//! item this process wrote and has not read back, or one whose labels or board field values
+//! item this process wrote and has not read back, or one whose comment clocks, labels or board field values
 //! came back as only a first page — gives none. [`order`] says how two tokens of one issue
 //! stand to each other, and an item whose later time is within [`SETTLED`] of the response's
 //! `Date`, or read from a response without one, gives no token.
@@ -15,7 +15,7 @@
 use std::cmp::Ordering;
 
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
-use onetaskgraph_plugin_api::{Label, Repository, asset_sha256};
+use onetaskgraph_plugin_api::{Label, NativeId, Repository, asset_sha256};
 use serde::Serialize;
 
 /// How long before the response that read it an item must last have changed for its token to
@@ -38,13 +38,15 @@ pub fn settled(issue: DateTime<Utc>, item: DateTime<Utc>, served: DateTime<Utc>)
 /// What every token this plugin gives starts with, so a reader can tell it from another
 /// plugin's.
 ///
-/// `gh3` since the item's facets — its own kind, its board field values and its labels — joined
+/// `gh4` includes comment identities and edit clocks in the facets, since an edit need not
+/// move the issue clock. Older tokens are deliberately unordered and cost one refresh.
+/// `gh3` added the item's facets — its own kind, its board field values and its labels — to
 /// the token. A `gh2` token, which lacked them, could stay equal across a label renamed or
 /// recoloured and a field option renamed, and order a token read after a far end's deletion
 /// before the one held; a `gh1` token lacked the relationship count and the repository too.
 /// Neither is a token this plugin orders or ever gives, so an entry or a copy that recorded one
 /// reads its item again once rather than trusting a version that could not see those.
-pub const PREFIX: &str = "gh3|";
+pub const PREFIX: &str = "gh4|";
 
 /// What one token of this plugin is made of.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,7 +71,9 @@ pub struct Parts {
 /// every board field it holds one of, and every label it carries, each named by what a person
 /// can rename — a field option's name, a label's name and colour.
 ///
-/// Its canonical JSON is
+/// Comment identities and edit clocks also participate: GitHub need not move either issue
+/// time when a comment is edited. An empty comment set is omitted.
+/// Its canonical JSON without comments is
 /// `{"kind":<"task"|"project"|"document">,"fields":[[<field>,<option or text>],...],"labels":[[<id>,<name>,<color>],...]}`,
 /// each list sorted by its first element; the token carries its digest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -82,6 +86,17 @@ pub struct Facets {
     fields: Vec<(String, String)>,
     /// Each label, by id, with its name and colour.
     labels: Vec<(String, String, Option<String>)>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    comments: Vec<CommentVersion>,
+}
+
+/// A comment identity and its validated edit clock, independent of the issue's clock.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct CommentVersion {
+    /// The comment whose edit this records.
+    pub id: NativeId,
+    /// The time GitHub last edited it.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// The kind of item a token's facets name: the one closed set the canonical JSON's `kind` holds.
@@ -159,7 +174,16 @@ impl Facets {
             kind,
             fields,
             labels,
+            comments: Vec::new(),
         }
+    }
+
+    /// Include each comment's identity and edit clock, independent of the issue's clock.
+    #[must_use]
+    pub fn with_comments(mut self, mut comments: Vec<CommentVersion>) -> Self {
+        comments.sort();
+        self.comments = comments;
+        self
     }
 
     /// The lowercase hex SHA-256 of their canonical JSON: the token's facets part.
@@ -325,6 +349,21 @@ mod tests {
             one.digest().as_str(),
             asset_sha256(serde_json::to_string(&one).unwrap().as_bytes())
         );
+        let commented = one.with_comments(vec![
+            CommentVersion {
+                id: NativeId("C2".to_owned()),
+                updated_at: "2026-11-04T00:00:02Z".parse().unwrap(),
+            },
+            CommentVersion {
+                id: NativeId("C1".to_owned()),
+                updated_at: "2026-11-04T00:00:01Z".parse().unwrap(),
+            },
+        ]);
+        assert_eq!(
+            serde_json::to_string(&commented).unwrap(),
+            r#"{"kind":"project","fields":[["Priority","P1"],["Status","Todo"]],"labels":[["L_1","bug","d73a4a"],["L_2","ui","ffffff"]],"comments":[{"id":"C1","updated_at":"2026-11-04T00:00:01Z"},{"id":"C2","updated_at":"2026-11-04T00:00:02Z"}]}"#
+        );
+        assert_ne!(commented.digest(), other.digest());
     }
 
     #[test]
@@ -438,10 +477,10 @@ mod tests {
             Some(facets())
         );
         for malformed in [
-            format!("gh3|not-a-time|x|1|0|{digest}|github.com/a/b"),
-            format!("gh3|2026-10-01T00:00:01Z|2026-10-01T00:00:01Z|0|0|{digest}|"),
-            format!("gh3|2026-10-01T00:00:01Z|2026-10-01T00:00:01Z|0|0|{digest}|a/b"),
-            "gh3|2026-10-01T00:00:01Z|2026-10-01T00:00:01Z|0|0|not-a-digest|github.com/a/b"
+            format!("gh4|not-a-time|x|1|0|{digest}|github.com/a/b"),
+            format!("gh4|2026-10-01T00:00:01Z|2026-10-01T00:00:01Z|0|0|{digest}|"),
+            format!("gh4|2026-10-01T00:00:01Z|2026-10-01T00:00:01Z|0|0|{digest}|a/b"),
+            "gh4|2026-10-01T00:00:01Z|2026-10-01T00:00:01Z|0|0|not-a-digest|github.com/a/b"
                 .to_owned(),
         ] {
             assert_eq!(order(&malformed, &malformed), None, "{malformed}");

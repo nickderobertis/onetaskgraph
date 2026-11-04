@@ -700,6 +700,7 @@ struct State {
     /// One alias of the next batched field write this board answers with this value instead
     /// of what it did — a response the source must refuse to read as landed.
     answers_alias_with: Option<(&'static str, Value)>,
+    comment_versions_answer: Option<Value>,
     blocked_by: BTreeMap<String, Vec<String>>,
     /// How many of what blocks each issue a copy's batched read answers with, saying whether
     /// more follow, as GitHub pages a nested connection — or `None` to answer without it.
@@ -1442,6 +1443,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
         status_field,
         extra_fields: Vec::new(),
         answers_alias_with: None,
+        comment_versions_answer: None,
         blocked_by: BTreeMap::new(),
         copy_details_blocked_by: None,
         scratch_fields: Vec::new(),
@@ -1589,6 +1591,9 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                         }
                         None => {
                             let mut data = answer(&served, query, variables);
+                            if query.contains("commentVersions:comments") {
+                                carry_comment_versions(&mut data, &served.lock().unwrap());
+                            }
                             if query.contains("rateLimit{cost}")
                                 && let Some(cost) =
                                     served.lock().unwrap().limits.reported_query_cost
@@ -1740,6 +1745,35 @@ const REPOSITORY_NODE_PREFIX: &str = "REPO_";
 
 fn repository_node_id(slug: &str) -> String {
     format!("{REPOSITORY_NODE_PREFIX}{slug}")
+}
+
+/// Render the selected comment connection from the board's actual comments on every issue.
+fn carry_comment_versions(value: &mut Value, state: &State) {
+    match value {
+        Value::Object(node) => {
+            if node.get("__typename").and_then(Value::as_str) == Some("Issue") {
+                let id = node.get("id").cloned().unwrap_or(Value::Null);
+                let rows: Vec<_> = state
+                    .comments
+                    .iter()
+                    .filter(|row| id == row.issue)
+                    .collect();
+                node.insert("commentVersions".to_owned(), state.comment_versions_answer.clone().unwrap_or_else(|| json!({
+                    "nodes":rows.iter().take(100).map(|row| json!({"id":row.id,"updatedAt":row.updated_at})).collect::<Vec<_>>(),
+                    "pageInfo":{"hasNextPage":rows.len() > 100}
+                })));
+            }
+            for child in node.values_mut() {
+                carry_comment_versions(child, state);
+            }
+        }
+        Value::Array(rows) => {
+            for row in rows {
+                carry_comment_versions(row, state);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
@@ -23267,5 +23301,65 @@ async fn a_held_update_goes_out_before_the_next_request_and_a_second_lands_after
         fixture.item("I_1").title,
         "third",
         "the later update landed last"
+    );
+}
+
+/// The issue and board clocks are settled throughout; only the comment-clock response varies.
+#[tokio::test]
+async fn incomplete_malformed_or_unsettled_comment_clocks_withhold_tokens_and_recover() {
+    let fixture = board(vec![
+        Item::issue("I_clock", "comment clock boundary").tokened("2026-09-01T00:00:00Z", 1),
+    ]);
+    let id = NativeId("I_clock".to_owned());
+    let connection = |rows: Value| json!({"nodes":rows,"pageInfo":{"hasNextPage":false}});
+    let valid = json!({"id":"C1","updatedAt":"2026-09-01T00:00:01Z"});
+    for bad in [
+        connection(json!([])),
+        connection(json!([valid.clone(), valid.clone()])),
+        connection(json!([{"id":"C1"}])),
+        connection(json!([{"id":"C1","updatedAt":"invalid"}])),
+        connection(json!([{"updatedAt":"2026-09-01T00:00:01Z"}])),
+        connection(json!([{"id":"","updatedAt":"2026-09-01T00:00:01Z"}])),
+        connection(json!([{"id":"C1","updatedAt":"2026-09-01T00:59:59Z"}])),
+    ] {
+        fixture.state.lock().unwrap().comment_versions_answer = Some(bad.clone());
+        let task = source(&fixture).get_task(&id).await.unwrap().unwrap();
+        assert!(
+            task.version.is_none(),
+            "an untrustworthy comment connection gave a token: {bad}"
+        );
+        fixture.state.lock().unwrap().comment_versions_answer =
+            Some(connection(json!([valid.clone()])));
+        let task = source(&fixture).get_task(&id).await.unwrap().unwrap();
+        assert!(
+            task.version.is_some(),
+            "a whole, settled connection did not recover after {bad}"
+        );
+    }
+    // Matching counts alone do not prove completeness when an upstream page repeats an id.
+    fixture.state.lock().unwrap().items[0].comment_count = Some(2);
+    fixture.state.lock().unwrap().comment_versions_answer =
+        Some(connection(json!([valid.clone(), valid.clone()])));
+    assert!(
+        source(&fixture)
+            .get_task(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .version
+            .is_none(),
+        "duplicate comment ids cannot vouch for the unseen comment"
+    );
+    fixture.state.lock().unwrap().comment_versions_answer = Some(connection(json!([
+        valid, {"id":"C2","updatedAt":"2026-09-01T00:00:02Z"}
+    ])));
+    assert!(
+        source(&fixture)
+            .get_task(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .version
+            .is_some()
     );
 }

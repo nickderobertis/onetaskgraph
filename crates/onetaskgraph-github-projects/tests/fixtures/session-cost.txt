@@ -1,5 +1,5 @@
 requests 240
-node count 275742
+node count 409842
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -32,23 +32,23 @@ requests per call
     1       0  live scratch field value
     1       0  live template lookup
     1     100  node-count and point-cost reconciliation while listing a repository's issues newest first for a create key
-    1     915  node-count and point-cost reconciliation while looking up the items copied from one origin
-    1    3100  node-count and point-cost reconciliation while looking up the items copied from several origins, and what creating one reads
-    1    3123  node-count and point-cost reconciliation while looking up the items copied from several origins, with a project's members
-    1     150  node-count and point-cost reconciliation while reading a batch of issues by their references
-    1    7272  node-count and point-cost reconciliation while reading a batch of issues with their comments
-    1    7463  node-count and point-cost reconciliation while reading a batch of issues with their comments and dependencies for a copy
-    1    6095  node-count and point-cost reconciliation while reading a project's tasks
+    1    1515  node-count and point-cost reconciliation while looking up the items copied from one origin
+    1    5100  node-count and point-cost reconciliation while looking up the items copied from several origins, and what creating one reads
+    1    5123  node-count and point-cost reconciliation while looking up the items copied from several origins, with a project's members
+    1    5150  node-count and point-cost reconciliation while reading a batch of issues by their references
+    1    9672  node-count and point-cost reconciliation while reading a batch of issues with their comments
+    1    9563  node-count and point-cost reconciliation while reading a batch of issues with their comments and dependencies for a copy
+    1    8495  node-count and point-cost reconciliation while reading a project's tasks
     1     100  node-count and point-cost reconciliation while reading a task's comments
     1     200  node-count and point-cost reconciliation while reading an issue's dependencies
-    1    5351  node-count and point-cost reconciliation while reading one document with its project and the project's members
+    1    7851  node-count and point-cost reconciliation while reading one document with its project and the project's members
     1     153  node-count and point-cost reconciliation while reading one draft
-    1     456  node-count and point-cost reconciliation while reading one issue
-    1     303  node-count and point-cost reconciliation while reading one issue with its comments
+    1     556  node-count and point-cost reconciliation while reading one issue
+    1     403  node-count and point-cost reconciliation while reading one issue with its comments
     1    5100  node-count and point-cost reconciliation while reading one issue's board memberships past the page it came with
-    1   10150  node-count and point-cost reconciliation while reading the board
+    1   20150  node-count and point-cost reconciliation while reading the board
     1      63  node-count and point-cost reconciliation while reading the board items of the issues a copy created
-    1   10150  node-count and point-cost reconciliation while reading the board's closed items
+    1   20150  node-count and point-cost reconciliation while reading the board's closed items
     1      50  node-count and point-cost reconciliation while reading the board's fields
     1      50  node-count and point-cost reconciliation while reading the board's fields and the destination repository
     1       0  node-count and point-cost reconciliation while reading the destination repository
@@ -56,16 +56,16 @@ requests per call
     1     100  node-count and point-cost reconciliation while reading what depends on an issue
     1       0  node-count and point-cost reconciliation while reading whether the board's project is public
     1       0  node-count and point-cost reconciliation while reading which issue a comment is on
-    1   20400  node-count and point-cost reconciliation while searching this board's issues
+    1   30400  node-count and point-cost reconciliation while searching this board's issues
     1    5150  node-count and point-cost reconciliation while snapshotting board Status options and assignments
     1     101  nominated board lookup
-    1    7272  reading a batch of issues with their comments
-    2   12190  reading a project's tasks
+    1    9672  reading a batch of issues with their comments
+    2   16990  reading a project's tasks
     3     300  reading a task's comments
     3     600  reading an issue's dependencies
-    4   21404  reading one document with its project and the project's members
-   36   16416  reading one issue
-    3   20451  reading the board
+    4   31404  reading one document with its project and the project's members
+   36   20016  reading one issue
+    3   40551  reading the board
     2     100  reading the board's fields and the destination repository
     2     106  reading what an item depends on
     2     100  reading what depends on an issue
@@ -73,7 +73,7 @@ requests per call
     5       0  recording a dependency
     2       0  removing a dependency
     1       0  safely replacing the board Status option list
-   14   89760  searching this board's issues
+   14  133760  searching this board's issues
     1       0  taking an issue out of its project
     2   20200  terminal status read-back
     9       0  the GraphQL rateLimit object
