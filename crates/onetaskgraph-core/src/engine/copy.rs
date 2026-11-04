@@ -81,7 +81,7 @@ use crate::template::TemplateProvenance;
 use crate::{Failure, GlobalId};
 
 use super::assets;
-use super::boundary::{Exposure, Outbound};
+use super::boundary::{Exposure, Outbound, Rewrite};
 use super::delivery::{Delivered, targets};
 use super::dependents::{self, Dependents};
 use super::fetch::{fits, unrepeated};
@@ -1803,6 +1803,9 @@ struct Planned {
     /// What its carried comments could not do for their section links, for the comments with
     /// nothing left to finish.
     comment_sections: sections::SectionCounts,
+    /// What the sanitisation that admitted its copy rewrote, applied to every value the copy
+    /// composes for it at a write — its origin, which names its source's id, among them.
+    rewrite: Rewrite,
 }
 
 impl Planned {
@@ -3494,15 +3497,25 @@ impl Engine {
         }
         // Every item of every project held to the public boundary before any is written, so
         // a refusal leaves nothing anywhere — not even a project its tasks never reached.
-        self.preflight_copy(
-            plans
-                .iter()
-                .flat_map(|(project, tasks, _, _)| std::iter::once(project).chain(tasks))
-                .filter(|item| !item.skipped)
-                .collect(),
-            running,
-        )
-        .await?;
+        let rewrite = self
+            .preflight_copy(
+                plans
+                    .iter()
+                    .flat_map(|(project, tasks, _, _)| std::iter::once(project).chain(tasks))
+                    .filter(|item| !item.skipped)
+                    .collect(),
+                running,
+            )
+            .await?;
+        // Only what lands somewhere screened is written as the policy passed it: a destination
+        // declared private takes the original, as it always did.
+        for (project, tasks, _, _) in &mut plans {
+            for item in std::iter::once(project).chain(tasks.iter_mut()) {
+                if self.declared(&item.to) != crate::config::SourceVisibility::Private {
+                    rewritten(item, &rewrite)?;
+                }
+            }
+        }
         // Every public view too, before anything of any plan is written.
         for (_, _, _, projecting) in &mut plans {
             if projecting.lands() {
@@ -5330,11 +5343,17 @@ impl Engine {
         // Once the content that lands is settled, and before anything — a member project
         // included — is written. A task skipped writes nothing, so it has nothing to hold.
         if !running.preflighted {
-            self.preflight_copy(
-                planned.iter().filter(|item| !item.skipped).collect(),
-                running,
-            )
-            .await?;
+            let rewrite = self
+                .preflight_copy(
+                    planned.iter().filter(|item| !item.skipped).collect(),
+                    running,
+                )
+                .await?;
+            for item in &mut planned {
+                if self.declared(&item.to) != crate::config::SourceVisibility::Private {
+                    rewritten(item, &rewrite)?;
+                }
+            }
         }
 
         // Every create this call makes is recorded as an intent on the item it copies before
@@ -6173,7 +6192,7 @@ impl Engine {
         &self,
         planned: Vec<&Planned>,
         running: &mut Running,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Rewrite, EngineError> {
         for item in &planned {
             note_private(running, item);
         }
@@ -7014,6 +7033,7 @@ impl Engine {
             pending: Vec::new(),
             comment_links: Vec::new(),
             comment_sections: sections::SectionCounts::default(),
+            rewrite: Rewrite::default(),
         })
     }
 
@@ -7357,6 +7377,19 @@ impl Engine {
                 carriers.first().cloned()
             }
             None => self.scan(destination, item.level(), &wanted).await?,
+        };
+        // A copy into a destination its policy rewrites wrote the origin as that policy passed
+        // it: an id carrying a replaced term is found by its replaced spelling, asked of the
+        // policy only once the id as it stands has found nothing.
+        let scanned = match scanned {
+            Some(found) => Some(found),
+            None => match self.origin_as_written(destination, id).await {
+                Some(replaced) => {
+                    self.scan(destination, item.level(), &Wanted::Origin(replaced))
+                        .await?
+                }
+                None => None,
+            },
         };
         if let Some(found) = scanned {
             let held = self
@@ -8515,7 +8548,7 @@ impl Engine {
             ),
             None => format!("the member project of {home}"),
         };
-        let member = Project {
+        let mut member = Project {
             version: None,
             id: home.native.clone(),
             title: held.title.clone(),
@@ -8530,19 +8563,21 @@ impl Engine {
             repositories: Vec::new(),
             classification,
         };
-        self.admit(
-            there,
-            &Outbound {
-                item,
-                classification: member.classification,
-                target: WriteTarget::New {
-                    repositories: &[],
-                    project: None,
+        let rewrite = self
+            .admit(
+                there,
+                &Outbound {
+                    item,
+                    classification: member.classification,
+                    target: WriteTarget::New {
+                        repositories: &[],
+                        project: None,
+                    },
+                    exposure: &Exposure::of_project(&member),
                 },
-                exposure: &Exposure::of_project(&member),
-            },
-        )
-        .await?;
+            )
+            .await?;
+        rewrite.project(&mut member);
         let created = there
             .source()
             .write_project(&ItemWrite {
@@ -10642,6 +10677,7 @@ fn outgoing(
             metadata: {
                 let mut metadata = carried(&task.metadata);
                 created_with(&mut metadata, item, held);
+                item.rewrite.metadata_values(&mut metadata);
                 metadata
             },
             classification,
@@ -10654,6 +10690,7 @@ fn outgoing(
                 metadata.remove(MetadataKey::MEMBER_OF_KEY);
             }
             created_with(&mut metadata, item, held);
+            item.rewrite.metadata_values(&mut metadata);
             Item::Project(Box::new(Project {
                 id,
                 url: None,
@@ -10681,6 +10718,7 @@ fn outgoing(
             metadata: {
                 let mut metadata = carried(&document.metadata);
                 created_with(&mut metadata, item, held);
+                item.rewrite.metadata_values(&mut metadata);
                 metadata
             },
             classification,
@@ -10747,6 +10785,17 @@ fn exposure_of(item: &Planned, withheld: impl Fn(&GlobalId) -> bool) -> Exposure
         Item::Document(document) => Exposure::of_document(document),
     }
     .assets(&item.assets)
+    // The id a create offers the destination is made up from the source's, and a destination
+    // whose ids are paths writes it where a reader sees it, so it is screened as the title is.
+    .and(match item.target {
+        Target::Create => Exposure::short([item.item.id().as_str().to_owned()]),
+        Target::Update { .. } => Exposure::default(),
+    })
+    // The source spelling its links are rendered from at each write, so the rendering is
+    // rewritten exactly as the content it becomes.
+    .and(item.links.as_ref().map_or_else(Exposure::default, |links| {
+        Exposure::text(links.original.clone())
+    }))
     // The comments a `--comments` copy carries land beside the item, so they are held to the
     // boundary with it — every one of them, before any is written.
     .and(
@@ -10765,6 +10814,72 @@ fn exposure_of(item: &Planned, withheld: impl Fn(&GlobalId) -> bool) -> Exposure
             .filter(|edge| far_end(&edge.to, origin).is_none_or(|far| !withheld(&far)))
             .map(|edge| edge.to.id().to_owned()),
     ))
+}
+
+/// `item` as the sanitisation that admitted its copy passed it: its own rewritable fields, the
+/// source spelling its links are rendered from, and the body of every comment it carries.
+///
+/// # Errors
+///
+/// [`EngineError::BoundaryRefused`] when a replacement left a carried comment empty, which no
+/// destination takes as a comment: the copy is refused before anything is written.
+fn rewritten(item: &mut Planned, rewrite: &Rewrite) -> Result<(), EngineError> {
+    if rewrite.is_identity() {
+        return Ok(());
+    }
+    item.rewrite = rewrite.clone();
+    let creates = matches!(item.target, Target::Create);
+    match &mut item.item {
+        Item::Task(task) => {
+            rewrite.task(task);
+            if creates {
+                task.id = NativeId::from(rewrite.short(task.id.as_str()).as_str());
+            }
+        }
+        Item::Project(project) => {
+            rewrite.project(project);
+            if creates {
+                project.id = NativeId::from(rewrite.short(project.id.as_str()).as_str());
+            }
+        }
+        Item::Document(document) => {
+            rewrite.document(document);
+            if creates {
+                document.id = NativeId::from(rewrite.short(document.id.as_str()).as_str());
+            }
+        }
+    }
+    if let Some(links) = &mut item.links {
+        links.original = rewrite.text(&links.original);
+    }
+    for comment in item.carried.iter_mut().flatten() {
+        comment.body = rewrite.text(&comment.body);
+    }
+    let emptied = || EngineError::BoundaryRefused {
+        item: item.source.to_string(),
+        destination: item.to.to_string(),
+        reason: "a replacement leaves a comment it carries empty".to_owned(),
+    };
+    let mut refused = None;
+    for step in item
+        .comment_plan
+        .iter_mut()
+        .flat_map(|plan| plan.steps.iter_mut())
+    {
+        match step {
+            comments::Step::Add(copy) | comments::Step::Edit { copy, .. } => {
+                match onetaskgraph_plugin_api::CommentBody::new(rewrite.text(copy.body.as_str())) {
+                    Ok(body) => copy.body = body,
+                    Err(_) => refused = Some(()),
+                }
+            }
+            comments::Step::Delete(_) => {}
+        }
+    }
+    match refused {
+        Some(()) => Err(emptied()),
+        None => Ok(()),
+    }
 }
 
 /// The id a created item is offered to the destination under.

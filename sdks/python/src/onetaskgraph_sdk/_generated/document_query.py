@@ -10,19 +10,16 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
+class TextFields(StrEnum):
+    TextFieldsTitle = "title"
+    TextFieldsContent = "content"
+    TextFieldsTitleOrContent = "title-or-content"
+
+
 class LabelFilter(BaseModel):
-    all_of: Annotated[list[str], Field(description="Keep an item carrying all of these.")]
     any_of: Annotated[list[str], Field(description="Keep an item carrying at least one of these.")]
+    all_of: Annotated[list[str], Field(description="Keep an item carrying all of these.")]
     none_of: Annotated[list[str], Field(description="Drop an item carrying any of these.")]
-
-
-class NativeId(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true."
-        ),
-    ]
 
 
 class ProjectFilterAny(RootModel[Literal["any"]]):
@@ -39,6 +36,20 @@ class ProjectFilterOrphans(RootModel[Literal["orphans"]]):
     ]
 
 
+class NativeId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true."
+        ),
+    ]
+
+
+class TextQuery(BaseModel):
+    terms: Annotated[str, Field(description="What the user typed.")]
+    fields: Annotated[TextFields, Field(description="Where to look for it.")]
+
+
 class ProjectFilter1(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -53,21 +64,10 @@ class ProjectFilter(RootModel[ProjectFilterAny | ProjectFilterOrphans | ProjectF
     ]
 
 
-class TextFields(StrEnum):
-    TextFieldsTitle = "title"
-    TextFieldsContent = "content"
-    TextFieldsTitleOrContent = "title-or-content"
-
-
-class TextQuery(BaseModel):
-    fields: Annotated[TextFields, Field(description="Where to look for it.")]
-    terms: Annotated[str, Field(description="What the user typed.")]
-
-
 class DocumentQuery(BaseModel):
-    labels: Annotated[LabelFilter, Field(description="Label membership.")]
-    project: Annotated[ProjectFilter, Field(description="Which project the document lives in.")]
     text: Annotated[
         TextQuery | None,
         Field(description="Free-text search, when the caller asked for one."),
     ] = None
+    labels: Annotated[LabelFilter, Field(description="Label membership.")]
+    project: Annotated[ProjectFilter, Field(description="Which project the document lives in.")]

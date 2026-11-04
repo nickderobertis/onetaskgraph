@@ -1252,6 +1252,77 @@ fn predicate_list(predicates: &[Predicate]) -> String {
     predicates.iter().map(wire).collect::<Vec<_>>().join(", ")
 }
 
+/// A write's human answer, then one line per field or comment its sanitisation changed beyond
+/// the write itself, naming each by its screened locator and never what it said.
+pub fn sanitised(rendered: String, done: &onetaskgraph_core::boundary::Sanitization) -> String {
+    if done.side_effect.is_empty() {
+        return rendered;
+    }
+    let mut out = rendered.trim_end().to_owned();
+    for effect in &done.side_effect {
+        out.push('\n');
+        out.push_str(&format!(
+            "{} {} {}",
+            if done.dry_run {
+                "would sanitise"
+            } else {
+                "sanitised"
+            },
+            effect.item,
+            effect.field
+        ));
+    }
+    out
+}
+
+/// What `sources sanitize` did: one line for what it covered and cost, then one per item and
+/// one per field it changed or could not, every record by its screened locator.
+pub fn sweep(report: &onetaskgraph_core::SweepReport) -> String {
+    let mut out = format!(
+        "{}: {} — {} source request(s); operations: {} search/list page(s), {} detail batch/comment walk(s), {} rewritten item(s)",
+        report.source,
+        match (report.complete, report.dry_run) {
+            (true, true) => "read whole, nothing written",
+            (true, false) => "read whole",
+            (false, true) => "searched, nothing written",
+            (false, false) => "searched",
+        },
+        report.requests.total,
+        report.requests.page_operations,
+        report.requests.detail_operations,
+        report.requests.rewrite_operations,
+    );
+    if !report.coverage.complete {
+        out.push_str(&format!(
+            "\nnot covered: {}",
+            report
+                .coverage
+                .uncovered
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    for item in &report.items {
+        out.push_str(&format!("\n{} {}", item.id, item.outcome));
+        for field in &item.fields {
+            out.push_str(&match &field.outcome {
+                onetaskgraph_core::FieldOutcome::Rewritten => {
+                    format!("\n  {} rewritten", field.field)
+                }
+                onetaskgraph_core::FieldOutcome::WouldRewrite => {
+                    format!("\n  {} would-rewrite", field.field)
+                }
+                onetaskgraph_core::FieldOutcome::Unfixable { why } => {
+                    format!("\n  {} unfixable ({why})", field.field)
+                }
+            });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use onetaskgraph_plugin_api::{Asset, AssetName};

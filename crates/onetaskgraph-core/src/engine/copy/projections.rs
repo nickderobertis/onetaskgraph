@@ -961,7 +961,10 @@ impl Engine {
                     exposure: &Exposure::of_project(&project),
                 },
             )
-            .await?;
+            .await
+            .and_then(|rewrite| {
+                unrewritten(destination, "the public projection project", &rewrite)
+            })?;
             destination
                 .source()
                 .check_status_write(ItemKind::Project, project.status.category, None)
@@ -1001,7 +1004,8 @@ impl Engine {
                     exposure: &Exposure::of_task(&view).assets(&task.assets),
                 },
             )
-            .await?;
+            .await
+            .and_then(|rewrite| unrewritten(destination, &task.item(), &rewrite))?;
             destination
                 .source()
                 .check_status_write(ItemKind::Task, view.status.category, None)
@@ -1927,6 +1931,26 @@ impl super::sections::Knows for ViewKnows<'_> {
     fn own(&self) -> Option<(NativeId, String)> {
         self.own.clone()
     }
+}
+
+/// A view is neutral by construction and is never rewritten: one a sanitisation would have to
+/// rewrite names something private, and is refused as the check refuses it, before anything of
+/// the copy is written.
+fn unrewritten(
+    destination: &crate::resolve::ResolvedSource,
+    item: &str,
+    rewrite: &super::super::boundary::Rewrite,
+) -> Result<(), EngineError> {
+    if rewrite.is_identity() {
+        return Ok(());
+    }
+    Err(EngineError::BoundaryRefused {
+        item: item.to_owned(),
+        destination: destination.name().to_string(),
+        reason: "it carries a term of a private repository, and a public view is never \
+                 rewritten"
+            .to_owned(),
+    })
 }
 
 #[cfg(test)]

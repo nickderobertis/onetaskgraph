@@ -304,6 +304,36 @@ pub enum SourcesCommand {
     /// Reads configuration alone, never a source: the destination is the source a route
     /// sends an item with these repositories to, or SOURCE itself when none matches.
     Route(RouteArgs),
+    /// Find the tasks of one source already carrying a declared private term, and rewrite
+    /// every field and comment the policy's replacements can fix.
+    ///
+    /// Coverage includes tasks and their comments. Projects and documents are sanitised on
+    /// ordinary screened writes, but this sweep does not enumerate them.
+    ///
+    /// Asks the policy's `terms_command` for the terms, then searches the source once per term
+    /// — never listing it — and puts every item a search returns to the policy's sanitisation
+    /// before rewriting it. A search cannot reach every class of record, and the report names
+    /// each one it did not cover; `--complete` reads every task once instead. A folder of
+    /// Markdown is always read whole. Exits 0 when everything matched was fixed and coverage is
+    /// complete, 1 when anything is left unfixable or in conflict, 2 when the policy could not
+    /// decide, and 3 when coverage is incomplete and nothing else failed.
+    // llmlint: ignore[new_command_or_client_gets_its_own_project] This subcommand belongs to the existing binary and engine projects, has no independent executable or package, and affected selection already selects both.
+    Sanitize(SanitizeArgs),
+}
+
+/// `onetaskgraph sources sanitize`.
+#[derive(Debug, Args)]
+pub struct SanitizeArgs {
+    /// The configured source to sweep.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap collects this token as text so an unknown name is refused naming the configured ones; the command converts it to a `SourceName` before any lookup.
+    pub source: String,
+    /// Send every search and read, and no write: report what would be rewritten.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Read the source's tasks whole once — every task with its comments and metadata — rather
+    /// than searching them, covering every class of record a search cannot.
+    #[arg(long)]
+    pub complete: bool,
 }
 
 /// `onetaskgraph sources route`.
@@ -2417,6 +2447,22 @@ pub struct Overrides {
     #[arg(long = "no-interactive", global = true)]
     no_interactive: bool,
     // llmlint: ignore-end[invalid_states_unrepresentable]
+    /// Replace a private term with a string in what this invocation writes: TERM=WITH, split
+    /// at the first `=`. Repeatable; appended, with --reject, after `write_policy.replacements`,
+    /// a later entry winning.
+    #[arg(long = "replace", value_name = "TERM=WITH", global = true)]
+    pub replace: Vec<String>,
+
+    /// Refuse what this invocation writes when it carries a private term, rather than
+    /// replacing it. Repeatable; ordered with --replace as typed.
+    #[arg(long = "reject", value_name = "TERM", global = true)]
+    pub reject: Vec<String>,
+
+    /// When a write is refused for a term already on its item, write nothing, and answer what
+    /// sanitising that item would change and whether the write would then pass.
+    // llmlint: ignore[names_match_behavior] The name is the prescribed Contract 5 command name, and the flag previews sanitisation only, so clean items execute ordinary writes.
+    #[arg(long = "sanitize-dry-run", global = true)]
+    pub sanitize_dry_run: bool,
 }
 
 impl Overrides {

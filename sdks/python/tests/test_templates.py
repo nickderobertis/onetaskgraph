@@ -206,21 +206,21 @@ def test_answers_json_cannot_carry_are_refused_before_the_binary_is_started(
     for answers in refused:
         with pytest.raises(TypeError, match="answers are not a JSON mapping"):
             run(
-                client.template_render(
+                client.template_render(  # ty: ignore[no-matching-overload] Deliberately invalid input tests runtime validation.
                     str(task),
                     search_path=[str(library)],
                     # Deliberately outside the declared type: the runtime half of that check.
-                    answers=answers,  # ty: ignore[invalid-argument-type]
+                    answers=answers,
                 )
             )
 
     # An iterable of pairs is not a mapping, though `dict` would make one of it.
     with pytest.raises(TypeError, match="answers are a list, not a mapping"):
         run(
-            client.template_render(
+            client.template_render(  # ty: ignore[no-matching-overload] Deliberately invalid input tests runtime validation.
                 str(task),
                 search_path=[str(library)],
-                answers=[("title", "t"), ("steps", [])],  # ty: ignore[invalid-argument-type]
+                answers=[("title", "t"), ("steps", [])],
             )
         )
 
@@ -235,11 +235,11 @@ def test_a_template_file_that_is_not_a_path_string_is_refused_before_the_binary_
     refused: list[object] = [7, tmp_path / "task.md", "", "--json", "-"]
     for file in refused:
         with pytest.raises(TypeError, match="template_variables: file is not a template path"):
-            run(client.template_variables(file))  # ty: ignore[invalid-argument-type]
+            run(client.template_variables(file))  # ty: ignore[no-matching-overload] Deliberately invalid input tests runtime validation.
         with pytest.raises(TypeError, match="template_render: file is not a template path"):
             run(
-                client.template_render(
-                    file,  # ty: ignore[invalid-argument-type]
+                client.template_render(  # ty: ignore[no-matching-overload] Deliberately invalid input tests runtime validation.
+                    file,
                     search_path=[str(library)],
                 )
             )
@@ -270,16 +270,16 @@ def test_a_search_path_or_var_that_is_not_strings_is_refused_before_the_binary_i
     for search_path, message in refusals:
         with pytest.raises(TypeError, match=f"template_variables: ({message})"):
             run(
-                client.template_variables(
+                client.template_variables(  # ty: ignore[no-matching-overload] Deliberately invalid input tests runtime validation.
                     str(task),
-                    search_path=search_path,  # ty: ignore[invalid-argument-type]
+                    search_path=search_path,
                 )
             )
         with pytest.raises(TypeError, match=f"template_render: ({message})"):
             run(
-                client.template_render(
+                client.template_render(  # ty: ignore[no-matching-overload] Deliberately invalid input tests runtime validation.
                     str(task),
-                    search_path=search_path,  # ty: ignore[invalid-argument-type]
+                    search_path=search_path,
                 )
             )
     for var, message in [
@@ -288,10 +288,10 @@ def test_a_search_path_or_var_that_is_not_strings_is_refused_before_the_binary_i
     ]:
         with pytest.raises(TypeError, match=f"template_render: {message}"):
             run(
-                client.template_render(
+                client.template_render(  # ty: ignore[no-matching-overload] Deliberately invalid input tests runtime validation.
                     str(task),
                     search_path=[str(library)],
-                    var=var,  # ty: ignore[invalid-argument-type]
+                    var=var,
                 )
             )
 

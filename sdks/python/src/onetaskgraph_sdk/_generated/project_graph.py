@@ -10,21 +10,6 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, RootModel
 
 
-class Designator(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
-            pattern="^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
-        ),
-    ]
-
-
-class FailureClass(StrEnum):
-    FailureClassRefused = "refused"
-    FailureClassTransient = "transient"
-
-
 class GlobalId(RootModel[str]):
     root: Annotated[
         str,
@@ -39,18 +24,30 @@ class GraphDirection(StrEnum):
     GraphDirectionLr = "lr"
 
 
-class GraphEdge(BaseModel):
-    from_: Annotated[
-        GlobalId,
+class GroupKey(RootModel[str]):
+    root: Annotated[
+        str,
         Field(
-            alias="from",
-            description="The prerequisite: the task that has to finish first.",
+            description="The task metadata key `project graph --group-by` groups by: any key a record may hold,\nand never the empty string, which names none.\n\nNot a [`MetadataKey`](onetaskgraph_plugin_api::MetadataKey): that is what a *write* may\nname, which keeps out this product's own namespace and a key with no dot. A read groups\nby whatever a task holds, so a folder of Markdown's `unit:` is as good a key as\n`orchestrator.unit`.",
+            min_length=1,
         ),
     ]
-    to: Annotated[GlobalId, Field(description="The dependent: the project task that waits on it.")]
 
 
 class GraphNode(BaseModel):
+    key: Annotated[
+        str,
+        Field(
+            description="The Mermaid form's node id: `n<k>` for the project's own tasks and `x<k>` for a task\noutside it, each counted from 1."
+        ),
+    ]
+    id: Annotated[GlobalId, Field(description="The task's qualified id.")]
+    title: Annotated[
+        str,
+        Field(
+            description="The task's title, exactly as its source reports it — unescaped and unaltered."
+        ),
+    ]
     external: Annotated[
         bool,
         Field(
@@ -63,68 +60,66 @@ class GraphNode(BaseModel):
             description="The task's group under `group_by`, or `null` — for a task with none, for every\nexternal task, and for every task when no key was given."
         ),
     ] = None
-    id: Annotated[GlobalId, Field(description="The task's qualified id.")]
-    key: Annotated[
-        str,
-        Field(
-            description="The Mermaid form's node id: `n<k>` for the project's own tasks and `x<k>` for a task\noutside it, each counted from 1."
-        ),
-    ]
-    title: Annotated[
-        str,
-        Field(
-            description="The task's title, exactly as its source reports it — unescaped and unaltered."
-        ),
-    ]
 
 
-class GroupKey(RootModel[str]):
+class GraphEdge(BaseModel):
+    from_: Annotated[
+        GlobalId,
+        Field(
+            alias="from",
+            description="The prerequisite: the task that has to finish first.",
+        ),
+    ]
+    to: Annotated[GlobalId, Field(description="The dependent: the project task that waits on it.")]
+
+
+class SourceName(RootModel[str]):
     root: Annotated[
         str,
         Field(
-            description="The task metadata key `project graph --group-by` groups by: any key a record may hold,\nand never the empty string, which names none.\n\nNot a [`MetadataKey`](onetaskgraph_plugin_api::MetadataKey): that is what a *write* may\nname, which keeps out this product's own namespace and a key with no dot. A read groups\nby whatever a task holds, so a folder of Markdown's `unit:` is as good a key as\n`orchestrator.unit`.",
-            min_length=1,
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
         ),
     ]
 
 
 class SourceErrorConfig(BaseModel):
-    kind: Literal["config"]
     message: Annotated[str, Field(description="What is wrong, in a form a user can act on.")]
+    kind: Literal["config"]
 
 
 class SourceErrorAuth(BaseModel):
-    kind: Literal["auth"]
     message: Annotated[str, Field(description="What failed. Never contains the credential itself.")]
+    kind: Literal["auth"]
 
 
 class SourceErrorRefused(BaseModel):
-    kind: Literal["refused"]
     message: Annotated[str, Field(description="The source's own reason.")]
+    kind: Literal["refused"]
 
 
 class SourceErrorRateLimited(BaseModel):
-    kind: Literal["rate-limited"]
+    retry_after_seconds: Annotated[
+        int | None,
+        Field(description="How long the source asked us to wait, when it said.", ge=0),
+    ] = None
     message: Annotated[
         str | None,
         Field(
             description="What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential."
         ),
     ] = None
-    retry_after_seconds: Annotated[
-        int | None,
-        Field(description="How long the source asked us to wait, when it said.", ge=0),
-    ] = None
+    kind: Literal["rate-limited"]
 
 
 class SourceErrorUnavailable(BaseModel):
-    kind: Literal["unavailable"]
     message: Annotated[str, Field(description="What went wrong reaching it.")]
+    kind: Literal["unavailable"]
 
 
 class SourceErrorMalformed(BaseModel):
-    kind: Literal["malformed"]
     message: Annotated[str, Field(description="What could not be represented.")]
+    kind: Literal["malformed"]
 
 
 class SourceError(
@@ -150,12 +145,17 @@ class SourceError(
     ]
 
 
-class SourceName(RootModel[str]):
+class FailureClass(StrEnum):
+    FailureClassRefused = "refused"
+    FailureClassTransient = "transient"
+
+
+class Designator(RootModel[str]):
     root: Annotated[
         str,
         Field(
-            description="The name a configuration document gives one configured source.",
-            pattern="^[a-z0-9][a-z0-9-]*$",
+            description="A tracker, named without conveying anything about it: `<plugin>/` and the hex SHA-256 of `<plugin>\n<backend identifier>`, or `alias/<public_alias>`.",
+            pattern="^(alias/[A-Za-z0-9_-]{16,64}|[a-z0-9][a-z0-9-]*/[0-9a-f]{64})$",
         ),
     ]
 
@@ -165,6 +165,8 @@ class UnresolvedReason(StrEnum):
 
 
 class SourceFailure(BaseModel):
+    source: Annotated[SourceName, Field(description="The source that failed.")]
+    error: Annotated[SourceError, Field(description="Why.")]
     class_: Annotated[
         FailureClass,
         Field(
@@ -172,8 +174,6 @@ class SourceFailure(BaseModel):
             description="Whether repeating the request unchanged could change this source's answer.",
         ),
     ]
-    error: Annotated[SourceError, Field(description="Why.")]
-    source: Annotated[SourceName, Field(description="The source that failed.")]
 
 
 class UnresolvedDesignator(BaseModel):
@@ -191,15 +191,13 @@ class Unanswered(RootModel[SourceFailure | UnresolvedDesignator]):
 
 
 class ProjectGraph(BaseModel):
+    schema_version: Annotated[
+        int, Field(description="The version of this document's shape; `1`.", ge=0)
+    ]
+    project: Annotated[GlobalId, Field(description="The project whose tasks these are.")]
     direction: Annotated[
         GraphDirection,
         Field(description="The direction the graph is laid out in — `auto` already resolved."),
-    ]
-    edges: Annotated[
-        list[GraphEdge],
-        Field(
-            description="Every dependency, ordered by its prerequisite's position and then its dependent's."
-        ),
     ]
     group_by: Annotated[
         GroupKey | None,
@@ -211,9 +209,11 @@ class ProjectGraph(BaseModel):
             description="Every task of the project in topological order, then every task outside it that one\nof them depends on, ordered by title and then qualified id."
         ),
     ]
-    project: Annotated[GlobalId, Field(description="The project whose tasks these are.")]
-    schema_version: Annotated[
-        int, Field(description="The version of this document's shape; `1`.", ge=0)
+    edges: Annotated[
+        list[GraphEdge],
+        Field(
+            description="Every dependency, ordered by its prerequisite's position and then its dependent's."
+        ),
     ]
     unanswered: Annotated[
         list[Unanswered],

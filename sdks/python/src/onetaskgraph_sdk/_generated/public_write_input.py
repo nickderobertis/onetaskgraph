@@ -21,15 +21,15 @@ class PublicWriteInput(BaseModel):
         extra="forbid",
     )
     destination: Annotated[RepositoryVisibility, Field(description="Where it is going.")]
+    text: Annotated[list[str], Field(description="Prose and file contents.")] = []
+    paths: Annotated[list[str], Field(description="Paths it names or writes.")] = []
     metadata: Annotated[
         list[str],
         Field(description="Titles, labels, metadata and every other short field."),
     ] = []
-    paths: Annotated[list[str], Field(description="Paths it names or writes.")] = []
     scope: Annotated[
         list[str] | None,
         Field(
             description="Which repositories' private terms the check derives, as the caller scoped it."
         ),
     ] = None
-    text: Annotated[list[str], Field(description="Prose and file contents.")] = []

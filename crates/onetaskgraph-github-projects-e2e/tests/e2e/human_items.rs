@@ -188,10 +188,11 @@ fn an_item_is_created_once_bound_and_settled_once_and_a_conflicting_terminal_is_
     let before = store.requests();
     let answer = projected(&store.project(&open));
     let created = native(&answer);
-    assert_eq!(
-        answer.as_object().unwrap().keys().collect::<Vec<_>>(),
-        ["project", "source", "task", "url"]
-    );
+    // The set of members: a parsed object keeps the binary's own order of them, which is no
+    // part of what this answer promises.
+    let mut members = answer.as_object().unwrap().keys().collect::<Vec<_>>();
+    members.sort();
+    assert_eq!(members, ["project", "source", "task", "url"]);
     assert_eq!(answer["source"], "human");
     assert_eq!(answer["project"], PROJECT);
     assert_eq!(
@@ -1326,4 +1327,69 @@ fn an_unreadable_request_and_an_unknown_host_are_refused_before_any_source() {
         stderr(&hostless)
     );
     assert_eq!(store.requests(), 0, "nothing was sent");
+}
+
+#[test]
+fn a_human_task_carrying_a_declared_term_is_projected_and_dismissed_with_it_replaced() {
+    let store = Store::new(Vec::new());
+    // A public board under the released onevcs's sanitise command, replacing an invented term.
+    let mut home = onetaskgraph_e2e_support::onevcs::OnevcsHome::new(&store.sandbox);
+    home.private("hiddenco", "quietharbor")
+        .public("synthco", "public-widgets");
+    let mut document: Value = serde_json::from_str(
+        &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml")).unwrap(),
+    )
+    .unwrap();
+    document["sources"]["human"]["visibility"] = json!("public");
+    document["write_policy"] =
+        home.sanitizing_write_policy(json!([{"term": "quietharbor", "with": "harbor-x"}]));
+    store.sandbox.project_document(&document.to_string());
+    let project = |request: &Value| {
+        let path = store.sandbox.project().join("request-term.json");
+        std::fs::write(&path, request.to_string()).unwrap();
+        store
+            .sandbox
+            .command()
+            .args(["task", "project-human", "--input"])
+            .arg(&path)
+            .arg("--json")
+            .env("ONETASKGRAPH_HOST", HOST)
+            .env("ONEVCS_HOME", home.path())
+            .output()
+            .unwrap()
+    };
+    let mut open = request("item-term", &[PUBLIC_REPOSITORY]);
+    open["title"] = json!("Decide on the quietharbor port");
+    open["body"] = json!("Choose how quietharbor's retry lands.");
+    let created = native(&projected(&project(&open)));
+    let issue = store
+        .board
+        .fields
+        .issues()
+        .into_iter()
+        .find(|issue| issue["id"] == json!(created))
+        .expect("the ticket");
+    assert_eq!(
+        issue["title"],
+        json!("Decide on the harbor-x port"),
+        "{issue}"
+    );
+    let body = store.board.fields.body(&created);
+    assert!(
+        body.as_str()
+            .is_some_and(|body| body.contains("Choose how harbor-x's retry lands.")
+                && !body.contains("quietharbor")),
+        "{body}"
+    );
+
+    let mut dismissed = open.clone();
+    dismissed["state"] = json!("dismissed");
+    dismissed["reason"] = json!("Superseded by the quietharbor rewrite.");
+    projected(&project(&dismissed));
+    let held = slot(&store.board.fields, &created);
+    assert_eq!(
+        held["human.reason"],
+        json!("Superseded by the harbor-x rewrite."),
+        "{held}"
+    );
 }

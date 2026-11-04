@@ -16,10 +16,10 @@ class Served(StrEnum):
 
 
 class CacheUse(BaseModel):
+    served: Annotated[Served, Field(description="Where it was answered from.")]
     bypassed: Annotated[
         str | None,
         Field(
             description="Why the cache could not be used at all for it — a part the source's change token does\nnot cover, or a task that carries no token — or `null` when nothing kept it from being."
         ),
     ] = None
-    served: Annotated[Served, Field(description="Where it was answered from.")]

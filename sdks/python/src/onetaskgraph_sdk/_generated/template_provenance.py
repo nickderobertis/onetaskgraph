@@ -23,23 +23,23 @@ class TemplateProvenance(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    answers_digest: Annotated[
-        Sha256Digest,
+    template: Annotated[
+        str,
         Field(
-            description="The SHA-256 of the resolved answers — defaults applied — as canonical JSON: keys sorted,\nno insignificant whitespace, UTF-8."
+            description="The template it was rendered from: the absolute path of a template file, or a loader\ndocument's `reference` verbatim. Recorded whole, whatever its length."
         ),
-    ]
-    body_digest: Annotated[
-        Sha256Digest,
-        Field(description="The SHA-256 of the item's content exactly as written."),
     ]
     digest: Annotated[
         Sha256Digest,
         Field(description="The chain digest the content was rendered with."),
     ]
-    template: Annotated[
-        str,
+    body_digest: Annotated[
+        Sha256Digest,
+        Field(description="The SHA-256 of the item's content exactly as written."),
+    ]
+    answers_digest: Annotated[
+        Sha256Digest,
         Field(
-            description="The template it was rendered from: the absolute path of a template file, or a loader\ndocument's `reference` verbatim. Recorded whole, whatever its length."
+            description="The SHA-256 of the resolved answers — defaults applied — as canonical JSON: keys sorted,\nno insignificant whitespace, UTF-8."
         ),
     ]

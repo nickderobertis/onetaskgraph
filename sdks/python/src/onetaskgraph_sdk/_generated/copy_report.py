@@ -7,32 +7,20 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, JsonValue, RootModel
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, RootModel
 
 
-class BudgetSpent(BaseModel):
-    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
-    budget: Annotated[
+class GlobalId(RootModel[str]):
+    root: Annotated[
         str,
-        Field(description="The budget, as the source names it — `graphql`, `rest`."),
-    ]
-    lower_bound: Annotated[
-        bool,
         Field(
-            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
+            description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
         ),
     ]
-    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
 
 
-class CommentCounts(BaseModel):
-    added: Annotated[int, Field(description="Copies the copy created.", ge=0)]
-    deleted: Annotated[int, Field(description="Copies the copy deleted.", ge=0)]
-    edited: Annotated[int, Field(description="Copies the copy edited.", ge=0)]
-    unchanged: Annotated[
-        int,
-        Field(description="Copies that already read as their origin comments.", ge=0),
-    ]
+class NoCounterpart(StrEnum):
+    NoCounterpartCreated = "created"
 
 
 class CopyLink(StrEnum):
@@ -40,6 +28,16 @@ class CopyLink(StrEnum):
     CopyLinkUnchanged = "unchanged"
     CopyLinkUnrecorded = "unrecorded"
     CopyLinkSkipped = "skipped"
+
+
+class CommentCounts(BaseModel):
+    added: Annotated[int, Field(description="Copies the copy created.", ge=0)]
+    edited: Annotated[int, Field(description="Copies the copy edited.", ge=0)]
+    deleted: Annotated[int, Field(description="Copies the copy deleted.", ge=0)]
+    unchanged: Annotated[
+        int,
+        Field(description="Copies that already read as their origin comments.", ge=0),
+    ]
 
 
 class CopyVia(StrEnum):
@@ -56,35 +54,6 @@ class FailureClass(StrEnum):
     FailureClassTransient = "transient"
 
 
-class GlobalId(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
-        ),
-    ]
-
-
-class NoCounterpart(StrEnum):
-    NoCounterpartCreated = "created"
-
-
-class Priority(StrEnum):
-    PriorityNone = "none"
-    PriorityUrgent = "urgent"
-    PriorityHigh = "high"
-    PriorityMedium = "medium"
-    PriorityLow = "low"
-
-
-class PriorityCondition(BaseModel):
-    held: Annotated[
-        Priority,
-        Field(description="The counterpart's priority, as the copy's own pre-write read held it."),
-    ]
-    met: Annotated[bool, Field(description="Whether that priority is one the condition names.")]
-
-
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -92,198 +61,6 @@ class SourceName(RootModel[str]):
             description="The name a configuration document gives one configured source.",
             pattern="^[a-z0-9][a-z0-9-]*$",
         ),
-    ]
-
-
-class Spent(BaseModel):
-    budgets: Annotated[
-        list[BudgetSpent],
-        Field(
-            description="What those requests spent, one entry per budget and unit, ordered by budget name."
-        ),
-    ]
-    requests: Annotated[
-        int,
-        Field(
-            description="How many HTTP requests those sources sent for this command.",
-            ge=0,
-        ),
-    ]
-
-
-class StatusCategory(StrEnum):
-    StatusCategoryDraft = "draft"
-    StatusCategoryBacklog = "backlog"
-    StatusCategoryTodo = "todo"
-    StatusCategoryQueued = "queued"
-    StatusCategoryInProgress = "in-progress"
-    StatusCategoryDone = "done"
-    StatusCategoryCancelled = "cancelled"
-    StatusCategoryUnknown = "unknown"
-
-
-class StatusCondition(BaseModel):
-    held: Annotated[
-        StatusCategory,
-        Field(
-            description="The counterpart's status category, as the copy's own pre-write read held it."
-        ),
-    ]
-    met: Annotated[bool, Field(description="Whether that category is one the condition names.")]
-
-
-class WriteFallback(BaseModel):
-    read: Annotated[bool, Field(description="Always `true`: the write made one read.")]
-    reason: Annotated[
-        str, Field(description="Why it could not take what it needed from the cache.")
-    ]
-
-
-class WritePartLanded(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
-    part: Annotated[
-        str,
-        Field(
-            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
-        ),
-    ]
-    outcome: Literal["landed"]
-
-
-class WritePartRejected(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
-    part: Annotated[
-        str,
-        Field(
-            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
-        ),
-    ]
-    error: Annotated[str, Field(description="What the backend said.")]
-    outcome: Literal["rejected"]
-    stale: Annotated[
-        bool,
-        Field(
-            description="Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read."
-        ),
-    ] = False
-
-
-class WritePartUnknown(BaseModel):
-    fields: Annotated[
-        dict[str, JsonValue],
-        Field(description="Each field it set, with the value the response shows."),
-    ]
-    part: Annotated[
-        str,
-        Field(
-            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
-        ),
-    ]
-    error: Annotated[str, Field(description="What went wrong.")]
-    outcome: Literal["unknown"]
-
-
-class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown]):
-    root: Annotated[
-        WritePartLanded | WritePartRejected | WritePartUnknown,
-        Field(description="One mutation of an expected write."),
-    ]
-
-
-class DeliveredWritten(BaseModel):
-    deliverer: Annotated[
-        GlobalId,
-        Field(
-            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
-        ),
-    ]
-    pruned: Annotated[
-        list[GlobalId],
-        Field(
-            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
-            validate_default=True,
-        ),
-    ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
-    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
-    outcome: Literal["written"]
-    to: Annotated[StatusCategory, Field(description="The category written.")]
-
-
-class DeliveredUnchanged(BaseModel):
-    deliverer: Annotated[
-        GlobalId,
-        Field(
-            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
-        ),
-    ]
-    pruned: Annotated[
-        list[GlobalId],
-        Field(
-            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
-            validate_default=True,
-        ),
-    ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
-    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
-    outcome: Literal["unchanged"]
-
-
-class DeliveredLeft(BaseModel):
-    deliverer: Annotated[
-        GlobalId,
-        Field(
-            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
-        ),
-    ]
-    pruned: Annotated[
-        list[GlobalId],
-        Field(
-            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
-            validate_default=True,
-        ),
-    ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
-    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
-    outcome: Literal["left"]
-
-
-class Failure(BaseModel):
-    class_: Annotated[
-        FailureClass,
-        Field(
-            alias="class",
-            description="Whether repeating the request unchanged could change the answer.",
-        ),
-    ]
-    kind: Annotated[
-        str,
-        Field(
-            description="What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`."
-        ),
-    ]
-    message: Annotated[
-        str,
-        Field(
-            description="What the command reported on standard error, without its `onetaskgraph: ` prefix."
-        ),
-    ]
-    retry_after_seconds: Annotated[
-        int | None,
-        Field(
-            description="How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
-            ge=0,
-        ),
-    ]
-    source: Annotated[
-        SourceName | None,
-        Field(description="The configured source the failure came from, or `null` when none did."),
     ]
 
 
@@ -301,6 +78,223 @@ class Placement(BaseModel):
     ] = None
 
 
+class WritePartLanded(BaseModel):
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    outcome: Literal["landed"]
+
+
+class WritePartRejected(BaseModel):
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    error: Annotated[str, Field(description="What the backend said.")]
+    stale: Annotated[
+        bool,
+        Field(
+            description="Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read."
+        ),
+    ] = False
+    outcome: Literal["rejected"]
+
+
+class WritePartUnknown(BaseModel):
+    part: Annotated[
+        str,
+        Field(
+            description="Which part it was, in the source's words: `fields`, `issue`, `comment`."
+        ),
+    ]
+    fields: Annotated[
+        dict[str, JsonValue],
+        Field(description="Each field it set, with the value the response shows."),
+    ]
+    error: Annotated[str, Field(description="What went wrong.")]
+    outcome: Literal["unknown"]
+
+
+class WritePart(RootModel[WritePartLanded | WritePartRejected | WritePartUnknown]):
+    root: Annotated[
+        WritePartLanded | WritePartRejected | WritePartUnknown,
+        Field(description="One mutation of an expected write."),
+    ]
+
+
+class StatusCategory(StrEnum):
+    StatusCategoryDraft = "draft"
+    StatusCategoryBacklog = "backlog"
+    StatusCategoryTodo = "todo"
+    StatusCategoryQueued = "queued"
+    StatusCategoryInProgress = "in-progress"
+    StatusCategoryDone = "done"
+    StatusCategoryCancelled = "cancelled"
+    StatusCategoryUnknown = "unknown"
+
+
+class Priority(StrEnum):
+    PriorityNone = "none"
+    PriorityUrgent = "urgent"
+    PriorityHigh = "high"
+    PriorityMedium = "medium"
+    PriorityLow = "low"
+
+
+class WriteFallback(BaseModel):
+    read: Annotated[bool, Field(description="Always `true`: the write made one read.")]
+    reason: Annotated[
+        str, Field(description="Why it could not take what it needed from the cache.")
+    ]
+
+
+class BudgetSpent(BaseModel):
+    budget: Annotated[
+        str,
+        Field(description="The budget, as the source names it — `graphql`, `rest`."),
+    ]
+    unit: Annotated[str, Field(description="What it is metered in — `points`, `requests`.")]
+    amount: Annotated[int, Field(description="How much was spent against it, in that unit.", ge=0)]
+    lower_bound: Annotated[
+        bool,
+        Field(
+            description="Whether any part of `amount` was modelled by a source rather than reported by its\nbackend or counted, which makes `amount` a lower bound on what the backend charged\nrather than a measurement of it."
+        ),
+    ]
+
+
+class StatusCondition(BaseModel):
+    held: Annotated[
+        StatusCategory,
+        Field(
+            description="The counterpart's status category, as the copy's own pre-write read held it."
+        ),
+    ]
+    met: Annotated[bool, Field(description="Whether that category is one the condition names.")]
+
+
+class PriorityCondition(BaseModel):
+    held: Annotated[
+        Priority,
+        Field(description="The counterpart's priority, as the copy's own pre-write read held it."),
+    ]
+    met: Annotated[bool, Field(description="Whether that priority is one the condition names.")]
+
+
+class DeliveredWritten(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    deliverer: Annotated[
+        GlobalId,
+        Field(
+            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+        ),
+    ]
+    pruned: Annotated[
+        list[GlobalId],
+        Field(
+            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            validate_default=True,
+        ),
+    ] = []
+    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
+    to: Annotated[StatusCategory, Field(description="The category written.")]
+    outcome: Literal["written"]
+
+
+class DeliveredUnchanged(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    deliverer: Annotated[
+        GlobalId,
+        Field(
+            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+        ),
+    ]
+    pruned: Annotated[
+        list[GlobalId],
+        Field(
+            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            validate_default=True,
+        ),
+    ] = []
+    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
+    outcome: Literal["unchanged"]
+
+
+class DeliveredLeft(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    deliverer: Annotated[
+        GlobalId,
+        Field(
+            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+        ),
+    ]
+    pruned: Annotated[
+        list[GlobalId],
+        Field(
+            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            validate_default=True,
+        ),
+    ] = []
+    from_: Annotated[StatusCategory, Field(alias="from", description="The category it read.")]
+    outcome: Literal["left"]
+
+
+class LocatorKind(StrEnum):
+    LocatorKindSource = "source"
+    LocatorKindItem = "item"
+    LocatorKindField = "field"
+    LocatorKindMetadataKey = "metadata-key"
+    LocatorKindComment = "comment"
+    LocatorKindPath = "path"
+    LocatorKindIdentity = "identity"
+
+
+class Failure(BaseModel):
+    class_: Annotated[
+        FailureClass,
+        Field(
+            alias="class",
+            description="Whether repeating the request unchanged could change the answer.",
+        ),
+    ]
+    kind: Annotated[
+        str,
+        Field(
+            description="What failed: the causing source error's own `kind` when a source caused it, and\notherwise this product's kebab-case name for the failure, such as `no-such-item`."
+        ),
+    ]
+    source: Annotated[
+        SourceName | None,
+        Field(description="The configured source the failure came from, or `null` when none did."),
+    ]
+    message: Annotated[
+        str,
+        Field(
+            description="What the command reported on standard error, without its `onetaskgraph: ` prefix."
+        ),
+    ]
+    retry_after_seconds: Annotated[
+        int | None,
+        Field(
+            description="How many seconds a rate limit asked the caller to wait, or `null` when it named no\nwait.",
+            ge=0,
+        ),
+    ]
+
+
 class Status(BaseModel):
     category: Annotated[
         StatusCategory,
@@ -309,17 +303,84 @@ class Status(BaseModel):
     name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
+class Spent(BaseModel):
+    requests: Annotated[
+        int,
+        Field(
+            description="How many HTTP requests those sources sent for this command.",
+            ge=0,
+        ),
+    ]
+    budgets: Annotated[
+        list[BudgetSpent],
+        Field(
+            description="What those requests spent, one entry per budget and unit, ordered by budget name."
+        ),
+    ]
+
+
+class DeliveredFailed(BaseModel):
+    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
+    deliverer: Annotated[
+        GlobalId,
+        Field(
+            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+        ),
+    ]
+    pruned: Annotated[
+        list[GlobalId],
+        Field(
+            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
+            validate_default=True,
+        ),
+    ] = []
+    from_: Annotated[
+        StatusCategory | None,
+        Field(alias="from", description="The category it read, when it could be read."),
+    ] = None
+    failure: Annotated[
+        Failure,
+        Field(
+            description="Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
+        ),
+    ]
+    outcome: Literal["failed"]
+
+
+class Delivered(RootModel[DeliveredWritten | DeliveredUnchanged | DeliveredLeft | DeliveredFailed]):
+    root: Annotated[
+        DeliveredWritten | DeliveredUnchanged | DeliveredLeft | DeliveredFailed,
+        Field(description="What keeping one delivered task in step with one deliverer came to."),
+    ]
+
+
+class Locator1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    redacted: Literal[True]
+    kind: LocatorKind
+    ordinal: Annotated[int, Field(ge=1)]
+
+
+class Locator(RootModel[str | Locator1]):
+    root: Annotated[
+        str | Locator1,
+        Field(description="A screened locator: the string verbatim, or its redacted form."),
+    ]
+
+
 class WriteResult(BaseModel):
+    version: Annotated[
+        str | None,
+        Field(
+            description="The item's version after the write, where the write's responses determine it."
+        ),
+    ] = None
     parts: Annotated[
         list[WritePart] | None,
         Field(
             description="One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`."
-        ),
-    ] = None
-    priority: Annotated[
-        Priority | None,
-        Field(
-            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
         ),
     ] = None
     status: Annotated[
@@ -328,37 +389,30 @@ class WriteResult(BaseModel):
             description="The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say."
         ),
     ] = None
-    version: Annotated[
-        str | None,
+    priority: Annotated[
+        Priority | None,
         Field(
-            description="The item's version after the write, where the write's responses determine it."
+            description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
         ),
     ] = None
+
+
+class SideEffect(BaseModel):
+    item: Annotated[Locator, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Locator,
+        Field(
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+        ),
+    ]
 
 
 class CopyOutcomeCreatedOrWouldCreate(BaseModel):
-    fallback: Annotated[
-        WriteFallback | None,
-        Field(
-            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
-        ),
-    ] = None
-    held: Annotated[
-        WriteResult | None,
-        Field(
-            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
-        ),
-    ] = None
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
-        ),
-    ] = None
-    priority_condition: Annotated[
-        PriorityCondition | None,
-        Field(
-            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     result: Annotated[
@@ -367,28 +421,12 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
             description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
-    section_link_updates: Annotated[
-        int,
+    fallback: Annotated[
+        WriteFallback | None,
         Field(
-            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
-            ge=0,
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
         ),
-    ] = 0
-    section_links_unaddressable: Annotated[
-        int,
-        Field(
-            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
-            ge=0,
-        ),
-    ] = 0
-    section_links_unresolved: Annotated[
-        int,
-        Field(
-            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
-            ge=0,
-        ),
-    ] = 0
-    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    ] = None
     spent: Annotated[
         Spent | None,
         Field(
@@ -401,23 +439,43 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
             description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
         ),
     ] = None
-    action: Literal["created"]
-    comments: Annotated[
-        CommentCounts | None,
+    priority_condition: Annotated[
+        PriorityCondition | None,
         Field(
-            description="What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
     destination: Annotated[
         GlobalId | None,
         Field(
             description="The id it was created under, or `null` for a dry run that would have created\none — there is no id, because nothing was."
-        ),
-    ] = None
-    link: Annotated[
-        CopyLink | None,
-        Field(
-            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`; absent for a dry run, which writes nothing."
         ),
     ] = None
     via: Annotated[
@@ -426,111 +484,27 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
             description="That no rule found a counterpart. The one word it can be, so a report written\nbefore there was a `via` reads as saying it."
         ),
     ] = NoCounterpart.NoCounterpartCreated
-
-
-class CopyOutcomeUpdated(BaseModel):
-    fallback: Annotated[
-        WriteFallback | None,
+    link: Annotated[
+        CopyLink | None,
         Field(
-            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
+            description="What the copy did to the link the copied item records for this destination at\n`onetaskgraph.copies`; absent for a dry run, which writes nothing."
         ),
     ] = None
-    held: Annotated[
-        WriteResult | None,
-        Field(
-            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
-        ),
-    ] = None
-    placed: Annotated[
-        Placement | None,
-        Field(
-            description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
-        ),
-    ] = None
-    priority_condition: Annotated[
-        PriorityCondition | None,
-        Field(
-            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
-        ),
-    ] = None
-    result: Annotated[
-        WriteResult | None,
-        Field(
-            description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
-        ),
-    ] = None
-    section_link_updates: Annotated[
-        int,
-        Field(
-            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
-            ge=0,
-        ),
-    ] = 0
-    section_links_unaddressable: Annotated[
-        int,
-        Field(
-            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
-            ge=0,
-        ),
-    ] = 0
-    section_links_unresolved: Annotated[
-        int,
-        Field(
-            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
-            ge=0,
-        ),
-    ] = 0
-    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
-    spent: Annotated[
-        Spent | None,
-        Field(
-            description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
-        ),
-    ] = None
-    status_condition: Annotated[
-        StatusCondition | None,
-        Field(
-            description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
-        ),
-    ] = None
-    action: Literal["updated"]
     comments: Annotated[
         CommentCounts | None,
         Field(
             description="What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
         ),
     ] = None
-    destination: Annotated[GlobalId, Field(description="The item that was updated.")]
-    link: Annotated[
-        CopyLink | None,
-        Field(description="What the copy did to the copied item's link; absent for a dry run."),
-    ] = None
-    via: Annotated[CopyVia, Field(description="Which rule found it.")]
+    action: Literal["created"]
 
 
-class CopyOutcomeUnchanged(BaseModel):
-    fallback: Annotated[
-        WriteFallback | None,
-        Field(
-            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
-        ),
-    ] = None
-    held: Annotated[
-        WriteResult | None,
-        Field(
-            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
-        ),
-    ] = None
+class CopyOutcomeUpdated(BaseModel):
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
-        ),
-    ] = None
-    priority_condition: Annotated[
-        PriorityCondition | None,
-        Field(
-            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     result: Annotated[
@@ -539,28 +513,12 @@ class CopyOutcomeUnchanged(BaseModel):
             description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
-    section_link_updates: Annotated[
-        int,
+    fallback: Annotated[
+        WriteFallback | None,
         Field(
-            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
-            ge=0,
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
         ),
-    ] = 0
-    section_links_unaddressable: Annotated[
-        int,
-        Field(
-            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
-            ge=0,
-        ),
-    ] = 0
-    section_links_unresolved: Annotated[
-        int,
-        Field(
-            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
-            ge=0,
-        ),
-    ] = 0
-    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    ] = None
     spent: Annotated[
         Spent | None,
         Field(
@@ -573,14 +531,121 @@ class CopyOutcomeUnchanged(BaseModel):
             description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
         ),
     ] = None
-    action: Literal["unchanged"]
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
+    destination: Annotated[GlobalId, Field(description="The item that was updated.")]
+    via: Annotated[CopyVia, Field(description="Which rule found it.")]
+    link: Annotated[
+        CopyLink | None,
+        Field(description="What the copy did to the copied item's link; absent for a dry run."),
+    ] = None
     comments: Annotated[
         CommentCounts | None,
         Field(
-            description="What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy found unchanged, a skipped one's included, and absent for a\ncopy without it and for a project and a document."
+            description="What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy landed, a dry run's included, and absent for a copy without\nit and for a project and a document."
         ),
     ] = None
+    action: Literal["updated"]
+
+
+class CopyOutcomeUnchanged(BaseModel):
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    placed: Annotated[
+        Placement | None,
+        Field(
+            description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    result: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
+        ),
+    ] = None
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
+        ),
+    ] = None
+    spent: Annotated[
+        Spent | None,
+        Field(
+            description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
+    status_condition: Annotated[
+        StatusCondition | None,
+        Field(
+            description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
+        ),
+    ] = None
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
     destination: Annotated[GlobalId, Field(description="The item that already said it.")]
+    via: Annotated[CopyVia, Field(description="Which rule found it.")]
     link: Annotated[
         CopyLink | None,
         Field(description="What the copy did to the copied item's link; absent for a dry run."),
@@ -591,32 +656,21 @@ class CopyOutcomeUnchanged(BaseModel):
             description="Whether the copy decided this from change tokens alone, without reading the item's\nbody or comments from the source: the source's current `version` is the one the\ndestination records at `onetaskgraph.copied_version`, and the destination reads as\nthe copy left it. `false` for an item read and compared."
         ),
     ] = False
-    via: Annotated[CopyVia, Field(description="Which rule found it.")]
+    comments: Annotated[
+        CommentCounts | None,
+        Field(
+            description="What the copy did to the task's comments at the destination — present for every\ntask a `--comments` copy found unchanged, a skipped one's included, and absent for a\ncopy without it and for a project and a document."
+        ),
+    ] = None
+    action: Literal["unchanged"]
 
 
 class CopyOutcomeOrphaned(BaseModel):
-    fallback: Annotated[
-        WriteFallback | None,
-        Field(
-            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
-        ),
-    ] = None
-    held: Annotated[
-        WriteResult | None,
-        Field(
-            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
-        ),
-    ] = None
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
-        ),
-    ] = None
-    priority_condition: Annotated[
-        PriorityCondition | None,
-        Field(
-            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     result: Annotated[
@@ -625,28 +679,12 @@ class CopyOutcomeOrphaned(BaseModel):
             description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
-    section_link_updates: Annotated[
-        int,
+    fallback: Annotated[
+        WriteFallback | None,
         Field(
-            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
-            ge=0,
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
         ),
-    ] = 0
-    section_links_unaddressable: Annotated[
-        int,
-        Field(
-            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
-            ge=0,
-        ),
-    ] = 0
-    section_links_unresolved: Annotated[
-        int,
-        Field(
-            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
-            ge=0,
-        ),
-    ] = 0
-    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    ] = None
     spent: Annotated[
         Spent | None,
         Field(
@@ -659,33 +697,49 @@ class CopyOutcomeOrphaned(BaseModel):
             description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
         ),
     ] = None
-    action: Literal["orphaned"]
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
     destination: Annotated[GlobalId, Field(description="The item that was left alone.")]
+    action: Literal["orphaned"]
 
 
 class CopyOutcomeFailed(BaseModel):
-    fallback: Annotated[
-        WriteFallback | None,
-        Field(
-            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
-        ),
-    ] = None
-    held: Annotated[
-        WriteResult | None,
-        Field(
-            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
-        ),
-    ] = None
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
-        ),
-    ] = None
-    priority_condition: Annotated[
-        PriorityCondition | None,
-        Field(
-            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     result: Annotated[
@@ -694,28 +748,12 @@ class CopyOutcomeFailed(BaseModel):
             description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
-    section_link_updates: Annotated[
-        int,
+    fallback: Annotated[
+        WriteFallback | None,
         Field(
-            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
-            ge=0,
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
         ),
-    ] = 0
-    section_links_unaddressable: Annotated[
-        int,
-        Field(
-            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
-            ge=0,
-        ),
-    ] = 0
-    section_links_unresolved: Annotated[
-        int,
-        Field(
-            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
-            ge=0,
-        ),
-    ] = 0
-    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    ] = None
     spent: Annotated[
         Spent | None,
         Field(
@@ -728,36 +766,52 @@ class CopyOutcomeFailed(BaseModel):
             description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
         ),
     ] = None
-    action: Literal["failed"]
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
     error: Annotated[
         Failure,
         Field(description="Why, in the failure document every verb reports a failure in."),
     ]
+    action: Literal["failed"]
 
 
 class CopyOutcomeSkipped(BaseModel):
-    fallback: Annotated[
-        WriteFallback | None,
-        Field(
-            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
-        ),
-    ] = None
-    held: Annotated[
-        WriteResult | None,
-        Field(
-            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
-        ),
-    ] = None
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     placed: Annotated[
         Placement | None,
         Field(
             description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
-        ),
-    ] = None
-    priority_condition: Annotated[
-        PriorityCondition | None,
-        Field(
-            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     result: Annotated[
@@ -766,28 +820,12 @@ class CopyOutcomeSkipped(BaseModel):
             description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
         ),
     ] = None
-    section_link_updates: Annotated[
-        int,
+    fallback: Annotated[
+        WriteFallback | None,
         Field(
-            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
-            ge=0,
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
         ),
-    ] = 0
-    section_links_unaddressable: Annotated[
-        int,
-        Field(
-            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
-            ge=0,
-        ),
-    ] = 0
-    section_links_unresolved: Annotated[
-        int,
-        Field(
-            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
-            ge=0,
-        ),
-    ] = 0
-    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    ] = None
     spent: Annotated[
         Spent | None,
         Field(
@@ -800,11 +838,44 @@ class CopyOutcomeSkipped(BaseModel):
             description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
         ),
     ] = None
-    action: Literal["skipped"]
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
     reason: Annotated[
         str,
         Field(description="Why, as `status <category> is not one of <categories>`."),
     ]
+    action: Literal["skipped"]
 
 
 class CopyOutcome(
@@ -830,69 +901,29 @@ class CopyOutcome(
     ]
 
 
-class DeliveredFailed(BaseModel):
-    deliverer: Annotated[
-        GlobalId,
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
         Field(
-            description="The deliverer whose write re-evaluated it — the one that just dropped it, when it was\nre-evaluated for being dropped."
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
         ),
     ]
-    pruned: Annotated[
-        list[GlobalId],
-        Field(
-            description="Deliverers its source read as not found, removed from its `delivered_by` on this\nwrite. Left out when there were none.",
-            validate_default=True,
-        ),
-    ] = []
-    ticket: Annotated[GlobalId, Field(description="The delivered task.")]
-    failure: Annotated[
-        Failure,
-        Field(
-            description="Why, as the failure object itself: the same `class`, `kind`, `source`, `message`\nand `retry_after_seconds` a failure document carries under its own `failure`\nmember — not that whole document nested again."
-        ),
-    ]
-    from_: Annotated[
-        StatusCategory | None,
-        Field(alias="from", description="The category it read, when it could be read."),
-    ] = None
-    outcome: Literal["failed"]
-
-
-class Delivered(RootModel[DeliveredWritten | DeliveredUnchanged | DeliveredLeft | DeliveredFailed]):
-    root: Annotated[
-        DeliveredWritten | DeliveredUnchanged | DeliveredLeft | DeliveredFailed,
-        Field(description="What keeping one delivered task in step with one deliverer came to."),
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
     ]
 
 
 class CopyReport(BaseModel):
-    delivered: Annotated[
-        list[Delivered],
-        Field(
-            description="One entry per delivered task the copy kept in step with a task it landed, after the\nwhole copy was complete — see `task status set`, which reports the same entries. Left\nout when there were none.\n\nA failed entry does not undo the copy: the tasks it landed stay landed, and the\ncommand exits `4`.",
-            validate_default=True,
-        ),
-    ] = []
-    delivers_rewritten: Annotated[
-        int,
-        Field(
-            description="`delivers` entries the copy rewrote to the destination's own id for a member of the\ncopied set, over the whole invocation. Every other entry arrives qualified and is not\ncounted. Left out when zero, as the three figures above are.",
-            ge=0,
-        ),
-    ] = 0
     items: Annotated[
         list[CopyOutcome],
         Field(
             description="One entry per item the copy considered, in the order it considered them."
         ),
     ]
-    references_ambiguous: Annotated[
-        int,
-        Field(
-            description="How many of [`Self::references_unresolved`] were left alone because the\ncorrespondence was **ambiguous** rather than merely absent. A sub-count, never\nlarger than it.\n\nSplit out because the two mean different things to a reader. A reference with no\ncounterpart is ordinary and expected under the bound above — the design working. An\nambiguous one says the destination holds duplicate records for one work item, or the\nsource reports one location for two records, and re-running the copy will never\nclear it.",
-            ge=0,
-        ),
-    ] = 0
     references_rewritten: Annotated[
         int,
         Field(
@@ -907,9 +938,31 @@ class CopyReport(BaseModel):
             ge=0,
         ),
     ] = 0
+    references_ambiguous: Annotated[
+        int,
+        Field(
+            description="How many of [`Self::references_unresolved`] were left alone because the\ncorrespondence was **ambiguous** rather than merely absent. A sub-count, never\nlarger than it.\n\nSplit out because the two mean different things to a reader. A reference with no\ncounterpart is ordinary and expected under the bound above — the design working. An\nambiguous one says the destination holds duplicate records for one work item, or the\nsource reports one location for two records, and re-running the copy will never\nclear it.",
+            ge=0,
+        ),
+    ] = 0
+    delivers_rewritten: Annotated[
+        int,
+        Field(
+            description="`delivers` entries the copy rewrote to the destination's own id for a member of the\ncopied set, over the whole invocation. Every other entry arrives qualified and is not\ncounted. Left out when zero, as the three figures above are.",
+            ge=0,
+        ),
+    ] = 0
+    delivered: Annotated[
+        list[Delivered],
+        Field(
+            description="One entry per delivered task the copy kept in step with a task it landed, after the\nwhole copy was complete — see `task status set`, which reports the same entries. Left\nout when there were none.\n\nA failed entry does not undo the copy: the tasks it landed stay landed, and the\ncommand exits `4`.",
+            validate_default=True,
+        ),
+    ] = []
     spent: Annotated[
         Spent | None,
         Field(
             description="What this copy spent, summed over the sources in the command that meter their own\nrequests — and absent, never zero, when none of them does.\n\nOmitted from the wire when absent, like the three figures above, so a consumer\nwritten against the output before it existed reads the same document."
         ),
     ] = None
+    sanitization: Sanitization | None = None

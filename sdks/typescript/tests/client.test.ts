@@ -951,7 +951,9 @@ test("taskUpdate sends exactly the flags the binary's task update reports, no mo
     ].filter((argument) => argument.startsWith("--")),
   );
   expect([...sent].sort()).toEqual(own);
-  for (const flag of Object.values(taskUpdateOptionFlags)) expect(own).toContain(flag);
+  // Per-call sanitization options use global flags, also accepted by task update.
+  const accepted = new Set([...own, ...global]);
+  for (const flag of Object.values(taskUpdateOptionFlags)) expect(accepted.has(flag)).toBe(true);
 });
 
 test("taskCopy sends exactly the flags the binary's task copy reports, no more and no fewer", () => {

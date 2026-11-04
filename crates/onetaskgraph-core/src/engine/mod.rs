@@ -36,6 +36,8 @@ mod projection;
 mod rendered;
 mod resume;
 mod stored;
+mod sweep;
+pub(crate) use sweep::schemas as sweep_schemas;
 mod update;
 
 use std::collections::BTreeMap;
@@ -58,6 +60,11 @@ use crate::plan::{
     PageToken, Predicate, QueryPlan, QueryResponse, SourceFailure, SourcePlan, Unanswered,
 };
 use crate::resolve::{ResolvedSource, UnavailableSource, resolve_available_with_clock};
+
+pub use sweep::{
+    FieldOutcome, ItemOutcome, SweepCoverage, SweepField, SweepItem, SweepKind, SweepReport,
+    SweepRequests, Uncovered,
+};
 
 use fetch::{Fetched, Stream, fits, merge, unrepeated, walk};
 use join::join_all;
@@ -464,6 +471,26 @@ pub enum EngineError {
         declared: crate::config::SourceVisibility,
     },
 
+    /// A narrow write to an item a source not declared private already holds, whose stored
+    /// record was already private — its `repositories` already naming a private repository —
+    /// before this write, which changes none of them.
+    #[error(
+        "{item} is private, and source {destination} is not declared private (it is \
+         declared {declared}); a private item is written only to a source declared private \
+         whose backend agrees. The item's `repositories` already named a private repository \
+         before this write, and replacement cannot fix `repositories`\n\
+         next: remove that repository from the item's `repositories`, or move the item to a \
+         source declared private."
+    )]
+    NotPrivateDestinationPredates {
+        /// How the write named the item, as screened.
+        item: String,
+        /// The configured name of the destination, as screened.
+        destination: String,
+        /// What its configuration declares.
+        declared: crate::config::SourceVisibility,
+    },
+
     /// A source declared private answered, at the write, that it is not.
     #[error(
         "source {destination} is declared private, but its backend reads {reality} for \
@@ -510,6 +537,78 @@ pub enum EngineError {
         destination: String,
         /// The check's neutral reason.
         reason: String,
+    },
+
+    /// A write to an item a source not declared private already holds was refused for a term
+    /// that was already on the item before this write, and that sanitising the item could not
+    /// fix.
+    #[error(
+        "{item} was not written to source {destination}, which is not verified private: \
+         {reason}. The term was already on the item before this write, and replacement cannot \
+         fix it in {unfixable}\n\
+         next: take it out of the item by hand — or declare a replacement for it and write \
+         again — then repeat this write."
+    )]
+    BoundaryRefusedPredates {
+        /// How the write named the item, as screened.
+        item: String,
+        /// The configured name of the destination, as screened.
+        destination: String,
+        /// The policy's neutral reason.
+        reason: String,
+        /// The kinds of field replacement cannot fix.
+        unfixable: boundary::UnfixableKinds,
+    },
+
+    /// `--sanitize-dry-run`: a write that would have sanitised its item first wrote nothing.
+    #[error(
+        "nothing was written: sanitising {item} first would change what the sanitization lists, \
+         and the write would then {}\n\
+         next: run it again without --sanitize-dry-run to sanitise the item and write.",
+        if *would_pass { "pass" } else { "still be refused" }
+    )]
+    SanitizeDryRun {
+        /// How the write named the item, as screened.
+        item: String,
+        /// Whether the write would pass once the item was sanitised.
+        would_pass: bool,
+    },
+
+    /// `sources sanitize` was asked of a store whose policy cannot list its terms.
+    #[error(
+        "source {name} cannot be swept: the policy cannot list the private terms to search \
+         for ({why})\n\
+         next: configure `write_policy.terms_command` — for example [onevcs, boundary, terms, \
+         --input, \"-\"] — and sweep again."
+    )]
+    TermsUnlisted {
+        /// The source asked about.
+        name: String,
+        /// Why, in neutral words.
+        why: String,
+    },
+
+    /// `sources sanitize` was asked of a store whose terms command could not decide.
+    #[error(
+        "source {name} was not swept: the policy could not decide the private terms to search \
+         for ({why})\n\
+         next: repair what `write_policy.terms_command` reports, then sweep again."
+    )]
+    TermsUndecided {
+        /// The source asked about.
+        name: String,
+        /// Why, in neutral words.
+        why: String,
+    },
+
+    /// A sanitising write found its item moved twice since it was read, and wrote nothing.
+    #[error(
+        "{item} changed twice while it was being sanitised, so nothing was overwritten\n\
+         next: read it again and repeat the write."
+    )]
+    SanitizeConflict {
+        /// How the write named the item, as screened.
+        item: String,
     },
 
     /// The caller's check could not decide about a write to a destination not verified
@@ -1126,8 +1225,8 @@ pub enum EngineError {
         task: GlobalId,
         /// The `--group-by` key.
         key: graph::GroupKey,
-        /// The value it holds.
-        value: serde_json::Value,
+        /// The value it holds, boxed so this one variant does not widen every error.
+        value: Box<serde_json::Value>,
     },
 
     /// `project graph` met tasks of the project that depend on each other in a cycle, which
@@ -1727,6 +1826,16 @@ pub enum EngineError {
 }
 
 impl EngineError {
+    /// Whether this refusal is of something already on the item before the write — what the
+    /// failure document says as `"predates_write": true`.
+    #[must_use]
+    pub fn predates_write(&self) -> bool {
+        matches!(
+            self,
+            Self::NotPrivateDestinationPredates { .. } | Self::BoundaryRefusedPredates { .. }
+        )
+    }
+
     /// What the destination item a copy refused to write held, as the copy's read of it before
     /// writing found it — for a refusal made after that read, and `None` for every other.
     #[must_use]

@@ -10,48 +10,63 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, RootModel
 
 
+class SourceName(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="The name a configuration document gives one configured source.",
+            pattern="^[a-z0-9][a-z0-9-]*$",
+        ),
+    ]
+
+
+class Support(StrEnum):
+    SupportNative = "native"
+    SupportUnsupported = "unsupported"
+
+
 class DependencySupport(StrEnum):
     DependencySupportBothDirections = "both-directions"
     DependencySupportForwardOnly = "forward-only"
 
 
 class SourceErrorConfig(BaseModel):
-    kind: Literal["config"]
     message: Annotated[str, Field(description="What is wrong, in a form a user can act on.")]
+    kind: Literal["config"]
 
 
 class SourceErrorAuth(BaseModel):
-    kind: Literal["auth"]
     message: Annotated[str, Field(description="What failed. Never contains the credential itself.")]
+    kind: Literal["auth"]
 
 
 class SourceErrorRefused(BaseModel):
-    kind: Literal["refused"]
     message: Annotated[str, Field(description="The source's own reason.")]
+    kind: Literal["refused"]
 
 
 class SourceErrorRateLimited(BaseModel):
-    kind: Literal["rate-limited"]
+    retry_after_seconds: Annotated[
+        int | None,
+        Field(description="How long the source asked us to wait, when it said.", ge=0),
+    ] = None
     message: Annotated[
         str | None,
         Field(
             description="What the source can add about *which* limit refused it and what it was doing.\n\nAbsent means the source had nothing to add beyond the kind, which is what\nevery source said before this member existed; it is omitted from the wire\nentirely when absent, so a reader written against the shape without it sees\nexactly the shape it was written for. Never contains a credential."
         ),
     ] = None
-    retry_after_seconds: Annotated[
-        int | None,
-        Field(description="How long the source asked us to wait, when it said.", ge=0),
-    ] = None
+    kind: Literal["rate-limited"]
 
 
 class SourceErrorUnavailable(BaseModel):
-    kind: Literal["unavailable"]
     message: Annotated[str, Field(description="What went wrong reaching it.")]
+    kind: Literal["unavailable"]
 
 
 class SourceErrorMalformed(BaseModel):
-    kind: Literal["malformed"]
     message: Annotated[str, Field(description="What could not be represented.")]
+    kind: Literal["malformed"]
 
 
 class SourceError(
@@ -77,38 +92,24 @@ class SourceError(
     ]
 
 
-class SourceName(RootModel[str]):
-    root: Annotated[
-        str,
-        Field(
-            description="The name a configuration document gives one configured source.",
-            pattern="^[a-z0-9][a-z0-9-]*$",
-        ),
-    ]
-
-
-class Support(StrEnum):
-    SupportNative = "native"
-    SupportUnsupported = "unsupported"
-
-
 class SourceListingUnavailable(BaseModel):
+    source: Annotated[SourceName, Field(description="The name the configuration gave it.")]
     kind: Annotated[
         str,
         Field(
             description="The plugin kind behind it.\n\nA `String` because the vocabulary is open, not because it was not thought about:\nthis is the kind a source reports, and a subprocess-hosted plugin reports one\narriving over the wire from a binary this workspace never compiled. No\ncompile-time enumeration can hold that, and a newtype over the same string would\nonly move where an unrelated value is accepted."
         ),
     ]
-    source: Annotated[SourceName, Field(description="The name the configuration gave it.")]
     error: Annotated[SourceError, Field(description="Why not.")]
     state: Literal["unavailable"]
 
 
 class Capabilities(BaseModel):
-    assets: Annotated[
+    projects: Annotated[Support, Field(description="Whether the source has projects at all.")]
+    documents: Annotated[
         Support,
         Field(
-            description="Whether the source stores the image assets a task's or a document's content references.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*, not\nwhich predicate it applies, so the second capability rule does not reach it. A source\ndeclaring `Native` is handed a record's assets beside the record's own write — through\n[`TaskSource::write_task_with_assets`](crate::TaskSource::write_task_with_assets) and its\nsiblings — and either keeps them beside the record or serves each at a URL it chooses,\nrewriting the record's references to point there. A source declaring `Unsupported` is\nnever handed one: a create or a copy of a record carrying an asset into it is refused,\nnaming the source, the record and the asset, before anything is written for that record.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates assets says nothing here and is never handed bytes it would drop."
+            description="Whether the source has documents at all.\n\nThe same shape as [`projects`](Self::projects), and read the same way: it says what\nthe source *holds*, not which predicate it applies. It is therefore **not** one of\nthe predicates the second capability rule reaches — there is no wider result set to\nreturn and nothing for the engine to narrow. A source declaring `Unsupported` is\nnever asked for a document at all; the engine reads this once at the handshake,\nexactly as it reads [`TaskSource::writes`](crate::TaskSource::writes), and a\ndocument read across several sources reports such a source as holding none rather\nthan as having failed.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates documents says nothing here and is read as the document-free source it is."
         ),
     ] = Support.SupportUnsupported
     comments: Annotated[
@@ -117,16 +118,22 @@ class Capabilities(BaseModel):
             description="Whether the source's tasks have comments at all.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*,\nnot which predicate it applies, so the second capability rule does not reach it. A\nsource declaring `Unsupported` is never sent a comment call — the engine reads this\nonce at the handshake and refuses such a call before anything is read, naming the\nsource and its plugin. Adding, editing and removing a comment is a write, so a source\ndeclaring `Native` is written through only when\n[`TaskSource::writes`](crate::TaskSource::writes) says it can be written at all.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates comments says nothing here and is read as the comment-free source it is."
         ),
     ] = Support.SupportUnsupported
-    complete_by_issue: Annotated[
+    assets: Annotated[
         Support,
         Field(
-            description="Whether the source answers\n[`TaskSource::issue_holdings`](crate::TaskSource::issue_holdings): which of its items\nan issue reference names, which `task status complete` moves to `done`.\n\nRead exactly as [`reconcile_status`](Self::reconcile_status) is: a source declaring\n`Unsupported` is never asked and sends no request, and is listed as unsupported.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms."
+            description="Whether the source stores the image assets a task's or a document's content references.\n\nRead exactly as [`documents`](Self::documents) is: it says what the source *holds*, not\nwhich predicate it applies, so the second capability rule does not reach it. A source\ndeclaring `Native` is handed a record's assets beside the record's own write — through\n[`TaskSource::write_task_with_assets`](crate::TaskSource::write_task_with_assets) and its\nsiblings — and either keeps them beside the record or serves each at a URL it chooses,\nrewriting the record's references to point there. A source declaring `Unsupported` is\nnever handed one: a create or a copy of a record carrying an asset into it is refused,\nnaming the source, the record and the asset, before anything is written for that record.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates assets says nothing here and is never handed bytes it would drop."
         ),
     ] = Support.SupportUnsupported
-    documents: Annotated[
+    priority: Annotated[
         Support,
         Field(
-            description="Whether the source has documents at all.\n\nThe same shape as [`projects`](Self::projects), and read the same way: it says what\nthe source *holds*, not which predicate it applies. It is therefore **not** one of\nthe predicates the second capability rule reaches — there is no wider result set to\nreturn and nothing for the engine to narrow. A source declaring `Unsupported` is\nnever asked for a document at all; the engine reads this once at the handshake,\nexactly as it reads [`TaskSource::writes`](crate::TaskSource::writes), and a\ndocument read across several sources reports such a source as holding none rather\nthan as having failed.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates documents says nothing here and is read as the document-free source it is."
+            description="Whether the source's tasks hold a [`Priority`](crate::Priority) at all.\n\nRead exactly as [`documents`](Self::documents) and [`comments`](Self::comments) are:\nit says what the source *holds*, not which predicate it applies, so the second\ncapability rule does not reach it. A source declaring `Unsupported` reports every\ntask's priority as `none`, and the engine never hands it one that is not: a copy\ncarrying another priority to it, and a `task priority set` naming it, are both refused\nbefore the source is asked, naming the source and the field.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities says nothing here and is never handed a priority it would drop."
+        ),
+    ] = Support.SupportUnsupported
+    filter_by_priority: Annotated[
+        Support,
+        Field(
+            description="Whether the source keeps only the tasks whose priority a query lists, itself.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores [`TaskQuery::priorities`](crate::TaskQuery::priorities) and\nreturns the wider set, and the engine narrows it. Its own member rather than a reading\nof [`priority`](Self::priority), because holding a priority and filtering by one are\ntwo abilities — a board holds a priority on a field it cannot be asked to filter by.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities is narrowed by the engine rather than trusted to have filtered."
         ),
     ] = Support.SupportUnsupported
     filter_by_comment_activity: Annotated[
@@ -135,9 +142,6 @@ class Capabilities(BaseModel):
             description="Whether the source keeps only the tasks a query's\n[`TaskQuery::commented_since`](crate::TaskQuery::commented_since) selects, itself: a\ntask one of whose comments was created or last edited at or after the instant.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores the instant and returns the wider set, and the engine narrows it\n— by reading **that source's comments, task by task**, for every task the source's\nother predicates kept. That is correct and it is not cheap, which is why a source that\ncan ask its store the narrower question declares `Native`. A source whose tasks have no\n[`comments`](Self::comments) at all holds no comment activity, so the engine keeps none\nof its tasks without asking it anything.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the predicate is narrowed by the engine rather than trusted to have filtered."
         ),
     ] = Support.SupportUnsupported
-    filter_by_label: Annotated[
-        Support, Field(description="Whether the source filters by label itself.")
-    ]
     filter_by_metadata: Annotated[
         Support,
         Field(
@@ -150,14 +154,41 @@ class Capabilities(BaseModel):
             description="Whether the source keeps only the tasks whose copy origin is a query's\n[`TaskQuery::origin`](crate::TaskQuery::origin), itself.\n\nA predicate on the terms [`filter_by_metadata`](Self::filter_by_metadata) is one, and\nits own member because a source may be able to ask its store one question and not the\nother: a board keeps a copy's origin in a field of its own and caller metadata in the\nissue body.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms."
         ),
     ] = Support.SupportUnsupported
-    filter_by_priority: Annotated[
+    reconcile_status: Annotated[
         Support,
         Field(
-            description="Whether the source keeps only the tasks whose priority a query lists, itself.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores [`TaskQuery::priorities`](crate::TaskQuery::priorities) and\nreturns the wider set, and the engine narrows it. Its own member rather than a reading\nof [`priority`](Self::priority), because holding a priority and filtering by one are\ntwo abilities — a board holds a priority on a field it cannot be asked to filter by.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities is narrowed by the engine rather than trusted to have filtered."
+            description="Whether the source answers\n[`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions): the\nitems whose card contradicts their issue's closure, which `task status reconcile`\nbrings in line.\n\nNot a predicate, so the second capability rule does not reach it: a source declaring\n`Unsupported` is never asked, and is reported as holding nothing to reconcile. That is\nevery source whose status *is* its closure — a Linear workflow state, a file's own\n`status:` — because there a card cannot contradict anything.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the method is never sent it."
         ),
     ] = Support.SupportUnsupported
+    complete_by_issue: Annotated[
+        Support,
+        Field(
+            description="Whether the source answers\n[`TaskSource::issue_holdings`](crate::TaskSource::issue_holdings): which of its items\nan issue reference names, which `task status complete` moves to `done`.\n\nRead exactly as [`reconcile_status`](Self::reconcile_status) is: a source declaring\n`Unsupported` is never asked and sends no request, and is listed as unsupported.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, on the same terms."
+        ),
+    ] = Support.SupportUnsupported
+    orphan_tasks: Annotated[
+        Support,
+        Field(description="Whether the source can select tasks belonging to no project."),
+    ]
+    filter_by_label: Annotated[
+        Support, Field(description="Whether the source filters by label itself.")
+    ]
     filter_by_status: Annotated[
         Support, Field(description="Whether the source filters by status itself.")
+    ]
+    search_title: Annotated[
+        Support, Field(description="Whether the source searches titles itself.")
+    ]
+    search_content: Annotated[
+        Support, Field(description="Whether the source searches bodies itself.")
+    ]
+    task_dependencies: Annotated[
+        DependencySupport,
+        Field(description="How far the source can walk task dependencies."),
+    ]
+    project_dependencies: Annotated[
+        DependencySupport,
+        Field(description="How far the source can walk project dependencies."),
     ]
     max_page_size: Annotated[
         int,
@@ -166,47 +197,16 @@ class Capabilities(BaseModel):
             ge=1,
         ),
     ]
-    orphan_tasks: Annotated[
-        Support,
-        Field(description="Whether the source can select tasks belonging to no project."),
-    ]
-    priority: Annotated[
-        Support,
-        Field(
-            description="Whether the source's tasks hold a [`Priority`](crate::Priority) at all.\n\nRead exactly as [`documents`](Self::documents) and [`comments`](Self::comments) are:\nit says what the source *holds*, not which predicate it applies, so the second\ncapability rule does not reach it. A source declaring `Unsupported` reports every\ntask's priority as `none`, and the engine never hands it one that is not: a copy\ncarrying another priority to it, and a `task priority set` naming it, are both refused\nbefore the source is asked, naming the source and the field.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities says nothing here and is never handed a priority it would drop."
-        ),
-    ] = Support.SupportUnsupported
-    project_dependencies: Annotated[
-        DependencySupport,
-        Field(description="How far the source can walk project dependencies."),
-    ]
-    projects: Annotated[Support, Field(description="Whether the source has projects at all.")]
-    reconcile_status: Annotated[
-        Support,
-        Field(
-            description="Whether the source answers\n[`TaskSource::status_contradictions`](crate::TaskSource::status_contradictions): the\nitems whose card contradicts their issue's closure, which `task status reconcile`\nbrings in line.\n\nNot a predicate, so the second capability rule does not reach it: a source declaring\n`Unsupported` is never asked, and is reported as holding nothing to reconcile. That is\nevery source whose status *is* its closure — a Linear workflow state, a file's own\n`status:` — because there a card cannot contradict anything.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates the method is never sent it."
-        ),
-    ] = Support.SupportUnsupported
-    search_content: Annotated[
-        Support, Field(description="Whether the source searches bodies itself.")
-    ]
-    search_title: Annotated[
-        Support, Field(description="Whether the source searches titles itself.")
-    ]
-    task_dependencies: Annotated[
-        DependencySupport,
-        Field(description="How far the source can walk task dependencies."),
-    ]
 
 
 class SourceListingAvailable(BaseModel):
+    source: Annotated[SourceName, Field(description="The name the configuration gave it.")]
     kind: Annotated[
         str,
         Field(
             description="The plugin kind behind it.\n\nA `String` because the vocabulary is open, not because it was not thought about:\nthis is the kind a source reports, and a subprocess-hosted plugin reports one\narriving over the wire from a binary this workspace never compiled. No\ncompile-time enumeration can hold that, and a newtype over the same string would\nonly move where an unrelated value is accepted."
         ),
     ]
-    source: Annotated[SourceName, Field(description="The name the configuration gave it.")]
     capabilities: Annotated[Capabilities, Field(description="What it applies itself.")]
     state: Literal["available"]
 

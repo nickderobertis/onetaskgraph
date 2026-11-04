@@ -137,7 +137,7 @@ async def select(policy: str, command: list[str], root: Path) -> int:
     return (await execute([*command, *exclusions], root, environment=environment)).status
 
 
-async def budgets(root: Path) -> int:
+async def budgets(root: Path, ids: list[str]) -> int:
     try:
         selected = Selection(os.environ.get("GITHUB_LIVE_SELECTION", Selection.RUN.value))
     except ValueError as error:
@@ -146,6 +146,9 @@ async def budgets(root: Path) -> int:
     arguments = ["bun", "run", "onebudgetspec", "check",
                  "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
                  "--exclude-label", HOST_LABEL]
+    # Delegate ID validation and selection to the same checker. With no operands the
+    # gate still measures every budget; callers can ask about a specific recording.
+    arguments.extend(f"--id={budget}" for budget in ids)
     if selected is Selection.NOT_SELECTED or not os.environ.get("GH_PROJECTS_TOKEN"):
         reason = "existing selection policy did not select the lane" if selected is Selection.NOT_SELECTED else "no GitHub credential was supplied"
         print(f"github-live-session-points unavailable: {reason}", flush=True)
@@ -158,10 +161,10 @@ async def main(arguments: list[str]) -> int:
     match arguments:
         case ["select", policy, command, *remaining]:
             return await select(policy, [command, *remaining], root)
-        case ["budgets"]:
-            return await budgets(root)
+        case ["budgets", *ids]:
+            return await budgets(root, ids)
         case _:
-            raise ValueError("expected select POLICY NX_COMMAND... or budgets")
+            raise ValueError("expected select POLICY NX_COMMAND... or budgets [BUDGET_ID...]")
 
 
 if __name__ == "__main__":

@@ -668,21 +668,42 @@ impl Engine {
             },
             depends_on,
         };
-        self.admit(
-            source,
-            &Outbound {
-                item: "the new task".to_owned(),
-                classification,
-                target: WriteTarget::New {
-                    repositories: &request.repositories,
-                    project: (near == &request.source).then_some(&request.project),
+        let rewrite = self
+            .admit(
+                source,
+                &Outbound {
+                    item: "the new task".to_owned(),
+                    classification,
+                    target: WriteTarget::New {
+                        repositories: &request.repositories,
+                        project: (near == &request.source).then_some(&request.project),
+                    },
+                    exposure: &Exposure::of_task(&write.item)
+                        .assets(&carried)
+                        .answers(answers)
+                        .and(Exposure::metadata(
+                            write.depends_on.iter().map(|edge| edge.to.id().to_owned()),
+                        )),
                 },
-                exposure: &Exposure::of_task(&write.item)
-                    .assets(&carried)
-                    .answers(answers),
-            },
-        )
-        .await?;
+            )
+            .await?;
+        rewrite.task(&mut write.item);
+        // An id this create made up from the title is made up from the title as written.
+        if !rewrite.is_identity() {
+            let made = NativeId::from(slug(&write.item.title, "task").as_str());
+            for edge in &mut write.depends_on {
+                if edge.from.id() == write.item.id.as_str() {
+                    edge.from = DependencyEndpoint::from_native(made.clone(), ItemKind::Task);
+                }
+            }
+            write.item.id = made;
+        }
+        let rewritten_answers = answers.map(|answers| {
+            let mut answers = answers.clone();
+            rewrite.answers(&mut answers);
+            answers
+        });
+        let answers = rewritten_answers.as_ref();
         // Only once it is admitted: a routed task's member project is itself a write.
         let filed = if near == &request.source {
             None
@@ -891,27 +912,42 @@ impl Engine {
             },
             depends_on: Vec::new(),
         };
-        self.admit(
-            source,
-            &Outbound {
-                item: write.target.as_ref().map_or_else(
-                    || "the new document".to_owned(),
-                    |id| format!("{}:{id}", request.source),
-                ),
-                classification,
-                target: match &write.target {
-                    Some(id) => WriteTarget::Existing(id),
-                    None => WriteTarget::New {
-                        repositories: &request.repositories,
-                        project: Some(&request.project),
+        let rewrite = self
+            .admit(
+                source,
+                &Outbound {
+                    item: write.target.as_ref().map_or_else(
+                        || "the new document".to_owned(),
+                        |id| format!("{}:{id}", request.source),
+                    ),
+                    classification,
+                    target: match &write.target {
+                        Some(id) => WriteTarget::Existing(id),
+                        None => WriteTarget::New {
+                            repositories: &request.repositories,
+                            project: Some(&request.project),
+                        },
                     },
+                    exposure: &Exposure::of_document(&write.item)
+                        .assets(&carried)
+                        .answers(answers)
+                        .and(Exposure::metadata(
+                            request.id.iter().map(|id| id.as_str().to_owned()),
+                        )),
                 },
-                exposure: &Exposure::of_document(&write.item)
-                    .assets(&carried)
-                    .answers(answers),
-            },
-        )
-        .await?;
+            )
+            .await?;
+        let mut write = write;
+        rewrite.document(&mut write.item);
+        if request.id.is_none() && !rewrite.is_identity() {
+            write.item.id = NativeId::from(slug(&write.item.title, "document").as_str());
+        }
+        let rewritten_answers = answers.map(|answers| {
+            let mut answers = answers.clone();
+            rewrite.answers(&mut answers);
+            answers
+        });
+        let answers = rewritten_answers.as_ref();
         if let Some(target) = &write.target {
             stored::forget(source, MetadataRecord::Document, target);
         }
@@ -1090,22 +1126,36 @@ impl Engine {
             },
             depends_on,
         };
-        self.admit(
-            source,
-            &Outbound {
-                item: format!("project {}:{}", request.source, request.id),
-                classification,
-                target: match &write.target {
-                    Some(id) => WriteTarget::Existing(id),
-                    None => WriteTarget::New {
-                        repositories: &write.item.repositories,
-                        project: None,
+        let rewrite = self
+            .admit(
+                source,
+                &Outbound {
+                    item: format!("{}:{}", request.source, request.id),
+                    classification,
+                    target: match &write.target {
+                        Some(id) => WriteTarget::Existing(id),
+                        None => WriteTarget::New {
+                            repositories: &write.item.repositories,
+                            project: None,
+                        },
                     },
+                    exposure: &Exposure::of_project(&write.item).answers(answers).and(
+                        Exposure::metadata(
+                            std::iter::once(request.id.as_str().to_owned())
+                                .chain(write.depends_on.iter().map(|edge| edge.to.id().to_owned())),
+                        ),
+                    ),
                 },
-                exposure: &Exposure::of_project(&write.item).answers(answers),
-            },
-        )
-        .await?;
+            )
+            .await?;
+        let mut write = write;
+        rewrite.project(&mut write.item);
+        let rewritten_answers = answers.map(|answers| {
+            let mut answers = answers.clone();
+            rewrite.answers(&mut answers);
+            answers
+        });
+        let answers = rewritten_answers.as_ref();
         if let Some(target) = &write.target {
             stored::forget(source, MetadataRecord::Project, target);
         }
@@ -1318,7 +1368,7 @@ impl Engine {
         answers: &Answers,
         dry_run: bool,
     ) -> Result<Regenerated, EngineError> {
-        let rendered = regeneration.render(answers)?;
+        let mut rendered = regeneration.render(answers)?;
         let mut provenance = TemplateProvenance::of(regeneration.reference.clone(), &rendered)
             .map_err(|error| EngineError::Template { error })?;
         let id = &regeneration.id;
@@ -1370,21 +1420,36 @@ impl Engine {
                 });
             }
             let value = provenance.to_value();
-            self.admit_existing(
-                source,
-                &id.to_string(),
-                &id.native,
-                match regeneration.record {
-                    RenderedRecord::Task => Held::Task,
-                    RenderedRecord::Project => Held::Project,
-                    RenderedRecord::Document => Held::Document,
-                },
-                &Exposure::text(rendered.body.clone())
-                    .and(Exposure::of_entry(TemplateProvenance::KEY, &value))
-                    .answers(Some(&rendered.answers))
-                    .assets(&carried),
-            )
-            .await?;
+            let rewrite = self
+                .admit_existing(
+                    source,
+                    &id.to_string(),
+                    &id.native,
+                    match regeneration.record {
+                        RenderedRecord::Task => Held::Task,
+                        RenderedRecord::Project => Held::Project,
+                        RenderedRecord::Document => Held::Document,
+                    },
+                    &Exposure::text(rendered.body.clone())
+                        .and(Exposure::of_entry(TemplateProvenance::KEY, &value))
+                        .answers(Some(&rendered.answers))
+                        .assets(&carried),
+                )
+                .await?;
+            // What lands is the rendering as the policy passed it, so the entry records that
+            // body's digest — as a copy does for a rendering it rewrote — while the answers
+            // digest still names what the template was given.
+            let value = if rewrite.is_identity() {
+                value
+            } else {
+                rendered.body = rewrite.text(&rendered.body);
+                rewrite.answers(&mut rendered.answers);
+                provenance.body_digest =
+                    crate::template::Sha256Digest::of(rendered.body.as_bytes());
+                let mut value = provenance.to_value();
+                rewrite.value(&mut value);
+                value
+            };
             let record = regeneration.record.metadata_record();
             stored::forget(source, record, &id.native);
             let body = || Some(rendered.body.clone());

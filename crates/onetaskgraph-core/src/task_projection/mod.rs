@@ -277,7 +277,7 @@ pub(crate) fn schemas() -> [(&'static str, Schema); 2] {
         ),
         (
             "HumanTaskProjected",
-            schemars::schema_for!(HumanTaskProjected),
+            crate::schema::write_answer_schema::<HumanTaskProjected>(),
         ),
     ]
 }

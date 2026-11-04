@@ -302,7 +302,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 53);
+    assert_eq!(bundle["version"], 56);
     assert!(bundle["roots"]["HumanTaskProjection"].is_object());
     assert!(bundle["roots"]["HumanTaskProjected"].is_object());
     assert!(bundle["roots"]["LocateReport"].is_object());
@@ -413,6 +413,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "sources status-options",
             "sources fields",
             "sources route",
+            "sources sanitize",
             "task list",
             "task show",
             "task show-many",
@@ -791,6 +792,9 @@ fn each_template_verb_s_readme_entry_names_the_flags_that_verb_takes() {
         "json",
         "interactive",
         "no-interactive",
+        "replace",
+        "reject",
+        "sanitize-dry-run",
         "help",
     ];
     let readme = readme();
@@ -858,6 +862,9 @@ fn the_task_update_synopsis_names_exactly_the_flags_that_verb_takes() {
         "json",
         "interactive",
         "no-interactive",
+        "replace",
+        "reject",
+        "sanitize-dry-run",
         "help",
     ];
     let entry = synopsis(&readme(), "task update")

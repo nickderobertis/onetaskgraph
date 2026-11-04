@@ -76,6 +76,9 @@ pulldown-cmark = { version = "0.13.5", default-features = false }
 # The Linear budgets' runner checks a budget id against onebudgetspec's own exported pattern.
 regex = "1.13.1"
 schemars = { version = "1.2.2", features = ["chrono04"] }
+# The private-terms specification's shapes the public boundary exchanges with its policy.
+# Only its types are used: the store never matches a term itself.
+privateterms = "0.1.0"
 secrecy = "0.10.3"
 # A template's digest: `sha256:` over every file of its chain.
 sha2 = "0.10.9"

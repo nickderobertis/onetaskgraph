@@ -10,15 +10,6 @@ from typing import Annotated
 from pydantic import BaseModel, Field, RootModel
 
 
-class ItemKind(StrEnum):
-    ItemKindTask = "task"
-    ItemKindProject = "project"
-
-
-class LinearTeam(RootModel[str]):
-    root: Annotated[str, Field(description="A Linear team's key or id.", min_length=1)]
-
-
 class SourceName(RootModel[str]):
     root: Annotated[
         str,
@@ -27,6 +18,15 @@ class SourceName(RootModel[str]):
             pattern="^[a-z0-9][a-z0-9-]*$",
         ),
     ]
+
+
+class LinearTeam(RootModel[str]):
+    root: Annotated[str, Field(description="A Linear team's key or id.", min_length=1)]
+
+
+class ItemKind(StrEnum):
+    ItemKindTask = "task"
+    ItemKindProject = "project"
 
 
 class StatusCategory(StrEnum):
@@ -51,25 +51,26 @@ class StatusName(RootModel[str]):
     ]
 
 
-class MappedStatusName(BaseModel):
-    category: Annotated[
-        StatusCategory, Field(description="The category the mapping sends to the name.")
-    ]
-    created: Annotated[
-        bool,
-        Field(description="Whether this run created the name; absent when it did not."),
-    ] = False
-    expected_type: Annotated[
-        str,
+class RefusedCreate(BaseModel):
+    kind: Annotated[
+        ItemKind,
         Field(
-            description="The type `--apply` creates a missing name of this category and kind as; a present name\nof another type is reported and left as it is."
+            description="Whether it was a workflow state (`task`) or a project status (`project`)."
         ),
     ]
+    name: Annotated[StatusName, Field(description="The name it would have created.")]
+    message: Annotated[str, Field(description="What Linear said.")]
+
+
+class MappedStatusName(BaseModel):
     kind: Annotated[
         ItemKind,
         Field(
             description="`task` for a workflow state of the team, `project` for a project status of the workspace."
         ),
+    ]
+    category: Annotated[
+        StatusCategory, Field(description="The category the mapping sends to the name.")
     ]
     name: Annotated[StatusName, Field(description="The name, as the mapping spells it.")]
     present: Annotated[
@@ -84,20 +85,21 @@ class MappedStatusName(BaseModel):
             description="The name's type in Linear — a `WorkflowState.type` for a task, a `ProjectStatusType`\nfor a project — absent when it is missing."
         ),
     ] = None
-
-
-class RefusedCreate(BaseModel):
-    kind: Annotated[
-        ItemKind,
+    expected_type: Annotated[
+        str,
         Field(
-            description="Whether it was a workflow state (`task`) or a project status (`project`)."
+            description="The type `--apply` creates a missing name of this category and kind as; a present name\nof another type is reported and left as it is."
         ),
     ]
-    message: Annotated[str, Field(description="What Linear said.")]
-    name: Annotated[StatusName, Field(description="The name it would have created.")]
+    created: Annotated[
+        bool,
+        Field(description="Whether this run created the name; absent when it did not."),
+    ] = False
 
 
 class StatusNamesReport(BaseModel):
+    source: Annotated[SourceName, Field(description="The configured source name.")]
+    team: Annotated[LinearTeam, Field(description="The configured team, as `team` names it.")]
     names: Annotated[
         list[MappedStatusName],
         Field(
@@ -110,5 +112,3 @@ class StatusNamesReport(BaseModel):
             description="The create Linear refused, which stopped an `--apply`; absent when nothing was refused."
         ),
     ] = None
-    source: Annotated[SourceName, Field(description="The configured source name.")]
-    team: Annotated[LinearTeam, Field(description="The configured team, as `team` names it.")]

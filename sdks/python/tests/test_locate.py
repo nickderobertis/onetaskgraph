@@ -151,5 +151,5 @@ def test_to_is_keyword_only_as_the_contract_spells_task_locate(binary: Path) -> 
         # Passing `to` by position is the mistake under test, so the checker's refusal of it is
         # the point rather than a defect here.
         asyncio.run(
-            Client(binary).task_locate(["plan:fresh"], "site")  # ty: ignore[too-many-positional-arguments, missing-argument]
+            Client(binary).task_locate(["plan:fresh"], "site")  # ty: ignore[no-matching-overload] Deliberately positional destination tests keyword-only validation.
         )

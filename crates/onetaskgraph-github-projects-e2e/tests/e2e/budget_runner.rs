@@ -197,6 +197,64 @@ fn report_settlement_update() {
 // llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-end[tests_assert_real_behavior]
 
+// llmlint: ignore-block[tests_assert_real_behavior] Report-only entries budgets.yaml selects, which report nothing without ONEBUDGETSPEC_BUDGET_ID; the sweep journeys in `sanitize_sweep.rs` assert what a sweep does on the same board.
+// llmlint: ignore-block[budgets_reuse_gate_telemetry] The task registering these two budgets rules that each figure is "measured fresh by that command, the standalone-measurement exception": the 2,000-item workload is loopback-only and seconds long, while the behaviour journeys in `sanitize_sweep.rs` run a four-item board, so threading the large scenario through them would cost more gate time than measuring it here.
+/// `sanitize-sweep-requests`: every request a default sweep and one rerun send to the
+/// 2,000-item board, measured fresh — the standalone-measurement exception, loopback-only.
+#[test]
+fn report_sanitize_sweep() {
+    let Some(_budget) = selected() else {
+        return;
+    };
+    let workload = super::sanitize_sweep::Workload::new(2_000, false);
+    let (first, first_detail) = workload.measure(&[]);
+    let (rerun, rerun_detail) = workload.measure(&[]);
+    let mut detail = format!(
+        "{} items; first sweep {first_detail}; rerun {rerun_detail}; native comment search unavailable (six searches and two comment-only hits deferred)",
+        workload.size
+    );
+    // Scaling is an explicitly invoked measurement, never part of routine CI budgets.
+    if std::env::var_os("ONETASKGRAPH_SANITIZE_SCALING").is_some() {
+        let larger = super::sanitize_sweep::Workload::new(20_000, false);
+        let (_large_first, large_first_detail) = larger.measure(&[]);
+        let (_large_rerun, large_rerun_detail) = larger.measure(&[]);
+        detail.push_str(&format!(
+            "; {} items: first {large_first_detail}; rerun {large_rerun_detail}",
+            larger.size
+        ));
+    }
+    hand_over((first + rerun) as f64, &detail);
+}
+
+/// `sanitize-complete-sweep-requests`: every request one `--complete` sweep sends, per 1,000
+/// items of the 2,000-item board, measured fresh.
+#[test]
+fn report_sanitize_complete_sweep() {
+    let Some(_budget) = selected() else {
+        return;
+    };
+    let workload = super::sanitize_sweep::Workload::new(2_000, true);
+    let (total, detail) = workload.measure(&["--complete"]);
+    let per_thousand = total as f64 * 1_000.0 / workload.size as f64;
+    let mut detail = format!(
+        "{} items, {per_thousand:.1} per 1,000; {detail}",
+        workload.size
+    );
+    // Opt in locally to the adoption-scale measurement; CI measures 2,000 items only.
+    if std::env::var_os("ONETASKGRAPH_SANITIZE_SCALING").is_some() {
+        let larger = super::sanitize_sweep::Workload::new(20_000, true);
+        let (large_total, large_detail) = larger.measure(&["--complete"]);
+        let large_per_thousand = large_total as f64 * 1_000.0 / larger.size as f64;
+        detail.push_str(&format!(
+            "; {} items, {large_per_thousand:.1} per 1,000; {large_detail}",
+            larger.size
+        ));
+    }
+    hand_over(per_thousand, &detail);
+}
+// llmlint: ignore-end[budgets_reuse_gate_telemetry]
+// llmlint: ignore-end[tests_assert_real_behavior]
+
 fn report_store_cost(workload: &str) {
     let Some(budget) = selected() else {
         return;
