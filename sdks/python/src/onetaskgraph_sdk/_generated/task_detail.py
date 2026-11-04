@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel
 
@@ -260,6 +260,16 @@ class Served(StrEnum):
     ServedRemote = "remote"
 
 
+class SideEffect(BaseModel):
+    item: Annotated[Any, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Any,
+        Field(
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+        ),
+    ]
+
+
 class Status(BaseModel):
     category: Annotated[
         StatusCategory,
@@ -376,6 +386,22 @@ class CacheUse(BaseModel):
             description="Why the cache could not be used at all for it — a part the source's change token does\nnot cover, or a task that carries no token — or `null` when nothing kept it from being."
         ),
     ] = None
+
+
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
+        Field(
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
+        ),
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
+    ]
 
 
 class Task(BaseModel):
@@ -526,3 +552,4 @@ class TaskDetail(BaseModel):
             description='How the read used its source\'s local cache: `{"served": "cache" | "remote",\n"bypassed": null | "<reason>"}` — absent for a source keeping none, and for an id\nnaming no configured source.'
         ),
     ] = None
+    sanitization: Sanitization | None = None

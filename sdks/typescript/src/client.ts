@@ -30,6 +30,7 @@ import type {
   QueryResponseOfSearchHit,
   Regenerated,
   RenderedTemplate,
+  SanitizeDryRun,
   SourceListings,
   SourceRoute,
   StatusCategory,
@@ -83,7 +84,12 @@ export type DocumentFilterOptions = Omit<FilterOptions, "statuses">;
 // Which private repositories a write's public-boundary check derives terms from: the
 // repositories named, none at all for `[]`, and every one the store's policy knows of when left
 // out. Every verb that writes takes it, and passes it to the binary unchanged.
-export type WriteOptions = { termScope?: string[] };
+export type WriteOptions = {
+  termScope?: string[];
+  replace?: string[];
+  reject?: string[];
+  sanitizeDryRun?: boolean;
+};
 // The version of the task a write says it knows, as a read of it reported: the write takes the
 // task's ids and current values from the source's local cache instead of reading it. Not a
 // precondition — see `docs/plugin-protocol.md`.
@@ -546,6 +552,9 @@ export const taskUpdateOptionFlags: Readonly<Record<keyof TaskUpdateOptions, str
   dependsOn: "--depends-on",
   // `[]` is sent as `--term-scope-empty`, which is how an empty scope is spelled.
   termScope: "--term-scope",
+  replace: "--replace",
+  reject: "--reject",
+  sanitizeDryRun: "--sanitize-dry-run",
   expect: "--expect",
 };
 
@@ -613,7 +622,7 @@ export function taskUpdateFlags(options: unknown): string[] {
     if (ids.length === 0) args.push(flag.replace("--", "--no-"));
     for (const id of ids) args.push(flag, id);
   }
-  args.push(...termScopeFlags(method, options));
+  args.push(...writePolicyFlags(method, options));
   return args;
 }
 
@@ -700,7 +709,7 @@ function createArguments(
     }
     args.push("--classification", options.classification);
   }
-  args.push(...termScopeFlags(method, options));
+  args.push(...writePolicyFlags(method, options));
   return { args, input };
 }
 
@@ -840,7 +849,7 @@ function renderInvocation(
     throw new TypeError(`${method}: dryRun is not a boolean; next: pass true or false`);
   }
   if (options.dryRun === true) args.push("--dry-run");
-  args.push(...termScopeFlags(method, options));
+  args.push(...writePolicyFlags(method, options));
   return [command, [id, ...args], input];
 }
 
@@ -869,11 +878,23 @@ function failureOf(stdout: string): FailureDocument["failure"] | undefined {
   return validate(value) ? (value as FailureDocument).failure : undefined;
 }
 
-function termScopeFlags(method: string, options: { termScope?: unknown }): string[] {
-  if (options.termScope === undefined) return [];
-  const scope = stringList(method, "termScope", options.termScope);
-  if (scope.length === 0) return ["--term-scope-empty"];
-  return scope.flatMap((repository) => ["--term-scope", repository]);
+function writePolicyFlags(method: string, options: WriteOptions): string[] {
+  const args: string[] = [];
+  if (options.termScope !== undefined) {
+    const scope = stringList(method, "termScope", options.termScope);
+    args.push(
+      ...(scope.length === 0
+        ? ["--term-scope-empty"]
+        : scope.flatMap((repository) => ["--term-scope", repository])),
+    );
+  }
+  for (const entry of stringList(method, "replace", options.replace)) args.push("--replace", entry);
+  for (const term of stringList(method, "reject", options.reject)) args.push("--reject", term);
+  if (options.sanitizeDryRun !== undefined && typeof options.sanitizeDryRun !== "boolean") {
+    throw new TypeError(`${method}: sanitizeDryRun must be a boolean`);
+  }
+  if (options.sanitizeDryRun) args.push("--sanitize-dry-run");
+  return args;
 }
 
 function expectFlags(method: string, options: { expect?: unknown }): string[] {
@@ -942,7 +963,7 @@ function copyFlags(
   method: string,
   options: CopyOptions & CopyQueryOptions & StatusCopyOptions,
 ): string[] {
-  const args: string[] = [...termScopeFlags(method, options)];
+  const args: string[] = [...writePolicyFlags(method, options)];
   for (const flag of ["noLink", "comments"] as const) {
     if (options[flag] !== undefined && typeof options[flag] !== "boolean") {
       throw new TypeError(`${method}: ${flag} must be a boolean`);
@@ -1040,7 +1061,7 @@ export class OnetaskgraphClient {
   // policy's replacements fix; `complete` reads the source whole, `dryRun` writes nothing.
   sourcesSanitize(
     source: string,
-    options: { dryRun?: boolean; complete?: boolean } = {},
+    options: Omit<WriteOptions, "sanitizeDryRun"> & { dryRun?: boolean; complete?: boolean } = {},
   ): Promise<SweepReport> {
     if (typeof source !== "string") {
       throw new TypeError(
@@ -1051,6 +1072,9 @@ export class OnetaskgraphClient {
       throw new TypeError(
         "sourcesSanitize: options is not a plain object; next: pass an options object",
       );
+    }
+    if ("sanitizeDryRun" in options) {
+      throw new TypeError("sourcesSanitize: use dryRun to preview a sweep");
     }
     // `as const` keeps each name the literal it is, for the message below.
     for (const [name, value] of [
@@ -1065,6 +1089,7 @@ export class OnetaskgraphClient {
       source,
       ...(options.dryRun ? ["--dry-run"] : []),
       ...(options.complete ? ["--complete"] : []),
+      ...writePolicyFlags("sourcesSanitize", options),
     ]);
   }
   taskList(
@@ -1147,12 +1172,17 @@ export class OnetaskgraphClient {
       ...pins,
     ]);
   }
-  taskCommentAdd(id: string, options: CommentAddOptions): Promise<CommentWritten> {
+  taskCommentAdd(
+    id: string,
+    options: CommentAddOptions & { sanitizeDryRun?: false },
+  ): Promise<CommentWritten>;
+  taskCommentAdd(id: string, options: CommentAddOptions): Promise<CommentWritten | SanitizeDryRun>;
+  taskCommentAdd(id: string, options: CommentAddOptions): Promise<CommentWritten | SanitizeDryRun> {
     const { args, input } = bodyArguments(options);
     if (options.author !== undefined) args.push("--author", options.author);
-    args.push(...termScopeFlags("taskCommentAdd", options));
+    args.push(...writePolicyFlags("taskCommentAdd", options));
     args.push(...expectFlags("taskCommentAdd", options));
-    return this.run("task comment add", [id, ...args], input);
+    return this.run("task comment add", [id, ...args], input, options.sanitizeDryRun === true);
   }
   taskCommentList(id: string, options: { pin?: string } = {}): Promise<CommentList> {
     return this.run("task comment list", [id, ...pinFlags("taskCommentList", options.pin)]);
@@ -1160,12 +1190,27 @@ export class OnetaskgraphClient {
   taskCommentEdit(
     id: string,
     commentId: string,
+    options: CommentBodyOptions & { sanitizeDryRun?: false },
+  ): Promise<CommentWritten>;
+  taskCommentEdit(
+    id: string,
+    commentId: string,
     options: CommentBodyOptions,
-  ): Promise<CommentWritten> {
+  ): Promise<CommentWritten | SanitizeDryRun>;
+  taskCommentEdit(
+    id: string,
+    commentId: string,
+    options: CommentBodyOptions,
+  ): Promise<CommentWritten | SanitizeDryRun> {
     const { args, input } = bodyArguments(options);
-    args.push(...termScopeFlags("taskCommentEdit", options));
+    args.push(...writePolicyFlags("taskCommentEdit", options));
     args.push(...expectFlags("taskCommentEdit", options));
-    return this.run("task comment edit", [id, commentId, ...args], input);
+    return this.run(
+      "task comment edit",
+      [id, commentId, ...args],
+      input,
+      options.sanitizeDryRun === true,
+    );
   }
   taskCommentDelete(
     id: string,
@@ -1181,37 +1226,72 @@ export class OnetaskgraphClient {
   taskStatusSet(
     id: string,
     category: StatusCategory,
+    options?: (WriteOptions & ExpectOptions) & { sanitizeDryRun?: false },
+  ): Promise<TaskStatusSet>;
+  taskStatusSet(
+    id: string,
+    category: StatusCategory,
+    options?: WriteOptions & ExpectOptions,
+  ): Promise<TaskStatusSet | SanitizeDryRun>;
+  taskStatusSet(
+    id: string,
+    category: StatusCategory,
     options: WriteOptions & ExpectOptions = {},
-  ): Promise<TaskStatusSet> {
-    return this.run("task status set", [
-      id,
-      category,
-      ...termScopeFlags("taskStatusSet", options),
-      ...expectFlags("taskStatusSet", options),
-    ]);
+  ): Promise<TaskStatusSet | SanitizeDryRun> {
+    return this.run(
+      "task status set",
+      [
+        id,
+        category,
+        ...writePolicyFlags("taskStatusSet", options),
+        ...expectFlags("taskStatusSet", options),
+      ],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
   }
   // Bring every card of `source` in line with its issue's closure, writing only the card; a
   // source whose status is its closure answers no items and is sent no request.
   taskStatusReconcile(
     source: string,
+    options?: (WriteOptions & { dryRun?: boolean }) & { sanitizeDryRun?: false },
+  ): Promise<StatusesReconciled>;
+  taskStatusReconcile(
+    source: string,
+    options?: WriteOptions & { dryRun?: boolean },
+  ): Promise<StatusesReconciled | SanitizeDryRun>;
+  taskStatusReconcile(
+    source: string,
     options: WriteOptions & { dryRun?: boolean } = {},
-  ): Promise<StatusesReconciled> {
+  ): Promise<StatusesReconciled | SanitizeDryRun> {
     const args = ["--source", stringOption("taskStatusReconcile", "source", source)];
     if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {
       throw new TypeError("taskStatusReconcile: dryRun must be a boolean");
     }
     if (options.dryRun) args.push("--dry-run");
-    return this.run("task status reconcile", [
-      ...args,
-      ...termScopeFlags("taskStatusReconcile", options),
-    ]);
+    return this.run(
+      "task status reconcile",
+      [...args, ...writePolicyFlags("taskStatusReconcile", options)],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
   }
   // Move to `done` every item the configured sources hold for `issues`, each `owner/name#N`.
   // Every configured source is asked unless `sources` narrows them.
   taskStatusComplete(
     issues: string[],
+    options?: (WriteOptions & { sources?: string[]; dryRun?: boolean }) & {
+      sanitizeDryRun?: false;
+    },
+  ): Promise<IssuesCompleted>;
+  taskStatusComplete(
+    issues: string[],
+    options?: WriteOptions & { sources?: string[]; dryRun?: boolean },
+  ): Promise<IssuesCompleted | SanitizeDryRun>;
+  taskStatusComplete(
+    issues: string[],
     options: WriteOptions & { sources?: string[]; dryRun?: boolean } = {},
-  ): Promise<IssuesCompleted> {
+  ): Promise<IssuesCompleted | SanitizeDryRun> {
     const args: string[] = [];
     for (const issue of stringList("taskStatusComplete", "issues", issues)) {
       args.push("--issue", issue);
@@ -1223,55 +1303,114 @@ export class OnetaskgraphClient {
       throw new TypeError("taskStatusComplete: dryRun must be a boolean");
     }
     if (options.dryRun) args.push("--dry-run");
-    return this.run("task status complete", [
-      ...args,
-      ...termScopeFlags("taskStatusComplete", options),
-    ]);
+    return this.run(
+      "task status complete",
+      [...args, ...writePolicyFlags("taskStatusComplete", options)],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
   }
   taskPrioritySet(
     id: string,
     priority: Priority,
+    options?: (WriteOptions & ExpectOptions) & { sanitizeDryRun?: false },
+  ): Promise<TaskPrioritySet>;
+  taskPrioritySet(
+    id: string,
+    priority: Priority,
+    options?: WriteOptions & ExpectOptions,
+  ): Promise<TaskPrioritySet | SanitizeDryRun>;
+  taskPrioritySet(
+    id: string,
+    priority: Priority,
     options: WriteOptions & ExpectOptions = {},
-  ): Promise<TaskPrioritySet> {
-    return this.run("task priority set", [
-      id,
-      priority,
-      ...termScopeFlags("taskPrioritySet", options),
-      ...expectFlags("taskPrioritySet", options),
-    ]);
+  ): Promise<TaskPrioritySet | SanitizeDryRun> {
+    return this.run(
+      "task priority set",
+      [
+        id,
+        priority,
+        ...writePolicyFlags("taskPrioritySet", options),
+        ...expectFlags("taskPrioritySet", options),
+      ],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
   }
   // `file` is read by the binary byte for byte, and its bytes replace the task's content.
   taskContentSet(
     id: string,
     file: string,
+    options?: (WriteOptions & ExpectOptions) & { sanitizeDryRun?: false },
+  ): Promise<TaskContentSet>;
+  taskContentSet(
+    id: string,
+    file: string,
+    options?: WriteOptions & ExpectOptions,
+  ): Promise<TaskContentSet | SanitizeDryRun>;
+  taskContentSet(
+    id: string,
+    file: string,
     options: WriteOptions & ExpectOptions = {},
-  ): Promise<TaskContentSet> {
-    return this.run("task content set", [
-      id,
-      "--file",
-      file,
-      ...termScopeFlags("taskContentSet", options),
-      ...expectFlags("taskContentSet", options),
-    ]);
+  ): Promise<TaskContentSet | SanitizeDryRun> {
+    return this.run(
+      "task content set",
+      [
+        id,
+        "--file",
+        file,
+        ...writePolicyFlags("taskContentSet", options),
+        ...expectFlags("taskContentSet", options),
+      ],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
   }
   // `value` is the JSON text the binary parses strictly, exactly the word the command line takes.
   taskMetadataSet(
     id: string,
     key: string,
     value: string,
+    options?: (WriteOptions & ExpectOptions) & { sanitizeDryRun?: false },
+  ): Promise<MetadataSet>;
+  taskMetadataSet(
+    id: string,
+    key: string,
+    value: string,
+    options?: WriteOptions & ExpectOptions,
+  ): Promise<MetadataSet | SanitizeDryRun>;
+  taskMetadataSet(
+    id: string,
+    key: string,
+    value: string,
     options: WriteOptions & ExpectOptions = {},
-  ): Promise<MetadataSet> {
-    return this.run("task metadata set", [
-      id,
-      key,
-      value,
-      ...termScopeFlags("taskMetadataSet", options),
-      ...expectFlags("taskMetadataSet", options),
-    ]);
+  ): Promise<MetadataSet | SanitizeDryRun> {
+    return this.run(
+      "task metadata set",
+      [
+        id,
+        key,
+        value,
+        ...writePolicyFlags("taskMetadataSet", options),
+        ...expectFlags("taskMetadataSet", options),
+      ],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
   }
   // One targeted update of one task: at least one field has to be named.
-  taskUpdate(id: string, options: TaskUpdateOptions): Promise<TaskUpdated> {
-    return this.run("task update", [id, ...taskUpdateFlags(options)]);
+  taskUpdate(
+    id: string,
+    options: TaskUpdateOptions & { sanitizeDryRun?: false },
+  ): Promise<TaskUpdated>;
+  taskUpdate(id: string, options: TaskUpdateOptions): Promise<TaskUpdated | SanitizeDryRun>;
+  taskUpdate(id: string, options: TaskUpdateOptions): Promise<TaskUpdated | SanitizeDryRun> {
+    return this.run(
+      "task update",
+      [id, ...taskUpdateFlags(options)],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
   }
   taskDeps(id: string, options: DependencyOptions = {}): Promise<QueryResponseOfQualifiedEdge> {
     const args = [id];
@@ -1279,8 +1418,27 @@ export class OnetaskgraphClient {
     if (options.direction) args.push("--direction", options.direction);
     return this.run("task deps", args);
   }
-  taskCopy(ids: string[], to: string, options: TaskCopyOptions = {}): Promise<CopyReport> {
-    return this.run("task copy", [...ids, "--to", to, ...taskCopyFlags(options)]);
+  taskCopy(
+    ids: string[],
+    to: string,
+    options?: TaskCopyOptions & { sanitizeDryRun?: false },
+  ): Promise<CopyReport>;
+  taskCopy(
+    ids: string[],
+    to: string,
+    options?: TaskCopyOptions,
+  ): Promise<CopyReport | SanitizeDryRun>;
+  taskCopy(
+    ids: string[],
+    to: string,
+    options: TaskCopyOptions = {},
+  ): Promise<CopyReport | SanitizeDryRun> {
+    return this.run(
+      "task copy",
+      [...ids, "--to", to, ...taskCopyFlags(options)],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
   }
   // Where `task copy --to <to>` would land each task, writing nothing: `noCounterpart` looks no
   // counterpart up, and `targetNative` names the one task's counterpart by its native id where
@@ -1341,39 +1499,76 @@ export class OnetaskgraphClient {
   projectCopy(
     id: string,
     to: string,
+    options?: (CopyOptions &
+      StatusCopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean }) & {
+      sanitizeDryRun?: false;
+    },
+  ): Promise<CopyReport>;
+  projectCopy(
+    id: string,
+    to: string,
+    options?: CopyOptions &
+      StatusCopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean },
+  ): Promise<CopyReport | SanitizeDryRun>;
+  projectCopy(
+    id: string,
+    to: string,
     // `membersOnly` copies the named `members` into the project the destination already holds,
     // leaving that project unread and unwritten; it is refused without a member.
     options: CopyOptions &
       StatusCopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean } = {},
-  ): Promise<CopyReport> {
+  ): Promise<CopyReport | SanitizeDryRun> {
     const args = [id, "--to", to, ...projectCopyFlags(options)];
-    return this.run("project copy", args);
+    return this.run("project copy", args, undefined, options.sanitizeDryRun === true);
   }
   projectMetadataSet(
     id: string,
     key: string,
     value: string,
+    options?: WriteOptions & { sanitizeDryRun?: false },
+  ): Promise<MetadataSet>;
+  projectMetadataSet(
+    id: string,
+    key: string,
+    value: string,
+    options?: WriteOptions,
+  ): Promise<MetadataSet | SanitizeDryRun>;
+  projectMetadataSet(
+    id: string,
+    key: string,
+    value: string,
     options: WriteOptions = {},
-  ): Promise<MetadataSet> {
-    return this.run("project metadata set", [
-      id,
-      key,
-      value,
-      ...termScopeFlags("projectMetadataSet", options),
-    ]);
+  ): Promise<MetadataSet | SanitizeDryRun> {
+    return this.run(
+      "project metadata set",
+      [id, key, value, ...writePolicyFlags("projectMetadataSet", options)],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
   }
   // Set one project's status and nothing else about it; a project delivers no task, so nothing
   // is kept in step after it.
   projectStatusSet(
     id: string,
     category: StatusCategory,
+    options?: WriteOptions & { sanitizeDryRun?: false },
+  ): Promise<ProjectStatusSet>;
+  projectStatusSet(
+    id: string,
+    category: StatusCategory,
+    options?: WriteOptions,
+  ): Promise<ProjectStatusSet | SanitizeDryRun>;
+  projectStatusSet(
+    id: string,
+    category: StatusCategory,
     options: WriteOptions = {},
-  ): Promise<ProjectStatusSet> {
-    return this.run("project status set", [
-      id,
-      category,
-      ...termScopeFlags("projectStatusSet", options),
-    ]);
+  ): Promise<ProjectStatusSet | SanitizeDryRun> {
+    return this.run(
+      "project status set",
+      [id, category, ...writePolicyFlags("projectStatusSet", options)],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
   }
   documentList(
     options: DocumentFilterOptions & { project?: string; noProject?: boolean } = {},
@@ -1399,22 +1594,49 @@ export class OnetaskgraphClient {
   documentCopy(
     ids: string[],
     to: string,
+    options?: Omit<CopyOptions, "comments"> & { sanitizeDryRun?: false },
+  ): Promise<CopyReport>;
+  documentCopy(
+    ids: string[],
+    to: string,
+    options?: Omit<CopyOptions, "comments">,
+  ): Promise<CopyReport | SanitizeDryRun>;
+  documentCopy(
+    ids: string[],
+    to: string,
     options: Omit<CopyOptions, "comments"> = {},
-  ): Promise<CopyReport> {
-    return this.run("document copy", [...ids, "--to", to, ...copyFlags("documentCopy", options)]);
+  ): Promise<CopyReport | SanitizeDryRun> {
+    return this.run(
+      "document copy",
+      [...ids, "--to", to, ...copyFlags("documentCopy", options)],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
   }
   documentMetadataSet(
     id: string,
     key: string,
     value: string,
+    options?: WriteOptions & { sanitizeDryRun?: false },
+  ): Promise<MetadataSet>;
+  documentMetadataSet(
+    id: string,
+    key: string,
+    value: string,
+    options?: WriteOptions,
+  ): Promise<MetadataSet | SanitizeDryRun>;
+  documentMetadataSet(
+    id: string,
+    key: string,
+    value: string,
     options: WriteOptions = {},
-  ): Promise<MetadataSet> {
-    return this.run("document metadata set", [
-      id,
-      key,
-      value,
-      ...termScopeFlags("documentMetadataSet", options),
-    ]);
+  ): Promise<MetadataSet | SanitizeDryRun> {
+    return this.run(
+      "document metadata set",
+      [id, key, value, ...writePolicyFlags("documentMetadataSet", options)],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
   }
   labelList(options: QueryOptions = {}): Promise<QueryResponseOfQualifiedLabel> {
     const args: string[] = [];
@@ -1465,12 +1687,24 @@ export class OnetaskgraphClient {
 
   // Create a task from a template, a loader document, `bodyFile` or `body`; it answers as
   // `taskShow` does, and records `onetaskgraph.template` provenance when rendered.
+  taskCreate(
+    source: string,
+    project: string,
+    title: string,
+    options?: TaskCreateOptions & { sanitizeDryRun?: false },
+  ): Promise<TaskDetail>;
+  taskCreate(
+    source: string,
+    project: string,
+    title: string,
+    options?: TaskCreateOptions,
+  ): Promise<TaskDetail | SanitizeDryRun>;
   async taskCreate(
     source: string,
     project: string,
     title: string,
     options: TaskCreateOptions = {},
-  ): Promise<TaskDetail> {
+  ): Promise<TaskDetail | SanitizeDryRun> {
     const { args, input } = createArguments(
       "taskCreate",
       ["--project", project, "--title", title],
@@ -1484,13 +1718,26 @@ export class OnetaskgraphClient {
       args.push("--delivers", id);
     }
     args.push(...assetFlags("taskCreate", options));
-    return this.run("task create", [source, ...args], input);
+    return this.run("task create", [source, ...args], input, options.sanitizeDryRun === true);
   }
   // Regenerate one task in place from its template, over its stored answers, keeping every
   // stored image asset its new content still references and storing `assets` with it.
-  async taskRender(id: string, options: ItemRenderOptions = {}): Promise<Regenerated> {
+  taskRender(
+    id: string,
+    options?: ItemRenderOptions & { sanitizeDryRun?: false },
+  ): Promise<Regenerated>;
+  taskRender(id: string, options?: ItemRenderOptions): Promise<Regenerated | SanitizeDryRun>;
+  async taskRender(
+    id: string,
+    options: ItemRenderOptions = {},
+  ): Promise<Regenerated | SanitizeDryRun> {
     const [command, args, input] = renderInvocation("task render", "taskRender", id, options);
-    return this.run(command, [...args, ...assetFlags("taskRender", options)], input);
+    return this.run(
+      command,
+      [...args, ...assetFlags("taskRender", options)],
+      input,
+      options.sanitizeDryRun === true,
+    );
   }
   taskAnswers(id: string): Promise<TemplateAnswers> {
     return this.run("task answers", [id]);
@@ -1510,34 +1757,71 @@ export class OnetaskgraphClient {
   }
   // Create — or, with `id` naming one the source holds, replace — a project, its description
   // rendered from a template or given as it is; it answers as `projectShow` does.
+  projectCreate(
+    source: string,
+    id: NativeId,
+    title: string,
+    options?: ProjectCreateOptions & { sanitizeDryRun?: false },
+  ): Promise<QueryResponseOfQualifiedProject>;
+  projectCreate(
+    source: string,
+    id: NativeId,
+    title: string,
+    options?: ProjectCreateOptions,
+  ): Promise<QueryResponseOfQualifiedProject | SanitizeDryRun>;
   async projectCreate(
     source: string,
     id: NativeId,
     title: string,
     options: ProjectCreateOptions = {},
-  ): Promise<QueryResponseOfQualifiedProject> {
+  ): Promise<QueryResponseOfQualifiedProject | SanitizeDryRun> {
     const { args, input } = createArguments(
       "projectCreate",
       ["--id", id, "--title", title],
       options,
     );
     if (options.status !== undefined) args.push("--status", options.status);
-    return this.run("project create", [source, ...args], input);
+    return this.run("project create", [source, ...args], input, options.sanitizeDryRun === true);
   }
   // Regenerate one project's description in place from its template, over its stored answers.
-  async projectRender(id: string, options: RenderOptions = {}): Promise<Regenerated> {
-    return this.run(...renderInvocation("project render", "projectRender", id, options));
+  projectRender(
+    id: string,
+    options?: RenderOptions & { sanitizeDryRun?: false },
+  ): Promise<Regenerated>;
+  projectRender(id: string, options?: RenderOptions): Promise<Regenerated | SanitizeDryRun>;
+  async projectRender(
+    id: string,
+    options: RenderOptions = {},
+  ): Promise<Regenerated | SanitizeDryRun> {
+    return this.run(
+      ...([
+        ...renderInvocation("project render", "projectRender", id, options),
+        options.sanitizeDryRun === true,
+      ] as const),
+    );
   }
   projectAnswers(id: string): Promise<TemplateAnswers> {
     return this.run("project answers", [id]);
   }
   // Create — or, with `id` naming one the source holds, replace — a project document.
+  documentCreate(
+    source: string,
+    project: string,
+    title: string,
+    options?: DocumentCreateOptions & { sanitizeDryRun?: false },
+  ): Promise<DocumentDetail>;
+  documentCreate(
+    source: string,
+    project: string,
+    title: string,
+    options?: DocumentCreateOptions,
+  ): Promise<DocumentDetail | SanitizeDryRun>;
   async documentCreate(
     source: string,
     project: string,
     title: string,
     options: DocumentCreateOptions = {},
-  ): Promise<DocumentDetail> {
+  ): Promise<DocumentDetail | SanitizeDryRun> {
     const { args, input } = createArguments(
       "documentCreate",
       ["--project", project, "--title", title],
@@ -1545,22 +1829,40 @@ export class OnetaskgraphClient {
     );
     if (options.id !== undefined) args.push("--id", options.id);
     args.push(...assetFlags("documentCreate", options));
-    return this.run("document create", [source, ...args], input);
+    return this.run("document create", [source, ...args], input, options.sanitizeDryRun === true);
   }
-  async documentRender(id: string, options: ItemRenderOptions = {}): Promise<Regenerated> {
+  documentRender(
+    id: string,
+    options?: ItemRenderOptions & { sanitizeDryRun?: false },
+  ): Promise<Regenerated>;
+  documentRender(id: string, options?: ItemRenderOptions): Promise<Regenerated | SanitizeDryRun>;
+  async documentRender(
+    id: string,
+    options: ItemRenderOptions = {},
+  ): Promise<Regenerated | SanitizeDryRun> {
     const [command, args, input] = renderInvocation(
       "document render",
       "documentRender",
       id,
       options,
     );
-    return this.run(command, [...args, ...assetFlags("documentRender", options)], input);
+    return this.run(
+      command,
+      [...args, ...assetFlags("documentRender", options)],
+      input,
+      options.sanitizeDryRun === true,
+    );
   }
   documentAnswers(id: string): Promise<TemplateAnswers> {
     return this.run("document answers", [id]);
   }
 
-  private run<T>(command: string, args: string[], input?: string): Promise<T> {
+  private run<T>(
+    command: string,
+    args: string[],
+    input?: string,
+    allowSanitization = false,
+  ): Promise<T> {
     // Every call is non-interactive: a library caller has no terminal to be asked on, and a
     // command that would prompt refuses what it was not given instead of waiting.
     const commandArgs = [...command.split(" "), ...args, "--json", "--no-interactive"];
@@ -1642,7 +1944,10 @@ export class OnetaskgraphClient {
           }
           const ajv = new Ajv2020({ strict: false });
           const validate = ajv.compile(runtimeSchemas[root]);
-          const alternates = commandAlternateRoots[command] ?? [];
+          const alternates = [
+            ...(commandAlternateRoots[command] ?? []),
+            ...(allowSanitization ? ["SanitizeDryRun" as const] : []),
+          ];
           if (
             !validate(value) &&
             !alternates.some((alternate) => ajv.compile(runtimeSchemas[alternate])(value))

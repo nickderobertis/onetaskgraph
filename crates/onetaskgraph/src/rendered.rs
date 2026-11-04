@@ -254,7 +254,10 @@ async fn regenerated(
     let regenerated = engine
         .regenerate(&regeneration, &answers, args.dry_run)
         .await
-        .map_err(refusal)?;
+        .map_err(|error| match refusal(error.clone()) {
+            Refusal::Failed(_) => Refusal::Failed(crate::write_failed(&engine, &error)),
+            other => other,
+        })?;
     let rendered = match loaded.config.output() {
         OutputFormat::Text => render::regenerated(&regenerated, args.dry_run),
         OutputFormat::Json => json(&regenerated, "the rendering")?,

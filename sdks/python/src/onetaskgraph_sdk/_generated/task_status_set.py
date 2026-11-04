@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, JsonValue, RootModel
 
@@ -190,6 +190,16 @@ class BudgetSpent(BaseModel):
     ]
 
 
+class SideEffect(BaseModel):
+    item: Annotated[Any, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Any,
+        Field(
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+        ),
+    ]
+
+
 class Status(BaseModel):
     category: Annotated[
         StatusCategory,
@@ -274,6 +284,22 @@ class Spent(BaseModel):
     ]
 
 
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
+        Field(
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
+        ),
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
+    ]
+
+
 class DeliveredFailed(BaseModel):
     ticket: Annotated[GlobalId, Field(description="The delivered task.")]
     deliverer: Annotated[
@@ -342,3 +368,4 @@ class TaskStatusSet(BaseModel):
             description="The public projection the new status category was mirrored to — absent for a task\nwith none."
         ),
     ] = None
+    sanitization: Sanitization | None = None

@@ -139,6 +139,7 @@ CONTRACT_ROOTS = {
     "RepositoryVisibility",
     "PublicWriteInput",
     "WriteVerdict",
+    "SanitizeDryRun",
     # The map a private destination project records from each canonical task to its public
     # projection, which a caller reading a coordination project models by name.
     "PublicProjections",
@@ -962,7 +963,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "import json",
         "from collections.abc import Mapping",
         "from functools import cache",
-        "from typing import TYPE_CHECKING, Literal",
+        "from typing import TYPE_CHECKING, Literal, overload",
         "",
         "from pydantic import JsonValue, TypeAdapter",
         "",
@@ -977,7 +978,14 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
             f"        {root},"
             for root in sorted(
                 response_roots()
-                | {"GlobalId", "NativeId", "Priority", "SourceName", "StatusCategory"}
+                | {
+                    "GlobalId",
+                    "NativeId",
+                    "Priority",
+                    "SourceName",
+                    "StatusCategory",
+                    "SanitizeDryRun",
+                }
             )
         ],
         "    )",
@@ -1205,6 +1213,36 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
                 passed.append(f"stdin=_stdin({name!r}, None, answers)")
         elif body:
             passed.append("stdin=body")
+        if "sanitize_dry_run" in keywords:
+            ordinary = [
+                parameter.replace(
+                    "sanitize_dry_run: bool | None = None",
+                    "sanitize_dry_run: Literal[False] | None = None",
+                )
+                for parameter in parameters
+            ]
+            preview = [
+                parameter.replace(
+                    "sanitize_dry_run: bool | None = None", "sanitize_dry_run: Literal[True]"
+                )
+                for parameter in parameters
+            ]
+            lines.extend(
+                [
+                    "    @overload",
+                    f"    async def {name}(self, {', '.join(ordinary)}) -> {return_type}: ...",
+                    "",
+                    "    @overload",
+                    f"    async def {name}(self, {', '.join(preview)})"
+                    f" -> {return_type} | SanitizeDryRun: ...",
+                    "",
+                    "    @overload",
+                    f"    async def {name}(self, {', '.join(parameters)})"
+                    f" -> {return_type} | SanitizeDryRun: ...",
+                    "",
+                ]
+            )
+            return_type = f"{return_type} | SanitizeDryRun"
         lines.extend(
             [
                 f"    async def {name}(self, {', '.join(parameters)}) -> {return_type}:",

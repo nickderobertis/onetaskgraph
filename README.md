@@ -2576,9 +2576,11 @@ the task and every comment on it as stored. A term an older store left there is 
 before the write is made: the task and its comments are written back, conditional on the
 version the read answered — a task that moved meanwhile is read again once and sanitised from
 that fresh record, keeping what changed; one that moves again is refused as
-`sanitize-conflict`, nothing overwritten — and each field and comment changed is named under
+`sanitize-conflict` — and each field and comment changed is named under
 `side_effect`, a human answer adding one `sanitised <item> <field>` line per change after
-today's line. `--sanitize-dry-run` writes nothing and answers `{"would_pass",
+today's line. This guard reads immediately before writing; the plugin interface supplies no
+atomic compare-and-set. An edit arriving between that final read and the write can still be
+overwritten. `--sanitize-dry-run` writes nothing and answers `{"would_pass",
 "sanitization"}`. A term replacement cannot fix is refused saying it was already on
 the item before this write and which kind of field replacement cannot fix (`repositories`, an
 id, a term no replacement is declared for). An item whose stored `repositories` already name a
@@ -2602,11 +2604,12 @@ than claim a clean source. `--complete` reads the source whole once, a page at a
 page's items decided and written before the next is asked for, covering all three; a source
 whose requests spend no quota, a folder of Markdown, is always read whole; one whose request
 count cannot be read is searched, as one spending a shared allowance is. `--dry-run` sends
-every search and read and no write.
+every search and read and no write. These are source-plugin API pages: GitHub's provider
+may prefetch HTTP pages into its per-command cache before returning its first caller page.
 
 ```json
 {"source": "plans", "dry_run": false, "complete": false,
- "requests": {"total": 30, "searches": 12, "reads": 9, "writes": 9},
+ "requests": {"total": 30, "page_operations": 12, "detail_operations": 9, "rewrite_operations": 9},
  "coverage": {"complete": false, "uncovered": ["metadata", "comments", "normalized-spellings"]},
  "items": [{"id": "plans:PVTI_x", "kind": "task", "outcome": "rewritten",
             "fields": [{"field": "content", "outcome": "rewritten"}]}]}
@@ -2617,9 +2620,11 @@ every search and read and no write.
 every item a whole read found carrying a term, and none for a term-free item read whole. Exit 0
 when coverage is complete and everything matched was fixed or needed nothing; 1 when anything is
 left unfixable or in conflict; 2 when the policy could not decide; 3 when coverage is incomplete
-and nothing else failed. `requests` is the source's own request accounting, all zero for a
-folder. No term, nor any query built from one, is written to the report, standard error, a log
-or the cache.
+and nothing else failed. `requests.total` is the source's own request accounting, zero for a
+folder. The three operation counters count search/list pages, detail batches or comment walks,
+and rewritten items; they do not partition that total. Guard reads and individual comment
+writes can send additional requests inside those operations. No term, nor any query built
+from one, is written to the report, standard error, a log or the cache.
 
 **Diagnostics name records by screened locators.** The source's name, a qualified item id, a
 metadata key and a comment id are put to the write's own sanitisation as `locators` and never

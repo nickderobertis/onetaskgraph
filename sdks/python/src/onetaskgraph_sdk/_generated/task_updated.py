@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel
 
@@ -264,6 +264,16 @@ class WriteFallback(BaseModel):
     ]
 
 
+class SideEffect(BaseModel):
+    item: Annotated[Any, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Any,
+        Field(
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+        ),
+    ]
+
+
 class Status(BaseModel):
     category: Annotated[
         StatusCategory,
@@ -346,6 +356,22 @@ class WriteResult(BaseModel):
             description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
         ),
     ] = None
+
+
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
+        Field(
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
+        ),
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
+    ]
 
 
 class Task(BaseModel):
@@ -510,3 +536,4 @@ class TaskUpdated(BaseModel):
             description="The public projection a written status category was mirrored to — absent when the\nupdate wrote no status, and for a task with no projection."
         ),
     ] = None
+    sanitization: Sanitization | None = None

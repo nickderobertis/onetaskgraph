@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel
 
@@ -199,6 +199,16 @@ class UnresolvedReason(StrEnum):
     UnresolvedReasonNot_Configured_On_This_Host = "not configured on this host"
 
 
+class SideEffect(BaseModel):
+    item: Annotated[Any, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Any,
+        Field(
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+        ),
+    ]
+
+
 class Status(BaseModel):
     category: Annotated[
         StatusCategory,
@@ -256,6 +266,22 @@ class UnresolvedDesignator(BaseModel):
         Designator, Field(description="The designator the far end was recorded under.")
     ]
     reason: Annotated[UnresolvedReason, Field(description="Why it was not resolved.")]
+
+
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
+        Field(
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
+        ),
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
+    ]
 
 
 class Project(BaseModel):
@@ -356,3 +382,4 @@ class QueryResponse(BaseModel):
             validate_default=True,
         ),
     ] = []
+    sanitization: Sanitization | None = None

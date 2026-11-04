@@ -18,8 +18,10 @@ from pathlib import Path
 from typing import TypedDict
 
 import pytest
+from pydantic import BaseModel, JsonValue
+from sweep_source import Label, Status, TaskId
 
-from onetaskgraph_sdk import Client, OnetaskgraphError
+from onetaskgraph_sdk import Client, OnetaskgraphError, StatusCategory
 
 TERMS = """
 import json, sys
@@ -68,6 +70,203 @@ print(json.dumps(answer))
 TERM = "emberline"
 
 
+class PeerError(BaseModel):
+    """The protocol peer's refused-request payload."""
+
+    kind: str
+    message: str
+
+
+class PeerReply(BaseModel):
+    """A refused response from the real peer subprocess."""
+
+    id: str
+    error: PeerError
+
+
+async def peer_exchange(store: Path, request: dict[str, JsonValue]) -> tuple[int, bytes, bytes]:
+    """Exchange a typed JSON request with the peer's real subprocess."""
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(Path(__file__).with_name("sweep_source.py")),
+        str(store),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await process.communicate((json.dumps(request) + "\n").encode())
+    assert process.returncode is not None
+    return process.returncode, stdout, stderr
+
+
+async def peer_request(store: Path, request: dict[str, JsonValue]) -> PeerReply:
+    """Send a malformed wire request and validate the peer's response."""
+    code, stdout, stderr = await peer_exchange(store, request)
+    assert code == 0, stderr.decode()
+    return PeerReply.model_validate_json(stdout)
+
+
+@pytest.mark.parametrize(
+    "held",
+    [
+        {"requests": True, "tasks": []},
+        {"requests": -1, "tasks": []},
+        {"requests": 0, "tasks": [{"id": "t1", "title": "No content"}]},
+    ],
+)
+def test_the_search_peer_refuses_malformed_stored_state(
+    tmp_path: Path, held: dict[str, JsonValue]
+) -> None:
+    """A malformed store is refused before any task can be read from it."""
+    store = tmp_path / "tracker.json"
+    before = json.dumps(held)
+    store.write_text(before, encoding="utf-8")
+    code, _, stderr = run(peer_exchange(store, {"id": "health", "method": "health"}))
+    assert code != 0
+    assert "not this peer's state" in stderr.decode()
+    assert "Traceback" not in stderr.decode()
+    assert store.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", {"category": "invented", "name": "Todo"}),
+        ("labels", [7]),
+        ("project", 7),
+        ("location", {"url": "https://example.invalid", "path": "/local"}),
+        ("created_at", 7),
+        ("updated_at", 7),
+    ],
+)
+def test_the_search_peer_validates_every_stored_task_field(
+    tmp_path: Path,
+    field: str,
+    value: JsonValue,
+) -> None:
+    """Do not return malformed persisted fields as if they were a task from the protocol."""
+    item: dict[str, JsonValue] = {
+        "id": "t1",
+        "title": "Plain",
+        "content": "Plain.",
+        "status": {"category": "todo", "name": "Todo"},
+        "labels": [],
+        "project": None,
+        "url": None,
+        "location": None,
+        "created_at": None,
+        "updated_at": None,
+    }
+    item[field] = value
+    store = tmp_path / "tracker.json"
+    before = json.dumps({"requests": 0, "tasks": [item]})
+    store.write_text(before, encoding="utf-8")
+    code, _, stderr = run(peer_exchange(store, {"id": "health", "method": "health"}))
+    assert code != 0
+    assert "not this peer's state" in stderr.decode()
+    assert "Traceback" not in stderr.decode()
+    assert store.read_text(encoding="utf-8") == before
+
+
+@pytest.mark.parametrize("identifier", [None, 7, []])
+def test_the_search_peer_refuses_malformed_task_identifiers(
+    tmp_path: Path, identifier: JsonValue
+) -> None:
+    """A malformed identifier is refused instead of answering that no task exists."""
+    store = tmp_path / "tracker.json"
+    store.write_text(json.dumps({"requests": 0, "tasks": [task("t1", "Plain.")]}), encoding="utf-8")
+    request: dict[str, JsonValue] = {
+        "id": "bad-id",
+        "method": "get_task",
+        "params": {"id": identifier},
+    }
+    assert run(peer_request(store, request)).error.kind == "malformed"
+
+
+@pytest.mark.parametrize("method", [None, 7, []])
+def test_the_search_peer_ignores_malformed_request_methods(
+    tmp_path: Path, method: JsonValue
+) -> None:
+    """Malformed envelopes do not enter dispatch or increment its request counter."""
+    store = tmp_path / "tracker.json"
+    before = json.dumps({"requests": 0, "tasks": [task("t1", "Plain.")]})
+    store.write_text(before, encoding="utf-8")
+    code, out, err = run(peer_exchange(store, {"id": "bad-method", "method": method}))
+    assert code == 0 and not out
+    assert "not a request" in err.decode()
+    assert store.read_text(encoding="utf-8") == before
+
+
+def test_the_search_peer_refuses_non_string_terms(tmp_path: Path) -> None:
+    """Malformed protocol searches receive a response without changing a stored task."""
+    store = tmp_path / "tracker.json"
+    tasks = [task("t1", "A plain task.")]
+    store.write_text(json.dumps({"requests": 0, "tasks": tasks}), encoding="utf-8")
+    for terms, fields in [
+        (7, "title-or-content"),
+        (["a"], "title-or-content"),
+        ({"term": "a"}, "title-or-content"),
+        ("plain", "elsewhere"),
+        ("plain", 7),
+    ]:
+        request: dict[str, JsonValue] = {
+            "id": "bad-search",
+            "method": "query_tasks",
+            "params": {
+                "query": {"text": {"terms": terms, "fields": fields}},
+            },
+        }
+        assert run(peer_request(store, request)).error.kind == "malformed"
+        assert json.loads(store.read_text(encoding="utf-8"))["tasks"] == tasks
+
+
+def test_the_search_peer_refuses_malformed_labels_without_dropping_them(tmp_path: Path) -> None:
+    """A malformed write receives a refusal and leaves the stored task whole."""
+    store = tmp_path / "tracker.json"
+    tasks = [task("t1", "A plain task.")]
+    store.write_text(json.dumps({"requests": 0, "tasks": tasks}), encoding="utf-8")
+    for label in [7, {}, {"id": 7, "name": "Bad"}]:
+        request: dict[str, JsonValue] = {
+            "id": "bad-label",
+            "method": "write_task",
+            "params": {
+                "write": {
+                    "target": "t1",
+                    "item": {
+                        "id": "t1",
+                        "title": "Changed",
+                        "content": "Changed.",
+                        "status": {"category": "todo", "name": "Todo"},
+                        "labels": [label],
+                    },
+                },
+            },
+        }
+        assert run(peer_request(store, request)).error.kind == "malformed"
+        assert json.loads(store.read_text(encoding="utf-8"))["tasks"] == tasks
+
+
+def test_the_search_peer_refuses_unknown_status_categories(tmp_path: Path) -> None:
+    """Reject an out-of-vocabulary status before replacing the stored record."""
+    store = tmp_path / "tracker.json"
+    tasks = [task("t1", "A plain task.")]
+    store.write_text(json.dumps({"requests": 0, "tasks": tasks}), encoding="utf-8")
+    item: dict[str, JsonValue] = {
+        "id": "t1",
+        "title": "Changed",
+        "content": "Changed.",
+        "labels": [],
+        "status": {"category": "invented", "name": "Todo"},
+    }
+    request: dict[str, JsonValue] = {
+        "id": "bad-category",
+        "method": "write_task",
+        "params": {"write": {"target": "t1", "item": item}},
+    }
+    assert run(peer_request(store, request)).error.kind == "malformed"
+    assert json.loads(store.read_text(encoding="utf-8"))["tasks"] == tasks
+
+
 def run[T](call: Coroutine[object, object, T]) -> T:
     """Drive one public async SDK call to completion."""
     return asyncio.run(call)
@@ -99,11 +298,11 @@ def client(
 class Task(TypedDict):
     """One task as `sweep_source.py` holds it and sends it (§4.4)."""
 
-    id: str
+    id: TaskId
     title: str
     content: str
-    status: dict[str, str]
-    labels: list[dict[str, str]]
+    status: Status
+    labels: list[Label]
     project: None
     url: None
     location: None
@@ -117,7 +316,7 @@ def task(identifier: str, content: str) -> Task:
         "id": identifier,
         "title": identifier.title(),
         "content": content,
-        "status": {"category": "todo", "name": "Todo"},
+        "status": {"category": StatusCategory.StatusCategoryTodo, "name": "Todo"},
         "labels": [],
         "project": None,
         "url": None,
@@ -125,6 +324,38 @@ def task(identifier: str, content: str) -> Task:
         "created_at": None,
         "updated_at": None,
     }
+
+
+def test_a_write_sanitization_preview_is_typed_and_leaves_the_item_unchanged(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Preview an older item, then apply the same priority change through the SDK."""
+    folder = tmp_path / "plans"
+    (folder / "tasks").mkdir(parents=True)
+    item = folder / "tasks" / "t1.md"
+    before = f"---\ntitle: Retry\nstatus: todo\n---\nRetry as {TERM} does.\n"
+    item.write_text(before, encoding="utf-8")
+    sdk = client(
+        binary,
+        tmp_path,
+        {"plans": {"plugin": "local-md", "visibility": "public", "config": {"root": str(folder)}}},
+    )
+    answer = run(sdk.task_priority_set("plans:t1", "high", sanitize_dry_run=True))
+    from onetaskgraph_sdk import SanitizeDryRun
+
+    assert isinstance(answer, SanitizeDryRun)
+    assert answer.would_pass is True
+    assert answer.sanitization.dry_run is True
+    assert item.read_text(encoding="utf-8") == before
+    written_answer = run(sdk.task_priority_set("plans:t1", "high"))
+    assert written_answer.sanitization is not None
+    assert written_answer.sanitization.side_effect
+    written = item.read_text(encoding="utf-8")
+    assert TERM not in written
+    assert "ember-x" in written
+    assert "priority: high" in written
+    unchanged = run(sdk.task_priority_set("plans:t1", "low"))
+    assert unchanged.sanitization is None
 
 
 def test_a_search_sweep_answers_its_report_on_exit_three(binary: Path, tmp_path: Path) -> None:

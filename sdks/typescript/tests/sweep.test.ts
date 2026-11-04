@@ -15,14 +15,17 @@ const TERM = "emberline";
 
 const TERMS = `
 const input = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
-console.log(JSON.stringify({ terms: (input.replacements ?? []).filter((entry) => "with" in entry)
+const rules = [...new Map((input.replacements ?? []).map((entry) => [entry.term, entry])).values()];
+console.log(JSON.stringify({ terms: rules
   .map((entry) => ({ term: entry.term, mode: "whole-word", case_sensitive: false,
-                     action: "replace", with: entry.with })) }));
+                     action: entry.reject === true ? "reject" : "replace",
+                     ...("with" in entry ? { with: entry.with } : {}) })) }));
 `;
 
 const SANITIZE = `
 const input = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
-const terms = (input.replacements ?? []).filter((entry) => "with" in entry);
+const rules = [...new Map((input.replacements ?? []).map((entry) => [entry.term, entry])).values()];
+const terms = rules.filter((entry) => "with" in entry);
 let replaced = 0;
 const rewrite = (value) => terms.reduce((text, entry) => {
   replaced += text.split(entry.term).length - 1;
@@ -30,16 +33,26 @@ const rewrite = (value) => terms.reduce((text, entry) => {
 }, value);
 const answer = {};
 for (const surface of ["text", "paths", "metadata"]) answer[surface] = (input[surface] ?? []).map(rewrite);
+const unfixed = [];
+for (const [key, surface] of [["text", "text"], ["paths", "path"], ["metadata", "metadata"]]) {
+  for (const [index, value] of answer[key].entries()) {
+    if (rules.some((entry) => entry.reject === true && value.includes(entry.term)))
+      unfixed.push({ surface, index, fixed: false });
+  }
+  for (const [index, value] of (input.fixed?.[key] ?? []).entries()) {
+    if (rules.some((entry) => value.includes(entry.term))) unfixed.push({ surface, index, fixed: true });
+  }
+}
 const locators = input.locators ?? [];
 const carrying = locators.flatMap((locator, index) =>
-  terms.some((entry) => locator.value.includes(entry.term)) ? [index] : []);
+  rules.some((entry) => locator.value.includes(entry.term)) ? [index] : []);
 let ordinal = 0;
 answer.locators = locators.map((locator, index) => carrying.includes(index)
   ? { redacted: true, kind: locator.kind, ordinal: ++ordinal } : locator.value);
 answer.replaced = replaced;
-if (carrying.length > 0) {
-  Object.assign(answer, { verdict: "refuse", surface: "locators",
-    unfixed: carrying.map((index) => ({ surface: "locators", index, fixed: true })) });
+unfixed.push(...carrying.map((index) => ({ surface: "locators", index, fixed: true })));
+if (unfixed.length > 0) {
+  Object.assign(answer, { verdict: "refuse", surface: unfixed[0].surface, unfixed });
   console.log(JSON.stringify(answer));
   process.exit(1);
 }
@@ -72,6 +85,45 @@ function store(sources: Record<string, unknown>, terms = true): [OnetaskgraphCli
   return [new OnetaskgraphClient({ binaryPath: binary, cwd: root }), root];
 }
 
+test("per-call replacement and rejection overrides support a sanitization preview", async () => {
+  const [, root] = store({});
+  const folder = resolve(root, "plans");
+  mkdirSync(resolve(folder, "tasks"), { recursive: true });
+  const file = resolve(folder, "tasks/t1.md");
+  const before = `---\ntitle: Retry\nstatus: todo\n---\nRetry as ${TERM} does.\n`;
+  writeFileSync(file, before);
+  const [client] = store({
+    plans: { plugin: "local-md", visibility: "public", config: { root: folder } },
+  });
+  const preview = await client.taskPrioritySet("plans:t1", "high", {
+    sanitizeDryRun: true,
+    replace: [`${TERM}=flag=x`],
+  });
+  expect("would_pass" in preview).toBe(true);
+  if (!("would_pass" in preview)) throw new Error("expected a sanitization preview");
+  expect(preview.would_pass).toBe(true);
+  expect(preview.sanitization?.dry_run).toBe(true);
+  expect(readFileSync(file, "utf8")).toBe(before);
+  await expect(
+    client.taskPrioritySet("plans:t1", "high", { reject: [TERM] }),
+  ).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+  expect(readFileSync(file, "utf8")).toBe(before);
+  const written = await client.taskPrioritySet("plans:t1", "high", { replace: [`${TERM}=flag=x`] });
+  expect(written.priority).toBe("high");
+  expect(written.sanitization?.side_effect.length).toBeGreaterThan(0);
+  expect(readFileSync(file, "utf8")).toContain("flag=x");
+  expect(readFileSync(file, "utf8")).not.toContain(TERM);
+  writeFileSync(file, before);
+  const swept = await client.sourcesSanitize("plans", {
+    replace: [`${TERM}=sweep-x`],
+    dryRun: true,
+  });
+  expect(swept.items[0]?.outcome).toBe("would-rewrite");
+  expect(readFileSync(file, "utf8")).toBe(before);
+  await client.sourcesSanitize("plans", { replace: [`${TERM}=sweep-x`] });
+  expect(readFileSync(file, "utf8")).toContain("sweep-x");
+});
+
 test("a search sweep answers its report on exit 3", async () => {
   const python = Bun.which("python3");
   if (python === null) throw new Error("python3 is needed to run the metered peer");
@@ -98,7 +150,7 @@ test("a search sweep answers its report on exit 3", async () => {
     tracker: {
       plugin: "subprocess",
       visibility: "public",
-      config: { command: python, args: [peer, held] },
+      config: { command: resolve(python), args: [peer, held] },
     },
   });
   const report = await client.sourcesSanitize("tracker");

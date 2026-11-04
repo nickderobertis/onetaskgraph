@@ -930,7 +930,10 @@ impl Engine {
                     },
                     exposure: &Exposure::of_document(&write.item)
                         .assets(&carried)
-                        .answers(answers),
+                        .answers(answers)
+                        .and(Exposure::metadata(
+                            request.id.iter().map(|id| id.as_str().to_owned()),
+                        )),
                 },
             )
             .await?;
@@ -1127,7 +1130,7 @@ impl Engine {
             .admit(
                 source,
                 &Outbound {
-                    item: format!("project {}:{}", request.source, request.id),
+                    item: format!("{}:{}", request.source, request.id),
                     classification,
                     target: match &write.target {
                         Some(id) => WriteTarget::Existing(id),
@@ -1138,7 +1141,8 @@ impl Engine {
                     },
                     exposure: &Exposure::of_project(&write.item).answers(answers).and(
                         Exposure::metadata(
-                            write.depends_on.iter().map(|edge| edge.to.id().to_owned()),
+                            std::iter::once(request.id.as_str().to_owned())
+                                .chain(write.depends_on.iter().map(|edge| edge.to.id().to_owned())),
                         ),
                     ),
                 },
@@ -1442,7 +1446,9 @@ impl Engine {
                 rewrite.answers(&mut rendered.answers);
                 provenance.body_digest =
                     crate::template::Sha256Digest::of(rendered.body.as_bytes());
-                provenance.to_value()
+                let mut value = provenance.to_value();
+                rewrite.value(&mut value);
+                value
             };
             let record = regeneration.record.metadata_record();
             stored::forget(source, record, &id.native);

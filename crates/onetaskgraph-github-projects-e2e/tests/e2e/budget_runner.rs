@@ -207,13 +207,21 @@ fn report_sanitize_sweep() {
         return;
     };
     let workload = super::sanitize_sweep::Workload::new(2_000, false);
-    let (first, first_detail) = super::sanitize_sweep::requests(&workload.sweep(&[]));
-    let (rerun, rerun_detail) = super::sanitize_sweep::requests(&workload.sweep(&[]));
+    let (first, first_detail) = workload.measure(&[]);
+    let (rerun, rerun_detail) = workload.measure(&[]);
+    let larger = super::sanitize_sweep::Workload::new(20_000, false);
+    let (large_first, large_first_detail) = larger.measure(&[]);
+    let (large_rerun, large_rerun_detail) = larger.measure(&[]);
+    assert_eq!(
+        large_first + large_rerun,
+        first + rerun,
+        "board size adds no requests"
+    );
     hand_over(
         (first + rerun) as f64,
         &format!(
-            "{} items; first sweep {first_detail}; rerun {rerun_detail}",
-            workload.size
+            "{} items; first sweep {first_detail}; rerun {rerun_detail}; {} items: first {large_first_detail}; rerun {large_rerun_detail}; native comment search unavailable (six searches and two comment-only hits deferred)",
+            workload.size, larger.size
         ),
     );
 }
@@ -226,13 +234,20 @@ fn report_sanitize_complete_sweep() {
         return;
     };
     let workload = super::sanitize_sweep::Workload::new(2_000, true);
-    let (total, detail) = super::sanitize_sweep::requests(&workload.sweep(&["--complete"]));
+    let (total, detail) = workload.measure(&["--complete"]);
     let per_thousand = total as f64 * 1_000.0 / workload.size as f64;
+    let larger = super::sanitize_sweep::Workload::new(20_000, true);
+    let (large_total, large_detail) = larger.measure(&["--complete"]);
+    let large_per_thousand = large_total as f64 * 1_000.0 / larger.size as f64;
+    assert!(
+        large_per_thousand <= per_thousand,
+        "larger board costs more per item: {large_detail}"
+    );
     hand_over(
-        per_thousand,
+        per_thousand.max(large_per_thousand),
         &format!(
-            "{} items, {per_thousand:.1} per 1,000; {detail}",
-            workload.size
+            "{} items, {per_thousand:.1} per 1,000; {detail}; {} items, {large_per_thousand:.1} per 1,000; {large_detail}",
+            workload.size, larger.size
         ),
     );
 }

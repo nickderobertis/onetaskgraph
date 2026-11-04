@@ -809,6 +809,15 @@ fn answer_problem(input: &PublicSanitizeInput, answer: &SanitizeVerdict) -> Opti
     if !answer.unfixed.iter().all(within) {
         return Some("the policy named an unfixed entry that was never sent");
     }
+    if answer.unfixed.iter().any(|unfixed| {
+        unfixed.surface == SanitizeSurface::Locators
+            && usize::try_from(unfixed.index)
+                .ok()
+                .and_then(|index| answer.locators.get(index))
+                .is_some_and(|locator| matches!(locator, Locator::Plain(_)))
+    }) {
+        return Some("the policy left an identifier it says carries a term unredacted");
+    }
     None
 }
 
@@ -1052,6 +1061,27 @@ pub struct Sanitization {
     pub side_effect: Vec<SideEffect>,
     /// Whether nothing was written, the changes only reported.
     pub dry_run: bool,
+}
+
+/// A command's object response with the sanitization report its writes produced.
+/// Empty reports are omitted, preserving the original answer when no field changed.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct WriteAnswer<T> {
+    #[serde(flatten)]
+    answer: T,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sanitization: Option<Sanitization>,
+}
+
+impl<T> WriteAnswer<T> {
+    /// Attach a nonempty report to an object response; an empty report leaves it unchanged.
+    #[must_use]
+    pub fn new(answer: T, sanitization: Sanitization) -> Self {
+        Self {
+            answer,
+            sanitization: (!sanitization.is_empty()).then_some(sanitization),
+        }
+    }
 }
 
 impl Sanitization {
@@ -2400,6 +2430,7 @@ impl Engine {
             })?;
             return match task {
                 Some(task) => {
+                    let task = checked_task_identity(destination, id, task)?;
                     self.admit_whole_task(destination, item, id, task, exposure)
                         .await
                 }
@@ -2641,16 +2672,50 @@ pub(super) async fn every_comment(
 /// fields; and the identifiers a diagnostic of a field would print.
 pub(super) struct StoredTask {
     pub(super) exposure: Exposure,
+    pub(super) depends_on: Vec<onetaskgraph_plugin_api::DependencyEdge>,
 }
 
 impl StoredTask {
-    pub(super) fn of(
+    pub(super) async fn read(
         destination: &ResolvedSource,
         item: &str,
         task: &Task,
         comments: &[Comment],
-    ) -> Self {
+    ) -> Result<Self, EngineError> {
+        let mut depends_on = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = destination
+                .source()
+                .task_dependencies(
+                    &task.id,
+                    onetaskgraph_plugin_api::Direction::DependsOn,
+                    &PageRequest {
+                        cursor: cursor.take(),
+                        limit: 100,
+                    },
+                )
+                .await
+                .map_err(|error| EngineError::SourceRefused {
+                    name: destination.name().to_string(),
+                    error,
+                })?;
+            depends_on.extend(page.items);
+            match page.next {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
         let mut exposure = Exposure::of_task(task);
+        for edge in &depends_on {
+            exposure
+                .fixed
+                .metadata
+                .extend([edge.from.id().to_owned(), edge.to.id().to_owned()]);
+            exposure = exposure
+                .locate(LocatorKind::Item, edge.from.id())
+                .locate(LocatorKind::Item, edge.to.id());
+        }
         for comment in comments {
             exposure = exposure
                 .and(Exposure::text(comment.body.clone()))
@@ -2659,9 +2724,10 @@ impl StoredTask {
         for key in task.metadata.keys() {
             exposure = exposure.locate(LocatorKind::MetadataKey, key.as_str());
         }
-        Self {
+        Ok(Self {
             exposure: located(destination, item, exposure),
-        }
+            depends_on,
+        })
     }
 }
 
@@ -2678,15 +2744,54 @@ pub(super) enum ChangedField {
 }
 
 /// A task as sanitising it would write it, each comment with its new body, and what changed.
-pub(super) type SanitisedTask = (Task, Vec<(Comment, String)>, Vec<ChangedField>);
+pub(super) type SanitisedTask = (
+    Task,
+    Vec<(Comment, String)>,
+    Vec<ChangedField>,
+    Vec<onetaskgraph_plugin_api::DependencyEdge>,
+);
 
 /// What a sanitising write wrote, or would: the fields it changed, the task as written, and —
 /// when the record moved and was screened again — that screening, which names its fields.
-#[derive(Default)]
-pub(super) struct Sanitised {
-    pub(super) fields: Vec<ChangedField>,
-    pub(super) written: Option<Task>,
-    pub(super) screening: Option<(Exposure, Vec<Locator>)>,
+pub(super) enum Sanitised {
+    Unchanged,
+    Previewed {
+        first: ChangedField,
+        rest: Vec<ChangedField>,
+    },
+    Written {
+        first: ChangedField,
+        rest: Vec<ChangedField>,
+        task: Task,
+        screening: Option<(Exposure, Vec<Locator>)>,
+    },
+}
+
+impl Sanitised {
+    pub(super) fn fields(&self) -> impl Iterator<Item = &ChangedField> {
+        let (first, rest): (Option<&ChangedField>, &[ChangedField]) = match self {
+            Self::Unchanged => (None, &[]),
+            Self::Previewed { first, rest } | Self::Written { first, rest, .. } => {
+                (Some(first), rest)
+            }
+        };
+        first.into_iter().chain(rest)
+    }
+
+    pub(super) fn was_written(&self) -> bool {
+        matches!(self, Self::Written { .. })
+    }
+
+    pub(super) fn has_changes(&self) -> bool {
+        !matches!(self, Self::Unchanged)
+    }
+
+    pub(super) fn screening(&self) -> Option<&(Exposure, Vec<Locator>)> {
+        match self {
+            Self::Written { screening, .. } => screening.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 /// One kind of field replacement cannot fix, as a refusal names it.
@@ -2736,6 +2841,7 @@ pub(super) fn sanitised_task(
     task: &Task,
     comments: &[Comment],
     rewrite: &Rewrite,
+    depends_on: &[onetaskgraph_plugin_api::DependencyEdge],
 ) -> Option<SanitisedTask> {
     let mut rewritten = task.clone();
     rewrite.task(&mut rewritten);
@@ -2764,11 +2870,11 @@ pub(super) fn sanitised_task(
     for (comment, _) in &edited {
         fields.push(ChangedField::Comment(comment.id.clone()));
     }
-    (!fields.is_empty()).then_some((rewritten, edited, fields))
+    (!fields.is_empty()).then_some((rewritten, edited, fields, depends_on.to_vec()))
 }
 
 /// The field of `task` — or the comment of `comments` — the `index`th entry of `surface` was,
-/// in the layout [`StoredTask::of`] sends: the content then each comment's body as prose; the
+/// in the layout [`StoredTask::read`] sends: the content then each comment's body as prose; the
 /// title, each label's name, then each metadata value's strings, key by key, as short fields;
 /// and those strings that read as paths, key by key, as paths.
 pub(super) fn stored_field(
@@ -2884,8 +2990,8 @@ impl Engine {
     /// made — the task and its comments written back, conditional on the version the read
     /// answered — and reported in the write's `sanitization`. One the answer cannot fix refuses
     /// the write saying the term was already on the item before it; a task already private by
-    /// its own record is refused by the classification rule, saying its `repositories` already
-    /// named a private repository.
+    /// its own record is refused by the classification rule, naming `repositories` only when
+    /// they already named a private repository.
     async fn admit_whole_task(
         &self,
         destination: &ResolvedSource,
@@ -2894,11 +3000,28 @@ impl Engine {
         task: Task,
         exposure: &Exposure,
     ) -> Result<Rewrite, EngineError> {
-        let classification = self.classify(task.classification, &task.repositories).await;
+        let repository_classification = self
+            .classify(Classification::Public, &task.repositories)
+            .await;
+        let classification = task.classification.strictest(repository_classification);
         if classification == Classification::Private {
             // Its locators are screened by one call on this refusal's path alone.
             let locators = located(destination, item, Exposure::default());
             let answer = self.screen(&locators).await;
+            if repository_classification != Classification::Private {
+                return Err(EngineError::NotPrivateDestination {
+                    item: screened_locator(&locators, &answer.locators, LocatorKind::Item, item)
+                        .to_string(),
+                    destination: screened_locator(
+                        &locators,
+                        &answer.locators,
+                        LocatorKind::Source,
+                        destination.name().as_str(),
+                    )
+                    .to_string(),
+                    declared: self.declared(destination.name()),
+                });
+            }
             return Err(EngineError::NotPrivateDestinationPredates {
                 item: screened_locator(&locators, &answer.locators, LocatorKind::Item, item)
                     .to_string(),
@@ -2913,7 +3036,7 @@ impl Engine {
             });
         }
         let comments = every_comment(destination, id).await?;
-        let stored = StoredTask::of(destination, item, &task, &comments);
+        let stored = StoredTask::read(destination, item, &task, &comments).await?;
         let write = located(destination, item, exposure.clone());
         let whole = write.clone().and(stored.exposure.clone());
         if let Some(rewrite) = self.boundary.passed(&whole) {
@@ -2923,8 +3046,8 @@ impl Engine {
         match &answer.verdict {
             WriteVerdict::Pass => {
                 let rewrite = Rewrite::of(&whole, &answer);
-                if let Some((sanitised, edited, fields)) =
-                    sanitised_task(&task, &comments, &rewrite)
+                if let Some(sanitised) =
+                    sanitised_task(&task, &comments, &rewrite, &stored.depends_on)
                 {
                     let written = self
                         .sanitise_task(
@@ -2932,7 +3055,7 @@ impl Engine {
                             item,
                             id,
                             &task,
-                            (sanitised, edited, fields),
+                            sanitised,
                             (&whole, &answer.locators),
                         )
                         .await?;
@@ -2994,7 +3117,10 @@ impl Engine {
                     .unfixed
                     .iter()
                     .any(|unfixed| unfixed.surface == SanitizeSurface::Locators);
-                if !named && let Some(sanitised) = sanitised_task(&task, &comments, &rewrite) {
+                if !named
+                    && let Some(sanitised) =
+                        sanitised_task(&task, &comments, &rewrite, &stored.depends_on)
+                {
                     self.sanitise_task(
                         destination,
                         item,
@@ -3066,11 +3192,7 @@ impl Engine {
     ) -> Result<Option<Task>, EngineError> {
         let (exposure, answered) = screened;
         let shown_item = screened_locator(exposure, answered, LocatorKind::Item, item);
-        let Sanitised {
-            fields,
-            written,
-            screening,
-        } = self
+        let result = self
             .sanitise_written(
                 destination,
                 item,
@@ -3090,19 +3212,22 @@ impl Engine {
             sanitized.dry_run |= self.boundary.sanitize_dry_run;
             // A record read again is named by the screening of what was read, which holds the
             // keys and comments another writer added.
-            let (exposure, answered) = screening
-                .as_ref()
+            let (exposure, answered) = result
+                .screening()
                 .map_or((exposure, answered), |(exposure, answered)| {
                     (exposure, answered.as_slice())
                 });
-            for field in fields {
+            for field in result.fields() {
                 sanitized.side_effect.push(SideEffect {
                     item: shown_item.clone(),
-                    field: screened_field(&field, exposure, answered),
+                    field: screened_field(field, exposure, answered),
                 });
             }
         }
-        Ok(written)
+        Ok(match result {
+            Sanitised::Written { task, .. } => Some(task),
+            _ => None,
+        })
     }
 
     /// Write `sanitised` back over `task` unless `dry_run`, on condition that the task is still
@@ -3121,7 +3246,7 @@ impl Engine {
         sanitised: SanitisedTask,
         dry_run: bool,
     ) -> Result<Sanitised, EngineError> {
-        let (mut rewritten, mut edited, mut fields) = sanitised;
+        let (mut rewritten, mut edited, mut fields, mut depends_on) = sanitised;
         let mut screening = None;
         if !dry_run {
             let fresh = self.read_held_task(destination, id).await?;
@@ -3146,16 +3271,17 @@ impl Engine {
                 } else {
                     fresh_comments
                 };
-                let stored = StoredTask::of(destination, item, &fresh, &comments);
+                let stored = StoredTask::read(destination, item, &fresh, &comments).await?;
                 let answer = self.screen(&stored.exposure).await;
                 if answer.verdict != WriteVerdict::Pass {
                     return Err(refusal(destination, item, &stored.exposure, &answer));
                 }
                 let rewrite = Rewrite::of(&stored.exposure, &answer);
-                let Some(again) = sanitised_task(&fresh, &comments, &rewrite) else {
-                    return Ok(Sanitised::default());
+                let Some(again) = sanitised_task(&fresh, &comments, &rewrite, &stored.depends_on)
+                else {
+                    return Ok(Sanitised::Unchanged);
                 };
-                (rewritten, edited, fields) = again;
+                (rewritten, edited, fields, depends_on) = again;
                 screening = Some((stored.exposure, answer.locators));
                 let latest = self.read_held_task(destination, id).await?;
                 let latest_comments = every_comment(destination, id).await?;
@@ -3168,18 +3294,26 @@ impl Engine {
                     });
                 }
             }
-            self.write_sanitised(destination, id, &rewritten, &edited)
+            let mut fields = fields.into_iter();
+            let Some(first) = fields.next() else {
+                return Ok(Sanitised::Unchanged);
+            };
+            self.write_sanitised(destination, id, &rewritten, &edited, depends_on)
                 .await?;
-            return Ok(Sanitised {
-                fields,
-                written: Some(rewritten),
+            return Ok(Sanitised::Written {
+                first,
+                rest: fields.collect(),
+                task: rewritten,
                 screening,
             });
         }
-        Ok(Sanitised {
-            fields,
-            written: None,
-            screening,
+        let mut fields = fields.into_iter();
+        Ok(match fields.next() {
+            Some(first) => Sanitised::Previewed {
+                first,
+                rest: fields.collect(),
+            },
+            None => Sanitised::Unchanged,
         })
     }
 
@@ -3203,7 +3337,7 @@ impl Engine {
             return Ok(());
         }
         let comments = every_comment(destination, id).await?;
-        let stored = StoredTask::of(destination, item, &fresh, &comments);
+        let stored = StoredTask::read(destination, item, &fresh, &comments).await?;
         let whole = write.clone().and(stored.exposure);
         let answer = self.screen(&whole).await;
         let shown = screened_locator(&whole, &answer.locators, LocatorKind::Item, item);
@@ -3212,7 +3346,7 @@ impl Engine {
         }
         let rewrite = Rewrite::of(&whole, &answer);
         let latest = self.read_held_task(destination, id).await?;
-        if sanitised_task(&fresh, &comments, &rewrite).is_some()
+        if sanitised_task(&fresh, &comments, &rewrite, &stored.depends_on).is_some()
             || latest.version != fresh.version
             || !holds_as_written(&latest, &fresh)
         {
@@ -3228,7 +3362,7 @@ impl Engine {
         destination: &ResolvedSource,
         id: &NativeId,
     ) -> Result<Task, EngineError> {
-        destination
+        let task = destination
             .source()
             .get_task(id)
             .await
@@ -3238,7 +3372,8 @@ impl Engine {
             })?
             .ok_or_else(|| EngineError::NoSuchTask {
                 id: format!("{}:{id}", destination.name()),
-            })
+            })?;
+        checked_task_identity(destination, id, task)
     }
 
     /// One task's sanitised fields and comments, written through the source's own write side:
@@ -3249,6 +3384,7 @@ impl Engine {
         id: &NativeId,
         task: &Task,
         comments: &[(Comment, String)],
+        depends_on: Vec<onetaskgraph_plugin_api::DependencyEdge>,
     ) -> Result<(), EngineError> {
         let refused = |error| EngineError::SourceRefused {
             name: destination.name().to_string(),
@@ -3263,27 +3399,6 @@ impl Engine {
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(refused)?;
-        let mut depends_on = Vec::new();
-        let mut cursor = None;
-        loop {
-            let page = destination
-                .source()
-                .task_dependencies(
-                    id,
-                    onetaskgraph_plugin_api::Direction::DependsOn,
-                    &PageRequest {
-                        cursor: cursor.take(),
-                        limit: 100,
-                    },
-                )
-                .await
-                .map_err(refused)?;
-            depends_on.extend(page.items);
-            match page.next {
-                Some(next) => cursor = Some(next),
-                None => break,
-            }
-        }
         super::stored::forget(
             destination,
             onetaskgraph_plugin_api::MetadataRecord::Task,
@@ -3300,9 +3415,7 @@ impl Engine {
             .map_err(refused)?;
         if &written != id {
             return Err(refused(SourceError::Malformed {
-                message: format!(
-                    "a sanitising write of {id} was answered as a write of another task, {written}"
-                ),
+                message: "a sanitising write was answered as a write of another task".to_owned(),
             }));
         }
         for (comment, body) in &bodies {
@@ -3311,16 +3424,41 @@ impl Engine {
                 .edit_comment(id, comment, body)
                 .await
                 .map_err(refused)?;
-            if edited.is_none() {
-                return Err(refused(SourceError::Refused {
-                    message: format!(
-                        "comment {comment} of {id} was gone before its sanitising write"
-                    ),
-                }));
+            match edited {
+                None => {
+                    return Err(refused(SourceError::Refused {
+                        message: format!(
+                            "comment {comment} of {id} was gone before its sanitising write"
+                        ),
+                    }));
+                }
+                Some(edited) if &edited.id != comment => {
+                    return Err(refused(SourceError::Malformed {
+                        message: "a sanitising comment edit was answered with another comment"
+                            .to_owned(),
+                    }));
+                }
+                Some(_) => {}
             }
         }
         Ok(())
     }
+}
+
+fn checked_task_identity(
+    destination: &ResolvedSource,
+    id: &NativeId,
+    task: Task,
+) -> Result<Task, EngineError> {
+    if &task.id != id {
+        return Err(EngineError::SourceRefused {
+            name: destination.name().to_string(),
+            error: SourceError::Malformed {
+                message: "a task read was answered with another task".to_owned(),
+            },
+        });
+    }
+    Ok(task)
 }
 
 /// Whether `read` holds what `written` says, every field a person edits compared and the

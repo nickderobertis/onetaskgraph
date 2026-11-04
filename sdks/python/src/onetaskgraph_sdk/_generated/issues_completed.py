@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, RootModel
 
@@ -127,6 +127,16 @@ class DeliveredLeft(BaseModel):
     outcome: Literal["left"]
 
 
+class SideEffect(BaseModel):
+    item: Annotated[Any, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Any,
+        Field(
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+        ),
+    ]
+
+
 class Status(BaseModel):
     category: Annotated[
         StatusCategory,
@@ -203,6 +213,22 @@ class Delivered(RootModel[DeliveredWritten | DeliveredUnchanged | DeliveredLeft 
     ]
 
 
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
+        Field(
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
+        ),
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
+    ]
+
+
 class IssueCompleted(BaseModel):
     issue: Annotated[IssueRef, Field(description="The issue, as `owner/name#N`.")]
     source: Annotated[SourceName, Field(description="The source asked.")]
@@ -261,3 +287,4 @@ class IssuesCompleted(BaseModel):
             description="Every source that would have been asked and holds no item by issue reference — its\nstatus is its closure, or its plugin does not declare `complete_by_issue` — each sent\nno request."
         ),
     ]
+    sanitization: Sanitization | None = None

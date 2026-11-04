@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from .regenerated import Regenerated as Regenerated
     from .rendered_template import RenderedTemplate as RenderedTemplate
     from .repository_visibility import RepositoryVisibility as RepositoryVisibility
+    from .sanitize_dry_run import SanitizeDryRun as SanitizeDryRun
     from .source_cache_config import SourceCacheConfig as SourceCacheConfig
     from .source_failure import SourceFailure as SourceFailure
     from .source_listing import SourceListing as SourceListing
@@ -128,6 +129,7 @@ __all__ = [
     "Regenerated",
     "RenderedTemplate",
     "RepositoryVisibility",
+    "SanitizeDryRun",
     "SourceCacheConfig",
     "SourceFailure",
     "SourceListing",
@@ -201,6 +203,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "Regenerated": ("regenerated", "Regenerated"),
     "RenderedTemplate": ("rendered_template", "RenderedTemplate"),
     "RepositoryVisibility": ("repository_visibility", "RepositoryVisibility"),
+    "SanitizeDryRun": ("sanitize_dry_run", "SanitizeDryRun"),
     "SourceCacheConfig": ("source_cache_config", "SourceCacheConfig"),
     "SourceFailure": ("source_failure", "SourceFailure"),
     "SourceListing": ("source_listing", "SourceListing"),

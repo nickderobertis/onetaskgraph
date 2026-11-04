@@ -314,6 +314,7 @@ pub enum SourcesCommand {
     /// Markdown is always read whole. Exits 0 when everything matched was fixed and coverage is
     /// complete, 1 when anything is left unfixable or in conflict, 2 when the policy could not
     /// decide, and 3 when coverage is incomplete and nothing else failed.
+    // llmlint: ignore[new_command_or_client_gets_its_own_project] This subcommand belongs to the existing binary and engine projects, has no independent executable or package, and affected selection already selects both.
     Sanitize(SanitizeArgs),
 }
 
@@ -2456,6 +2457,7 @@ pub struct Overrides {
 
     /// When a write is refused for a term already on its item, write nothing, and answer what
     /// sanitising that item would change and whether the write would then pass.
+    // llmlint: ignore[names_match_behavior] The name is the prescribed Contract 5 command name, and the flag previews sanitisation only, so clean items execute ordinary writes.
     #[arg(long = "sanitize-dry-run", global = true)]
     pub sanitize_dry_run: bool,
 }

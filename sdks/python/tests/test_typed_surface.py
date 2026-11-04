@@ -67,6 +67,7 @@ from onetaskgraph_sdk import (
     Regenerated,
     RenderedTemplate,
     RepositoryVisibility,
+    SanitizeDryRun,
     SourceCacheConfig,
     SourceFailure,
     SourceListing,
@@ -225,6 +226,9 @@ from onetaskgraph_sdk._generated.models import (
     RepositoryVisibility as ModelsRepositoryVisibility,
 )
 from onetaskgraph_sdk._generated.models import (
+    SanitizeDryRun as ModelsSanitizeDryRun,
+)
+from onetaskgraph_sdk._generated.models import (
     SourceCacheConfig as ModelsSourceCacheConfig,
 )
 from onetaskgraph_sdk._generated.models import (
@@ -379,6 +383,7 @@ FROM_ROOT: dict[str, object] = {
     "Regenerated": Regenerated,
     "RenderedTemplate": RenderedTemplate,
     "RepositoryVisibility": RepositoryVisibility,
+    "SanitizeDryRun": SanitizeDryRun,
     "SourceCacheConfig": SourceCacheConfig,
     "SourceFailure": SourceFailure,
     "SourceListing": SourceListing,
@@ -453,6 +458,7 @@ FROM_MODELS: dict[str, object] = {
     "Regenerated": ModelsRegenerated,
     "RenderedTemplate": ModelsRenderedTemplate,
     "RepositoryVisibility": ModelsRepositoryVisibility,
+    "SanitizeDryRun": ModelsSanitizeDryRun,
     "SourceCacheConfig": ModelsSourceCacheConfig,
     "SourceFailure": ModelsSourceFailure,
     "SourceListing": ModelsSourceListing,
@@ -591,6 +597,7 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "QueryResponseOfSearchHit": QueryResponseOfSearchHit,
     "Regenerated": Regenerated,
     "RenderedTemplate": RenderedTemplate,
+    "SanitizeDryRun": SanitizeDryRun,
     "SourceCacheConfig": SourceCacheConfig,
     "SourceFailure": SourceFailure,
     "SourceListing": SourceListing,
@@ -657,6 +664,7 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "QueryResponseOfSearchHit": ModelsQueryResponseOfSearchHit,
     "Regenerated": ModelsRegenerated,
     "RenderedTemplate": ModelsRenderedTemplate,
+    "SanitizeDryRun": ModelsSanitizeDryRun,
     "SourceCacheConfig": ModelsSourceCacheConfig,
     "SourceFailure": ModelsSourceFailure,
     "SourceListing": ModelsSourceListing,

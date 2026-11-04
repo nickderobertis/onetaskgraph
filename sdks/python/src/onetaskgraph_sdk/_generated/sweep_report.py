@@ -14,25 +14,25 @@ class SweepRequests(BaseModel):
     total: Annotated[
         int,
         Field(
-            description="Every request the source counted, `0` for one that counts none.",
+            description="Every request in the source counter delta, or `0` without a usable counter.",
             ge=0,
         ),
     ]
-    searches: Annotated[
+    page_operations: Annotated[
         int,
         Field(
             description="Search pages — or, for a sweep reading its source whole, listing pages — the sweep asked\nits source for: each one call of the plugin contract, which a source may answer with\nmore than one request.",
             ge=0,
         ),
     ]
-    reads: Annotated[
+    detail_operations: Annotated[
         int,
         Field(
             description="Batched reads of items with their first comment page, each one call, and each walk of\nan item's further comment pages, counted once however many pages it took.",
             ge=0,
         ),
     ]
-    writes: Annotated[
+    rewrite_operations: Annotated[
         int,
         Field(
             description="Items the sweep wrote back, each with every comment of it that changed.",

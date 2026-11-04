@@ -994,6 +994,16 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ]
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -1341,6 +1351,50 @@ export const runtimeSchemas = {
           "unit",
           "amount",
           "lower_bound"
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
         ]
       }
     }
@@ -3310,6 +3364,16 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ]
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -4263,6 +4327,50 @@ export const runtimeSchemas = {
             ]
           }
         ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
       }
     }
   },
@@ -4383,6 +4491,16 @@ export const runtimeSchemas = {
         "anyOf": [
           {
             "$ref": "#/$defs/Spent"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
           },
           {
             "type": "null"
@@ -4682,6 +4800,50 @@ export const runtimeSchemas = {
           "unit",
           "amount",
           "lower_bound"
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
         ]
       }
     }
@@ -5557,6 +5719,16 @@ export const runtimeSchemas = {
         "items": {
           "$ref": "#/$defs/Asset"
         }
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -6178,6 +6350,50 @@ export const runtimeSchemas = {
             "type": "string",
             "const": "image/webp"
           }
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
         ]
       }
     }
@@ -6986,6 +7202,16 @@ export const runtimeSchemas = {
         "description": "`true` when the write was refused for something already on its item before it — a\nprivate repository among its `repositories`, or a term sanitising it could not fix —\nand absent otherwise.",
         "type": "boolean",
         "default": false
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -7342,6 +7568,50 @@ export const runtimeSchemas = {
           "amount",
           "lower_bound"
         ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
       }
     }
   },
@@ -7485,9 +7755,18 @@ export const runtimeSchemas = {
       "source": {
         "description": "The resolved configured source.",
         "$ref": "#/$defs/SourceName"
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
-    "additionalProperties": false,
     "required": [
       "task",
       "url",
@@ -7499,6 +7778,50 @@ export const runtimeSchemas = {
         "description": "The name a configuration document gives one configured source.",
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
       }
     }
   },
@@ -8276,6 +8599,16 @@ export const runtimeSchemas = {
         "items": {
           "$ref": "#/$defs/SourceName"
         }
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -8667,6 +9000,50 @@ export const runtimeSchemas = {
               "failure"
             ]
           }
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
         ]
       }
     }
@@ -9256,6 +9633,16 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ]
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -9587,6 +9974,50 @@ export const runtimeSchemas = {
           "unit",
           "amount",
           "lower_bound"
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
         ]
       }
     }
@@ -11829,6 +12260,16 @@ export const runtimeSchemas = {
       "status": {
         "description": "Its status as its source reads it back.",
         "$ref": "#/$defs/Status"
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -11901,6 +12342,50 @@ export const runtimeSchemas = {
             "type": "string",
             "const": "unknown"
           }
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
         ]
       }
     }
@@ -14796,6 +15281,16 @@ export const runtimeSchemas = {
           "$ref": "#/$defs/Unanswered"
         },
         "default": []
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -15415,6 +15910,50 @@ export const runtimeSchemas = {
             "type": "string",
             "const": "not configured on this host"
           }
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
         ]
       }
     }
@@ -17190,6 +17729,16 @@ export const runtimeSchemas = {
       "body": {
         "description": "The rendered content.",
         "type": "string"
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -17208,6 +17757,50 @@ export const runtimeSchemas = {
         "description": "`sha256:` and 64 lowercase hex digits.",
         "type": "string",
         "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
       }
     }
   },
@@ -20228,6 +20821,16 @@ export const runtimeSchemas = {
         "items": {
           "$ref": "#/$defs/StatusReconciled"
         }
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -20456,6 +21059,50 @@ export const runtimeSchemas = {
         "description": "The name a configuration document gives one configured source.",
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
       }
     }
   },
@@ -20502,28 +21149,28 @@ export const runtimeSchemas = {
     ],
     "$defs": {
       "SweepRequests": {
-        "description": "What a sweep sent its source.",
+        "description": "Source-counted requests and engine operations, not a partition of those requests.\nOnly `total` counts every request; one operation may send several, and guarded reads or\nindividual comment writes may be internal to an operation.",
         "type": "object",
         "properties": {
           "total": {
-            "description": "Every request the source counted, `0` for one that counts none.",
+            "description": "Every request in the source counter delta, or `0` without a usable counter.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
-          "searches": {
+          "page_operations": {
             "description": "Search pages — or, for a sweep reading its source whole, listing pages — the sweep asked\nits source for: each one call of the plugin contract, which a source may answer with\nmore than one request.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
-          "reads": {
+          "detail_operations": {
             "description": "Batched reads of items with their first comment page, each one call, and each walk of\nan item's further comment pages, counted once however many pages it took.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
           },
-          "writes": {
+          "rewrite_operations": {
             "description": "Items the sweep wrote back, each with every comment of it that changed.",
             "type": "integer",
             "format": "uint64",
@@ -20532,9 +21179,9 @@ export const runtimeSchemas = {
         },
         "required": [
           "total",
-          "searches",
-          "reads",
-          "writes"
+          "page_operations",
+          "detail_operations",
+          "rewrite_operations"
         ]
       },
       "SweepCoverage": {
@@ -21093,6 +21740,16 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ]
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -21389,6 +22046,50 @@ export const runtimeSchemas = {
           "amount",
           "lower_bound"
         ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
       }
     }
   },
@@ -21460,6 +22161,16 @@ export const runtimeSchemas = {
         "anyOf": [
           {
             "$ref": "#/$defs/CacheUse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
           },
           {
             "type": "null"
@@ -22359,6 +23070,50 @@ export const runtimeSchemas = {
             "type": "string",
             "const": "remote"
           }
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
         ]
       }
     }
@@ -23396,6 +24151,16 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ]
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -23691,6 +24456,50 @@ export const runtimeSchemas = {
           "unit",
           "amount",
           "lower_bound"
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
         ]
       }
     }
@@ -24035,6 +24844,16 @@ export const runtimeSchemas = {
         "anyOf": [
           {
             "$ref": "#/$defs/GlobalId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
           },
           {
             "type": "null"
@@ -24517,6 +25336,50 @@ export const runtimeSchemas = {
           "unit",
           "amount",
           "lower_bound"
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
         ]
       }
     }
@@ -25258,6 +26121,16 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ]
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "required": [
@@ -25998,6 +26871,50 @@ export const runtimeSchemas = {
         "required": [
           "read",
           "reason"
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened."
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+          }
+        },
+        "required": [
+          "item",
+          "field"
         ]
       }
     }

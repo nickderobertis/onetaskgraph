@@ -6,14 +6,14 @@ this build ships spends none, so the SDK's sweep journeys speak to this peer, sp
 `docs/plugin-protocol.md` exactly as the engine speaks to any plugin. Its tasks live in the JSON
 file named by its one argument, so what one invocation writes the next one reads.
 
-It is spawned with a cleared environment (§3.1), so it imports only the standard library — and
-none of the SDK's own models.
 """
 
 import json
 import sys
 from pathlib import Path
 from typing import Any, TypedDict, cast
+
+from onetaskgraph_sdk import StatusCategory
 
 KIND = "sweep-source"
 PROTOCOL_VERSION = 2
@@ -33,24 +33,51 @@ CAPABILITIES = {
 }
 
 
+type TaskId = str
+type ProjectId = str
+
+
+class Label(TypedDict):
+    """A named label with the protocol's nullable colour."""
+
+    id: str
+    name: str
+    color: str | None
+
+
+class UrlLocation(TypedDict):
+    """A hosted record's link (§4.4)."""
+
+    url: str
+
+
+class PathLocation(TypedDict):
+    """A local record's absolute path (§4.4)."""
+
+    path: str
+
+
+type Location = UrlLocation | PathLocation
+
+
 class Status(TypedDict):
     """A task's status on the wire (§4.4)."""
 
-    category: str
+    category: StatusCategory
     name: str
 
 
 class Task(TypedDict):
     """A task as this peer holds it and sends it (§4.4)."""
 
-    id: str
+    id: TaskId
     title: str
     content: str | None
     status: Status
-    labels: list[dict[str, str]]
-    project: str | None
+    labels: list[Label]
+    project: ProjectId | None
     url: str | None
-    location: dict[str, str] | None
+    location: Location | None
     created_at: str | None
     updated_at: str | None
 
@@ -62,6 +89,53 @@ class Held(TypedDict):
     tasks: list[Task]
 
 
+def _valid_task(task: object) -> bool:
+    """Validate every member the peer reads or returns before trusting its persisted state."""
+    if not isinstance(task, dict):
+        return False
+    nullable = ("content", "project", "url", "created_at", "updated_at")
+    if not (
+        isinstance(task.get("id"), str)
+        and isinstance(task.get("title"), str)
+        and all(key in task and isinstance(task[key], (str, type(None))) for key in nullable)
+    ):
+        return False
+    status = task.get("status")
+    if not isinstance(status, dict) or not isinstance(status.get("name"), str):
+        return False
+    try:
+        category = StatusCategory(status.get("category"))
+    except (ValueError, TypeError):
+        return False
+    labels = task.get("labels")
+    if not isinstance(labels, list) or not all(
+        isinstance(label, dict)
+        and isinstance(label.get("id"), str)
+        and isinstance(label.get("name"), str)
+        and isinstance(label.get("color"), (str, type(None)))
+        for label in labels
+    ):
+        return False
+    if "location" not in task:
+        return False
+    location = task["location"]
+    if location is not None and not (
+        isinstance(location, dict)
+        and len(location) == 1
+        and (
+            (set(location) == {"url"} and isinstance(location["url"], str))
+            or (
+                set(location) == {"path"}
+                and isinstance(location["path"], str)
+                and Path(location["path"]).is_absolute()
+            )
+        )
+    ):
+        return False
+    status["category"] = category
+    return True
+
+
 def _held(store: Path) -> Held:
     """Read the peer's own file: a count of requests beside a list of tasks.
 
@@ -69,12 +143,8 @@ def _held(store: Path) -> Held:
     """
     held = json.loads(store.read_text(encoding="utf-8"))
     match held:
-        case {"requests": int(), "tasks": list(tasks)} if all(
-            isinstance(task, dict)
-            and isinstance(task.get("id"), str)
-            and isinstance(task.get("title"), str)
-            and isinstance(task.get("content"), (str, type(None)))
-            for task in tasks
+        case {"requests": int(requests), "tasks": list(tasks)} if (
+            type(requests) is int and requests >= 0 and all(_valid_task(task) for task in tasks)
         ):
             # Checked member by member above for what the peer reads; the rest of each task is
             # passed through as the engine sent it.
@@ -88,7 +158,7 @@ def _matches(task: Task, query: dict[str, Any]) -> bool:
     text = query.get("text")
     if not isinstance(text, dict):
         return True
-    wanted = str(text.get("terms", "")).lower()
+    wanted = text["terms"].lower()
     title = task["title"].lower()
     content = (task["content"] or "").lower()
     match text.get("fields"):
@@ -122,11 +192,22 @@ def _answer(store: Path, method: str, params: dict[str, object]) -> dict[str, ob
         case "metering":
             return {"result": {"metering": {"requests": held["requests"], "budgets": []}}}
         case "get_task":
+            if not isinstance(params.get("id"), str):
+                return {"error": {"kind": "malformed", "message": "the task id is a string"}}
             found = [task for task in tasks if task["id"] == params.get("id")]
             return {"result": {"task": found[0] if found else None}}
         case "query_tasks":
             query = params.get("query")
-            wanted = query if isinstance(query, dict) else {}
+            if not isinstance(query, dict):
+                return {"error": {"kind": "malformed", "message": "a query is an object"}}
+            wanted = query
+            text = wanted.get("text")
+            if text is not None and (
+                not isinstance(text, dict)
+                or not isinstance(text.get("terms"), str)
+                or text.get("fields") not in ("title", "content", "title-or-content")
+            ):
+                return {"error": {"kind": "malformed", "message": "search terms are a string"}}
             return {
                 "result": {
                     "items": [task for task in tasks if _matches(task, wanted)],
@@ -157,6 +238,15 @@ def _answer(store: Path, method: str, params: dict[str, object]) -> dict[str, ob
                             "message": "write_task carries a write of a whole task",
                         }
                     }
+            try:
+                status_category = StatusCategory(category)
+            except ValueError:
+                return {
+                    "error": {
+                        "kind": "malformed",
+                        "message": "status category is outside the protocol vocabulary",
+                    }
+                }
             match write.get("target"):
                 case None:
                     target = identifier
@@ -164,12 +254,22 @@ def _answer(store: Path, method: str, params: dict[str, object]) -> dict[str, ob
                     target = named
                 case _:
                     return {"error": {"kind": "malformed", "message": "a write's target is an id"}}
+            if not all(
+                isinstance(label, dict)
+                and isinstance(label.get("id"), str)
+                and isinstance(label.get("name"), str)
+                and isinstance(label.get("color"), (str, type(None)))
+                for label in labels
+            ):
+                return {
+                    "error": {"kind": "malformed", "message": "labels carry string ids and names"}
+                }
             written: Task = {
                 "id": target,
                 "title": title,
                 "content": content,
-                "status": {"category": category, "name": name},
-                "labels": [label for label in labels if isinstance(label, dict)],
+                "status": {"category": status_category, "name": name},
+                "labels": labels,
                 "project": None,
                 "url": None,
                 "location": None,
@@ -198,13 +298,15 @@ def _main() -> None:
         except ValueError:
             print(f"{KIND}: ignoring a line that is not JSON", file=sys.stderr)
             continue
-        if not isinstance(request, dict) or not isinstance(request.get("id"), str):
+        if (
+            not isinstance(request, dict)
+            or not isinstance(request.get("id"), str)
+            or not isinstance(request.get("method"), str)
+        ):
             print(f"{KIND}: ignoring a line that is not a request", file=sys.stderr)
             continue
         params = request.get("params")
-        answer = _answer(
-            store, str(request.get("method")), params if isinstance(params, dict) else {}
-        )
+        answer = _answer(store, request["method"], params if isinstance(params, dict) else {})
         sys.stdout.write(json.dumps({"id": request["id"], **answer}) + "\n")
         sys.stdout.flush()
 

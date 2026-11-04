@@ -255,8 +255,21 @@ fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
         };
         // Best effort, and deliberately silent: the stderr line above already said why the
         // command failed, and a reader that has gone away cannot be told anything more.
-        if let Ok(rendered) = json(&document, "the failure") {
+        if let Ok(rendered) = json(
+            &onetaskgraph_core::boundary::WriteAnswer::new(document, sanitization()),
+            "the failure",
+        ) {
             let _ = emit(&mut io::stdout().lock(), &rendered, "the failure");
+        }
+    } else {
+        let done = sanitization();
+        if !done.is_empty() {
+            let rendered = render::sanitised(String::new(), &done);
+            let _ = emit(
+                &mut io::stdout().lock(),
+                rendered.trim_start_matches('\n').trim_end(),
+                "the sanitization",
+            );
         }
     }
     code
@@ -1190,14 +1203,13 @@ pub(crate) fn sanitized(rendered: String, format: OutputFormat) -> Result<String
     }
     match format {
         OutputFormat::Json => {
-            let mut value: serde_json::Value =
-                serde_json::from_str(&rendered).map_err(|error| {
-                    Failure::decided("render", format!("could not render the answer: {error}"))
-                })?;
-            if let Some(object) = value.as_object_mut() {
-                object.insert("sanitization".to_owned(), done.to_json());
-            }
-            json(&value, "the answer")
+            let value: serde_json::Value = serde_json::from_str(&rendered).map_err(|error| {
+                Failure::decided("render", format!("could not render the answer: {error}"))
+            })?;
+            json(
+                &onetaskgraph_core::boundary::WriteAnswer::new(value, done),
+                "the answer",
+            )
         }
         OutputFormat::Text => Ok(render::sanitised(rendered, &done)),
     }

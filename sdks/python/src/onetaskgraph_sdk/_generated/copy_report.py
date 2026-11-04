@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, JsonValue, RootModel
 
@@ -252,6 +252,16 @@ class DeliveredLeft(BaseModel):
     outcome: Literal["left"]
 
 
+class SideEffect(BaseModel):
+    item: Annotated[Any, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Any,
+        Field(
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+        ),
+    ]
+
+
 class Failure(BaseModel):
     class_: Annotated[
         FailureClass,
@@ -341,6 +351,22 @@ class Delivered(RootModel[DeliveredWritten | DeliveredUnchanged | DeliveredLeft 
     root: Annotated[
         DeliveredWritten | DeliveredUnchanged | DeliveredLeft | DeliveredFailed,
         Field(description="What keeping one delivered task in step with one deliverer came to."),
+    ]
+
+
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
+        Field(
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
+        ),
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
     ]
 
 
@@ -913,3 +939,4 @@ class CopyReport(BaseModel):
             description="What this copy spent, summed over the sources in the command that meter their own\nrequests — and absent, never zero, when none of them does.\n\nOmitted from the wire when absent, like the three figures above, so a consumer\nwritten against the output before it existed reads the same document."
         ),
     ] = None
+    sanitization: Sanitization | None = None

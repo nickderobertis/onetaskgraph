@@ -112,7 +112,7 @@ def test_a_create_status_metadata_and_update_pass_their_term_scope_through_uncha
     # A bare string is deliberately the wrong type: this proves the SDK refuses it at run time
     # rather than sending each of its characters as a repository.
     with pytest.raises(TypeError, match="term_scope"):
-        run(client.task_create("site", "p", "Bad", body="x", term_scope="github.com/a/b"))  # ty: ignore[invalid-argument-type]
+        run(client.task_create("site", "p", "Bad", body="x", term_scope="github.com/a/b"))  # ty: ignore[no-matching-overload]
 
 
 def test_a_private_item_stays_in_a_private_source_and_a_refusal_reaches_the_caller(

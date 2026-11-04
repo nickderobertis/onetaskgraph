@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, RootModel
 
@@ -204,6 +204,16 @@ class AssetContentType(StrEnum):
     AssetContentTypeImage_Webp = "image/webp"
 
 
+class SideEffect(BaseModel):
+    item: Annotated[Any, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Any,
+        Field(
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+        ),
+    ]
+
+
 class Document(BaseModel):
     id: Annotated[NativeId, Field(description="The source's own opaque identifier.")]
     title: Annotated[str, Field(description="The one-line summary a person recognises it by.")]
@@ -326,6 +336,22 @@ class Asset(BaseModel):
     ] = None
 
 
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
+        Field(
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
+        ),
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
+    ]
+
+
 class QualifiedDocument(BaseModel):
     id: Annotated[
         GlobalId,
@@ -377,3 +403,4 @@ class DocumentDetail(BaseModel):
             description="The image assets the document holds, in the order its content first references them\n— `[]` for a document that holds none.\n\n**Absent** for a document that was not found, and for one whose assets could not be\nread — the failure then in the response's `errors`."
         ),
     ] = None
+    sanitization: Sanitization | None = None

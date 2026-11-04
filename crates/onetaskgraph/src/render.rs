@@ -1279,7 +1279,7 @@ pub fn sanitised(rendered: String, done: &onetaskgraph_core::boundary::Sanitizat
 /// one per field it changed or could not, every record by its screened locator.
 pub fn sweep(report: &onetaskgraph_core::SweepReport) -> String {
     let mut out = format!(
-        "{}: {} — {} request(s), {} search(es), {} read(s), {} write(s)",
+        "{}: {} — {} source request(s); operations: {} search/list page(s), {} detail batch/comment walk(s), {} rewritten item(s)",
         report.source,
         match (report.complete, report.dry_run) {
             (true, true) => "read whole, nothing written",
@@ -1288,9 +1288,9 @@ pub fn sweep(report: &onetaskgraph_core::SweepReport) -> String {
             (false, false) => "searched",
         },
         report.requests.total,
-        report.requests.searches,
-        report.requests.reads,
-        report.requests.writes,
+        report.requests.page_operations,
+        report.requests.detail_operations,
+        report.requests.rewrite_operations,
     );
     if !report.coverage.complete {
         out.push_str(&format!(

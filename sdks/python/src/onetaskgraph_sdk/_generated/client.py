@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from functools import cache
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, overload
 
 from pydantic import JsonValue, TypeAdapter
 
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
         QueryResponseOfSearchHit,
         Regenerated,
         RenderedTemplate,
+        SanitizeDryRun,
         SourceListing,
         SourceName,
         SourceRoute,
@@ -230,6 +231,33 @@ class GeneratedClient:
     ) -> T:
         raise NotImplementedError
 
+    @overload
+    async def cache_clear(
+        self,
+        source: SourceName | str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> CacheCleared: ...
+
+    @overload
+    async def cache_clear(
+        self,
+        source: SourceName | str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> CacheCleared | SanitizeDryRun: ...
+
+    @overload
     async def cache_clear(
         self,
         source: SourceName | str | None = None,
@@ -240,11 +268,23 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> CacheCleared:
+    ) -> CacheCleared | SanitizeDryRun: ...
+
+    async def cache_clear(
+        self,
+        source: SourceName | str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> CacheCleared | SanitizeDryRun:
         """Run ``onetaskgraph cache clear``."""
         return await self._invoke(
             ["cache", "clear"],
-            _models.CacheCleared,
+            _models.CacheCleared | _models.SanitizeDryRun,
             source=source,
             default_sources=default_sources,
             page_size=page_size,
@@ -253,6 +293,42 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def config_show(
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> EffectiveConfig: ...
+
+    @overload
+    async def config_show(
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> EffectiveConfig | SanitizeDryRun: ...
+
+    @overload
+    async def config_show(
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> EffectiveConfig | SanitizeDryRun: ...
 
     async def config_show(
         self,
@@ -263,11 +339,11 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> EffectiveConfig:
+    ) -> EffectiveConfig | SanitizeDryRun:
         """Run ``onetaskgraph config show``."""
         return await self._invoke(
             ["config", "show"],
-            _models.EffectiveConfig,
+            _models.EffectiveConfig | _models.SanitizeDryRun,
             default_sources=default_sources,
             page_size=page_size,
             reject=reject,
@@ -275,6 +351,45 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def document_answers(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateAnswers: ...
+
+    @overload
+    async def document_answers(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateAnswers | SanitizeDryRun: ...
+
+    @overload
+    async def document_answers(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateAnswers | SanitizeDryRun: ...
 
     async def document_answers(
         self,
@@ -286,11 +401,11 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> TemplateAnswers:
+    ) -> TemplateAnswers | SanitizeDryRun:
         """Run ``onetaskgraph document answers``."""
         return await self._invoke(
             ["document", "answers"],
-            _models.TemplateAnswers,
+            _models.TemplateAnswers | _models.SanitizeDryRun,
             id=id,
             default_sources=default_sources,
             page_size=page_size,
@@ -299,6 +414,63 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def document_copy(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        match_by: str | None = None,
+        no_link: bool | None = None,
+        page_size: int | None = None,
+        recreate: bool | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        to: str | None = None,
+    ) -> CopyReport: ...
+
+    @overload
+    async def document_copy(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        match_by: str | None = None,
+        no_link: bool | None = None,
+        page_size: int | None = None,
+        recreate: bool | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        to: str | None = None,
+    ) -> CopyReport | SanitizeDryRun: ...
+
+    @overload
+    async def document_copy(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        match_by: str | None = None,
+        no_link: bool | None = None,
+        page_size: int | None = None,
+        recreate: bool | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        to: str | None = None,
+    ) -> CopyReport | SanitizeDryRun: ...
 
     async def document_copy(
         self,
@@ -316,11 +488,11 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
-    ) -> CopyReport:
+    ) -> CopyReport | SanitizeDryRun:
         """Run ``onetaskgraph document copy``."""
         return await self._invoke(
             ["document", "copy"],
-            _models.CopyReport,
+            _models.CopyReport | _models.SanitizeDryRun,
             ids=ids,
             default_sources=default_sources,
             dry_run=dry_run,
@@ -335,6 +507,93 @@ class GeneratedClient:
             term_scope=_strings("document_copy", "term_scope", term_scope),
             to=to,
         )
+
+    @overload
+    async def document_create(
+        self,
+        source: SourceName | str,
+        project: str,
+        title: str,
+        *,
+        asset: list[str] | tuple[str, ...] | None = None,
+        body_file: str | None = None,
+        classification: Literal["public", "private"] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        id: str | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> DocumentDetail: ...
+
+    @overload
+    async def document_create(
+        self,
+        source: SourceName | str,
+        project: str,
+        title: str,
+        *,
+        asset: list[str] | tuple[str, ...] | None = None,
+        body_file: str | None = None,
+        classification: Literal["public", "private"] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        id: str | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> DocumentDetail | SanitizeDryRun: ...
+
+    @overload
+    async def document_create(
+        self,
+        source: SourceName | str,
+        project: str,
+        title: str,
+        *,
+        asset: list[str] | tuple[str, ...] | None = None,
+        body_file: str | None = None,
+        classification: Literal["public", "private"] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        id: str | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> DocumentDetail | SanitizeDryRun: ...
 
     async def document_create(
         self,
@@ -362,11 +621,11 @@ class GeneratedClient:
         var: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
         answers: Mapping[str, JsonValue] | None = None,
-    ) -> DocumentDetail:
+    ) -> DocumentDetail | SanitizeDryRun:
         """Run ``onetaskgraph document create``."""
         return await self._invoke(
             ["document", "create"],
-            _models.DocumentDetail,
+            _models.DocumentDetail | _models.SanitizeDryRun,
             source=source,
             project=project,
             title=title,
@@ -397,6 +656,53 @@ class GeneratedClient:
             ),
         )
 
+    @overload
+    async def document_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        limit: int | None = None,
+        no_project: bool | None = None,
+        not_label: list[str] | tuple[str, ...] | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        project: str | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        search: str | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedDocument: ...
+
+    @overload
+    async def document_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        limit: int | None = None,
+        no_project: bool | None = None,
+        not_label: list[str] | tuple[str, ...] | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        project: str | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        search: str | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedDocument | SanitizeDryRun: ...
+
+    @overload
     async def document_list(
         self,
         *,
@@ -417,11 +723,33 @@ class GeneratedClient:
         search: str | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
-    ) -> QueryResponseOfQualifiedDocument:
+    ) -> QueryResponseOfQualifiedDocument | SanitizeDryRun: ...
+
+    async def document_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        limit: int | None = None,
+        no_project: bool | None = None,
+        not_label: list[str] | tuple[str, ...] | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        project: str | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        search: str | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedDocument | SanitizeDryRun:
         """Run ``onetaskgraph document list``."""
         return await self._invoke(
             ["document", "list"],
-            _models.QueryResponseOfQualifiedDocument,
+            _models.QueryResponseOfQualifiedDocument | _models.SanitizeDryRun,
             allow_partial=allow_partial,
             default_sources=default_sources,
             explain=explain,
@@ -441,6 +769,41 @@ class GeneratedClient:
             source=source,
         )
 
+    @overload
+    async def document_metadata_set(
+        self,
+        id: GlobalId | str,
+        key: str,
+        value: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> MetadataSet: ...
+
+    @overload
+    async def document_metadata_set(
+        self,
+        id: GlobalId | str,
+        key: str,
+        value: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> MetadataSet | SanitizeDryRun: ...
+
+    @overload
     async def document_metadata_set(
         self,
         id: GlobalId | str,
@@ -455,11 +818,27 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
-    ) -> MetadataSet:
+    ) -> MetadataSet | SanitizeDryRun: ...
+
+    async def document_metadata_set(
+        self,
+        id: GlobalId | str,
+        key: str,
+        value: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> MetadataSet | SanitizeDryRun:
         """Run ``onetaskgraph document metadata set``."""
         return await self._invoke(
             ["document", "metadata", "set"],
-            _models.MetadataSet,
+            _models.MetadataSet | _models.SanitizeDryRun,
             id=id,
             key=key,
             value=value,
@@ -472,6 +851,72 @@ class GeneratedClient:
             set=set,
             term_scope=_strings("document_metadata_set", "term_scope", term_scope),
         )
+
+    @overload
+    async def document_render(
+        self,
+        id: GlobalId | str,
+        *,
+        asset: list[str] | tuple[str, ...] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        unset: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> Regenerated: ...
+
+    @overload
+    async def document_render(
+        self,
+        id: GlobalId | str,
+        *,
+        asset: list[str] | tuple[str, ...] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        unset: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> Regenerated | SanitizeDryRun: ...
+
+    @overload
+    async def document_render(
+        self,
+        id: GlobalId | str,
+        *,
+        asset: list[str] | tuple[str, ...] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        unset: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> Regenerated | SanitizeDryRun: ...
 
     async def document_render(
         self,
@@ -492,11 +937,11 @@ class GeneratedClient:
         unset: list[str] | tuple[str, ...] | None = None,
         var: list[str] | tuple[str, ...] | None = None,
         answers: Mapping[str, JsonValue] | None = None,
-    ) -> Regenerated:
+    ) -> Regenerated | SanitizeDryRun:
         """Run ``onetaskgraph document render``."""
         return await self._invoke(
             ["document", "render"],
-            _models.Regenerated,
+            _models.Regenerated | _models.SanitizeDryRun,
             id=id,
             asset=asset,
             default_sources=default_sources,
@@ -516,6 +961,39 @@ class GeneratedClient:
             stdin=_stdin("document_render", None, answers),
         )
 
+    @overload
+    async def document_show(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> DocumentDetail: ...
+
+    @overload
+    async def document_show(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> DocumentDetail | SanitizeDryRun: ...
+
+    @overload
     async def document_show(
         self,
         id: GlobalId | str,
@@ -529,11 +1007,26 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> DocumentDetail:
+    ) -> DocumentDetail | SanitizeDryRun: ...
+
+    async def document_show(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> DocumentDetail | SanitizeDryRun:
         """Run ``onetaskgraph document show``."""
         return await self._invoke(
             ["document", "show"],
-            _models.DocumentDetail,
+            _models.DocumentDetail | _models.SanitizeDryRun,
             id=id,
             allow_partial=allow_partial,
             default_sources=default_sources,
@@ -545,6 +1038,57 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def label_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedLabel: ...
+
+    @overload
+    async def label_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedLabel | SanitizeDryRun: ...
+
+    @overload
+    async def label_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedLabel | SanitizeDryRun: ...
 
     async def label_list(
         self,
@@ -560,11 +1104,11 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
-    ) -> QueryResponseOfQualifiedLabel:
+    ) -> QueryResponseOfQualifiedLabel | SanitizeDryRun:
         """Run ``onetaskgraph label list``."""
         return await self._invoke(
             ["label", "list"],
-            _models.QueryResponseOfQualifiedLabel,
+            _models.QueryResponseOfQualifiedLabel | _models.SanitizeDryRun,
             allow_partial=allow_partial,
             default_sources=default_sources,
             explain=explain,
@@ -578,6 +1122,33 @@ class GeneratedClient:
             source=source,
         )
 
+    @overload
+    async def project_answers(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateAnswers: ...
+
+    @overload
+    async def project_answers(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateAnswers | SanitizeDryRun: ...
+
+    @overload
     async def project_answers(
         self,
         id: GlobalId | str,
@@ -588,11 +1159,23 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> TemplateAnswers:
+    ) -> TemplateAnswers | SanitizeDryRun: ...
+
+    async def project_answers(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateAnswers | SanitizeDryRun:
         """Run ``onetaskgraph project answers``."""
         return await self._invoke(
             ["project", "answers"],
-            _models.TemplateAnswers,
+            _models.TemplateAnswers | _models.SanitizeDryRun,
             id=id,
             default_sources=default_sources,
             page_size=page_size,
@@ -601,6 +1184,78 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def project_copy(
+        self,
+        id: GlobalId | str,
+        *,
+        comments: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        match_by: str | None = None,
+        member: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        members_only: bool | None = None,
+        no_link: bool | None = None,
+        no_tasks: bool | None = None,
+        page_size: int | None = None,
+        recreate: bool | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status_policy: Literal["source", "preserve-destination"] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        to: str | None = None,
+    ) -> CopyReport: ...
+
+    @overload
+    async def project_copy(
+        self,
+        id: GlobalId | str,
+        *,
+        comments: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        match_by: str | None = None,
+        member: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        members_only: bool | None = None,
+        no_link: bool | None = None,
+        no_tasks: bool | None = None,
+        page_size: int | None = None,
+        recreate: bool | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        status_policy: Literal["source", "preserve-destination"] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        to: str | None = None,
+    ) -> CopyReport | SanitizeDryRun: ...
+
+    @overload
+    async def project_copy(
+        self,
+        id: GlobalId | str,
+        *,
+        comments: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        match_by: str | None = None,
+        member: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        members_only: bool | None = None,
+        no_link: bool | None = None,
+        no_tasks: bool | None = None,
+        page_size: int | None = None,
+        recreate: bool | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status_policy: Literal["source", "preserve-destination"] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        to: str | None = None,
+    ) -> CopyReport | SanitizeDryRun: ...
 
     async def project_copy(
         self,
@@ -623,11 +1278,11 @@ class GeneratedClient:
         status_policy: Literal["source", "preserve-destination"] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
-    ) -> CopyReport:
+    ) -> CopyReport | SanitizeDryRun:
         """Run ``onetaskgraph project copy``."""
         return await self._invoke(
             ["project", "copy"],
-            _models.CopyReport,
+            _models.CopyReport | _models.SanitizeDryRun,
             id=id,
             comments=comments,
             default_sources=default_sources,
@@ -647,6 +1302,99 @@ class GeneratedClient:
             term_scope=_strings("project_copy", "term_scope", term_scope),
             to=to,
         )
+
+    @overload
+    async def project_create(
+        self,
+        source: SourceName | str,
+        id: NativeId | str,
+        title: str,
+        *,
+        body_file: str | None = None,
+        classification: Literal["public", "private"] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: Literal[
+            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+        ]
+        | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> QueryResponseOfQualifiedProject: ...
+
+    @overload
+    async def project_create(
+        self,
+        source: SourceName | str,
+        id: NativeId | str,
+        title: str,
+        *,
+        body_file: str | None = None,
+        classification: Literal["public", "private"] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: Literal[
+            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+        ]
+        | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> QueryResponseOfQualifiedProject | SanitizeDryRun: ...
+
+    @overload
+    async def project_create(
+        self,
+        source: SourceName | str,
+        id: NativeId | str,
+        title: str,
+        *,
+        body_file: str | None = None,
+        classification: Literal["public", "private"] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: Literal[
+            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+        ]
+        | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> QueryResponseOfQualifiedProject | SanitizeDryRun: ...
 
     async def project_create(
         self,
@@ -676,11 +1424,11 @@ class GeneratedClient:
         var: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
         answers: Mapping[str, JsonValue] | None = None,
-    ) -> QueryResponseOfQualifiedProject:
+    ) -> QueryResponseOfQualifiedProject | SanitizeDryRun:
         """Run ``onetaskgraph project create``."""
         return await self._invoke(
             ["project", "create"],
-            _models.QueryResponseOfQualifiedProject,
+            _models.QueryResponseOfQualifiedProject | _models.SanitizeDryRun,
             source=source,
             id=id,
             title=title,
@@ -710,6 +1458,45 @@ class GeneratedClient:
             ),
         )
 
+    @overload
+    async def project_deps(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        direction: Literal["depends-on", "depended-on-by"] | None = None,
+        explain: bool | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedEdge: ...
+
+    @overload
+    async def project_deps(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        direction: Literal["depends-on", "depended-on-by"] | None = None,
+        explain: bool | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedEdge | SanitizeDryRun: ...
+
+    @overload
     async def project_deps(
         self,
         id: GlobalId | str,
@@ -726,11 +1513,29 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> QueryResponseOfQualifiedEdge:
+    ) -> QueryResponseOfQualifiedEdge | SanitizeDryRun: ...
+
+    async def project_deps(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        direction: Literal["depends-on", "depended-on-by"] | None = None,
+        explain: bool | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedEdge | SanitizeDryRun:
         """Run ``onetaskgraph project deps``."""
         return await self._invoke(
             ["project", "deps"],
-            _models.QueryResponseOfQualifiedEdge,
+            _models.QueryResponseOfQualifiedEdge | _models.SanitizeDryRun,
             id=id,
             allow_partial=allow_partial,
             default_sources=default_sources,
@@ -746,6 +1551,39 @@ class GeneratedClient:
             set=set,
         )
 
+    @overload
+    async def project_graph(
+        self,
+        id: GlobalId | str,
+        *,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        direction: Literal["auto", "td", "lr"] | None = None,
+        group_by: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> ProjectGraph: ...
+
+    @overload
+    async def project_graph(
+        self,
+        id: GlobalId | str,
+        *,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        direction: Literal["auto", "td", "lr"] | None = None,
+        group_by: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> ProjectGraph | SanitizeDryRun: ...
+
+    @overload
     async def project_graph(
         self,
         id: GlobalId | str,
@@ -759,11 +1597,26 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> ProjectGraph:
+    ) -> ProjectGraph | SanitizeDryRun: ...
+
+    async def project_graph(
+        self,
+        id: GlobalId | str,
+        *,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        direction: Literal["auto", "td", "lr"] | None = None,
+        group_by: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> ProjectGraph | SanitizeDryRun:
         """Run ``onetaskgraph project graph``."""
         return await self._invoke(
             ["project", "graph"],
-            _models.ProjectGraph,
+            _models.ProjectGraph | _models.SanitizeDryRun,
             id=id,
             complete=complete,
             default_sources=default_sources,
@@ -776,6 +1629,108 @@ class GeneratedClient:
             set=set,
             format="json",
         )
+
+    @overload
+    async def project_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        limit: int | None = None,
+        not_label: list[str] | tuple[str, ...] | None = None,
+        origin: GlobalId | str | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        search: str | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> QueryResponseOfQualifiedProject: ...
+
+    @overload
+    async def project_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        limit: int | None = None,
+        not_label: list[str] | tuple[str, ...] | None = None,
+        origin: GlobalId | str | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        search: str | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> QueryResponseOfQualifiedProject | SanitizeDryRun: ...
+
+    @overload
+    async def project_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        limit: int | None = None,
+        not_label: list[str] | tuple[str, ...] | None = None,
+        origin: GlobalId | str | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        search: str | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> QueryResponseOfQualifiedProject | SanitizeDryRun: ...
 
     async def project_list(
         self,
@@ -808,11 +1763,11 @@ class GeneratedClient:
             ...,
         ]
         | None = None,
-    ) -> QueryResponseOfQualifiedProject:
+    ) -> QueryResponseOfQualifiedProject | SanitizeDryRun:
         """Run ``onetaskgraph project list``."""
         return await self._invoke(
             ["project", "list"],
-            _models.QueryResponseOfQualifiedProject,
+            _models.QueryResponseOfQualifiedProject | _models.SanitizeDryRun,
             allow_partial=allow_partial,
             default_sources=default_sources,
             explain=explain,
@@ -832,6 +1787,41 @@ class GeneratedClient:
             status=status,
         )
 
+    @overload
+    async def project_metadata_set(
+        self,
+        id: GlobalId | str,
+        key: str,
+        value: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> MetadataSet: ...
+
+    @overload
+    async def project_metadata_set(
+        self,
+        id: GlobalId | str,
+        key: str,
+        value: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> MetadataSet | SanitizeDryRun: ...
+
+    @overload
     async def project_metadata_set(
         self,
         id: GlobalId | str,
@@ -846,11 +1836,27 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
-    ) -> MetadataSet:
+    ) -> MetadataSet | SanitizeDryRun: ...
+
+    async def project_metadata_set(
+        self,
+        id: GlobalId | str,
+        key: str,
+        value: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> MetadataSet | SanitizeDryRun:
         """Run ``onetaskgraph project metadata set``."""
         return await self._invoke(
             ["project", "metadata", "set"],
-            _models.MetadataSet,
+            _models.MetadataSet | _models.SanitizeDryRun,
             id=id,
             key=key,
             value=value,
@@ -863,6 +1869,69 @@ class GeneratedClient:
             set=set,
             term_scope=_strings("project_metadata_set", "term_scope", term_scope),
         )
+
+    @overload
+    async def project_render(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        unset: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> Regenerated: ...
+
+    @overload
+    async def project_render(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        unset: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> Regenerated | SanitizeDryRun: ...
+
+    @overload
+    async def project_render(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        unset: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> Regenerated | SanitizeDryRun: ...
 
     async def project_render(
         self,
@@ -882,11 +1951,11 @@ class GeneratedClient:
         unset: list[str] | tuple[str, ...] | None = None,
         var: list[str] | tuple[str, ...] | None = None,
         answers: Mapping[str, JsonValue] | None = None,
-    ) -> Regenerated:
+    ) -> Regenerated | SanitizeDryRun:
         """Run ``onetaskgraph project render``."""
         return await self._invoke(
             ["project", "render"],
-            _models.Regenerated,
+            _models.Regenerated | _models.SanitizeDryRun,
             id=id,
             default_sources=default_sources,
             dry_run=dry_run,
@@ -905,6 +1974,39 @@ class GeneratedClient:
             stdin=_stdin("project_render", None, answers),
         )
 
+    @overload
+    async def project_show(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedProject: ...
+
+    @overload
+    async def project_show(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedProject | SanitizeDryRun: ...
+
+    @overload
     async def project_show(
         self,
         id: GlobalId | str,
@@ -918,11 +2020,26 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> QueryResponseOfQualifiedProject:
+    ) -> QueryResponseOfQualifiedProject | SanitizeDryRun: ...
+
+    async def project_show(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedProject | SanitizeDryRun:
         """Run ``onetaskgraph project show``."""
         return await self._invoke(
             ["project", "show"],
-            _models.QueryResponseOfQualifiedProject,
+            _models.QueryResponseOfQualifiedProject | _models.SanitizeDryRun,
             id=id,
             allow_partial=allow_partial,
             default_sources=default_sources,
@@ -934,6 +2051,51 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def project_status_set(
+        self,
+        id: GlobalId | str,
+        category: StatusCategory | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> ProjectStatusSet: ...
+
+    @overload
+    async def project_status_set(
+        self,
+        id: GlobalId | str,
+        category: StatusCategory | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> ProjectStatusSet | SanitizeDryRun: ...
+
+    @overload
+    async def project_status_set(
+        self,
+        id: GlobalId | str,
+        category: StatusCategory | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> ProjectStatusSet | SanitizeDryRun: ...
 
     async def project_status_set(
         self,
@@ -947,11 +2109,11 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
-    ) -> ProjectStatusSet:
+    ) -> ProjectStatusSet | SanitizeDryRun:
         """Run ``onetaskgraph project status set``."""
         return await self._invoke(
             ["project", "status", "set"],
-            _models.ProjectStatusSet,
+            _models.ProjectStatusSet | _models.SanitizeDryRun,
             id=id,
             category=category,
             default_sources=default_sources,
@@ -962,6 +2124,66 @@ class GeneratedClient:
             set=set,
             term_scope=_strings("project_status_set", "term_scope", term_scope),
         )
+
+    @overload
+    async def search(
+        self,
+        text: str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        kind: Literal["task", "project", "both"] | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfSearchHit: ...
+
+    @overload
+    async def search(
+        self,
+        text: str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        kind: Literal["task", "project", "both"] | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfSearchHit | SanitizeDryRun: ...
+
+    @overload
+    async def search(
+        self,
+        text: str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        kind: Literal["task", "project", "both"] | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfSearchHit | SanitizeDryRun: ...
 
     async def search(
         self,
@@ -980,11 +2202,11 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
-    ) -> QueryResponseOfSearchHit:
+    ) -> QueryResponseOfSearchHit | SanitizeDryRun:
         """Run ``onetaskgraph search``."""
         return await self._invoke(
             ["search"],
-            _models.QueryResponseOfSearchHit,
+            _models.QueryResponseOfSearchHit | _models.SanitizeDryRun,
             text=text,
             allow_partial=allow_partial,
             default_sources=default_sources,
@@ -1001,6 +2223,35 @@ class GeneratedClient:
             source=source,
         )
 
+    @overload
+    async def sources_fields(
+        self,
+        source: SourceName | str,
+        *,
+        apply: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> FieldsReport | StatusNamesReport: ...
+
+    @overload
+    async def sources_fields(
+        self,
+        source: SourceName | str,
+        *,
+        apply: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> FieldsReport | StatusNamesReport | SanitizeDryRun: ...
+
+    @overload
     async def sources_fields(
         self,
         source: SourceName | str,
@@ -1012,11 +2263,24 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> FieldsReport | StatusNamesReport:
+    ) -> FieldsReport | StatusNamesReport | SanitizeDryRun: ...
+
+    async def sources_fields(
+        self,
+        source: SourceName | str,
+        *,
+        apply: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> FieldsReport | StatusNamesReport | SanitizeDryRun:
         """Run ``onetaskgraph sources fields``."""
         return await self._invoke(
             ["sources", "fields"],
-            _models.FieldsReport | _models.StatusNamesReport,
+            _models.FieldsReport | _models.StatusNamesReport | _models.SanitizeDryRun,
             source=source,
             apply=apply,
             default_sources=default_sources,
@@ -1027,6 +2291,31 @@ class GeneratedClient:
             set=set,
         )
 
+    @overload
+    async def sources_list(
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> list[SourceListing]: ...
+
+    @overload
+    async def sources_list(
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> list[SourceListing] | SanitizeDryRun: ...
+
+    @overload
     async def sources_list(
         self,
         *,
@@ -1036,11 +2325,22 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> list[SourceListing]:
+    ) -> list[SourceListing] | SanitizeDryRun: ...
+
+    async def sources_list(
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> list[SourceListing] | SanitizeDryRun:
         """Run ``onetaskgraph sources list``."""
         return await self._invoke(
             ["sources", "list"],
-            list[_models.SourceListing],
+            list[_models.SourceListing] | _models.SanitizeDryRun,
             default_sources=default_sources,
             page_size=page_size,
             reject=reject,
@@ -1048,6 +2348,51 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def sources_route(
+        self,
+        source: SourceName | str,
+        *,
+        classification: Literal["public", "private"] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> SourceRoute: ...
+
+    @overload
+    async def sources_route(
+        self,
+        source: SourceName | str,
+        *,
+        classification: Literal["public", "private"] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> SourceRoute | SanitizeDryRun: ...
+
+    @overload
+    async def sources_route(
+        self,
+        source: SourceName | str,
+        *,
+        classification: Literal["public", "private"] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> SourceRoute | SanitizeDryRun: ...
 
     async def sources_route(
         self,
@@ -1061,11 +2406,11 @@ class GeneratedClient:
         repository: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> SourceRoute:
+    ) -> SourceRoute | SanitizeDryRun:
         """Run ``onetaskgraph sources route``."""
         return await self._invoke(
             ["sources", "route"],
-            _models.SourceRoute,
+            _models.SourceRoute | _models.SanitizeDryRun,
             source=source,
             classification=classification,
             default_sources=default_sources,
@@ -1076,6 +2421,51 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def sources_sanitize(
+        self,
+        source: SourceName | str,
+        *,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> SweepReport: ...
+
+    @overload
+    async def sources_sanitize(
+        self,
+        source: SourceName | str,
+        *,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> SweepReport | SanitizeDryRun: ...
+
+    @overload
+    async def sources_sanitize(
+        self,
+        source: SourceName | str,
+        *,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> SweepReport | SanitizeDryRun: ...
 
     async def sources_sanitize(
         self,
@@ -1089,11 +2479,11 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> SweepReport:
+    ) -> SweepReport | SanitizeDryRun:
         """Run ``onetaskgraph sources sanitize``."""
         return await self._invoke(
             ["sources", "sanitize"],
-            _models.SweepReport,
+            _models.SweepReport | _models.SanitizeDryRun,
             source=source,
             complete=complete,
             default_sources=default_sources,
@@ -1104,6 +2494,48 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def sources_status_options(
+        self,
+        source: SourceName | str,
+        *,
+        apply: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> StatusOptionsReport: ...
+
+    @overload
+    async def sources_status_options(
+        self,
+        source: SourceName | str,
+        *,
+        apply: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> StatusOptionsReport | SanitizeDryRun: ...
+
+    @overload
+    async def sources_status_options(
+        self,
+        source: SourceName | str,
+        *,
+        apply: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> StatusOptionsReport | SanitizeDryRun: ...
 
     async def sources_status_options(
         self,
@@ -1116,11 +2548,11 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> StatusOptionsReport:
+    ) -> StatusOptionsReport | SanitizeDryRun:
         """Run ``onetaskgraph sources status-options``."""
         return await self._invoke(
             ["sources", "status-options"],
-            _models.StatusOptionsReport,
+            _models.StatusOptionsReport | _models.SanitizeDryRun,
             source=source,
             apply=apply,
             default_sources=default_sources,
@@ -1130,6 +2562,45 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def task_answers(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateAnswers: ...
+
+    @overload
+    async def task_answers(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateAnswers | SanitizeDryRun: ...
+
+    @overload
+    async def task_answers(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TemplateAnswers | SanitizeDryRun: ...
 
     async def task_answers(
         self,
@@ -1141,11 +2612,11 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> TemplateAnswers:
+    ) -> TemplateAnswers | SanitizeDryRun:
         """Run ``onetaskgraph task answers``."""
         return await self._invoke(
             ["task", "answers"],
-            _models.TemplateAnswers,
+            _models.TemplateAnswers | _models.SanitizeDryRun,
             id=id,
             default_sources=default_sources,
             page_size=page_size,
@@ -1154,6 +2625,48 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def task_assets(
+        self,
+        id: GlobalId | str,
+        output_dir: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskAssetNames: ...
+
+    @overload
+    async def task_assets(
+        self,
+        id: GlobalId | str,
+        output_dir: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskAssetNames | SanitizeDryRun: ...
+
+    @overload
+    async def task_assets(
+        self,
+        id: GlobalId | str,
+        output_dir: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskAssetNames | SanitizeDryRun: ...
 
     async def task_assets(
         self,
@@ -1166,11 +2679,11 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> TaskAssetNames:
+    ) -> TaskAssetNames | SanitizeDryRun:
         """Run ``onetaskgraph task assets``."""
         return await self._invoke(
             ["task", "assets"],
-            _models.TaskAssetNames,
+            _models.TaskAssetNames | _models.SanitizeDryRun,
             id=id,
             output_dir=output_dir,
             default_sources=default_sources,
@@ -1180,6 +2693,60 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def task_comment_add(
+        self,
+        id: GlobalId | str,
+        *,
+        author: str | None = None,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+    ) -> CommentWritten: ...
+
+    @overload
+    async def task_comment_add(
+        self,
+        id: GlobalId | str,
+        *,
+        author: str | None = None,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+    ) -> CommentWritten | SanitizeDryRun: ...
+
+    @overload
+    async def task_comment_add(
+        self,
+        id: GlobalId | str,
+        *,
+        author: str | None = None,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+    ) -> CommentWritten | SanitizeDryRun: ...
 
     async def task_comment_add(
         self,
@@ -1196,11 +2763,11 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
-    ) -> CommentWritten:
+    ) -> CommentWritten | SanitizeDryRun:
         """Run ``onetaskgraph task comment add``."""
         return await self._invoke(
             ["task", "comment", "add"],
-            _models.CommentWritten,
+            _models.CommentWritten | _models.SanitizeDryRun,
             id=id,
             author=author,
             body_file=body_file,
@@ -1215,6 +2782,37 @@ class GeneratedClient:
             stdin=body,
         )
 
+    @overload
+    async def task_comment_delete(
+        self,
+        id: GlobalId | str,
+        comment_id: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> DeletedComment: ...
+
+    @overload
+    async def task_comment_delete(
+        self,
+        id: GlobalId | str,
+        comment_id: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> DeletedComment | SanitizeDryRun: ...
+
+    @overload
     async def task_comment_delete(
         self,
         id: GlobalId | str,
@@ -1227,11 +2825,25 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> DeletedComment:
+    ) -> DeletedComment | SanitizeDryRun: ...
+
+    async def task_comment_delete(
+        self,
+        id: GlobalId | str,
+        comment_id: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> DeletedComment | SanitizeDryRun:
         """Run ``onetaskgraph task comment delete``."""
         return await self._invoke(
             ["task", "comment", "delete"],
-            _models.DeletedComment,
+            _models.DeletedComment | _models.SanitizeDryRun,
             id=id,
             comment_id=comment_id,
             default_sources=default_sources,
@@ -1242,6 +2854,60 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def task_comment_edit(
+        self,
+        id: GlobalId | str,
+        comment_id: str,
+        *,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+    ) -> CommentWritten: ...
+
+    @overload
+    async def task_comment_edit(
+        self,
+        id: GlobalId | str,
+        comment_id: str,
+        *,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+    ) -> CommentWritten | SanitizeDryRun: ...
+
+    @overload
+    async def task_comment_edit(
+        self,
+        id: GlobalId | str,
+        comment_id: str,
+        *,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+    ) -> CommentWritten | SanitizeDryRun: ...
 
     async def task_comment_edit(
         self,
@@ -1258,11 +2924,11 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
-    ) -> CommentWritten:
+    ) -> CommentWritten | SanitizeDryRun:
         """Run ``onetaskgraph task comment edit``."""
         return await self._invoke(
             ["task", "comment", "edit"],
-            _models.CommentWritten,
+            _models.CommentWritten | _models.SanitizeDryRun,
             id=id,
             comment_id=comment_id,
             body_file=body_file,
@@ -1277,6 +2943,35 @@ class GeneratedClient:
             stdin=body,
         )
 
+    @overload
+    async def task_comment_list(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> CommentList: ...
+
+    @overload
+    async def task_comment_list(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> CommentList | SanitizeDryRun: ...
+
+    @overload
     async def task_comment_list(
         self,
         id: GlobalId | str,
@@ -1288,11 +2983,24 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> CommentList:
+    ) -> CommentList | SanitizeDryRun: ...
+
+    async def task_comment_list(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> CommentList | SanitizeDryRun:
         """Run ``onetaskgraph task comment list``."""
         return await self._invoke(
             ["task", "comment", "list"],
-            _models.CommentList,
+            _models.CommentList | _models.SanitizeDryRun,
             id=id,
             default_sources=default_sources,
             page_size=page_size,
@@ -1302,6 +3010,54 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def task_content_set(
+        self,
+        id: GlobalId | str,
+        file: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskContentSet: ...
+
+    @overload
+    async def task_content_set(
+        self,
+        id: GlobalId | str,
+        file: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskContentSet | SanitizeDryRun: ...
+
+    @overload
+    async def task_content_set(
+        self,
+        id: GlobalId | str,
+        file: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskContentSet | SanitizeDryRun: ...
 
     async def task_content_set(
         self,
@@ -1316,11 +3072,11 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
-    ) -> TaskContentSet:
+    ) -> TaskContentSet | SanitizeDryRun:
         """Run ``onetaskgraph task content set``."""
         return await self._invoke(
             ["task", "content", "set"],
-            _models.TaskContentSet,
+            _models.TaskContentSet | _models.SanitizeDryRun,
             id=id,
             file=file,
             default_sources=default_sources,
@@ -1332,6 +3088,171 @@ class GeneratedClient:
             set=set,
             term_scope=_strings("task_content_set", "term_scope", term_scope),
         )
+
+    @overload
+    async def task_copy(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        commented_since: str | None = None,
+        comments: bool | None = None,
+        create: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        expect: VersionToken | None = None,
+        match_by: str | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        no_link: bool | None = None,
+        otherwise: Literal["refuse", "preserve-destination"] | None = None,
+        page_size: int | None = None,
+        recreate: bool | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+        status_policy: Literal["source", "preserve-destination"] | None = None,
+        target_task: GlobalId | str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        to: str | None = None,
+        when_destination_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
+        when_destination_status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> CopyReport: ...
+
+    @overload
+    async def task_copy(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        commented_since: str | None = None,
+        comments: bool | None = None,
+        create: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        expect: VersionToken | None = None,
+        match_by: str | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        no_link: bool | None = None,
+        otherwise: Literal["refuse", "preserve-destination"] | None = None,
+        page_size: int | None = None,
+        recreate: bool | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+        status_policy: Literal["source", "preserve-destination"] | None = None,
+        target_task: GlobalId | str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        to: str | None = None,
+        when_destination_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
+        when_destination_status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> CopyReport | SanitizeDryRun: ...
+
+    @overload
+    async def task_copy(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        commented_since: str | None = None,
+        comments: bool | None = None,
+        create: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        expect: VersionToken | None = None,
+        match_by: str | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        no_link: bool | None = None,
+        otherwise: Literal["refuse", "preserve-destination"] | None = None,
+        page_size: int | None = None,
+        recreate: bool | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+        status_policy: Literal["source", "preserve-destination"] | None = None,
+        target_task: GlobalId | str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        to: str | None = None,
+        when_destination_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
+        when_destination_status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> CopyReport | SanitizeDryRun: ...
 
     async def task_copy(
         self,
@@ -1385,11 +3306,11 @@ class GeneratedClient:
             ...,
         ]
         | None = None,
-    ) -> CopyReport:
+    ) -> CopyReport | SanitizeDryRun:
         """Run ``onetaskgraph task copy``."""
         return await self._invoke(
             ["task", "copy"],
-            _models.CopyReport,
+            _models.CopyReport | _models.SanitizeDryRun,
             ids=ids,
             commented_since=commented_since,
             comments=comments,
@@ -1416,6 +3337,108 @@ class GeneratedClient:
             when_destination_priority=when_destination_priority,
             when_destination_status=when_destination_status,
         )
+
+    @overload
+    async def task_create(
+        self,
+        source: SourceName | str,
+        project: str,
+        title: str,
+        *,
+        asset: list[str] | tuple[str, ...] | None = None,
+        body_file: str | None = None,
+        classification: Literal["public", "private"] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: Literal[
+            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+        ]
+        | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> TaskDetail: ...
+
+    @overload
+    async def task_create(
+        self,
+        source: SourceName | str,
+        project: str,
+        title: str,
+        *,
+        asset: list[str] | tuple[str, ...] | None = None,
+        body_file: str | None = None,
+        classification: Literal["public", "private"] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: Literal[
+            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+        ]
+        | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> TaskDetail | SanitizeDryRun: ...
+
+    @overload
+    async def task_create(
+        self,
+        source: SourceName | str,
+        project: str,
+        title: str,
+        *,
+        asset: list[str] | tuple[str, ...] | None = None,
+        body_file: str | None = None,
+        classification: Literal["public", "private"] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: Literal[
+            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+        ]
+        | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        body: str | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> TaskDetail | SanitizeDryRun: ...
 
     async def task_create(
         self,
@@ -1448,11 +3471,11 @@ class GeneratedClient:
         var: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
         answers: Mapping[str, JsonValue] | None = None,
-    ) -> TaskDetail:
+    ) -> TaskDetail | SanitizeDryRun:
         """Run ``onetaskgraph task create``."""
         return await self._invoke(
             ["task", "create"],
-            _models.TaskDetail,
+            _models.TaskDetail | _models.SanitizeDryRun,
             source=source,
             project=project,
             title=title,
@@ -1485,6 +3508,47 @@ class GeneratedClient:
             ),
         )
 
+    @overload
+    async def task_deps(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        direction: Literal["depends-on", "depended-on-by"] | None = None,
+        explain: bool | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedEdge: ...
+
+    @overload
+    async def task_deps(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        direction: Literal["depends-on", "depended-on-by"] | None = None,
+        explain: bool | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedEdge | SanitizeDryRun: ...
+
+    @overload
     async def task_deps(
         self,
         id: GlobalId | str,
@@ -1502,11 +3566,30 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> QueryResponseOfQualifiedEdge:
+    ) -> QueryResponseOfQualifiedEdge | SanitizeDryRun: ...
+
+    async def task_deps(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        direction: Literal["depends-on", "depended-on-by"] | None = None,
+        explain: bool | None = None,
+        limit: int | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryResponseOfQualifiedEdge | SanitizeDryRun:
         """Run ``onetaskgraph task deps``."""
         return await self._invoke(
             ["task", "deps"],
-            _models.QueryResponseOfQualifiedEdge,
+            _models.QueryResponseOfQualifiedEdge | _models.SanitizeDryRun,
             id=id,
             allow_partial=allow_partial,
             complete=complete,
@@ -1522,6 +3605,132 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def task_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        commented_since: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        limit: int | None = None,
+        members: bool | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        no_project: bool | None = None,
+        not_label: list[str] | tuple[str, ...] | None = None,
+        origin: GlobalId | str | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
+        project: str | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        search: str | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> QueryResponseOfQualifiedTask: ...
+
+    @overload
+    async def task_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        commented_since: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        limit: int | None = None,
+        members: bool | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        no_project: bool | None = None,
+        not_label: list[str] | tuple[str, ...] | None = None,
+        origin: GlobalId | str | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
+        project: str | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        search: str | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> QueryResponseOfQualifiedTask | SanitizeDryRun: ...
+
+    @overload
+    async def task_list(
+        self,
+        *,
+        allow_partial: bool | None = None,
+        commented_since: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        in_: Literal["title", "content", "both"] | None = None,
+        label: list[str] | tuple[str, ...] | None = None,
+        limit: int | None = None,
+        members: bool | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        no_project: bool | None = None,
+        not_label: list[str] | tuple[str, ...] | None = None,
+        origin: GlobalId | str | None = None,
+        page: str | None = None,
+        page_size: int | None = None,
+        priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
+        project: str | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        search: str | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> QueryResponseOfQualifiedTask | SanitizeDryRun: ...
 
     async def task_list(
         self,
@@ -1562,11 +3771,11 @@ class GeneratedClient:
             ...,
         ]
         | None = None,
-    ) -> QueryResponseOfQualifiedTask:
+    ) -> QueryResponseOfQualifiedTask | SanitizeDryRun:
         """Run ``onetaskgraph task list``."""
         return await self._invoke(
             ["task", "list"],
-            _models.QueryResponseOfQualifiedTask,
+            _models.QueryResponseOfQualifiedTask | _models.SanitizeDryRun,
             allow_partial=allow_partial,
             commented_since=commented_since,
             default_sources=default_sources,
@@ -1592,6 +3801,39 @@ class GeneratedClient:
             status=status,
         )
 
+    @overload
+    async def task_locate(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        to: str,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        no_counterpart: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        target_native: str | None = None,
+    ) -> LocateReport: ...
+
+    @overload
+    async def task_locate(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        to: str,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        no_counterpart: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        target_native: str | None = None,
+    ) -> LocateReport | SanitizeDryRun: ...
+
+    @overload
     async def task_locate(
         self,
         ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
@@ -1605,11 +3847,26 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         target_native: str | None = None,
-    ) -> LocateReport:
+    ) -> LocateReport | SanitizeDryRun: ...
+
+    async def task_locate(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        to: str,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        no_counterpart: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        target_native: str | None = None,
+    ) -> LocateReport | SanitizeDryRun:
         """Run ``onetaskgraph task locate``."""
         return await self._invoke(
             ["task", "locate"],
-            _models.LocateReport,
+            _models.LocateReport | _models.SanitizeDryRun,
             ids=ids,
             to=to,
             default_sources=default_sources,
@@ -1621,6 +3878,57 @@ class GeneratedClient:
             set=set,
             target_native=target_native,
         )
+
+    @overload
+    async def task_metadata_set(
+        self,
+        id: GlobalId | str,
+        key: str,
+        value: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> MetadataSet: ...
+
+    @overload
+    async def task_metadata_set(
+        self,
+        id: GlobalId | str,
+        key: str,
+        value: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> MetadataSet | SanitizeDryRun: ...
+
+    @overload
+    async def task_metadata_set(
+        self,
+        id: GlobalId | str,
+        key: str,
+        value: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> MetadataSet | SanitizeDryRun: ...
 
     async def task_metadata_set(
         self,
@@ -1636,11 +3944,11 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
-    ) -> MetadataSet:
+    ) -> MetadataSet | SanitizeDryRun:
         """Run ``onetaskgraph task metadata set``."""
         return await self._invoke(
             ["task", "metadata", "set"],
-            _models.MetadataSet,
+            _models.MetadataSet | _models.SanitizeDryRun,
             id=id,
             key=key,
             value=value,
@@ -1653,6 +3961,54 @@ class GeneratedClient:
             set=set,
             term_scope=_strings("task_metadata_set", "term_scope", term_scope),
         )
+
+    @overload
+    async def task_priority_set(
+        self,
+        id: GlobalId | str,
+        priority: Priority | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskPrioritySet: ...
+
+    @overload
+    async def task_priority_set(
+        self,
+        id: GlobalId | str,
+        priority: Priority | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskPrioritySet | SanitizeDryRun: ...
+
+    @overload
+    async def task_priority_set(
+        self,
+        id: GlobalId | str,
+        priority: Priority | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskPrioritySet | SanitizeDryRun: ...
 
     async def task_priority_set(
         self,
@@ -1667,11 +4023,11 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
-    ) -> TaskPrioritySet:
+    ) -> TaskPrioritySet | SanitizeDryRun:
         """Run ``onetaskgraph task priority set``."""
         return await self._invoke(
             ["task", "priority", "set"],
-            _models.TaskPrioritySet,
+            _models.TaskPrioritySet | _models.SanitizeDryRun,
             id=id,
             priority=priority,
             default_sources=default_sources,
@@ -1684,6 +4040,33 @@ class GeneratedClient:
             term_scope=_strings("task_priority_set", "term_scope", term_scope),
         )
 
+    @overload
+    async def task_project_human(
+        self,
+        input: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> HumanTaskProjected: ...
+
+    @overload
+    async def task_project_human(
+        self,
+        input: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> HumanTaskProjected | SanitizeDryRun: ...
+
+    @overload
     async def task_project_human(
         self,
         input: str,
@@ -1694,11 +4077,23 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> HumanTaskProjected:
+    ) -> HumanTaskProjected | SanitizeDryRun: ...
+
+    async def task_project_human(
+        self,
+        input: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> HumanTaskProjected | SanitizeDryRun:
         """Run ``onetaskgraph task project-human``."""
         return await self._invoke(
             ["task", "project-human"],
-            _models.HumanTaskProjected,
+            _models.HumanTaskProjected | _models.SanitizeDryRun,
             input=input,
             default_sources=default_sources,
             page_size=page_size,
@@ -1707,6 +4102,72 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def task_render(
+        self,
+        id: GlobalId | str,
+        *,
+        asset: list[str] | tuple[str, ...] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        unset: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> Regenerated: ...
+
+    @overload
+    async def task_render(
+        self,
+        id: GlobalId | str,
+        *,
+        asset: list[str] | tuple[str, ...] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        unset: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> Regenerated | SanitizeDryRun: ...
+
+    @overload
+    async def task_render(
+        self,
+        id: GlobalId | str,
+        *,
+        asset: list[str] | tuple[str, ...] | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template: str | None = None,
+        template_loader: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        unset: list[str] | tuple[str, ...] | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> Regenerated | SanitizeDryRun: ...
 
     async def task_render(
         self,
@@ -1727,11 +4188,11 @@ class GeneratedClient:
         unset: list[str] | tuple[str, ...] | None = None,
         var: list[str] | tuple[str, ...] | None = None,
         answers: Mapping[str, JsonValue] | None = None,
-    ) -> Regenerated:
+    ) -> Regenerated | SanitizeDryRun:
         """Run ``onetaskgraph task render``."""
         return await self._invoke(
             ["task", "render"],
-            _models.Regenerated,
+            _models.Regenerated | _models.SanitizeDryRun,
             id=id,
             asset=asset,
             default_sources=default_sources,
@@ -1751,6 +4212,41 @@ class GeneratedClient:
             stdin=_stdin("task_render", None, answers),
         )
 
+    @overload
+    async def task_show(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        no_comments: bool | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskDetail: ...
+
+    @overload
+    async def task_show(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        no_comments: bool | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskDetail | SanitizeDryRun: ...
+
+    @overload
     async def task_show(
         self,
         id: GlobalId | str,
@@ -1765,11 +4261,27 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> TaskDetail:
+    ) -> TaskDetail | SanitizeDryRun: ...
+
+    async def task_show(
+        self,
+        id: GlobalId | str,
+        *,
+        allow_partial: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        explain: bool | None = None,
+        no_comments: bool | None = None,
+        page_size: int | None = None,
+        pin: VersionToken | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskDetail | SanitizeDryRun:
         """Run ``onetaskgraph task show``."""
         return await self._invoke(
             ["task", "show"],
-            _models.TaskDetail,
+            _models.TaskDetail | _models.SanitizeDryRun,
             id=id,
             allow_partial=allow_partial,
             default_sources=default_sources,
@@ -1783,6 +4295,37 @@ class GeneratedClient:
             set=set,
         )
 
+    @overload
+    async def task_show_many(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        no_comments: bool | None = None,
+        page_size: int | None = None,
+        pin: list[str] | tuple[str, ...] | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskDetails: ...
+
+    @overload
+    async def task_show_many(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        no_comments: bool | None = None,
+        page_size: int | None = None,
+        pin: list[str] | tuple[str, ...] | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskDetails | SanitizeDryRun: ...
+
+    @overload
     async def task_show_many(
         self,
         ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
@@ -1795,11 +4338,25 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
-    ) -> TaskDetails:
+    ) -> TaskDetails | SanitizeDryRun: ...
+
+    async def task_show_many(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        no_comments: bool | None = None,
+        page_size: int | None = None,
+        pin: list[str] | tuple[str, ...] | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskDetails | SanitizeDryRun:
         """Run ``onetaskgraph task show-many``."""
         return await self._invoke(
             ["task", "show-many"],
-            _models.TaskDetails,
+            _models.TaskDetails | _models.SanitizeDryRun,
             ids=ids,
             default_sources=default_sources,
             no_comments=no_comments,
@@ -1810,6 +4367,54 @@ class GeneratedClient:
             sanitize_dry_run=sanitize_dry_run,
             set=set,
         )
+
+    @overload
+    async def task_status_complete(
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        issue: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> IssuesCompleted: ...
+
+    @overload
+    async def task_status_complete(
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        issue: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> IssuesCompleted | SanitizeDryRun: ...
+
+    @overload
+    async def task_status_complete(
+        self,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        issue: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        source: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> IssuesCompleted | SanitizeDryRun: ...
 
     async def task_status_complete(
         self,
@@ -1824,11 +4429,11 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         source: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
-    ) -> IssuesCompleted:
+    ) -> IssuesCompleted | SanitizeDryRun:
         """Run ``onetaskgraph task status complete``."""
         return await self._invoke(
             ["task", "status", "complete"],
-            _models.IssuesCompleted,
+            _models.IssuesCompleted | _models.SanitizeDryRun,
             default_sources=default_sources,
             dry_run=dry_run,
             issue=issue,
@@ -1840,6 +4445,51 @@ class GeneratedClient:
             source=source,
             term_scope=_strings("task_status_complete", "term_scope", term_scope),
         )
+
+    @overload
+    async def task_status_reconcile(
+        self,
+        source: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> StatusesReconciled: ...
+
+    @overload
+    async def task_status_reconcile(
+        self,
+        source: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> StatusesReconciled | SanitizeDryRun: ...
+
+    @overload
+    async def task_status_reconcile(
+        self,
+        source: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> StatusesReconciled | SanitizeDryRun: ...
 
     async def task_status_reconcile(
         self,
@@ -1853,11 +4503,11 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
-    ) -> StatusesReconciled:
+    ) -> StatusesReconciled | SanitizeDryRun:
         """Run ``onetaskgraph task status reconcile``."""
         return await self._invoke(
             ["task", "status", "reconcile"],
-            _models.StatusesReconciled,
+            _models.StatusesReconciled | _models.SanitizeDryRun,
             source=source,
             default_sources=default_sources,
             dry_run=dry_run,
@@ -1868,6 +4518,54 @@ class GeneratedClient:
             set=set,
             term_scope=_strings("task_status_reconcile", "term_scope", term_scope),
         )
+
+    @overload
+    async def task_status_set(
+        self,
+        id: GlobalId | str,
+        category: StatusCategory | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskStatusSet: ...
+
+    @overload
+    async def task_status_set(
+        self,
+        id: GlobalId | str,
+        category: StatusCategory | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskStatusSet | SanitizeDryRun: ...
+
+    @overload
+    async def task_status_set(
+        self,
+        id: GlobalId | str,
+        category: StatusCategory | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        expect: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskStatusSet | SanitizeDryRun: ...
 
     async def task_status_set(
         self,
@@ -1882,11 +4580,11 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
-    ) -> TaskStatusSet:
+    ) -> TaskStatusSet | SanitizeDryRun:
         """Run ``onetaskgraph task status set``."""
         return await self._invoke(
             ["task", "status", "set"],
-            _models.TaskStatusSet,
+            _models.TaskStatusSet | _models.SanitizeDryRun,
             id=id,
             category=category,
             default_sources=default_sources,
@@ -1898,6 +4596,93 @@ class GeneratedClient:
             set=set,
             term_scope=_strings("task_status_set", "term_scope", term_scope),
         )
+
+    @overload
+    async def task_update(
+        self,
+        id: GlobalId | str,
+        *,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        expect: VersionToken | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        no_delivers: bool | None = None,
+        no_depends_on: bool | None = None,
+        page_size: int | None = None,
+        priority: Literal["none", "urgent", "high", "medium", "low"] | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        remove_metadata: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: Literal[
+            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+        ]
+        | None = None,
+        status_name: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        title: str | None = None,
+    ) -> TaskUpdated: ...
+
+    @overload
+    async def task_update(
+        self,
+        id: GlobalId | str,
+        *,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        expect: VersionToken | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        no_delivers: bool | None = None,
+        no_depends_on: bool | None = None,
+        page_size: int | None = None,
+        priority: Literal["none", "urgent", "high", "medium", "low"] | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        remove_metadata: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        status: Literal[
+            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+        ]
+        | None = None,
+        status_name: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        title: str | None = None,
+    ) -> TaskUpdated | SanitizeDryRun: ...
+
+    @overload
+    async def task_update(
+        self,
+        id: GlobalId | str,
+        *,
+        body_file: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        expect: VersionToken | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        no_delivers: bool | None = None,
+        no_depends_on: bool | None = None,
+        page_size: int | None = None,
+        priority: Literal["none", "urgent", "high", "medium", "low"] | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        remove_metadata: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: Literal[
+            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+        ]
+        | None = None,
+        status_name: str | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+        title: str | None = None,
+    ) -> TaskUpdated | SanitizeDryRun: ...
 
     async def task_update(
         self,
@@ -1925,11 +4710,11 @@ class GeneratedClient:
         status_name: str | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         title: str | None = None,
-    ) -> TaskUpdated:
+    ) -> TaskUpdated | SanitizeDryRun:
         """Run ``onetaskgraph task update``."""
         return await self._invoke(
             ["task", "update"],
-            _models.TaskUpdated,
+            _models.TaskUpdated | _models.SanitizeDryRun,
             id=id,
             body_file=body_file,
             default_sources=default_sources,
@@ -1952,6 +4737,41 @@ class GeneratedClient:
             title=title,
         )
 
+    @overload
+    async def template_render(
+        self,
+        file: str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template_loader: str | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> RenderedTemplate: ...
+
+    @overload
+    async def template_render(
+        self,
+        file: str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template_loader: str | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> RenderedTemplate | SanitizeDryRun: ...
+
+    @overload
     async def template_render(
         self,
         file: str | None = None,
@@ -1966,11 +4786,27 @@ class GeneratedClient:
         template_loader: str | None = None,
         var: list[str] | tuple[str, ...] | None = None,
         answers: Mapping[str, JsonValue] | None = None,
-    ) -> RenderedTemplate:
+    ) -> RenderedTemplate | SanitizeDryRun: ...
+
+    async def template_render(
+        self,
+        file: str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template_loader: str | None = None,
+        var: list[str] | tuple[str, ...] | None = None,
+        answers: Mapping[str, JsonValue] | None = None,
+    ) -> RenderedTemplate | SanitizeDryRun:
         """Run ``onetaskgraph template render``."""
         return await self._invoke(
             ["template", "render"],
-            _models.RenderedTemplate,
+            _models.RenderedTemplate | _models.SanitizeDryRun,
             file=_template_file("template_render", file),
             default_sources=default_sources,
             page_size=page_size,
@@ -1985,6 +4821,37 @@ class GeneratedClient:
             stdin=_stdin("template_render", None, answers),
         )
 
+    @overload
+    async def template_variables(
+        self,
+        file: str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template_loader: str | None = None,
+    ) -> TemplateVariables: ...
+
+    @overload
+    async def template_variables(
+        self,
+        file: str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template_loader: str | None = None,
+    ) -> TemplateVariables | SanitizeDryRun: ...
+
+    @overload
     async def template_variables(
         self,
         file: str | None = None,
@@ -1997,11 +4864,25 @@ class GeneratedClient:
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         template_loader: str | None = None,
-    ) -> TemplateVariables:
+    ) -> TemplateVariables | SanitizeDryRun: ...
+
+    async def template_variables(
+        self,
+        file: str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        search_path: list[str] | tuple[str, ...] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        template_loader: str | None = None,
+    ) -> TemplateVariables | SanitizeDryRun:
         """Run ``onetaskgraph template variables``."""
         return await self._invoke(
             ["template", "variables"],
-            _models.TemplateVariables,
+            _models.TemplateVariables | _models.SanitizeDryRun,
             file=_template_file("template_variables", file),
             default_sources=default_sources,
             page_size=page_size,

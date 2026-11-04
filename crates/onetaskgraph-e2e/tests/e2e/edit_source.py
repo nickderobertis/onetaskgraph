@@ -19,7 +19,7 @@ It is spawned with a cleared environment (§3.1), so it imports only the standar
 import json
 import sys
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, TypedDict, cast, get_args
 
 KIND = "edit-source"
 PROTOCOL_VERSION = 2
@@ -40,25 +40,76 @@ CAPABILITIES = {
 }
 
 
+TaskId: TypeAlias = str
+CommentId: TypeAlias = str
+VersionToken: TypeAlias = str
+StatusCategory: TypeAlias = Literal["draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"]
+
+
+class Status(TypedDict):
+    """The protocol status category beside the backend's own name."""
+
+    category: StatusCategory
+    name: str
+
+
+class Label(TypedDict):
+    """A named label with the protocol's nullable colour."""
+
+    id: str
+    name: str
+    color: str | None
+
+
+class Edit(TypedDict, total=False):
+    """The fixture's independent edits, applied together at a chosen read."""
+
+    label: str
+    content: str
+    paragraph: str
+    comment: str
+    comment_id: CommentId
+    comment_body: str
+    comment_target: CommentId
+    silent: str
+
+
+T = TypeVar("T")
+
+
+class PageRequest(TypedDict):
+    """The cursor and positive limit validated before paging (§4.5)."""
+
+    cursor: str | None
+    limit: int
+
+
+class Page(TypedDict, Generic[T]):
+    """One typed page, with its continuation cursor (§4.5)."""
+
+    items: list[T]
+    next: str | None
+
+
 class Task(TypedDict):
     """A task as this peer holds it and sends it (§4.4): every member the store reads, its
     `version` the token another writer's edit moves."""
 
-    id: str
+    id: TaskId
     title: str
     content: str | None
-    status: dict[str, str]
-    priority: str
-    labels: list[dict[str, str | None]]
+    status: Status
+    priority: str | None
+    labels: list[Label]
     # Caller-defined metadata holds any JSON value under each key (§4.4): `Any` is JSON here.
     metadata: dict[str, Any]
-    version: str
+    version: VersionToken
 
 
 class Comment(TypedDict):
     """A comment as this peer holds it and sends it (§4.16)."""
 
-    id: str
+    id: CommentId
     body: str
 
 
@@ -71,7 +122,7 @@ class State(TypedDict):
     comments: dict[str, list[Comment]]
     reads: dict[str, int]
     moves: dict[str, list[int]]
-    edits: dict[str, dict[str, str]]
+    edits: dict[TaskId, Edit]
     index: dict[str, str]
     # Each task's forward edges, as a write sent them (§4.7): decoded JSON, kept as sent.
     edges: dict[str, list[Any]]
@@ -120,9 +171,58 @@ def _malformed(message: str) -> dict[str, dict[str, str]]:
     return {"error": {"kind": "malformed", "message": message}}
 
 
+def _is_ordinal(value: object) -> bool:
+    """Whether the peer's cursor or version can be consumed by its integer arithmetic."""
+    if not isinstance(value, str) or not value.isdigit():
+        return False
+    try:
+        int(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _is_page(page: object) -> bool:
+    match page:
+        case {"cursor": cursor, "limit": limit}:
+            return type(limit) is int and limit > 0 and (cursor is None or _is_ordinal(cursor))
+        case _:
+            return False
+
+
+def _page(state: State, items: list[T], page: PageRequest) -> Page[T]:
+    start = 0 if page["cursor"] is None else int(page["cursor"])
+    end = start + min(page["limit"], state.get("page_size", page["limit"]))
+    return {"items": items[start:end], "next": str(end) if end < len(items) else None}
+
+
+def _is_priority(value: object) -> bool:
+    return isinstance(value, str) and value in ("none", "urgent", "high", "medium", "low")
+
+
+def _is_label(value: object) -> bool:
+    return (isinstance(value, dict) and isinstance(value.get("id"), str)
+            and isinstance(value.get("name"), str) and isinstance(value.get("color"), (str, type(None))))
+
+
+def _is_endpoint(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value)
+    return (isinstance(value, dict) and isinstance(value.get("id"), str) and bool(value["id"])
+            and value.get("kind") in ("task", "project")
+            and ("designator" not in value or isinstance(value["designator"], str)))
+
+
+def _is_edge(value: object) -> bool:
+    return (isinstance(value, dict) and _is_endpoint(value.get("from"))
+            and _is_endpoint(value.get("to")) and value.get("kind") in ("blocks", "related"))
+
+
 # A request's params and a response are JSON objects whose members each method names (§2), so
 # `Any` stands for a decoded JSON value; every member a method reads is checked where it is.
 def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    if method in ("get_task", "set_task_priority") and not isinstance(params.get("id"), str):
+        return _malformed("the task id is a string")
     match method:
         case "initialize":
             return {
@@ -148,23 +248,33 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
                 state["reads"][task["id"]] = reads
                 if reads in state["moves"].get(task["id"], []):
                     _move(state, task)
-            return {"result": {"task": None if task is None else _shown(state, task)}}
+            shown = None if task is None else _shown(state, task)
+            if shown is not None and state.get("wrong_read_id") and reads == state.get("wrong_read_at", 2):
+                shown["id"] = state["wrong_read_id"]
+            return {"result": {"task": shown}}
         case "query_tasks" if state.get("query_fails"):
             return {"error": {"kind": "unavailable", "message": "the tasks could not be listed"}}
         case "query_tasks":
+            if not _is_page(params.get("page")):
+                return _malformed("query_tasks carries a page with a positive limit")
             match params.get("query"):
-                case {"text": {"terms": str(terms)}}:
+                case {"text": {"terms": str(terms), "fields": str(fields)}} if fields in ("title", "content", "title-or-content"):
                     wanted = terms.lower()
-                case {"text": None} | dict():
+                    index = state["index"] if fields == "title-or-content" else state[f"{fields}_index"]
+                case dict(query) if query.get("text") is None:
                     wanted = None
+                    index = state["index"]
                 case _:
                     return _malformed("query_tasks carries its query as an object")
             items = [
                 _shown(state, task)
-                for task in state["tasks"]
-                if wanted is None or wanted in state["index"].get(task["id"], "").lower()
+                for task in sorted(state["tasks"], key=lambda task: task["id"])
+                if wanted is None or wanted in index.get(task["id"], "").lower()
             ]
-            return {"result": {"items": items, "next": None}}
+            state.setdefault("query_cursors", []).append(params["page"]["cursor"])
+            return {"result": _page(state, items, params["page"])}
+        case "task_comments" if not _is_page(params.get("page")):
+            return _malformed("task_comments pages by this peer's own cursor and a positive limit")
         case "task_comments" if state.get("comments_fail") or (
             state.get("later_comments_fail") and params.get("page", {}).get("cursor") is not None
         ):
@@ -186,6 +296,8 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             following = str(end) if end < len(held) else None
             return {"result": {"page": {"items": held[start:end], "next": following}}}
         case "edit_comment":
+            if not isinstance(params.get("comment"), str):
+                return _malformed("edit_comment names its comment by a string id")
             if not isinstance(params.get("body"), str):
                 return _malformed("edit_comment carries the comment's new body as a string")
             for comment in state["comments"].get(params.get("task"), []):
@@ -194,12 +306,20 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
                     task = _task(state, params.get("task"))
                     if task is not None:
                         task["version"] = str(int(task["version"]) + 1)
-                    return {"result": {"comment": comment}}
+                    shown = dict(comment)
+                    if state.get("wrong_comment_id"):
+                        shown["id"] = state["wrong_comment_id"]
+                    return {"result": {"comment": shown}}
             return {"result": {"comment": None}}
         case "task_dependencies":
+            if (not isinstance(params.get("id"), str)
+                    or params.get("direction") not in ("depends-on", "depended-on-by")
+                    or not _is_page(params.get("page"))):
+                return _malformed("task_dependencies carries an id, direction and page")
             forward = params.get("direction") == "depends-on"
-            held = state["edges"].get(str(params.get("id")), []) if forward else []
-            return {"result": {"items": held, "next": None}}
+            held = state["edges"].get(params["id"], []) if forward else []
+            state.setdefault("dependency_cursors", []).append(params["page"]["cursor"])
+            return {"result": _page(state, held, params["page"])}
         case "labels":
             return {"result": {"items": [], "next": None}}
         case "write_task" if state.get("refuse_writes"):
@@ -207,9 +327,15 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
         case "write_task":
             match params.get("write"):
                 case {"item": {"id": str(), "title": str(), "status": dict()} as item, **write}:
+                    if not _is_task({**item, "version": "1"}):
+                        return _malformed("write_task carries a whole task")
+                    if write.get("target") is not None and not isinstance(write["target"], str):
+                        return _malformed("write_task target is a string or null")
                     target = write.get("target") or item["id"]
-                    if isinstance(write.get("depends_on"), list):
-                        state["edges"][target] = write["depends_on"]
+                    edges = write.get("depends_on", [])
+                    if not isinstance(edges, list) or not all(_is_edge(edge) for edge in edges):
+                        return _malformed("write_task carries whole dependency edges")
+                    state["edges"][target] = edges
                 case _:
                     return _malformed("write_task carries a write of a task with an id and title")
             held = _task(state, target)
@@ -224,7 +350,7 @@ def _answer(state: State, method: str, params: dict[str, Any]) -> dict[str, Any]
             task = _task(state, params.get("id"))
             if task is None:
                 return {"result": {"priority": None}}
-            if not isinstance(params.get("priority"), str):
+            if not _is_priority(params.get("priority")):
                 return _malformed("set_task_priority carries a priority word")
             task["priority"] = params["priority"]
             task["version"] = str(int(task["version"]) + 1)
@@ -245,13 +371,15 @@ def _is_task(task: object) -> bool:
             "id": str(),
             "title": str(),
             "content": str() | None,
-            "status": dict(),
-            "priority": str(),
+            "status": {"category": str(category), "name": str()},
+            "priority": priority,
             "labels": list(labels),
             "metadata": dict(),
             "version": str(version),
         }:
-            return version.isdigit() and all(isinstance(label, dict) for label in labels)
+            return (_is_ordinal(version) and (priority is None or _is_priority(priority))
+                    and category in get_args(StatusCategory)
+                    and all(_is_label(label) for label in labels))
         case _:
             return False
 
@@ -278,18 +406,20 @@ def _well_formed(held: object) -> bool:
             "edits": dict(edits),
             "index": dict(index),
             "edges": dict(edges),
-            "log": list(),
+            "log": list(log),
         }:
             return (
                 all(_is_task(task) for task in tasks)
-                and all(isinstance(count, int) for count in reads.values())
+                and all(type(count) is int and count >= 0 for count in reads.values())
                 and all(
-                    isinstance(at, list) and all(isinstance(read, int) for read in at)
+                    isinstance(at, list) and all(type(read) is int and read > 0 for read in at)
                     for at in moves.values()
                 )
                 and all(_is_edit(edit) for edit in edits.values())
                 and all(isinstance(text, str) for text in index.values())
-                and all(isinstance(held_edges, list) for held_edges in edges.values())
+                and all(isinstance(held_edges, list) and all(_is_edge(edge) for edge in held_edges) for held_edges in edges.values())
+                and all(isinstance(entry, str) for entry in log)
+                and _controls_well_formed(held)
                 and all(
                     isinstance(held_comments, list)
                     and all(
@@ -305,11 +435,37 @@ def _well_formed(held: object) -> bool:
             return False
 
 
+def _controls_well_formed(held: dict[str, object]) -> bool:
+    for key in ("unversioned", "metering_fails", "query_fails", "comments_fail", "later_comments_fail", "refuse_writes", "drop_comments_on_write"):
+        if key in held and not isinstance(held[key], bool):
+            return False
+    if any(key in held and not isinstance(held[key], str) for key in ("wrong_read_id", "wrong_comment_id")):
+        return False
+    if "wrong_read_at" in held and (type(held["wrong_read_at"]) is not int or held["wrong_read_at"] < 1):
+        return False
+    gone = held.get("gone", [])
+    answers = held.get("answer_ids", {})
+    if not isinstance(gone, list) or not all(isinstance(value, str) for value in gone):
+        return False
+    if not isinstance(answers, dict) or not all(isinstance(value, str) for value in answers.values()):
+        return False
+    if "page_size" in held and (type(held["page_size"]) is not int or held["page_size"] <= 0):
+        return False
+    for key in ("title_index", "content_index"):
+        index = held.get(key, {})
+        if not isinstance(index, dict) or not all(isinstance(value, str) for value in index.values()):
+            return False
+    return all(isinstance(held.get(key, []), list) and all(value is None or _is_ordinal(value) for value in held.get(key, []))
+               for key in ("query_cursors", "dependency_cursors"))
+
+
 def _state(store: Path) -> State:
     """The peer's own file, refused — ending the peer — unless it is well formed."""
     held = json.loads(store.read_text(encoding="utf-8"))
     if not _well_formed(held):
         sys.exit(f"{KIND}: {store} is not this peer's state")
+    held.setdefault("title_index", {task["id"]: task["title"] for task in held["tasks"]})
+    held.setdefault("content_index", {task["id"]: task["content"] or "" for task in held["tasks"]})
     # Checked member by member above for everything this peer indexes or counts.
     return cast(State, held)
 

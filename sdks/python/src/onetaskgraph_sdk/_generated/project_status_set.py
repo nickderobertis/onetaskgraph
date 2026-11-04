@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, RootModel
 
@@ -30,6 +30,16 @@ class StatusCategory(StrEnum):
     StatusCategoryUnknown = "unknown"
 
 
+class SideEffect(BaseModel):
+    item: Annotated[Any, Field(description="The item, by its qualified id as screened.")]
+    field: Annotated[
+        Any,
+        Field(
+            description="The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`."
+        ),
+    ]
+
+
 class Status(BaseModel):
     category: Annotated[
         StatusCategory,
@@ -38,6 +48,23 @@ class Status(BaseModel):
     name: Annotated[str, Field(description="The source's own label for this status.")]
 
 
+class Sanitization(BaseModel):
+    replaced: Annotated[
+        int, Field(description="Spans the writes' own sanitisations rewrote.", ge=0)
+    ]
+    side_effect: Annotated[
+        list[SideEffect],
+        Field(
+            description="Each field or comment of an item sanitisation changed beyond the write itself."
+        ),
+    ]
+    dry_run: Annotated[
+        bool,
+        Field(description="Whether nothing was written, the changes only reported."),
+    ]
+
+
 class ProjectStatusSet(BaseModel):
     id: Annotated[GlobalId, Field(description="The project whose status was set.")]
     status: Annotated[Status, Field(description="Its status as its source reads it back.")]
+    sanitization: Sanitization | None = None

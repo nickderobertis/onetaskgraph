@@ -42,6 +42,275 @@ fn replaced() -> Value {
     json!([{ "term": TERM, "with": WITH }])
 }
 
+#[test]
+fn a_priority_carrying_a_declared_term_is_refused_without_rewriting_it() {
+    let (store, _) = sanitizing(json!([{ "term": "high", "with": "medium" }]));
+    store.record(
+        "site",
+        "tasks",
+        "clean",
+        "title: Clean\nstatus: todo",
+        PLAIN,
+    );
+    let before = tree(&store.folder("site"));
+    let (kind, _) = store.refused(&["task", "update", "site:clean", "--priority", "high"]);
+    assert_eq!(kind, "boundary-refused");
+    assert_eq!(tree(&store.folder("site")), before);
+}
+
+#[test]
+fn a_terms_failure_screens_the_source_name_even_when_no_item_was_read() {
+    for missing in [false, true] {
+        let (store, _) = sanitizing(replaced());
+        let mut document: Value = serde_json::from_str(
+            &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+                .expect("config"),
+        )
+        .expect("a document");
+        document["sources"][TERM] = document["sources"]["site"].clone();
+        if missing {
+            document["write_policy"]
+                .as_object_mut()
+                .expect("policy")
+                .remove("terms_command");
+        } else {
+            document["write_policy"]["terms_command"] = json!([
+                crate::document_store::interpreter().to_string_lossy(),
+                "-c",
+                "import sys; sys.exit(2)"
+            ]);
+        }
+        store.sandbox.project_document(&document.to_string());
+        let (code, _, out, err) = sweep(&store, TERM, &[]);
+        assert_eq!(code, Some(if missing { 1 } else { 2 }), "{out}{err}");
+        assert!(err.contains("<redacted source 1>"), "{err}");
+        spelled_nowhere(&store, &[&out, &err]);
+    }
+}
+
+#[test]
+fn the_editing_peers_status_vocabulary_is_the_emitted_contract() {
+    let shared = Shared::new(&[("t1", PLAIN)], json!({}), json!({}));
+    let bundle: Value = serde_json::from_str(&shared.store.ok(&["schema"])).expect("schema");
+    let output = std::process::Command::new("python3")
+        .args(["-c", "import json, runpy, sys, typing; print(json.dumps(typing.get_args(runpy.run_path(sys.argv[1])['StatusCategory'])))"])
+        .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/edit_source.py"))
+        .output().expect("peer vocabulary");
+    assert!(output.status.success(), "{}", stderr(&output));
+    let declared: Value = serde_json::from_str(&stdout(&output)).expect("category values");
+    let expected: Vec<Value> = bundle["roots"]["StatusCategory"]["oneOf"]
+        .as_array()
+        .expect("the category alternatives")
+        .iter()
+        .map(|category| category["const"].clone())
+        .collect();
+    assert_eq!(declared, json!(expected));
+}
+
+#[test]
+fn the_editing_peer_refuses_malformed_pages_targets_and_tasks_without_changing_the_record() {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let shared = Shared::new(&[("t1", PLAIN)], json!({}), json!({}));
+    let mut state = shared.state();
+    state["later_comments_fail"] = json!(true);
+    std::fs::write(&shared.state, state.to_string()).expect("the peer's state");
+    let before = shared.state()["tasks"].clone();
+    let mut requests: Vec<Value> = [json!([1]), json!({"bad": 1}), json!(7)]
+        .into_iter()
+        .map(|target| {
+            json!({"id":"bad-target", "method":"write_task", "params":{"write":{
+                "target":target, "item":shared.task("t1"), "depends_on":[]
+            }}})
+        })
+        .collect();
+    for method in ["get_task", "set_task_priority"] {
+        for id in [Value::Null, json!(7), json!([])] {
+            requests.push(
+                json!({"id":"bad-id", "method":method, "params":{"id":id,"priority":"high"}}),
+            );
+        }
+    }
+    requests.push(json!({"id":"bad-page", "method":"task_comments", "params":{
+        "task":"t1", "page":null
+    }}));
+    for limit in [json!(0), json!(-1), json!(true)] {
+        requests.push(
+            json!({"id":"bad-limit", "method":"task_comments", "params":{
+                "task":"t1", "page":{"cursor":null,"limit":limit}
+            }}),
+        );
+    }
+    requests.push(json!({"id":"bad-query", "method":"query_tasks", "params":{
+        "query":{"text":{"terms":7,"fields":"title-or-content"}}
+    }}));
+    requests.push(json!({"id":"bad-fields", "method":"query_tasks", "params":{
+        "query":{"text":{"terms":"plain","fields":"elsewhere"}}, "page":{"cursor":null,"limit":100}
+    }}));
+    requests.push(
+        json!({"id":"bad-comment", "method":"edit_comment", "params":{
+            "task":"t1", "comment":[], "body":"Plain."
+        }}),
+    );
+    requests.push(
+        json!({"id":"bad-direction", "method":"task_dependencies", "params":{
+            "id":"t1", "direction":"sideways", "page":{"cursor":null,"limit":100}
+        }}),
+    );
+    requests.push(
+        json!({"id":"bad-priority", "method":"set_task_priority", "params":{
+            "id":"t1", "priority":"eventually"
+        }}),
+    );
+    requests.push(
+        json!({"id":"bad-edge", "method":"write_task", "params":{"write":{
+            "target":"t1", "item":shared.task("t1"), "depends_on":[{"from":7}]
+        }}}),
+    );
+    let mut incomplete = shared.task("t1");
+    incomplete.as_object_mut().expect("task").remove("content");
+    requests.push(
+        json!({"id":"bad-task", "method":"write_task", "params":{"write":{
+            "target":"t1", "item":incomplete, "depends_on":[]
+        }}}),
+    );
+    for request in requests {
+        let mut child = Command::new(crate::document_store::interpreter())
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/edit_source.py"))
+            .arg(&shared.state)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("the editing peer");
+        writeln!(child.stdin.take().expect("stdin"), "{request}").expect("a request");
+        let output = child.wait_with_output().expect("a response");
+        assert!(output.status.success(), "{}", stderr(&output));
+        let answer: Value = serde_json::from_str(&stdout(&output)).expect("a response document");
+        assert_eq!(answer["error"]["kind"], json!("malformed"), "{answer}");
+        assert_eq!(shared.state()["tasks"], before);
+    }
+}
+
+#[test]
+fn the_editing_peer_refuses_malformed_stored_versions_and_controls() {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let shared = Shared::new(&[("t1", PLAIN)], json!({}), json!({}));
+    let base = shared.state();
+    for (key, value) in [
+        ("version", json!("²")),
+        ("gone", json!(7)),
+        ("answer_ids", json!([])),
+        ("log", json!([7])),
+        ("unversioned", json!("yes")),
+        ("reads", json!({"t1":true})),
+        ("moves", json!({"t1":[0]})),
+    ] {
+        let mut state = base.clone();
+        if key == "version" {
+            state["tasks"][0]["version"] = value;
+        } else {
+            state[key] = value;
+        }
+        let before = state.to_string();
+        std::fs::write(&shared.state, &before).expect("state");
+        let mut child = Command::new(crate::document_store::interpreter())
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/edit_source.py"))
+            .arg(&shared.state)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("peer");
+        writeln!(
+            child.stdin.take().expect("stdin"),
+            "{}",
+            json!({"id":"health","method":"health"})
+        )
+        .expect("request");
+        let output = child.wait_with_output().expect("response");
+        assert!(!output.status.success());
+        assert!(
+            stderr(&output).contains("not this peer's state"),
+            "{}",
+            stderr(&output)
+        );
+        assert_eq!(
+            std::fs::read_to_string(&shared.state).expect("state"),
+            before
+        );
+    }
+}
+
+#[test]
+fn explicit_document_and_project_ids_are_fixed_entries_of_a_public_create() {
+    let (store, record) = sanitizing(replaced());
+    for kind in ["document", "project"] {
+        let before = tree(&store.folder("site"));
+        let body = store.body(PLAIN);
+        let mut args = vec![
+            kind,
+            "create",
+            "site",
+            "--id",
+            TERM,
+            "--title",
+            "Notes",
+            "--body-file",
+            &body,
+        ];
+        if kind == "document" {
+            args.extend(["--project", "p"]);
+        }
+        let output = store.run(&args);
+        assert!(!stdout(&output).contains(TERM), "{}", stdout(&output));
+        assert!(!stderr(&output).contains(TERM), "{}", stderr(&output));
+        let (failure, _) = store.refused(&args);
+        assert_eq!(failure, "boundary-refused");
+        assert_eq!(tree(&store.folder("site")), before);
+        let calls = record.calls();
+        let sent = &calls.last().expect("a screening call").input;
+        assert!(
+            sent["fixed"]["metadata"]
+                .as_array()
+                .expect("fixed metadata")
+                .contains(&json!(TERM)),
+            "{sent}"
+        );
+    }
+}
+
+#[test]
+fn a_copy_whose_replacement_empties_a_carried_comment_writes_nothing() {
+    let (store, _) = sanitizing(replaced());
+    let python = crate::document_store::interpreter();
+    repolicy(&store, |policy| {
+        policy["sanitize_command"] = json!([python.to_string_lossy(), "-c", EMPTIES]);
+    });
+    store.record(
+        "plan",
+        "tasks",
+        "carried",
+        "title: Carried\nstatus: todo",
+        &format!(
+            "Plain body.\n\n## Comments\n\n<!-- onetaskgraph:comment \
+          id=\"20260913T151107Z-1\" author=\"ada\" created_at=\"2026-09-13T15:11:07Z\" \
+          updated_at=\"2026-09-13T15:11:07Z\" -->\n### ada — 2026-09-13T15:11:07Z\n\n\
+          {TERM}\n\n<!-- /onetaskgraph:comment -->"
+        ),
+    );
+    let before = tree(&store.folder("site"));
+    let output = store.run(&["task", "copy", "plan:carried", "--to", "site", "--comments"]);
+    assert!(!output.status.success(), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("leaves a comment it carries empty"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(tree(&store.folder("site")), before);
+}
+
 /// How many times the store ran `command` since `before` calls had been recorded.
 fn ran(record: &BoundaryRecord, before: usize, command: BoundaryCommand) -> usize {
     record.calls()[before..]
@@ -914,6 +1183,78 @@ fn a_sanitising_write_s_human_answer_is_today_s_line_then_one_sanitised_line_per
 }
 
 #[test]
+fn a_refused_write_reports_the_fields_it_sanitised_before_refusing() {
+    for json_output in [true, false] {
+        let (store, _) = sanitizing(replaced());
+        stage_older(&store);
+        let path = store.folder("site").join("tasks/older.md");
+        let before = std::fs::read_to_string(&path).expect("task");
+        std::fs::write(
+            &path,
+            before.replace(
+                &format!("seen in {TERM}"),
+                &format!("seen in {TERM} for hiddenco"),
+            ),
+        )
+        .expect("older task");
+        let mut args = vec!["task", "priority", "set", "site:older", "high"];
+        if json_output {
+            args.push("--json");
+        }
+        let output = store.run(&args);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        let out = stdout(&output);
+        if json_output {
+            let answer: Value = serde_json::from_str(&out).expect("failure");
+            assert_eq!(answer["predates_write"], json!(true));
+            assert_eq!(
+                answer["sanitization"]["side_effect"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(SIDE_EFFECTS.len()),
+                "{answer}"
+            );
+        } else {
+            for field in SIDE_EFFECTS {
+                assert!(
+                    out.contains(&format!("sanitised site:older {field}")),
+                    "{out}"
+                );
+            }
+        }
+        assert!(!out.contains(TERM) && !stderr(&output).contains(TERM));
+        assert!(!out.contains("hiddenco") && !stderr(&output).contains("hiddenco"));
+        let stored = std::fs::read_to_string(&path).expect("task");
+        assert!(!stored.contains(TERM), "{stored}");
+        assert!(stored.contains("hiddenco"));
+        assert!(
+            !stored.contains("priority: high"),
+            "the requested write stayed refused"
+        );
+    }
+}
+
+#[test]
+fn an_explicitly_private_item_with_no_repositories_keeps_the_classification_refusal() {
+    let (store, _) = sanitizing(replaced());
+    store.record(
+        "site",
+        "tasks",
+        "private",
+        "title: Private\nstatus: todo\nclassification: private",
+        PLAIN,
+    );
+    let before = tree(&store.folder("site"));
+    let output = store.run(&["task", "priority", "set", "site:private", "high", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(failure["failure"]["kind"], json!("not-private-destination"));
+    assert!(failure.get("predates_write").is_none(), "{failure}");
+    assert!(!stderr(&output).contains("already named a private repository"));
+    assert_eq!(tree(&store.folder("site")), before);
+}
+
+#[test]
 fn an_item_whose_stored_repositories_already_name_a_private_repository_is_refused_saying_so() {
     let (store, record) = sanitizing(replaced());
     store.record(
@@ -1126,10 +1467,17 @@ fn a_sweep_of_a_folder_reads_it_whole_and_rewrites_every_hit_class_reporting_loc
     );
     assert_eq!(report["source"], json!("site"));
     assert_eq!(
-        report["requests"],
-        json!({"total": 0, "searches": 0, "reads": 0, "writes": 0}),
-        "a folder spends no requests: {report}"
+        report["requests"]["total"], 0,
+        "a folder spends no source requests: {report}"
     );
+    for operation in ["page_operations", "detail_operations", "rewrite_operations"] {
+        assert!(
+            report["requests"][operation]
+                .as_u64()
+                .is_some_and(|count| count > 0),
+            "local work still counts as operations: {report}"
+        );
+    }
     let fields = |id: &str| -> Vec<(String, String)> {
         entry(&report, id)["fields"]
             .as_array()
@@ -1948,6 +2296,9 @@ elif how == "wrong-kind":
     answer.update(verdict="refuse", surface="locators",
                   unfixed=[{"surface": "locators", "index": 0, "fixed": True}])
     answer["locators"][0] = {"redacted": True, "kind": "comment", "ordinal": 1}
+elif how == "unfixed-plain":
+    answer.update(verdict="refuse", surface="locators",
+                  unfixed=[{"surface": "locators", "index": 0, "fixed": True}])
 elif how == "zero-ordinal":
     answer.update(verdict="refuse", surface="locators",
                   unfixed=[{"surface": "locators", "index": 0, "fixed": True}])
@@ -1997,6 +2348,7 @@ fn a_policy_answer_that_does_not_match_what_was_sent_is_never_a_pass() {
         "passed-redacted",
         "two-ways",
         "wrong-kind",
+        "unfixed-plain",
         "zero-ordinal",
         "path-conflict",
         "locator-rewritable",
@@ -2557,14 +2909,26 @@ fn a_moved_record_whose_new_comment_id_carries_a_term_is_refused_naming_it_only_
 #[test]
 fn a_sanitising_write_keeps_every_forward_edge_of_its_task() {
     let shared = Shared::new(
-        &[("t1", &with_term()), ("t2", "Plain.")],
+        &[
+            ("t1", &with_term()),
+            ("t2", "Plain."),
+            ("t3", "Plain."),
+            ("t4", "Plain."),
+        ],
         json!({}),
         json!({}),
     );
-    let edge = json!({"from": {"id": "t1", "kind": "task"}, "to": {"id": "t2", "kind": "task"},
-                      "kind": "blocks"});
+    let edges: Vec<Value> = ["t2", "t3", "t4"]
+        .into_iter()
+        .map(|to| {
+            json!({"from": {"id": "t1", "kind": "task"}, "to": {"id": to, "kind": "task"},
+               "kind": "blocks"})
+        })
+        .collect();
     let mut state = shared.state();
-    state["edges"]["t1"] = json!([edge.clone()]);
+    state["edges"]["t1"] = json!(edges);
+    state["page_size"] = json!(1);
+    state["dependency_cursors"] = json!([]);
     std::fs::write(&shared.state, state.to_string()).expect("the state");
     shared
         .store
@@ -2572,13 +2936,113 @@ fn a_sanitising_write_keeps_every_forward_edge_of_its_task() {
     assert_eq!(shared.writes(), 1, "one sanitising write");
     assert_eq!(
         shared.state()["edges"]["t1"],
-        json!([edge]),
+        json!(edges),
         "the edge was written back as it was"
     );
     let deps: Value =
         serde_json::from_str(&shared.store.ok(&["task", "deps", "shared:t1", "--json"]))
             .expect("the dependencies");
-    assert_eq!(deps["items"].as_array().map(Vec::len), Some(1), "{deps}");
+    assert_eq!(deps["items"].as_array().map(Vec::len), Some(3), "{deps}");
+    let state = shared.state();
+    let cursors = state["dependency_cursors"]
+        .as_array()
+        .expect("dependency pages");
+    assert!(
+        cursors.contains(&json!("1")) && cursors.contains(&json!("2")),
+        "{state}"
+    );
+}
+
+#[test]
+fn a_sanitising_write_refuses_a_private_term_in_a_preserved_dependency_endpoint() {
+    let shared = Shared::new(&[("t1", &with_term())], json!({}), json!({}));
+    let mut state = shared.state();
+    let edge = json!({"from": {"id": "t1", "kind": "task"},
+        "to": {"id": format!("{TERM}-t2"), "kind": "task"}, "kind": "blocks"});
+    state["edges"]["t1"] = json!([edge]);
+    std::fs::write(&shared.state, state.to_string()).expect("state");
+    let (kind, said) = shared
+        .store
+        .refused(&["task", "priority", "set", "shared:t1", "high"]);
+    assert_eq!(kind, "boundary-refused", "{said}");
+    assert!(!said.contains(TERM), "{said}");
+    assert_eq!(
+        shared.writes(),
+        0,
+        "no sanitizing write crosses an unscreened edge"
+    );
+    assert_eq!(shared.state()["edges"], state["edges"]);
+}
+
+#[test]
+fn a_search_sweep_repairs_matches_on_later_native_search_pages() {
+    let shared = Shared::new(
+        &[
+            ("t1", &with_term()),
+            ("t2", &with_term()),
+            ("t3", &with_term()),
+        ],
+        json!({}),
+        json!({}),
+    );
+    let mut state = shared.state();
+    state["page_size"] = json!(1);
+    state["query_cursors"] = json!([]);
+    std::fs::write(&shared.state, state.to_string()).expect("state");
+    let (code, report, out, err) = sweep(&shared.store, "shared", &[]);
+    assert_eq!(code, Some(3), "{out}{err}");
+    assert_eq!(
+        report["items"].as_array().map(Vec::len),
+        Some(3),
+        "{report}"
+    );
+    for id in ["t1", "t2", "t3"] {
+        let shown: Value = serde_json::from_str(&shared.store.ok(&[
+            "task",
+            "show",
+            &format!("shared:{id}"),
+            "--json",
+        ]))
+        .expect("task");
+        assert!(
+            !shown["items"][0]["item"]["content"]
+                .as_str()
+                .expect("body")
+                .contains(TERM)
+        );
+    }
+    let state = shared.state();
+    let cursors = state["query_cursors"].as_array().expect("search pages");
+    assert!(
+        cursors.contains(&json!("1")) && cursors.contains(&json!("2")),
+        "{state}"
+    );
+}
+
+#[test]
+fn the_editing_peer_applies_each_native_search_field() {
+    let shared = Shared::new(
+        &[("needle", "Plain."), ("body", "A needle in the body.")],
+        json!({}),
+        json!({}),
+    );
+    for (fields, expected) in [
+        ("title", vec!["shared:needle"]),
+        ("content", vec!["shared:body"]),
+        ("both", vec!["shared:body", "shared:needle"]),
+    ] {
+        let report: Value = serde_json::from_str(&shared.store.ok(&[
+            "task", "list", "--source", "shared", "--search", "needle", "--in", fields, "--json",
+        ]))
+        .expect("tasks");
+        let ids: Vec<&str> = report["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .map(|item| item["id"].as_str().expect("id"))
+            .collect();
+        assert_eq!(ids, expected, "{fields}: {report}");
+    }
 }
 
 #[test]
@@ -2657,12 +3121,17 @@ fn a_re_render_whose_content_is_rewritten_records_the_digest_of_what_landed() {
         .as_str()
         .expect("an id")
         .to_owned();
+    let private_path = store
+        .sandbox
+        .config_home()
+        .join(format!("{TERM}-template.md"));
+    std::fs::copy(&template, &private_path).expect("a second template path");
     store.ok(&[
         "task",
         "render",
         &id,
         "--template",
-        &template,
+        private_path.to_str().expect("a template path"),
         "--var",
         &format!("goal=Match {TERM}"),
         "--no-interactive",
@@ -2670,6 +3139,10 @@ fn a_re_render_whose_content_is_rewritten_records_the_digest_of_what_landed() {
     let shown: Value =
         serde_json::from_str(&store.ok(&["task", "show", &id, "--json"])).expect("the task");
     let item = &shown["items"][0]["item"];
+    assert_eq!(
+        item["metadata"]["onetaskgraph.template"]["template"],
+        json!(private_path.to_string_lossy().replace(TERM, WITH)),
+    );
     let content = item["content"].as_str().expect("content");
     assert!(content.contains(&format!("# Match {WITH}")), "{content}");
     let recorded = item["metadata"]["onetaskgraph.template"]["body_digest"]
@@ -2693,6 +3166,46 @@ fn a_re_render_whose_content_is_rewritten_records_the_digest_of_what_landed() {
 }
 
 #[test]
+fn regeneration_answers_a_sanitization_preview_and_a_predates_refusal_without_writing() {
+    let (store, _) = sanitizing(replaced());
+    stage_older(&store);
+    let template = template(&store);
+    let before = tree(&store.folder("site"));
+    let args = [
+        "task",
+        "render",
+        "site:older",
+        "--template",
+        &template,
+        "--var",
+        "goal=Plain goal",
+        "--no-interactive",
+        "--json",
+    ];
+    let mut preview = args.to_vec();
+    preview.push("--sanitize-dry-run");
+    let output = store.run(&preview);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let answer: Value = serde_json::from_str(&stdout(&output)).expect("a preview");
+    assert_eq!(answer["would_pass"], json!(true), "{answer}");
+    assert!(
+        !answer["sanitization"]["side_effect"]
+            .as_array()
+            .expect("changes")
+            .is_empty()
+    );
+    assert_eq!(tree(&store.folder("site")), before);
+    repolicy(&store, |policy| {
+        policy["replacements"] = json!([{ "term": TERM, "reject": true }]);
+    });
+    let output = store.run(&args);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure");
+    assert_eq!(failure["predates_write"], json!(true), "{failure}");
+    assert_eq!(tree(&store.folder("site")), before);
+}
+
+#[test]
 fn a_source_keeping_no_version_moving_twice_is_a_conflict_too() {
     let shared = Shared::new(
         &[("t1", &with_term())],
@@ -2711,10 +3224,49 @@ fn a_source_keeping_no_version_moving_twice_is_a_conflict_too() {
 }
 
 #[test]
+fn sanitising_reads_and_comment_answers_must_name_the_record_requested() {
+    for (control, at, expected) in [
+        ("wrong_read_id", 1, "another task"),
+        ("wrong_read_id", 2, "another task"),
+        ("wrong_comment_id", 2, "another comment"),
+    ] {
+        let shared = Shared::new(&[("t1", &with_term())], json!({}), json!({}));
+        shared.comment("t1", "c1", &format!("Ask {TERM}."));
+        let mut state = shared.state();
+        state[control] = json!("another-record");
+        state["wrong_read_at"] = json!(at);
+        std::fs::write(&shared.state, state.to_string()).expect("state");
+        let output = shared
+            .store
+            .run(&["task", "priority", "set", "shared:t1", "high"]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{control}: {}{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        assert!(stderr(&output).contains(expected), "{}", stderr(&output));
+        assert_eq!(
+            shared.task("t1")["priority"],
+            "none",
+            "original write refused"
+        );
+        if control == "wrong_read_id" {
+            assert_eq!(
+                shared.writes(),
+                0,
+                "no record overwritten after a malformed read"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_sanitising_write_answered_as_another_task_refuses_the_write_it_was_for() {
     let shared = Shared::new(&[("t1", &with_term())], json!({}), json!({}));
     let mut state = shared.state();
-    state["answer_ids"] = json!({"t1": "t9"});
+    state["answer_ids"] = json!({"t1": format!("{TERM}-t9")});
     std::fs::write(&shared.state, state.to_string()).expect("the state");
     let output = shared
         .store
@@ -2723,6 +3275,12 @@ fn a_sanitising_write_answered_as_another_task_refuses_the_write_it_was_for() {
     assert!(
         stderr(&output).contains("another task"),
         "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stdout(&output).contains(TERM) && !stderr(&output).contains(TERM),
+        "{}{}",
+        stdout(&output),
         stderr(&output)
     );
     assert_eq!(

@@ -1470,6 +1470,13 @@ is where its activation rule is stated for a user — **an inactive store consul
 visibility**, which is what keeps every request sequence and budget above unchanged until a
 store opts in.
 
+A sweep's `requests.total` is the source's own request count. Its `page_operations`,
+`detail_operations` and `rewrite_operations` count engine operations, not a partition of
+HTTP requests. The page bound is on engine-held work: provider-owned per-command read
+caches may retain records until command end; releasing them per page needs its own source
+seam and request-budget verification. GitHub may prefetch its HTTP pages before returning
+the first caller page; the ordering guarantee is over the engine's source-API pages.
+
 - **No production dependency on onevcs.** The command adapter speaks onevcs's versioned
   boundary schema, pinned at `engine/boundary/onevcs-boundary-schema-v4.json`; the release the
   journeys drive is pinned once, as `ONEVCS_CLI` in `crates/onetaskgraph-e2e-support/src/onevcs.rs`,
@@ -1492,7 +1499,8 @@ store opts in.
   stored, and what that call rewrites of them is written back first (`admit_whole_task`);
   `sources sanitize` (`engine/sweep.rs`) is the same per item. Neither has a backend
   precondition: "conditional on the version" is a read immediately before the write, as
-  `set_document_metadata_at` already does.
+  `set_document_metadata_at` already does. An edit between that final read and the write can
+  still be overwritten; the guard is not an atomic compare-and-set.
 - **Destination reality is the plugin's own read** (`TaskSource::visibility`), never the
   policy's. A GitHub source reads each destination — the board, each repository — once per
   copy, before its first write, held by the engine's `hold_visibility` for that one operation

@@ -8,6 +8,7 @@ use onetaskgraph_e2e_support::{
     fixtures::{GitHubBoardFields, document, github_projects_with_items},
     onevcs::OnevcsHome,
 };
+use onetaskgraph_github_projects::graphql;
 use serde_json::{Value, json};
 
 /// The invented private term, and what the store replaces it with.
@@ -47,6 +48,10 @@ impl Board {
             ],
         );
         board.add_comment("X-902", &format!("Asked {TERM} first."));
+        Self::configured(sandbox, config, board)
+    }
+
+    fn configured(sandbox: Sandbox, config: Value, board: GitHubBoardFields) -> Self {
         let mut home = OnevcsHome::new(&sandbox);
         // The repository every board item names is public; the term's is private.
         home.private("hiddenco", TERM)
@@ -220,6 +225,60 @@ fn a_complete_sweep_reads_the_board_whole_and_covers_every_class() {
     assert_eq!(report["items"], json!([]), "{report}");
 }
 
+#[test]
+fn a_complete_sweep_repairs_later_item_and_comment_pages_before_claiming_coverage() {
+    let sandbox = Sandbox::new();
+    let items = (0..110)
+        .map(|index| {
+            issue(
+                &format!("PAGE-{index}"),
+                "Plain",
+                if index == 0 || index == 109 {
+                    TERM
+                } else {
+                    "Plain."
+                },
+                "",
+            )
+        })
+        .collect();
+    let (config, backend) = github_projects_with_items(&sandbox, items);
+    backend.seed_comments(
+        "PAGE-0",
+        (0..25).map(|index| {
+            if index == 24 {
+                format!("Last comment names {TERM}.")
+            } else {
+                format!("Comment {index}.")
+            }
+        }),
+    );
+    let board = Board::configured(sandbox, config, backend);
+    let (code, report, out, err, _) = board.sweep(&["--complete"]);
+    assert_eq!(code, Some(0), "{out}{err}");
+    assert_eq!(report["coverage"], json!({"complete":true,"uncovered":[]}));
+    for id in ["PAGE-0", "PAGE-109"] {
+        let body = board.board.body(id);
+        assert!(
+            body.as_str()
+                .is_some_and(|body| body.lines().next() == Some(WITH) && !body.contains(TERM)),
+            "{id}: {body}"
+        );
+        assert!(
+            report["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["id"] == format!("board:{id}") && item["outcome"] == "rewritten")
+        );
+    }
+    assert_eq!(
+        board.board.comments_on("PAGE-0")[24]["body"],
+        format!("Last comment names {WITH}.")
+    );
+    assert!(!out.contains(TERM) && !err.contains(TERM));
+}
+
 /// The budgets' board: `size` items with comments, and the term-carrying items of
 /// `sanitize-sweep-requests` and `sanitize-complete-sweep-requests` among them.
 ///
@@ -232,6 +291,8 @@ fn a_complete_sweep_reads_the_board_whole_and_covers_every_class() {
 pub(super) struct Workload {
     board: Board,
     pub(super) size: usize,
+    deep: bool,
+    runs: std::cell::Cell<usize>,
 }
 
 impl Workload {
@@ -264,17 +325,56 @@ impl Workload {
         // The unfixable one names the private repository.
         items[999]["repo"] = json!(format!("hiddenco/{TERM}"));
         items[1111]["origin"] = json!("plan:pinecrest-1");
-        items[1222]["body"] = json!("Mirror quiet\u{200b}harbor here.");
+        items[1222]["body"] = json!("Mirror ｑｕｉｅｔ\u{200b}ｈａｒｂｏｒ here.");
+        for index in [1300, 1400, 1500] {
+            items[index]["body"] = json!("A former emberline reference.");
+        }
         let (config, board) = github_projects_with_items(&sandbox, items);
+        board.freeze_search_index();
+        for index in [1300, 1400, 1500] {
+            board.edit_body(&format!("W-{index}"), "An ordinary public description.");
+        }
+        if !deep {
+            for id in ["W-11", "W-222", "W-333"] {
+                board.after_request(
+                    move |query, variables| {
+                        matches!(query, graphql::ISSUE_DETAILS | graphql::ISSUE_COPY_DETAILS)
+                            && variables
+                                .as_object()
+                                .is_some_and(|values| values.values().any(|v| v == id))
+                    },
+                    0,
+                    move |board| {
+                        let body = board.body(id);
+                        board.edit_body(
+                            id,
+                            &format!("{}\nPerson's first paragraph.", body.as_str().unwrap()),
+                        );
+                    },
+                );
+            }
+            board.after_request(
+                |query, variables| query == graphql::ISSUE && variables["id"] == "W-333",
+                0,
+                |board| {
+                    let body = board.body("W-333");
+                    board.edit_body(
+                        "W-333",
+                        &format!("{}\nPerson's second paragraph.", body.as_str().unwrap()),
+                    );
+                },
+            );
+        }
         for n in 0..size {
             let count = if deep {
                 if n % 50 == 0 { 25 } else { n % 21 }
             } else {
                 n % 21
             };
-            for c in 0..count {
-                board.add_comment(&format!("W-{n}"), &format!("Comment {c}."));
-            }
+            board.seed_comments(
+                &format!("W-{n}"),
+                (0..count).map(|c| format!("Comment {c}.")),
+            );
         }
         for (index, _, said) in &hits {
             if !said.is_empty() {
@@ -302,32 +402,124 @@ impl Workload {
                 home,
             },
             size,
+            deep,
+            runs: std::cell::Cell::new(0),
         }
     }
 
+    /// Measure the CLI report's source-request total and price the served documents with
+    /// the provider's own worst-case GraphQL table, without sending another request.
+    pub(super) fn measure(&self, flags: &[&str]) -> (u64, String) {
+        let mark = self.board.board.served_count();
+        let report = self.sweep(flags);
+        let points: u64 = self
+            .board
+            .board
+            .served_since(mark)
+            .iter()
+            .map(|(document, _)| {
+                onetaskgraph_github_projects::worst_case_point_cost(document)
+                    .expect("a document priced by the source's own table")
+            })
+            .sum();
+        let (total, detail) = requests(&report);
+        (
+            total,
+            format!("{detail}; {points} modelled worst-case GraphQL points"),
+        )
+    }
+
     /// One sweep's report, with `flags`.
-    pub(super) fn sweep(&self, flags: &[&str]) -> Value {
+    fn sweep(&self, flags: &[&str]) -> Value {
         let (code, report, out, err, _) = self.board.sweep(flags);
         assert!(
             matches!(code, Some(0 | 1 | 3)),
             "the sweep answered a report: {code:?} {out}{err}"
         );
-        assert!(!out.contains(TERM) && !err.contains(TERM));
+        for private in [
+            TERM,
+            "hiddenco",
+            "emberline",
+            "duskfield",
+            "pinecrest",
+            "quiet\u{200b}harbor",
+            "ｑｕｉｅｔ\u{200b}ｈａｒｂｏｒ",
+        ] {
+            assert!(
+                !out.contains(private) && !err.contains(private),
+                "{out}{err}"
+            );
+        }
+        if !self.deep {
+            let items = report["items"].as_array().expect("reported items");
+            assert_eq!(items.len(), 10, "{report}");
+            assert_eq!(
+                items
+                    .iter()
+                    .filter(|item| item["outcome"] == "not-a-match")
+                    .count(),
+                3,
+                "{report}"
+            );
+            let conflicted = items
+                .iter()
+                .find(|item| item["id"] == "board:W-333")
+                .expect("twice-moved item reported");
+            assert_eq!(
+                conflicted["outcome"],
+                if self.runs.get() == 0 {
+                    "conflict"
+                } else {
+                    "rewritten"
+                },
+                "{report}"
+            );
+            for id in ["W-11", "W-222", "W-333"] {
+                let body = self.board.board.body(id);
+                assert!(
+                    body.as_str().unwrap().contains("Person's first paragraph."),
+                    "{id}: {body}"
+                );
+            }
+            assert!(
+                self.board
+                    .board
+                    .body("W-333")
+                    .as_str()
+                    .unwrap()
+                    .contains("Person's second paragraph.")
+            );
+            if self.runs.get() > 0 {
+                assert_eq!(
+                    report["requests"]["rewrite_operations"], 1,
+                    "only the previously conflicted item is written: {report}"
+                );
+                assert_eq!(
+                    items
+                        .iter()
+                        .filter(|item| item["outcome"] == "unchanged")
+                        .count(),
+                    5,
+                    "{report}"
+                );
+            }
+        }
+        self.runs.set(self.runs.get() + 1);
         report
     }
 }
 
 /// `report`'s request figures, as a detail line.
-pub(super) fn requests(report: &Value) -> (u64, String) {
+fn requests(report: &Value) -> (u64, String) {
     let requests = &report["requests"];
     let total = requests["total"].as_u64().expect("a request total");
     (
         total,
         format!(
-            "total {total}: searches {}, reads {}, writes {}; {} item(s) reported; coverage {}",
-            requests["searches"],
-            requests["reads"],
-            requests["writes"],
+            "{total} source requests; operations: search/list pages {}, detail batches/comment walks {}, rewritten items {}; {} item(s) reported; coverage {}",
+            requests["page_operations"],
+            requests["detail_operations"],
+            requests["rewrite_operations"],
             report["items"].as_array().map_or(0, Vec::len),
             report["coverage"],
         ),

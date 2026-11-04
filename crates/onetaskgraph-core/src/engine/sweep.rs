@@ -18,7 +18,8 @@
 //! [`WritePolicy::declared_terms`]: super::boundary::WritePolicy::declared_terms
 
 use onetaskgraph_plugin_api::{
-    Classification, NativeId, PageRequest, SourceName, Task, TaskQuery, TextFields, TextQuery,
+    Classification, NativeId, PageRequest, SourceError, SourceName, Task, TaskQuery, TextFields,
+    TextQuery,
 };
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -111,21 +112,22 @@ pub struct SweepReport {
     pub items: Vec<SweepItem>,
 }
 
-/// What a sweep sent its source.
+/// Source-counted requests and engine operations, not a partition of those requests.
+/// Only `total` counts every request; one operation may send several, and guarded reads or
+/// individual comment writes may be internal to an operation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct SweepRequests {
-    /// Every request the source counted, `0` for one that counts none.
+    /// Every request in the source counter delta, or `0` without a usable counter.
     pub total: u64,
     /// Search pages — or, for a sweep reading its source whole, listing pages — the sweep asked
     /// its source for: each one call of the plugin contract, which a source may answer with
     /// more than one request.
-    // llmlint: ignore[names_match_behavior] The member's name is the task's stated report contract, `"requests": {"total", "searches", "reads", "writes"}`, which both SDKs are generated from; a whole read's listing pages are the pages a search sweep sends as searches, and the doc comment above says which a report's figure counts.
-    pub searches: u64,
+    pub page_operations: u64,
     /// Batched reads of items with their first comment page, each one call, and each walk of
     /// an item's further comment pages, counted once however many pages it took.
-    pub reads: u64,
+    pub detail_operations: u64,
     /// Items the sweep wrote back, each with every comment of it that changed.
-    pub writes: u64,
+    pub rewrite_operations: u64,
 }
 
 /// Which classes of record a sweep could not establish.
@@ -233,17 +235,34 @@ impl Engine {
                 scope: self.term_scope(),
                 replacements: self.replacements().to_vec(),
             })
-            .await
-            // A terms command that could not decide is the policy undecided, as a write's
-            // sanitisation would be: a refusal the command line answers with exit 2.
-            .map_err(|error| EngineError::TermsUndecided {
-                name: source.to_string(),
-                why: error.message,
-            })?
-            .ok_or_else(|| EngineError::TermsUnlisted {
-                name: source.to_string(),
-                why: "no write_policy.terms_command is configured".to_owned(),
-            })?;
+            .await;
+        let terms = match terms {
+            Ok(Some(terms)) => terms,
+            failure => {
+                let exposure = Exposure::default().locate(LocatorKind::Source, source.as_str());
+                let answer = self.screen(&exposure).await;
+                let name = screened_locator(
+                    &exposure,
+                    &answer.locators,
+                    LocatorKind::Source,
+                    source.as_str(),
+                )
+                .to_string();
+                return Err(match (failure, answer.verdict) {
+                    (_, WriteVerdict::Unavailable { reason }) => {
+                        EngineError::TermsUndecided { name, why: reason }
+                    }
+                    (Err(error), _) => EngineError::TermsUndecided {
+                        name,
+                        why: error.message,
+                    },
+                    _ => EngineError::TermsUnlisted {
+                        name,
+                        why: "no write_policy.terms_command is configured".to_owned(),
+                    },
+                });
+            }
+        };
         // Read whole only a source that says it counts no requests: one whose count could not
         // be read may be spending a shared allowance, so it is searched as a counting one is.
         let metering = destination.source().metering().await;
@@ -268,7 +287,7 @@ impl Engine {
                     )
                     .await
                     .map_err(|error| refused(destination, error))?;
-                sweep.requests.searches += 1;
+                sweep.requests.page_operations += 1;
                 // Each item of the page is decided, and written, before the next is asked for.
                 let ids = page.items.into_iter().map(|task| task.id).collect();
                 self.sweep_batch(destination, ids, false, dry_run, &mut sweep)
@@ -300,7 +319,7 @@ impl Engine {
                         )
                         .await
                         .map_err(|error| refused(destination, error))?;
-                    sweep.requests.searches += 1;
+                    sweep.requests.page_operations += 1;
                     let ids = page
                         .items
                         .into_iter()
@@ -338,9 +357,6 @@ impl Engine {
             (Some(before), Some(after)) => after.requests.saturating_sub(before.requests),
             _ => 0,
         };
-        if sweep.requests.total == 0 {
-            sweep.requests = SweepRequests::default();
-        }
         let mut report = SweepReport {
             source: shown_source,
             dry_run,
@@ -387,11 +403,50 @@ impl Engine {
             cursor: None,
             limit: 20,
         };
-        let details = destination
-            .source()
-            .get_task_details(&ids, commented.then_some(&first))
-            .await;
-        sweep.requests.reads += 1;
+        // Like a copy, sanitization reads the forward edges next. The existing detail
+        // method lets a hosted source carry them in the same request as the comments.
+        let details = if commented {
+            destination
+                .source()
+                .get_task_details_for_copy(&ids, &first)
+                .await
+        } else {
+            destination.source().get_task_details(&ids, None).await
+        };
+        sweep.requests.detail_operations += 1;
+        let problem = if details.len() != ids.len() {
+            Some(format!(
+                "source answered {} task details for the {} ids",
+                details.len(),
+                ids.len()
+            ))
+        } else if ids
+            .iter()
+            .zip(&details)
+            .any(|(id, detail)| matches!(detail, Ok(Some(read)) if &read.task.id != id))
+        {
+            Some("source answered a task detail for a different id".to_owned())
+        } else {
+            None
+        };
+        if let Some(message) = problem {
+            let exposure =
+                Exposure::default().locate(LocatorKind::Source, destination.name().as_str());
+            let answer = self.screen(&exposure).await;
+            if matches!(answer.verdict, WriteVerdict::Unavailable { .. }) {
+                return Err(refusal(destination, "the source", &exposure, &answer));
+            }
+            return Err(EngineError::SourceRefused {
+                name: screened_locator(
+                    &exposure,
+                    &answer.locators,
+                    LocatorKind::Source,
+                    destination.name().as_str(),
+                )
+                .to_string(),
+                error: SourceError::Malformed { message },
+            });
+        }
         for (id, detail) in ids.into_iter().zip(details) {
             let Some(read) = detail.map_err(|error| refused(destination, error))? else {
                 continue;
@@ -405,7 +460,7 @@ impl Engine {
                         // Every page of one revision, read again from the start rather than
                         // resumed, so no comment is counted twice.
                         comments = every_comment(destination, &id).await?;
-                        sweep.requests.reads += 1;
+                        sweep.requests.detail_operations += 1;
                     }
                 }
                 Some(Ok(None)) | None => {}
@@ -441,7 +496,7 @@ impl Engine {
         sweep: &mut Sweep,
     ) -> Result<(), EngineError> {
         let item = format!("{}:{id}", destination.name());
-        let stored = StoredTask::of(destination, &item, &task, &comments);
+        let stored = StoredTask::read(destination, &item, &task, &comments).await?;
         let answer: SanitizeVerdict = self.screen(&stored.exposure).await;
         if let WriteVerdict::Unavailable { .. } = answer.verdict {
             return Err(refusal(destination, &item, &stored.exposure, &answer));
@@ -548,7 +603,7 @@ impl Engine {
                 });
             }
         }
-        let Some(sanitised) = sanitised_task(&task, &comments, &rewrite) else {
+        let Some(sanitised) = sanitised_task(&task, &comments, &rewrite, &stored.depends_on) else {
             if unfixable {
                 sweep.items.push(SweepItem {
                     id: shown_item,
@@ -595,15 +650,15 @@ impl Engine {
             }
             Err(error) => return Err(error),
         };
-        if written.written.is_some() {
-            sweep.requests.writes += 1;
+        if written.was_written() {
+            sweep.requests.rewrite_operations += 1;
         }
         let (word, whole) = if dry_run {
             (FieldOutcome::WouldRewrite, ItemOutcome::WouldRewrite)
         } else {
             (FieldOutcome::Rewritten, ItemOutcome::Rewritten)
         };
-        let outcome = if written.fields.is_empty() {
+        let outcome = if !written.has_changes() {
             ItemOutcome::Unchanged
         } else if unfixable {
             ItemOutcome::Unfixable
@@ -611,11 +666,11 @@ impl Engine {
             whole
         };
         // A record read again is named by the screening of what was read.
-        let (exposure, answered) = written.screening.as_ref().map_or(
+        let (exposure, answered) = written.screening().map_or(
             (&stored.exposure, answer.locators.as_slice()),
             |(exposure, answered)| (exposure, answered.as_slice()),
         );
-        for field in &written.fields {
+        for field in written.fields() {
             fields.push(SweepField {
                 field: screened_field(field, exposure, answered),
                 outcome: word.clone(),
@@ -631,7 +686,6 @@ impl Engine {
     }
 }
 
-/// What a sweep has gathered so far.
 struct Sweep {
     requests: SweepRequests,
     items: Vec<SweepItem>,

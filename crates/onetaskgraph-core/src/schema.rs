@@ -54,7 +54,19 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 53;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 54;
+
+/// The same typed envelope the command line serializes, keeping the payload's root name.
+pub(crate) fn write_answer_schema<T: schemars::JsonSchema>() -> Schema {
+    let payload = schema_for!(T);
+    let mut answer = schema_for!(crate::boundary::WriteAnswer<T>);
+    for key in ["title", "description"] {
+        if let Some(value) = payload.get(key) {
+            answer.insert(key.to_owned(), value.clone());
+        }
+    }
+    answer
+}
 
 /// Every contract root, keyed by name, plus each registered plugin's config schema.
 #[must_use]
@@ -123,7 +135,7 @@ pub fn schema_bundle() -> Value {
     roots.insert("SourceFailure", schema_for!(SourceFailure));
     // What a command writes to standard output when it exits `1` under machine output,
     // and the two types inside it a caller branches on by name.
-    roots.insert("FailureDocument", schema_for!(FailureDocument));
+    roots.insert("FailureDocument", write_answer_schema::<FailureDocument>());
     roots.insert("Failure", schema_for!(Failure));
     roots.insert("FailureClass", schema_for!(FailureClass));
     roots.insert("QualifiedTask", schema_for!(Qualified<Task>));
@@ -140,7 +152,7 @@ pub fn schema_bundle() -> Value {
     );
     roots.insert(
         "QueryResponseOfQualifiedProject",
-        schema_for!(QueryResponse<Qualified<Project>>),
+        write_answer_schema::<QueryResponse<Qualified<Project>>>(),
     );
     roots.insert(
         "QueryResponseOfQualifiedDocument",
@@ -165,8 +177,8 @@ pub fn schema_bundle() -> Value {
     roots.insert("NewComment", schema_for!(NewComment));
     roots.insert("PageOfComment", schema_for!(Page<Comment>));
     roots.insert("CommentList", schema_for!(CommentList));
-    roots.insert("DeletedComment", schema_for!(DeletedComment));
-    roots.insert("TaskDetail", schema_for!(TaskDetail));
+    roots.insert("DeletedComment", write_answer_schema::<DeletedComment>());
+    roots.insert("TaskDetail", write_answer_schema::<TaskDetail>());
     // What `task show-many` answers with: one `TaskDetail` per id, in request order.
     roots.insert("TaskDetails", schema_for!(TaskDetails));
     // What `project graph --format json` answers with: one project's tasks and the edges
@@ -174,7 +186,7 @@ pub fn schema_bundle() -> Value {
     roots.insert("ProjectGraph", schema_for!(ProjectGraph));
 
     // What `document show` answers with: the document and the image assets it holds.
-    roots.insert("DocumentDetail", schema_for!(DocumentDetail));
+    roots.insert("DocumentDetail", write_answer_schema::<DocumentDetail>());
     // The image assets a task or a document holds, as `task show` and `document show` list
     // them, and what crosses the stdio plugin protocol beside a write that carries them:
     // `AssetWrite` is the `assets` and `recorded_assets` members of a `write_task` or a
@@ -192,9 +204,12 @@ pub fn schema_bundle() -> Value {
     // What `task status set` answers with, and the per-task entries it and a copy report for
     // the delivered tasks they kept in step — plus the entry type both of a task's lists hold.
     roots.insert("TaskRef", schema_for!(TaskRef));
-    roots.insert("TaskStatusSet", schema_for!(TaskStatusSet));
+    roots.insert("TaskStatusSet", write_answer_schema::<TaskStatusSet>());
     // What `project status set` answers with.
-    roots.insert("ProjectStatusSet", schema_for!(ProjectStatusSet));
+    roots.insert(
+        "ProjectStatusSet",
+        write_answer_schema::<ProjectStatusSet>(),
+    );
     roots.insert("Delivered", schema_for!(Delivered));
     roots.insert("DeliveryOutcome", schema_for!(DeliveryOutcome));
 
@@ -202,10 +217,13 @@ pub fn schema_bundle() -> Value {
     // vocabularies inside each, which a caller branches on by name — with the issue reference
     // both the command line and a landing event spell, and the two answers that cross the
     // plugin protocol beneath them.
-    roots.insert("StatusesReconciled", schema_for!(StatusesReconciled));
+    roots.insert(
+        "StatusesReconciled",
+        write_answer_schema::<StatusesReconciled>(),
+    );
     roots.insert("StatusReconciled", schema_for!(StatusReconciled));
     roots.insert("ReconcileOutcome", schema_for!(ReconcileOutcome));
-    roots.insert("IssuesCompleted", schema_for!(IssuesCompleted));
+    roots.insert("IssuesCompleted", write_answer_schema::<IssuesCompleted>());
     roots.insert("IssueCompleted", schema_for!(IssueCompleted));
     roots.insert("CompleteAction", schema_for!(CompleteAction));
     roots.insert("IssueRef", schema_for!(IssueRef));
@@ -217,21 +235,21 @@ pub fn schema_bundle() -> Value {
     roots.insert("ContradictedItem", schema_for!(ContradictedItem));
 
     // What `task priority set` and `task content set` answer with.
-    roots.insert("TaskPrioritySet", schema_for!(TaskPrioritySet));
-    roots.insert("TaskContentSet", schema_for!(TaskContentSet));
+    roots.insert("TaskPrioritySet", write_answer_schema::<TaskPrioritySet>());
+    roots.insert("TaskContentSet", write_answer_schema::<TaskContentSet>());
 
     // The targeted update: what a caller names, what `task update` answers with and the
     // field vocabulary both report in, and the outcome a source answers it with across the
     // plugin protocol.
     roots.insert("TaskUpdate", schema_for!(TaskUpdate));
-    roots.insert("TaskUpdated", schema_for!(TaskUpdated));
+    roots.insert("TaskUpdated", write_answer_schema::<TaskUpdated>());
     roots.insert("UpdatedField", schema_for!(UpdatedField));
     roots.insert("TaskUpdateOutcome", schema_for!(TaskUpdateOutcome));
 
     // What `task`, `project` and `document metadata set` answer with.
-    roots.insert("MetadataSet", schema_for!(MetadataSet));
+    roots.insert("MetadataSet", write_answer_schema::<MetadataSet>());
 
-    roots.insert("CopyReport", schema_for!(CopyReport));
+    roots.insert("CopyReport", write_answer_schema::<CopyReport>());
     // A root of its own, for the reason `StatusMapping` is one: every source's block takes the
     // two settings of a create safe to retry by name, whatever plugin it names.
     roots.insert("CreateSettings", schema_for!(crate::config::CreateSettings));
@@ -260,7 +278,7 @@ pub fn schema_bundle() -> Value {
     // `document answers` answer with, and the `onetaskgraph.template` entry an item rendered
     // from a template records — named, because a caller checking a hand edit or a changed
     // template reads its hashes by name.
-    roots.insert("Regenerated", schema_for!(Regenerated));
+    roots.insert("Regenerated", write_answer_schema::<Regenerated>());
     roots.insert("TemplateAnswers", schema_for!(TemplateAnswers));
     roots.insert("TemplateProvenance", schema_for!(TemplateProvenance));
     // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
@@ -307,7 +325,7 @@ pub fn schema_bundle() -> Value {
     roots.insert("CacheCleared", schema_for!(CacheCleared));
     roots.insert("CacheUse", schema_for!(CacheUse));
     roots.insert("ExpectedWrite", schema_for!(ExpectedWrite));
-    roots.insert("CommentWritten", schema_for!(CommentWritten));
+    roots.insert("CommentWritten", write_answer_schema::<CommentWritten>());
 
     // A `linear` source's configuration, as a root of its own as well as under
     // `plugin_config`: both SDKs are generated from the roots, and a caller writing a

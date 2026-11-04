@@ -1323,6 +1323,7 @@ struct GitHubBoard {
     /// The most rows one page of an issue search answers with, fewer than it was asked for —
     /// as GitHub may — or `None` to answer as many as asked.
     search_page_rows: Option<usize>,
+    search_snapshot: Option<std::collections::BTreeMap<String, (String, String)>>,
     /// Whether a mutation selecting the whole issue it wrote is answered with only what it
     /// wrote and the parts of the issue's change token — the response a store's cache must
     /// not take for the whole issue.
@@ -2493,6 +2494,28 @@ impl GitHubBoardFields {
         added["id"].as_str().expect("a comment id").to_owned()
     }
 
+    /// Seed an issue's comments together before a journey starts. Each comment and the
+    /// issue receive their ordinary timestamps, without looking up that same issue again
+    /// for every comment of a large board.
+    pub fn seed_comments(&self, issue: &str, bodies: impl IntoIterator<Item = String>) {
+        let mut board = self.board.lock().unwrap();
+        let index = board
+            .items
+            .iter()
+            .position(|item| item["id"] == issue)
+            .expect("the issue to seed comments on");
+        for body in bodies {
+            let at = board.tick();
+            let id = format!("COMMENT-{}", board.comment_ticks);
+            board
+                .comments
+                .push(json!({"id":id,"issue":issue,"author":GITHUB_COMMENTER,
+                "body":body,"createdAt":at,"updatedAt":at}));
+            let updated = board.tick();
+            board.items[index]["updatedAt"] = json!(updated);
+        }
+    }
+
     /// Replace one comment's body, as its author editing it on GitHub would.
     pub fn edit_comment(&self, comment: &str, body: &str) {
         let mut board = self.board.lock().unwrap();
@@ -2539,6 +2562,28 @@ impl GitHubBoardFields {
     /// for when it asked for more, as GitHub's search may.
     pub fn answer_search_pages_of(&self, rows: usize) {
         self.board.lock().unwrap().search_page_rows = Some(rows);
+    }
+
+    /// Keep matching searches and answering their titles and bodies from today's snapshot
+    /// after later edits. Direct issue reads still return current records, as with a lagging
+    /// hosted search index.
+    pub fn freeze_search_index(&self) {
+        let mut board = self.board.lock().unwrap();
+        board.search_snapshot = Some(
+            board
+                .items
+                .iter()
+                .map(|item| {
+                    (
+                        item["id"].as_str().expect("issue id").to_owned(),
+                        (
+                            item["title"].as_str().unwrap_or_default().to_owned(),
+                            item["body"].as_str().unwrap_or_default().to_owned(),
+                        ),
+                    )
+                })
+                .collect(),
+        );
     }
 
     /// Have this board make `change` once it has answered the `skip + 1`th request that
@@ -2906,13 +2951,11 @@ impl GitHubBoard {
     fn tick(&mut self) -> String {
         self.comment_ticks += 1;
         let ticks = self.held_second.unwrap_or(self.comment_ticks);
-        assert!(ticks < 86_400, "this board's clock runs one day");
-        format!(
-            "2026-09-01T{:02}:{:02}:{:02}Z",
-            ticks / 3600,
-            (ticks / 60) % 60,
-            ticks % 60
-        )
+        let epoch: chrono::DateTime<chrono::Utc> =
+            GITHUB_BOARD_EPOCH.parse().expect("the board's epoch");
+        let seconds = i64::try_from(ticks).expect("board seconds fit i64");
+        (epoch + chrono::Duration::seconds(seconds))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
 
     /// The server's clock on an answer, as GitHub's `Date` header spells it: `read_lag`
@@ -2923,7 +2966,7 @@ impl GitHubBoard {
         let latest = self.held_second.unwrap_or(self.comment_ticks);
         let epoch: chrono::DateTime<chrono::Utc> =
             GITHUB_BOARD_EPOCH.parse().expect("the board's epoch");
-        let seconds = i64::try_from(latest + lag).expect("a day's seconds");
+        let seconds = i64::try_from(latest + lag).expect("board seconds fit i64");
         Some(
             (epoch + chrono::TimeDelta::seconds(seconds))
                 .format("%a, %d %b %Y %H:%M:%S GMT")
@@ -3897,6 +3940,7 @@ fn github_projects_board_at(
         repository_visibility_after: Vec::new(),
         hooks: Vec::new(),
         search_page_rows: None,
+        search_snapshot: None,
         partial_writes: false,
         dropping: Vec::new(),
         refusing_stale: Vec::new(),
@@ -5530,10 +5574,21 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             // board returns only the issues it holds a card for.
             .filter(|item| !GitHubBoard::is_draft(item) && GitHubBoard::on_board(item))
             .filter(|item| {
-                wanted.admits(
-                    item["title"].as_str().unwrap_or_default(),
-                    item["body"].as_str().unwrap_or_default(),
-                ) && wanted.recent(&item["updatedAt"])
+                let indexed = board
+                    .search_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| item["id"].as_str().and_then(|id| snapshot.get(id)));
+                let (title, body) = indexed.map_or_else(
+                    || {
+                        (
+                            item["title"].as_str().unwrap_or_default(),
+                            item["body"].as_str().unwrap_or_default(),
+                        )
+                    },
+                    |(title, body)| (title.as_str(), body.as_str()),
+                );
+                wanted.admits(title, body)
+                    && wanted.recent(&item["updatedAt"])
                     && wanted.state.is_none_or(|state| item["state"] == state)
             })
             .collect::<Vec<_>>();
@@ -5541,7 +5596,18 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let tallies = board.tallies();
         let nodes = matched[offset.min(end)..end]
             .iter()
-            .map(|item| board.as_issue_counted(item, Some(&tallies)))
+            .map(|item| {
+                let mut node = board.as_issue_counted(item, Some(&tallies));
+                if let Some((title, body)) = board
+                    .search_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| item["id"].as_str().and_then(|id| snapshot.get(id)))
+                {
+                    node["title"] = json!(title);
+                    node["body"] = json!(body);
+                }
+                node
+            })
             .collect::<Vec<_>>();
         return json!({"search":{"nodes":nodes,
             "pageInfo":{"hasNextPage":end < matched.len(),"endCursor":end.to_string()}}});
