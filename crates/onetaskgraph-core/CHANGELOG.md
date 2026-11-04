@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.4](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.13.3...onetaskgraph-core-v0.13.4) - 2026-11-04
+
+### Fixed
+
+- keep a private record's address out of the section links a public reader gets ([#3876](https://github.com/nickderobertis/onetaskgraph/pull/3876))
+
 ## [0.13.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.13.2...onetaskgraph-core-v0.13.3) - 2026-11-03
 
 ### Added
