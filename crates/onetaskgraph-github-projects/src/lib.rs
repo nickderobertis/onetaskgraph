@@ -7242,13 +7242,17 @@ impl GitHubProjectsSource {
             None => self.searched_issues().await?,
             Some(also) => self.searched_narrowly(also).await?,
         };
+        // A complete sweep asks for every page of this view. Reconcile ids once per
+        // view, rather than scanning the board for every search result on every page.
+        let mut ids: std::collections::HashSet<_> =
+            board.items.iter().map(|item| item.id.clone()).collect();
         for held in searched {
-            if !board.items.iter().any(|item| item.id == held.id) {
+            if ids.insert(held.id.clone()) {
                 board.items.push(held);
             }
         }
         for own in self.created()?.iter() {
-            if !board.items.iter().any(|item| item.id == own.id) {
+            if ids.insert(own.id.clone()) {
                 board.items.push(own.clone());
             }
         }
