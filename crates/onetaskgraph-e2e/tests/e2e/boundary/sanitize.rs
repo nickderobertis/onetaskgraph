@@ -91,6 +91,12 @@ fn stored_priorities_and_statuses_are_fixed_and_reported_as_their_own_fields() {
             "{report}"
         );
         assert_eq!(tree(&store.folder("site")), before);
+        let (kind, said) =
+            store.refused(&["task", "update", "site:clean", "--title", "Still clean"]);
+        assert_eq!(kind, "boundary-refused", "{said}");
+        assert!(said.contains("a fixed field"), "{field}: {said}");
+        assert!(!said.contains("an id"), "{field}: {said}");
+        assert_eq!(tree(&store.folder("site")), before);
     }
 }
 

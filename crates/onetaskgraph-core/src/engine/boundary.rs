@@ -2881,6 +2881,8 @@ pub enum UnfixableKind {
     Repositories,
     /// An id the item carries.
     Id,
+    /// A non-rewritable field, including statuses, priorities, metadata keys and ids.
+    FixedField,
     /// An identifier a diagnostic would print.
     Identifier,
     /// A term with no replacement declared for it.
@@ -2892,6 +2894,7 @@ impl std::fmt::Display for UnfixableKind {
         formatter.write_str(match self {
             Self::Repositories => "repositories",
             Self::Id => "an id",
+            Self::FixedField => "a fixed field",
             Self::Identifier => "an identifier",
             Self::Unreplaced => "a term no replacement is declared for",
         })
@@ -3246,10 +3249,10 @@ impl Engine {
                             }) {
                                 UnfixableKind::Repositories
                             } else {
-                                UnfixableKind::Id
+                                UnfixableKind::FixedField
                             }
                         }
-                        (_, true) => UnfixableKind::Id,
+                        (_, true) => UnfixableKind::FixedField,
                         (_, false) => UnfixableKind::Unreplaced,
                     };
                     if !unfixable.contains(&kind) {
