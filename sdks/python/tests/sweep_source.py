@@ -11,12 +11,21 @@ file named by its one argument, so what one invocation writes the next one reads
 import json
 import sys
 from pathlib import Path
-from typing import Any, TypedDict, cast
+from typing import Literal, NotRequired, TypedDict, cast
+
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 from onetaskgraph_sdk import StatusCategory
+from onetaskgraph_sdk._generated.query_response_of_qualified_edge import (
+    DependencyKind,
+    Designator,
+    QualifiedEndpoint,
+)
+from onetaskgraph_sdk._generated.task_detail import Task as WireTask
 
 KIND = "sweep-source"
 PROTOCOL_VERSION = 2
+MAX_PAGE_SIZE = 100
 
 CAPABILITIES = {
     "projects": "unsupported",
@@ -29,7 +38,7 @@ CAPABILITIES = {
     "search_content": "native",
     "task_dependencies": "forward-only",
     "project_dependencies": "forward-only",
-    "max_page_size": 100,
+    "max_page_size": MAX_PAGE_SIZE,
 }
 
 
@@ -42,7 +51,7 @@ class Label(TypedDict):
 
     id: str
     name: str
-    color: str | None
+    color: NotRequired[str | None]
 
 
 class UrlLocation(TypedDict):
@@ -71,6 +80,8 @@ class Task(TypedDict):
     """A task as this peer holds it and sends it (§4.4)."""
 
     id: TaskId
+    key: NotRequired[str | None]
+    version: NotRequired[str | None]
     title: str
     content: str | None
     status: Status
@@ -82,16 +93,105 @@ class Task(TypedDict):
     updated_at: str | None
 
 
+class WireEndpoint(QualifiedEndpoint):
+    """The native wire endpoint also accepts the protocol's opaque designator (§4.7)."""
+
+    designator: Designator | None = None
+
+
+class WireEdge(BaseModel):
+    """A native edge, using the generated endpoint and relationship vocabularies."""
+
+    from_: WireEndpoint = Field(alias="from")
+    to: WireEndpoint
+    kind: DependencyKind
+
+
+class PageRequest(BaseModel):
+    """The peer issues decimal offsets and honours its advertised page ceiling."""
+
+    cursor: str | None = None
+    limit: int = Field(strict=True, gt=0, le=MAX_PAGE_SIZE)
+
+    @field_validator("cursor")
+    @classmethod
+    def issued_cursor(cls, value: str | None) -> str | None:
+        """Reject a cursor the peer's decimal encoder could not have issued."""
+        if value is not None and (
+            not value.isascii() or not value.isdecimal() or value != str(int(value))
+        ):
+            raise ValueError("a cursor is a canonical decimal offset")
+        return value
+
+    @property
+    def offset(self) -> int:
+        """The first row to return, after cursor validation."""
+        return 0 if self.cursor is None else int(self.cursor)
+
+
+class SearchText(BaseModel):
+    """A hosted index may keep these older strings after the record itself changes."""
+
+    title: str
+    content: str | None = None
+
+
+class TextQuery(BaseModel):
+    """The three native text selectors of protocol §4.5."""
+
+    terms: str
+    fields: Literal["title", "content", "title-or-content"] = "title-or-content"
+
+
 class Held(TypedDict):
-    """The peer's own file: how many requests it has answered, and its tasks."""
+    """The peer's own requests, records, relationships and lagging text index."""
 
     requests: int
     tasks: list[Task]
+    edges: dict[TaskId, list[WireEdge]]
+    index: dict[TaskId, SearchText]
+
+
+def _decode[T: BaseModel](model: type[T], value: object) -> T | None:
+    """Use JSON-mode strict validation, including wire enum and timestamp strings."""
+    try:
+        return model.model_validate_json(json.dumps(value), strict=True)
+    except (ValidationError, TypeError, ValueError):
+        return None
+
+
+def _json_model(value: object) -> JsonValue:
+    """Encode only validated models; preserve their protocol aliases and omit absent fields."""
+    if not isinstance(value, BaseModel):
+        raise TypeError("not a wire model")
+    return TypeAdapter(JsonValue).validate_python(
+        value.model_dump(mode="json", by_alias=True, exclude_none=True)
+    )
+
+
+def _save(store: Path, held: Held) -> None:
+    store.write_text(json.dumps(held, default=_json_model), encoding="utf-8")
+
+
+def _malformed(message: str) -> dict[str, object]:
+    return {"error": {"kind": "malformed", "message": message}}
+
+
+def _page[T](items: list[T], page: PageRequest) -> dict[str, object]:
+    end = min(page.offset + page.limit, len(items))
+    return {"items": items[page.offset : end], "next": str(end) if end < len(items) else None}
+
+
+def _shown(task: Task) -> Task:
+    # This peer issues no change tokens; a caller must compare its fresh fields instead.
+    shown = dict(task)
+    shown.pop("version", None)
+    return cast(Task, shown)
 
 
 def _valid_task(task: object) -> bool:
     """Validate every member the peer reads or returns before trusting its persisted state."""
-    if not isinstance(task, dict):
+    if not isinstance(task, dict) or _decode(WireTask, task) is None:
         return False
     nullable = ("content", "project", "url", "created_at", "updated_at")
     if not (
@@ -137,31 +237,54 @@ def _valid_task(task: object) -> bool:
 
 
 def _held(store: Path) -> Held:
-    """Read the peer's own file: a count of requests beside a list of tasks.
-
-    Anything else ends the peer, saying why.
-    """
-    held = json.loads(store.read_text(encoding="utf-8"))
+    """Refuse malformed persisted work before it can be returned as a protocol record."""
+    try:
+        held = json.loads(store.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        sys.exit(f"{KIND}: not this peer's state")
     match held:
         case {"requests": int(requests), "tasks": list(tasks)} if (
             type(requests) is int and requests >= 0 and all(_valid_task(task) for task in tasks)
         ):
-            # Checked member by member above for what the peer reads; the rest of each task is
-            # passed through as the engine sent it.
-            return cast(Held, held)
+            pass
         case _:
-            sys.exit(f"{KIND}: {store} is not this peer's state")
+            sys.exit(f"{KIND}: not this peer's state")
+    edges = held.get("edges", {})
+    index = held.get("index", {})
+    if (
+        not isinstance(edges, dict)
+        or not isinstance(index, dict)
+        or not all(isinstance(key, str) for key in edges)
+        or not all(isinstance(key, str) for key in index)
+    ):
+        sys.exit(f"{KIND}: not this peer's state")
+    try:
+        held["edges"] = {
+            key: TypeAdapter(list[WireEdge]).validate_json(json.dumps(value), strict=True)
+            for key, value in edges.items()
+        }
+        held["index"] = {
+            key: SearchText.model_validate_json(json.dumps(value), strict=True)
+            for key, value in index.items()
+        }
+    except (ValidationError, TypeError, ValueError):
+        sys.exit(f"{KIND}: not this peer's state")
+    for task in tasks:
+        held["index"].setdefault(
+            task["id"], SearchText(title=task["title"], content=task["content"])
+        )
+    # Every known task field was checked by the generated wire model and the stricter
+    # persisted-state checks above. Opaque extra JSON fields are retained, not interpreted.
+    return cast(Held, held)
 
 
-# A query is a JSON object (§4.5) of which only `text` is read here, checked where it is read.
-def _matches(task: Task, query: dict[str, Any]) -> bool:
-    text = query.get("text")
-    if not isinstance(text, dict):
+def _matches(text: SearchText, query: TextQuery | None) -> bool:
+    if query is None:
         return True
-    wanted = text["terms"].lower()
-    title = task["title"].lower()
-    content = (task["content"] or "").lower()
-    match text.get("fields"):
+    wanted = query.terms.lower()
+    title = text.title.lower()
+    content = (text.content or "").lower()
+    match query.fields:
         case "title":
             return wanted in title
         case "content":
@@ -175,7 +298,7 @@ def _answer(store: Path, method: str, params: dict[str, object]) -> dict[str, ob
     tasks = held["tasks"]
     if method != "initialize":
         held["requests"] = held["requests"] + 1
-        store.write_text(json.dumps(held), encoding="utf-8")
+        _save(store, held)
     match method:
         case "initialize":
             return {
@@ -195,89 +318,101 @@ def _answer(store: Path, method: str, params: dict[str, object]) -> dict[str, ob
             if not isinstance(params.get("id"), str):
                 return {"error": {"kind": "malformed", "message": "the task id is a string"}}
             found = [task for task in tasks if task["id"] == params.get("id")]
-            return {"result": {"task": found[0] if found else None}}
+            return {"result": {"task": _shown(found[0]) if found else None}}
         case "query_tasks":
+            page = _decode(PageRequest, params.get("page"))
+            if page is None:
+                return _malformed("a page carries a cursor and a positive bounded limit")
             query = params.get("query")
             if not isinstance(query, dict):
-                return {"error": {"kind": "malformed", "message": "a query is an object"}}
-            wanted = query
-            text = wanted.get("text")
-            if text is not None and (
-                not isinstance(text, dict)
-                or not isinstance(text.get("terms"), str)
-                or text.get("fields") not in ("title", "content", "title-or-content")
-            ):
-                return {"error": {"kind": "malformed", "message": "search terms are a string"}}
-            return {
-                "result": {
-                    "items": [task for task in tasks if _matches(task, wanted)],
-                    "next": None,
-                }
-            }
-        case "task_comments":
-            return {"result": {"page": {"items": [], "next": None}}}
-        case "labels" | "task_dependencies":
-            return {"result": {"items": [], "next": None}}
+                return _malformed("a query is an object")
+            text = None if query.get("text") is None else _decode(TextQuery, query["text"])
+            if query.get("text") is not None and text is None:
+                return _malformed("search terms and fields follow the text query contract")
+            matched = [_shown(task) for task in tasks if _matches(held["index"][task["id"]], text)]
+            return {"result": _page(matched, page)}
+        case "task_comments" | "labels" | "task_dependencies":
+            page = _decode(PageRequest, params.get("page"))
+            if page is None:
+                return _malformed("a page carries a cursor and a positive bounded limit")
+            if method == "labels":
+                labels = {label["id"]: label for task in tasks for label in task["labels"]}
+                return {"result": _page(list(labels.values()), page)}
+            identifier = params.get("task" if method == "task_comments" else "id")
+            if not isinstance(identifier, str):
+                return _malformed("the task id is a string")
+            if method == "task_comments":
+                exists = any(task["id"] == identifier for task in tasks)
+                return {"result": {"page": _page([], page) if exists else None}}
+            direction = params.get("direction")
+            if direction not in ("depends-on", "depended-on-by"):
+                return _malformed("the dependency direction follows protocol section 4.7")
+            edges = (
+                held["edges"].get(identifier, [])
+                if direction == "depends-on"
+                else [
+                    edge
+                    for grouped in held["edges"].values()
+                    for edge in grouped
+                    if edge.to.id.root == identifier
+                ]
+            )
+            return {"result": _page(edges, page)}
         case "write_task":
-            match params.get("write"):
-                case {
-                    "item": {
-                        "id": str(identifier),
-                        "title": str(title),
-                        "content": str() | None as content,
-                        "status": {"category": str(category), "name": str(name)},
-                        "labels": list(labels),
-                    },
-                    **write,
-                }:
-                    pass
-                case _:
-                    return {
-                        "error": {
-                            "kind": "malformed",
-                            "message": "write_task carries a write of a whole task",
-                        }
-                    }
+            write = params.get("write")
+            if not isinstance(write, dict) or not isinstance(write.get("item"), dict):
+                return _malformed("write_task carries a whole task")
+            item = write["item"]
+            parsed = _decode(WireTask, item)
+            if parsed is None:
+                return _malformed("the whole task must follow its wire contract")
             try:
-                status_category = StatusCategory(category)
-            except ValueError:
-                return {
-                    "error": {
-                        "kind": "malformed",
-                        "message": "status category is outside the protocol vocabulary",
-                    }
-                }
-            match write.get("target"):
-                case None:
-                    target = identifier
-                case str(named):
-                    target = named
-                case _:
-                    return {"error": {"kind": "malformed", "message": "a write's target is an id"}}
-            if not all(
-                isinstance(label, dict)
-                and isinstance(label.get("id"), str)
-                and isinstance(label.get("name"), str)
-                and isinstance(label.get("color"), (str, type(None)))
-                for label in labels
-            ):
-                return {
-                    "error": {"kind": "malformed", "message": "labels carry string ids and names"}
-                }
-            written: Task = {
-                "id": target,
-                "title": title,
-                "content": content,
-                "status": {"category": status_category, "name": name},
-                "labels": labels,
-                "project": None,
-                "url": None,
-                "location": None,
-                "created_at": None,
-                "updated_at": None,
-            }
-            held["tasks"] = [task for task in tasks if task["id"] != target] + [written]
-            store.write_text(json.dumps(held), encoding="utf-8")
+                edges = TypeAdapter(list[WireEdge]).validate_json(
+                    json.dumps(write.get("depends_on", [])), strict=True
+                )
+            except (ValidationError, TypeError, ValueError):
+                return _malformed("dependency edges must follow their wire contract")
+            target = write.get("target", parsed.id.root)
+            if target is None:
+                target = parsed.id.root
+            if not isinstance(target, str):
+                return _malformed("a write's target is an id")
+            defaults = parsed.model_dump(mode="json")
+            written = dict(item)
+            for field in ("content", "project", "url", "location", "created_at", "updated_at"):
+                written.setdefault(field, defaults[field])
+            # A destination ignores the source's read-only key and change token (§4.4).
+            written.pop("key", None)
+            written.pop("version", None)
+            old = next((task for task in tasks if task["id"] == target), None)
+            if old is not None and "key" in old:
+                written["key"] = old["key"]
+            written["id"] = target
+            if not _valid_task(written):
+                return _malformed("the stored task must follow its wire contract")
+            # Validated above, preserving every provided work field rather than rebuilding
+            # a selected subset; the cast only connects decoded JSON to the peer's record.
+            record = cast(Task, written)
+            held["tasks"] = [record if task["id"] == target else task for task in tasks]
+            if old is None:
+                held["tasks"].append(record)
+            held["edges"][target] = [
+                WireEdge.model_validate_json(
+                    json.dumps(
+                        {
+                            "from": {"id": target, "kind": "task"},
+                            "to": _json_model(edge.to),
+                            "kind": edge.kind.value,
+                        }
+                    ),
+                    strict=True,
+                )
+                for edge in edges
+            ]
+            held["index"].setdefault(
+                target, SearchText(title=record["title"], content=record["content"])
+            )
+            _save(store, held)
             return {"result": {"id": target}}
         case _:
             return {
@@ -306,8 +441,11 @@ def _main() -> None:
             print(f"{KIND}: ignoring a line that is not a request", file=sys.stderr)
             continue
         params = request.get("params")
-        answer = _answer(store, request["method"], params if isinstance(params, dict) else {})
-        sys.stdout.write(json.dumps({"id": request["id"], **answer}) + "\n")
+        if params is not None and not isinstance(params, dict):
+            answer = _malformed("request params are an object")
+        else:
+            answer = _answer(store, request["method"], params or {})
+        sys.stdout.write(json.dumps({"id": request["id"], **answer}, default=_json_model) + "\n")
         sys.stdout.flush()
 
 

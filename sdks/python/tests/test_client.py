@@ -1039,16 +1039,21 @@ def test_comment_methods_drive_the_binary(binary: Path, tmp_path: Path) -> None:
     # an id naming nothing carries its failure in its own detail rather than refusing the rest.
     many = run(client.task_show_many(ids=["plain:T-1", "notes:T-missing", "notes:T-1"]))
     assert len(many.details) == 3
-    # Compared as the documents they are: each generated root models what it nests on its own.
-    assert many.details[0].model_dump() == run(client.task_show(id="plain:T-1")).model_dump()
-    assert many.details[2].model_dump() == shown.model_dump()
+    # Compare fields received on the wire: the standalone write-answer root also has an
+    # optional sanitization member, absent on these reads and on nested details.
+    assert many.details[0].model_dump(exclude_unset=True) == run(
+        client.task_show(id="plain:T-1")
+    ).model_dump(exclude_unset=True)
+    assert many.details[2].model_dump(exclude_unset=True) == shown.model_dump(exclude_unset=True)
     assert many.details[1].items == []
     assert many.details[1].comments is None
     assert "no task with the id notes:T-missing" in str(
         many.details[1].errors[0].error.root.message
     )
     records = run(client.task_show_many(ids=("notes:T-1",), no_comments=True))
-    assert [detail.model_dump() for detail in records.details] == [record.model_dump()]
+    assert [detail.model_dump(exclude_unset=True) for detail in records.details] == [
+        record.model_dump(exclude_unset=True)
+    ]
 
     # A source whose tasks have none carries no comments key, and refuses the verbs.
     assert run(client.task_show(id="plain:T-1")).comments is None

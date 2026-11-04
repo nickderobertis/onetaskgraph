@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TypedDict
 
 import pytest
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter
 from sweep_source import Label, Status, TaskId
 
 from onetaskgraph_sdk import Client, OnetaskgraphError, StatusCategory
@@ -214,6 +214,7 @@ def test_the_search_peer_refuses_non_string_terms(tmp_path: Path) -> None:
             "method": "query_tasks",
             "params": {
                 "query": {"text": {"terms": terms, "fields": fields}},
+                "page": {"limit": 100, "cursor": None},
             },
         }
         assert run(peer_request(store, request)).error.kind == "malformed"
@@ -265,6 +266,223 @@ def test_the_search_peer_refuses_unknown_status_categories(tmp_path: Path) -> No
     }
     assert run(peer_request(store, request)).error.kind == "malformed"
     assert json.loads(store.read_text(encoding="utf-8"))["tasks"] == tasks
+
+
+async def peer_result(store: Path, request: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """Read a successful protocol reply without discarding any of its JSON fields."""
+    code, out, err = await peer_exchange(store, request)
+    assert code == 0, err.decode()
+    reply = TypeAdapter(dict[str, JsonValue]).validate_json(out)
+    result = reply.get("result")
+    assert isinstance(result, dict), reply
+    return result
+
+
+@pytest.mark.parametrize("method", ["query_tasks", "task_comments", "task_dependencies", "labels"])
+@pytest.mark.parametrize(
+    "page", [None, [], {"limit": 0}, {"limit": True}, {"limit": 101}, {"limit": 1, "cursor": "bad"}]
+)
+def test_the_peer_refuses_malformed_pages_for_every_paged_read(
+    tmp_path: Path, method: str, page: JsonValue
+) -> None:
+    """Invalid pages never become an apparently complete empty or unbounded result."""
+    store = tmp_path / "tracker.json"
+    tasks = [task("t1", "Plain.")]
+    store.write_text(json.dumps({"requests": 0, "tasks": tasks}), encoding="utf-8")
+    params: dict[str, JsonValue] = {
+        "id": "t1",
+        "task": "t1",
+        "direction": "depends-on",
+        "query": {},
+        "page": page,
+    }
+    assert (
+        run(peer_request(store, {"id": "bad-page", "method": method, "params": params})).error.kind
+        == "malformed"
+    )
+    assert json.loads(store.read_text(encoding="utf-8"))["tasks"] == tasks
+
+
+def test_the_peer_returns_only_the_requested_task_page(tmp_path: Path) -> None:
+    """A real request limit and continuation split two tasks into two pages."""
+    store = tmp_path / "tracker.json"
+    store.write_text(
+        json.dumps({"requests": 0, "tasks": [task("t1", "First."), task("t2", "Second.")]}),
+        encoding="utf-8",
+    )
+    first = run(
+        peer_result(
+            store,
+            {
+                "id": "first",
+                "method": "query_tasks",
+                "params": {"query": {}, "page": {"cursor": None, "limit": 1}},
+            },
+        )
+    )
+    assert first == {"items": [task("t1", "First.")], "next": "1"}
+    second = run(
+        peer_result(
+            store,
+            {
+                "id": "second",
+                "method": "query_tasks",
+                "params": {"query": {}, "page": {"cursor": first["next"], "limit": 1}},
+            },
+        )
+    )
+    assert second == {"items": [task("t2", "Second.")], "next": None}
+
+
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("task_comments", {"task": 7, "page": {"limit": 1}}),
+        ("task_dependencies", {"id": [], "direction": "depends-on", "page": {"limit": 1}}),
+        ("task_dependencies", {"id": "t1", "direction": "sideways", "page": {"limit": 1}}),
+    ],
+)
+def test_the_peer_refuses_malformed_comment_and_dependency_targets(
+    tmp_path: Path, method: str, params: dict[str, JsonValue]
+) -> None:
+    """Malformed identifiers and directions cannot masquerade as empty traversals."""
+    store = tmp_path / "tracker.json"
+    store.write_text(json.dumps({"requests": 0, "tasks": [task("t1", "Plain.")]}), encoding="utf-8")
+    assert (
+        run(
+            peer_request(store, {"id": "bad-target", "method": method, "params": params})
+        ).error.kind
+        == "malformed"
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("metadata", []),
+        ("repositories", [7]),
+        ("classification", "everyone"),
+        ("priority", "soon"),
+        ("project", []),
+        ("delivers", [7]),
+        ("delivered_by", [7]),
+        ("version", 7),
+        ("created_at", 7),
+    ],
+)
+def test_the_peer_validates_the_whole_incoming_task(
+    tmp_path: Path, field: str, value: JsonValue
+) -> None:
+    """Reject malformed work fields before replacing any stored record."""
+    store = tmp_path / "tracker.json"
+    tasks = [task("t1", "Before.")]
+    store.write_text(json.dumps({"requests": 0, "tasks": tasks}), encoding="utf-8")
+    item = TypeAdapter(dict[str, JsonValue]).validate_python(task("t1", "Changed."))
+    item[field] = value
+    assert (
+        run(
+            peer_request(
+                store,
+                {
+                    "id": "bad-task",
+                    "method": "write_task",
+                    "params": {"write": {"target": "t1", "item": item, "depends_on": []}},
+                },
+            )
+        ).error.kind
+        == "malformed"
+    )
+    assert json.loads(store.read_text(encoding="utf-8"))["tasks"] == tasks
+
+
+@pytest.mark.parametrize(
+    "edge",
+    [
+        7,
+        {},
+        {"from": {"id": "t1", "kind": "task"}, "to": {"id": 7, "kind": "task"}, "kind": "blocks"},
+        {
+            "from": {"id": "t1", "kind": "task"},
+            "to": {"id": "t2", "kind": "task"},
+            "kind": "unknown",
+        },
+    ],
+)
+def test_the_peer_refuses_malformed_edges_before_writing(tmp_path: Path, edge: JsonValue) -> None:
+    """Invalid relationships cannot be silently discarded by a whole-task write."""
+    store = tmp_path / "tracker.json"
+    tasks = [task("t1", "Before.")]
+    store.write_text(json.dumps({"requests": 0, "tasks": tasks}), encoding="utf-8")
+    item = TypeAdapter(dict[str, JsonValue]).validate_python(task("t1", "Changed."))
+    assert (
+        run(
+            peer_request(
+                store,
+                {
+                    "id": "bad-edge",
+                    "method": "write_task",
+                    "params": {"write": {"target": "t1", "item": item, "depends_on": [edge]}},
+                },
+            )
+        ).error.kind
+        == "malformed"
+    )
+    assert json.loads(store.read_text(encoding="utf-8"))["tasks"] == tasks
+
+
+def test_the_peer_preserves_written_work_fields_and_dependencies(tmp_path: Path) -> None:
+    """Write through the protocol and read back the full task and its forward edge."""
+    store = tmp_path / "tracker.json"
+    store.write_text(
+        json.dumps({"requests": 0, "tasks": [task("t1", "Before.")]}), encoding="utf-8"
+    )
+    item = TypeAdapter(dict[str, JsonValue]).validate_python(task("source-id", "Changed."))
+    item.update(
+        {
+            "metadata": {"answer": "keep", "number": 7},
+            "repositories": ["github.com/example/work"],
+            "classification": "private",
+            "priority": "high",
+            "project": "p1",
+            "url": "https://example.invalid/t1",
+            "location": {"url": "https://example.invalid/t1"},
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z",
+            "delivers": ["other:t2"],
+            "delivered_by": ["origin:t1"],
+        }
+    )
+    edge: dict[str, JsonValue] = {
+        "from": {"id": "source-id", "kind": "task"},
+        "to": {"id": "other:t2", "kind": "task"},
+        "kind": "blocks",
+    }
+    assert run(
+        peer_result(
+            store,
+            {
+                "id": "write",
+                "method": "write_task",
+                "params": {"write": {"target": "t1", "item": item, "depends_on": [edge]}},
+            },
+        )
+    ) == {"id": "t1"}
+    read = run(peer_result(store, {"id": "read", "method": "get_task", "params": {"id": "t1"}}))[
+        "task"
+    ]
+    assert isinstance(read, dict)
+    assert read == {**item, "id": "t1"}
+    page = run(
+        peer_result(
+            store,
+            {
+                "id": "deps",
+                "method": "task_dependencies",
+                "params": {"id": "t1", "direction": "depends-on", "page": {"limit": 1}},
+            },
+        )
+    )
+    assert page == {"items": [{**edge, "from": {"id": "t1", "kind": "task"}}], "next": None}
 
 
 def run[T](call: Coroutine[object, object, T]) -> T:

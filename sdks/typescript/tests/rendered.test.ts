@@ -493,23 +493,29 @@ test("every flag the create, render, answers and template verbs take is spelled 
   };
   const template = ["templateSourceArguments", "varFlags"];
   const builders: Record<string, string[]> = {
-    "task create": ["taskCreate", "createArguments", "termScopeFlags", "assetFlags", ...template],
-    "task render": ["taskRender", "renderInvocation", "termScopeFlags", "assetFlags", ...template],
+    "task create": ["taskCreate", "createArguments", "writePolicyFlags", "assetFlags", ...template],
+    "task render": [
+      "taskRender",
+      "renderInvocation",
+      "writePolicyFlags",
+      "assetFlags",
+      ...template,
+    ],
     "task answers": ["taskAnswers"],
-    "project create": ["projectCreate", "createArguments", "termScopeFlags", ...template],
-    "project render": ["projectRender", "renderInvocation", "termScopeFlags", ...template],
+    "project create": ["projectCreate", "createArguments", "writePolicyFlags", ...template],
+    "project render": ["projectRender", "renderInvocation", "writePolicyFlags", ...template],
     "project answers": ["projectAnswers"],
     "document create": [
       "documentCreate",
       "createArguments",
-      "termScopeFlags",
+      "writePolicyFlags",
       "assetFlags",
       ...template,
     ],
     "document render": [
       "documentRender",
       "renderInvocation",
-      "termScopeFlags",
+      "writePolicyFlags",
       "assetFlags",
       ...template,
     ],

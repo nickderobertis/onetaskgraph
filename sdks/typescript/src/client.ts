@@ -1793,12 +1793,8 @@ export class OnetaskgraphClient {
     id: string,
     options: RenderOptions = {},
   ): Promise<Regenerated | SanitizeDryRun> {
-    return this.run(
-      ...([
-        ...renderInvocation("project render", "projectRender", id, options),
-        options.sanitizeDryRun === true,
-      ] as const),
-    );
+    const [command, args, input] = renderInvocation("project render", "projectRender", id, options);
+    return this.run(command, args, input, options.sanitizeDryRun === true);
   }
   projectAnswers(id: string): Promise<TemplateAnswers> {
     return this.run("project answers", [id]);
@@ -1944,10 +1940,8 @@ export class OnetaskgraphClient {
           }
           const ajv = new Ajv2020({ strict: false });
           const validate = ajv.compile(runtimeSchemas[root]);
-          const alternates = [
-            ...(commandAlternateRoots[command] ?? []),
-            ...(allowSanitization ? ["SanitizeDryRun" as const] : []),
-          ];
+          const alternates = [...(commandAlternateRoots[command] ?? [])];
+          if (allowSanitization) alternates.push("SanitizeDryRun");
           if (
             !validate(value) &&
             !alternates.some((alternate) => ajv.compile(runtimeSchemas[alternate])(value))
