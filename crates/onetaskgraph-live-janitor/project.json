@@ -89,8 +89,6 @@
       },
       "cache": true,
       "inputs": [
-        "versionFreeNpm",
-        "{workspaceRoot}/.tool-versions",
         "default",
         "^default",
         {
@@ -98,7 +96,9 @@
         },
         {
           "runtime": "node -p process.platform"
-        }
+        },
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions"
       ],
       "//": "Judges the request count recorded by the offline test, on every platform. The cache includes the measured code, telemetry and onebudgetspec pins.",
       "outputs": []

@@ -88,7 +88,14 @@ test("release.yml is five jobs on the runners their names say, and release-plz.y
     // publish's last two steps are the release tail, after every phase: .github/tests/
     // release-tail.test.mjs runs both as written and holds them to their shape.
     const tail = id === "publish" ? job.steps.slice(-2) : [];
-    for (const step of job.steps.filter((step) => step.run !== undefined && !tail.includes(step))) {
+    const provisioning = job.steps.filter((step) => step.id === "pins");
+    assert.equal(provisioning.length, 1, `${id} reads its pinned tools exactly once`);
+    assert.equal(provisioning[0].run, "bash scripts/ci-tool-pins.sh");
+    assert.equal(provisioning[0].shell, "bash");
+    assert.equal(provisioning[0].if, undefined);
+    for (const step of job.steps.filter(
+      (step) => step.run !== undefined && !tail.includes(step) && !provisioning.includes(step),
+    )) {
       const parsed = phase(step);
       assert.ok(parsed, `${id} runs '${step.run}', which is not a phase of its recipe`);
       assert.equal(parsed.recipe, expected.recipe, `${id} runs another job's recipe`);

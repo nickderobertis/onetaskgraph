@@ -173,7 +173,11 @@ test("only the daily schedule creates fresh documents and manual dispatch initia
   assert.equal(job.env.ONETASKGRAPH_LIVE_REQUIRED, "1");
   assert.equal(job.env.LINEAR_WRITE_TEAM, "$" + "{{ vars.LINEAR_WRITE_TEAM }}");
   const commands = job.steps.filter((step) => step.run).map((step) => step.run);
-  assert.deepEqual(commands, ["just linear-document-creation"]);
+  assert.deepEqual(commands, ["bash scripts/ci-tool-pins.sh", "just linear-document-creation"]);
+  const pins = job.steps.find((step) => step.id === "pins");
+  assert.equal(pins?.run, "bash scripts/ci-tool-pins.sh");
+  assert.equal(pins?.shell, "bash");
+  assert.equal(pins?.if, undefined);
   assert.ok(job.steps.some((step) => step.uses === "extractions/setup-just@v4"));
   assert.ok(
     job.steps.some(

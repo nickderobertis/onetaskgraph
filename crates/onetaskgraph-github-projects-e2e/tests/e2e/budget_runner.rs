@@ -1212,9 +1212,13 @@ fn nx_tracks_the_reporter_telemetry_directory() {
         project["targets"]["test"]["outputs"][0],
         format!("{{workspaceRoot}}/target/debug/{suffix}/*.json")
     );
-    assert_eq!(
-        project["targets"]["budgets"]["inputs"][2]["dependentTasksOutputFiles"],
-        format!("**/{suffix}/*.json")
+    assert!(
+        project["targets"]["budgets"]["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|input| input["dependentTasksOutputFiles"] == format!("**/{suffix}/*.json")),
+        "the budget target must hash its reporter's telemetry files"
     );
 }
 
