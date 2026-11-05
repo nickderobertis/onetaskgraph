@@ -4072,3 +4072,20 @@ fn a_definition_and_a_bare_path_naming_each_other_are_finished_in_the_copy_that_
         assert!(!held.contains("onetaskgraph-pending-"), "{kind}: {held}");
     }
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: two folders of Markdown exercise the engine's public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_private_documents_only_address_being_a_bare_path_is_still_screened() {
+    let sandbox = Sandbox::new();
+    private_design(&sandbox, "local-md", "| T | ../tasks/T.md |\n");
+    let (design, figures) = copy_design(&sandbox);
+    assert_eq!(design.content(&sandbox).trim_end(), "| T |  |");
+    assert_eq!(figures, [0, 1, 0], "no counterpart yet");
+    publish_target(&sandbox, "local-md");
+    let (design, figures) = copy_design(&sandbox);
+    assert_eq!(
+        design.content(&sandbox).trim_end(),
+        "| T | ../tasks/Destination.md |"
+    );
+    assert_eq!(figures, [1, 0, 0], "its counterpart landed since");
+}
