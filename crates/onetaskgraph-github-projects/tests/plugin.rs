@@ -1745,7 +1745,11 @@ fn repository_node_id(slug: &str) -> String {
 fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     {
         let mut held = state.lock().unwrap();
-        let copying = query.contains("LiveTemplate(") || query.contains("LiveCopyBoard(");
+        let copying = query.contains("LiveTemplate(")
+            || query.contains("LiveCopyBoard(")
+            // Each entry point reads the template's draft count before making its copy.
+            || (query.contains("LiveTemplateItems(")
+                && held.run_boards.iter().all(|(_, deleted)| *deleted));
         let names_template = variables.to_string().contains("\"PVT_template\"")
             || (query.contains("projectV2(number:") && variables["number"] == json!(6));
         if !held.run_boards.is_empty() && !copying && names_template {
@@ -3192,7 +3196,8 @@ fn answer_a_session_call(
                 typename if residue => {
                     json!({"id":item.item_id,"content":{"__typename":typename}})
                 }
-                "DraftIssue" => json!({"id":item.item_id,"content":{"title":item.title}}),
+                "DraftIssue" => json!({"id":item.item_id,
+                    "content":{"__typename":"DraftIssue","title":item.title}}),
                 _ => json!({"id":item.item_id,"content":{}}),
             })
             .collect::<Vec<_>>();
