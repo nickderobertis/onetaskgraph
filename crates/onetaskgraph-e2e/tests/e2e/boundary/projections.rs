@@ -1710,7 +1710,7 @@ fn the_copy_s_own_project_made_not_neutral_or_removed_refuses_a_mirror_and_a_rec
     // not one.
     let elsewhere = made.with_file_name("roadmap.md");
     std::fs::write(
-        &ping_file,
+        &elsewhere,
         format!("{}\nTheir own plans.\n", held.trim_end()),
     )
     .expect("their project, carrying the allocation");
@@ -1724,7 +1724,7 @@ fn the_copy_s_own_project_made_not_neutral_or_removed_refuses_a_mirror_and_a_rec
     assert_eq!(store.tree(), before, "nothing is written into it");
 
     // Put back as the copy made it, the copy and the mirror both go on.
-    std::fs::remove_file(&ping_file).expect("theirs removed");
+    std::fs::remove_file(&elsewhere).expect("theirs removed");
     std::fs::write(&made, &held).expect("the project put back");
     copy_rollout(&store);
     assert_eq!(view_of(&store, &landed, widget), view, "the same view");
