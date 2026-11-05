@@ -258,10 +258,17 @@ impl Account {
             }
         }
         if document.contains("query LiveTemplate(") {
-            let board = self
+            let mut board = self
                 .boards
                 .get(&number(variables))
                 .map(|board| json!({"id":board.id,"items":{"totalCount":board.items.len()}}));
+            if let Some(board) = board.as_mut() {
+                if self.has("missing-template-count") {
+                    board["items"] = json!({});
+                } else if self.has("malformed-template-count") {
+                    board["items"]["totalCount"] = json!("73");
+                }
+            }
             return json!({"data":{"repositoryOwner":{"id":"U_octo","projectV2":board}}});
         }
         if document.contains("mutation LiveCopyBoard(") {
@@ -1112,6 +1119,25 @@ fn failing_session_with(faults: &[&'static str], entry: &str) -> (String, Arc<Mu
         String::from_utf8_lossy(&output.stderr)
     );
     (said, account)
+}
+
+#[test]
+fn a_template_without_a_valid_item_count_refuses_before_creating_a_copy() {
+    for fault in ["missing-template-count", "malformed-template-count"] {
+        let (said, account) = failing_session(fault, "main");
+        assert!(
+            said.contains("did not answer the template item count"),
+            "{said}"
+        );
+        let account = account.lock().unwrap();
+        assert!(
+            !account
+                .seen
+                .iter()
+                .any(|(_, document, _)| document.starts_with("mutation"))
+        );
+        assert_eq!(account.boards.len(), 1);
+    }
 }
 
 #[test]
