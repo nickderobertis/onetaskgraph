@@ -3954,3 +3954,65 @@ fn a_private_documents_references_reach_a_stdio_destinations_counterpart_and_no_
     );
     assert_eq!(figures, [2, 2, 0]);
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and a loopback stand-in exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_private_documents_angled_definition_under_an_escaped_label_keeps_its_shape() {
+    for kind in ["local-md", "github-projects"] {
+        let sandbox = Sandbox::new();
+        let (destination, _) = private_design(
+            &sandbox,
+            kind,
+            "See [the task][a\\]: b] and [the other][wrapped].\n\n\
+             [a\\]: b]: <../tasks/T.md#what> \"The task\"\n\
+             [wrapped]:\n    ../tasks/T.md#what\n",
+        );
+        let task = publish_target(&sandbox, kind);
+        let (design, figures) = copy_design(&sandbox);
+        let link = destination.link(&sandbox, &design, Some(&task), HEADINGS[0], 0);
+        assert_eq!(
+            design.content(&sandbox).trim_end(),
+            format!(
+                "See [the task][a\\]: b] and [the other][wrapped].\n\n\
+                 [a\\]: b]: <{link}> \"The task\"\n\
+                 [wrapped]:\n    {link}"
+            ),
+            "{kind}"
+        );
+        assert_eq!(figures, [2, 0, 0], "{kind}");
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: two folders of Markdown exercise the engine's copy, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_definition_and_a_bare_path_are_left_as_they_are_when_no_private_source_is_configured() {
+    let sandbox = Sandbox::new();
+    let (source, _) = authored(&sandbox, "plans");
+    let (_, public) = store(&sandbox, "local-md", "public", None);
+    configure(&sandbox, &[("plans", &source), ("public", &public)]);
+    let design = "| T | `../tasks/T.md` |\n\nSee [the task][t].\n\n[t]: ../tasks/T.md#what";
+    std::fs::write(
+        root_of(&sandbox, "plans").join("documents/D.md"),
+        format!("---\ntitle: Design\nproject: P\n---\n{design}\n"),
+    )
+    .expect("the design document");
+    ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plans:P",
+            "--to",
+            "public",
+            "--no-tasks",
+            "--json",
+        ],
+    );
+    ok(
+        &sandbox,
+        &["task", "copy", "plans:T", "--to", "public", "--json"],
+    );
+    let (copied, figures) = copy_design(&sandbox);
+    assert_eq!(copied.content(&sandbox).trim_end(), design);
+    assert_eq!(figures, [0, 0, 0]);
+}
