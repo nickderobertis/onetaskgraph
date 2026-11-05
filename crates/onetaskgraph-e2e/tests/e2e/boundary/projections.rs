@@ -3616,7 +3616,6 @@ fn linker_view(budget: &str, anchor: &str, task: &str, own: &str) -> String {
     )
 }
 
-/// How many of the requests the board was served update an issue.
 fn issue_updates(board: &crate::fixtures::GitHubBoardFields) -> usize {
     board
         .served()
@@ -3686,7 +3685,6 @@ fn a_views_link_to_another_views_heading_lands_in_the_boards_section_form() {
             }
         }
     }
-    // Landed target first, so the link costs no second write of its view: one create each.
     let mark = board.served_count();
     copy_rollout(&store);
     assert!(
