@@ -1553,9 +1553,8 @@ own reported `Location`; nothing composes an address from a name, an id or a roo
 deliberately not a Markdown-link parser: the artifact this exists for holds bare absolute
 paths inside backticks in a table cell, which `[text](target)` matching would have left
 exactly as it found them. A body bound for a public destination while private sources are
-configured reads two spellings more, because the screen must either carry them or remove them:
-a reference-style definition, and a relative path written alone. Between public sources both
-are left as they are.
+configured also reads a relative path written alone, a reference-style definition's included,
+because the screen must either carry it or remove it. Otherwise such a path is left as it is.
 
 The referent set is the document's **own project** — that project's record, the tasks filed
 under it, and the other documents filed under it — so a reference to a record in another

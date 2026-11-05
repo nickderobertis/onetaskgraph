@@ -181,9 +181,10 @@ pub(super) struct BodyLinks {
     pub(super) referents: Vec<Linked>,
     /// Private addresses screened from every rendering sent to a public destination.
     private_locations: Option<Vec<String>>,
-    /// Whether a reference-style definition and a bare relative path are read as references,
-    /// as a body bound for a public destination's are. Kept apart from `private_locations`
-    /// because a placeholder is rendered again alone, unscreened, by the same reading.
+    /// Whether a relative path written alone is read as a reference, as one in a body bound for
+    /// a public destination is, a reference-style definition's among them. Kept apart from
+    /// `private_locations` because a placeholder is rendered again alone, unscreened, by the same
+    /// reading.
     public_body: bool,
 }
 
@@ -255,8 +256,8 @@ impl BodyLinks {
 
     /// Whether `content` names a record whose source reports `location`, in any spelling of
     /// the source kind's form, as a whole reference — or, read from `own` in a folder of
-    /// Markdown, as a Markdown link to a path relative to it. In a `public_body`, also as a
-    /// reference-style definition of such a path or as such a path alone.
+    /// Markdown, as a Markdown link to a path relative to it. In a `public_body`, also as such
+    /// a path alone.
     pub(super) fn names(
         from: Option<SectionForm>,
         content: &str,
@@ -281,11 +282,7 @@ impl BodyLinks {
                     resolve_relative(own, path).as_deref() == Some(location)
                 };
                 destinations(content).any(|(_, target)| names_it(target))
-                    || (public_body
-                        && (definition_destinations(content)
-                            .iter()
-                            .any(|(at, angled)| names_it(destination_at(content, *at, *angled)))
-                            || bare_paths(content).any(|(_, path)| names_it(path))))
+                    || (public_body && bare_paths(content).any(|(_, path)| names_it(path)))
             })
     }
 
@@ -313,19 +310,8 @@ impl BodyLinks {
             content: String::with_capacity(content.len()),
             ..Rendered::default()
         };
-        let definitions = if self.public_body {
-            definition_destinations(content)
-        } else {
-            Vec::new()
-        };
         let mut at = 0;
         while at < content.len() {
-            if let Some((_, angled)) = definitions.iter().find(|(start, _)| *start == at)
-                && let Some(occurrence) = self.in_destination(content, at, *angled)
-            {
-                at = self.write(&occurrence, content, at, knows, pass, &mut rendered);
-                continue;
-            }
             if content[at..].starts_with("](") {
                 // A destination may be written in angle brackets, as Linear stores every one.
                 let opening = if content[at..].starts_with("](<") {
@@ -442,14 +428,9 @@ impl BodyLinks {
                     // angle brackets stores it.
                     written[at..].starts_with(&placeholder.text) && {
                         let next = written[at + placeholder.text.len()..].chars().next();
-                        let before = &written[..at];
-                        let definition = |before: &str| before.trim_end().ends_with("]:");
-                        ((before.ends_with("](") || definition(before))
+                        (written[..at].ends_with("](")
                             && next.is_none_or(|c| c == ')' || c.is_whitespace()))
-                            || (next == Some('>')
-                                && before
-                                    .strip_suffix('<')
-                                    .is_some_and(|open| open.ends_with("](") || definition(open)))
+                            || (written[..at].ends_with("](<") && next == Some('>'))
                     }
                 } else {
                     delimited(written, at, &placeholder.text)
@@ -492,8 +473,16 @@ impl BodyLinks {
         at: usize,
         angled: bool,
     ) -> Option<Occurrence<'a>> {
-        let target = destination_at(content, at, angled);
-        let end = at + target.len();
+        let end = content[at..]
+            .find(|c: char| {
+                if angled {
+                    c == '>'
+                } else {
+                    c == ')' || c.is_whitespace()
+                }
+            })
+            .map_or(content.len(), |found| at + found);
+        let target = &content[at..end];
         if let Some(fragment) = target.strip_prefix(FRAGMENT) {
             return Some(Occurrence {
                 referent: None,
@@ -538,7 +527,8 @@ impl BodyLinks {
         })
     }
 
-    /// The relative path spelled alone at `at`, as a table cell names a record, when one is.
+    /// The relative path spelled alone at `at`, as a table cell or a reference-style definition
+    /// names a record, when one is.
     fn bare<'a>(&'a self, content: &'a str, at: usize) -> Option<Occurrence<'a>> {
         let path = bare_path_at(content, at)?;
         self.relative(path, at + path.len(), Spelled::Literal)
@@ -815,59 +805,23 @@ fn delimited(content: &str, at: usize, location: &str) -> bool {
     super::delimited_at(content, at, location)
 }
 
-/// The link destination starting at `at`, up to what closes it.
-fn destination_at(content: &str, at: usize, angled: bool) -> &str {
-    let end = content[at..]
-        .find(|c: char| {
-            if angled {
-                c == '>'
-            } else {
-                c == ')' || c.is_whitespace()
-            }
-        })
-        .map_or(content.len(), |found| at + found);
-    &content[at..end]
-}
-
 /// Every Markdown link destination `content` holds, with where it starts — one written in
 /// angle brackets without them, as [`BodyLinks::render`] reads it.
 fn destinations(content: &str) -> impl Iterator<Item = (usize, &str)> {
     content.match_indices("](").map(move |(at, _)| {
         let angled = content[at + 2..].starts_with('<');
         let start = at + 2 + usize::from(angled);
-        (start, destination_at(content, start, angled))
-    })
-}
-
-/// Where the destination of each reference-style definition `content` holds starts, and
-/// whether it is written in angle brackets. Markdown's own parser says which lines are
-/// definitions, so a line of a code block that looks like one is not.
-fn definition_destinations(content: &str) -> Vec<(usize, bool)> {
-    let parser = pulldown_cmark::Parser::new(content);
-    parser
-        .reference_definitions()
-        .iter()
-        .filter_map(|(_, definition)| {
-            let text = &content[definition.span.clone()];
-            let mut escaped = false;
-            let closes = text.char_indices().find_map(|(at, character)| {
-                if escaped {
-                    escaped = false;
-                } else if character == '\\' {
-                    escaped = true;
-                } else if text[at..].starts_with("]:") {
-                    return Some(at + 2);
+        let end = content[start..]
+            .find(|c: char| {
+                if angled {
+                    c == '>'
+                } else {
+                    c == ')' || c.is_whitespace()
                 }
-                None
-            })?;
-            let after = &text[closes..];
-            let start = definition.span.start + closes + (after.len() - after.trim_start().len());
-            Some(match content[start..].starts_with('<') {
-                true => (start + 1, true),
-                false => (start, false),
             })
-        })
-        .collect()
+            .map_or(content.len(), |found| start + found);
+        (start, &content[start..end])
+    })
 }
 
 /// The word starting at `at`, its fragment included and without the sentence punctuation

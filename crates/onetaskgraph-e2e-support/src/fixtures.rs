@@ -6559,6 +6559,7 @@ impl LinearWorkspace {
         });
     }
 
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_workspace`: the loopback Linear and its handle live in this shared harness because more than one suite drives them, so a second workspace's addressing belongs beside them; the engine's section-link journeys are the caller.
     /// Address what this workspace is written under `workspace`, as a second Linear workspace's
     /// records are: the two otherwise mint the same ids, and so spell one address twice.
     pub fn use_web_workspace(&self, workspace: &str) {
@@ -9408,6 +9409,7 @@ fn linear_restate(row: &mut Value, before: Option<&Value>, stateless: bool, stam
     ));
 }
 
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_workspace`: the loopback Linear and its handle live in this shared harness because more than one suite drives them, so a second workspace's addressing belongs beside them; the engine's section-link journeys are the caller.
 /// Give `row` its address under `workspace`, when the workspace was named one: see
 /// [`LinearWorkspace::use_web_workspace`].
 fn linear_address_under(row: &mut Value, workspace: Option<&str>, kind: &str) {

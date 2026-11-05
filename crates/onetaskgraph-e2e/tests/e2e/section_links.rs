@@ -4016,3 +4016,59 @@ fn a_definition_and_a_bare_path_are_left_as_they_are_when_no_private_source_is_c
     assert_eq!(copied.content(&sandbox).trim_end(), design);
     assert_eq!(figures, [0, 0, 0]);
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and a loopback stand-in exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_definition_and_a_bare_path_naming_each_other_are_finished_in_the_copy_that_writes_both() {
+    for kind in ["local-md", "github-projects"] {
+        let sandbox = Sandbox::new();
+        let (destination, root) = private_design(&sandbox, kind, "The design.\n");
+        // Linking each other, so whichever lands first is written before the other's address
+        // is known.
+        std::fs::write(
+            root.join("tasks/T.md"),
+            "---\ntitle: Target\nstatus: todo\nproject: P\n---\n## What\n\n\
+             See [the referrer][u].\n\n[u]: <U.md#what>\n",
+        )
+        .expect("the target");
+        std::fs::write(
+            root.join("tasks/U.md"),
+            "---\ntitle: Referrer\nstatus: todo\nproject: P\n---\n## What\n\n\
+             | Target | `T.md` |\n\n[t]: T.md#what\n",
+        )
+        .expect("the referrer");
+        let rendered = ok(
+            &sandbox,
+            &[
+                "task", "copy", "plans:T", "plans:U", "--to", "public", "--json",
+            ],
+        );
+        let report = outcomes(&rendered);
+        let landed = |source: &str| Landed {
+            verb: "task",
+            id: report[source]["destination"]
+                .as_str()
+                .expect("the task landed")
+                .to_owned(),
+        };
+        let (target, referrer) = (landed("plans:T"), landed("plans:U"));
+        let to_referrer = destination.link(&sandbox, &target, Some(&referrer), HEADINGS[0], 0);
+        let to_target = destination.link(&sandbox, &referrer, Some(&target), HEADINGS[0], 0);
+        let cell = match destination {
+            Store::Local => relative(&referrer.location(&sandbox), &target.location(&sandbox)),
+            _ => target.location(&sandbox),
+        };
+        let held = target.content(&sandbox);
+        assert_eq!(
+            held.trim_end(),
+            format!("## What\n\nSee [the referrer][u].\n\n[u]: <{to_referrer}>"),
+            "{kind}"
+        );
+        assert_eq!(
+            referrer.content(&sandbox).trim_end(),
+            format!("## What\n\n| Target | `{cell}` |\n\n[t]: {to_target}"),
+            "{kind}"
+        );
+        assert!(!held.contains("onetaskgraph-pending-"), "{kind}: {held}");
+    }
+}
