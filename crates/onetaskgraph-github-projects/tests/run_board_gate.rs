@@ -890,8 +890,6 @@ fn assert_isolated(account: &Account, tokens: &[String], reports: &[Report]) {
     );
 }
 
-/// Two sessions of each entry point at once, on an account answering with `faults`, through
-/// to [`assert_isolated`].
 fn two_concurrent_lifecycles_of_each_entry_point(faults: &[&'static str]) {
     let account = Arc::new(Mutex::new(Account::new()));
     account.lock().unwrap().faults = faults.to_vec();
