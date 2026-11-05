@@ -3780,7 +3780,6 @@ fn publish_target(sandbox: &Sandbox, kind: &str) -> Landed {
     }
 }
 
-/// Copy the design document to `public`, answering its record there and the copy's figures.
 fn copy_design(sandbox: &Sandbox) -> (Landed, [u64; 3]) {
     let rendered = ok(
         sandbox,
@@ -4088,4 +4087,24 @@ fn a_private_documents_only_address_being_a_bare_path_is_still_screened() {
         "| T | ../tasks/Destination.md |"
     );
     assert_eq!(figures, [1, 0, 0], "its counterpart landed since");
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: two folders of Markdown exercise the engine's public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_bare_path_to_a_private_record_of_another_project_is_removed_and_not_counted() {
+    let sandbox = Sandbox::new();
+    let (_, root) = private_design(&sandbox, "local-md", "| other | `../tasks/Other.md` |\n");
+    std::fs::write(
+        root.join("projects/Q.md"),
+        "---\ntitle: Another plan\nstatus: todo\n---\nAnother.\n",
+    )
+    .expect("the other project");
+    std::fs::write(
+        root.join("tasks/Other.md"),
+        "---\ntitle: Other\nstatus: todo\nproject: Q\n---\nElsewhere.\n",
+    )
+    .expect("the other project's task");
+    let (design, figures) = copy_design(&sandbox);
+    assert_eq!(design.content(&sandbox).trim_end(), "| other | `` |");
+    assert_eq!(figures, [0, 0, 0], "outside the referent set");
 }

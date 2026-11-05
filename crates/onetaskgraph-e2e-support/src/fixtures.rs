@@ -8471,7 +8471,11 @@ fn linear_write_item(
     linear_address_under(
         &mut row,
         web_workspace.as_deref(),
-        if project { "project" } else { "issue" },
+        if project {
+            LinearRecord::Project
+        } else {
+            LinearRecord::Task
+        },
     );
     linear_restate(
         &mut row,
@@ -8577,7 +8581,7 @@ fn linear_write_document(
     if let Some(updated) = existing.and_then(|index| rows[index].get("_updated").cloned()) {
         row["_updated"] = updated;
     }
-    linear_address_under(&mut row, web_workspace.as_deref(), "document");
+    linear_address_under(&mut row, web_workspace.as_deref(), LinearRecord::Document);
     linear_restate(
         &mut row,
         existing.map(|index| &rows[index]),
@@ -9410,10 +9414,13 @@ fn linear_restate(row: &mut Value, before: Option<&Value>, stateless: bool, stam
 }
 
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `linear_workspace`: the loopback Linear and its handle live in this shared harness because more than one suite drives them, so a second workspace's addressing belongs beside them; the engine's section-link journeys are the caller.
-/// Give `row` its address under `workspace`, when the workspace was named one: see
-/// [`LinearWorkspace::use_web_workspace`].
-fn linear_address_under(row: &mut Value, workspace: Option<&str>, kind: &str) {
+fn linear_address_under(row: &mut Value, workspace: Option<&str>, record: LinearRecord) {
     if let Some(workspace) = workspace {
+        let kind = match record {
+            LinearRecord::Task => "issue",
+            LinearRecord::Project => "project",
+            LinearRecord::Document => "document",
+        };
         let id = row["id"].as_str().unwrap_or_default().to_owned();
         row["url"] = json!(format!("https://linear.app/{workspace}/{kind}/{id}"));
     }
