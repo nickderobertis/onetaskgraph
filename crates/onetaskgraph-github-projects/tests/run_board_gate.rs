@@ -263,7 +263,9 @@ impl Account {
                 .get(&number(variables))
                 .map(|board| json!({"id":board.id,"items":{"totalCount":board.items.len()}}));
             if let Some(board) = board.as_mut() {
-                if self.has("missing-template-count") {
+                if self.has("mixed-template") {
+                    board["items"]["totalCount"] = json!(TEMPLATE_DRAFTS + 13);
+                } else if self.has("missing-template-count") {
                     board["items"] = json!({});
                 } else if self.has("malformed-template-count") {
                     board["items"]["totalCount"] = json!("73");
@@ -405,9 +407,10 @@ impl Account {
             if lagging {
                 self.lagging -= 1;
             }
+            let mixed = self.has("mixed-template") && variables["id"] == "PVT_template";
             let board = self.by_id(variables["id"].as_str().unwrap()).unwrap();
             let listed = board.items.len() - usize::from(lagging);
-            let nodes: Vec<_> = board.items[..listed]
+            let mut nodes: Vec<_> = board.items[..listed]
                 .iter()
                 .skip(start)
                 .take(100)
@@ -419,6 +422,11 @@ impl Account {
                     }
                 })
                 .collect();
+            if mixed && start == 0 {
+                nodes.extend((0..13).map(
+                    |n| json!({"id":format!("PVTI_issue_{n}"),"content":{"__typename":"Issue"}}),
+                ));
+            }
             let next = start + nodes.len();
             let more = next < listed;
             let page = if self.has("no-has-next") {
@@ -660,6 +668,14 @@ async fn session_child() {
     let writer = lane::Writer::Ci(run);
     let stamp = writer.stamp(onetaskgraph_live::artifact::now_micros());
     let send = journey::run_board::main_sender(&token);
+    if std::env::var_os("RUN_BOARD_GATE_COPY_TWICE").is_some() {
+        let first = journey::run_board::copy(&send, OWNER, TEMPLATE, &stamp)
+            .await
+            .expect("first session copies the template");
+        journey::run_board::delete(&send, &first)
+            .await
+            .expect("first session removes its copy");
+    }
     let board = journey::run_board::copy(&send, OWNER, TEMPLATE, &stamp)
         .await
         .unwrap_or_else(|error| panic!("copy: {error}"));
@@ -827,7 +843,9 @@ fn assert_isolated(account: &Account, tokens: &[String], reports: &[Report]) {
         for (_, document, variables) in account.seen.iter().filter(|(sender, ..)| sender == token) {
             for board in named(variables, &boards) {
                 let template_read = board == TEMPLATE
-                    && (document.contains("LiveTemplate(") || document.contains("LiveCopyBoard("));
+                    && (document.contains("LiveTemplate(")
+                        || document.contains("LiveTemplateItems(")
+                        || document.contains("LiveCopyBoard("));
                 assert!(
                     board == report.board || template_read,
                     "session {token} named board #{board} in {document}"
@@ -947,7 +965,10 @@ fn a_session_naming_a_board_outside_its_run_is_refused_before_sending() {
         EntryPoint::Assets,
         "trespasser",
         303,
-        &[("RUN_BOARD_GATE_TRESPASS", "1")],
+        &[
+            ("RUN_BOARD_GATE_TRESPASS", "1"),
+            ("RUN_BOARD_GATE_COPY_TWICE", "1"),
+        ],
     );
     let output = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -982,6 +1003,7 @@ fn a_session_naming_a_board_outside_its_run_is_refused_before_sending() {
         .filter(|(token, document, variables)| {
             token == "trespasser"
                 && !document.contains("LiveTemplate(")
+                && !document.contains("LiveTemplateItems(")
                 && !document.contains("LiveCopyBoard(")
                 && named(
                     variables,
@@ -1141,9 +1163,9 @@ fn a_template_without_a_valid_item_count_refuses_before_creating_a_copy() {
 }
 
 #[test]
-fn a_copy_waits_past_repeated_zero_counts_for_the_templates_items() {
+fn a_copy_waits_past_repeated_zero_counts_for_only_the_templates_draft_items() {
     let account = Arc::new(Mutex::new(Account::new()));
-    account.lock().unwrap().faults = vec!["slow-copy"];
+    account.lock().unwrap().faults = vec!["slow-copy", "mixed-template"];
     let origin = serve(Arc::clone(&account));
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["session_child", "--exact", "--nocapture"])
