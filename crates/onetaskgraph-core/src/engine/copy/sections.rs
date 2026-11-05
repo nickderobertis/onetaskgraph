@@ -183,6 +183,15 @@ pub(super) struct BodyLinks {
     screening: Screening,
 }
 
+/// What a body's text is read for when asking which records it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Reading {
+    /// Whole references alone.
+    WholeReferences,
+    /// A body bound for a public destination: a relative path written alone as well.
+    PublicBody,
+}
+
 /// How a body's rendering treats private addresses.
 #[derive(Debug, Clone, Default)]
 enum Screening {
@@ -289,14 +298,14 @@ impl BodyLinks {
 
     /// Whether `content` names a record whose source reports `location`, in any spelling of
     /// the source kind's form, as a whole reference — or, read from `own` in a folder of
-    /// Markdown, as a Markdown link to a path relative to it. In a `public_body`, also as such
-    /// a path alone.
+    /// Markdown, as a Markdown link to a path relative to it. In a [`Reading::PublicBody`], also
+    /// as such a path alone.
     pub(super) fn names(
         from: Option<SectionForm>,
         content: &str,
         own: Option<&str>,
         location: &str,
-        public_body: bool,
+        reading: Reading,
     ) -> bool {
         let spellings = from.map_or_else(
             || vec![location.to_owned()],
@@ -315,7 +324,8 @@ impl BodyLinks {
                     resolve_relative(own, path).as_deref() == Some(location)
                 };
                 destinations(content).any(|(_, target)| names_it(target))
-                    || (public_body && bare_paths(content).any(|(_, path)| names_it(path)))
+                    || (reading == Reading::PublicBody
+                        && bare_paths(content).any(|(_, path)| names_it(path)))
             })
     }
 
