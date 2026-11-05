@@ -1710,7 +1710,7 @@ fn the_copy_s_own_project_made_not_neutral_or_removed_refuses_a_mirror_and_a_rec
     // not one.
     let elsewhere = made.with_file_name("roadmap.md");
     std::fs::write(
-        &elsewhere,
+        &ping_file,
         format!("{}\nTheir own plans.\n", held.trim_end()),
     )
     .expect("their project, carrying the allocation");
@@ -1724,7 +1724,7 @@ fn the_copy_s_own_project_made_not_neutral_or_removed_refuses_a_mirror_and_a_rec
     assert_eq!(store.tree(), before, "nothing is written into it");
 
     // Put back as the copy made it, the copy and the mirror both go on.
-    std::fs::remove_file(&elsewhere).expect("theirs removed");
+    std::fs::remove_file(&ping_file).expect("theirs removed");
     std::fs::write(&made, &held).expect("the project put back");
     copy_rollout(&store);
     assert_eq!(view_of(&store, &landed, widget), view, "the same view");
@@ -4244,4 +4244,62 @@ fn a_link_that_could_name_either_of_two_tasks_at_one_location_is_its_text_alone(
         content.trim_end(),
         format!("See shared and [own]({file}.md#about)."),
     );
+}
+
+#[test]
+fn a_recorded_view_moved_or_deleted_is_linked_as_the_view_that_replaces_it() {
+    let store = projecting_store();
+    private_rollout(&store);
+    for (id, other) in [("ping", "pong"), ("pong", "ping")] {
+        store.record(
+            "plan",
+            "tasks",
+            id,
+            &format!(
+                "title: Answer {other}\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"
+            ),
+            &format!("See [{other}]({other}.md#about-{other}).\n\n## About {id}\n\nIt.\n"),
+        );
+    }
+    let landed = copy_rollout(&store);
+    let (ping, pong) = (
+        linked_view(&store, &landed, "ping"),
+        linked_view(&store, &landed, "pong"),
+    );
+    let links_to = |view: &str, other: &str| {
+        let file = other.split_once(':').expect("a qualified id").1;
+        let content = shown(&store, "task", view)["content"]
+            .as_str()
+            .expect("the view's content")
+            .to_owned();
+        assert!(
+            content.contains(&format!("[ping]({file}.md#about-ping)")),
+            "{content}"
+        );
+    };
+    links_to(&pong, &ping);
+    // The view the map names is no longer in the plan's project: pong is pointed at the new one.
+    let ping_file = record_file(&store, "tasks", &ping);
+    let taken_out: String = std::fs::read_to_string(&ping_file)
+        .expect("the view")
+        .lines()
+        .filter(|line| !line.starts_with("project:"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&ping_file, taken_out).expect("taken out of its project");
+    copy_rollout(&store);
+    let replaced = linked_view(&store, &landed, "ping");
+    assert_ne!(replaced, ping, "a new view is recorded");
+    links_to(&pong, &replaced);
+    let before = store.tree();
+    copy_rollout(&store);
+    assert_eq!(store.tree(), before, "and the next copy writes nothing");
+    // The view the map names is gone: the copy makes it again, and pong still reaches it.
+    std::fs::remove_file(record_file(&store, "tasks", &replaced)).expect("the view deleted");
+    copy_rollout(&store);
+    let remade = linked_view(&store, &landed, "ping");
+    links_to(&pong, &remade);
+    let before = store.tree();
+    copy_rollout(&store);
+    assert_eq!(store.tree(), before, "and the next copy writes nothing");
 }
