@@ -3616,6 +3616,15 @@ fn linker_view(budget: &str, anchor: &str, task: &str, own: &str) -> String {
     )
 }
 
+/// How many of the requests the board was served update an issue.
+fn issue_updates(board: &crate::fixtures::GitHubBoardFields) -> usize {
+    board
+        .served()
+        .iter()
+        .filter(|(document, _)| document.contains("updateIssue(input:$input)"))
+        .count()
+}
+
 /// The view `task` of the plan landed as, by the map `landed`'s home records.
 fn linked_view(store: &Store, landed: &BTreeMap<String, String>, task: &str) -> String {
     view_of(store, landed, &landed[&format!("plan:{task}")])
@@ -3653,6 +3662,17 @@ fn a_views_link_to_another_views_heading_lands_in_the_boards_section_form() {
             .unwrap_or_default()
             .contains("<a id=\"budget-details\"></a>\n## Budget details"),
         "{target_raw}"
+    );
+    // The anchor is no heading: its fragment is carried, because the check passed it.
+    assert!(
+        raw.contains(&format!("[the anchor]({url}#the-anchor)")),
+        "{raw}"
+    );
+    // What it links to landed first, so no view took a second write to point its link.
+    assert_eq!(
+        issue_updates(&board),
+        0,
+        "the first copy sent no update of a view"
     );
     // Nothing the board was sent names the private plan's records, at any write of the copy.
     let plan = store.folder("plan").display().to_string();
@@ -3934,6 +3954,10 @@ fn two_views_linking_each_other_both_land_their_links_and_a_repeat_writes_nothin
                 });
             assert!(content.contains(&format!("]({at})")), "{content}");
         }
+        // One of the two was created before the other's address was known, and takes one update.
+        if let Some(board) = &board {
+            assert_eq!(issue_updates(board), 1, "the cycle's one finishing write");
+        }
         let before = store.tree();
         let mark = board
             .as_ref()
@@ -4165,4 +4189,61 @@ fn a_plan_copied_onward_from_private_linear_points_its_tracker_links_at_the_view
         assert!(content.contains("Not the producer."), "{content}");
         assert!(!content.contains("linear"), "{destination_kind}: {content}");
     }
+}
+
+#[test]
+fn a_link_that_could_name_either_of_two_tasks_at_one_location_is_its_text_alone() {
+    // Two tasks of a private in-memory plan report one location, as nothing stops a stdio plugin
+    // doing: a link to it could name either, so neither view is chosen. A task with a location
+    // of its own is linked, its fragment carried since this source's kind has no form to read.
+    let task = |id: &str, url: &str, repository: &str, content: &str| {
+        json!({"id": id, "title": format!("Work {id}"), "content": content,
+            "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P",
+            "location": {"url": url}, "repositories": [repository]})
+    };
+    let store = Store::laid(Some(registered), |_| {
+        json!({
+            "seeded": {"plugin": "in-memory", "visibility": "private", "config": {
+                "projects": [{"id": "P", "title": "A plan", "labels": [],
+                    "status": {"category": "todo", "name": "Todo"}}],
+                "tasks": [
+                    task("hidden", "https://tracker.invalid/hidden", A, "Private work."),
+                    task("left", "https://tracker.invalid/shared", OPEN, "One."),
+                    task("right", "https://tracker.invalid/shared", OPEN, "Other."),
+                    task("own", "https://tracker.invalid/own", OPEN, "Its own."),
+                    task(
+                        "linker",
+                        "https://tracker.invalid/linker",
+                        OPEN,
+                        "See [shared](https://tracker.invalid/shared#about) and \
+                         [own](https://tracker.invalid/own#about).",
+                    ),
+                ],
+            }},
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "site"}]},
+        })
+    });
+    let landed = landed_ids(&store.ok(&["project", "copy", "seeded:P", "--to", "vault", "--json"]));
+    let map = projection_map(&store, &landed["seeded:P"]);
+    let view_of_task = |task: &str| {
+        map["tasks"]
+            .as_array()
+            .expect("the map's tasks")
+            .iter()
+            .find(|entry| entry["task"] == landed[&format!("seeded:{task}")])
+            .expect("the task's view")["projection"]
+            .as_str()
+            .expect("the view")
+            .to_owned()
+    };
+    let own = view_of_task("own");
+    let file = own.split_once(':').expect("a qualified id").1;
+    let content = shown(&store, "task", &view_of_task("linker"))["content"]
+        .as_str()
+        .expect("the view's content")
+        .to_owned();
+    assert_eq!(
+        content.trim_end(),
+        format!("See shared and [own]({file}.md#about)."),
+    );
 }
