@@ -798,11 +798,13 @@ fn authored_section_links_land_in_each_destinations_form_and_a_repeat_copy_write
     }
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
 #[test]
 fn private_authored_section_links_reach_public_local_md_counterparts() {
     private_authored_section_links_reach_public_counterparts("local-md");
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
 #[test]
 fn private_authored_section_links_reach_public_github_counterparts() {
     private_authored_section_links_reach_public_counterparts("github-projects");
@@ -893,6 +895,7 @@ fn private_authored_section_links_reach_public_counterparts(kind: &str) {
     }
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
 #[test]
 fn private_pending_links_do_not_replace_authored_destinations_that_match_the_placeholder() {
     for kind in ["local-md", "github-projects"] {
@@ -934,6 +937,7 @@ fn private_pending_links_do_not_replace_authored_destinations_that_match_the_pla
     }
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
 #[test]
 fn private_pending_links_to_a_planned_task_left_out_by_the_destination_become_text() {
     let sandbox = Sandbox::new();
@@ -984,6 +988,7 @@ fn private_pending_links_to_a_planned_task_left_out_by_the_destination_become_te
     assert!(!root_of(&sandbox, "public").join("tasks/T.md").exists());
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
 #[test]
 fn a_reference_only_comment_without_a_counterpart_is_screened_before_public_copy() {
     let sandbox = Sandbox::new();
@@ -1025,6 +1030,7 @@ fn a_reference_only_comment_without_a_counterpart_is_screened_before_public_copy
     );
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
 #[test]
 fn a_public_counterparts_relative_path_does_not_authorize_an_uncopied_private_record() {
     let sandbox = Sandbox::new();
