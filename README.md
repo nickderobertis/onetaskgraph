@@ -1350,8 +1350,8 @@ found. An unchanged repeat copy writes nothing at all. `linear-requests-per-plan
 A copy points every reference between the records of one project at the destination's own
 records, in the content of every task, project and document it writes, and in the comments a
 `--comments` copy carries. A public view of a private plan's task has its links to its own
-headings written in the destination's form too; a view holds no link to another record, which
-the copy refuses as it always has. A **section link** is
+headings written in the destination's form too, and its links to other views as "Links in a
+public view" below states. A **section link** is
 a reference that names one heading of its record as well, and each destination addresses a
 heading its own way, so a copy writes every section link in the destination's form.
 
@@ -1429,6 +1429,19 @@ this copy or an earlier one: a design document copied after its project's tasks 
 budget links. A link with no counterpart there, including one copied only to another
 destination, becomes its link text alone. Private record addresses never enter a public body,
 including provisional writes made before all counterparts have landed.
+
+**Links in a public view.** A view of a private plan's public task keeps a link to another
+public task of that plan whose view lands on the same destination, pointed at that view: on a
+GitHub board `https://www.github.com/…/issues/<n>#user-content-<slug>`, and in a folder of
+Markdown the relative path to the other view's file with the authored `#<slug>`. The other view
+may have been written by this copy or an earlier one. A link in a view to anything else of the
+plan, such as the private home's documents, a private task or a view on another destination,
+becomes its link text alone, and so does every such link in a view on a public Linear source.
+What the public boundary reads of a view is that text, plus any fragment of a link to another
+view that names no heading there, which is carried only if the check passes it. A view that a
+later view's link has to point at is written once, except where two views link to each other:
+one of the two is then written a second time, within the same copy, and a repeat copy writes
+nothing.
 
 **Reading a tracker's own form.** A body copied out of a GitHub board or a Linear workspace holds
 its section links in that tracker's form, written by an earlier copy or by hand. Each one is
