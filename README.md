@@ -1422,13 +1422,16 @@ decided: it writes the form, parses it back and supplies its markup.
   the rewritten link, as before section forms existed.
 
 **Links from a private source.** Before writing a public body, a copy inventories every
-source declared private and removes its record addresses. For GitHub Projects and local
-Markdown destinations, a link with a verified counterpart on that destination is translated
-to the counterpart's section-link form instead. The counterpart may have been written by
-this copy or an earlier one: a design document copied after its project's tasks keeps its
-budget links. A link with no counterpart there, including one copied only to another
-destination, becomes its link text alone. Private record addresses never enter a public body,
-including provisional writes made before all counterparts have landed.
+source declared private and removes its record addresses. A reference with a verified
+counterpart on that destination, whichever kind it is, is translated to the counterpart's
+address, in its section-link form where it has one. That covers an inline link, a
+reference-style definition (`[t]: ../tasks/t.md#what`), a location, and a path relative to the
+body's own file written alone, as a table cell names one. The counterpart may have been written
+by this copy or an earlier one: a design document copied after its project's tasks keeps its
+budget links. A reference with no counterpart there, including one copied only to another
+destination, is counted unresolved and removed: a link becomes its text, and a definition or a
+path is dropped. Private record addresses never enter a public body, including provisional
+writes made before all counterparts have landed.
 
 **Reading a tracker's own form.** A body copied out of a GitHub board or a Linear workspace holds
 its section links in that tracker's form, written by an earlier copy or by hand. Each one is

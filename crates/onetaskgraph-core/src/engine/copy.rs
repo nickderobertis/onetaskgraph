@@ -4408,7 +4408,8 @@ impl Engine {
             named.push(if item.links.is_some() {
                 Vec::new()
             } else {
-                self.named_referents(item, &mut by_project).await?
+                self.named_referents(item, &mut by_project, private_locations.is_some())
+                    .await?
             });
         }
         // What this very call writes is found by the copy's own target rather than by asking
@@ -4680,6 +4681,7 @@ impl Engine {
         &self,
         item: &Planned,
         by_project: &mut BTreeMap<String, Vec<Referent>>,
+        public_body: bool,
     ) -> Result<Vec<Referent>, EngineError> {
         let Some(project) = project_of(&item.item) else {
             return Ok(Vec::new());
@@ -4694,7 +4696,7 @@ impl Engine {
                     .flatten()
                     .map(|comment| comment.body.as_str()),
             )
-            .filter(|body| could_name(body))
+            .filter(|body| could_name(body) || (public_body && privacy::could_address(body)))
             .collect();
         if bodies.is_empty() {
             return Ok(Vec::new());
@@ -4717,7 +4719,13 @@ impl Engine {
             .filter(|referent| referent.level != level || referent.id != item.source)
             .filter(|referent| {
                 bodies.iter().any(|content| {
-                    sections::BodyLinks::names(from, content, own.as_deref(), &referent.location)
+                    sections::BodyLinks::names(
+                        from,
+                        content,
+                        own.as_deref(),
+                        &referent.location,
+                        public_body,
+                    )
                 })
             })
             .cloned()

@@ -181,6 +181,10 @@ pub(super) struct BodyLinks {
     pub(super) referents: Vec<Linked>,
     /// Private addresses screened from every rendering sent to a public destination.
     private_locations: Option<Vec<String>>,
+    /// Whether a reference-style definition and a bare relative path are read as references,
+    /// as a body bound for a public destination's are. Kept apart from `private_locations`
+    /// because a placeholder is rendered again alone, unscreened, by the same reading.
+    public_body: bool,
 }
 
 /// One recognised occurrence: what it names, and where its text ends.
@@ -220,6 +224,7 @@ impl BodyLinks {
         });
         Self {
             private_locations: None,
+            public_body: false,
             own_headings: RecordHeadings::of(&original),
             original,
             from,
@@ -235,6 +240,7 @@ impl BodyLinks {
     /// only in the invocation's link plan.
     pub(super) fn screen_public(mut self, locations: Option<&[String]>) -> Self {
         self.private_locations = locations.map(<[String]>::to_vec);
+        self.public_body = locations.is_some();
         self
     }
 
@@ -249,12 +255,14 @@ impl BodyLinks {
 
     /// Whether `content` names a record whose source reports `location`, in any spelling of
     /// the source kind's form, as a whole reference — or, read from `own` in a folder of
-    /// Markdown, as a Markdown link to a path relative to it.
+    /// Markdown, as a Markdown link to a path relative to it. In a `public_body`, also as a
+    /// reference-style definition of such a path or as such a path alone.
     pub(super) fn names(
         from: Option<SectionForm>,
         content: &str,
         own: Option<&str>,
         location: &str,
+        public_body: bool,
     ) -> bool {
         let spellings = from.map_or_else(
             || vec![location.to_owned()],
@@ -268,10 +276,16 @@ impl BodyLinks {
         }
         from == Some(SectionForm::LocalMd)
             && own.is_some_and(|own| {
-                destinations(content).any(|(_, target)| {
+                let names_it = |target: &str| {
                     let path = target.split(FRAGMENT).next().unwrap_or_default();
                     resolve_relative(own, path).as_deref() == Some(location)
-                })
+                };
+                destinations(content).any(|(_, target)| names_it(target))
+                    || (public_body
+                        && (definition_destinations(content)
+                            .iter()
+                            .any(|(at, angled)| names_it(destination_at(content, *at, *angled)))
+                            || bare_paths(content).any(|(_, path)| names_it(path))))
             })
     }
 
@@ -299,8 +313,19 @@ impl BodyLinks {
             content: String::with_capacity(content.len()),
             ..Rendered::default()
         };
+        let definitions = if self.public_body {
+            definition_destinations(content)
+        } else {
+            Vec::new()
+        };
         let mut at = 0;
         while at < content.len() {
+            if let Some((_, angled)) = definitions.iter().find(|(start, _)| *start == at)
+                && let Some(occurrence) = self.in_destination(content, at, *angled)
+            {
+                at = self.write(&occurrence, content, at, knows, pass, &mut rendered);
+                continue;
+            }
             if content[at..].starts_with("](") {
                 // A destination may be written in angle brackets, as Linear stores every one.
                 let opening = if content[at..].starts_with("](<") {
@@ -316,6 +341,12 @@ impl BodyLinks {
                 continue;
             }
             if let Some(occurrence) = self.spelled(content, at) {
+                at = self.write(&occurrence, content, at, knows, pass, &mut rendered);
+                continue;
+            }
+            if self.public_body
+                && let Some(occurrence) = self.bare(content, at)
+            {
                 at = self.write(&occurrence, content, at, knows, pass, &mut rendered);
                 continue;
             }
@@ -411,9 +442,14 @@ impl BodyLinks {
                     // angle brackets stores it.
                     written[at..].starts_with(&placeholder.text) && {
                         let next = written[at + placeholder.text.len()..].chars().next();
-                        (written[..at].ends_with("](")
+                        let before = &written[..at];
+                        let definition = |before: &str| before.trim_end().ends_with("]:");
+                        ((before.ends_with("](") || definition(before))
                             && next.is_none_or(|c| c == ')' || c.is_whitespace()))
-                            || (written[..at].ends_with("](<") && next == Some('>'))
+                            || (next == Some('>')
+                                && before
+                                    .strip_suffix('<')
+                                    .is_some_and(|open| open.ends_with("](") || definition(open)))
                     }
                 } else {
                     delimited(written, at, &placeholder.text)
@@ -456,16 +492,8 @@ impl BodyLinks {
         at: usize,
         angled: bool,
     ) -> Option<Occurrence<'a>> {
-        let end = content[at..]
-            .find(|c: char| {
-                if angled {
-                    c == '>'
-                } else {
-                    c == ')' || c.is_whitespace()
-                }
-            })
-            .map_or(content.len(), |found| at + found);
-        let target = &content[at..end];
+        let target = destination_at(content, at, angled);
+        let end = at + target.len();
         if let Some(fragment) = target.strip_prefix(FRAGMENT) {
             return Some(Occurrence {
                 referent: None,
@@ -475,6 +503,17 @@ impl BodyLinks {
                 spelled: Spelled::Destination,
             });
         }
+        self.relative(target, end, Spelled::Destination)
+    }
+
+    /// The occurrence `target`, ending at `end`, holds when it is a path relative to the body's
+    /// own file naming a referent or that file itself.
+    fn relative<'a>(
+        &'a self,
+        target: &'a str,
+        end: usize,
+        spelled: Spelled,
+    ) -> Option<Occurrence<'a>> {
         if self.from != Some(SectionForm::LocalMd) {
             return None;
         }
@@ -495,8 +534,14 @@ impl BodyLinks {
             end,
             fragment,
             relative: true,
-            spelled: Spelled::Destination,
+            spelled,
         })
+    }
+
+    /// The relative path spelled alone at `at`, as a table cell names a record, when one is.
+    fn bare<'a>(&'a self, content: &'a str, at: usize) -> Option<Occurrence<'a>> {
+        let path = bare_path_at(content, at)?;
+        self.relative(path, at + path.len(), Spelled::Literal)
     }
 
     /// The whole reference spelled at `at`, with its fragment, when one is: a referent's, or
@@ -770,21 +815,79 @@ fn delimited(content: &str, at: usize, location: &str) -> bool {
     super::delimited_at(content, at, location)
 }
 
+/// The link destination starting at `at`, up to what closes it.
+fn destination_at(content: &str, at: usize, angled: bool) -> &str {
+    let end = content[at..]
+        .find(|c: char| {
+            if angled {
+                c == '>'
+            } else {
+                c == ')' || c.is_whitespace()
+            }
+        })
+        .map_or(content.len(), |found| at + found);
+    &content[at..end]
+}
+
 /// Every Markdown link destination `content` holds, with where it starts — one written in
 /// angle brackets without them, as [`BodyLinks::render`] reads it.
 fn destinations(content: &str) -> impl Iterator<Item = (usize, &str)> {
     content.match_indices("](").map(move |(at, _)| {
         let angled = content[at + 2..].starts_with('<');
         let start = at + 2 + usize::from(angled);
-        let end = content[start..]
-            .find(|c: char| {
-                if angled {
-                    c == '>'
-                } else {
-                    c == ')' || c.is_whitespace()
-                }
-            })
-            .map_or(content.len(), |found| start + found);
-        (start, &content[start..end])
+        (start, destination_at(content, start, angled))
     })
+}
+
+/// Where the destination of each reference-style definition `content` holds starts, and
+/// whether it is written in angle brackets. Markdown's own parser says which lines are
+/// definitions, so a line of a code block that looks like one is not.
+fn definition_destinations(content: &str) -> Vec<(usize, bool)> {
+    let parser = pulldown_cmark::Parser::new(content);
+    parser
+        .reference_definitions()
+        .iter()
+        .filter_map(|(_, definition)| {
+            let text = &content[definition.span.clone()];
+            let mut escaped = false;
+            let closes = text.char_indices().find_map(|(at, character)| {
+                if escaped {
+                    escaped = false;
+                } else if character == '\\' {
+                    escaped = true;
+                } else if text[at..].starts_with("]:") {
+                    return Some(at + 2);
+                }
+                None
+            })?;
+            let after = &text[closes..];
+            let start = definition.span.start + closes + (after.len() - after.trim_start().len());
+            Some(match content[start..].starts_with('<') {
+                true => (start + 1, true),
+                false => (start, false),
+            })
+        })
+        .collect()
+}
+
+/// The word starting at `at`, its fragment included and without the sentence punctuation
+/// after it, when `at` starts one: what may be a relative path spelled alone.
+pub(super) fn bare_path_at(content: &str, at: usize) -> Option<&str> {
+    if !content.is_char_boundary(at)
+        || !stops_a_location(content[..at].chars().next_back())
+        || stops_a_location(content[at..].chars().next())
+    {
+        return None;
+    }
+    let word = content[at..]
+        .split(|c: char| stops_a_location(Some(c)))
+        .next()?;
+    Some(word.trim_end_matches(['.', ':', '!', '?']))
+}
+
+/// Every word of `content`, with where it starts: see [`bare_path_at`].
+pub(super) fn bare_paths(content: &str) -> impl Iterator<Item = (usize, &str)> {
+    content
+        .char_indices()
+        .filter_map(|(at, _)| bare_path_at(content, at).map(|path| (at, path)))
 }

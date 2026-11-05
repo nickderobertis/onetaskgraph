@@ -6559,6 +6559,12 @@ impl LinearWorkspace {
         });
     }
 
+    /// Address what this workspace is written under `workspace`, as a second Linear workspace's
+    /// records are: the two otherwise mint the same ids, and so spell one address twice.
+    pub fn use_web_workspace(&self, workspace: &str) {
+        self.state.lock().unwrap()["_linear_web_workspace"] = json!(workspace);
+    }
+
     /// Move one issue to another team, which gives it another identifier and another address.
     pub fn move_team(&self, issue: &str, identifier: &str) {
         self.change("tasks", issue, true, |row| {
@@ -8376,6 +8382,7 @@ fn linear_write_item(
         "_linear_project_statuses": data["_linear_project_statuses"].clone()});
     let vocabulary_markdown = json!({"_linear_markdown": data["_linear_markdown"].clone()});
     let stateless = data["_linear_stateless"] == true;
+    let web_workspace = data["_linear_web_workspace"].as_str().map(str::to_owned);
     let burnt = linear_burnt(data);
     let rows = data[collection]
         .as_array_mut()
@@ -8460,6 +8467,11 @@ fn linear_write_item(
         row["priority"] = linear_priority_name(priority);
     }
     row["_updated"] = json!(stamp);
+    linear_address_under(
+        &mut row,
+        web_workspace.as_deref(),
+        if project { "project" } else { "issue" },
+    );
     linear_restate(
         &mut row,
         existing.map(|index| &rows[index]),
@@ -8522,6 +8534,7 @@ fn linear_write_document(
     let stateless = data["_linear_stateless"] == true;
     // Seeded without moving the workspace's clock: a document's write moves no time here.
     let stamp = format!("d{}", data["documents"].as_array().map_or(0, Vec::len));
+    let web_workspace = data["_linear_web_workspace"].as_str().map(str::to_owned);
     let burnt = linear_burnt(data);
     let rows = data["documents"]
         .as_array_mut()
@@ -8563,6 +8576,7 @@ fn linear_write_document(
     if let Some(updated) = existing.and_then(|index| rows[index].get("_updated").cloned()) {
         row["_updated"] = updated;
     }
+    linear_address_under(&mut row, web_workspace.as_deref(), "document");
     linear_restate(
         &mut row,
         existing.map(|index| &rows[index]),
@@ -9392,6 +9406,15 @@ fn linear_restate(row: &mut Value, before: Option<&Value>, stateless: bool, stam
         &content,
         &seed
     ));
+}
+
+/// Give `row` its address under `workspace`, when the workspace was named one: see
+/// [`LinearWorkspace::use_web_workspace`].
+fn linear_address_under(row: &mut Value, workspace: Option<&str>, kind: &str) {
+    if let Some(workspace) = workspace {
+        let id = row["id"].as_str().unwrap_or_default().to_owned();
+        row["url"] = json!(format!("https://linear.app/{workspace}/{kind}/{id}"));
+    }
 }
 
 fn linear_address(kind: &str, id: &str) -> String {

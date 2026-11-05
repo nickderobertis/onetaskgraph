@@ -1459,6 +1459,12 @@ them do; this is the inventory of what is owed, not a status board.
      of record a search could not cover and exiting 3 — or reads it whole with `--complete`;
      every record in its report is a screened locator, one carrying a term redacted and
      numbered from 1, and an undecided policy exits 2.
+141. A document copied from a private folder to a public folder, board, Linear workspace or
+     stdio peer holding the task or document it names points a table cell and a reference-style
+     definition at that counterpart, in the destination's form, one rewritten per occurrence, and
+     a repeat writes nothing.
+142. With no counterpart there, every inline link, definition, location and bare relative path
+     naming the private record is removed from the public body and counted unresolved.
 
 ## The public boundary
 
@@ -1546,7 +1552,10 @@ full stop included, is still not recognised at all. Both ends come from the plug
 own reported `Location`; nothing composes an address from a name, an id or a root. It is
 deliberately not a Markdown-link parser: the artifact this exists for holds bare absolute
 paths inside backticks in a table cell, which `[text](target)` matching would have left
-exactly as it found them.
+exactly as it found them. A body bound for a public destination while private sources are
+configured reads two spellings more, because the screen must either carry them or remove them:
+a reference-style definition, and a relative path written alone. Between public sources both
+are left as they are.
 
 The referent set is the document's **own project** — that project's record, the tasks filed
 under it, and the other documents filed under it — so a reference to a record in another
