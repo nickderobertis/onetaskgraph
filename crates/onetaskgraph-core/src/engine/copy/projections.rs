@@ -12,7 +12,7 @@
 //!
 //! A projection is a **view**, never another executable task: it carries its canonical task's
 //! screened title, content, repositories and status, its dependencies only on other
-//! projections, and nothing else — no metadata, no origin, no link back, no name of the
+//! projections, its links only to its own headings and to other projections, and nothing else — no metadata, no origin, no link back, no name of the
 //! private project. Everything it is made from is read from the canonical records on every
 //! copy, so an edit made to a view is overwritten by the next copy and never reaches the
 //! canonical graph.
@@ -627,6 +627,47 @@ pub(super) struct Projected {
     assets: Vec<AssetPayload>,
     /// The tasks of the same plan it depends on, by their source ids.
     depends_on: Vec<GlobalId>,
+    /// What its content links to among the views landing beside it, when it links to any.
+    links: Option<ViewLinks>,
+}
+
+/// One view's links to the other views of its destination, read before its content was reduced
+/// to what the boundary check sees. Held in memory for the copy: the source's addresses it holds
+/// are what identify each link, and never reach a rendering a destination is sent.
+struct ViewLinks {
+    /// The task's content before any link was reduced to its text.
+    authored: String,
+    /// The other views' tasks it names, each to be asked of what has landed.
+    referents: Vec<super::sections::Linked>,
+    /// What a rendering of it is screened of: every private address, and the source's address
+    /// of each referent, for a link whose view has not landed.
+    screened: Vec<String>,
+    /// The fragments it would carry naming no heading, which only the boundary check vouches for.
+    carried_fragments: Vec<String>,
+}
+
+impl Projected {
+    /// The tasks whose views this one's content links to.
+    fn linked(&self) -> impl Iterator<Item = &GlobalId> {
+        self.links
+            .iter()
+            .flat_map(|links| &links.referents)
+            .map(|referent| &referent.id)
+    }
+
+    /// Every task this view is better landed after: what it depends on, then what it links to.
+    fn landed_after(&self) -> impl Iterator<Item = &GlobalId> {
+        self.depends_on.iter().chain(self.linked())
+    }
+}
+
+/// One task's record as every view of its plan may link to it.
+struct Sibling {
+    id: GlobalId,
+    to: SourceName,
+    location: String,
+    content: Option<String>,
+    stored: Option<Vec<onetaskgraph_plugin_api::StoredHeading>>,
 }
 
 impl Projected {
@@ -777,13 +818,16 @@ impl Projecting {
     }
 
     /// Restore authored same-record links before the public boundary examines a view, and
-    /// leave private cross-record links as text alone.
+    /// leave private cross-record links as text alone. A link to another view's task is text in
+    /// what the boundary examines too, and is noted so its landing can point it at that view,
+    /// whose address is public and unknown until it has landed.
     pub(super) fn public_bodies(
         &mut self,
         engine: &Engine,
         locations: &[String],
     ) -> Result<(), EngineError> {
         if let Self::Active(tasks) = self {
+            let siblings = siblings(engine, tasks)?;
             for task in tasks {
                 let source = engine.readable(&task.source.source)?;
                 if let Some(content) = task.task.content.as_deref() {
@@ -799,9 +843,22 @@ impl Projecting {
                                 form.read_same_record(content, own.as_deref(), stored.as_deref())
                             },
                         );
+                    task.links = view_links(
+                        engine,
+                        task,
+                        &authored,
+                        own.as_deref(),
+                        stored,
+                        &siblings,
+                        locations,
+                    )?;
+                    let screened = task
+                        .links
+                        .as_ref()
+                        .map_or(locations, |links| links.screened.as_slice());
                     task.task.content = Some(super::privacy::without_private_links(
                         &authored,
-                        locations,
+                        screened,
                         if source.kind() == "local-md" {
                             own.as_deref()
                         } else {
@@ -840,6 +897,7 @@ impl Projecting {
                 })
                 .filter_map(|edge| far_end(&edge.to, &task.source.source))
                 .collect(),
+            links: None,
         });
     }
 
@@ -856,12 +914,28 @@ impl Projecting {
 
     /// The views landing in `to`, every one after the views it depends on where they can be.
     fn ordered(&self, to: &SourceName) -> Vec<&Projected> {
+        self.ordered_by(to, |task| task.depends_on.iter().collect())
+    }
+
+    /// [`Self::ordered`], and every view after the views it links to where they can be too, so
+    /// a link costs a second write of its view only in a cycle.
+    fn landing_order(&self, to: &SourceName) -> Vec<&Projected> {
+        self.ordered_by(to, |task| task.landed_after().collect())
+    }
+
+    /// The views landing in `to`, every one after the views `after` names where they can be.
+    fn ordered_by<'a>(
+        &'a self,
+        to: &SourceName,
+        after: fn(&'a Projected) -> Vec<&'a GlobalId>,
+    ) -> Vec<&'a Projected> {
         let here: Vec<&Projected> = self.tasks().iter().filter(|task| &task.to == to).collect();
         let mut ordered: Vec<&Projected> = Vec::new();
         let mut visiting: Vec<&GlobalId> = Vec::new();
         fn visit<'a>(
             task: &'a Projected,
             here: &[&'a Projected],
+            after: fn(&'a Projected) -> Vec<&'a GlobalId>,
             ordered: &mut Vec<&'a Projected>,
             visiting: &mut Vec<&'a GlobalId>,
         ) {
@@ -871,28 +945,138 @@ impl Projecting {
                 return;
             }
             visiting.push(&task.source);
-            for far in &task.depends_on {
+            for far in after(task) {
                 if let Some(first) = here.iter().find(|other| &other.source == far) {
-                    visit(first, here, ordered, visiting);
+                    visit(first, here, after, ordered, visiting);
                 }
             }
             visiting.pop();
             ordered.push(task);
         }
         for task in &here {
-            visit(task, &here, &mut ordered, &mut visiting);
+            visit(task, &here, after, &mut ordered, &mut visiting);
         }
         ordered
     }
 }
 
 /// What every view of one plan in one public source lands against: the project they are
-/// filed under, the map as recorded so far, and the views already landed by source task id.
+/// filed under, the map as recorded so far, the views already landed by source task id, and
+/// where each view a link can be pointed at is.
 struct Landing<'a> {
     home: &'a GlobalId,
     project: &'a NativeId,
     map: &'a PublicProjections,
     views: &'a HashMap<GlobalId, NativeId>,
+    located: &'a HashMap<GlobalId, (NativeId, String)>,
+}
+
+/// One view as it landed: its id, and where its destination says it is when it says.
+struct LandedView {
+    id: NativeId,
+    location: Option<String>,
+}
+
+/// Every projected task a view could link to: each has a location to be recognised by, and no
+/// other task reports the same one — a link that could name either is pointed at neither.
+fn siblings(engine: &Engine, tasks: &[Projected]) -> Result<Vec<Sibling>, EngineError> {
+    let mut siblings = Vec::new();
+    for task in tasks {
+        let Some(location) = super::located(task.task.location.as_ref()) else {
+            continue;
+        };
+        if tasks
+            .iter()
+            .filter(|other| {
+                super::located(other.task.location.as_ref()).as_ref() == Some(&location)
+            })
+            .count()
+            > 1
+        {
+            continue;
+        }
+        siblings.push(Sibling {
+            id: task.source.clone(),
+            to: task.to.clone(),
+            location,
+            content: task.task.content.clone(),
+            stored: engine
+                .readable(&task.source.source)?
+                .source()
+                .stored_headings(
+                    onetaskgraph_plugin_api::MetadataRecord::Task,
+                    &task.source.native,
+                ),
+        });
+    }
+    Ok(siblings)
+}
+
+/// What `task`, whose content reads as `authored`, links to among the views landing beside it —
+/// `None` when it names none, or when its destination has no form a link to one is written in
+/// here. A folder of Markdown and a GitHub board are the kinds a public body's links to its
+/// counterparts are written for; every other keeps its links as text, as a plain copy's do.
+fn view_links(
+    engine: &Engine,
+    task: &Projected,
+    authored: &str,
+    own: Option<&str>,
+    stored: Option<Vec<onetaskgraph_plugin_api::StoredHeading>>,
+    siblings: &[Sibling],
+    locations: &[String],
+) -> Result<Option<ViewLinks>, EngineError> {
+    use super::sections::{BodyLinks, Counterpart, Linked};
+    use crate::section_links::SectionForm;
+    let to = SectionForm::for_kind(engine.writable(&task.to)?.kind());
+    if !matches!(to, Some(SectionForm::LocalMd | SectionForm::GithubProjects)) {
+        return Ok(None);
+    }
+    let from = SectionForm::for_kind(engine.readable(&task.source.source)?.kind());
+    let referents: Vec<Linked> = siblings
+        .iter()
+        .filter(|sibling| {
+            sibling.id != task.source
+                && sibling.to == task.to
+                && BodyLinks::names(from, authored, own, &sibling.location)
+        })
+        .map(|sibling| {
+            let mut linked = Linked::new(
+                Level::Task,
+                sibling.id.clone(),
+                sibling.location.clone(),
+                from,
+                sibling.content.as_deref(),
+                sibling.stored.clone(),
+            );
+            linked.counterpart = Counterpart::InCopy;
+            linked
+        })
+        .collect();
+    if referents.is_empty() {
+        return Ok(None);
+    }
+    let mut screened = locations.to_vec();
+    screened.extend(
+        referents
+            .iter()
+            .flat_map(|referent| referent.spellings().iter().cloned()),
+    );
+    let carried_fragments = BodyLinks::new(
+        authored.to_owned(),
+        from,
+        to,
+        Level::Task,
+        own.map(str::to_owned),
+        stored,
+        referents.clone(),
+    )
+    .carried_fragments();
+    Ok(Some(ViewLinks {
+        authored: authored.to_owned(),
+        referents,
+        screened,
+        carried_fragments,
+    }))
 }
 
 impl Engine {
@@ -1001,7 +1185,13 @@ impl Engine {
                         repositories: &view.repositories,
                         project: None,
                     },
-                    exposure: &Exposure::of_task(&view).assets(&task.assets),
+                    exposure: &Exposure::of_task(&view).assets(&task.assets).and(
+                        Exposure::metadata(
+                            task.links
+                                .iter()
+                                .flat_map(|links| links.carried_fragments.iter().cloned()),
+                        ),
+                    ),
                 },
             )
             .await
@@ -1059,11 +1249,18 @@ impl Engine {
         }
         for to in projecting.destinations() {
             let destination = self.writable(&to)?;
-            let ordered = projecting.ordered(&to);
             let project = self
-                .land_public_project(destination, &home, &ordered, &mut map, journal)
+                .land_public_project(
+                    destination,
+                    &home,
+                    &projecting.ordered(&to),
+                    &mut map,
+                    journal,
+                )
                 .await?;
+            let ordered = projecting.landing_order(&to);
             let mut views: HashMap<GlobalId, NativeId> = HashMap::new();
+            let mut located: HashMap<GlobalId, (NativeId, String)> = HashMap::new();
             // The tasks under the public project no map entry names, listed once when a view is
             // looked for by what it says.
             let mut unrecorded: Option<Vec<Task>> = None;
@@ -1072,16 +1269,34 @@ impl Engine {
                 let Some(canonical_task) = canonical.get(&task.source) else {
                     continue;
                 };
+                // A view linking to one landing after it — a cycle — is pointed at it where an
+                // earlier copy's map says it already is, so a repeat copy has nothing to write.
+                for far in task.linked() {
+                    if located.contains_key(far) {
+                        continue;
+                    }
+                    if let Some(found) = self
+                        .recorded_view(
+                            destination,
+                            canonical.get(far).and_then(|at| map.projection_of(at)),
+                            &project,
+                        )
+                        .await?
+                    {
+                        located.insert(far.clone(), found);
+                    }
+                }
                 let complete = task.depends_on.iter().all(|far| {
                     !ordered.iter().any(|other| &other.source == far) || views.contains_key(far)
-                });
+                }) && task.linked().all(|far| located.contains_key(far));
                 let landing = Landing {
                     home: &home,
                     project: &project,
                     map: &map,
                     views: &views,
+                    located: &located,
                 };
-                let id = self
+                let landed = self
                     .land_view(
                         destination,
                         task,
@@ -1091,16 +1306,24 @@ impl Engine {
                         journal,
                     )
                     .await?;
-                views.insert(task.source.clone(), id.clone());
-                if map.set(canonical_task, &GlobalId::new(to.clone(), id)) {
+                views.insert(task.source.clone(), landed.id.clone());
+                match landed.location {
+                    Some(location) => {
+                        located.insert(task.source.clone(), (landed.id.clone(), location));
+                    }
+                    None => {
+                        located.remove(&task.source);
+                    }
+                }
+                if map.set(canonical_task, &GlobalId::new(to.clone(), landed.id)) {
                     self.record_projections(at, &home, &map, journal).await?;
                 }
                 if !complete {
                     incomplete.push(*task);
                 }
             }
-            // A view that depends on one landed after it — a cycle — is written again now that
-            // every view it names is there.
+            // A view that depends on or links to one landed after it — a cycle — is written
+            // again now that every view it names is there.
             for task in incomplete {
                 let canonical_task = &canonical[&task.source];
                 let landing = Landing {
@@ -1108,6 +1331,7 @@ impl Engine {
                     project: &project,
                     map: &map,
                     views: &views,
+                    located: &located,
                 };
                 self.land_view(
                     destination,
@@ -1121,6 +1345,32 @@ impl Engine {
             }
         }
         Ok(())
+    }
+
+    /// The view `recorded` names, and where its destination says it is, when it is one of this
+    /// destination's filed under `project` — what [`Engine::land_view`] would take it for.
+    async fn recorded_view(
+        &self,
+        destination: &ResolvedSource,
+        recorded: Option<&GlobalId>,
+        project: &NativeId,
+    ) -> Result<Option<(NativeId, String)>, EngineError> {
+        let Some(recorded) = recorded.filter(|at| &at.source == destination.name()) else {
+            return Ok(None);
+        };
+        let Some(prior) = self
+            .prior(destination, Level::Task, &recorded.native)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Item::Task(view) = &prior.item else {
+            return Ok(None);
+        };
+        if view.project.as_ref() != Some(project) {
+            return Ok(None);
+        }
+        Ok(super::located(view.location.as_ref()).map(|location| (view.id.clone(), location)))
     }
 
     /// The map `metadata` of the private home `home` records, held to [`Engine::held_to_home`].
@@ -1461,7 +1711,7 @@ impl Engine {
 
     /// Land one view: over the one the map names, or the one its opaque id names, when either
     /// is there — written only when it differs from what the canonical task now says — and
-    /// created otherwise. Answers the id it is held under.
+    /// created otherwise. Answers the id it is held under, and where its destination says it is.
     ///
     /// A view this copy made and never learned the id of — its create's answer lost, at a
     /// destination that issues ids of its own and so ignores the opaque one — is found by what
@@ -1475,7 +1725,7 @@ impl Engine {
         landing: &Landing<'_>,
         unrecorded: &mut Option<Vec<Task>>,
         journal: &mut Journal,
-    ) -> Result<NativeId, EngineError> {
+    ) -> Result<LandedView, EngineError> {
         let opaque = opaque_id("pt", canonical);
         // What the view now holds, read once: it is what is compared, and what the journal puts
         // back if the copy cannot finish.
@@ -1544,42 +1794,66 @@ impl Engine {
         }
         let id = held.as_ref().map_or(opaque, |(view, _)| view.id.clone());
         let mut view = task.view(id.clone(), Some(landing.project.clone()));
-        // A view's links to its own headings, in the destination's section form: a view holds
-        // no other link to a record, which the preflight refused.
-        // llmlint: ignore-block[changed_behavior_has_e2e] A public view's section links are held by `a_views_link_to_its_own_heading_lands_in_the_boards_section_form`, `a_new_linear_views_link_to_its_own_heading_names_the_id_its_create_was_answered_with` and the two rollback journeys beside them in `crates/onetaskgraph-e2e/tests/e2e/boundary/projections.rs`; the projection fixture plans are authored in a folder of Markdown, and a plan held in a tracker reaches a view through the same rendering, whose tracker-form reading the section-link matrix journeys in `section_links.rs` hold for every source kind.
+        // A view's links to its own headings and to the views landing beside it, in the
+        // destination's section form: any other link to a record is its text alone by now, or
+        // was refused by the preflight.
+        // llmlint: ignore-block[changed_behavior_has_e2e] A public view's section links are held by `a_views_link_to_its_own_heading_lands_in_the_boards_section_form`, `a_new_linear_views_link_to_its_own_heading_names_the_id_its_create_was_answered_with` and the two rollback journeys beside them in `crates/onetaskgraph-e2e/tests/e2e/boundary/projections.rs`, and its links to other views by `a_views_link_to_another_views_heading_lands_in_the_boards_section_form` and the journeys after it there; the projection fixture plans are authored in a folder of Markdown, and a plan held in a tracker reaches a view through the same rendering, whose tracker-form reading the section-link matrix journeys in `section_links.rs` hold for every source kind.
         let mut view_links = None;
         if let Some(content) = view.content.clone() {
             let from = crate::section_links::SectionForm::for_kind(
                 self.readable(&task.source.source)?.kind(),
             );
-            let links = super::sections::BodyLinks::new(
-                content.clone(),
-                from,
-                crate::section_links::SectionForm::for_kind(destination.kind()),
-                Level::Task,
-                // Where the canonical task is, so a link to its own heading spelled with its own
-                // address — as a view copied out of a tracker holds one — is read as one. A local
-                // path in a view is refused before this, by the preflight.
-                super::located(task.task.location.as_ref()),
-                self.readable(&task.source.source)?
-                    .source()
-                    .stored_headings(
-                        onetaskgraph_plugin_api::MetadataRecord::Task,
-                        &task.source.native,
-                    ),
-                Vec::new(),
-            );
-            if links.matters() {
-                let own = held.as_ref().and_then(|(held, _)| {
-                    held.location
-                        .as_ref()
-                        .and_then(|location| super::located(Some(location)))
-                        .map(|location| (held.id.clone(), location))
-                });
-                let knows = ViewKnows { destination, own };
-                view.content = Some(links.render(&knows, super::sections::Pass::Final).content);
-                view_links = Some(links);
+            let to = crate::section_links::SectionForm::for_kind(destination.kind());
+            let links = |content: String, referents| {
+                Ok::<_, EngineError>(super::sections::BodyLinks::new(
+                    content,
+                    from,
+                    to,
+                    Level::Task,
+                    // Where the canonical task is, so a link to its own heading spelled with its
+                    // own address — as a view copied out of a tracker holds one — is read as one.
+                    // A local path in a view is refused before this, by the preflight.
+                    super::located(task.task.location.as_ref()),
+                    self.readable(&task.source.source)?
+                        .source()
+                        .stored_headings(
+                            onetaskgraph_plugin_api::MetadataRecord::Task,
+                            &task.source.native,
+                        ),
+                    referents,
+                ))
+            };
+            let reduced = links(content, Vec::new())?;
+            let linking = task
+                .links
+                .as_ref()
+                .map(|held| {
+                    links(held.authored.clone(), held.referents.clone())
+                        .map(|links| links.screen_public(Some(&held.screened)).always_relative())
+                })
+                .transpose()?;
+            let own = held.as_ref().and_then(|(held, _)| {
+                held.location
+                    .as_ref()
+                    .and_then(|location| super::located(Some(location)))
+                    .map(|location| (held.id.clone(), location))
+            });
+            // A folder of Markdown's link is relative to the view's own file, which a new view
+            // has none of yet: its first write holds the link's text, as a kept placeholder
+            // would have to, and the write finishing it below holds the link.
+            let addressable =
+                own.is_some() || to != Some(crate::section_links::SectionForm::LocalMd);
+            let knows = ViewKnows {
+                destination,
+                own,
+                located: landing.located,
+            };
+            if let Some(linking) = linking.as_ref().filter(|_| addressable) {
+                view.content = Some(linking.render(&knows, super::sections::Pass::Final).content);
+            } else if reduced.matters() {
+                view.content = Some(reduced.render(&knows, super::sections::Pass::Final).content);
             }
+            view_links = linking.or_else(|| reduced.matters().then_some(reduced));
         }
         // llmlint: ignore-end[changed_behavior_has_e2e]
         let edges: Vec<DependencyEdge> = task
@@ -1617,7 +1891,10 @@ impl Engine {
                 && were == are
                 && digests(prior.assets.as_deref().unwrap_or_default()) == digests(&task.assets)
             {
-                return Ok(held.id.clone());
+                return Ok(LandedView {
+                    id: held.id.clone(),
+                    location: super::located(held.location.as_ref()),
+                });
             }
         }
         let item = task.item();
@@ -1635,6 +1912,9 @@ impl Engine {
             .await
             .map_err(|error| refused(destination, error))?;
         let recorded = held.as_ref().and_then(|(_, prior)| prior.recorded.clone());
+        let held_location = held
+            .as_ref()
+            .and_then(|(held, _)| super::located(held.location.as_ref()));
         // A view carries assets when its task references any, and when the view it overwrites
         // holds any: what lands then holds exactly the task's, none included.
         let carrying = !task.assets.is_empty()
@@ -1697,7 +1977,11 @@ impl Engine {
                         .as_ref(),
                 )
                 .map(|location| (landed.clone(), location));
-                let knows = ViewKnows { destination, own };
+                let knows = ViewKnows {
+                    destination,
+                    own,
+                    located: landing.located,
+                };
                 let finished = links.render(&knows, super::sections::Pass::Final).content;
                 if write.item.content.as_deref() != Some(finished.as_str()) {
                     let mut item = write.item.clone();
@@ -1744,7 +2028,17 @@ impl Engine {
                 }
             }
         }
-        Ok(landed)
+        let location = super::located(
+            destination
+                .source()
+                .written_location(onetaskgraph_plugin_api::MetadataRecord::Task, &landed)
+                .as_ref(),
+        )
+        .or(held_location);
+        Ok(LandedView {
+            id: landed,
+            location,
+        })
     }
 
     /// Write `map` onto the private home `home` through its own project write, unless it
@@ -1904,18 +2198,20 @@ impl Engine {
     }
 }
 
-/// What a public view's rendering knows: the view's own counterpart, when it is updated, and
-/// the heading ids the destination's read of it answered.
+/// What a public view's rendering knows: the view's own counterpart, when it is updated, the
+/// other views located so far, and the heading ids the destination's read of it answered.
 struct ViewKnows<'a> {
     /// The public destination.
     destination: &'a ResolvedSource,
     /// The view already there, and where its destination says it is.
     own: Option<(NativeId, String)>,
+    /// Where each view a link can be pointed at is, by its source task id.
+    located: &'a HashMap<GlobalId, (NativeId, String)>,
 }
 
 impl super::sections::Knows for ViewKnows<'_> {
-    fn landed(&self, _referent: &super::sections::Linked) -> Option<(NativeId, String)> {
-        None
+    fn landed(&self, referent: &super::sections::Linked) -> Option<(NativeId, String)> {
+        self.located.get(&referent.id).cloned()
     }
 
     fn stored(

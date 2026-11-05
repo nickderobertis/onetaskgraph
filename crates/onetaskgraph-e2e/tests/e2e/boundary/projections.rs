@@ -3574,3 +3574,732 @@ fn a_private_linear_canonicals_public_view_keeps_its_authored_sections_without_i
         }
     }
 }
+
+/// The content of a task whose headings a sibling view's links name.
+const LINKED_TARGET: &str = "## What\n\nThe budget.\n\n## Budget details\n\n30 seconds.\n\n\
+                             <a id=\"the-anchor\"></a>\n\nAn authored anchor.\n";
+
+/// The plan's task `budgets`, public on `repository`, that another view's links name.
+fn record_link_target(store: &Store, repository: &str) {
+    store.record(
+        "plan",
+        "tasks",
+        "budgets",
+        &format!(
+            "title: Budget the copy\nstatus: todo\nproject: rollout\nrepositories: [{repository}]"
+        ),
+        LINKED_TARGET,
+    );
+}
+
+/// The plan's task `a-linker`, public on `repository` and listed before what it links to:
+/// its links reach another view, a private task, the plan's document and its own heading.
+fn record_linker(store: &Store, repository: &str) {
+    store.record(
+        "plan",
+        "tasks",
+        "a-linker",
+        &format!(
+            "title: Hold the budget\nstatus: todo\nproject: rollout\nrepositories: [{repository}]"
+        ),
+        "Read [the budget](budgets.md#budget-details), [the anchor](budgets.md#the-anchor) and \
+         [the task](budgets.md). Not [the producer](producer.md), not \
+         [the reasons](../documents/design.md), and [below](#own-part).\n\n## Own part\n\nMine.\n",
+    );
+}
+
+/// The prose a view of [`record_linker`] holds, given how each of its links to a view lands.
+fn linker_view(budget: &str, anchor: &str, task: &str, own: &str) -> String {
+    format!(
+        "Read [the budget]({budget}), [the anchor]({anchor}) and [the task]({task}). Not the \
+         producer, not the reasons, and [below]({own})."
+    )
+}
+
+fn issue_updates(board: &crate::fixtures::GitHubBoardFields) -> usize {
+    board
+        .served()
+        .iter()
+        .filter(|(document, _)| document.contains("updateIssue(input:$input)"))
+        .count()
+}
+
+/// The view `task` of the plan landed as, by the map `landed`'s home records.
+fn linked_view(store: &Store, landed: &BTreeMap<String, String>, task: &str) -> String {
+    view_of(store, landed, &landed[&format!("plan:{task}")])
+}
+
+#[test]
+fn a_views_link_to_another_views_heading_lands_in_the_boards_section_form() {
+    let (store, board) = board_store();
+    record_link_target(&store, BOARD_REPOSITORY);
+    record_linker(&store, BOARD_REPOSITORY);
+    let landed = copy_rollout(&store);
+    let linker = linked_view(&store, &landed, "a-linker");
+    let target = linked_view(&store, &landed, "budgets");
+    let url = shown(&store, "task", &target)["location"]["url"]
+        .as_str()
+        .expect("the view's address")
+        .replacen("https://github.com/", "https://www.github.com/", 1);
+    let raw = board.body(linker.split_once(':').expect("a qualified id").1);
+    let raw = raw.as_str().expect("the stored body");
+    assert!(
+        raw.contains(&linker_view(
+            &format!("{url}#user-content-budget-details"),
+            &format!("{url}#the-anchor"),
+            shown(&store, "task", &target)["location"]["url"]
+                .as_str()
+                .expect("the view's address"),
+            "#user-content-own-part",
+        )),
+        "{raw}"
+    );
+    let target_raw = board.body(target.split_once(':').expect("a qualified id").1);
+    assert!(
+        target_raw
+            .as_str()
+            .unwrap_or_default()
+            .contains("<a id=\"budget-details\"></a>\n## Budget details"),
+        "{target_raw}"
+    );
+    // The anchor is no heading: its fragment is carried, because the check passed it.
+    assert!(
+        raw.contains(&format!("[the anchor]({url}#the-anchor)")),
+        "{raw}"
+    );
+    // What it links to landed first, so no view took a second write to point its link.
+    assert_eq!(
+        issue_updates(&board),
+        0,
+        "the first copy sent no update of a view"
+    );
+    // Nothing the board was sent names the private plan's records, at any write of the copy.
+    let plan = store.folder("plan").display().to_string();
+    let plan = serde_json::to_string(&plan).expect("a path");
+    for (document, variables) in board.served() {
+        if document.trim_start().starts_with("mutation") {
+            let sent = variables.to_string();
+            assert!(!sent.contains(plan.trim_matches('"')), "{sent}");
+            for named in ["budgets.md", "producer.md", "design.md", "plan:"] {
+                assert!(!sent.contains(named), "{named} in {sent}");
+            }
+        }
+    }
+    let mark = board.served_count();
+    copy_rollout(&store);
+    assert!(
+        board
+            .served_since(mark)
+            .iter()
+            .all(|(document, _)| !document.trim_start().starts_with("mutation")),
+        "a repeat copy writes the board nothing"
+    );
+}
+
+#[test]
+fn a_views_link_to_another_views_heading_lands_as_its_relative_path_in_a_folder() {
+    let store = projecting_store();
+    private_rollout(&store);
+    record_link_target(&store, OPEN);
+    record_linker(&store, OPEN);
+    let landed = copy_rollout(&store);
+    let target = linked_view(&store, &landed, "budgets");
+    let file = target.split_once(':').expect("a qualified id").1;
+    let linker = linked_view(&store, &landed, "a-linker");
+    let stored = std::fs::read_to_string(record_file(&store, "tasks", &linker)).expect("the view");
+    assert!(
+        stored.contains(&linker_view(
+            &format!("{file}.md#budget-details"),
+            &format!("{file}.md#the-anchor"),
+            &format!("{file}.md"),
+            "#own-part",
+        )),
+        "{stored}"
+    );
+    assert_site_neutral(&store);
+    let before = store.tree();
+    copy_rollout(&store);
+    assert_eq!(store.tree(), before, "a repeat copy writes nothing");
+}
+
+#[test]
+fn a_views_link_spelled_by_absolute_path_lands_relative_and_names_no_folder() {
+    let store = projecting_store();
+    private_rollout(&store);
+    record_link_target(&store, OPEN);
+    let absolute = record_file(&store, "tasks", "plan:budgets")
+        .canonicalize()
+        .expect("the target's file")
+        .display()
+        .to_string();
+    store.record(
+        "plan",
+        "tasks",
+        "a-linker",
+        &format!("title: Hold the budget\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+        &format!("Read [the task](<{absolute}>) and [the budget](<{absolute}#budget-details>).\n"),
+    );
+    let landed = copy_rollout(&store);
+    let target = linked_view(&store, &landed, "budgets");
+    let file = target.split_once(':').expect("a qualified id").1;
+    let linker = linked_view(&store, &landed, "a-linker");
+    let stored = std::fs::read_to_string(record_file(&store, "tasks", &linker)).expect("the view");
+    assert!(
+        stored.contains(&format!(
+            "Read [the task](<{file}.md>) and [the budget](<{file}.md#budget-details>)."
+        )),
+        "{stored}"
+    );
+    let site = store.folder("site").canonicalize().expect("the folder");
+    assert!(!stored.contains(&*site.display().to_string()), "{stored}");
+}
+
+#[test]
+fn a_public_authoring_folder_s_link_between_public_tasks_reaches_the_view() {
+    // The plan is private by what it holds and its folder is not declared private, so nothing
+    // inventories its addresses: the link is recognised as naming the other view all the same.
+    let store = Store::laid(Some(registered), |sandbox| {
+        json!({
+            "plan": folder(sandbox, "plan", "public"),
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "site"}]},
+        })
+    });
+    private_rollout(&store);
+    record_link_target(&store, OPEN);
+    store.record(
+        "plan",
+        "tasks",
+        "a-linker",
+        &format!("title: Hold the budget\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+        "Read [the budget](budgets.md#budget-details).\n",
+    );
+    let landed = copy_rollout(&store);
+    let target = linked_view(&store, &landed, "budgets");
+    let file = target.split_once(':').expect("a qualified id").1;
+    let content = shown(&store, "task", &linked_view(&store, &landed, "a-linker"))["content"]
+        .as_str()
+        .expect("the view's content")
+        .to_owned();
+    assert!(
+        content.contains(&format!("[the budget]({file}.md#budget-details)")),
+        "{content}"
+    );
+}
+
+#[test]
+fn a_dry_run_and_a_failed_copy_leave_a_linking_view_nowhere() {
+    let store = projecting_store();
+    private_rollout(&store);
+    record_link_target(&store, OPEN);
+    record_linker(&store, OPEN);
+    let before = store.tree();
+    store.ok(&[
+        "project",
+        "copy",
+        "plan:rollout",
+        "--to",
+        "vault",
+        "--dry-run",
+    ]);
+    assert_eq!(store.tree(), before, "a dry run writes nothing");
+    // `site` cannot hold a task file: the first view's write fails after the canonical plan
+    // and the neutral project landed, and every write is taken back.
+    std::fs::create_dir_all(store.folder("site")).expect("the site folder");
+    std::fs::write(store.folder("site").join("tasks"), "not a folder").expect("a blocking file");
+    let before = store.tree();
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        store.tree(),
+        before,
+        "every write of the copy is taken back"
+    );
+}
+
+#[test]
+fn a_refused_write_finishing_a_views_link_takes_the_whole_copy_back() {
+    // Two views link each other, so the first is written again once the second has landed, and
+    // the board refuses that write: no view the copy created is left behind.
+    let (store, board) = board_store();
+    for (id, other) in [("ping", "pong"), ("pong", "ping")] {
+        store.record(
+            "plan",
+            "tasks",
+            id,
+            &format!(
+                "title: Answer {other}\nstatus: todo\nproject: rollout\n\
+                 repositories: [{BOARD_REPOSITORY}]"
+            ),
+            &format!("See [{other}]({other}.md#about-{other}).\n\n## About {id}\n\nIt.\n"),
+        );
+    }
+    board.refuse_once("updateIssue(input:$input)");
+    let output = store.run(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        tasks_of(&store, "board")
+            .iter()
+            .filter(|task| task["id"]
+                .as_str()
+                .is_some_and(|id| !id.starts_with("board:T-")))
+            .cloned()
+            .collect::<Vec<Value>>(),
+        Vec::<Value>::new(),
+        "every view is taken back: {}",
+        stderr(&output)
+    );
+    assert_eq!(
+        tasks_of(&store, "vault"),
+        Vec::<Value>::new(),
+        "and the canonical plan"
+    );
+}
+
+#[test]
+fn a_view_written_by_an_earlier_copy_is_linked_by_a_later_one() {
+    for on_board in [false, true] {
+        let (store, board) = if on_board {
+            let (store, board) = board_store();
+            (store, Some(board))
+        } else {
+            let store = projecting_store();
+            private_rollout(&store);
+            (store, None)
+        };
+        let repository = if on_board { BOARD_REPOSITORY } else { OPEN };
+        record_link_target(&store, repository);
+        let first = copy_rollout(&store);
+        let target = linked_view(&store, &first, "budgets");
+        record_linker(&store, repository);
+        let landed = copy_rollout(&store);
+        assert_eq!(
+            linked_view(&store, &landed, "budgets"),
+            target,
+            "the target's view is the one the earlier copy made"
+        );
+        let linker = linked_view(&store, &landed, "a-linker");
+        let content = shown(&store, "task", &linker)["content"]
+            .as_str()
+            .expect("the view's content")
+            .to_owned();
+        let at = shown(&store, "task", &target)["location"]["url"]
+            .as_str()
+            .map(|url| url.replacen("https://github.com/", "https://www.github.com/", 1))
+            .unwrap_or_else(|| format!("{}.md", target.split_once(':').expect("a qualified id").1));
+        let slug = if on_board { "user-content-" } else { "" };
+        assert!(
+            content.contains(&format!("[the budget]({at}#{slug}budget-details)")),
+            "{content}"
+        );
+        if let Some(board) = board {
+            let mark = board.served_count();
+            copy_rollout(&store);
+            assert!(
+                board
+                    .served_since(mark)
+                    .iter()
+                    .all(|(document, _)| !document.trim_start().starts_with("mutation")),
+                "a repeat copy writes the board nothing"
+            );
+        }
+    }
+}
+
+#[test]
+fn two_views_linking_each_other_both_land_their_links_and_a_repeat_writes_nothing() {
+    for on_board in [false, true] {
+        let (store, board) = if on_board {
+            let (store, board) = board_store();
+            (store, Some(board))
+        } else {
+            let store = projecting_store();
+            private_rollout(&store);
+            (store, None)
+        };
+        let repository = if on_board { BOARD_REPOSITORY } else { OPEN };
+        for (id, other) in [("ping", "pong"), ("pong", "ping")] {
+            store.record(
+                "plan",
+                "tasks",
+                id,
+                &format!("title: Answer {other}\nstatus: todo\nproject: rollout\nrepositories: [{repository}]"),
+                &format!("See [{other}]({other}.md#about-{other}).\n\n## About {id}\n\nIt.\n"),
+            );
+        }
+        let landed = copy_rollout(&store);
+        let views = ["ping", "pong"].map(|task| linked_view(&store, &landed, task));
+        for (view, other, slug) in [
+            (&views[0], &views[1], "about-pong"),
+            (&views[1], &views[0], "about-ping"),
+        ] {
+            let content = shown(&store, "task", view)["content"]
+                .as_str()
+                .expect("the view's content")
+                .to_owned();
+            let at = shown(&store, "task", other)["location"]["url"]
+                .as_str()
+                .map(|url| {
+                    format!(
+                        "{}#user-content-{slug}",
+                        url.replacen("https://github.com/", "https://www.github.com/", 1)
+                    )
+                })
+                .unwrap_or_else(|| {
+                    format!(
+                        "{}.md#{slug}",
+                        other.split_once(':').expect("a qualified id").1
+                    )
+                });
+            assert!(content.contains(&format!("]({at})")), "{content}");
+        }
+        // One of the two was created before the other's address was known, and takes one update.
+        if let Some(board) = &board {
+            assert_eq!(issue_updates(board), 1, "the cycle's one finishing write");
+        }
+        let before = store.tree();
+        let mark = board
+            .as_ref()
+            .map(crate::fixtures::GitHubBoardFields::served_count);
+        copy_rollout(&store);
+        match (&board, mark) {
+            (Some(board), Some(mark)) => assert!(
+                board
+                    .served_since(mark)
+                    .iter()
+                    .all(|(document, _)| !document.trim_start().starts_with("mutation")),
+                "a repeat copy writes the board nothing"
+            ),
+            _ => assert_eq!(store.tree(), before, "a repeat copy writes nothing"),
+        }
+    }
+}
+
+#[test]
+fn a_fragment_only_the_check_can_vouch_for_is_refused_when_it_names_private_material() {
+    let store = projecting_store();
+    private_rollout(&store);
+    record_link_target(&store, OPEN);
+    store.record(
+        "plan",
+        "tasks",
+        "a-linker",
+        &format!("title: Hold the budget\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"),
+        "Read [the notes](budgets.md#quietharbor-notes).\n",
+    );
+    let before = store.tree();
+    let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
+    assert_eq!(kind, "boundary-refused", "{said}");
+    assert_eq!(store.tree(), before, "nothing was written anywhere");
+}
+
+#[test]
+fn a_link_to_a_view_in_another_public_source_is_its_text_alone() {
+    let store = Store::laid(Some(registered), |sandbox| {
+        json!({
+            "shop": folder(sandbox, "shop", "public"),
+            "vault": {"routes": [
+                {"repositories": ["github.com/openco/*"], "to": "site"},
+                {"repositories": ["github.com/shopco/*"], "to": "shop"},
+            ]},
+        })
+    });
+    private_rollout(&store);
+    record_link_target(&store, SHOP);
+    record_linker(&store, OPEN);
+    let landed = copy_rollout(&store);
+    let linker = linked_view(&store, &landed, "a-linker");
+    let content = shown(&store, "task", &linker)["content"]
+        .as_str()
+        .expect("the view's content")
+        .to_owned();
+    assert!(
+        content.contains("Read the budget, the anchor and the task. Not the producer"),
+        "{content}"
+    );
+}
+
+#[test]
+fn a_plan_held_in_private_linear_keeps_its_views_links_where_a_form_is_written() {
+    for destination_kind in ["local-md", "github-projects", "linear"] {
+        // Held for the journey: each store's server ends with its handle.
+        let (mut canonical_store, mut public_store) = (None, None);
+        let store = Store::laid(Some(registered_with_board), |sandbox| {
+            let (held_canonical, mut canonical) =
+                crate::section_links::store(sandbox, "linear", "canonical", None);
+            canonical_store = Some(held_canonical);
+            canonical["visibility"] = json!("private");
+            let (held_public, mut public) =
+                crate::section_links::store(sandbox, destination_kind, "public", None);
+            public["visibility"] = json!("public");
+            public_store = Some(held_public);
+            sandbox.secrets_file(
+                "LINEAR_API_KEY=fixture-key\nGITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n\
+                 GITHUB_PROJECTS_FIXTURE_TOKEN_B=test-token-b\n",
+            );
+            canonical["routes"] = json!([{"repositories": [BOARD_REPOSITORY], "to": "public"}]);
+            json!({"canonical": canonical, "public": public})
+        });
+        let _held = (canonical_store, public_store);
+        private_rollout_of(&store, BOARD_REPOSITORY);
+        record_link_target(&store, BOARD_REPOSITORY);
+        record_linker(&store, BOARD_REPOSITORY);
+        // The draft in a folder, its home the private Linear workspace, its public work routed:
+        // the shape a plan naming a private repository takes.
+        let landed = landed_ids(&store.ok(&[
+            "project",
+            "copy",
+            "plan:rollout",
+            "--to",
+            "canonical",
+            "--json",
+        ]));
+        let map = projection_map(&store, &landed["plan:rollout"]);
+        let view_of_task = |task: &str| {
+            map["tasks"]
+                .as_array()
+                .expect("the map's tasks")
+                .iter()
+                .find(|entry| entry["task"] == landed[&format!("plan:{task}")])
+                .expect("the task's view")["projection"]
+                .as_str()
+                .expect("the view")
+                .to_owned()
+        };
+        let (linker, target) = (view_of_task("a-linker"), view_of_task("budgets"));
+        let content = shown(&store, "task", &linker)["content"]
+            .as_str()
+            .expect("the view's content")
+            .to_owned();
+        let target_read = shown(&store, "task", &target);
+        let native = target.split_once(':').expect("a qualified id").1;
+        match destination_kind {
+            "local-md" => assert!(
+                content.contains(&format!("[the budget]({native}.md#budget-details)")),
+                "{content}"
+            ),
+            "github-projects" => {
+                let url = target_read["location"]["url"]
+                    .as_str()
+                    .expect("the address");
+                let www = url.replacen("https://github.com/", "https://www.github.com/", 1);
+                assert!(
+                    content.contains(&format!("[the budget]({www}#user-content-budget-details)")),
+                    "{content}"
+                );
+            }
+            _ => assert!(content.contains("Read the budget, the anchor"), "{content}"),
+        }
+        assert!(
+            content.contains("Not the producer, not the reasons"),
+            "{destination_kind}: {content}"
+        );
+        for private in ["linear.app", "budgets.md", "producer.md", "design.md"] {
+            assert!(
+                !content.contains(private),
+                "{destination_kind}: {private} in {content}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_plan_copied_onward_from_private_linear_points_its_tracker_links_at_the_views() {
+    for destination_kind in ["local-md", "github-projects"] {
+        let (mut canonical_store, mut public_store) = (None, None);
+        let store = Store::laid(Some(registered_with_board), |sandbox| {
+            let (held_canonical, mut canonical) =
+                crate::section_links::store(sandbox, "linear", "canonical", None);
+            canonical_store = Some(held_canonical);
+            canonical["visibility"] = json!("private");
+            let (held_public, mut public) =
+                crate::section_links::store(sandbox, destination_kind, "public", None);
+            public["visibility"] = json!("public");
+            public_store = Some(held_public);
+            sandbox.secrets_file(
+                "LINEAR_API_KEY=fixture-key\nGITHUB_PROJECTS_FIXTURE_TOKEN=test-token\n\
+                 GITHUB_PROJECTS_FIXTURE_TOKEN_B=test-token-b\n",
+            );
+            json!({"canonical": canonical, "public": public,
+                "vault": {"routes": [{"repositories": [BOARD_REPOSITORY], "to": "public"}]}})
+        });
+        let _held = (canonical_store, public_store);
+        private_rollout_of(&store, BOARD_REPOSITORY);
+        record_link_target(&store, BOARD_REPOSITORY);
+        // A link's far end has to have a counterpart in Linear to read as Linear's own form.
+        store.record(
+            "plan",
+            "tasks",
+            "a-linker",
+            &format!(
+                "title: Hold the budget\nstatus: todo\nproject: rollout\n\
+                 repositories: [{BOARD_REPOSITORY}]"
+            ),
+            "Read [the budget](budgets.md#budget-details). Not [the producer](producer.md).\n",
+        );
+        let held = landed_ids(&store.ok(&[
+            "project",
+            "copy",
+            "plan:rollout",
+            "--to",
+            "canonical",
+            "--json",
+        ]));
+        let linker = &held["plan:a-linker"];
+        let private_link = shown(&store, "task", linker)["content"]
+            .as_str()
+            .expect("the canonical content")
+            .to_owned();
+        assert!(private_link.contains("linear"), "{private_link}");
+        let landed = landed_ids(&store.ok(&[
+            "project",
+            "copy",
+            &held["plan:rollout"],
+            "--to",
+            "vault",
+            "--json",
+        ]));
+        let map = projection_map(&store, &landed[&held["plan:rollout"]]);
+        let view_of_task = |task: &str| {
+            map["tasks"]
+                .as_array()
+                .expect("the map's tasks")
+                .iter()
+                .find(|entry| entry["task"] == landed[&held[&format!("plan:{task}")]])
+                .expect("the task's view")["projection"]
+                .as_str()
+                .expect("the view")
+                .to_owned()
+        };
+        let (view, target) = (view_of_task("a-linker"), view_of_task("budgets"));
+        let content = shown(&store, "task", &view)["content"]
+            .as_str()
+            .expect("the view's content")
+            .to_owned();
+        let native = target.split_once(':').expect("a qualified id").1;
+        let expected = match shown(&store, "task", &target)["location"]["url"].as_str() {
+            Some(url) => format!(
+                "[the budget]({}#user-content-budget-details)",
+                url.replacen("https://github.com/", "https://www.github.com/", 1)
+            ),
+            None => format!("[the budget]({native}.md#budget-details)"),
+        };
+        assert!(content.contains(&expected), "{destination_kind}: {content}");
+        assert!(content.contains("Not the producer."), "{content}");
+        assert!(!content.contains("linear"), "{destination_kind}: {content}");
+    }
+}
+
+#[test]
+fn a_link_that_could_name_either_of_two_tasks_at_one_location_is_its_text_alone() {
+    // Two tasks of a private in-memory plan report one location, as nothing stops a stdio plugin
+    // doing: a link to it could name either, so neither view is chosen. A task with a location
+    // of its own is linked, its fragment carried since this source's kind has no form to read.
+    let task = |id: &str, url: &str, repository: &str, content: &str| {
+        json!({"id": id, "title": format!("Work {id}"), "content": content,
+            "status": {"category": "todo", "name": "Todo"}, "labels": [], "project": "P",
+            "location": {"url": url}, "repositories": [repository]})
+    };
+    let store = Store::laid(Some(registered), |_| {
+        json!({
+            "seeded": {"plugin": "in-memory", "visibility": "private", "config": {
+                "projects": [{"id": "P", "title": "A plan", "labels": [],
+                    "status": {"category": "todo", "name": "Todo"}}],
+                "tasks": [
+                    task("hidden", "https://tracker.invalid/hidden", A, "Private work."),
+                    task("left", "https://tracker.invalid/shared", OPEN, "One."),
+                    task("right", "https://tracker.invalid/shared", OPEN, "Other."),
+                    task("own", "https://tracker.invalid/own", OPEN, "Its own."),
+                    task(
+                        "linker",
+                        "https://tracker.invalid/linker",
+                        OPEN,
+                        "See [shared](https://tracker.invalid/shared#about) and \
+                         [own](https://tracker.invalid/own#about).",
+                    ),
+                ],
+            }},
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "site"}]},
+        })
+    });
+    let landed = landed_ids(&store.ok(&["project", "copy", "seeded:P", "--to", "vault", "--json"]));
+    let map = projection_map(&store, &landed["seeded:P"]);
+    let view_of_task = |task: &str| {
+        map["tasks"]
+            .as_array()
+            .expect("the map's tasks")
+            .iter()
+            .find(|entry| entry["task"] == landed[&format!("seeded:{task}")])
+            .expect("the task's view")["projection"]
+            .as_str()
+            .expect("the view")
+            .to_owned()
+    };
+    let own = view_of_task("own");
+    let file = own.split_once(':').expect("a qualified id").1;
+    let content = shown(&store, "task", &view_of_task("linker"))["content"]
+        .as_str()
+        .expect("the view's content")
+        .to_owned();
+    assert_eq!(
+        content.trim_end(),
+        format!("See shared and [own]({file}.md#about)."),
+    );
+}
+
+#[test]
+fn a_recorded_view_moved_or_deleted_is_linked_as_the_view_that_replaces_it() {
+    let store = projecting_store();
+    private_rollout(&store);
+    for (id, other) in [("ping", "pong"), ("pong", "ping")] {
+        store.record(
+            "plan",
+            "tasks",
+            id,
+            &format!(
+                "title: Answer {other}\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"
+            ),
+            &format!("See [{other}]({other}.md#about-{other}).\n\n## About {id}\n\nIt.\n"),
+        );
+    }
+    let landed = copy_rollout(&store);
+    let (ping, pong) = (
+        linked_view(&store, &landed, "ping"),
+        linked_view(&store, &landed, "pong"),
+    );
+    let links_to = |view: &str, other: &str| {
+        let file = other.split_once(':').expect("a qualified id").1;
+        let content = shown(&store, "task", view)["content"]
+            .as_str()
+            .expect("the view's content")
+            .to_owned();
+        assert!(
+            content.contains(&format!("[ping]({file}.md#about-ping)")),
+            "{content}"
+        );
+    };
+    links_to(&pong, &ping);
+    // The view the map names is no longer in the plan's project: pong is pointed at the new one.
+    let ping_file = record_file(&store, "tasks", &ping);
+    let taken_out: String = std::fs::read_to_string(&ping_file)
+        .expect("the view")
+        .lines()
+        .filter(|line| !line.starts_with("project:"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(&ping_file, taken_out).expect("taken out of its project");
+    copy_rollout(&store);
+    let replaced = linked_view(&store, &landed, "ping");
+    assert_ne!(replaced, ping, "a new view is recorded");
+    links_to(&pong, &replaced);
+    let before = store.tree();
+    copy_rollout(&store);
+    assert_eq!(store.tree(), before, "and the next copy writes nothing");
+    // The view the map names is gone: the copy makes it again, and pong still reaches it.
+    std::fs::remove_file(record_file(&store, "tasks", &replaced)).expect("the view deleted");
+    copy_rollout(&store);
+    let remade = linked_view(&store, &landed, "ping");
+    links_to(&pong, &remade);
+    let before = store.tree();
+    copy_rollout(&store);
+    assert_eq!(store.tree(), before, "and the next copy writes nothing");
+}
