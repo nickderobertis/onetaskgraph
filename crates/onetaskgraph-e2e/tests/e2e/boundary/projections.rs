@@ -3639,7 +3639,7 @@ fn a_views_link_to_another_views_heading_lands_in_the_boards_section_form() {
         raw.contains(&linker_view(
             &format!("{url}#user-content-budget-details"),
             &format!("{url}#the-anchor"),
-            &shown(&store, "task", &target)["location"]["url"]
+            shown(&store, "task", &target)["location"]["url"]
                 .as_str()
                 .expect("the view's address"),
             "#user-content-own-part",
