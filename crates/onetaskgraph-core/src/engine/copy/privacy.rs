@@ -36,14 +36,8 @@ impl Engine {
         }
         // Read links while their private source spellings still identify their referents.
         // The renderer screens every public result and uses opaque pending links until a
-        // counterpart has landed. Linear's public-copy behaviour is outside this path.
-        let destination = self.writable(&item.to)?;
-        if !running.private_locations.as_ref().is_none_or(Vec::is_empty)
-            && matches!(
-                SectionForm::for_kind(destination.kind()),
-                Some(SectionForm::LocalMd | SectionForm::GithubProjects)
-            )
-        {
+        // counterpart has landed.
+        if !running.private_locations.as_ref().is_none_or(Vec::is_empty) {
             self.rewrite_references(
                 std::slice::from_mut(item),
                 &running.resolvable,
@@ -210,11 +204,15 @@ impl Engine {
 }
 
 /// Reported record locations are URLs or absolute paths. A slash inside ordinary prose
-/// (including a repository name) is not evidence that an unrelated private store must be read.
+/// (including a repository name) is not evidence that an unrelated private store must be read;
+/// a word naming a Markdown file is, because a folder of Markdown's records are those files and
+/// a body may name one by a relative path alone.
 pub(super) fn could_address(content: &str) -> bool {
     content.contains("](")
         || content.contains("]:")
         || content.contains("://")
+        || super::sections::bare_paths(content)
+            .any(|(_, word)| word.split('#').next().unwrap_or_default().ends_with(".md"))
         || content.char_indices().any(|(at, character)| {
             (character == '/' || character == '\\')
                 && super::stops_a_location(content[..at].chars().next_back())
@@ -254,6 +252,10 @@ pub(super) fn without_private_links_keeping(
             })
         })
         .collect::<Vec<_>>();
+    let known = locations
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
     let private = |target: &str, range: &std::ops::Range<usize>| {
         if destination_links.iter().any(|(written, link)| {
             link == target && range.start <= written.start && written.end <= range.end
@@ -270,6 +272,11 @@ pub(super) fn without_private_links_keeping(
                     .is_some_and(|rest| rest.starts_with('#'))
         })
     };
+    let bare_private = |path: &str| {
+        let path = path.split('#').next().unwrap_or_default();
+        own.and_then(|own| crate::section_links::resolve_relative(own, path))
+            .is_some_and(|resolved| known.contains(resolved.as_str()))
+    };
     let parser = pulldown_cmark::Parser::new(content);
     let mut replacements = parser
         .reference_definitions()
@@ -283,6 +290,21 @@ pub(super) fn without_private_links_keeping(
         {
             let link = &content[range.clone()];
             replacements.push((range, link_label(link).to_owned()));
+        }
+    }
+    // A path alone, as a table cell names a record. A word inside a link or definition just
+    // replaced goes with it, and one inside a verified link is the counterpart's own spelling.
+    for (at, path) in super::sections::bare_paths(content) {
+        let range = at..at + path.len();
+        let overlaps =
+            |held: &std::ops::Range<usize>| range.start < held.end && held.start < range.end;
+        if bare_private(path)
+            && !replacements.iter().any(|(held, _)| overlaps(held))
+            && !destination_links
+                .iter()
+                .any(|(written, _)| overlaps(written))
+        {
+            replacements.push((range, String::new()));
         }
     }
     replacements.sort_by_key(|(range, _)| range.start);

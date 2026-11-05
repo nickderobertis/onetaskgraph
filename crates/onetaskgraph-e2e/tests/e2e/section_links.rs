@@ -184,6 +184,9 @@ pub(crate) fn store(
         }
         _ => {
             let (config, workspace) = linear_empty_workspace_held(sandbox);
+            if matches!(beside, Some(Store::Linear(_))) {
+                workspace.use_web_workspace("second");
+            }
             (
                 Store::Linear(workspace),
                 json!({"plugin": "linear", "config": config}),
@@ -3301,30 +3304,13 @@ fn public_copies_keep_sections_and_screen_private_record_links_in_bodies_and_com
                 target_body().trim_end(),
                 "{context}: own sections survive"
             );
-            if destination_kind != "linear" {
-                holds_the_form(&sandbox, &context, &public, &landed, &authored_target);
-            }
+            holds_the_form(&sandbox, &context, &public, &landed, &authored_target);
             for key in ["P", "U", "D"] {
                 let content = landed[key].content(&sandbox);
                 assert!(
                     !content.contains(&private_location),
                     "{context} {key}: {content}"
                 );
-                for label in [
-                    "the demo",
-                    "the first",
-                    "what it is",
-                    "the retry",
-                    "first",
-                    "second",
-                    "retry",
-                    "missing",
-                ] {
-                    assert!(
-                        destination_kind != "linear" || !content.contains(&format!("[{label}](")),
-                        "{context} {key}: private link becomes text: {content}"
-                    );
-                }
             }
             let comments: Value = serde_json::from_str(&ok(
                 &sandbox,
@@ -3332,14 +3318,10 @@ fn public_copies_keep_sections_and_screen_private_record_links_in_bodies_and_com
             ))
             .unwrap();
             let text = comments["comments"][0]["body"].as_str().unwrap();
-            let expected = if destination_kind == "linear" {
-                "Read the private budget and [public docs](https://example.org/docs).".to_owned()
-            } else {
-                let link = public.link(&sandbox, &landed["U"], Some(&landed["T"]), HEADINGS[1], 0);
-                format!(
-                    "Read [the private budget]({link}) and [public docs](https://example.org/docs)."
-                )
-            };
+            let link = public.link(&sandbox, &landed["U"], Some(&landed["T"]), HEADINGS[1], 0);
+            let expected = format!(
+                "Read [the private budget]({link}) and [public docs](https://example.org/docs)."
+            );
             assert_eq!(text, expected, "{context}: {comments}");
             assert!(report.contains_key(&canonical["T"].id));
         }
@@ -3732,4 +3714,397 @@ fn a_private_inventory_failure_after_earlier_pages_refuses_publication_and_recov
             target_body().trim_end()
         );
     }
+}
+
+/// A private folder holding the authored project with its design document's content replaced,
+/// beside a public store of `kind`: the destination, the sandbox's private root.
+fn private_design(sandbox: &Sandbox, kind: &str, design: &str) -> (Store, PathBuf) {
+    let (mut source, _) = authored(sandbox, "plans");
+    source["visibility"] = json!("private");
+    let (destination, mut public) = store(sandbox, kind, "public", None);
+    public["visibility"] = json!("public");
+    configure(sandbox, &[("plans", &source), ("public", &public)]);
+    let root = root_of(sandbox, "plans");
+    std::fs::write(
+        root.join("documents/D.md"),
+        format!("---\ntitle: Design\nproject: P\n---\n{design}"),
+    )
+    .expect("the design document");
+    (destination, root)
+}
+
+/// A copy's three reference figures: rewritten, unresolved and ambiguous, zero when absent.
+fn reference_figures(rendered: &str) -> [u64; 3] {
+    let report: Value = serde_json::from_str(rendered).expect("a copy emits JSON");
+    ["rewritten", "unresolved", "ambiguous"].map(|figure| {
+        report[format!("references_{figure}")]
+            .as_u64()
+            .unwrap_or_default()
+    })
+}
+
+/// Copy the project and its target task to `public`, the task landing on `Destination.md` in a
+/// folder of Markdown, so a rewritten path cannot pass for the source's own spelling. Answers
+/// the task's record there.
+fn publish_target(sandbox: &Sandbox, kind: &str) -> Landed {
+    ok(
+        sandbox,
+        &[
+            "project",
+            "copy",
+            "plans:P",
+            "--to",
+            "public",
+            "--no-tasks",
+            "--json",
+        ],
+    );
+    let mut arguments = vec!["task", "copy", "plans:T", "--to", "public", "--json"];
+    if kind == "local-md" {
+        let tasks = root_of(sandbox, "public").join("tasks");
+        std::fs::create_dir_all(&tasks).expect("the folder");
+        std::fs::write(
+            tasks.join("Destination.md"),
+            "---\ntitle: Target\nstatus: todo\n---\nTo be replaced.\n",
+        )
+        .expect("the counterpart");
+        arguments.extend(["--match-by", "title"]);
+    }
+    let report = outcomes(&ok(sandbox, &arguments));
+    Landed {
+        verb: "task",
+        id: report["plans:T"]["destination"]
+            .as_str()
+            .expect("the task landed")
+            .to_owned(),
+    }
+}
+
+fn copy_design(sandbox: &Sandbox) -> (Landed, [u64; 3]) {
+    let rendered = ok(
+        sandbox,
+        &["document", "copy", "plans:D", "--to", "public", "--json"],
+    );
+    let id = outcomes(&rendered)["plans:D"]["destination"]
+        .as_str()
+        .expect("the document landed")
+        .to_owned();
+    (
+        Landed {
+            verb: "document",
+            id,
+        },
+        reference_figures(&rendered),
+    )
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_private_documents_definition_used_in_a_table_cell_points_at_the_public_counterpart() {
+    for kind in KINDS {
+        let sandbox = Sandbox::new();
+        let (destination, root) = private_design(
+            &sandbox,
+            kind,
+            "| Task | Where |\n| --- | --- |\n| T | [the task][t] |\n\n[t]: ../tasks/T.md#what\n",
+        );
+        let task = publish_target(&sandbox, kind);
+        let (design, figures) = copy_design(&sandbox);
+        let link = destination.link(&sandbox, &design, Some(&task), HEADINGS[0], 0);
+        assert_eq!(
+            design.content(&sandbox).trim_end(),
+            format!("| Task | Where |\n| --- | --- |\n| T | [the task][t] |\n\n[t]: {link}"),
+            "{kind}"
+        );
+        assert_eq!(figures, [1, 0, 0], "{kind}: one reference rewritten");
+        assert!(
+            !design
+                .content(&sandbox)
+                .contains(&root.display().to_string())
+        );
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_private_documents_path_in_a_table_cell_and_its_definition_each_point_at_the_counterpart() {
+    for kind in KINDS {
+        let sandbox = Sandbox::new();
+        let (destination, _) = private_design(
+            &sandbox,
+            kind,
+            "| Task | Where |\n| --- | --- |\n| T | `../tasks/T.md` |\n\nSee [the task][t].\n\n\
+             [t]: ../tasks/T.md#what\n",
+        );
+        let task = publish_target(&sandbox, kind);
+        let (design, figures) = copy_design(&sandbox);
+        let link = destination.link(&sandbox, &design, Some(&task), HEADINGS[0], 0);
+        // A path alone names the record, which is the location everywhere but a folder of
+        // Markdown, whose own spelling of a link is the path relative to the linking file.
+        let cell = match destination {
+            Store::Local => relative(&design.location(&sandbox), &task.location(&sandbox)),
+            _ => task.location(&sandbox),
+        };
+        assert_eq!(
+            design.content(&sandbox).trim_end(),
+            format!(
+                "| Task | Where |\n| --- | --- |\n| T | `{cell}` |\n\nSee [the task][t].\n\n\
+                 [t]: {link}"
+            ),
+            "{kind}"
+        );
+        assert_eq!(figures, [2, 0, 0], "{kind}: two occurrences rewritten");
+        // Nothing moved at the source, so the same copy again writes nothing.
+        let again = ok(
+            &sandbox,
+            &["document", "copy", "plans:D", "--to", "public", "--json"],
+        );
+        assert_eq!(outcomes(&again)["plans:D"]["action"], "unchanged", "{kind}");
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_private_documents_references_with_no_public_counterpart_are_removed_and_counted() {
+    for kind in KINDS {
+        let sandbox = Sandbox::new();
+        let root_target = root_of(&sandbox, "plans")
+            .join("tasks")
+            .join("T.md")
+            .display()
+            .to_string();
+        let (destination, root) = private_design(
+            &sandbox,
+            kind,
+            &format!(
+                "| Task | Where |\n| --- | --- |\n| bare | `../tasks/T.md` |\n| plain | ../tasks/T.md#what |\n\
+                 | absolute | `{root_target}` |\n| linked | [inline](../tasks/T.md#what) |\n\n\
+                 See [the task][t], or ../tasks/T.md.\n\n[t]: ../tasks/T.md#what\n"
+            ),
+        );
+        let (design, figures) = copy_design(&sandbox);
+        assert_eq!(
+            design.content(&sandbox).trim_end(),
+            "| Task | Where |\n| --- | --- |\n| bare | `` |\n| plain |  |\n| absolute | `` |\n\
+             | linked | inline |\n\nSee the task, or .",
+            "{kind}"
+        );
+        assert_eq!(figures, [0, 6, 0], "{kind}: each occurrence is counted");
+        if let Store::Github(board) = &destination {
+            for (query, variables) in board.served() {
+                if query.trim_start().starts_with("mutation") {
+                    let sent = variables.to_string();
+                    for private in ["T.md", "plans:T", &root.display().to_string()] {
+                        assert!(!sent.contains(private), "{private}: {sent}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: a folder of Markdown and a spawned stdio peer exercise the engine's public-copy screen.
+#[test]
+fn a_private_documents_references_reach_a_stdio_destinations_counterpart_and_no_further() {
+    let sandbox = Sandbox::new();
+    let (mut source, _) = authored(&sandbox, "plans");
+    source["visibility"] = json!("private");
+    let root = root_of(&sandbox, "plans");
+    for key in ["Held", "Unheld"] {
+        std::fs::write(
+            root.join("documents").join(format!("{key}.md")),
+            format!("---\ntitle: {key}\nproject: P\n---\n## Budgets\n"),
+        )
+        .expect("a linked document");
+    }
+    std::fs::write(
+        root.join("documents/D.md"),
+        "---\ntitle: Design\nproject: P\n---\n| held | `Held.md` |\n| unheld | `Unheld.md` |\n\n\
+         See [held][h] and [unheld][u].\n\n[h]: Held.md#budgets\n[u]: Unheld.md#budgets\n",
+    )
+    .expect("the design document");
+    let store = sandbox.project().join("store.json");
+    // The counterpart a person's earlier copy left, at the location this peer reports for it.
+    let counterpart = "https://documents.example.invalid/counterpart";
+    std::fs::write(
+        &store,
+        json!({"documents": [{
+            "id": "counterpart",
+            "title": "Held",
+            "content": "## Budgets\n",
+            "labels": [],
+            "repositories": [],
+            "location": {"url": counterpart},
+            "metadata": {"onetaskgraph.origin": "plans:Held"},
+        }]})
+        .to_string(),
+    )
+    .expect("the peer's store");
+    let mut peer = crate::document_store::store_at(&store, None, "native");
+    peer["visibility"] = json!("public");
+    configure(&sandbox, &[("plans", &source), ("public", &peer)]);
+    let (design, figures) = copy_design(&sandbox);
+    assert_eq!(
+        design.content(&sandbox).trim_end(),
+        format!(
+            "| held | `{counterpart}` |\n| unheld | `` |\n\nSee [held][h] and unheld.\n\n\
+             [h]: {counterpart}#budgets"
+        )
+    );
+    assert_eq!(figures, [2, 2, 0]);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and a loopback stand-in exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_private_documents_angled_definition_under_an_escaped_label_keeps_its_shape() {
+    for kind in ["local-md", "github-projects"] {
+        let sandbox = Sandbox::new();
+        let (destination, _) = private_design(
+            &sandbox,
+            kind,
+            "See [the task][a\\]: b] and [the other][wrapped].\n\n\
+             [a\\]: b]: <../tasks/T.md#what> \"The task\"\n\
+             [wrapped]:\n    ../tasks/T.md#what\n",
+        );
+        let task = publish_target(&sandbox, kind);
+        let (design, figures) = copy_design(&sandbox);
+        let link = destination.link(&sandbox, &design, Some(&task), HEADINGS[0], 0);
+        assert_eq!(
+            design.content(&sandbox).trim_end(),
+            format!(
+                "See [the task][a\\]: b] and [the other][wrapped].\n\n\
+                 [a\\]: b]: <{link}> \"The task\"\n\
+                 [wrapped]:\n    {link}"
+            ),
+            "{kind}"
+        );
+        assert_eq!(figures, [2, 0, 0], "{kind}");
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: two folders of Markdown exercise the engine's copy, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_definition_and_a_bare_path_are_left_as_they_are_when_no_private_source_is_configured() {
+    let sandbox = Sandbox::new();
+    let (source, _) = authored(&sandbox, "plans");
+    let (_, public) = store(&sandbox, "local-md", "public", None);
+    configure(&sandbox, &[("plans", &source), ("public", &public)]);
+    let design = "| T | `../tasks/T.md` |\n\nSee [the task][t].\n\n[t]: ../tasks/T.md#what";
+    std::fs::write(
+        root_of(&sandbox, "plans").join("documents/D.md"),
+        format!("---\ntitle: Design\nproject: P\n---\n{design}\n"),
+    )
+    .expect("the design document");
+    ok(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plans:P",
+            "--to",
+            "public",
+            "--no-tasks",
+            "--json",
+        ],
+    );
+    ok(
+        &sandbox,
+        &["task", "copy", "plans:T", "--to", "public", "--json"],
+    );
+    let (copied, figures) = copy_design(&sandbox);
+    assert_eq!(copied.content(&sandbox).trim_end(), design);
+    assert_eq!(figures, [0, 0, 0]);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and a loopback stand-in exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_definition_and_a_bare_path_naming_each_other_are_finished_in_the_copy_that_writes_both() {
+    for kind in ["local-md", "github-projects"] {
+        let sandbox = Sandbox::new();
+        let (destination, root) = private_design(&sandbox, kind, "The design.\n");
+        // Linking each other, so whichever lands first is written before the other's address
+        // is known.
+        std::fs::write(
+            root.join("tasks/T.md"),
+            "---\ntitle: Target\nstatus: todo\nproject: P\n---\n## What\n\n\
+             See [the referrer][u].\n\n[u]: <U.md#what>\n",
+        )
+        .expect("the target");
+        std::fs::write(
+            root.join("tasks/U.md"),
+            "---\ntitle: Referrer\nstatus: todo\nproject: P\n---\n## What\n\n\
+             | Target | `T.md` |\n\n[t]: T.md#what\n",
+        )
+        .expect("the referrer");
+        let rendered = ok(
+            &sandbox,
+            &[
+                "task", "copy", "plans:T", "plans:U", "--to", "public", "--json",
+            ],
+        );
+        let report = outcomes(&rendered);
+        let landed = |source: &str| Landed {
+            verb: "task",
+            id: report[source]["destination"]
+                .as_str()
+                .expect("the task landed")
+                .to_owned(),
+        };
+        let (target, referrer) = (landed("plans:T"), landed("plans:U"));
+        let to_referrer = destination.link(&sandbox, &target, Some(&referrer), HEADINGS[0], 0);
+        let to_target = destination.link(&sandbox, &referrer, Some(&target), HEADINGS[0], 0);
+        let cell = match destination {
+            Store::Local => relative(&referrer.location(&sandbox), &target.location(&sandbox)),
+            _ => target.location(&sandbox),
+        };
+        let held = target.content(&sandbox);
+        assert_eq!(
+            held.trim_end(),
+            format!("## What\n\nSee [the referrer][u].\n\n[u]: <{to_referrer}>"),
+            "{kind}"
+        );
+        assert_eq!(
+            referrer.content(&sandbox).trim_end(),
+            format!("## What\n\n| Target | `{cell}` |\n\n[t]: {to_target}"),
+            "{kind}"
+        );
+        assert!(!held.contains("onetaskgraph-pending-"), "{kind}: {held}");
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: two folders of Markdown exercise the engine's public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_private_documents_only_address_being_a_bare_path_is_still_screened() {
+    let sandbox = Sandbox::new();
+    private_design(&sandbox, "local-md", "| T | ../tasks/T.md |\n");
+    let (design, figures) = copy_design(&sandbox);
+    assert_eq!(design.content(&sandbox).trim_end(), "| T |  |");
+    assert_eq!(figures, [0, 1, 0], "no counterpart yet");
+    publish_target(&sandbox, "local-md");
+    let (design, figures) = copy_design(&sandbox);
+    assert_eq!(
+        design.content(&sandbox).trim_end(),
+        "| T | ../tasks/Destination.md |"
+    );
+    assert_eq!(figures, [1, 0, 0], "its counterpart landed since");
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: two folders of Markdown exercise the engine's public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_bare_path_to_a_private_record_of_another_project_is_removed_and_not_counted() {
+    let sandbox = Sandbox::new();
+    let (_, root) = private_design(&sandbox, "local-md", "| other | `../tasks/Other.md` |\n");
+    std::fs::write(
+        root.join("projects/Q.md"),
+        "---\ntitle: Another plan\nstatus: todo\n---\nAnother.\n",
+    )
+    .expect("the other project");
+    std::fs::write(
+        root.join("tasks/Other.md"),
+        "---\ntitle: Other\nstatus: todo\nproject: Q\n---\nElsewhere.\n",
+    )
+    .expect("the other project's task");
+    let (design, figures) = copy_design(&sandbox);
+    assert_eq!(design.content(&sandbox).trim_end(), "| other | `` |");
+    assert_eq!(figures, [0, 0, 0], "outside the referent set");
 }

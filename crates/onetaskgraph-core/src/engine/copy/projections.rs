@@ -1037,7 +1037,14 @@ fn view_links(
         .filter(|sibling| {
             sibling.id != task.source
                 && sibling.to == task.to
-                && BodyLinks::names(from, authored, own, &sibling.location)
+                && BodyLinks::names(
+                    from,
+                    authored,
+                    own,
+                    &sibling.location,
+                    // A view is a public body: its rendering reads a path written alone.
+                    super::sections::Reading::PublicBody,
+                )
         })
         .map(|sibling| {
             let mut linked = Linked::new(

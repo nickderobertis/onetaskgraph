@@ -1465,6 +1465,15 @@ them do; this is the inventory of what is owed, not a status board.
      views linking each other both land theirs, and a repeat writes nothing. A link to a private
      task, the plan's document or a view elsewhere, and every link in a view on a public Linear
      source, is its text alone; a carried fragment naming private material is refused.
+142. A document copied from a private folder to a public folder, board, Linear workspace or
+     stdio peer holding the task or document it names points a table cell and a reference-style
+     definition at that counterpart, in the destination's form, one rewritten per occurrence, and
+     a repeat writes nothing.
+143. With no counterpart there, every inline link, definition, location and bare relative path
+     naming the private record is removed from the public body and counted unresolved.
+144. A fragment carried on a bare path in a view, or on a comment's link whose target lands later
+     in the same project copy, reaches the boundary check: refused when it names private
+     material, and landing with the term replaced under a policy that rewrites.
 
 ## The public boundary
 
@@ -1553,7 +1562,9 @@ full stop included, is still not recognised at all. Both ends come from the plug
 own reported `Location`; nothing composes an address from a name, an id or a root. It is
 deliberately not a Markdown-link parser: the artifact this exists for holds bare absolute
 paths inside backticks in a table cell, which `[text](target)` matching would have left
-exactly as it found them.
+exactly as it found them. A body bound for a public destination while private sources are
+configured also reads a relative path written alone, a reference-style definition's included,
+because the screen must either carry it or remove it. Otherwise such a path is left as it is.
 
 The referent set is the document's **own project** — that project's record, the tasks filed
 under it, and the other documents filed under it — so a reference to a record in another

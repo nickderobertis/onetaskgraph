@@ -28,7 +28,7 @@ fn name(value: &str) -> SourceName {
 }
 
 /// How [`read_live_rendering`] asks again after a gateway error: up to `attempts` reads in
-/// all, sleeping `pause` times the attempt number after each 5xx.
+/// all, sleeping `pause` times the attempt number after each 5xx or dropped connection.
 #[derive(Clone, Copy, Debug)]
 struct RenderingRetry {
     attempts: u32,
@@ -45,9 +45,10 @@ const RENDERING_RETRY: RenderingRetry = RenderingRetry {
 /// and fails unless it answers success.
 ///
 /// A gateway error from GitHub's attachment host says nothing about the image: one run met
-/// a `504` here for an asset the upload's own verification had just read back `200`. So a
-/// 5xx is asked again, up to `retry.attempts` reads in all, and any other answer — a `404`
-/// above all — decides at once.
+/// a `504` here for an asset the upload's own verification had just read back `200`, and
+/// another had the connection fail for one the same verification had read back seconds
+/// earlier. So a 5xx or a read that got no answer is asked again, up to `retry.attempts`
+/// reads in all, and any other answer — a `404` above all — decides at once.
 async fn read_live_rendering(
     url: &str,
     token: &str,
@@ -75,7 +76,15 @@ async fn read_live_rendering(
                         .finished(Outcome::Refused, RateLimit::default())
                         .with_execution(None, ResponseOutcome::TransportError, attempt),
                 );
-                return Err(error.to_string());
+                let failure = with_causes(&error);
+                journey::say(&format!(
+                    "authenticated live rendering read {file}, attempt {attempt}: {failure}"
+                ));
+                if attempt >= retry.attempts {
+                    return Err(failure);
+                }
+                tokio::time::sleep(retry.pause * attempt).await;
+                continue;
             }
         };
         let limits = RateLimit::read(|header| {
@@ -112,6 +121,19 @@ async fn read_live_rendering(
         return Err(format!("broken live image {file}: {}", response.status()));
     }
     Ok(())
+}
+
+/// `error` and every cause beneath it, because reqwest's own message stops short of the
+/// socket error that says why the request failed.
+fn with_causes(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut cause = error.source();
+    while let Some(beneath) = cause {
+        message.push_str(": ");
+        message.push_str(&beneath.to_string());
+        cause = beneath.source();
+    }
+    message
 }
 
 /// Record each raw asset-lane query before interpreting its response, including refusals.
@@ -1176,6 +1198,9 @@ fn malformed_live_demand_is_refused_before_admission() {
     );
 }
 
+/// Stands in `attachment_host`'s list for a read the host drops without answering it.
+const DROPPED: u16 = 0;
+
 /// A loopback attachment host answering each read with the next of `statuses`, then `200`
 /// for as long as it is asked, counting every read that carried the credential.
 fn attachment_host(statuses: Vec<u16>) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
@@ -1203,6 +1228,9 @@ fn attachment_host(statuses: Vec<u16>) -> (String, Arc<std::sync::atomic::Atomic
             assert!(headers.contains("authorization: bearer test-token"));
             counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let status = statuses.next().unwrap_or(200);
+            if status == DROPPED {
+                continue;
+            }
             write!(
                 stream,
                 "HTTP/1.1 {status} Fixture\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -1298,7 +1326,48 @@ async fn a_rendering_read_answered_not_found_fails_at_once() {
 }
 
 #[tokio::test]
-async fn a_rendering_transport_failure_retains_its_rest_call() {
+async fn a_rendering_read_rides_out_a_dropped_connection_and_reads_the_image() {
+    let (url, reads) = attachment_host(vec![DROPPED]);
+
+    let ledger = Accounting::new();
+    let read = read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY, &ledger).await;
+
+    assert_eq!(
+        read,
+        Ok(()),
+        "a dropped connection says nothing about the image"
+    );
+    let snapshot = ledger.snapshot();
+    assert_eq!(snapshot.requests().len(), 2);
+    assert_eq!(
+        snapshot.requests()[0].response_outcome(),
+        ResponseOutcome::TransportError
+    );
+    assert_eq!(snapshot.requests()[0].attempt(), 1);
+    assert_eq!(
+        snapshot.requests()[1].response_outcome(),
+        ResponseOutcome::Success
+    );
+    assert_eq!(snapshot.requests()[1].attempt(), 2);
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_rendering_read_a_broken_image_answers_after_a_dropped_connection_still_fails() {
+    let (url, reads) = attachment_host(vec![DROPPED, 404]);
+
+    let ledger = Accounting::new();
+    let read = read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY, &ledger).await;
+
+    assert_eq!(
+        read,
+        Err("broken live image one.png: 404 Not Found".to_owned())
+    );
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_rendering_read_that_never_reaches_the_host_fails_after_its_bound_retaining_every_call() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!(
         "http://{}/user-attachments/assets/one",
@@ -1306,22 +1375,29 @@ async fn a_rendering_transport_failure_retains_its_rest_call() {
     );
     drop(listener);
     let ledger = Accounting::new();
+    let failure = read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY, &ledger)
+        .await
+        .unwrap_err();
     assert!(
-        read_live_rendering(&url, "test-token", "one.png", IMMEDIATE_RETRY, &ledger)
-            .await
-            .is_err()
+        failure.contains(&url) && failure.contains(": "),
+        "it names the read and the error beneath it: {failure}"
+    );
+    assert!(
+        failure.to_ascii_lowercase().contains("connection refused") || failure.contains("os error"),
+        "it reaches the socket error: {failure}"
     );
     let snapshot = ledger.snapshot();
-    assert_eq!(snapshot.requests().len(), 1);
-    let request = &snapshot.requests()[0];
-    assert_eq!(
-        request.budget(),
-        onetaskgraph_github_projects::accounting::Budget::Rest
-    );
-    assert_eq!(request.response_outcome(), ResponseOutcome::TransportError);
-    assert_eq!(request.attempt(), 1);
-    assert_eq!(request.document(), None);
-    assert_eq!(request.name(), "GET /user-attachments/assets/{asset}");
+    assert_eq!(snapshot.requests().len(), RENDERING_RETRY.attempts as usize);
+    for (index, request) in snapshot.requests().iter().enumerate() {
+        assert_eq!(
+            request.budget(),
+            onetaskgraph_github_projects::accounting::Budget::Rest
+        );
+        assert_eq!(request.response_outcome(), ResponseOutcome::TransportError);
+        assert_eq!(request.attempt(), u32::try_from(index + 1).unwrap());
+        assert_eq!(request.document(), None);
+        assert_eq!(request.name(), "GET /user-attachments/assets/{asset}");
+    }
 }
 
 #[test]

@@ -148,6 +148,18 @@ pub(super) struct Pending {
     spelled: Spelled,
 }
 
+impl Pending {
+    /// The source spelling this link is rendered from once it is addressable.
+    pub(super) fn source_spelling(&self) -> &str {
+        &self.original
+    }
+
+    /// The same link with its source spelling as a sanitisation passed it.
+    pub(super) fn reword(&mut self, reworded: impl FnOnce(&str) -> String) {
+        self.original = reworded(&self.original);
+    }
+}
+
 /// One rendering of a body.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Rendered {
@@ -186,11 +198,58 @@ pub(super) struct BodyLinks {
     own_stored: Option<Vec<StoredHeading>>,
     /// The records of its project it names, longest spelling first.
     pub(super) referents: Vec<Linked>,
-    /// Private addresses screened from every rendering sent to a public destination.
-    private_locations: Option<Vec<String>>,
+    /// How a rendering treats private addresses.
+    screening: Screening,
     /// Whether a folder of Markdown is sent every link to a record as a relative path, so that
     /// no spelling of a public view names where that folder sits on this machine.
     always_relative: bool,
+}
+
+/// What a body's text is read for when asking which records it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Reading {
+    /// Whole references alone.
+    WholeReferences,
+    /// A body bound for a public destination: a relative path written alone as well.
+    PublicBody,
+}
+
+/// How a body's rendering treats private addresses.
+#[derive(Debug, Clone, Default)]
+enum Screening {
+    /// Not bound for a public destination: only a whole reference is read.
+    #[default]
+    None,
+    /// Bound for a public destination: a relative path written alone, a reference-style
+    /// definition's among them, is read as a reference too, and these private addresses are
+    /// screened from every rendering.
+    Public(Vec<String>),
+    /// Read as such a body is, and not screened in this rendering: a placeholder rendered again
+    /// alone, screened once inserted back into it, or a body asked what fragments it carries.
+    PublicPlaceholder,
+}
+
+impl Screening {
+    /// The private addresses this rendering itself screens.
+    fn private_locations(&self) -> Option<&[String]> {
+        match self {
+            Self::Public(locations) => Some(locations),
+            Self::None | Self::PublicPlaceholder => None,
+        }
+    }
+
+    /// Whether a relative path written alone is read as a reference.
+    fn reads_bare_paths(&self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// The screening of a placeholder of a body screened like this.
+    fn of_placeholder(&self) -> Self {
+        match self {
+            Self::None => Self::None,
+            Self::Public(_) | Self::PublicPlaceholder => Self::PublicPlaceholder,
+        }
+    }
 }
 
 /// One recognised occurrence: what it names, and where its text ends.
@@ -229,7 +288,7 @@ impl BodyLinks {
             )
         });
         Self {
-            private_locations: None,
+            screening: Screening::None,
             always_relative: false,
             own_headings: RecordHeadings::of(&original),
             original,
@@ -245,7 +304,9 @@ impl BodyLinks {
     /// Screen public renderings after resolving counterparts, retaining private addresses
     /// only in the invocation's link plan.
     pub(super) fn screen_public(mut self, locations: Option<&[String]>) -> Self {
-        self.private_locations = locations.map(<[String]>::to_vec);
+        self.screening = locations.map_or(Screening::None, |locations| {
+            Screening::Public(locations.to_vec())
+        });
         self
     }
 
@@ -267,12 +328,14 @@ impl BodyLinks {
 
     /// Whether `content` names a record whose source reports `location`, in any spelling of
     /// the source kind's form, as a whole reference — or, read from `own` in a folder of
-    /// Markdown, as a Markdown link to a path relative to it.
+    /// Markdown, as a Markdown link to a path relative to it. In a [`Reading::PublicBody`], also
+    /// as such a path alone.
     pub(super) fn names(
         from: Option<SectionForm>,
         content: &str,
         own: Option<&str>,
         location: &str,
+        reading: Reading,
     ) -> bool {
         let spellings = from.map_or_else(
             || vec![location.to_owned()],
@@ -286,10 +349,13 @@ impl BodyLinks {
         }
         from == Some(SectionForm::LocalMd)
             && own.is_some_and(|own| {
-                destinations(content).any(|(_, target)| {
+                let names_it = |target: &str| {
                     let path = target.split(FRAGMENT).next().unwrap_or_default();
                     resolve_relative(own, path).as_deref() == Some(location)
-                })
+                };
+                destinations(content).any(|(_, target)| names_it(target))
+                    || (reading == Reading::PublicBody
+                        && bare_paths(content).any(|(_, path)| names_it(path)))
             })
     }
 
@@ -326,7 +392,14 @@ impl BodyLinks {
                 None
             }
         }
-        self.render(&Landed, Pass::Final).carried_fragments
+        // Read as the public body it is, or a fragment on a path written alone would reach the
+        // destination without this answer naming it.
+        Self {
+            screening: Screening::PublicPlaceholder,
+            ..self.clone()
+        }
+        .render(&Landed, Pass::Final)
+        .carried_fragments
     }
 
     /// The body rendered against what `knows` says now, on the terms `pass` names.
@@ -356,6 +429,12 @@ impl BodyLinks {
                 at = self.write(&occurrence, content, at, knows, pass, &mut rendered);
                 continue;
             }
+            if self.screening.reads_bare_paths()
+                && let Some(occurrence) = self.bare(content, at)
+            {
+                at = self.write(&occurrence, content, at, knows, pass, &mut rendered);
+                continue;
+            }
             let character = content[at..]
                 .chars()
                 .next()
@@ -363,7 +442,7 @@ impl BodyLinks {
             rendered.content.push(character);
             at += character.len_utf8();
         }
-        if let Some(locations) = &self.private_locations {
+        if let Some(locations) = self.screening.private_locations() {
             rendered.content = super::privacy::without_private_links_keeping(
                 &rendered.content,
                 locations,
@@ -401,7 +480,7 @@ impl BodyLinks {
                 original,
                 // This is a destination fragment, not a complete Markdown link. Screen
                 // only after inserting it into the complete body below, preserving labels.
-                private_locations: None,
+                screening: self.screening.of_placeholder(),
                 ..self.clone()
             }
             .render(knows, pass);
@@ -418,7 +497,7 @@ impl BodyLinks {
             if pass == Pass::Final
                 && text.is_some()
                 && lone.destination_links.is_empty()
-                && let Some(locations) = &self.private_locations
+                && let Some(locations) = self.screening.private_locations()
             {
                 let original = format!("[record](<{}>)", placeholder.original);
                 let clean = super::privacy::without_private_links(
@@ -473,8 +552,8 @@ impl BodyLinks {
             out.push(character);
             at += character.len_utf8();
         }
-        if let Some(locations) = &self.private_locations {
-            let mut locations = locations.clone();
+        if let Some(locations) = self.screening.private_locations() {
+            let mut locations = locations.to_vec();
             locations.extend(withheld);
             // Existing relative links were screened in their source context by `render`.
             // Only unresolved placeholders and absolute private addresses need removing now;
@@ -512,6 +591,17 @@ impl BodyLinks {
                 spelled: Spelled::Destination,
             });
         }
+        self.relative(target, end, Spelled::Destination)
+    }
+
+    /// The occurrence `target`, ending at `end`, holds when it is a path relative to the body's
+    /// own file naming a referent or that file itself.
+    fn relative<'a>(
+        &'a self,
+        target: &'a str,
+        end: usize,
+        spelled: Spelled,
+    ) -> Option<Occurrence<'a>> {
         if self.from != Some(SectionForm::LocalMd) {
             return None;
         }
@@ -532,8 +622,15 @@ impl BodyLinks {
             end,
             fragment,
             relative: true,
-            spelled: Spelled::Destination,
+            spelled,
         })
+    }
+
+    /// The relative path spelled alone at `at`, as a table cell or a reference-style definition
+    /// names a record, when one is.
+    fn bare<'a>(&'a self, content: &'a str, at: usize) -> Option<Occurrence<'a>> {
+        let path = bare_path_at(content, at)?;
+        self.relative(path, at + path.len(), Spelled::Literal)
     }
 
     /// The whole reference spelled at `at`, with its fragment, when one is: a referent's, or
@@ -612,7 +709,7 @@ impl BodyLinks {
                 rendered.content.push_str(&written);
             }
             None => {
-                let text = if self.private_locations.is_some() {
+                let text = if self.screening.private_locations().is_some() {
                     // A provisional write must not name the private source. Retain that
                     // spelling only in memory, behind a token absent from the authored body.
                     let mut token = format!("onetaskgraph-pending-{}-end", rendered.pending.len());
@@ -825,4 +922,26 @@ fn destinations(content: &str) -> impl Iterator<Item = (usize, &str)> {
             .map_or(content.len(), |found| start + found);
         (start, &content[start..end])
     })
+}
+
+/// The word starting at `at`, its fragment included and without the sentence punctuation
+/// after it, when `at` starts one: what may be a relative path spelled alone.
+pub(super) fn bare_path_at(content: &str, at: usize) -> Option<&str> {
+    if !content.is_char_boundary(at)
+        || !stops_a_location(content[..at].chars().next_back())
+        || stops_a_location(content[at..].chars().next())
+    {
+        return None;
+    }
+    let word = content[at..]
+        .split(|c: char| stops_a_location(Some(c)))
+        .next()?;
+    Some(word.trim_end_matches(['.', ':', '!', '?']))
+}
+
+/// Every word of `content`, with where it starts: see [`bare_path_at`].
+pub(super) fn bare_paths(content: &str) -> impl Iterator<Item = (usize, &str)> {
+    content
+        .char_indices()
+        .filter_map(|(at, _)| bare_path_at(content, at).map(|path| (at, path)))
 }
