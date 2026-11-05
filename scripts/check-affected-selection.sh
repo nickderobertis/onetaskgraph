@@ -238,15 +238,54 @@ for suite in $E2E_SUITES; do
   expect_selected "editing the engine" "$suite" "$selection"
 done
 report_on_failure "editing onetaskgraph-core" "$selection" "$before"
+# A nested job must start without the Linux caller's phase settings. ci-job.sh
+# installs each job's own settings, including whether its tests run under coverage.
+run_job() (
+  cd "$scratch/repo"
+  if [ "$1" != test-linux ]; then
+    # env -u also removes a temporary assignment on a shell-function call;
+    # Bash's unset can expose the previous exported value instead.
+    set -- env -u ONETASKGRAPH_SKIP_RUST_COVERAGE bash scripts/ci-job.sh "$@"
+  else
+    set -- bash scripts/ci-job.sh "$@"
+  fi
+  NX_BASE=HEAD~1 NX_HEAD=HEAD env -u ONETASKGRAPH_TESTS_UNDER_COVERAGE \
+    -u ONETASKGRAPH_CD_TIMINGS -u ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER "$@"
+)
+
 # Exercise each real CI job on an engine-only diff: both session contributors must
 # be selected without making the loopback suite wait behind the main session.
 for job in test-linux test-macos test-windows; do
-  if ! (cd "$scratch/repo" && NX_BASE=HEAD~1 NX_HEAD=HEAD bash scripts/ci-job.sh "$job" --select-only) > "$scratch/core-$job.txt"; then
+  if ! run_job "$job" --select-only > "$scratch/core-$job.txt"; then
     echo "check-affected-selection: $job could not plan the engine-only diff; run scripts/ci-job.sh $job --select-only with NX_BASE and NX_HEAD naming that diff, then fix its Nx error." >&2
     exit 1
   fi
+  # Reproduce the environment of the release-only Linux CI step. Its coverage
+  # switch must neither refuse another platform nor change that platform's plan.
+  # Linux retains its own switch, which deliberately changes its coverage selection.
+  if ! ONETASKGRAPH_SKIP_RUST_COVERAGE=1 run_job "$job" --select-only > "$scratch/core-$job-inherited.txt"; then
+    echo "check-affected-selection: $job could not plan with Linux coverage settings inherited; inspect the ci-job error above and restore run_job environment isolation, then re-run this guard" >&2
+    exit 1
+  fi
+  sed -n "/^ci-job: $job: selects /p" "$scratch/core-$job.txt" > "$scratch/selection-$job.txt"
+  sed -n "/^ci-job: $job: selects /p" "$scratch/core-$job-inherited.txt" > "$scratch/selection-$job-inherited.txt"
+  if [ "$job" != test-linux ] && ! cmp -s "$scratch/selection-$job.txt" "$scratch/selection-$job-inherited.txt"; then
+    echo "check-affected-selection: $job selection changed with Linux coverage settings inherited; restore run_job environment isolation, then re-run this guard" >&2
+    diff -u "$scratch/selection-$job.txt" "$scratch/selection-$job-inherited.txt" >&2 || true
+    exit 1
+  fi
+  if [ "$job" != test-linux ]; then
+    status=0
+    (cd "$scratch/repo" && ONETASKGRAPH_SKIP_RUST_COVERAGE=1 bash scripts/ci-job.sh "$job" --select-only) > "$scratch/refused-$job.txt" 2>&1 || status=$?
+    if [ "$status" -ne 2 ] || ! grep -qxF 'ci-job: ONETASKGRAPH_SKIP_RUST_COVERAGE=1 is only valid for test-linux' "$scratch/refused-$job.txt"; then
+      echo "check-affected-selection: $job must still refuse the Linux-only coverage switch (exit $status); restore ci-job.sh's non-Linux refusal, then re-run this guard" >&2
+      cat "$scratch/refused-$job.txt" >&2
+      exit 1
+    fi
+  fi
   for task in onetaskgraph-github-projects:test onetaskgraph-github-projects-e2e:test; do
-    if ! tr ' ' '\n' < "$scratch/core-$job.txt" | grep -qxF "$task"; then
+    if ! tr ' ' '\n' < "$scratch/core-$job.txt" | grep -qxF "$task" \
+      || ! tr ' ' '\n' < "$scratch/core-$job-inherited.txt" | grep -qxF "$task"; then
       echo "check-affected-selection: $job must select $task beside its session contributor; restore contributor selection in scripts/ci-job.sh, then re-run this guard." >&2
       failures=$((failures + 1))
     fi
@@ -279,7 +318,7 @@ for name in subprocess.check_output(["git", "ls-files", "*project.json"], text=T
 PYTARGETS
   )
   status=0
-  (cd "$scratch/repo" && NX_BASE=HEAD~1 NX_HEAD=HEAD bash scripts/ci-job.sh test-linux) \
+  run_job test-linux \
     > "$scratch/core-run-$outcome.txt" 2>&1 || status=$?
   if [ "$outcome" = success ]; then
     if [ "$status" -ne 0 ]; then
@@ -308,7 +347,7 @@ fi
 exec "$(dirname "$0")/nx.real" "$@"
 NXWRAPPER
 chmod +x "$scratch/repo/node_modules/.bin/nx"
-if (cd "$scratch/repo" && NX_BASE=HEAD~1 NX_HEAD=HEAD bash scripts/ci-job.sh test-linux --select-only) \
+if run_job test-linux --select-only \
   > "$scratch/core-replan.txt" 2>&1; then
   echo "check-affected-selection: Linux accepted failed replacement planning; return failure from run_phase when its second selected_tasks call fails, then re-run this guard." >&2
   failures=$((failures + 1))
