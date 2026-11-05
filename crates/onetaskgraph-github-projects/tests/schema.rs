@@ -1839,7 +1839,9 @@ fn unknown_user_field(server: &github_schema::PrivateServer, field: &str) {
 fn an_idle_server_stops() {
     use std::io::{BufRead, BufReader, Write};
 
-    let idle = std::time::Duration::from_millis(500);
+    // Half of this is what a connection has to arrive in to cancel the stop below, across a
+    // process boundary, so it is what a loaded host has to manage.
+    let idle = std::time::Duration::from_secs(2);
     let server = github_schema::serve_privately_from_a_copy(idle);
     let endpoint = server
         .schema()

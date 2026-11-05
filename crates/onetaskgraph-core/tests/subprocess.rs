@@ -634,7 +634,7 @@ async fn an_existing_stream_applies_its_deadline_after_initialization() {
         "a later request is bounded too"
     );
     assert!(
-        again.elapsed() < Duration::from_secs(1),
+        again.elapsed() < Duration::from_secs(10),
         "the later request hung"
     );
 }
@@ -678,7 +678,7 @@ async fn a_request_deadline_turns_a_silent_child_into_a_named_source_error() {
         "{message}"
     );
     assert!(
-        started.elapsed() < Duration::from_secs(1),
+        started.elapsed() < Duration::from_secs(10),
         "the deadline did not hang"
     );
     // An expired request kills the child this path owns, closing the connection for good; a

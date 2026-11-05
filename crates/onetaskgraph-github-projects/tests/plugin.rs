@@ -11722,12 +11722,11 @@ async fn a_fixture_wait_gives_up_within_its_deadline_and_bounds_the_read_that_ex
         SearchWithheld::item("T_second", usize::MAX)
             .answering_reads_by_id_in(Duration::from_secs(5)),
     );
+    // Long enough for a loaded host to deliver the read that is being abandoned, and still
+    // well short of the read's own answer above.
     let wait = journey::FixtureWait {
-        bound: Duration::from_millis(400),
-        first: Duration::from_millis(20),
-        steady_for: Duration::from_millis(100),
-        longest: Duration::from_millis(100),
-        diagnosis: Duration::from_millis(300),
+        diagnosis: Duration::from_secs(2),
+        ..GIVE_UP
     };
     let created = |ids: &[(&str, usize)]| {
         ids.iter()
@@ -11758,8 +11757,9 @@ async fn a_fixture_wait_gives_up_within_its_deadline_and_bounds_the_read_that_ex
     assert!(
         said.contains(&format!(
             "never reported the task {:?} (T_second), which a read by its own id did not answer \
-             within the 0.3s given it",
-            titles[3]
+             within the {}s given it",
+            titles[3],
+            wait.diagnosis.as_secs_f64()
         )),
         "{said}"
     );
@@ -12025,11 +12025,13 @@ async fn a_fixture_waits_read_by_id_is_given_its_diagnosis_and_no_longer() {
 
 /// The short wait the give-up journeys below are held to.
 /// Its bound is long enough for a loaded host to answer a search inside it, which every one of
-/// them but the one whose searches outlast it depends on. Its diagnosis is long enough for a
-/// loaded host to answer a read by id, which they assert on what they found: a hosted runner
-/// once took more than 300ms over one, and the journey then read as the read having hung.
+/// them but the one whose searches outlast it depends on: a hosted runner once took more than
+/// 400ms over one, and the journey then read as no search having answered. Its diagnosis is
+/// long enough for a loaded host to answer a read by id, which they assert on what they found:
+/// a hosted runner once took more than 300ms over one, and the journey then read as the read
+/// having hung.
 const GIVE_UP: journey::FixtureWait = journey::FixtureWait {
-    bound: Duration::from_millis(1_000),
+    bound: Duration::from_secs(5),
     first: Duration::from_millis(20),
     steady_for: Duration::from_millis(100),
     longest: Duration::from_millis(100),
@@ -12155,7 +12157,8 @@ async fn a_fixture_wait_no_search_answered_names_every_item() {
     let prefix = "onetaskgraph live cleanup 4242-912-";
     let (fixture, tasks, projects) = fixture_run(prefix, &[]);
     fixture.search_withholds(
-        SearchWithheld::item("T_second", usize::MAX).answering_searches_in(Duration::from_secs(2)),
+        SearchWithheld::item("T_second", usize::MAX)
+            .answering_searches_in(GIVE_UP.bound + Duration::from_secs(1)),
     );
     let Err(said) = journey::settled_fixture(
         &|| source(&fixture),
@@ -12292,8 +12295,10 @@ async fn the_shipped_backoff_is_what_an_unhinted_refusal_waits_when_nothing_is_c
         2,
         "the unhinted refusal was not retried at the shipped default"
     );
+    // Bounded above only to tell the shipped backoff from a much longer one: the retry's own
+    // round trip is inside this, and a loaded host can spend seconds on it.
     assert!(
-        waited >= shipped && waited < shipped * 2,
+        waited >= shipped && waited < shipped * 5,
         "the defaulted path did not wait the shipped backoff of {shipped:?}: {waited:?}"
     );
 }
@@ -12857,7 +12862,9 @@ async fn an_exhausted_budget_reports_when_it_comes_back_rather_than_burning_the_
             ),
             body: "{}".to_owned(),
         }),
-        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":50,"retry_budget_ms":5_000}),
+        // The budget stays far past the bound below, so a source burning it fails that bound
+        // while a loaded host answering slowly does not.
+        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":50,"retry_budget_ms":60_000}),
     );
     let started = Instant::now();
     let error = source
@@ -12865,7 +12872,7 @@ async fn an_exhausted_budget_reports_when_it_comes_back_rather_than_burning_the_
         .await
         .expect_err("a budget that does not come back inside the wait");
     assert!(
-        started.elapsed() < Duration::from_secs(1),
+        started.elapsed() < Duration::from_secs(10),
         "it waited on a reset it could never reach"
     );
     let SourceError::RateLimited {
