@@ -1421,6 +1421,15 @@ decided: it writes the form, parses it back and supplies its markup.
 - Any other destination, a stdio plugin among them, receives every fragment byte for byte on
   the rewritten link, as before section forms existed.
 
+**Links from a private source.** Before writing a public body, a copy inventories every
+source declared private and removes its record addresses. For GitHub Projects and local
+Markdown destinations, a link with a verified counterpart on that destination is translated
+to the counterpart's section-link form instead. The counterpart may have been written by
+this copy or an earlier one: a design document copied after its project's tasks keeps its
+budget links. A link with no counterpart there, including one copied only to another
+destination, becomes its link text alone. Private record addresses never enter a public body,
+including provisional writes made before all counterparts have landed.
+
 **Reading a tracker's own form.** A body copied out of a GitHub board or a Linear workspace holds
 its section links in that tracker's form, written by an earlier copy or by hand. Each one is
 recognised as naming its record and its heading, and written in the next destination's form.
