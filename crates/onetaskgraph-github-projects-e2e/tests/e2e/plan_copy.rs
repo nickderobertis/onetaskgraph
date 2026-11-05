@@ -1276,12 +1276,8 @@ pub(super) fn holds_the_plan(plan: &Plan, at: &Counterparts, changed: Option<(us
     for n in 1..=TASKS {
         expected = expected.replace(
             &plan.task_path(n),
-            &if plan.private && plan.site.is_none() {
-                // A public copy withholds even bare addresses of private canonical records.
-                String::new()
-            } else {
-                format!("https://example.invalid/{}", at[&format!("T-{n}")])
-            },
+            // The public counterpart is safe to name even when its source is private.
+            &format!("https://example.invalid/{}", at[&format!("T-{n}")]),
         );
     }
     expected = expected.replace("](./diagram.png)", &format!("]({url})"));
