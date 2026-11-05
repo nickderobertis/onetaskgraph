@@ -12025,11 +12025,8 @@ async fn a_fixture_waits_read_by_id_is_given_its_diagnosis_and_no_longer() {
 
 /// The short wait the give-up journeys below are held to.
 /// Its bound is long enough for a loaded host to answer a search inside it, which every one of
-/// them but the one whose searches outlast it depends on: a hosted runner once took more than
-/// 400ms over one, and the journey then read as no search having answered. Its diagnosis is
-/// long enough for a loaded host to answer a read by id, which they assert on what they found:
-/// a hosted runner once took more than 300ms over one, and the journey then read as the read
-/// having hung.
+/// them but the one whose searches outlast it depends on, and its diagnosis to answer a read by
+/// id, which they assert on what they found.
 const GIVE_UP: journey::FixtureWait = journey::FixtureWait {
     bound: Duration::from_secs(5),
     first: Duration::from_millis(20),
@@ -12854,25 +12851,33 @@ async fn an_exhausted_budget_reports_when_it_comes_back_rather_than_burning_the_
     // spend waiting, so this reports at once — carrying that wait — instead of sitting in
     // the schedule for a limit that will not lift inside it.
     let refills_in_an_hour = chrono::Utc::now().timestamp() + 3_600;
-    let source = paced(
-        &always(&Refusal {
-            status: "403 Forbidden",
-            headers: format!(
-                "x-ratelimit-remaining: 0\r\nx-ratelimit-reset: {refills_in_an_hour}\r\n"
+    let endpoint = always(&Refusal {
+        status: "403 Forbidden",
+        headers: format!("x-ratelimit-remaining: 0\r\nx-ratelimit-reset: {refills_in_an_hour}\r\n"),
+        body: "{}".to_owned(),
+    });
+    let clock = Arc::new(AdvancingClock::default());
+    let source = Plugin
+        .build_with_clock(
+            &SourceName::new("work").unwrap(),
+            &fixture_config(
+                &endpoint,
+                &json!({"pacing": {
+                    "min_mutation_interval_ms": 0, "retry_backoff_ms": 50,
+                    "retry_budget_ms": 5_000
+                }}),
             ),
-            body: "{}".to_owned(),
-        }),
-        // The budget stays far past the bound below, so a source burning it fails that bound
-        // while a loaded host answering slowly does not.
-        json!({"min_mutation_interval_ms":0,"retry_backoff_ms":50,"retry_budget_ms":60_000}),
-    );
-    let started = Instant::now();
+            &Secrets,
+            clock.clone(),
+        )
+        .unwrap();
     let error = source
         .query_tasks(&TaskQuery::default(), &page(10))
         .await
         .expect_err("a budget that does not come back inside the wait");
-    assert!(
-        started.elapsed() < Duration::from_secs(10),
+    assert_eq!(
+        *clock.waits.lock().unwrap(),
+        Vec::<Duration>::new(),
         "it waited on a reset it could never reach"
     );
     let SourceError::RateLimited {

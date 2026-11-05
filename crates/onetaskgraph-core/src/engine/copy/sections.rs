@@ -179,13 +179,46 @@ pub(super) struct BodyLinks {
     own_stored: Option<Vec<StoredHeading>>,
     /// The records of its project it names, longest spelling first.
     pub(super) referents: Vec<Linked>,
-    /// Private addresses screened from every rendering sent to a public destination.
-    private_locations: Option<Vec<String>>,
-    /// Whether a relative path written alone is read as a reference, as one in a body bound for
-    /// a public destination is, a reference-style definition's among them. Kept apart from
-    /// `private_locations` because a placeholder is rendered again alone, unscreened, by the same
-    /// reading.
-    public_body: bool,
+    /// How a rendering treats private addresses.
+    screening: Screening,
+}
+
+/// How a body's rendering treats private addresses.
+#[derive(Debug, Clone, Default)]
+enum Screening {
+    /// Not bound for a public destination: only a whole reference is read.
+    #[default]
+    None,
+    /// Bound for a public destination: a relative path written alone, a reference-style
+    /// definition's among them, is read as a reference too, and these private addresses are
+    /// screened from every rendering.
+    Public(Vec<String>),
+    /// A placeholder of such a body, rendered again alone: read as that body is, and screened
+    /// only once inserted back into it.
+    PublicPlaceholder,
+}
+
+impl Screening {
+    /// The private addresses this rendering itself screens.
+    fn private_locations(&self) -> Option<&[String]> {
+        match self {
+            Self::Public(locations) => Some(locations),
+            Self::None | Self::PublicPlaceholder => None,
+        }
+    }
+
+    /// Whether a relative path written alone is read as a reference.
+    fn reads_bare_paths(&self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// The screening of a placeholder of a body screened like this.
+    fn of_placeholder(&self) -> Self {
+        match self {
+            Self::None => Self::None,
+            Self::Public(_) | Self::PublicPlaceholder => Self::PublicPlaceholder,
+        }
+    }
 }
 
 /// One recognised occurrence: what it names, and where its text ends.
@@ -224,8 +257,7 @@ impl BodyLinks {
             )
         });
         Self {
-            private_locations: None,
-            public_body: false,
+            screening: Screening::None,
             own_headings: RecordHeadings::of(&original),
             original,
             from,
@@ -240,8 +272,9 @@ impl BodyLinks {
     /// Screen public renderings after resolving counterparts, retaining private addresses
     /// only in the invocation's link plan.
     pub(super) fn screen_public(mut self, locations: Option<&[String]>) -> Self {
-        self.private_locations = locations.map(<[String]>::to_vec);
-        self.public_body = locations.is_some();
+        self.screening = locations.map_or(Screening::None, |locations| {
+            Screening::Public(locations.to_vec())
+        });
         self
     }
 
@@ -330,7 +363,7 @@ impl BodyLinks {
                 at = self.write(&occurrence, content, at, knows, pass, &mut rendered);
                 continue;
             }
-            if self.public_body
+            if self.screening.reads_bare_paths()
                 && let Some(occurrence) = self.bare(content, at)
             {
                 at = self.write(&occurrence, content, at, knows, pass, &mut rendered);
@@ -343,7 +376,7 @@ impl BodyLinks {
             rendered.content.push(character);
             at += character.len_utf8();
         }
-        if let Some(locations) = &self.private_locations {
+        if let Some(locations) = self.screening.private_locations() {
             rendered.content = super::privacy::without_private_links_keeping(
                 &rendered.content,
                 locations,
@@ -381,7 +414,7 @@ impl BodyLinks {
                 original,
                 // This is a destination fragment, not a complete Markdown link. Screen
                 // only after inserting it into the complete body below, preserving labels.
-                private_locations: None,
+                screening: self.screening.of_placeholder(),
                 ..self.clone()
             }
             .render(knows, pass);
@@ -398,7 +431,7 @@ impl BodyLinks {
             if pass == Pass::Final
                 && text.is_some()
                 && lone.destination_links.is_empty()
-                && let Some(locations) = &self.private_locations
+                && let Some(locations) = self.screening.private_locations()
             {
                 let original = format!("[record](<{}>)", placeholder.original);
                 let clean = super::privacy::without_private_links(
@@ -453,8 +486,8 @@ impl BodyLinks {
             out.push(character);
             at += character.len_utf8();
         }
-        if let Some(locations) = &self.private_locations {
-            let mut locations = locations.clone();
+        if let Some(locations) = self.screening.private_locations() {
+            let mut locations = locations.to_vec();
             locations.extend(withheld);
             // Existing relative links were screened in their source context by `render`.
             // Only unresolved placeholders and absolute private addresses need removing now;
@@ -610,7 +643,7 @@ impl BodyLinks {
                 rendered.content.push_str(&written);
             }
             None => {
-                let text = if self.private_locations.is_some() {
+                let text = if self.screening.private_locations().is_some() {
                     // A provisional write must not name the private source. Retain that
                     // spelling only in memory, behind a token absent from the authored body.
                     let mut token = format!("onetaskgraph-pending-{}-end", rendered.pending.len());
