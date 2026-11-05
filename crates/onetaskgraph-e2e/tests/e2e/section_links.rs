@@ -3771,14 +3771,13 @@ fn publish_target(sandbox: &Sandbox, kind: &str) -> Landed {
         arguments.extend(["--match-by", "title"]);
     }
     let report = outcomes(&ok(sandbox, &arguments));
-    let task = Landed {
+    Landed {
         verb: "task",
         id: report["plans:T"]["destination"]
             .as_str()
             .expect("the task landed")
             .to_owned(),
-    };
-    task
+    }
 }
 
 /// Copy the design document to `public`, answering its record there and the copy's figures.
