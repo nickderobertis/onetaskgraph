@@ -169,6 +169,7 @@ struct Account {
     /// answered without its id (`"copy-without-id"`) or as the template itself
     /// (`"copy-as-template"`), and a deletion refused (`"refused-delete"`).
     faults: Vec<&'static str>,
+    copy_reads: usize,
     /// Whether the per-minute secondary limits are enforced, over every request since the
     /// account was made: a burst test's whole run falls inside one minute.
     per_minute: bool,
@@ -257,10 +258,19 @@ impl Account {
             }
         }
         if document.contains("query LiveTemplate(") {
-            let board = self
+            let mut board = self
                 .boards
                 .get(&number(variables))
-                .map(|board| json!({"id":board.id}));
+                .map(|board| json!({"id":board.id,"items":{"totalCount":board.items.len()}}));
+            if let Some(board) = board.as_mut() {
+                if self.has("mixed-template") {
+                    board["items"]["totalCount"] = json!(TEMPLATE_DRAFTS + 13);
+                } else if self.has("missing-template-count") {
+                    board["items"] = json!({});
+                } else if self.has("malformed-template-count") {
+                    board["items"]["totalCount"] = json!("73");
+                }
+            }
             return json!({"data":{"repositoryOwner":{"id":"U_octo","projectV2":board}}});
         }
         if document.contains("mutation LiveCopyBoard(") {
@@ -308,6 +318,20 @@ impl Account {
         if document.contains("query LiveRunBoardItems(") {
             if self.has("unread-count") {
                 return json!({"errors":[{"message":"Something went wrong while executing your query."}]});
+            }
+            self.copy_reads += 1;
+            if self.has("empty-copy") {
+                return json!({"data":{"repositoryOwner":{"projectV2":{"items":{"totalCount":0}}}}});
+            }
+            if self.has("slow-copy") {
+                let count = if self.copy_reads <= 6 {
+                    0
+                } else if self.copy_reads <= 8 {
+                    24
+                } else {
+                    TEMPLATE_DRAFTS
+                };
+                return json!({"data":{"repositoryOwner":{"projectV2":{"items":{"totalCount":count}}}}});
             }
             if self.has("stalled-copy") {
                 // A copy still filling in on every read: no two reads agree.
@@ -383,9 +407,10 @@ impl Account {
             if lagging {
                 self.lagging -= 1;
             }
+            let mixed = self.has("mixed-template") && variables["id"] == "PVT_template";
             let board = self.by_id(variables["id"].as_str().unwrap()).unwrap();
             let listed = board.items.len() - usize::from(lagging);
-            let nodes: Vec<_> = board.items[..listed]
+            let mut nodes: Vec<_> = board.items[..listed]
                 .iter()
                 .skip(start)
                 .take(100)
@@ -397,6 +422,11 @@ impl Account {
                     }
                 })
                 .collect();
+            if mixed && start == 0 {
+                nodes.extend((0..13).map(
+                    |n| json!({"id":format!("PVTI_issue_{n}"),"content":{"__typename":"Issue"}}),
+                ));
+            }
             let next = start + nodes.len();
             let more = next < listed;
             let page = if self.has("no-has-next") {
@@ -638,6 +668,14 @@ async fn session_child() {
     let writer = lane::Writer::Ci(run);
     let stamp = writer.stamp(onetaskgraph_live::artifact::now_micros());
     let send = journey::run_board::main_sender(&token);
+    if std::env::var_os("RUN_BOARD_GATE_COPY_TWICE").is_some() {
+        let first = journey::run_board::copy(&send, OWNER, TEMPLATE, &stamp)
+            .await
+            .expect("first session copies the template");
+        journey::run_board::delete(&send, &first)
+            .await
+            .expect("first session removes its copy");
+    }
     let board = journey::run_board::copy(&send, OWNER, TEMPLATE, &stamp)
         .await
         .unwrap_or_else(|error| panic!("copy: {error}"));
@@ -805,7 +843,9 @@ fn assert_isolated(account: &Account, tokens: &[String], reports: &[Report]) {
         for (_, document, variables) in account.seen.iter().filter(|(sender, ..)| sender == token) {
             for board in named(variables, &boards) {
                 let template_read = board == TEMPLATE
-                    && (document.contains("LiveTemplate(") || document.contains("LiveCopyBoard("));
+                    && (document.contains("LiveTemplate(")
+                        || document.contains("LiveTemplateItems(")
+                        || document.contains("LiveCopyBoard("));
                 assert!(
                     board == report.board || template_read,
                     "session {token} named board #{board} in {document}"
@@ -925,7 +965,10 @@ fn a_session_naming_a_board_outside_its_run_is_refused_before_sending() {
         EntryPoint::Assets,
         "trespasser",
         303,
-        &[("RUN_BOARD_GATE_TRESPASS", "1")],
+        &[
+            ("RUN_BOARD_GATE_TRESPASS", "1"),
+            ("RUN_BOARD_GATE_COPY_TWICE", "1"),
+        ],
     );
     let output = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -960,6 +1003,7 @@ fn a_session_naming_a_board_outside_its_run_is_refused_before_sending() {
         .filter(|(token, document, variables)| {
             token == "trespasser"
                 && !document.contains("LiveTemplate(")
+                && !document.contains("LiveTemplateItems(")
                 && !document.contains("LiveCopyBoard(")
                 && named(
                     variables,
@@ -1100,9 +1144,50 @@ fn failing_session_with(faults: &[&'static str], entry: &str) -> (String, Arc<Mu
 }
 
 #[test]
+fn a_template_without_a_valid_item_count_refuses_before_creating_a_copy() {
+    for fault in ["missing-template-count", "malformed-template-count"] {
+        let (said, account) = failing_session(fault, "main");
+        assert!(
+            said.contains("did not answer the template item count"),
+            "{said}"
+        );
+        let account = account.lock().unwrap();
+        assert!(
+            !account
+                .seen
+                .iter()
+                .any(|(_, document, _)| document.starts_with("mutation"))
+        );
+        assert_eq!(account.boards.len(), 1);
+    }
+}
+
+#[test]
+fn a_copy_waits_past_repeated_zero_counts_for_only_the_templates_draft_items() {
+    let account = Arc::new(Mutex::new(Account::new()));
+    account.lock().unwrap().faults = vec!["slow-copy", "mixed-template"];
+    let origin = serve(Arc::clone(&account));
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["session_child", "--exact", "--nocapture"])
+        .env("RUN_BOARD_GATE_ORIGIN", &origin)
+        .env("RUN_BOARD_GATE_ENTRY", "main")
+        .env("RUN_BOARD_GATE_TOKEN", "slow")
+        .env("RUN_BOARD_GATE_RUN", "402")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(account.lock().unwrap().copy_reads, 10);
+}
+
+#[test]
 fn a_copy_that_never_settles_or_cannot_be_counted_is_refused_and_deleted() {
     for (fault, expected) in [
         ("stalled-copy", "did not settle"),
+        ("empty-copy", "observed item counts [Some(0)"),
         ("unread-count", "live board copy item count"),
     ] {
         let (said, account) = failing_session(fault, "main");

@@ -34,6 +34,25 @@ impl Engine {
         if running.private_locations.is_none() {
             running.private_locations = Some(self.private_locations().await?);
         }
+        // Read links while their private source spellings still identify their referents.
+        // The renderer screens every public result and uses opaque pending links until a
+        // counterpart has landed. Linear's public-copy behaviour is outside this path.
+        let destination = self.writable(&item.to)?;
+        if !running.private_locations.as_ref().is_none_or(Vec::is_empty)
+            && matches!(
+                SectionForm::for_kind(destination.kind()),
+                Some(SectionForm::LocalMd | SectionForm::GithubProjects)
+            )
+        {
+            self.rewrite_references(
+                std::slice::from_mut(item),
+                &running.resolvable,
+                &mut running.references,
+                running.private_locations.as_deref(),
+            )
+            .await?;
+            return Ok(());
+        }
         let source = self.readable(&item.source.source)?;
         let form = SectionForm::for_kind(source.kind());
         let own = located(location_of(&item.item));
@@ -210,6 +229,17 @@ pub(super) fn without_private_links(
     locations: &[String],
     own: Option<&str>,
 ) -> String {
+    without_private_links_keeping(content, locations, own, &[])
+}
+
+/// Resolved destination links may have the same relative spelling as private source links.
+/// Only the renderer can authorize them, after verifying their destination counterparts.
+pub(super) fn without_private_links_keeping(
+    content: &str,
+    locations: &[String],
+    own: Option<&str>,
+    destination_links: &[(std::ops::Range<usize>, String)],
+) -> String {
     // Markdown unescapes backslashes before punctuation, including the `\.` in a
     // Windows temporary directory. Compare destinations in the parser's own spelling too.
     let parsed_locations = locations
@@ -224,7 +254,12 @@ pub(super) fn without_private_links(
             })
         })
         .collect::<Vec<_>>();
-    let private = |target: &str| {
+    let private = |target: &str, range: &std::ops::Range<usize>| {
+        if destination_links.iter().any(|(written, link)| {
+            link == target && range.start <= written.start && written.end <= range.end
+        }) {
+            return false;
+        }
         let path = target.split('#').next().unwrap_or_default();
         let resolved = own.and_then(|own| crate::section_links::resolve_relative(own, path));
         locations.iter().chain(&parsed_locations).any(|location| {
@@ -239,12 +274,12 @@ pub(super) fn without_private_links(
     let mut replacements = parser
         .reference_definitions()
         .iter()
-        .filter(|(_, definition)| private(&definition.dest))
+        .filter(|(_, definition)| private(&definition.dest, &definition.span))
         .map(|(_, definition)| (definition.span.clone(), String::new()))
         .collect::<Vec<_>>();
     for (event, range) in parser.into_offset_iter() {
         if let pulldown_cmark::Event::Start(pulldown_cmark::Tag::Link { dest_url, .. }) = event
-            && private(&dest_url)
+            && private(&dest_url, &range)
         {
             let link = &content[range.clone()];
             replacements.push((range, link_label(link).to_owned()));

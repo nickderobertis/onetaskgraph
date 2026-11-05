@@ -4398,13 +4398,18 @@ impl Engine {
         planned: &mut [Planned],
         copied: &[GlobalId],
         counts: &mut Counted,
+        private_locations: Option<&[String]>,
     ) -> Result<(), EngineError> {
         // Read at the source, once per project rather than once per body: several bodies of
         // one project is the ordinary case.
         let mut by_project: BTreeMap<String, Vec<Referent>> = BTreeMap::new();
         let mut named: Vec<Vec<Referent>> = Vec::new();
         for item in planned.iter() {
-            named.push(self.named_referents(item, &mut by_project).await?);
+            named.push(if item.links.is_some() {
+                Vec::new()
+            } else {
+                self.named_referents(item, &mut by_project).await?
+            });
         }
         // What this very call writes is found by the copy's own target rather than by asking
         // the destination, which on a first copy holds nothing of it yet: an update's
@@ -4459,6 +4464,9 @@ impl Engine {
         let none = Counterparts::default();
         let mut read_for_headings: BTreeSet<(SourceName, Level, NativeId)> = BTreeSet::new();
         for (item, referents) in planned.iter_mut().zip(named) {
+            if item.links.is_some() {
+                continue;
+            }
             let content = content_of(&item.item).unwrap_or_default().to_owned();
             if content.is_empty() && item.carried.as_ref().is_none_or(Vec::is_empty) {
                 continue;
@@ -4547,7 +4555,8 @@ impl Engine {
                     .source()
                     .stored_headings(level.record(), &item.source.native),
                 linked,
-            );
+            )
+            .screen_public(private_locations);
             let own = match &item.target {
                 Target::Update { id, .. } => item
                     .held
@@ -4590,7 +4599,9 @@ impl Engine {
                 };
                 for comment in carried.iter_mut() {
                     let links = links.for_comment(comment.body.clone());
-                    if !could_name(&comment.body) || !links.matters() {
+                    if private_locations.is_none()
+                        && (!could_name(&comment.body) || !links.matters())
+                    {
                         continue;
                     }
                     let rendered = links.render(&planning, sections::Pass::Provisional);
@@ -4610,7 +4621,7 @@ impl Engine {
                     }
                 }
             }
-            if content.is_empty() || !links.matters() {
+            if content.is_empty() || (!links.matters() && private_locations.is_none()) {
                 continue;
             }
             let mut planning = Planning {
@@ -5195,8 +5206,13 @@ impl Engine {
                 self.prepare_public_body(item, running).await?;
             }
         }
-        self.rewrite_references(&mut planned, &running.resolvable, &mut running.references)
-            .await?;
+        self.rewrite_references(
+            &mut planned,
+            &running.resolvable,
+            &mut running.references,
+            None,
+        )
+        .await?;
         // Each record a body links to is written before the body, so a link is addressable when
         // its body is first written rather than finished by a write of its own.
         let mut planned = targets_first(planned);

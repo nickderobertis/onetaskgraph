@@ -798,6 +798,336 @@ fn authored_section_links_land_in_each_destinations_form_and_a_repeat_copy_write
     }
 }
 
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn private_authored_section_links_reach_public_local_md_counterparts() {
+    private_authored_section_links_reach_public_counterparts("local-md");
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn private_authored_section_links_reach_public_github_counterparts() {
+    private_authored_section_links_reach_public_counterparts("github-projects");
+}
+
+fn private_authored_section_links_reach_public_counterparts(kind: &str) {
+    let sandbox = Sandbox::new();
+    let (mut authored_config, authored_target) = authored(&sandbox, "plans");
+    authored_config["visibility"] = json!("private");
+    let (destination, mut config) = store(&sandbox, kind, "dest", None);
+    config["visibility"] = json!("public");
+    let (_, elsewhere) = store(&sandbox, "local-md", "elsewhere", None);
+    configure(
+        &sandbox,
+        &[
+            ("plans", &authored_config),
+            ("dest", &config),
+            ("elsewhere", &elsewhere),
+        ],
+    );
+    let (landed, _) = copy_plan(&sandbox, &authored_ids("plans"), "dest");
+    holds_the_form(&sandbox, kind, &destination, &landed, &authored_target);
+    // Add records after the project copy: neither has a counterpart on `dest`, even
+    // though one is explicitly published to a different destination.
+    let source_root = root_of(&sandbox, "plans");
+    for key in ["Elsewhere", "Uncopied"] {
+        std::fs::write(
+            source_root.join("tasks").join(format!("{key}.md")),
+            format!("---\ntitle: {key}\nstatus: todo\nproject: P\n---\n## Budget\n\nA quota.\n"),
+        )
+        .unwrap();
+    }
+    ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "plans:Elsewhere",
+            "--to",
+            "elsewhere",
+            "--json",
+        ],
+    );
+    let document_path = source_root.join("documents/D.md");
+    let original = std::fs::read_to_string(&document_path).unwrap();
+    std::fs::write(&document_path, format!("{original}\nOnly [elsewhere](../tasks/Elsewhere.md#budget); [never copied](../tasks/Uncopied.md#budget); [self missing](D.md#not-a-heading).\n")).unwrap();
+    ok(
+        &sandbox,
+        &["document", "copy", "plans:D", "--to", "dest", "--json"],
+    );
+    let expected = expected_bodies(&sandbox, &destination, &landed, &authored_target);
+    assert_eq!(
+        landed["D"].content(&sandbox).trim_end(),
+        format!(
+            "{}\n\nOnly elsewhere; never copied; self missing.",
+            expected["D"].trim_end()
+        )
+    );
+    let private_root = root_of(&sandbox, "plans").display().to_string();
+    for record in landed.values() {
+        let content = record.content(&sandbox);
+        assert!(!content.contains(&private_root), "{kind}: {content}");
+        assert!(
+            !content.contains("onetaskgraph-pending-"),
+            "{kind}: {content}"
+        );
+    }
+    if let Store::Github(board) = &destination {
+        for (query, variables) in board.served() {
+            if query.trim_start().starts_with("mutation") {
+                let sent = variables.to_string();
+                let private_json = serde_json::to_string(&private_root).unwrap();
+                assert!(
+                    !sent.contains(&private_json[1..private_json.len() - 1]),
+                    "a provisional write exposes a private path: {sent}"
+                );
+                for id in [
+                    "plans:T",
+                    "plans:U",
+                    "plans:D",
+                    "plans:Elsewhere",
+                    "plans:Uncopied",
+                ] {
+                    assert!(!sent.contains(id), "a public write exposes {id}: {sent}");
+                }
+            }
+        }
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn private_pending_links_do_not_replace_authored_destinations_that_match_the_placeholder() {
+    for kind in ["local-md", "github-projects"] {
+        let sandbox = Sandbox::new();
+        let (mut source, _) = authored(&sandbox, "plans");
+        source["visibility"] = json!("private");
+        let (destination, public) = store(&sandbox, kind, "public", None);
+        configure(&sandbox, &[("plans", &source), ("public", &public)]);
+        let path = root_of(&sandbox, "plans").join("tasks/U.md");
+        let original = std::fs::read_to_string(&path).unwrap();
+        let collisions = "Keep [authored](onetaskgraph-pending-0-end) and [another](onetaskgraph-pending-0-endx).";
+        std::fs::write(&path, format!("{original}\n{collisions}\n")).unwrap();
+        let report = outcomes(&ok(
+            &sandbox,
+            &[
+                "task", "copy", "plans:U", "plans:T", "--to", "public", "--json",
+            ],
+        ));
+        let task = Landed {
+            verb: "task",
+            id: report["plans:U"]["destination"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        };
+        let target = Landed {
+            verb: "task",
+            id: report["plans:T"]["destination"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        };
+        let demo = destination.link(&sandbox, &task, Some(&target), HEADINGS[2], 0);
+        let first = destination.link(&sandbox, &task, Some(&target), HEADINGS[1], 0);
+        assert_eq!(
+            task.content(&sandbox).trim_end(),
+            format!("See [the demo]({demo}) and [the first]({first}).\n\n{collisions}")
+        );
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn private_pending_links_to_a_planned_task_left_out_by_the_destination_become_text() {
+    let sandbox = Sandbox::new();
+    let (mut source, _) = authored(&sandbox, "plans");
+    source["visibility"] = json!("private");
+    source["config"]["status_mapping"] = json!({"todo": "todo", "queued": "queued"});
+    let (_, mut public) = store(&sandbox, "local-md", "public", None);
+    public["config"]["status_mapping"] = json!({"todo": "todo"});
+    configure(&sandbox, &[("plans", &source), ("public", &public)]);
+    let root = root_of(&sandbox, "plans");
+    let path = root.join("tasks/T.md");
+    let original = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        original.replacen("status: todo", "status: queued", 1),
+    )
+    .unwrap();
+    let output = sandbox
+        .command()
+        .args([
+            "task", "copy", "plans:U", "plans:T", "--to", "public", "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "{}\n{}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let report = outcomes(&stdout(&output));
+    assert_eq!(report["plans:T"]["action"], "failed");
+    assert!(
+        report["plans:T"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot represent the field `status`")
+    );
+    let referring = Landed {
+        verb: "task",
+        id: report["plans:U"]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    assert_eq!(referring.content(&sandbox), "See the demo and the first.");
+    assert!(!root_of(&sandbox, "public").join("tasks/T.md").exists());
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_reference_only_comment_without_a_counterpart_is_screened_before_public_copy() {
+    let sandbox = Sandbox::new();
+    let (mut source, _) = authored(&sandbox, "plans");
+    source["visibility"] = json!("private");
+    let (_, public) = store(&sandbox, "local-md", "public", None);
+    configure(&sandbox, &[("plans", &source), ("public", &public)]);
+    let path = sandbox.project().join("reference-comment.md");
+    std::fs::write(&path, "Read [outside][r].\n\n[r]: T.md#budgets\n").unwrap();
+    ok(
+        &sandbox,
+        &[
+            "task",
+            "comment",
+            "add",
+            "plans:U",
+            "--body-file",
+            &path.display().to_string(),
+        ],
+    );
+    let report = outcomes(&ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "plans:U",
+            "--to",
+            "public",
+            "--comments",
+            "--json",
+        ],
+    ));
+    let id = report["plans:U"]["destination"].as_str().unwrap();
+    let comments: Value =
+        serde_json::from_str(&ok(&sandbox, &["task", "comment", "list", id, "--json"])).unwrap();
+    assert_eq!(
+        comments["comments"][0]["body"].as_str().unwrap().trim_end(),
+        "Read outside."
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_public_counterparts_relative_path_does_not_authorize_an_uncopied_private_record() {
+    let sandbox = Sandbox::new();
+    let (mut source, _) = authored(&sandbox, "plans");
+    source["visibility"] = json!("private");
+    source["config"]["status_mapping"] = json!({"todo": "todo", "queued": "queued"});
+    let (_, mut public) = store(&sandbox, "local-md", "public", None);
+    public["config"]["status_mapping"] = json!({"todo": "todo"});
+    let destination_root = root_of(&sandbox, "public");
+    std::fs::create_dir_all(destination_root.join("tasks")).unwrap();
+    std::fs::write(
+        destination_root.join("tasks/Destination.md"),
+        "---\ntitle: Target\nstatus: todo\n---\n## Budgets\n",
+    )
+    .unwrap();
+    let source_root = root_of(&sandbox, "plans");
+    std::fs::write(
+        source_root.join("tasks/Destination.md"),
+        "---\ntitle: Unpublished target\nstatus: queued\nproject: P\n---\n## Budgets\n",
+    )
+    .unwrap();
+    std::fs::write(source_root.join("tasks/U.md"), "---\ntitle: Referrer\nstatus: todo\nproject: P\n---\nSee [published](T.md#budgets) and [unpublished](Destination.md#budgets).\n").unwrap();
+    configure(&sandbox, &[("plans", &source), ("public", &public)]);
+    ok(
+        &sandbox,
+        &[
+            "task",
+            "copy",
+            "plans:T",
+            "--to",
+            "public",
+            "--match-by",
+            "title",
+            "--json",
+        ],
+    );
+    let report = outcomes(&ok(
+        &sandbox,
+        &["task", "copy", "plans:U", "--to", "public", "--json"],
+    ));
+    let referring = Landed {
+        verb: "task",
+        id: report["plans:U"]["destination"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    };
+    let expected = "See [published](Destination.md#budgets) and unpublished.";
+    assert_eq!(
+        referring.content(&sandbox),
+        expected,
+        "an existing counterpart authorizes only its own reference"
+    );
+    let path = source_root.join("tasks/U.md");
+    let original = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("{original}\nUpdated.\n")).unwrap();
+    ok(
+        &sandbox,
+        &["task", "copy", "plans:U", "--to", "public", "--json"],
+    );
+    let expected = format!("{expected}\n\nUpdated.");
+    assert_eq!(
+        referring.content(&sandbox),
+        expected,
+        "an update distinguishes the resolved destination from the uncarried private source"
+    );
+    std::fs::write(&path, format!("{original}\nUpdated again.\n")).unwrap();
+    let expected = expected.replace("Updated.", "Updated again.");
+    // Planning the unpublished record too must not authorize it after the destination
+    // refuses its queued status, even though another counterpart has that file name.
+    let output = sandbox
+        .command()
+        .args([
+            "task",
+            "copy",
+            "plans:U",
+            "plans:Destination",
+            "--to",
+            "public",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "{}\n{}",
+        stdout(&output),
+        stderr(&output)
+    );
+    assert_eq!(
+        referring.content(&sandbox),
+        expected,
+        "a refused planned counterpart still becomes text"
+    );
+}
+
 /// A folder whose root is configured with `/` between its parts — on Windows the spelling a
 /// person writes, beside the platform's `\\` — and an unnormalised `.` segment, still has every
 /// relative and absolute section link of its records read as naming the record it resolves to.
@@ -2911,14 +3241,15 @@ fn a_private_trackers_task_read_restores_its_authored_same_record_links() {
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Only folders of Markdown and loopback tracker fakes, never live APIs.
 #[test]
-fn public_copies_keep_same_record_sections_and_remove_private_record_links_from_every_body() {
+fn public_copies_keep_sections_and_screen_private_record_links_in_bodies_and_comments() {
     for home_kind in KINDS {
         for destination_kind in KINDS {
             let sandbox = Sandbox::new();
-            let (plans, _) = authored(&sandbox, "plans");
+            let (plans, authored_target) = authored(&sandbox, "plans");
             let (home, mut home_config) = store(&sandbox, home_kind, "home", None);
             home_config["visibility"] = json!("private");
-            let (_, mut public_config) = store(&sandbox, destination_kind, "public", Some(&home));
+            let (public, mut public_config) =
+                store(&sandbox, destination_kind, "public", Some(&home));
             public_config["visibility"] = json!("public");
             configure(
                 &sandbox,
@@ -2932,7 +3263,14 @@ fn public_copies_keep_same_record_sections_and_remove_private_record_links_from_
             let private_location = canonical["T"].location(&sandbox);
             // A comment is authored against the real canonical record, then carried on copy.
             let comment = sandbox.project().join("comment.md");
-            std::fs::write(&comment, format!("Read [the private budget]({private_location}#budgets) and [public docs](https://example.org/docs).")).unwrap();
+            let private_budget_link = home.link(
+                &sandbox,
+                &canonical["U"],
+                Some(&canonical["T"]),
+                HEADINGS[1],
+                0,
+            );
+            std::fs::write(&comment, format!("Read [the private budget]({private_budget_link}) and [public docs](https://example.org/docs).")).unwrap();
             ok(
                 &sandbox,
                 &[
@@ -2963,6 +3301,9 @@ fn public_copies_keep_same_record_sections_and_remove_private_record_links_from_
                 target_body().trim_end(),
                 "{context}: own sections survive"
             );
+            if destination_kind != "linear" {
+                holds_the_form(&sandbox, &context, &public, &landed, &authored_target);
+            }
             for key in ["P", "U", "D"] {
                 let content = landed[key].content(&sandbox);
                 assert!(
@@ -2980,7 +3321,7 @@ fn public_copies_keep_same_record_sections_and_remove_private_record_links_from_
                     "missing",
                 ] {
                     assert!(
-                        !content.contains(&format!("[{label}](")),
+                        destination_kind != "linear" || !content.contains(&format!("[{label}](")),
                         "{context} {key}: private link becomes text: {content}"
                     );
                 }
@@ -2991,10 +3332,15 @@ fn public_copies_keep_same_record_sections_and_remove_private_record_links_from_
             ))
             .unwrap();
             let text = comments["comments"][0]["body"].as_str().unwrap();
-            assert_eq!(
-                text, "Read the private budget and [public docs](https://example.org/docs).",
-                "{context}: {comments}"
-            );
+            let expected = if destination_kind == "linear" {
+                "Read the private budget and [public docs](https://example.org/docs).".to_owned()
+            } else {
+                let link = public.link(&sandbox, &landed["U"], Some(&landed["T"]), HEADINGS[1], 0);
+                format!(
+                    "Read [the private budget]({link}) and [public docs](https://example.org/docs)."
+                )
+            };
+            assert_eq!(text, expected, "{context}: {comments}");
             assert!(report.contains_key(&canonical["T"].id));
         }
     }

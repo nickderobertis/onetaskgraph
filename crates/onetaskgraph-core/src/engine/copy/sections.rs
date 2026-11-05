@@ -17,7 +17,9 @@ use onetaskgraph_plugin_api::{NativeId, StoredHeading};
 
 use super::{Counted, FRAGMENT, Level, stops_a_location};
 use crate::GlobalId;
-use crate::section_links::{RecordHeadings, SectionForm, Written, relative_path, resolve_relative};
+use crate::section_links::{
+    Heading, RecordHeadings, SectionForm, Written, relative_path, resolve_relative,
+};
 
 /// The section-link figures of one body's rendering, which the copy reports per record.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -133,8 +135,10 @@ enum Spelled {
 /// yet: rendered again once the copy knows more.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Pending {
-    /// The link's text exactly as the source spelled it.
+    /// The placeholder sent to the destination; opaque when the body is public.
     pub(super) text: String,
+    /// The source spelling, held only in memory while a public placeholder is written.
+    original: String,
     /// Where it was spelled, which is the context it is read again in.
     spelled: Spelled,
 }
@@ -150,6 +154,8 @@ pub(super) struct Rendered {
     pub(super) sections: SectionCounts,
     /// The placeholders written.
     pub(super) pending: Vec<Pending>,
+    /// Links resolved to verified destination counterparts during this rendering.
+    destination_links: Vec<(std::ops::Range<usize>, String)>,
 }
 
 /// One body's references and section links, as the copy learned them before writing it.
@@ -173,6 +179,8 @@ pub(super) struct BodyLinks {
     own_stored: Option<Vec<StoredHeading>>,
     /// The records of its project it names, longest spelling first.
     pub(super) referents: Vec<Linked>,
+    /// Private addresses screened from every rendering sent to a public destination.
+    private_locations: Option<Vec<String>>,
 }
 
 /// One recognised occurrence: what it names, and where its text ends.
@@ -211,6 +219,7 @@ impl BodyLinks {
             )
         });
         Self {
+            private_locations: None,
             own_headings: RecordHeadings::of(&original),
             original,
             from,
@@ -220,6 +229,13 @@ impl BodyLinks {
             own_stored,
             referents,
         }
+    }
+
+    /// Screen public renderings after resolving counterparts, retaining private addresses
+    /// only in the invocation's link plan.
+    pub(super) fn screen_public(mut self, locations: Option<&[String]>) -> Self {
+        self.private_locations = locations.map(<[String]>::to_vec);
+        self
     }
 
     /// The same links read in `content` — a comment of the record — whose fragments of the
@@ -310,6 +326,16 @@ impl BodyLinks {
             rendered.content.push(character);
             at += character.len_utf8();
         }
+        if let Some(locations) = &self.private_locations {
+            rendered.content = super::privacy::without_private_links_keeping(
+                &rendered.content,
+                locations,
+                (self.from == Some(SectionForm::LocalMd))
+                    .then_some(self.own_location.as_deref())
+                    .flatten(),
+                &rendered.destination_links,
+            );
+        }
         rendered
     }
 
@@ -324,21 +350,25 @@ impl BodyLinks {
         pass: Pass,
     ) -> (String, Vec<Pending>) {
         let mut replacements: Vec<(Pending, Option<String>)> = Vec::new();
+        let mut withheld = Vec::new();
         for placeholder in pending {
             if replacements.iter().any(|(held, _)| held == placeholder) {
                 continue;
             }
             let original = if placeholder.spelled == Spelled::Destination {
-                format!("]({})", placeholder.text)
+                format!("]({})", placeholder.original)
             } else {
-                placeholder.text.clone()
+                placeholder.original.clone()
             };
             let lone = Self {
                 original,
+                // This is a destination fragment, not a complete Markdown link. Screen
+                // only after inserting it into the complete body below, preserving labels.
+                private_locations: None,
                 ..self.clone()
             }
             .render(knows, pass);
-            let text = if !lone.pending.is_empty() {
+            let mut text = if !lone.pending.is_empty() {
                 None
             } else if placeholder.spelled == Spelled::Destination {
                 lone.content
@@ -348,6 +378,26 @@ impl BodyLinks {
             } else {
                 Some(lone.content)
             };
+            if pass == Pass::Final
+                && text.is_some()
+                && lone.destination_links.is_empty()
+                && let Some(locations) = &self.private_locations
+            {
+                let original = format!("[record](<{}>)", placeholder.original);
+                let clean = super::privacy::without_private_links(
+                    &original,
+                    locations,
+                    (self.from == Some(SectionForm::LocalMd))
+                        .then_some(self.own_location.as_deref())
+                        .flatten(),
+                );
+                if clean != original {
+                    // Keep the existing opaque placeholder until the complete Markdown is
+                    // screened below: removing its destination alone would leave an empty link.
+                    withheld.push(placeholder.text.clone());
+                    text = Some(placeholder.text.clone());
+                }
+            }
             replacements.push((placeholder.clone(), text));
         }
         replacements.sort_by_key(|(placeholder, _)| std::cmp::Reverse(placeholder.text.len()));
@@ -385,6 +435,14 @@ impl BodyLinks {
             let character = written[at..].chars().next().expect("a character boundary");
             out.push(character);
             at += character.len_utf8();
+        }
+        if let Some(locations) = &self.private_locations {
+            let mut locations = locations.clone();
+            locations.extend(withheld);
+            // Existing relative links were screened in their source context by `render`.
+            // Only unresolved placeholders and absolute private addresses need removing now;
+            // reading a resolved destination path against the source would misidentify it.
+            out = super::privacy::without_private_links(&out, &locations, None);
         }
         (out, still)
     }
@@ -493,16 +551,62 @@ impl BodyLinks {
             }
         };
         match written {
-            Some(written) => rendered.content.push_str(&written),
+            Some(written) => {
+                let resolved = match occurrence.referent {
+                    Some(referent) => match referent.counterpart {
+                        Counterpart::At { .. } => true,
+                        Counterpart::InCopy => knows.landed(referent).is_some(),
+                        Counterpart::None | Counterpart::Ambiguous => false,
+                    },
+                    None => {
+                        knows.own().is_some()
+                            && (self.from.is_none()
+                                || self.to.is_none()
+                                || occurrence.fragment.is_none()
+                                || self.own_heading(occurrence, verbatim).is_some())
+                    }
+                };
+                if resolved {
+                    let start = rendered.content.len();
+                    rendered
+                        .destination_links
+                        .push((start..start + written.len(), written.clone()));
+                }
+                rendered.content.push_str(&written);
+            }
             None => {
+                let text = if self.private_locations.is_some() {
+                    // A provisional write must not name the private source. Retain that
+                    // spelling only in memory, behind a token absent from the authored body.
+                    let mut token = format!("onetaskgraph-pending-{}-end", rendered.pending.len());
+                    while content.contains(&token) {
+                        token.push('x');
+                    }
+                    token
+                } else {
+                    verbatim.to_owned()
+                };
+                rendered.content.push_str(&text);
                 rendered.pending.push(Pending {
-                    text: verbatim.to_owned(),
+                    text,
+                    original: verbatim.to_owned(),
                     spelled: occurrence.spelled,
                 });
-                rendered.content.push_str(verbatim);
             }
         }
         occurrence.end
+    }
+
+    /// The source heading an own-record occurrence actually names. An unknown fragment
+    /// is carried verbatim, so it cannot authorize a private relative source address.
+    fn own_heading(&self, occurrence: &Occurrence<'_>, verbatim: &str) -> Option<Heading> {
+        let from = self.from?;
+        let fragment = occurrence.fragment?;
+        if verbatim.starts_with(FRAGMENT) {
+            from.same_record(fragment, &self.own_headings)
+        } else {
+            from.heading_of(fragment, &self.own_headings, self.own_stored.as_deref())
+        }
     }
 
     /// A link to the body's own record: a fragment of it, or its own location. `None` is a
@@ -516,8 +620,7 @@ impl BodyLinks {
         rendered: &mut Rendered,
     ) -> Option<String> {
         let bare = verbatim.starts_with(FRAGMENT);
-        let (Some(from), Some(to), Some(fragment)) = (self.from, self.to, occurrence.fragment)
-        else {
+        let (Some(_), Some(to), Some(_)) = (self.from, self.to, occurrence.fragment) else {
             // A plain link to itself, or a source or a destination with no form: its location
             // rewritten as any reference's is, its fragment carried.
             if bare {
@@ -534,11 +637,7 @@ impl BodyLinks {
                 None => None,
             };
         };
-        let heading = if bare {
-            from.same_record(fragment, &self.own_headings)
-        } else {
-            from.heading_of(fragment, &self.own_headings, self.own_stored.as_deref())
-        };
+        let heading = self.own_heading(occurrence, verbatim);
         let Some(heading) = heading else {
             rendered.sections.unresolved += 1;
             return Some(verbatim.to_owned());

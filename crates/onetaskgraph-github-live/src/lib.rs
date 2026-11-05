@@ -299,8 +299,8 @@ const _: () = assert!(TEMPLATE_DRAFTS >= quota::MINIMUM_INITIAL_ITEMS);
 /// draft item the template holds, whoever added it, because a copy carries them all.
 pub const TEMPLATE_DRAFT_TITLE: &str = "onetaskgraph live template draft";
 
-/// The nominated template's id and its owner's, which a copy needs both of.
-pub const TEMPLATE_DOCUMENT: &str = "query LiveTemplate($owner:String!,$number:Int!){repositoryOwner(login:$owner){id ... on ProjectV2Owner{projectV2(number:$number){id}}}}";
+/// The template's id, owner and item count, used to copy it and await its population.
+pub const TEMPLATE_DOCUMENT: &str = "query LiveTemplate($owner:String!,$number:Int!){repositoryOwner(login:$owner){id ... on ProjectV2Owner{projectV2(number:$number){id items(first:1){totalCount}}}}}";
 
 /// Copies the template, its draft items included, into a session's own board.
 pub const COPY_BOARD_DOCUMENT: &str = "mutation LiveCopyBoard($input:CopyProjectV2Input!){copyProjectV2(input:$input){projectV2{id number title}}}";
