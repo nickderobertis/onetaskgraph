@@ -154,6 +154,9 @@ struct Board {
 #[derive(Default)]
 struct Account {
     boards: BTreeMap<u32, Board>,
+    /// The highest number any board of this account has carried, deleted boards included:
+    /// GitHub never gives a new board a number an earlier one had.
+    last_board_number: u32,
     serial: u64,
     points: u64,
     creations: u64,
@@ -167,7 +170,8 @@ struct Account {
     /// under another title (`"retitled-copy"`) and a draft answered with no item
     /// (`"unanswered-draft"`), an item answered without its type (`"untyped-item"`), a copy
     /// answered without its id (`"copy-without-id"`) or as the template itself
-    /// (`"copy-as-template"`), and a deletion refused (`"refused-delete"`).
+    /// (`"copy-as-template"`), every copy made as one and the same board (`"shared-copy"`),
+    /// and a deletion refused (`"refused-delete"`).
     faults: Vec<&'static str>,
     copy_reads: usize,
     /// Whether the per-minute secondary limits are enforced, over every request since the
@@ -182,7 +186,10 @@ struct Account {
 
 impl Account {
     fn new() -> Self {
-        let mut account = Self::default();
+        let mut account = Self {
+            last_board_number: TEMPLATE,
+            ..Self::default()
+        };
         let fields = (0..template_fields())
             .map(|n| {
                 let name = if n == 0 {
@@ -216,6 +223,11 @@ impl Account {
     fn next(&mut self, prefix: &str) -> String {
         self.serial += 1;
         format!("{prefix}_{}", self.serial)
+    }
+
+    fn next_board_number(&mut self) -> u32 {
+        self.last_board_number += 1;
+        self.last_board_number
     }
 
     fn by_id(&mut self, id: &str) -> Option<&mut Board> {
@@ -277,7 +289,11 @@ impl Account {
             let Some(template) = self.by_id(input["projectId"].as_str().unwrap()).cloned() else {
                 return json!({"errors":[{"message":"Could not resolve to a ProjectV2"}]});
             };
-            let number = self.boards.keys().max().unwrap() + 1;
+            let number = if self.has("shared-copy") {
+                TEMPLATE + 1
+            } else {
+                self.next_board_number()
+            };
             let id = format!("PVT_{number}");
             let items = if input["includeDraftIssues"] == json!(true) {
                 template
@@ -408,7 +424,9 @@ impl Account {
                 self.lagging -= 1;
             }
             let mixed = self.has("mixed-template") && variables["id"] == "PVT_template";
-            let board = self.by_id(variables["id"].as_str().unwrap()).unwrap();
+            let Some(board) = self.by_id(variables["id"].as_str().unwrap()) else {
+                return json!({"errors":[{"message":"Could not resolve to a node"}]});
+            };
             let listed = board.items.len() - usize::from(lagging);
             let mut nodes: Vec<_> = board.items[..listed]
                 .iter()
@@ -872,9 +890,11 @@ fn assert_isolated(account: &Account, tokens: &[String], reports: &[Report]) {
     );
 }
 
-#[test]
-fn two_concurrent_board_lifecycles_of_each_entry_point_pass_on_boards_of_their_own() {
+/// Two sessions of each entry point at once, on an account answering with `faults`, through
+/// to [`assert_isolated`].
+fn two_concurrent_lifecycles_of_each_entry_point(faults: &[&'static str]) {
     let account = Arc::new(Mutex::new(Account::new()));
+    account.lock().unwrap().faults = faults.to_vec();
     let origin = serve(Arc::clone(&account));
     let sessions = [
         (EntryPoint::Main, "main-a", 101),
@@ -894,6 +914,43 @@ fn two_concurrent_board_lifecycles_of_each_entry_point_pass_on_boards_of_their_o
         .iter()
         .map(|(_, token, _)| (*token).to_owned())
         .collect();
+    assert_isolated(&account.lock().unwrap(), &tokens, &reports);
+}
+
+#[test]
+fn two_concurrent_board_lifecycles_of_each_entry_point_pass_on_boards_of_their_own() {
+    two_concurrent_lifecycles_of_each_entry_point(&[]);
+}
+
+/// The test above, watched failing: however the sessions interleave, one working on a board
+/// another is using fails inside its session, and one that finds it free reports its number.
+#[test]
+fn concurrent_lifecycles_made_to_use_one_board_fail() {
+    let verdict = std::panic::catch_unwind(|| {
+        two_concurrent_lifecycles_of_each_entry_point(&["shared-copy"]);
+    });
+    assert!(verdict.is_err(), "sessions sharing a board passed");
+}
+
+/// A session starting after another's copy is gone gets a number of its own, as on GitHub: a
+/// reused number would read as the two sessions having shared a board.
+#[test]
+fn a_copy_made_after_another_sessions_copy_was_deleted_never_reuses_its_number() {
+    let account = Arc::new(Mutex::new(Account::new()));
+    let origin = serve(Arc::clone(&account));
+    let sessions = [("first", 501), ("second", 502)];
+    let reports: Vec<_> = sessions
+        .iter()
+        .map(|(token, run)| {
+            finish(session(&origin, EntryPoint::Main, token, *run, &[]))
+                .unwrap_or_else(|error| panic!("{error}"))
+        })
+        .collect();
+    assert_ne!(
+        reports[0].board, reports[1].board,
+        "the second copy reused the deleted copy's number"
+    );
+    let tokens = sessions.map(|(token, _)| token.to_owned());
     assert_isolated(&account.lock().unwrap(), &tokens, &reports);
 }
 
@@ -945,7 +1002,7 @@ fn a_session_naming_a_board_outside_its_run_is_refused_before_sending() {
     // The bystander's board is gone by now; seed one as a live run's copy would stand.
     let seeded = {
         let mut account = account.lock().unwrap();
-        let number = account.boards.keys().max().unwrap() + 1;
+        let number = account.next_board_number();
         account.boards.insert(
             number,
             Board {
