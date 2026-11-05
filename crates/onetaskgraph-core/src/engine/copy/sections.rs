@@ -98,6 +98,11 @@ impl Linked {
             counterpart: Counterpart::None,
         }
     }
+
+    /// Every spelling of its location in the source kind's own form.
+    pub(super) fn spellings(&self) -> &[String] {
+        &self.spellings
+    }
 }
 
 /// What a rendering asks of the copy it is part of.
@@ -156,6 +161,8 @@ pub(super) struct Rendered {
     pub(super) pending: Vec<Pending>,
     /// Links resolved to verified destination counterparts during this rendering.
     destination_links: Vec<(std::ops::Range<usize>, String)>,
+    /// Fragments naming no heading of their referent, carried byte for byte.
+    carried_fragments: Vec<String>,
 }
 
 /// One body's references and section links, as the copy learned them before writing it.
@@ -181,6 +188,9 @@ pub(super) struct BodyLinks {
     pub(super) referents: Vec<Linked>,
     /// How a rendering treats private addresses.
     screening: Screening,
+    /// Whether a folder of Markdown is sent every link to a record as a relative path, so that
+    /// no spelling of a public view names where that folder sits on this machine.
+    always_relative: bool,
 }
 
 /// What a body's text is read for when asking which records it names.
@@ -202,8 +212,8 @@ enum Screening {
     /// definition's among them, is read as a reference too, and these private addresses are
     /// screened from every rendering.
     Public(Vec<String>),
-    /// A placeholder of such a body, rendered again alone: read as that body is, and screened
-    /// only once inserted back into it.
+    /// Read as such a body is, and not screened in this rendering: a placeholder rendered again
+    /// alone, screened once inserted back into it, or a body asked what fragments it carries.
     PublicPlaceholder,
 }
 
@@ -267,6 +277,7 @@ impl BodyLinks {
         });
         Self {
             screening: Screening::None,
+            always_relative: false,
             own_headings: RecordHeadings::of(&original),
             original,
             from,
@@ -284,6 +295,13 @@ impl BodyLinks {
         self.screening = locations.map_or(Screening::None, |locations| {
             Screening::Public(locations.to_vec())
         });
+        self
+    }
+
+    /// Write every link to a record as a relative path in a folder of Markdown, as a public view
+    /// holds them, however the source spelled it.
+    pub(super) fn always_relative(mut self) -> Self {
+        self.always_relative = true;
         self
     }
 
@@ -344,6 +362,32 @@ impl BodyLinks {
                             resolve_relative(own, path).as_deref() == Some(own)
                         }))
             })
+    }
+
+    /// Every fragment this body's links to its referents would carry byte for byte, because
+    /// it names no heading: text no heading vouches for, which a boundary check has to read.
+    pub(super) fn carried_fragments(&self) -> Vec<String> {
+        /// Knows every referent as landed, so each occurrence reaches its fragment.
+        struct Landed;
+        impl Knows for Landed {
+            fn landed(&self, _referent: &Linked) -> Option<(NativeId, String)> {
+                Some((NativeId(String::new()), String::new()))
+            }
+            fn stored(&self, _level: Level, _id: &NativeId) -> Option<Vec<StoredHeading>> {
+                None
+            }
+            fn own(&self) -> Option<(NativeId, String)> {
+                None
+            }
+        }
+        // Read as the public body it is, or a fragment on a path written alone would reach the
+        // destination without this answer naming it.
+        Self {
+            screening: Screening::PublicPlaceholder,
+            ..self.clone()
+        }
+        .render(&Landed, Pass::Final)
+        .carried_fragments
     }
 
     /// The body rendered against what `knows` says now, on the terms `pass` names.
@@ -780,6 +824,7 @@ impl BodyLinks {
             if self.to.is_some() && self.from.is_some() {
                 rendered.sections.unresolved += 1;
             }
+            rendered.carried_fragments.push(fragment.to_owned());
             // A fragment naming no heading, or a destination with no form: the record's link,
             // its fragment carried byte for byte — into a folder of Markdown as the path relative
             // to the linking file a section link there is.
@@ -806,7 +851,7 @@ impl BodyLinks {
     /// so and the destination is a folder of Markdown, and the location itself otherwise.
     /// `None` while the body's own file is not known yet.
     fn plain(&self, location: &str, relative: bool, knows: &dyn Knows) -> Option<String> {
-        if relative && self.to == Some(SectionForm::LocalMd) {
+        if (relative || self.always_relative) && self.to == Some(SectionForm::LocalMd) {
             return knows.own().map(|(_, own)| relative_path(&own, location));
         }
         Some(location.to_owned())

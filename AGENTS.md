@@ -1459,11 +1459,17 @@ them do; this is the inventory of what is owed, not a status board.
      of record a search could not cover and exiting 3 — or reads it whole with `--complete`;
      every record in its report is a screened locator, one carrying a term redacted and
      numbered from 1, and an undecided policy exits 2.
-141. A document copied from a private folder to a public folder, board, Linear workspace or
+141. A section link between two public tasks of a private plan lands in each view on a GitHub
+     board or in a folder of Markdown as a link to the other's view in that destination's form,
+     from a draft in a folder and from a plan held in Linear, whichever copy wrote that view; two
+     views linking each other both land theirs, and a repeat writes nothing. A link to a private
+     task, the plan's document or a view elsewhere, and every link in a view on a public Linear
+     source, is its text alone; a carried fragment naming private material is refused.
+142. A document copied from a private folder to a public folder, board, Linear workspace or
      stdio peer holding the task or document it names points a table cell and a reference-style
      definition at that counterpart, in the destination's form, one rewritten per occurrence, and
      a repeat writes nothing.
-142. With no counterpart there, every inline link, definition, location and bare relative path
+143. With no counterpart there, every inline link, definition, location and bare relative path
      naming the private record is removed from the public body and counted unresolved.
 
 ## The public boundary
@@ -1528,7 +1534,8 @@ each comment a `--comments` copy carries — together with the `body_digest` of 
 `onetaskgraph.template` entry when the rewrite changed a rendering that still matched it, so
 that entry stays true of what landed (the stored answers and `answers_digest` still name the
 pre-copy locations, so the copy is not a fresh rendering of them). A public view has only its
-links to its own headings rewritten; it may hold no other link to a record.
+links to its own headings and to other views of its destination rewritten; any other link to a
+record is its text alone, or the copy is refused.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 A reference is a literal
 occurrence in it of the exact location string a source reports for a related record — the
