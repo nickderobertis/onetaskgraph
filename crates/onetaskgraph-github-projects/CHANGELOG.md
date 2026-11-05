@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.14.1...onetaskgraph-github-projects-v0.14.2) - 2026-11-05
+
+### Fixed
+
+- *(test)* never reuse a board number in the run-board gate's fake account ([#3896](https://github.com/nickderobertis/onetaskgraph/pull/3896))
+
 ## [0.14.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.14.0...onetaskgraph-github-projects-v0.14.1) - 2026-11-05
 
 ### Fixed
