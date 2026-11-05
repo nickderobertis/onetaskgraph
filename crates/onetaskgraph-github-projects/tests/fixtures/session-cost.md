@@ -130,7 +130,7 @@ completed them. Main helpers below are in `tests/journey/mod.rs`; assets are in
 | Native priority token | Same helper, conditional on native priority; unsupported priority does not claim this proof |
 | Pre-existing capability gaps | Explicit priority/metadata/origin query-predicate positive/negative assertions were absent before this change and remain unproved |
 | Task and document assets | `disposable_task_and_document_asset_copies`: Engine copies, four real upload/verification pairs, persisted asset records, markdown alt-text and attachment URL rewrites |
-| Authenticated rendering and recovery | Same entry point: four authenticated reads; bounded 5xx retry, immediate non-5xx failure, per-attempt telemetry |
+| Authenticated rendering and recovery | Same entry point: four authenticated reads; bounded retry of a 5xx or dropped connection, immediate failure on any other answer, per-attempt telemetry |
 | Unchanged copies | Same entry point: end-command boundary then two re-copies, neither uploads again |
 | Owned cleanup and orphan recovery | Main `remove_live_state`/`sweep_orphans` and asset owning-plugin deletions: stamp safety, issue/item/label cleanup, failure reporting |
 
