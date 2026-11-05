@@ -1471,6 +1471,9 @@ them do; this is the inventory of what is owed, not a status board.
      a repeat writes nothing.
 143. With no counterpart there, every inline link, definition, location and bare relative path
      naming the private record is removed from the public body and counted unresolved.
+144. A fragment carried on a bare path in a view, or on a comment's link whose target lands later
+     in the same project copy, reaches the boundary check: refused when it names private
+     material, and landing with the term replaced under a policy that rewrites.
 
 ## The public boundary
 

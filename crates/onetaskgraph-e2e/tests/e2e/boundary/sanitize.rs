@@ -851,6 +851,70 @@ fn a_term_in_a_field_replacement_never_rewrites_is_refused_and_nothing_is_writte
 }
 
 #[test]
+fn a_replaced_term_in_a_fragment_of_a_link_landing_later_is_replaced_where_it_lands() {
+    for (link, landed) in [
+        (
+            "Read [the notes](budgets.md#quietharbor-notes).\n",
+            "Read [the notes](budgets.md#harbor-x-notes).",
+        ),
+        (
+            "| Notes | budgets.md#quietharbor-notes |\n",
+            "| Notes | budgets.md#harbor-x-notes |",
+        ),
+        (
+            "Read [the notes][n].\n\n[n]: budgets.md#quietharbor-notes\n",
+            "[n]: budgets.md#harbor-x-notes",
+        ),
+    ] {
+        let (store, _) = sanitizing(replaced());
+        store.record(
+            "plan",
+            "projects",
+            "open",
+            "title: Open work\nstatus: todo",
+            PLAIN,
+        );
+        let task = |id: &str, body: &str| {
+            store.record(
+                "plan",
+                "tasks",
+                id,
+                &format!(
+                    "title: {id}\nstatus: todo\nproject: open\n\
+                     repositories: [github.com/openco/openwidget]"
+                ),
+                body,
+            );
+        };
+        task("budgets", "## What\n\nThe budget.\n");
+        task("a-body", link);
+        task("a-comment", "Plain.\n");
+        let said = store.sandbox.project().join("comment.md");
+        std::fs::write(&said, link).expect("the comment");
+        store.ok(&[
+            "task",
+            "comment",
+            "add",
+            "plan:a-comment",
+            "--body-file",
+            &said.display().to_string(),
+        ]);
+        store.ok(&[
+            "project",
+            "copy",
+            "plan:open",
+            "--to",
+            "site",
+            "--comments",
+            "--json",
+        ]);
+        let site = text_of(&store, "site");
+        assert!(!site.contains(TERM), "{link}: {site}");
+        assert_eq!(site.matches(landed).count(), 2, "{link}: {site}");
+    }
+}
+
+#[test]
 fn a_destination_declared_private_receives_the_original_text() {
     let (store, record) = sanitizing(replaced());
     store.record("plan", "projects", "p", "title: P\nstatus: todo", PLAIN);

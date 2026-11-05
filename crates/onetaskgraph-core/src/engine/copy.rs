@@ -10827,6 +10827,27 @@ fn exposure_of(item: &Planned, withheld: impl Fn(&GlobalId) -> bool) -> Exposure
     .and(item.links.as_ref().map_or_else(Exposure::default, |links| {
         Exposure::text(links.original.clone())
     }))
+    // So is what a link not addressable yet is rendered from once it is: a placeholder stands in
+    // for it above, and its fragment lands as written.
+    .and(
+        item.pending
+            .iter()
+            .chain(
+                item.comment_links
+                    .iter()
+                    .flat_map(|(_, _, pending)| pending),
+            )
+            .fold(Exposure::metadata(Vec::new()), |exposure, pending| {
+                exposure.and(Exposure::text(pending.source_spelling().to_owned()))
+            }),
+    )
+    .and(
+        item.comment_links
+            .iter()
+            .fold(Exposure::metadata(Vec::new()), |exposure, (_, links, _)| {
+                exposure.and(Exposure::text(links.original.clone()))
+            }),
+    )
     // The comments a `--comments` copy carries land beside the item, so they are held to the
     // boundary with it — every one of them, before any is written.
     .and(
@@ -10882,6 +10903,16 @@ fn rewritten(item: &mut Planned, rewrite: &Rewrite) -> Result<(), EngineError> {
     }
     if let Some(links) = &mut item.links {
         links.original = rewrite.text(&links.original);
+    }
+    for (_, links, _) in &mut item.comment_links {
+        links.original = rewrite.text(&links.original);
+    }
+    for pending in item.pending.iter_mut().chain(
+        item.comment_links
+            .iter_mut()
+            .flat_map(|(_, _, pending)| pending),
+    ) {
+        pending.reword(|spelling| rewrite.text(spelling));
     }
     for comment in item.carried.iter_mut().flatten() {
         comment.body = rewrite.text(&comment.body);

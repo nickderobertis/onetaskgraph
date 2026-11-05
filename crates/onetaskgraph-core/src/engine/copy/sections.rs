@@ -148,6 +148,18 @@ pub(super) struct Pending {
     spelled: Spelled,
 }
 
+impl Pending {
+    /// The source spelling this link is rendered from once it is addressable.
+    pub(super) fn source_spelling(&self) -> &str {
+        &self.original
+    }
+
+    /// The same link with its source spelling as a sanitisation passed it.
+    pub(super) fn reword(&mut self, reworded: impl FnOnce(&str) -> String) {
+        self.original = reworded(&self.original);
+    }
+}
+
 /// One rendering of a body.
 #[derive(Debug, Clone, Default)]
 pub(super) struct Rendered {

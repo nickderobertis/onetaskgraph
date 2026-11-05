@@ -3608,6 +3608,17 @@ fn record_linker(store: &Store, repository: &str) {
     );
 }
 
+/// A task of the private source's project `open` naming only the public repository.
+fn record_open_task(store: &Store, id: &str, title: &str, body: &str) {
+    store.record(
+        "plan",
+        "tasks",
+        id,
+        &format!("title: {title}\nstatus: todo\nproject: open\nrepositories: [{OPEN}]"),
+        body,
+    );
+}
+
 /// The prose a view of [`record_linker`] holds, given how each of its links to a view lands.
 fn linker_view(budget: &str, anchor: &str, task: &str, own: &str) -> String {
     format!(
@@ -4035,6 +4046,41 @@ fn a_fragment_carried_on_a_path_written_alone_is_refused_when_it_names_private_m
     let (kind, said) = store.refused(&["project", "copy", "plan:rollout", "--to", "vault"]);
     assert_eq!(kind, "boundary-refused", "{said}");
     assert_eq!(store.tree(), before, "nothing was written anywhere");
+}
+
+#[test]
+fn a_comments_fragment_on_a_link_landing_later_is_refused_when_it_names_private_material() {
+    for link in [
+        "Read [the notes](budgets.md#quietharbor-notes).\n",
+        "| Notes | budgets.md#quietharbor-notes |\n",
+        "Read [the notes][n].\n\n[n]: budgets.md#quietharbor-notes\n",
+    ] {
+        let store = projecting_store();
+        store.record(
+            "plan",
+            "projects",
+            "open",
+            "title: Open work\nstatus: todo",
+            "Public work.",
+        );
+        record_open_task(&store, "budgets", "Budget the copy", LINKED_TARGET);
+        record_open_task(&store, "a-linker", "Hold the budget", "Plain.\n");
+        let said = store.sandbox.project().join("comment.md");
+        std::fs::write(&said, link).expect("the comment");
+        store.ok(&[
+            "task",
+            "comment",
+            "add",
+            "plan:a-linker",
+            "--body-file",
+            &said.display().to_string(),
+        ]);
+        let before = store.tree();
+        let (kind, said) =
+            store.refused(&["project", "copy", "plan:open", "--to", "site", "--comments"]);
+        assert_eq!(kind, "boundary-refused", "{link}: {said}");
+        assert_eq!(store.tree(), before, "{link}: nothing was written anywhere");
+    }
 }
 
 #[test]
