@@ -12025,13 +12025,15 @@ async fn a_fixture_waits_read_by_id_is_given_its_diagnosis_and_no_longer() {
 
 /// The short wait the give-up journeys below are held to.
 /// Its bound is long enough for a loaded host to answer a search inside it, which every one of
-/// them but the one whose searches outlast it depends on.
+/// them but the one whose searches outlast it depends on. Its diagnosis is long enough for a
+/// loaded host to answer a read by id, which they assert on what they found: a hosted runner
+/// once took more than 300ms over one, and the journey then read as the read having hung.
 const GIVE_UP: journey::FixtureWait = journey::FixtureWait {
     bound: Duration::from_millis(1_000),
     first: Duration::from_millis(20),
     steady_for: Duration::from_millis(100),
     longest: Duration::from_millis(100),
-    diagnosis: Duration::from_millis(300),
+    diagnosis: Duration::from_secs(10),
 };
 
 /// A wait that gives up names each item the search never reported by its kind, and says what a
