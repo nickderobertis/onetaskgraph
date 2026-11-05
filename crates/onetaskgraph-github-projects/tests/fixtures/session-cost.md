@@ -301,3 +301,10 @@ to 238 / 300,890. The template lookup adds one node; three removed item-count re
 remove three nodes and three one-point GraphQL calls (226 to 223 attributed points;
 the unchanged 15 REST calls account for the remaining requests). No budget ceiling changes.
 A populated real template can require more reads while GitHub copies its items.
+
+Counting the template's draft items separately from its total adds one template-item
+listing request and 100 worst-case nodes. With that preflight, the offline session
+records 239 requests / 300,990 nodes and 224 attributed GraphQL points. Only draft
+items travel with a board copy; issues and pull requests stay on the template.
+The copy waits for that draft count on two consecutive reads within the same bound.
+No budget ceiling changes.
