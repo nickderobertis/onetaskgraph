@@ -3062,7 +3062,9 @@ fn answer_a_session_call(
     if query.contains("query LiveTemplate(") {
         assert_eq!(variables["owner"], json!("octo-org"));
         assert_eq!(variables["number"], json!(6));
-        return Some(json!({"repositoryOwner":{"id":"U_octo","projectV2":{"id":"PVT_template"}}}));
+        return Some(
+            json!({"repositoryOwner":{"id":"U_octo","projectV2":{"id":"PVT_template","items":{"totalCount":state.items.len()}}}}),
+        );
     }
     if query.contains("mutation LiveCopyBoard(") {
         assert_eq!(input["projectId"], json!("PVT_template"));

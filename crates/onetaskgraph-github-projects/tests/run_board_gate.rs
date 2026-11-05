@@ -169,6 +169,7 @@ struct Account {
     /// answered without its id (`"copy-without-id"`) or as the template itself
     /// (`"copy-as-template"`), and a deletion refused (`"refused-delete"`).
     faults: Vec<&'static str>,
+    copy_reads: usize,
     /// Whether the per-minute secondary limits are enforced, over every request since the
     /// account was made: a burst test's whole run falls inside one minute.
     per_minute: bool,
@@ -260,7 +261,7 @@ impl Account {
             let board = self
                 .boards
                 .get(&number(variables))
-                .map(|board| json!({"id":board.id}));
+                .map(|board| json!({"id":board.id,"items":{"totalCount":board.items.len()}}));
             return json!({"data":{"repositoryOwner":{"id":"U_octo","projectV2":board}}});
         }
         if document.contains("mutation LiveCopyBoard(") {
@@ -308,6 +309,20 @@ impl Account {
         if document.contains("query LiveRunBoardItems(") {
             if self.has("unread-count") {
                 return json!({"errors":[{"message":"Something went wrong while executing your query."}]});
+            }
+            self.copy_reads += 1;
+            if self.has("empty-copy") {
+                return json!({"data":{"repositoryOwner":{"projectV2":{"items":{"totalCount":0}}}}});
+            }
+            if self.has("slow-copy") {
+                let count = if self.copy_reads <= 6 {
+                    0
+                } else if self.copy_reads <= 8 {
+                    24
+                } else {
+                    TEMPLATE_DRAFTS
+                };
+                return json!({"data":{"repositoryOwner":{"projectV2":{"items":{"totalCount":count}}}}});
             }
             if self.has("stalled-copy") {
                 // A copy still filling in on every read: no two reads agree.
@@ -1100,9 +1115,31 @@ fn failing_session_with(faults: &[&'static str], entry: &str) -> (String, Arc<Mu
 }
 
 #[test]
+fn a_copy_waits_past_repeated_zero_counts_for_the_templates_items() {
+    let account = Arc::new(Mutex::new(Account::new()));
+    account.lock().unwrap().faults = vec!["slow-copy"];
+    let origin = serve(Arc::clone(&account));
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["session_child", "--exact", "--nocapture"])
+        .env("RUN_BOARD_GATE_ORIGIN", &origin)
+        .env("RUN_BOARD_GATE_ENTRY", "main")
+        .env("RUN_BOARD_GATE_TOKEN", "slow")
+        .env("RUN_BOARD_GATE_RUN", "402")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(account.lock().unwrap().copy_reads, 10);
+}
+
+#[test]
 fn a_copy_that_never_settles_or_cannot_be_counted_is_refused_and_deleted() {
     for (fault, expected) in [
         ("stalled-copy", "did not settle"),
+        ("empty-copy", "observed item counts [Some(0)"),
         ("unread-count", "live board copy item count"),
     ] {
         let (said, account) = failing_session(fault, "main");

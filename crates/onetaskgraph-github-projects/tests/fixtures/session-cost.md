@@ -289,3 +289,15 @@ session spent 212, and a copy adds a handful of one-point requests to that.
 Merged onto `main`'s #3838, whose own record was 233 requests and 275,937 worst-case nodes,
 the same board-copy additions and removals land on top of it: 240 requests and 275,742
 worst-case nodes.
+
+
+## Waiting for a disposable copy to populate
+
+The template lookup now requests its item count and the copy must report that count on
+two consecutive reads, within 30 reads spaced two seconds apart. Repeated low counts
+no longer authorize preflight. The loopback's empty template previously took five reads
+and now takes two: the measured record moves from 241 requests / 300,892 worst-case nodes
+to 238 / 300,890. The template lookup adds one node; three removed item-count reads
+remove three nodes and three one-point GraphQL calls (226 to 223 attributed points;
+the unchanged 15 REST calls account for the remaining requests). No budget ceiling changes.
+A populated real template can require more reads while GitHub copies its items.

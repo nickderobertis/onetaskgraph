@@ -2,8 +2,7 @@
 //! has one is [`onetaskgraph_github_live::RUN_BOARD_PREFIX`]'s to say.
 use super::{github_pause, graphql_variables};
 use onetaskgraph_github_live::{
-    COPY_BOARD_DOCUMENT, DELETE_BOARD_DOCUMENT, TEMPLATE_DOCUMENT, quota::MINIMUM_INITIAL_ITEMS,
-    run_board_stamp,
+    COPY_BOARD_DOCUMENT, DELETE_BOARD_DOCUMENT, TEMPLATE_DOCUMENT, run_board_stamp,
 };
 use serde_json::{Value, json};
 use std::sync::Mutex;
@@ -14,10 +13,6 @@ const BOARD_ITEMS_DOCUMENT: &str = "query LiveRunBoardItems($owner:String!,$numb
 /// How many times the copy's item count is read before the copy is refused as incomplete.
 /// GitHub copies a board's draft items after it answers the mutation; this bounds the wait.
 const COPY_READS: u32 = 30;
-
-/// How many reads in a row past the first must agree before a count below the journey's
-/// minimum is taken as the copy's whole: about ten seconds of GitHub's copy standing still.
-const SETTLED_READS: u32 = 4;
 
 /// A board this session copied for itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -203,6 +198,10 @@ pub async fn copy(
             )
         })?
         .to_owned();
+    let expected = found
+        .pointer("/data/repositoryOwner/projectV2/items/totalCount")
+        .and_then(Value::as_u64)
+        .ok_or("GitHub did not answer the template item count")?;
     let copied = send(
         COPY_BOARD_DOCUMENT,
         "live board copy",
@@ -257,7 +256,7 @@ pub async fn copy(
     // GitHub copies the draft items after it answers; the session starts once they are there.
     // A copy that never settles, or whose count cannot be read, is this session's board all
     // the same, and is deleted before the refusal is reported.
-    match settle(send, owner, &board).await {
+    match settle(send, owner, &board, expected).await {
         Ok(()) => Ok(board),
         Err(error) => Err(match delete(send, &board).await {
             Ok(()) => error,
@@ -266,10 +265,14 @@ pub async fn copy(
     }
 }
 
-async fn settle(send: &impl Sender, owner: &str, board: &RunBoard) -> Result<(), String> {
+async fn settle(
+    send: &impl Sender,
+    owner: &str,
+    board: &RunBoard,
+    expected: u64,
+) -> Result<(), String> {
     let number = board.number;
-    let mut last = None;
-    let mut agreeing = 0;
+    let mut counts = Vec::new();
     for read in 0..COPY_READS {
         if read > 0 {
             github_pause(std::time::Duration::from_secs(2)).await;
@@ -283,25 +286,14 @@ async fn settle(send: &impl Sender, owner: &str, board: &RunBoard) -> Result<(),
         let items = answer
             .pointer("/data/repositoryOwner/projectV2/items/totalCount")
             .and_then(Value::as_u64);
-        // Settled when two reads agree on a count the journey can run on, or when several in a
-        // row agree on any count; whether that count is the registered workload is the
-        // pre-flight's to judge, in its own words.
-        agreeing = if items.is_some() && items == last {
-            agreeing + 1
-        } else {
-            0
-        };
-        if (agreeing >= 1 && items.is_some_and(|items| items >= MINIMUM_INITIAL_ITEMS))
-            || agreeing >= SETTLED_READS
-        {
+        counts.push(items);
+        if items == Some(expected) && counts.iter().rev().nth(1) == Some(&Some(expected)) {
             return Ok(());
         }
-        last = items;
     }
     Err(format!(
-        "the live board copy #{number} did not settle (last read {last:?} items); its template \
-         needs at least {MINIMUM_INITIAL_ITEMS} draft items — run `just github-live-template \
-         dry-run`"
+        "the live board copy #{number} did not settle across {COPY_READS} reads 2s apart \
+         (observed item counts {counts:?}); template holds {expected} items"
     ))
 }
 
