@@ -1282,19 +1282,42 @@ async fn rest(
     body: Option<Value>,
     what: &str,
 ) -> Result<Value, String> {
+    rest_answer(token, method, endpoint, parameters, query, body, what)
+        .await
+        .map_err(Refusal::into_message)
+}
+
+/// [`rest`], keeping whether GitHub answered the call apart from what it said.
+async fn rest_answer(
+    token: &str,
+    method: Method,
+    endpoint: &str,
+    parameters: &[(&str, &str)],
+    query: &str,
+    body: Option<Value>,
+    what: &str,
+) -> Result<Value, Refusal> {
     // Refused here rather than recorded: an endpoint the accounting will not name is a
     // mis-spelled call site, and this lane learns that before it sends anything.
     let named = Endpoint::parse(method, endpoint).ok_or_else(|| {
-        format!("{what} names {endpoint}, which is not spelled like a GitHub endpoint template")
+        Refusal::Answered(
+            format!(
+                "{what} names {endpoint}, which is not spelled like a GitHub endpoint template"
+            ),
+            None,
+        )
     })?;
     let mut path = endpoint.to_owned();
     for (name, value) in parameters {
         path = path.replace(&format!("{{{name}}}"), value);
     }
     if let Some(unfilled) = path.find('{') {
-        return Err(format!(
-            "{what} left {} unfilled in the endpoint {endpoint}",
-            &path[unfilled..]
+        return Err(Refusal::Answered(
+            format!(
+                "{what} left {} unfilled in the endpoint {endpoint}",
+                &path[unfilled..]
+            ),
+            None,
         ));
     }
     let url = format!("{}{path}{query}", endpoints().rest_host);
@@ -1306,7 +1329,7 @@ async fn rest(
     if let Some(body) = body {
         request = request.json(&body);
     }
-    record_rest_response(&SESSION, &named, request.send().await, what).await
+    record_rest_answer(&SESSION, &named, request.send().await, what).await
 }
 
 /// Record what one REST call produced, and hand its body back.
@@ -1324,12 +1347,26 @@ pub async fn record_rest_response(
     sent: reqwest::Result<reqwest::Response>,
     what: &str,
 ) -> Result<Value, String> {
+    record_rest_answer(into, endpoint, sent, what)
+        .await
+        .map_err(Refusal::into_message)
+}
+
+/// [`record_rest_response`], keeping whether GitHub answered the call apart from what it said.
+async fn record_rest_answer(
+    into: &Accounting,
+    endpoint: &Endpoint,
+    sent: reqwest::Result<reqwest::Response>,
+    what: &str,
+) -> Result<Value, Refusal> {
     let sending = || Request::rest(endpoint.clone());
     let response = match sent {
         Ok(response) => response,
         Err(error) => {
             into.record(sending().finished(Outcome::Refused, RateLimit::default()));
-            return Err(format!("{what} could not reach GitHub: {error}"));
+            return Err(Refusal::Unanswered(format!(
+                "{what} could not reach GitHub: {error}"
+            )));
         }
     };
     let status = response.status();
@@ -1340,7 +1377,9 @@ pub async fn record_rest_response(
         Ok(text) => text,
         Err(error) => {
             into.record(outcome(Outcome::Refused));
-            return Err(format!("{what} returned no readable body: {error}"));
+            return Err(Refusal::Unanswered(format!(
+                "{what} returned no readable body: {error}"
+            )));
         }
     };
     // Decoded first, so what is recorded is what this call really produced: a `2xx` whose
@@ -1357,9 +1396,15 @@ pub async fn record_rest_response(
         decoded.is_ok(),
     )));
     if !status.is_success() {
-        return Err(format!("{what} failed with HTTP {status}: {text}"));
+        let problem = format!("{what} failed with HTTP {status}: {text}");
+        return Err(if status.is_server_error() {
+            Refusal::Unanswered(problem)
+        } else {
+            Refusal::Answered(problem, None)
+        });
     }
-    decoded.map_err(|error| format!("{what} returned invalid JSON: {error}"))
+    decoded
+        .map_err(|error| Refusal::Answered(format!("{what} returned invalid JSON: {error}"), None))
 }
 
 /// The `{owner}` and `{repo}` every endpoint here names, out of one `owner/name`.
@@ -4440,13 +4485,25 @@ async fn every_facet_change_moves_a_projects_and_a_documents_token(
 
         // Renamed to another of this run's own label names, so its cleanup still finds it.
         let renamed = run.own.label(run.stamp_micros + 1);
-        change_artifact_label(run, label_name, json!({"new_name": renamed})).await?;
+        change_artifact_label(
+            &run.token,
+            &run.repository,
+            label_name,
+            json!({"new_name": renamed}),
+        )
+        .await?;
         (held_project, held_document) = tokio::try_join!(
             moved(project, beta, "its label renamed", &held_project),
             moved(document, design, "its label renamed", &held_document),
         )?;
 
-        change_artifact_label(run, &renamed, json!({"color": "5319e7"})).await?;
+        change_artifact_label(
+            &run.token,
+            &run.repository,
+            &renamed,
+            json!({"color": "5319e7"}),
+        )
+        .await?;
         // The scratch leg reads its own token before its change, so this one is not held on.
         (_, held_document) = tokio::try_join!(
             moved(project, beta, "its label recoloured", &held_project),
@@ -4500,20 +4557,81 @@ async fn every_facet_change_moves_a_projects_and_a_documents_token(
 }
 
 /// Change the run's label `name` over GitHub's REST API, as a person editing it would.
-async fn change_artifact_label(run: &LiveRun, name: &str, change: Value) -> Result<(), String> {
-    let mut parameters = repository_parameters(&run.repository);
+///
+/// **A call GitHub never answered is not an answer about the label, so the label decides.**
+/// GitHub has answered this very call `500 Internal Server Error` with no body, which failed a
+/// run over nothing the code had done, and a 5xx says nothing about whether the change landed
+/// behind it. Sending a rename again after it landed would be refused for a name that no longer
+/// exists, so each such call is followed by a read of the label, and only a label not showing
+/// the change is sent it again, up to three times in all. A refusal GitHub did answer fails at
+/// once, unless a read shows an earlier unanswered attempt landed after all.
+pub async fn change_artifact_label(
+    token: &str,
+    repository: &str,
+    name: &str,
+    change: Value,
+) -> Result<(), String> {
+    const ATTEMPTS: u64 = 3;
+    let mut parameters = repository_parameters(repository);
     parameters.push(("name", name));
-    rest(
-        &run.token,
-        Method::Patch,
+    let mut unanswered = None;
+    for attempt in 1..=ATTEMPTS {
+        let answer = rest_answer(
+            token,
+            Method::Patch,
+            "/repos/{owner}/{repo}/labels/{name}",
+            &parameters,
+            "",
+            Some(change.clone()),
+            "live label change",
+        )
+        .await;
+        match answer {
+            Ok(_) => return Ok(()),
+            Err(Refusal::Answered(problem, _)) if unanswered.is_none() => return Err(problem),
+            Err(Refusal::Answered(problem, _)) => {
+                return if label_shows_change(token, repository, name, &change).await {
+                    Ok(())
+                } else {
+                    Err(problem)
+                };
+            }
+            Err(Refusal::Unanswered(problem)) => {
+                unanswered = Some(problem);
+                tokio::time::sleep(std::time::Duration::from_secs(attempt)).await;
+                if label_shows_change(token, repository, name, &change).await {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Err(format!(
+        "label {name} does not show its change after {ATTEMPTS} attempts GitHub never answered; \
+         the last: {}",
+        unanswered.unwrap_or_default()
+    ))
+}
+
+/// Whether the repository's label reads as `change` asked, read rather than inferred. A read
+/// that fails settles nothing, so it reads as a change not yet seen.
+async fn label_shows_change(token: &str, repository: &str, name: &str, change: &Value) -> bool {
+    let named = change["new_name"].as_str().unwrap_or(name);
+    let mut parameters = repository_parameters(repository);
+    parameters.push(("name", named));
+    let Ok(label) = rest(
+        token,
+        Method::Get,
         "/repos/{owner}/{repo}/labels/{name}",
         &parameters,
         "",
-        Some(change),
-        "live label change",
+        None,
+        "live label read",
     )
     .await
-    .map(|_| ())
+    else {
+        return false;
+    };
+    label["name"] == named && (change["color"].is_null() || label["color"] == change["color"])
 }
 
 /// A stamped single-select field this run created on the board, with its options.
