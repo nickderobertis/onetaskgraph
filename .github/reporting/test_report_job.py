@@ -544,6 +544,27 @@ class Contract(unittest.TestCase):
         self.assertEqual((TREE / 'release-action.yml').read_bytes(), (HERE / f'action-{TAG}.yml').read_bytes())
         self.assertEqual((TREE / 'action.yml').read_bytes(), (HERE / f'action-{TAG}.yml').read_bytes())
 
+    def test_the_real_host_comparison_reproduces_from_its_saved_input(self):
+        # Saved from run 42169097213 of throwaway pull request #3904: 60 rows at head bf9fd231.
+        saved = HERE / 'fixtures/demo-comparison-input.json'
+        reader = STATE / 'reader'
+        reader.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(next((TREE / 'dist').glob('*.tar.gz'))) as archive:
+            archive.extractall(reader, filter='data')
+        tools = STATE / 'tools'
+        if not (tools / 'onebudgetspec').exists():
+            journey = Journey(self)
+            job = journey.run('push', journey.base)
+            shutil.copytree(job.temp / 'onebudgetspec-action/tools', tools, dirs_exist_ok=True)
+        path = os.pathsep.join([str(reader), str(tools), os.environ['PATH']])
+        reproduced = subprocess.run(['onebudgetspec-github-action', 'reproduce', '--input', str(saved)],
+                                    env={**os.environ, 'PATH': path}, capture_output=True, text=True, check=False)
+        self.assertEqual(reproduced.returncode, 0, reproduced.stderr)
+        self.assertIn('head: bf9fd2313e5118e0f0d6493651457bfd4d47457e', reproduced.stdout)
+        rows = [line for line in reproduced.stdout.splitlines() if line.startswith('| ') and ' / ' in line]
+        self.assertEqual(len(rows), 60)
+        self.assertIn('onetaskgraph-ci-check-time', reproduced.stdout)
+
     def test_the_job_names_only_inputs_the_action_declares_and_every_one_it_requires(self):
         declared = yaml.safe_load((TREE / 'action.yml').read_text())['inputs']
         given = set(action_step()['with'])
