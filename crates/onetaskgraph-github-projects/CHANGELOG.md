@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.4](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.14.3...onetaskgraph-github-projects-v0.14.4) - 2026-11-06
+
+### Fixed
+
+- rewrite reference-style section links on a copy to a private destination ([#3909](https://github.com/nickderobertis/onetaskgraph/pull/3909))
+
 ## [0.14.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.14.2...onetaskgraph-github-projects-v0.14.3) - 2026-11-05
 
 ### Fixed
