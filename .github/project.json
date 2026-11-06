@@ -69,7 +69,7 @@
     "budgetJourneys": [
       "workflowGraph",
       "{workspaceRoot}/budgets.yaml",
-      "{workspaceRoot}/.github/reporting/action-v0.1.1.yml",
+      "{workspaceRoot}/.github/reporting/action-v0.1.2.yml",
       "{workspaceRoot}/.github/governance.json",
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/scripts/gate-time.sh",
