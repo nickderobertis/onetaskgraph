@@ -58,6 +58,8 @@ ROWS = 100
 COMMITS = 20
 COMMANDS_READING_REST = 12
 UNJUDGED = 1_000_000
+# Below this many samples the action's report shows a row as having no baseline yet.
+MINIMUM_SAMPLES = 5
 TRANSFER_SERVICES = ('artifact-service', 'blob-storage', 'object-storage', 'release-host', 'package-index')
 
 
@@ -360,6 +362,11 @@ def table_row(markdown, budget):
     return rows[0]
 
 
+def measured(saved_run):
+    """The budgets one saved base run has a figure for."""
+    return {result['id'] for result in saved_run['results']['results']}
+
+
 def catalog():
     """Every production budget, from the same discovery rule the action applies."""
     found = {}
@@ -439,17 +446,11 @@ class ProductionCatalog(unittest.TestCase):
         self.assertEqual(journey.host.comments, [], 'a base push posts nothing')
         saved = journey.host.artifact_files(base.run_id)
         self.assertIn('budget-run.json', saved)
-        # On this catalog only the job's own budget measures, after the main phase, and action
-        # v0.1.1 starts a rolling file only from a main phase that measured something. So no
-        # baseline accumulates, and the report says so rather than inventing one.
-        self.assertNotIn('rolling-history.json', saved)
-        self.assertIn('no rolling file saved', base.markdown() + base.summary + base.stdout)
 
         first = journey.pull_request()
         self.assertEqual(first.exit_code, 0, first.stdout)
         self.assertEqual(len(journey.host.comments), 1)
         self.assertIn(first.sha, journey.host.comments[0]['body'])
-        self.assertEqual(first.saved('comparison-input.json')['baseline'], [], 'no PR-run substitute')
         self.assertTrue((first.out / 'budget-run.json').is_file(), 'the same result artifact')
 
         second = journey.pull_request()
@@ -460,6 +461,41 @@ class ProductionCatalog(unittest.TestCase):
         self.assertIn(f'head: {second.sha}', body)
         self.assertNotIn(f'head: {first.sha}', body)
         self.assertIn(first.sha, body, 'the earlier head stays as informational history')
+
+    def test_base_pushes_save_the_jobs_own_budget_as_history_a_pull_request_reads_as_its_baseline(self):
+        # On this catalog the job's own budget is the only measurement, and it joins only the final
+        # upload: this is the case the pinned release has to save history for.
+        journey = Journey(self)
+        first = journey.push()
+        self.assertEqual(first.exit_code, 0, first.stdout)
+        history = json.loads(journey.host.artifact_files(first.run_id)['rolling-history.json'])
+        self.assertEqual([saved_run['head_sha'] for saved_run in history['runs']], [first.sha])
+        self.assertEqual(measured(history['runs'][0]), {OWN}, 'the only measurement on this catalog')
+
+        few = journey.pull_request()
+        self.assertEqual(few.exit_code, 0, few.stdout)
+        baseline = few.saved('comparison-input.json')['baseline']
+        self.assertEqual([sample['head_sha'] for sample in baseline], [first.sha], 'base runs alone')
+        self.assertEqual(measured(baseline[0]), {OWN})
+        self.assertEqual(few.rows()[OWN]['baseline_n'], 1)
+        self.assertIn('minimum 5', few.rows()[OWN]['unavailable'], 'a sample below the minimum is shown as one')
+
+        journey.repository.git('checkout', '--quiet', 'main')
+        pushes = [first, *(journey.push() for _ in range(MINIMUM_SAMPLES - 1))]
+        history = json.loads(journey.host.artifact_files(pushes[-1].run_id)['rolling-history.json'])
+        heads = [push.sha for push in pushes]
+        self.assertEqual([saved_run['head_sha'] for saved_run in history['runs']], heads)
+
+        enough = journey.pull_request()
+        self.assertEqual(enough.exit_code, 0, enough.stdout)
+        baseline = enough.saved('comparison-input.json')['baseline']
+        self.assertEqual([sample['head_sha'] for sample in baseline], heads, 'no pull request run enters')
+        rows = enough.rows()
+        self.assertEqual(rows[OWN]['baseline_n'], MINIMUM_SAMPLES)
+        self.assertNotIn('baseline unavailable', rows[OWN].get('unavailable', ''), rows[OWN])
+        self.assertNotIn('baseline unavailable', table_row(enough.markdown(), OWN))
+        unmeasured = catalog().keys() - {OWN}
+        self.assertEqual({rows[identifier]['baseline_n'] for identifier in unmeasured}, {0})
 
     def test_a_fork_gets_a_summary_and_artifact_with_no_comment(self):
         journey = Journey(self)

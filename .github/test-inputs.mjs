@@ -88,7 +88,7 @@ export const policyJourneyFiles = [
 // name: the release commit and the push it pins are immutable.
 export const budgetJourneyReadSet = [
   "budgets.yaml",
-  ".github/reporting/action-v0.1.1.yml",
+  ".github/reporting/action-v0.1.2.yml",
   ".github/governance.json",
   "justfile",
   "package.json",
