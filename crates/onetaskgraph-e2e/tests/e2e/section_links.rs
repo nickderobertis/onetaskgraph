@@ -4206,7 +4206,46 @@ fn every_form_of_a_section_link_lands_identically_on_a_private_linear_source() {
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
 #[test]
 fn every_form_of_a_section_link_lands_identically_on_a_private_folder() {
-    every_form_lands_identically_on_a_private_destination("local-md", true);
+    let sandbox = Sandbox::new();
+    let design = format!("{EVERY_FORM}{NAMES_NOTHING}");
+    let (destination, _) = into_a_private_destination(&sandbox, "local-md", &design, true);
+    // The task's counterpart is filed under another name, so a path the copy left as authored
+    // names nothing there rather than happening to be right.
+    let root = root_of(&sandbox, "dest");
+    std::fs::create_dir_all(root.join("tasks")).expect("the destination's tasks");
+    std::fs::write(
+        root.join("tasks/budget-target.md"),
+        "---\ntitle: Target\nstatus: todo\nmetadata:\n  onetaskgraph.origin: plans:T\n---\nOld.\n",
+    )
+    .expect("the task's counterpart");
+    let from = authored_ids("plans");
+    let (landed, _) = copy_plan(&sandbox, &from, "dest");
+    assert_eq!(landed["T"].id, "dest:budget-target");
+    assert!(
+        !root.join("tasks/T.md").exists(),
+        "the counterpart is updated"
+    );
+    assert_eq!(
+        landed["D"].content(&sandbox).trim_end(),
+        format!(
+            "{}\n{}",
+            every_form_as(
+                "../tasks/budget-target.md#budget-demo-quota-seconds",
+                "#overview"
+            ),
+            NAMES_NOTHING.trim_end()
+        ),
+        "every spelling names the counterpart's path and heading, and what names no record stays"
+    );
+    repeats_writing_nothing(
+        &sandbox,
+        "local-md",
+        &from,
+        "dest",
+        &destination,
+        Some(&root),
+        &landed,
+    );
 }
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
