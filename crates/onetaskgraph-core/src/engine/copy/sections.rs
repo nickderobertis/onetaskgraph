@@ -210,16 +210,20 @@ pub(super) struct BodyLinks {
 pub(super) enum Reading {
     /// Whole references alone.
     WholeReferences,
-    /// A body bound for a public destination: a relative path written alone as well.
-    PublicBody,
+    /// A body bound for a destination declared private, or screened for a public one: a relative
+    /// path written alone as well.
+    BarePathsToo,
 }
 
 /// How a body's rendering treats private addresses.
 #[derive(Debug, Clone, Default)]
 enum Screening {
-    /// Not bound for a public destination: only a whole reference is read.
+    /// No boundary reads this body: only a whole reference is read.
     #[default]
     None,
+    /// Bound for a destination declared private: a relative path written alone, a reference-style
+    /// definition's among them, is read as an inline link's is, and nothing is screened.
+    Private,
     /// Bound for a public destination: a relative path written alone, a reference-style
     /// definition's among them, is read as a reference too, and these private addresses are
     /// screened from every rendering.
@@ -234,7 +238,7 @@ impl Screening {
     fn private_locations(&self) -> Option<&[String]> {
         match self {
             Self::Public(locations) => Some(locations),
-            Self::None | Self::PublicPlaceholder => None,
+            Self::None | Self::Private | Self::PublicPlaceholder => None,
         }
     }
 
@@ -247,6 +251,7 @@ impl Screening {
     fn of_placeholder(&self) -> Self {
         match self {
             Self::None => Self::None,
+            Self::Private => Self::Private,
             Self::Public(_) | Self::PublicPlaceholder => Self::PublicPlaceholder,
         }
     }
@@ -310,6 +315,15 @@ impl BodyLinks {
         self
     }
 
+    /// Read a relative path written alone as an inline link is read, for a destination declared
+    /// private. A body already screened for a public destination reads one anyway.
+    pub(super) fn for_private_destination(mut self) -> Self {
+        if matches!(self.screening, Screening::None) {
+            self.screening = Screening::Private;
+        }
+        self
+    }
+
     /// Write every link to a record as a relative path in a folder of Markdown, as a public view
     /// holds them, however the source spelled it.
     pub(super) fn always_relative(mut self) -> Self {
@@ -328,7 +342,7 @@ impl BodyLinks {
 
     /// Whether `content` names a record whose source reports `location`, in any spelling of
     /// the source kind's form, as a whole reference — or, read from `own` in a folder of
-    /// Markdown, as a Markdown link to a path relative to it. In a [`Reading::PublicBody`], also
+    /// Markdown, as a Markdown link to a path relative to it. In a [`Reading::BarePathsToo`], also
     /// as such a path alone.
     pub(super) fn names(
         from: Option<SectionForm>,
@@ -354,9 +368,17 @@ impl BodyLinks {
                     resolve_relative(own, path).as_deref() == Some(location)
                 };
                 destinations(content).any(|(_, target)| names_it(target))
-                    || (reading == Reading::PublicBody
+                    || (reading == Reading::BarePathsToo
                         && bare_paths(content).any(|(_, path)| names_it(path)))
             })
+    }
+
+    /// Every spelling of the body's own record's location in the source kind's own form.
+    fn own_spellings(&self) -> Vec<String> {
+        self.own_location.as_ref().map_or_else(Vec::new, |own| {
+            self.from
+                .map_or_else(|| vec![own.clone()], |form| form.spellings(own))
+        })
     }
 
     /// Whether this body holds anything a rendering could change: a referent, or a link to
@@ -367,12 +389,17 @@ impl BodyLinks {
                 && self.to.is_some()
                 && destinations(&self.original).any(|(_, target)| target.starts_with(FRAGMENT)))
             || self.own_location.as_deref().is_some_and(|own| {
-                (0..self.original.len()).any(|at| delimited(&self.original, at, own))
-                    || (self.from == Some(SectionForm::LocalMd)
-                        && destinations(&self.original).any(|(_, target)| {
-                            let path = target.split(FRAGMENT).next().unwrap_or_default();
-                            resolve_relative(own, path).as_deref() == Some(own)
-                        }))
+                self.own_spellings().iter().any(|spelling| {
+                    (0..self.original.len()).any(|at| delimited(&self.original, at, spelling))
+                }) || (self.from == Some(SectionForm::LocalMd) && {
+                    let names_itself = |target: &str| {
+                        let path = target.split(FRAGMENT).next().unwrap_or_default();
+                        resolve_relative(own, path).as_deref() == Some(own)
+                    };
+                    destinations(&self.original).any(|(_, target)| names_itself(target))
+                        || (self.screening.reads_bare_paths()
+                            && bare_paths(&self.original).any(|(_, path)| names_itself(path)))
+                })
             })
     }
 
@@ -532,7 +559,7 @@ impl BodyLinks {
                             || (written[..at].ends_with("](<") && next == Some('>'))
                     }
                 } else {
-                    delimited(written, at, &placeholder.text)
+                    placeholder_at(written, at, &placeholder.text)
                 }
             });
             if let Some((placeholder, text)) = found {
@@ -636,7 +663,7 @@ impl BodyLinks {
     /// The whole reference spelled at `at`, with its fragment, when one is: a referent's, or
     /// the body's own record's.
     fn spelled<'a>(&'a self, content: &'a str, at: usize) -> Option<Occurrence<'a>> {
-        let own = self.own_location.as_ref().map(|own| (None, own));
+        let own = self.own_spellings();
         let (referent, spelling) = self
             .referents
             .iter()
@@ -644,9 +671,9 @@ impl BodyLinks {
                 referent
                     .spellings
                     .iter()
-                    .map(move |spelling| (Some(referent), spelling))
+                    .map(move |spelling| (Some(referent), spelling.as_str()))
             })
-            .chain(own)
+            .chain(own.iter().map(|spelling| (None, spelling.as_str())))
             .find(|(_, spelling)| delimited(content, at, spelling))?;
         let after = at + spelling.len();
         let (end, fragment) = if content[after..].starts_with(FRAGMENT) {
@@ -903,6 +930,13 @@ fn with_fragment(link: String, fragment: Option<&str>) -> String {
 /// Whether `location` occurs at `at` as a whole reference, as `delimited_at` reads one.
 fn delimited(content: &str, at: usize, location: &str) -> bool {
     super::delimited_at(content, at, location)
+}
+
+/// Whether the placeholder `text` of a link spelled literally occurs at `at`: as a whole
+/// reference, or with the sentence punctuation [`bare_path_at`] leaves out of a path alone.
+fn placeholder_at(written: &str, at: usize, text: &str) -> bool {
+    delimited(written, at, text)
+        || (written[at..].starts_with(text) && bare_path_at(written, at) == Some(text))
 }
 
 /// Every Markdown link destination `content` holds, with where it starts — one written in

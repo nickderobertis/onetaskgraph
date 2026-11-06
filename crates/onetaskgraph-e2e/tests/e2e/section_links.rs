@@ -275,10 +275,17 @@ impl Store {
                     relative(&from.location(sandbox), &to.location(sandbox))
                 ),
             },
-            Self::Github(_) => match to {
-                None => documented_same_record("A GitHub Projects issue", github),
-                Some(to) => format!("{}#user-content-{github}", www(&to.location(sandbox))),
-            },
+            // Between records and within one, the README's table gives the same form.
+            Self::Github(_) => {
+                assert_eq!(
+                    documented_form("A GitHub Projects issue", 3),
+                    documented_form("A GitHub Projects issue", 2)
+                );
+                format!(
+                    "{}#user-content-{github}",
+                    www(&to.unwrap_or(from).location(sandbox))
+                )
+            }
             Self::Linear(workspace) => {
                 let at = to.unwrap_or(from);
                 format!(
@@ -657,8 +664,12 @@ fn holds_the_form(
             // The issue page gives a heading no id: the body carries one before each.
             let raw = store.raw(&landed["T"]);
             assert!(
-                raw.contains("[the second budgets](#user-content-budgets-1)"),
-                "{what}: the same-record link targets the written GitHub anchor: {raw}"
+                raw.contains(&format!(
+                    "[the second budgets]({}#user-content-budgets-1)",
+                    www(&landed["T"].location(sandbox))
+                )),
+                "{what}: the same-record link names its own issue on the www host and the \
+                 written GitHub anchor: {raw}"
             );
             for (text, slug) in [
                 ("## What", "what"),
@@ -3077,9 +3088,12 @@ fn a_task_linking_its_own_record_and_its_comments_fragment_are_written_for_the_d
         };
         let there = task.location(&sandbox);
         let (own_link, fragment) = match &destination {
-            Store::Local => ("A.md".to_owned(), "#budgets"),
-            Store::Github(_) => (there.clone(), "#user-content-budgets"),
-            _ => (there.clone(), "#budgets"),
+            Store::Local => ("A.md".to_owned(), "#budgets".to_owned()),
+            Store::Github(_) => (
+                there.clone(),
+                format!("{}#user-content-budgets", www(&there)),
+            ),
+            _ => (there.clone(), "#budgets".to_owned()),
         };
         assert!(
             task.content(&sandbox)
@@ -4107,4 +4121,425 @@ fn a_bare_path_to_a_private_record_of_another_project_is_removed_and_not_counted
     let (design, figures) = copy_design(&sandbox);
     assert_eq!(design.content(&sandbox).trim_end(), "| other | `` |");
     assert_eq!(figures, [0, 0, 0], "outside the referent set");
+}
+
+/// A design document naming the target task's budget heading in all three forms, and its own
+/// heading by a path written alone, ending a sentence.
+const EVERY_FORM: &str = "## Overview\n\n| Form | Budget |\n| --- | --- |\n| inline | \
+     [budget](../tasks/T.md#budget-demo-quota-seconds) |\n| definition | [budget][budget] |\n| \
+     alone | ../tasks/T.md#budget-demo-quota-seconds |\n| quoted | \
+     `../tasks/T.md#budget-demo-quota-seconds` |\n\nThis is D.md#overview.\n\n\
+     [budget]: ../tasks/T.md#budget-demo-quota-seconds\n";
+
+/// What [`EVERY_FORM`] reads as with its cross-record links written `budget` and its link to its
+/// own heading written `own`.
+fn every_form_as(budget: &str, own: &str) -> String {
+    format!(
+        "## Overview\n\n| Form | Budget |\n| --- | --- |\n| inline | [budget]({budget}) |\n| \
+         definition | [budget][budget] |\n| alone | {budget} |\n| quoted | `{budget}` |\n\n\
+         This is {own}.\n\n[budget]: {budget}"
+    )
+}
+
+/// Paths written alone that name no record the copy carries or knows.
+const NAMES_NOTHING: &str = "\nNeither ../tasks/Nothing.md#budgets nor `../notes/plan.md` is a \
+     record, nor is [this][nothing].\n\n[nothing]: ../tasks/Nothing.md#what\n";
+
+/// The plan `plans`, its design document holding `design` and the source declared private when
+/// `source_private` says so, and a destination `dest` of `kind` declared private.
+fn into_a_private_destination(
+    sandbox: &Sandbox,
+    kind: &str,
+    design: &str,
+    source_private: bool,
+) -> (Store, PathBuf) {
+    let (mut source, _) = authored(sandbox, "plans");
+    if source_private {
+        source["visibility"] = json!("private");
+    }
+    let (destination, mut config) = store(sandbox, kind, "dest", None);
+    config["visibility"] = json!("private");
+    configure(sandbox, &[("plans", &source), ("dest", &config)]);
+    let root = root_of(sandbox, "plans");
+    std::fs::write(
+        root.join("documents/D.md"),
+        format!("---\ntitle: Design\nproject: P\n---\n{design}"),
+    )
+    .expect("the design document");
+    (destination, root)
+}
+
+/// Copy the plan into a destination of `kind` declared private, and hold the document's three
+/// spellings of one budget link to one link in that kind's form.
+fn every_form_lands_identically_on_a_private_destination(kind: &str, source_private: bool) {
+    let what = format!("{kind}, source private: {source_private}");
+    let sandbox = Sandbox::new();
+    let (destination, _) = into_a_private_destination(&sandbox, kind, EVERY_FORM, source_private);
+    let from = authored_ids("plans");
+    let (landed, _) = copy_plan(&sandbox, &from, "dest");
+    let budget = destination.link(&sandbox, &landed["D"], Some(&landed["T"]), HEADINGS[2], 0);
+    let own = destination.link(&sandbox, &landed["D"], None, OVERVIEW, 0);
+    assert_eq!(
+        landed["D"].content(&sandbox).trim_end(),
+        every_form_as(&budget, &own),
+        "{what}: every spelling lands in the destination's form"
+    );
+    let root = (kind == "local-md").then(|| root_of(&sandbox, "dest"));
+    repeats_writing_nothing(
+        &sandbox,
+        &what,
+        &from,
+        "dest",
+        &destination,
+        root.as_deref(),
+        &landed,
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
+#[test]
+fn every_form_of_a_section_link_lands_identically_on_a_private_linear_source() {
+    every_form_lands_identically_on_a_private_destination("linear", true);
+    every_form_lands_identically_on_a_private_destination("linear", false);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
+#[test]
+fn every_form_of_a_section_link_lands_identically_on_a_private_folder() {
+    let sandbox = Sandbox::new();
+    let design = format!("{EVERY_FORM}{NAMES_NOTHING}");
+    let (destination, _) = into_a_private_destination(&sandbox, "local-md", &design, true);
+    // The task's counterpart is filed under another name, so a path the copy left as authored
+    // names nothing there rather than happening to be right.
+    let root = root_of(&sandbox, "dest");
+    std::fs::create_dir_all(root.join("tasks")).expect("the destination's tasks");
+    std::fs::write(
+        root.join("tasks/budget-target.md"),
+        "---\ntitle: Target\nstatus: todo\nmetadata:\n  onetaskgraph.origin: plans:T\n---\nOld.\n",
+    )
+    .expect("the task's counterpart");
+    let from = authored_ids("plans");
+    let (landed, _) = copy_plan(&sandbox, &from, "dest");
+    assert_eq!(landed["T"].id, "dest:budget-target");
+    assert!(
+        !root.join("tasks/T.md").exists(),
+        "the counterpart is updated"
+    );
+    assert_eq!(
+        landed["D"].content(&sandbox).trim_end(),
+        format!(
+            "{}\n{}",
+            every_form_as(
+                "../tasks/budget-target.md#budget-demo-quota-seconds",
+                "#overview"
+            ),
+            NAMES_NOTHING.trim_end()
+        ),
+        "every spelling names the counterpart's path and heading, and what names no record stays"
+    );
+    repeats_writing_nothing(
+        &sandbox,
+        "local-md",
+        &from,
+        "dest",
+        &destination,
+        Some(&root),
+        &landed,
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
+#[test]
+fn every_form_of_a_section_link_lands_identically_on_a_private_github_board() {
+    every_form_lands_identically_on_a_private_destination("github-projects", true);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_path_alone_naming_no_known_record_is_left_on_a_private_destination() {
+    for kind in KINDS {
+        let sandbox = Sandbox::new();
+        let design = format!("{EVERY_FORM}{NAMES_NOTHING}");
+        let (destination, root) = into_a_private_destination(&sandbox, kind, &design, true);
+        let (landed, _) = copy_plan(&sandbox, &authored_ids("plans"), "dest");
+        let budget = destination.link(&sandbox, &landed["D"], Some(&landed["T"]), HEADINGS[2], 0);
+        let own = destination.link(&sandbox, &landed["D"], None, OVERVIEW, 0);
+        assert_eq!(
+            landed["D"].content(&sandbox).trim_end(),
+            format!(
+                "{}\n{}",
+                every_form_as(&budget, &own),
+                NAMES_NOTHING.trim_end()
+            ),
+            "{kind}: only what names a record is rewritten"
+        );
+        // A record of the project with no counterpart there is named and cannot be pointed at
+        // anything: left as authored, and counted as an inline link to it is.
+        std::fs::write(
+            root.join("tasks/Uncopied.md"),
+            "---\ntitle: Uncopied\nstatus: todo\nproject: P\n---\n## Budget\n\nA quota.\n",
+        )
+        .expect("a task the copy has not carried");
+        let unresolved =
+            "| Uncopied | ../tasks/Uncopied.md#budget |\n\n[later]: ../tasks/Uncopied.md#budget\n";
+        std::fs::write(
+            root.join("documents/D.md"),
+            format!("---\ntitle: Design\nproject: P\n---\n{unresolved}"),
+        )
+        .expect("the design document");
+        let rendered = ok(
+            &sandbox,
+            &["document", "copy", "plans:D", "--to", "dest", "--json"],
+        );
+        assert_eq!(
+            landed["D"].content(&sandbox).trim_end(),
+            unresolved.trim_end(),
+            "{kind}: a record with no counterpart is left as authored"
+        );
+        assert_eq!(
+            reference_figures(&rendered),
+            [0, 2, 0],
+            "{kind}: both occurrences counted unresolved"
+        );
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_definition_and_a_path_alone_stay_as_written_with_no_boundary_active() {
+    // The state the README names apart: no source declared private, so nothing screens this
+    // body and it is read for whole references and inline links alone.
+    for kind in KINDS {
+        let sandbox = Sandbox::new();
+        let (source, _) = authored(&sandbox, "plans");
+        // Held for the journey: a hosted store's stand-in serves as long as its handle lives.
+        let (_destination, config) = store(&sandbox, kind, "dest", None);
+        configure(&sandbox, &[("plans", &source), ("dest", &config)]);
+        let authored_design =
+            "| Budget |\n| --- |\n| ../tasks/T.md#budgets |\n\n[t]: ../tasks/T.md#budgets\n";
+        std::fs::write(
+            root_of(&sandbox, "plans").join("documents/D.md"),
+            format!("---\ntitle: Design\nproject: P\n---\n{authored_design}"),
+        )
+        .expect("the design document");
+        let (landed, _) = copy_plan(&sandbox, &authored_ids("plans"), "dest");
+        assert_eq!(
+            landed["D"].content(&sandbox).trim_end(),
+            authored_design.trim_end(),
+            "{kind}"
+        );
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
+#[test]
+fn tasks_and_a_comment_naming_each_other_by_a_path_alone_are_finished_on_a_private_destination() {
+    for kind in KINDS {
+        let sandbox = Sandbox::new();
+        let (destination, root) = into_a_private_destination(&sandbox, kind, "The design.\n", true);
+        // Linking each other, so whichever lands first is written before the other's address is
+        // known; beside each other, so nothing here holds a slash; and ending a sentence.
+        std::fs::write(
+            root.join("tasks/T.md"),
+            "---\ntitle: Target\nstatus: todo\nproject: P\n---\n## What\n\n\
+             See [the referrer][u].\n\n[u]: U.md#what\n",
+        )
+        .expect("the target");
+        std::fs::write(
+            root.join("tasks/U.md"),
+            "---\ntitle: Referrer\nstatus: todo\nproject: P\n---\n## What\n\n\
+             The target is T.md#what.\n\n## Comments\n\n<!-- onetaskgraph:comment id=\"c1\" \
+             created_at=\"2026-11-02T12:00:00Z\" updated_at=\"2026-11-02T12:00:00Z\" -->\n\
+             ### comment — 2026-11-02T12:00:00Z\n\nThe bar is T.md#what, not [it][t].\n\n\
+             [t]: T.md#nowhere\n\n<!-- /onetaskgraph:comment -->\n",
+        )
+        .expect("the referrer");
+        let report = outcomes(&ok(
+            &sandbox,
+            &[
+                "project",
+                "copy",
+                "plans:P",
+                "--to",
+                "dest",
+                "--comments",
+                "--json",
+            ],
+        ));
+        let landed = |source: &str| Landed {
+            verb: "task",
+            id: report[source]["destination"]
+                .as_str()
+                .expect("the task landed")
+                .to_owned(),
+        };
+        let (target, referrer) = (landed("plans:T"), landed("plans:U"));
+        let to_referrer = destination.link(&sandbox, &target, Some(&referrer), HEADINGS[0], 0);
+        let to_target = destination.link(&sandbox, &referrer, Some(&target), HEADINGS[0], 0);
+        assert_eq!(
+            target.content(&sandbox).trim_end(),
+            format!("## What\n\nSee [the referrer][u].\n\n[u]: {to_referrer}"),
+            "{kind}"
+        );
+        assert_eq!(
+            referrer.content(&sandbox).trim_end(),
+            format!("## What\n\nThe target is {to_target}."),
+            "{kind}"
+        );
+        let listed: Value = serde_json::from_str(&ok(
+            &sandbox,
+            &["task", "comment", "list", &referrer.id, "--json"],
+        ))
+        .expect("comments as JSON");
+        let body = listed["comments"][0]["body"].as_str().expect("the comment");
+        assert!(
+            body.contains(&format!("The bar is {to_target}, not [it][t]")),
+            "{kind}: the comment's path alone is pointed at the counterpart: {body}"
+        );
+        let carried = relative(&referrer.location(&sandbox), &target.location(&sandbox));
+        let nowhere = match destination {
+            Store::Local => format!("[t]: {carried}#nowhere"),
+            _ => format!("[t]: {}#nowhere", target.location(&sandbox)),
+        };
+        assert!(
+            body.contains(&nowhere),
+            "{kind}: its definition's fragment names no heading and is carried: {body}"
+        );
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and a loopback board exercise the engine's section forms across plugins, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_github_issues_link_to_its_own_heading_is_its_own_www_url_on_a_first_and_a_repeat_copy() {
+    let sandbox = Sandbox::new();
+    let (plans, _) = authored(&sandbox, "plans");
+    let (board, config) = store(&sandbox, "github-projects", "board", None);
+    let (_, folder) = store(&sandbox, "local-md", "back", None);
+    configure(
+        &sandbox,
+        &[("plans", &plans), ("board", &config), ("back", &folder)],
+    );
+    let Store::Github(served) = &board else {
+        unreachable!("a board was asked for");
+    };
+    let updates_since = |at: usize| {
+        served
+            .served_since(at)
+            .iter()
+            .filter(|(document, _)| document.contains("updateIssue"))
+            .count()
+    };
+    // The number is not known until the create is answered: the create holds the authored link,
+    // and one follow-up each for the task and the document that link to their own headings.
+    let from = authored_ids("plans");
+    let (landed, _) = copy_plan(&sandbox, &from, "board");
+    for (key, slug, text) in [
+        ("T", "budgets-1", "the second budgets"),
+        ("D", "overview", "overview"),
+    ] {
+        let at = www(&landed[key].location(&sandbox));
+        let raw = board.raw(&landed[key]);
+        assert!(
+            raw.contains(&format!("[{text}]({at}#user-content-{slug})")),
+            "{key}: {raw}"
+        );
+        assert!(
+            raw.contains(&format!("<a id=\"{slug}\"></a>")),
+            "{key}: {raw}"
+        );
+    }
+    let sent: Vec<String> = served
+        .served()
+        .iter()
+        .filter(|(document, _)| document.contains("createIssue"))
+        .map(|(_, variables)| variables.to_string())
+        .collect();
+    assert!(
+        sent.iter().any(|create| create.contains("(#budgets-1)")),
+        "the create holds the link as authored until its number is known: {sent:#?}"
+    );
+    // Its own URL read back: a repeat copy finds the same bytes and writes nothing.
+    let at = served.served_count();
+    repeats_writing_nothing(&sandbox, "the board", &from, "board", &board, None, &landed);
+    assert_eq!(updates_since(at), 0, "a repeat copy updates no issue");
+    // Out of the board again the link is the record's own, in the destination's form; a task read
+    // answers the authored form.
+    let task = shown(&sandbox, "task", &landed["T"].id);
+    assert!(
+        task["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("[the second budgets](#budgets-1)")),
+        "{task:#}"
+    );
+    let report = outcomes(&ok(
+        &sandbox,
+        &[
+            "document",
+            "copy",
+            &landed["D"].id,
+            "--to",
+            "back",
+            "--json",
+        ],
+    ));
+    let back = Landed {
+        verb: "document",
+        id: report[&landed["D"].id]["destination"]
+            .as_str()
+            .expect("the document landed")
+            .to_owned(),
+    };
+    let content = back.content(&sandbox);
+    assert!(content.contains("[overview](#overview)"), "{content}");
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and a loopback board exercise the engine's public-copy screen across plugins, so this journey belongs in the engine e2e suite.
+#[test]
+fn an_issues_own_url_on_a_private_board_never_reaches_a_public_copy() {
+    let sandbox = Sandbox::new();
+    let (plans, _) = authored(&sandbox, "plans");
+    let (board, mut home) = store(&sandbox, "github-projects", "home", None);
+    home["visibility"] = json!("private");
+    let (_, mut public) = store(&sandbox, "local-md", "public", None);
+    public["visibility"] = json!("public");
+    configure(
+        &sandbox,
+        &[("plans", &plans), ("home", &home), ("public", &public)],
+    );
+    let (on_board, _) = copy_plan(&sandbox, &authored_ids("plans"), "home");
+    // Beside the link the copy wrote, one naming a heading the task does not hold, which no form
+    // can translate.
+    let task = &on_board["T"];
+    let own = www(&task.location(&sandbox));
+    let body = format!(
+        "{}\nAnd [gone]({own}#user-content-gone).\n",
+        board.raw(task)
+    );
+    assert!(
+        body.contains(&format!("{own}#user-content-budgets-1")),
+        "{body}"
+    );
+    let file = sandbox.project().join("edited.md");
+    std::fs::write(&file, &body).expect("the edit");
+    ok(
+        &sandbox,
+        &[
+            "task",
+            "content",
+            "set",
+            &task.id,
+            "--file",
+            &file.display().to_string(),
+        ],
+    );
+    let (landed, _) = copy_plan(&sandbox, &on_board, "public");
+    let held = landed["T"].content(&sandbox);
+    assert!(held.contains("[the second budgets](#budgets-1)"), "{held}");
+    assert!(held.contains("And gone."), "{held}");
+    let design = landed["D"].content(&sandbox);
+    assert!(design.contains("[overview](#overview)"), "{design}");
+    for key in ["P", "T", "U", "D"] {
+        let content = landed[key].content(&sandbox);
+        assert!(!content.contains("github.com"), "{key}: {content}");
+    }
 }

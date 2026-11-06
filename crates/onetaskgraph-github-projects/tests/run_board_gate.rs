@@ -349,6 +349,18 @@ impl Account {
                 };
                 return json!({"data":{"repositoryOwner":{"projectV2":{"items":{"totalCount":count}}}}});
             }
+            if self.has("last-draft-late") {
+                // The counts a real copy reported on its first thirty reads, and then the rest.
+                const OBSERVED: [u64; 30] = [
+                    0, 0, 0, 0, 0, 0, 0, 8, 13, 28, 31, 34, 34, 45, 51, 54, 57, 59, 59, 59, 59, 59,
+                    59, 59, 59, 59, 59, 59, 59, 59,
+                ];
+                let count = OBSERVED
+                    .get(self.copy_reads - 1)
+                    .copied()
+                    .unwrap_or(TEMPLATE_DRAFTS);
+                return json!({"data":{"repositoryOwner":{"projectV2":{"items":{"totalCount":count}}}}});
+            }
             if self.has("stalled-copy") {
                 // A copy still filling in on every read: no two reads agree.
                 let id = self.next("DI");
@@ -1236,6 +1248,27 @@ fn a_copy_waits_past_repeated_zero_counts_for_only_the_templates_draft_items() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(account.lock().unwrap().copy_reads, 10);
+}
+
+#[test]
+fn a_copy_waits_for_a_last_draft_its_listing_shows_a_minute_after_the_copy() {
+    let account = Arc::new(Mutex::new(Account::new()));
+    account.lock().unwrap().faults = vec!["last-draft-late"];
+    let origin = serve(Arc::clone(&account));
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["session_child", "--exact", "--nocapture"])
+        .env("RUN_BOARD_GATE_ORIGIN", &origin)
+        .env("RUN_BOARD_GATE_ENTRY", "main")
+        .env("RUN_BOARD_GATE_TOKEN", "late")
+        .env("RUN_BOARD_GATE_RUN", "403")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(account.lock().unwrap().copy_reads, 32);
 }
 
 #[test]

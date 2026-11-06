@@ -1475,6 +1475,15 @@ them do; this is the inventory of what is owed, not a status board.
      in the same project copy, reaches the boundary check: refused when it names private
      material, and landing with the term replaced under a policy that rewrites.
 
+145. A section link written inline, as a reference-style definition or as a relative path alone
+     lands identically on a Linear source, a folder of Markdown and a GitHub board declared
+     private, a design document's budget link on its copied task's heading, and in a comment;
+     a path naming no record is left as written, one naming a record with no counterpart is
+     left and counted unresolved, and with no source declared private both forms stay as written.
+146. On a GitHub board a link to a heading of an issue's own body is that issue's own URL on the
+     www host with `#user-content-<slug>`: a first copy sends the create and one follow-up writing
+     it, a repeat copy writes nothing, and a copy out of the board reads it as a same-record link.
+
 ## The public boundary
 
 Classification, a source's declared `visibility`, classification routes and `write_policy`
@@ -1562,9 +1571,11 @@ full stop included, is still not recognised at all. Both ends come from the plug
 own reported `Location`; nothing composes an address from a name, an id or a root. It is
 deliberately not a Markdown-link parser: the artifact this exists for holds bare absolute
 paths inside backticks in a table cell, which `[text](target)` matching would have left
-exactly as it found them. A body bound for a public destination while private sources are
-configured also reads a relative path written alone, a reference-style definition's included,
-because the screen must either carry it or remove it. Otherwise such a path is left as it is.
+exactly as it found them. A body bound for a destination declared private also reads a relative
+path written alone, a reference-style definition's included, exactly as it reads an inline link;
+so does one bound for any other destination while private sources are configured, because the
+screen must either carry it or remove it. With no source declared private such a path is left as
+it is, so an inactive store's requests stay what they were.
 
 The referent set is the document's **own project** — that project's record, the tasks filed
 under it, and the other documents filed under it — so a reference to a record in another

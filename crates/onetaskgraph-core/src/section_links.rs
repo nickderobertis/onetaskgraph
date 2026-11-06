@@ -275,8 +275,8 @@ pub enum SectionForm {
     /// `#<slug>`.
     LocalMd,
     /// A GitHub Projects board's issues: `https://www.github.com/<owner>/<repo>/issues/<n>`
-    /// then `#user-content-<slug>`, against an `<a id="<slug>"></a>` the body carries on the
-    /// line before each heading.
+    /// then `#user-content-<slug>`, between records and within one, against an
+    /// `<a id="<slug>"></a>` the body carries on the line before each heading.
     GithubProjects,
     /// Linear issues, projects and documents: see [`LinearSectionForm`].
     Linear(LinearSectionForm),
@@ -488,7 +488,9 @@ impl SectionForm {
     }
 
     /// A link from a record to its own `heading`: `own` is where the destination says the
-    /// record is, which only Linear's form needs.
+    /// record is, which Linear's form and GitHub's need. Clicked inside its own issue, only the
+    /// issue's own URL on the `www` host scrolls: GitHub's page handles a fragment alone, and the
+    /// canonical host's URL, itself.
     #[must_use]
     pub fn same(
         self,
@@ -502,11 +504,7 @@ impl SectionForm {
                 Some(slug) => Written::Link(format!("#{slug}")),
                 None => Written::Unaddressable(String::new()),
             },
-            Self::GithubProjects => match headings.slug_of(heading) {
-                Some(slug) => Written::Link(format!("#{USER_CONTENT}{slug}")),
-                None => Written::Unaddressable(String::new()),
-            },
-            Self::Linear(_) => match own {
+            Self::GithubProjects | Self::Linear(_) => match own {
                 Some(own) => match self.cross(own, None, heading, headings, stored) {
                     Written::Unaddressable(location) => Written::Unaddressable(
                         headings

@@ -109,8 +109,18 @@ fn each_destination_writes_its_own_form() {
         Written::Link("https://www.github.com/o/r/issues/7#user-content-budgets-1".into())
     );
     assert_eq!(
+        SectionForm::GithubProjects.same(
+            Some("https://github.com/o/r/issues/7"),
+            &second,
+            &held,
+            None
+        ),
+        Written::Link("https://www.github.com/o/r/issues/7#user-content-budgets-1".into())
+    );
+    assert_eq!(
         SectionForm::GithubProjects.same(None, &second, &held, None),
-        Written::Link("#user-content-budgets-1".into())
+        Written::Pending,
+        "a new issue's own number is not known until it is created"
     );
     let stored = vec![
         StoredHeading {

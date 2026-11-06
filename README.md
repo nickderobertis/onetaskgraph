@@ -1379,7 +1379,7 @@ decided: it writes the form, parses it back and supplies its markup.
 | Destination | Link to another record's heading | Link to its own heading |
 | --- | --- | --- |
 | A folder of Markdown | `<path relative to the linking file>#<slug>` | `#<slug>` |
-| A GitHub Projects issue | `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` | `#user-content-<slug>` |
+| A GitHub Projects issue | `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` | `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` |
 | A Linear issue, project or document | `<record URL>#heading-<Linear slug>-<id8>` | the record's own URL with that fragment |
 | Linear without a stored heading id | `<record URL>` | `#<slug>` |
 | Task read (every source) | as stored | `#<slug>` |
@@ -1391,7 +1391,11 @@ decided: it writes the form, parses it back and supplies its markup.
   GitHub's canonical `github.com` host, clicked inside another issue, opens its target at the
   top, because GitHub's in-page navigation drops the fragment. The `www.github.com` host is
   answered with a redirect that keeps it. The link then lands both when opened directly and
-  when clicked inside an issue. **That rests on undocumented GitHub behaviour**, which the
+  when clicked inside an issue. A link to a heading of the issue's own body takes that same form,
+  naming the issue itself. Clicked inside the issue, `#user-content-<slug>`, `#<slug>` and the
+  `github.com` URL do not scroll, because GitHub's page handles the hash itself. A new issue has no
+  number until it is created, so the copy writes such a link in a follow-up write of what it just
+  created. **That rests on undocumented GitHub behaviour**, which the
   credentialed live journey re-observes in a real browser.
 - **Linear.** Linear keeps each record's content as an editor state beside its Markdown
   (`descriptionState`, `contentState`). There every heading carries an id Linear assigns when
@@ -1420,6 +1424,21 @@ decided: it writes the form, parses it back and supplies its markup.
     `record-url` writes the record's URL alone, for a measurement.
 - Any other destination, a stdio plugin among them, receives every fragment byte for byte on
   the rewritten link, as before section forms existed.
+
+**Which spellings a copy reads.** What a copy reads as a link to a record depends on where the
+body is bound. Each case below holds for every destination kind:
+
+- **A destination declared private.** An inline link, a reference-style definition
+  (`[t]: ../tasks/t.md#what`), a location, and a path relative to the body's own file written
+  alone, as a table cell names one, all land alike: on the counterpart and its heading, in the
+  form the table above gives that destination. A path that names no record is left as written.
+  So is one naming a record of the project with no counterpart there, which is counted
+  unresolved.
+- **A public or undeclared destination, with a source declared private.** The same spellings are
+  read, and the body is then screened as the next paragraph states.
+- **A public or undeclared destination, with no source declared private.** An inline link and a
+  location are rewritten. A reference-style definition or a path written alone that gives a
+  relative path is left as written.
 
 **Links from a private source.** Before writing a public body, a copy inventories every
 source declared private and removes its record addresses. A reference with a verified

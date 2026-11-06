@@ -4408,12 +4408,12 @@ impl Engine {
             named.push(if item.links.is_some() {
                 Vec::new()
             } else {
-                let reading = if private_locations.is_some() {
-                    sections::Reading::PublicBody
-                } else {
-                    sections::Reading::WholeReferences
-                };
-                self.named_referents(item, &mut by_project, reading).await?
+                self.named_referents(
+                    item,
+                    &mut by_project,
+                    self.reading_of(item, private_locations),
+                )
+                .await?
             });
         }
         // What this very call writes is found by the copy's own target rather than by asking
@@ -4562,6 +4562,12 @@ impl Engine {
                 linked,
             )
             .screen_public(private_locations);
+            let reading = self.reading_of(item, private_locations);
+            let links = if self.declared(&item.to) == crate::config::SourceVisibility::Private {
+                links.for_private_destination()
+            } else {
+                links
+            };
             let own = match &item.target {
                 Target::Update { id, .. } => item
                     .held
@@ -4587,7 +4593,7 @@ impl Engine {
                     };
                     for comment in carried.iter() {
                         let links = links.for_comment(comment.body.clone());
-                        if could_name(&comment.body) && links.matters() {
+                        if could_be_read(&comment.body, reading) && links.matters() {
                             let _ = links.render(&probing, sections::Pass::Provisional);
                         }
                     }
@@ -4605,7 +4611,7 @@ impl Engine {
                 for comment in carried.iter_mut() {
                     let links = links.for_comment(comment.body.clone());
                     if private_locations.is_none()
-                        && (!could_name(&comment.body) || !links.matters())
+                        && (!could_be_read(&comment.body, reading) || !links.matters())
                     {
                         continue;
                     }
@@ -4673,9 +4679,26 @@ impl Engine {
         Ok(())
     }
 
+    /// What one planned body is read for: a relative path written alone as well when it is
+    /// screened for a public destination or bound for one declared private.
+    fn reading_of(
+        &self,
+        item: &Planned,
+        private_locations: Option<&[String]>,
+    ) -> sections::Reading {
+        if private_locations.is_some()
+            || self.declared(&item.to) == crate::config::SourceVisibility::Private
+        {
+            sections::Reading::BarePathsToo
+        } else {
+            sections::Reading::WholeReferences
+        }
+    }
+
     /// The records of one body's own project whose location its content really names, in the
     /// source kind's own form: as a whole reference, or — from a folder of Markdown — as a
-    /// Markdown link to a path relative to the body's own file.
+    /// Markdown link to a path relative to the body's own file, and in a
+    /// [`sections::Reading::BarePathsToo`] as such a path alone.
     ///
     /// A body with no content, or one of no project at the source, names nothing: the
     /// referent set is the body's own project, its tasks and its documents, and there is no
@@ -4700,10 +4723,7 @@ impl Engine {
                     .flatten()
                     .map(|comment| comment.body.as_str()),
             )
-            .filter(|body| {
-                could_name(body)
-                    || (reading == sections::Reading::PublicBody && privacy::could_address(body))
-            })
+            .filter(|body| could_be_read(body, reading))
             .collect();
         if bodies.is_empty() {
             return Ok(Vec::new());
@@ -11272,6 +11292,12 @@ fn project_of(item: &Item) -> Option<NativeId> {
 /// holds no `/`.
 fn could_name(content: &str) -> bool {
     content.contains("](") || content.contains("://") || content.contains(['/', '\\'])
+}
+
+/// Whether `content` holds anything `reading` could take for a link.
+fn could_be_read(content: &str, reading: sections::Reading) -> bool {
+    could_name(content)
+        || (reading == sections::Reading::BarePathsToo && privacy::could_address(content))
 }
 
 /// Read the record `id` of `destination` through `level`, for what its answer says its
