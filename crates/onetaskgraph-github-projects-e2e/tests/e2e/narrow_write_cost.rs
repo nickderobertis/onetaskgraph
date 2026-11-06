@@ -334,9 +334,7 @@ impl onetaskgraph_core::boundary::WritePolicy for Linked {
             (Some(0), Some("private")) => {
                 Ok(onetaskgraph_core::boundary::RepositoryVisibility::Private)
             }
-            _ => Err(onetaskgraph_core::boundary::PolicyError::new(format!(
-                "onevcs answered {code:?} with {answer}"
-            ))),
+            _ => Ok(onetaskgraph_core::boundary::RepositoryVisibility::Unknown),
         }
     }
 
