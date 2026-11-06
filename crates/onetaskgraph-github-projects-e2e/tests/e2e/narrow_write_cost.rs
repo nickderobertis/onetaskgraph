@@ -19,7 +19,6 @@ const WITH: &str = "harbor-x";
 const TASK: &str = "board:X-901";
 const NOTE: &str = "myapp.note";
 
-/// What the store's `write_policy` can do.
 #[derive(Clone, Copy)]
 enum Policy {
     /// `visibility_command` and `check_command`, with no `sanitize_command`.
@@ -131,7 +130,6 @@ impl Board {
         shown["items"][0]["item"].clone()
     }
 
-    /// Every comment the board holds on the issue.
     fn comments(&self) -> Vec<String> {
         self.board
             .comments_on("X-901")
@@ -324,16 +322,22 @@ impl onetaskgraph_core::boundary::WritePolicy for Linked {
         onetaskgraph_core::boundary::RepositoryVisibility,
         onetaskgraph_core::boundary::PolicyError,
     > {
-        let (_, answer) = self.answered(
+        let (code, answer) = self.answered(
             &["boundary", "inspect", "--input", "-"],
             &json!({"repository": repository.as_str()}),
         );
         let answer: Value = serde_json::from_slice(&answer).unwrap_or(Value::Null);
-        Ok(if answer["visibility"] == json!("public") {
-            onetaskgraph_core::boundary::RepositoryVisibility::Public
-        } else {
-            onetaskgraph_core::boundary::RepositoryVisibility::Private
-        })
+        match (code, answer["visibility"].as_str()) {
+            (Some(0), Some("public")) => {
+                Ok(onetaskgraph_core::boundary::RepositoryVisibility::Public)
+            }
+            (Some(0), Some("private")) => {
+                Ok(onetaskgraph_core::boundary::RepositoryVisibility::Private)
+            }
+            _ => Err(onetaskgraph_core::boundary::PolicyError::new(format!(
+                "onevcs answered {code:?} with {answer}"
+            ))),
+        }
     }
 
     async fn check_public_write(
