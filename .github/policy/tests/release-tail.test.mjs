@@ -80,7 +80,8 @@ const excludedBy = (command) =>
 const WARMER = parse(
   readFileSync(join(root, ".github/workflows/rust-cache-warm.yml"), "utf8"),
 ).name;
-const EXCLUDED = [WARMER, "ci"];
+const CI_WORKFLOW = parse(readFileSync(join(root, ".github/workflows/ci.yml"), "utf8")).name;
+const EXCLUDED = [WARMER, CI_WORKFLOW];
 
 const releaseWorkflow = () =>
   parse(readFileSync(join(root, ".github/workflows/release.yml"), "utf8"));

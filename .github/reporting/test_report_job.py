@@ -48,6 +48,7 @@ RUNNER_TARGETS = {'x86_64': 'x86_64-unknown-linux-gnu', 'aarch64': 'aarch64-unkn
 ROWS = 100
 COMMITS = 20
 COMMANDS_READING_REST = 12
+UNJUDGED = 1_000_000
 TRANSFER_SERVICES = ('artifact-service', 'blob-storage', 'object-storage', 'release-host', 'package-index')
 
 
@@ -74,6 +75,10 @@ def job_inputs(**override):
     given = dict(action_step()['with'])
     assert given.pop('token') == '${{ github.token }}'
     return {'token': 'job-token', **given, **override}
+
+
+def workflow_name():
+    return yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())['name']
 
 
 def fetch(url):
@@ -167,7 +172,7 @@ def replay(directory, longest_seconds):
             body['jobs'].append(dict(body['jobs'][-1], id=body['jobs'][-1]['id'] + 1, name='budgets'))
             body['total_count'] = len(body['jobs'])
         if path.name == 'runs-at-release-commit.http':
-            ci = dict(body['workflow_runs'][0], id=999000001, name='ci', event='push', conclusion='success')
+            ci = dict(body['workflow_runs'][0], id=999000001, name=workflow_name(), event='push', conclusion='success')
             body['workflow_runs'].append(ci)
             body['total_count'] = len(body['workflow_runs'])
         (responses / str(index)).write_text(head + json.dumps(body))
@@ -215,6 +220,9 @@ class Journey:
         self.path = runner_bin(self.root / 'runner-bin', self.cargo_started)
         self.next_run = 1000
         self.environment = {}
+        # This test records what the job cost; report-job:budgets alone judges it.
+        own = self.repository.path / '.github/reporting/budgets.yaml'
+        own.write_text(own.read_text().replace('threshold: 120', f'threshold: {UNJUDGED}'))
         self.base = self.repository.commit('the tree')
 
     def add_budgets(self, relative, entries):
@@ -468,7 +476,7 @@ class WholeJob(unittest.TestCase):
         counted = 'echo "$ONEBUDGETSPEC_BUDGET_ID" >> "$JOURNEY_COUNTS"'
         entries = [
             (OWN, ['onebudgetspec-github-action', 'telemetry', '--metric', TIME_METRIC, '--input', 'report-job.json'],
-             {'unit': 'seconds', 'labels': ['ci-report'], 'threshold': 120}),
+             {'unit': 'seconds', 'labels': ['ci-report'], 'threshold': UNJUDGED}),
             ('not-on-this-runner', ['tool-this-runner-lacks'], {}),
             ('saved-telemetry-absent', ['bash', '-c', counted, 'target/absent/record.json'], {}),
             ('a-labelled-one', ['bash', '-c', f'{counted}; {write}'], {'labels': ['ci-report'], 'unit': 'percent',
