@@ -13,7 +13,9 @@ const BOARD_ITEMS_DOCUMENT: &str = "query LiveRunBoardItems($owner:String!,$numb
 
 /// How many times the copy's item count is read before the copy is refused as incomplete.
 /// GitHub copies a board's draft items after it answers the mutation; this bounds the wait.
-const COPY_READS: u32 = 30;
+/// Two minutes, because a real copy has taken 36 seconds to reach 59 of its 60 drafts and was
+/// still one short 24 seconds later, inside the [`LISTING_LAG`] a listing is known to run behind.
+const COPY_READS: u32 = 60;
 
 /// A board this session copied for itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
