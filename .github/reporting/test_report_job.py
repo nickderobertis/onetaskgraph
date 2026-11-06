@@ -1,4 +1,3 @@
-# llmlint: ignore-file[modern_domain_modeling] This journey speaks the released harness's own shapes (budget tuples, refusal dictionaries) and edits GitHub's recorded wire JSON; a model of either would restate a contract the action owns, beside the one it drives.
 """The `budgets` job of ci.yml, driven at GitHub's boundary with the action release it pins.
 
 Each journey runs what the job's `uses:` pins with its `with:` inputs: action.yml's own steps, the
@@ -25,7 +24,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from typing import NamedTuple
+from dataclasses import asdict, dataclass
+from typing import NamedTuple, NewType
 from types import ModuleType
 import unittest
 import urllib.request
@@ -38,11 +38,14 @@ TELEMETRY = HERE / '.telemetry'
 STATE = ROOT / 'target' / 'report-job'
 ACTION = 'nickderobertis/onebudgetspec-github-action'
 RECORDINGS = ROOT / '.github/policy/tests/fixtures/release-tail/recordings-v0.13.0'
-CHECK_TIME = 'onetaskgraph-ci-check-time'
-JOB_COUNT = 'onetaskgraph-ci-job-count'
-OWN = 'onetaskgraph-budget-report-command-seconds'
-REST_METRIC = 'report-github-api-requests-per-run'
-TIME_METRIC = 'report-command-seconds'
+BudgetId = NewType('BudgetId', str)
+MetricName = NewType('MetricName', str)
+CHECK_TIME = BudgetId('onetaskgraph-ci-check-time')
+JOB_COUNT = BudgetId('onetaskgraph-ci-job-count')
+CD_JOB_COUNT = BudgetId('onetaskgraph-cd-job-count')
+OWN = BudgetId('onetaskgraph-budget-report-command-seconds')
+REST_METRIC = MetricName('report-github-api-requests-per-run')
+TIME_METRIC = MetricName('report-command-seconds')
 RUNNER_TARGETS = {'x86_64': 'x86_64-unknown-linux-gnu', 'aarch64': 'aarch64-unknown-linux-gnu'}
 # The workload `## Budgets` states for the job's own budget, and the design's command reads.
 ROWS = 100
@@ -50,6 +53,65 @@ COMMITS = 20
 COMMANDS_READING_REST = 12
 UNJUDGED = 1_000_000
 TRANSFER_SERVICES = ('artifact-service', 'blob-storage', 'object-storage', 'release-host', 'package-index')
+
+
+@dataclass(frozen=True)
+class CatalogBudget:
+    """One production budget, as its budgets file registers it."""
+
+    id: BudgetId
+    command: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class FixtureBudget:
+    """A budget a journey adds to its copy of the tree."""
+
+    id: BudgetId
+    command: tuple[str, ...]
+    unit: str = 'count'
+    direction: str = 'max'
+    threshold: float = 100
+    measure: str = 'reported'
+    labels: tuple[str, ...] = ()
+
+    def harness_entry(self):
+        """The (id, command, options) entry the released harness's `budgets_yaml` takes."""
+        options = {'unit': self.unit, 'direction': self.direction, 'threshold': self.threshold,
+                   'measure': self.measure}
+        return (self.id, list(self.command), options | ({'labels': list(self.labels)} if self.labels else {}))
+
+
+@dataclass(frozen=True)
+class Refusal:
+    """A status the doubled host answers a path with."""
+
+    path: str
+    status: int
+    times: int
+    retry_after: int | None = None
+
+    def harness_rule(self):
+        """The rule the released harness's `Host.refuse` takes."""
+        rule = {'path': self.path, 'status': self.status, 'times': self.times}
+        return rule if self.retry_after is None else rule | {'retry_after': self.retry_after}
+
+
+@dataclass(frozen=True)
+class ReplayedFigure:
+    """What onebudgetspec answered for one registered command over replayed telemetry."""
+
+    actual: float
+    threshold: float
+    verdict: str
+
+
+@dataclass(frozen=True)
+class ReplayedFigures:
+    """The recording of those answers, per the replay's longest job in seconds."""
+
+    provenance: str
+    figures: dict[int, dict[BudgetId, ReplayedFigure]]
 
 
 class Released(NamedTuple):
@@ -159,6 +221,7 @@ def replay(directory, longest_seconds):
         source = json.loads(Path(f'{path}.source.json').read_text())
         split = text.index('\r\n\r\n') + 4 if '\r\n\r\n' in text else text.index('\n\n') + 2
         head, body = text[:split], json.loads(text[split:])
+        # llmlint: ignore-block[modern_domain_modeling] This edits GitHub's recorded response JSON in place and writes it back whole; a model would drop every field the edit does not name.
         if path.name.startswith('jobs-of-pr-'):
             first = body['jobs'][0]
             started = first['started_at']
@@ -175,6 +238,7 @@ def replay(directory, longest_seconds):
             ci = dict(body['workflow_runs'][0], id=999000001, name=workflow_name(), event='push', conclusion='success')
             body['workflow_runs'].append(ci)
             body['total_count'] = len(body['workflow_runs'])
+        # llmlint: ignore-end[modern_domain_modeling]
         (responses / str(index)).write_text(head + json.dumps(body))
         routes.append(f'{source["path"]}\t{index}\n')
     (directory / 'routes.tsv').write_text(''.join(routes))
@@ -225,8 +289,11 @@ class Journey:
         own.write_text(own.read_text().replace('threshold: 120', f'threshold: {UNJUDGED}'))
         self.base = self.repository.commit('the tree')
 
-    def add_budgets(self, relative, entries):
-        self.repository.write(relative, harness.budgets_yaml(entries))
+    def add_budgets(self, relative, budgets):
+        self.repository.write(relative, harness.budgets_yaml([budget.harness_entry() for budget in budgets]))
+
+    def refuse(self, refusal):
+        self.host.refuse.append(refusal.harness_rule())
 
     def run(self, event_name, sha, inputs=None, **options):
         self.next_run += 1
@@ -277,13 +344,14 @@ def catalog():
     for name in listed:
         if Path(name).name == 'budgets.yaml' and not {'fixture', 'fixtures'} & set(Path(name).parts):
             for budget in yaml.safe_load((ROOT / name).read_text())['budgets']:
-                found[budget['id']] = {**budget, 'file': name}
+                identifier = BudgetId(budget['id'])
+                found[identifier] = CatalogBudget(identifier, tuple(budget['command']))
     return found
 
 
 def expected_reason(budget):
     """Why this production budget cannot measure in the job, in the words of its row."""
-    match budget['command']:
+    match budget.command:
         case ['bash', 'scripts/actions-budget-figures.sh', 'cache-use', *_]:
             return 'no release: pass --release TAG'
         case ['bash', 'scripts/actions-budget-figures.sh', *_]:
@@ -358,8 +426,8 @@ class ProductionCatalog(unittest.TestCase):
 
     def test_a_refused_comment_and_no_baseline_are_diagnostics_and_never_fail_the_job(self):
         journey = Journey(self)
-        journey.host.refuse.append({'path': r'issues/1/comments', 'status': 403, 'times': 99})
-        journey.host.refuse.append({'path': r'artifacts\?', 'status': 403, 'times': 99})
+        journey.refuse(Refusal(r'issues/1/comments', 403, 99))
+        journey.refuse(Refusal(r'artifacts\?', 403, 99))
         job = journey.pull_request()
         self.assertEqual(job.exit_code, 0, job.stdout)
         self.assertEqual(journey.host.comments, [])
@@ -370,8 +438,8 @@ class Replayed(unittest.TestCase):
     """The release figures, over replayed telemetry: never a claim about a live pull request."""
 
     def enforced_over(self, journey):
-        journey.add_budgets('demo/budgets.yaml', [
-            ('demo-enforced', ['bash', '-c', 'echo "{\\"value\\": 5}" > "$ONEBUDGETSPEC_RESULT"'], {'threshold': 1})])
+        command = ('bash', '-c', 'echo "{\\"value\\": 5}" > "$ONEBUDGETSPEC_RESULT"')
+        journey.add_budgets('demo/budgets.yaml', [FixtureBudget(BudgetId('demo-enforced'), command, threshold=1)])
 
     def test_check_time_over_its_line_is_report_only_with_its_flag_and_an_enforced_overrun_is_not(self):
         journey = Journey(self)
@@ -451,21 +519,19 @@ class Replayed(unittest.TestCase):
             environment['ONEVCS'] = journey.environment['ONEVCS']
             checked = subprocess.run(
                 ['onebudgetspec', 'check', '--json', 'budgets.yaml', '--id', CHECK_TIME, '--id', JOB_COUNT,
-                 '--id', 'onetaskgraph-cd-job-count'],
+                 '--id', CD_JOB_COUNT],
                 cwd=journey.repository.path, env=environment, capture_output=True, text=True, check=False)
             results = {result['id']: result for result in json.loads(checked.stdout)['results']}
             self.assertEqual(results[CHECK_TIME]['verdict'], verdict, checked.stdout)
             self.assertEqual(results[CHECK_TIME]['actual'], longest)
             self.assertEqual(results[JOB_COUNT]['actual'], 5, checked.stdout)
             self.assertEqual(results[JOB_COUNT]['verdict'], 'within')
-            self.assertEqual(results['onetaskgraph-cd-job-count']['actual'], 6, 'the ci push run is left out')
-            figures[str(longest)] = {identifier: {'actual': result['actual'], 'threshold': result['threshold'],
-                                                  'verdict': result['verdict']}
-                                     for identifier, result in results.items()}
+            self.assertEqual(results[CD_JOB_COUNT]['actual'], 6, 'the ci push run is left out')
+            figures[longest] = {BudgetId(identifier): ReplayedFigure(result['actual'], result['threshold'], result['verdict'])
+                                for identifier, result in results.items()}
         TELEMETRY.mkdir(exist_ok=True)
-        (TELEMETRY / 'replayed-budget-figures.json').write_text(json.dumps(
-            {'provenance': 'replayed telemetry over the v0.13.0 recordings, never live CI', 'figures': figures},
-            indent=2))
+        recording = ReplayedFigures('replayed telemetry over the v0.13.0 recordings, never live CI', figures)
+        (TELEMETRY / 'replayed-budget-figures.json').write_text(json.dumps(asdict(recording), indent=2))
 
 
 class WholeJob(unittest.TestCase):
@@ -474,28 +540,32 @@ class WholeJob(unittest.TestCase):
     def catalog(self):
         write = 'echo "{\\"value\\": 1}" > "$ONEBUDGETSPEC_RESULT"'
         counted = 'echo "$ONEBUDGETSPEC_BUDGET_ID" >> "$JOURNEY_COUNTS"'
-        entries = [
-            (OWN, ['onebudgetspec-github-action', 'telemetry', '--metric', TIME_METRIC, '--input', 'report-job.json'],
-             {'unit': 'seconds', 'labels': ['ci-report'], 'threshold': UNJUDGED}),
-            ('not-on-this-runner', ['tool-this-runner-lacks'], {}),
-            ('saved-telemetry-absent', ['bash', '-c', counted, 'target/absent/record.json'], {}),
-            ('a-labelled-one', ['bash', '-c', f'{counted}; {write}'], {'labels': ['ci-report'], 'unit': 'percent',
-                                                                       'direction': 'min', 'threshold': 0}),
-            ('an-elapsed-one', ['bash', '-c', counted], {'measure': 'elapsed', 'unit': 'seconds'}),
+        budgets = [
+            FixtureBudget(OWN, ('onebudgetspec-github-action', 'telemetry', '--metric', TIME_METRIC,
+                                '--input', 'report-job.json'),
+                          unit='seconds', labels=('ci-report',), threshold=UNJUDGED),
+            FixtureBudget(BudgetId('not-on-this-runner'), ('tool-this-runner-lacks',)),
+            FixtureBudget(BudgetId('saved-telemetry-absent'), ('bash', '-c', counted, 'target/absent/record.json')),
+            FixtureBudget(BudgetId('a-labelled-one'), ('bash', '-c', f'{counted}; {write}'), labels=('ci-report',),
+                          unit='percent', direction='min', threshold=0),
+            FixtureBudget(BudgetId('an-elapsed-one'), ('bash', '-c', counted), measure='elapsed', unit='seconds'),
         ]
         for index in range(COMMANDS_READING_REST):
-            entries.append((f'reads-rest-{index}', ['bash', '-c', f'{counted}; gh api repos/owner/repo/commits/{index}'
-                                                    f' > /dev/null || exit 1; {write}'], {'unit': 'requests'}))
-        while len(entries) < ROWS:
-            entries.append((f'local-{len(entries)}', ['bash', '-c', f'{counted}; {write}'], {'unit': 'bytes'}))
-        return harness.budgets_yaml(entries), [entry[0] for entry in entries]
+            read = f'gh api repos/owner/repo/commits/{index} > /dev/null || exit 1'
+            budgets.append(FixtureBudget(BudgetId(f'reads-rest-{index}'), ('bash', '-c', f'{counted}; {read}; {write}'),
+                                         unit='requests'))
+        while len(budgets) < ROWS:
+            budgets.append(FixtureBudget(BudgetId(f'local-{len(budgets)}'), ('bash', '-c', f'{counted}; {write}'),
+                                         unit='bytes'))
+        return budgets
 
     def test_record_one_complete_job(self):
         journey = Journey(self)
         for path in journey.repository.git('ls-files', '*budgets.yaml').split():
             (journey.repository.path / path).unlink()
-        text, identifiers = self.catalog()
-        journey.repository.write('budgets.yaml', text)
+        budgets = self.catalog()
+        identifiers = [budget.id for budget in budgets]
+        journey.add_budgets('budgets.yaml', budgets)
         counts = journey.root / 'counts'
         journey.environment = {'JOURNEY_COUNTS': str(counts)}
         heads = [journey.repository.commit(f'base {index}') for index in range(COMMITS)]
@@ -503,9 +573,11 @@ class WholeJob(unittest.TestCase):
         self.assertEqual(first.exit_code, 0, first.stdout)
         journey.host.artifacts.clear()
         journey.host.runs.clear()
+        # llmlint: ignore-block[modern_domain_modeling] The rolling file is the action's own format, seeded from a run it saved, so its next run reads what the action wrote.
         history = {'schema_version': 1, 'repository': harness.REPOSITORY, 'base_ref': 'main', 'runs': [
             {**first.saved('budget-run.json'), 'head_sha': head, 'run_id': str(500 + index), 'attempt': 1}
             for index, head in enumerate(heads)]}
+        # llmlint: ignore-end[modern_domain_modeling]
         journey.host.add_run(519, heads[-1], minute=519)
         journey.host.attach(519, 'budget-results', zip_of('rolling-history.json', json.dumps(history)))
 
@@ -515,7 +587,7 @@ class WholeJob(unittest.TestCase):
                 'push', heads[-1], attempt=2, register=False))):
             counts.unlink(missing_ok=True)
             journey.host.clear_requests()
-            journey.host.refuse.append({'path': r'artifacts\?', 'status': 429, 'times': 1, 'retry_after': 1})
+            journey.refuse(Refusal(r'artifacts\?', 429, 1, retry_after=1))
             job = start()
             self.assertEqual(job.exit_code, 0, job.stdout)
             self.assertEqual(job.outcomes['final-upload'], 'success', job.stdout)
@@ -531,9 +603,11 @@ class WholeJob(unittest.TestCase):
             figures.append(boundary_record(journey.host, job.saved('report-job.json')))
             self.assertEqual(figures[-1]['metrics'][REST_METRIC]['value'], journey.host.count(''))
         TELEMETRY.mkdir(exist_ok=True)
+        # llmlint: ignore-block[modern_domain_modeling] This is the telemetry file the released reader reads, restated field by field in the action's own shape.
         worst = max(figures, key=lambda record: record['metrics'][TIME_METRIC]['value'])
         worst['metrics'][REST_METRIC] = max((record['metrics'][REST_METRIC] for record in figures),
                                             key=lambda metric: metric['value'])
+        # llmlint: ignore-end[modern_domain_modeling]
         (TELEMETRY / 'report-job.json').write_text(json.dumps(worst, indent=2))
         tools = STATE / 'tools'
         shutil.copytree(job.temp / 'onebudgetspec-action/tools', tools, dirs_exist_ok=True)
@@ -541,11 +615,13 @@ class WholeJob(unittest.TestCase):
 
 def boundary_record(host, telemetry):
     """The job's telemetry, with its request figure restated from what the double received."""
+    # llmlint: ignore-block[modern_domain_modeling] This restates a metric inside the telemetry file the released reader reads, in the action's own shape.
     record = json.loads(json.dumps(telemetry))
     transfers = {service: host.transferred(service) for service in TRANSFER_SERVICES}
     metric = record['metrics'][REST_METRIC]
     metric['value'] = host.count('')
     metric['detail'] = f'{metric.get("detail", "")}; measured at the boundary, file transfers {transfers}'
+    # llmlint: ignore-end[modern_domain_modeling]
     return record
 
 
