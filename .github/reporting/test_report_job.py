@@ -647,7 +647,6 @@ class Contract(unittest.TestCase):
         self.assertEqual((TREE / 'action.yml').read_bytes(), (HERE / f'action-{TAG}.yml').read_bytes())
 
     def test_the_real_host_comparison_reproduces_from_its_saved_input(self):
-        # Saved from run 42169097213 of throwaway pull request #3904: 60 rows at head bf9fd231.
         saved = HERE / 'fixtures/demo-comparison-input.json'
         reader = STATE / 'reader'
         reader.mkdir(parents=True, exist_ok=True)
