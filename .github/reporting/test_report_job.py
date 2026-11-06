@@ -310,6 +310,8 @@ class Journey:
         job = harness.Job(self.host, self.repository, event_name, sha, inputs=inputs or job_inputs(),
                           run_id=self.next_run, action_path=TREE, environment={
                               'PATH': self.path,
+                              # gh's keyring lookup must not start a session bus on this machine.
+                              'DBUS_SESSION_BUS_ADDRESS': 'disabled:',
                               'GITHUB_REPOSITORY': harness.REPOSITORY,
                               'GITHUB_RUN_ID': str(self.next_run),
                               **self.environment}, **options)
