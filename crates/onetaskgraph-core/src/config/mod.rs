@@ -434,6 +434,13 @@ impl std::fmt::Display for SourceVisibility {
 /// asks for. `replacements` is the caller's replacement layer, sent with every sanitisation
 /// and above every declaration level the policy reads, a later entry winning; it is refused
 /// at load without a `sanitize_command`, because nothing would apply it.
+///
+/// `sanitize_stored_on_write` opts a store into the read-first guard: a narrow write to a task
+/// is screened with the task and every comment on it as stored, and what that rewrites is
+/// written back first. Off, a narrow write screens only what it writes and a stored term is left
+/// for `sources sanitize`. It is refused at load without a `sanitize_command` for the same
+/// reason as `replacements`; a linking caller's own policy opts in through
+/// `Engine::with_sanitize_stored_on_write`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WritePolicyConfig {
@@ -457,6 +464,10 @@ pub struct WritePolicyConfig {
     )]
     #[schemars(!skip_serializing_if)]
     pub replacements: Vec<privateterms::Replacement>,
+    /// Whether a narrow write to a task first rewrites the terms already stored on it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[schemars(!skip_serializing_if)]
+    pub sanitize_stored_on_write: bool,
 }
 
 /// `write_policy.replacements` as a document, an environment variable or `--set` spells it: a
@@ -759,6 +770,19 @@ impl Config {
                 "configure write_policy.sanitize_command — for example \
                  [onevcs, boundary, sanitize, --input, \"-\"] — or remove \
                  write_policy.replacements.",
+            ));
+        }
+        if let Some(policy) = &shape.write_policy
+            && policy.sanitize_stored_on_write
+            && policy.sanitize_command.is_none()
+        {
+            return Err(ConfigError::setting(
+                "write_policy.sanitize_command",
+                "write_policy.sanitize_stored_on_write is set, but no \
+                 write_policy.sanitize_command is configured to rewrite what is stored",
+                "configure write_policy.sanitize_command — for example \
+                 [onevcs, boundary, sanitize, --input, \"-\"] — or remove \
+                 write_policy.sanitize_stored_on_write.",
             ));
         }
         let config = Self {

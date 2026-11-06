@@ -120,6 +120,8 @@ function store(sources: Record<string, unknown>, terms = true): [OnetaskgraphCli
         sanitize_command: [process.execPath, "-e", SANITIZE],
         ...(terms ? { terms_command: [process.execPath, "-e", TERMS] } : {}),
         replacements: [{ term: TERM, with: "ember-x" }],
+        // A sweep does not read this; the write preview's journey here drives the guard it opts into.
+        sanitize_stored_on_write: true,
       },
       sources,
     }),

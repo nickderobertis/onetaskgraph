@@ -612,6 +612,8 @@ def policy(*, terms: bool = True) -> WritePolicyConfig:
         "check_command": [sys.executable, "-c", "import sys; sys.exit(2)"],
         "sanitize_command": [sys.executable, "-c", SANITIZE],
         "replacements": [{"term": TERM, "with": "ember-x"}],
+        # A sweep does not read this; the write preview's journey here drives the guard it opts into.
+        "sanitize_stored_on_write": True,
     }
     if terms:
         configured["terms_command"] = [sys.executable, "-c", TERMS]

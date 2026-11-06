@@ -1451,8 +1451,9 @@ them do; this is the inventory of what is owed, not a status board.
      writing nothing, a private destination gets the original, and a replacement set in the
      document, the environment and `--replace` takes effect in that order of precedence over every
      declaration level onevcs reads.
-139. A narrow write to a task already carrying a term sanitises it and its comments first and
-     names each change, `--sanitize-dry-run` writes nothing, and an item whose stored
+139. With `write_policy.sanitize_stored_on_write` on, a narrow write to a task already carrying a
+     term sanitises it and its comments first and names each change; `--sanitize-dry-run` writes
+     nothing with it on or off; and, on or off, an item whose stored
      `repositories` already name a private repository is refused saying so, with
      `"predates_write": true`.
 140. `sources sanitize` reads a folder whole, and searches a GitHub board — naming every class
@@ -1483,6 +1484,9 @@ them do; this is the inventory of what is owed, not a status board.
 146. On a GitHub board a link to a heading of an issue's own body is that issue's own URL on the
      www host with `#user-content-<slug>`: a first copy sends the create and one follow-up writing
      it, a repeat copy writes nothing, and a copy out of the board reads it as a same-record link.
+147. Under a `sanitize_command` or a linking caller's own rewriting policy, each narrow write on
+     a GitHub board sends exactly the requests it sends with only a `check_command`, its own text
+     stored replaced; a term already stored stays until `sources sanitize` rewrites it.
 
 ## The public boundary
 
@@ -1521,9 +1525,11 @@ documents, whose ordinary screened writes still sanitise them.
   rewritable or `fixed`. The shapes are the `privateterms` crate's, which turns on `serde_json`'s
   and `schemars`' `preserve_order` for the whole workspace — the reason the bundle's key order
   and `serde_json::Value`'s size moved with it. The store never matches a term itself. A narrow
-  write to a task, while the policy can rewrite, is screened with the task and its comments as
-  stored, and what that call rewrites of them is written back first (`admit_whole_task`);
-  `sources sanitize` (`engine/sweep.rs`) is the same per item. Neither has a backend
+  write to a task screens what it writes and costs the source what it costs with no rewriting
+  policy; a term already stored is `sources sanitize`'s (`engine/sweep.rs`). Opted in by
+  `write_policy.sanitize_stored_on_write`, or asked by `--sanitize-dry-run`, it is screened with
+  the task and its comments as stored, and what that call rewrites of them is written back first
+  (`admit_whole_task`), as a sweep does per item. Neither has a backend
   precondition: "conditional on the version" is a read immediately before the write, as
   `set_document_metadata_at` already does. An edit between that final read and the write can
   still be overwritten; the guard is not an atomic compare-and-set.

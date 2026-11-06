@@ -352,6 +352,34 @@ fn python() -> &'static Path {
 }
 
 impl OnevcsHome {
+    /// [`Self::write_policy`], every command naming this home itself, for an engine a test links:
+    /// its commands inherit the test process's environment, which cannot name a home of this run.
+    #[must_use]
+    pub fn write_policy_naming_home(&self, sandbox: &Sandbox) -> Value {
+        let script = sandbox.subdirectory("boundary-home").join("onevcs_home.py");
+        std::fs::write(
+            &script,
+            "import os, subprocess, sys\n\
+             os.environ['ONEVCS_HOME'] = sys.argv[1]\n\
+             sys.exit(subprocess.call(sys.argv[2:]))\n",
+        )
+        .expect("the wrapper");
+        let through = |command: &[&str]| {
+            let mut argv = vec![
+                python().to_string_lossy().into_owned(),
+                script.to_string_lossy().into_owned(),
+                self.path().to_string_lossy().into_owned(),
+                onevcs().to_string_lossy().into_owned(),
+            ];
+            argv.extend(command.iter().map(|part| (*part).to_owned()));
+            argv
+        };
+        json!({
+            "visibility_command": through(&["boundary", "inspect", "--input", "-"]),
+            "check_command": through(&["boundary", "check", "--destination", "public", "--input", "-"]),
+        })
+    }
+
     /// [`Self::write_policy`], every command run through a recorder writing to `sandbox`.
     #[must_use]
     pub fn recorded(&self, sandbox: &Sandbox) -> BoundaryRecord {

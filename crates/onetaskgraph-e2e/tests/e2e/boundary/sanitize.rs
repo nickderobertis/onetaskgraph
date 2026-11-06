@@ -5,7 +5,9 @@
 //! The term every journey here declares a replacement for is `quietharbor`, the name of the
 //! invented private repository `hiddenco/quietharbor`: onevcs derives it, and rejects it unless a
 //! replacement says otherwise. A store's own `replacements`, the environment and `--replace`
-//! each supply one, and what lands in the public folder is held to carrying none of it.
+//! each supply one, and what lands in the public folder is held to carrying none of it. A term
+//! already stored is `sources sanitize`'s unless a store opts in to the read-first guard, which
+//! the journeys of a stored term do through [`guarded`].
 
 use serde_json::{Value, json};
 
@@ -37,6 +39,15 @@ fn sanitizing(replacements: Value) -> (Store, BoundaryRecord) {
     (store, record.expect("a record"))
 }
 
+/// [`sanitizing`], opted in to the read-first guard: `write_policy.sanitize_stored_on_write`.
+fn guarded(replacements: Value) -> (Store, BoundaryRecord) {
+    let (store, record) = sanitizing(replacements);
+    repolicy(&store, |policy| {
+        policy["sanitize_stored_on_write"] = json!(true);
+    });
+    (store, record)
+}
+
 /// The store's own replacement of [`TERM`] by [`WITH`].
 fn replaced() -> Value {
     json!([{ "term": TERM, "with": WITH }])
@@ -61,7 +72,7 @@ fn a_priority_carrying_a_declared_term_is_refused_without_rewriting_it() {
 #[test]
 fn stored_priorities_and_statuses_are_fixed_and_reported_as_their_own_fields() {
     for (field, value) in [("priority", "high"), ("status", "todo")] {
-        let (store, _) = sanitizing(json!([{ "term": value, "with": "clean" }]));
+        let (store, _) = guarded(json!([{ "term": value, "with": "clean" }]));
         store.record(
             "site",
             "tasks",
@@ -103,7 +114,7 @@ fn stored_priorities_and_statuses_are_fixed_and_reported_as_their_own_fields() {
 /// A stored fixed identifier refuses a narrow write without changing the source; correcting
 /// that identifier by hand lets the same write through on its next attempt.
 fn fixed_identifier_refuses_then_recovers(dirty: &str, clean: &str) {
-    let (store, record) = sanitizing(replaced());
+    let (store, record) = guarded(replaced());
     let stage = |field: &str| {
         store.record(
             "site",
@@ -1386,7 +1397,7 @@ const SIDE_EFFECTS: [&str; 6] = [
 
 #[test]
 fn a_narrow_write_to_an_item_already_carrying_a_term_sanitises_it_first_and_says_so() {
-    let (store, record) = sanitizing(replaced());
+    let (store, record) = guarded(replaced());
     stage_older(&store);
     let before = record.calls().len();
     let answer: Value = serde_json::from_str(&store.ok(&[
@@ -1437,6 +1448,102 @@ fn a_narrow_write_to_an_item_already_carrying_a_term_sanitises_it_first_and_says
 }
 
 #[test]
+fn a_narrow_write_under_the_default_screens_what_it_writes_and_the_sweep_cleans_what_is_stored() {
+    let (store, record) = sanitizing(replaced());
+    stage_older(&store);
+    let before = record.calls().len();
+    let answer: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "comment",
+        "add",
+        "site:older",
+        "--body-file",
+        &store.body(&format!("Now {TERM} answers.")),
+        "--json",
+    ]))
+    .expect("the answer");
+    // One call, screening the written comment alone: what is stored was neither sent nor changed.
+    assert_eq!(ran(&record, before, BoundaryCommand::Sanitize), 1);
+    assert_eq!(answer["sanitization"]["replaced"], json!(1), "{answer}");
+    assert_eq!(answer["sanitization"]["side_effect"], json!([]), "{answer}");
+    let public = text_of(&store, "site");
+    assert!(public.contains(&format!("Now {WITH} answers.")), "{public}");
+    for stored in [
+        format!("Retry the way {TERM} does."),
+        format!("Port the {TERM} retry"),
+        format!("Asked {TERM} first."),
+        format!("And {TERM} again."),
+    ] {
+        assert!(public.contains(&stored), "{stored:?}:\n{public}");
+    }
+
+    let (code, report, out, err) = sweep(&store, "site", &["--complete"]);
+    assert_eq!(code, Some(0), "{out}{err}");
+    assert_eq!(entry(&report, "site:older")["outcome"], json!("rewritten"));
+    let public = text_of(&store, "site");
+    assert!(!public.contains(TERM), "{public}");
+    assert!(public.contains(&format!("Asked {WITH} first.")), "{public}");
+}
+
+#[test]
+fn the_read_first_guard_is_opted_into_at_every_layer_and_needs_a_sanitize_command() {
+    const KEY: &str = "write_policy.sanitize_stored_on_write";
+    let written = |environment: &[(&str, &str)], flags: &[&str]| {
+        let (store, _) = sanitizing(replaced());
+        stage_older(&store);
+        let mut command = store.sandbox.command();
+        command.args(["task", "priority", "set", "site:older", "high", "--json"]);
+        command.args(flags);
+        command.env("ONEVCS_HOME", store.onevcs.as_ref().expect("a home").path());
+        command.envs(environment.iter().copied());
+        let output = command.assert().get_output().clone();
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        let mut shown = store.sandbox.command();
+        shown.args(["config", "show", "--json"]);
+        shown.args(flags);
+        shown.envs(environment.iter().copied());
+        let shown: Value =
+            serde_json::from_slice(&shown.assert().get_output().stdout).expect("the configuration");
+        let origin = shown["settings"]
+            .as_array()
+            .expect("settings")
+            .iter()
+            .find(|setting| setting["key"] == json!(KEY))
+            .map(|setting| setting["origin"].clone());
+        (!text_of(&store, "site").contains(TERM), origin)
+    };
+    let (cleaned, origin) = written(&[], &[]);
+    assert!(!cleaned, "off unless it is set");
+    assert_eq!(origin, None);
+    let (cleaned, origin) = written(
+        &[(
+            "ONETASKGRAPH_WRITE_POLICY__SANITIZE_STORED_ON_WRITE",
+            "true",
+        )],
+        &[],
+    );
+    assert!(cleaned, "the environment opts in");
+    assert!(origin.is_some_and(|origin| origin.to_string().contains("ONETASKGRAPH_")));
+    let (cleaned, origin) = written(&[], &["--set", &format!("{KEY}=true")]);
+    assert!(cleaned, "--set opts in");
+    assert!(origin.is_some_and(|origin| origin.to_string().contains("flag")));
+
+    let store = Store::new(Some(registered), json!({}));
+    let mut policy = store.onevcs.as_ref().expect("a home").write_policy();
+    policy["sanitize_stored_on_write"] = json!(true);
+    let mut document: Value = serde_json::from_str(
+        &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the project document"),
+    )
+    .expect("JSON");
+    document["write_policy"] = policy;
+    store.sandbox.project_document(&document.to_string());
+    let output = store.run(&["task", "list"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(stderr(&output).contains(KEY), "{}", stderr(&output));
+}
+
+#[test]
 fn a_sanitising_write_s_dry_run_writes_nothing_and_says_what_it_would_change() {
     let (store, _record) = sanitizing(replaced());
     stage_older(&store);
@@ -1468,7 +1575,7 @@ fn a_sanitising_write_s_dry_run_writes_nothing_and_says_what_it_would_change() {
 
 #[test]
 fn a_sanitising_write_s_human_answer_is_today_s_line_then_one_sanitised_line_per_field() {
-    let (store, _record) = sanitizing(replaced());
+    let (store, _record) = guarded(replaced());
     store.record(
         "site",
         "tasks",
@@ -1500,7 +1607,7 @@ fn a_sanitising_write_s_human_answer_is_today_s_line_then_one_sanitised_line_per
 #[test]
 fn a_refused_write_reports_the_fields_it_sanitised_before_refusing() {
     for json_output in [true, false] {
-        let (store, _) = sanitizing(replaced());
+        let (store, _) = guarded(replaced());
         stage_older(&store);
         let path = store.folder("site").join("tasks/older.md");
         let before = std::fs::read_to_string(&path).expect("task");
@@ -2099,7 +2206,7 @@ impl Shared {
 
     /// [`Shared::new`], the peer configured under `name`.
     fn named(name: &str, tasks: &[(&str, &str)], moves: Value, edits: Value) -> Self {
-        let (store, _record) = sanitizing(replaced());
+        let (store, _record) = guarded(replaced());
         let state = store.sandbox.config_home().join("edit-source.json");
         let held: Vec<Value> = tasks
             .iter()
@@ -2708,7 +2815,7 @@ fn a_policy_answer_that_does_not_match_what_was_sent_is_never_a_pass() {
 #[test]
 fn a_term_replacement_cannot_fix_is_refused_after_what_it_can_fix_is_fixed_and_a_dry_run_writes_nothing()
  {
-    let (store, _record) = sanitizing(replaced());
+    let (store, _record) = guarded(replaced());
     // `quietharbor` is replaced; the owner onevcs derives, `hiddenco`, has no replacement.
     let body = format!("Retry like {TERM} and hiddenco do.");
     store.record(
@@ -3537,7 +3644,7 @@ fn a_re_render_whose_content_is_rewritten_records_the_digest_of_what_landed() {
 
 #[test]
 fn regeneration_answers_a_sanitization_preview_and_a_predates_refusal_without_writing() {
-    let (store, _) = sanitizing(replaced());
+    let (store, _) = guarded(replaced());
     stage_older(&store);
     let template = template(&store);
     let before = tree(&store.folder("site"));
@@ -4045,6 +4152,7 @@ async fn a_retry_on_one_engine_after_a_failed_sanitising_write_sanitises_again_r
             home,
             calls: std::sync::atomic::AtomicUsize::new(0),
         }))
+        .with_sanitize_stored_on_write(true)
         .with_replacements(vec![onetaskgraph_core::boundary::Replacement::Replace {
             term: TERM.to_owned(),
             with: WITH.to_owned(),

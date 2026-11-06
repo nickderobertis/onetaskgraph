@@ -70,3 +70,9 @@ class WritePolicyConfig(BaseModel):
             validate_default=True,
         ),
     ] = []
+    sanitize_stored_on_write: Annotated[
+        bool,
+        Field(
+            description="Whether a narrow write to a task first rewrites the terms already stored on it."
+        ),
+    ] = False

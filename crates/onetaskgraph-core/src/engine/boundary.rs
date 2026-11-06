@@ -986,8 +986,11 @@ pub(crate) struct Boundary {
     replacements: Vec<Replacement>,
     /// Whether sanitise-on-refusal writes nothing and only answers what it would change.
     sanitize_dry_run: bool,
-    /// What the policy can do with a write, which decides what is screened beside it.
+    /// What the policy can do with a write.
     mode: PolicyMode,
+    /// Whether a narrow write to a task is screened with the task as stored, and what that
+    /// rewrites written back first: `write_policy.sanitize_stored_on_write`, off by default.
+    sanitize_stored_on_write: bool,
     /// What the screened writes of this command replaced, until [`Engine::take_sanitization`].
     sanitized: Arc<std::sync::Mutex<Sanitization>>,
     /// What the policy has answered in this command, until [`Engine::end_command`].
@@ -1002,12 +1005,11 @@ pub(crate) struct Boundary {
 enum PolicyMode {
     /// The configured commands check and rewrite nothing: every write is screened as before.
     Checks,
-    /// The configuration names a `sanitize_command`, the one policy known to rewrite: a narrow
-    /// write is screened with its item as stored, and a re-copy's origin search may ask it for
-    /// a replaced spelling.
+    /// The configuration names a `sanitize_command`, the one policy known to rewrite: a re-copy's
+    /// origin search may ask it for a replaced spelling.
     SanitizeCommand,
-    /// A linking caller's own policy, which may rewrite: a narrow write is screened with its
-    /// item as stored, and nothing beyond a write's own call is asked of it.
+    /// A linking caller's own policy, which may rewrite: nothing beyond a write's own call is
+    /// asked of it.
     Linked,
 }
 
@@ -1158,6 +1160,7 @@ impl Default for Boundary {
             replacements: Vec::new(),
             sanitize_dry_run: false,
             mode: PolicyMode::Checks,
+            sanitize_stored_on_write: false,
             sanitized: Arc::default(),
             screened: Arc::default(),
             withheld: Arc::default(),
@@ -1190,6 +1193,8 @@ impl Boundary {
             } else {
                 PolicyMode::Checks
             },
+            sanitize_stored_on_write: write_policy
+                .is_some_and(|config| config.sanitize_stored_on_write),
             sanitized: Arc::default(),
             screened: Arc::default(),
             withheld: Arc::default(),
@@ -1758,8 +1763,20 @@ impl Engine {
         self
     }
 
+    /// The same engine, screening a narrow write to a task together with the task and its
+    /// comments as stored and writing back what that rewrites before the write is made:
+    /// `write_policy.sanitize_stored_on_write`, for a linking caller's own policy. Off, a narrow
+    /// write screens only what it writes, and a term already stored is `sources sanitize`'s.
+    #[must_use]
+    pub fn with_sanitize_stored_on_write(mut self, enabled: bool) -> Self {
+        self.boundary.sanitize_stored_on_write = enabled;
+        self
+    }
+
     /// The same engine, writing nothing when a write is refused for a term already on its
-    /// item, and answering what sanitising that item would change instead.
+    /// item, and answering what sanitising that item would change instead. Asking this is
+    /// asking what is stored, so a narrow write under a policy that can rewrite reads the task
+    /// and its comments whether or not `sanitize_stored_on_write` is on.
     #[must_use]
     pub fn with_sanitize_dry_run(mut self, dry_run: bool) -> Self {
         self.boundary.sanitize_dry_run = dry_run;
@@ -2475,8 +2492,9 @@ impl Engine {
     ///
     /// A destination verified private takes it with no read beyond its reality. Any other —
     /// while the boundary is active — has the item read once for its classification, refuses
-    /// a private one, and puts what the write adds to the check. An inactive boundary reads
-    /// nothing and admits it.
+    /// a private one, and puts what the write adds to the check; a term already stored on the
+    /// item is left for `sources sanitize`, unless the store opted in to
+    /// `sanitize_stored_on_write`. An inactive boundary reads nothing and admits it.
     pub(crate) async fn admit_existing(
         &self,
         destination: &ResolvedSource,
@@ -2493,21 +2511,33 @@ impl Engine {
         if !self.boundary.active {
             return Ok(Rewrite::default());
         }
-        if held == Held::Task && self.sanitizes_whole_items() {
+        if held == Held::Task && self.can_rewrite() {
             let task = destination.source().get_task(id).await.map_err(|error| {
                 EngineError::SourceRefused {
                     name: destination.name().to_string(),
                     error,
                 }
             })?;
-            return match task {
-                Some(task) => {
-                    let task = checked_task_identity(destination, id, task)?;
-                    self.admit_whole_task(destination, item, id, task, exposure)
-                        .await
-                }
-                None => Ok(Rewrite::default()),
+            let Some(task) = task else {
+                return Ok(Rewrite::default());
             };
+            let task = checked_task_identity(destination, id, task)?;
+            if self.sanitizes_whole_items() {
+                return self
+                    .admit_whole_task(destination, item, id, task, exposure)
+                    .await;
+            }
+            self.refuse_stored_private(destination, item, &task).await?;
+            return self
+                .admit_known(
+                    destination,
+                    item,
+                    id,
+                    task.classification,
+                    &task.repositories,
+                    exposure,
+                )
+                .await;
         }
         let stored = match held {
             Held::Task => destination.source().get_task(id).await.map(|task| {
@@ -3063,11 +3093,55 @@ pub(super) fn screened_locator(
 }
 
 impl Engine {
-    /// Whether a narrow write to an existing task is screened with the task as it stands, so a
-    /// term already on it is sanitised rather than written past: on whenever the policy can
-    /// rewrite — a `sanitize_command`, or a linking caller's own policy.
-    fn sanitizes_whole_items(&self) -> bool {
+    /// Whether the policy can rewrite: a `sanitize_command`, or a linking caller's own policy.
+    fn can_rewrite(&self) -> bool {
         self.boundary.mode != PolicyMode::Checks
+    }
+
+    /// Whether a narrow write to an existing task is screened with the task as it stands, so a
+    /// term already on it is sanitised rather than written past: when the policy can rewrite
+    /// and either the store opted in or this invocation asked what that would change.
+    fn sanitizes_whole_items(&self) -> bool {
+        self.can_rewrite()
+            && (self.boundary.sanitize_stored_on_write || self.boundary.sanitize_dry_run)
+    }
+
+    /// Refuse a narrow write to a task already private by its own record, naming `repositories`
+    /// only when they already named a private repository. Its locators are screened by one call
+    /// on this refusal's path alone.
+    async fn refuse_stored_private(
+        &self,
+        destination: &ResolvedSource,
+        item: &str,
+        task: &Task,
+    ) -> Result<(), EngineError> {
+        let repository_classification = self
+            .classify(Classification::Public, &task.repositories)
+            .await;
+        if task.classification.strictest(repository_classification) != Classification::Private {
+            return Ok(());
+        }
+        let locators = located(destination, item, Exposure::default());
+        let answer = self.screen(&locators).await;
+        let shown = |kind: LocatorKind, value: &str| {
+            screened_locator(&locators, &answer.locators, kind, value).to_string()
+        };
+        let item = shown(LocatorKind::Item, item);
+        let shown_destination = shown(LocatorKind::Source, destination.name().as_str());
+        let declared = self.declared(destination.name());
+        Err(if repository_classification == Classification::Private {
+            EngineError::NotPrivateDestinationPredates {
+                item,
+                destination: shown_destination,
+                declared,
+            }
+        } else {
+            EngineError::NotPrivateDestination {
+                item,
+                destination: shown_destination,
+                declared,
+            }
+        })
     }
 
     /// Admit one narrow write to the task `task`, as `destination` holds it, by one sanitisation
@@ -3104,41 +3178,7 @@ impl Engine {
         task: Task,
         exposure: &Exposure,
     ) -> Result<Rewrite, EngineError> {
-        let repository_classification = self
-            .classify(Classification::Public, &task.repositories)
-            .await;
-        let classification = task.classification.strictest(repository_classification);
-        if classification == Classification::Private {
-            // Its locators are screened by one call on this refusal's path alone.
-            let locators = located(destination, item, Exposure::default());
-            let answer = self.screen(&locators).await;
-            if repository_classification != Classification::Private {
-                return Err(EngineError::NotPrivateDestination {
-                    item: screened_locator(&locators, &answer.locators, LocatorKind::Item, item)
-                        .to_string(),
-                    destination: screened_locator(
-                        &locators,
-                        &answer.locators,
-                        LocatorKind::Source,
-                        destination.name().as_str(),
-                    )
-                    .to_string(),
-                    declared: self.declared(destination.name()),
-                });
-            }
-            return Err(EngineError::NotPrivateDestinationPredates {
-                item: screened_locator(&locators, &answer.locators, LocatorKind::Item, item)
-                    .to_string(),
-                destination: screened_locator(
-                    &locators,
-                    &answer.locators,
-                    LocatorKind::Source,
-                    destination.name().as_str(),
-                )
-                .to_string(),
-                declared: self.declared(destination.name()),
-            });
-        }
+        self.refuse_stored_private(destination, item, &task).await?;
         let comments = every_comment(destination, id).await?;
         let stored = StoredTask::read(destination, item, &task, &comments).await?;
         let write = located(destination, item, exposure.clone());

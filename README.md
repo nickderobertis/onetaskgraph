@@ -2617,10 +2617,21 @@ already answered — `{"replaced": <spans>, "side_effect": [{"item", "field"}], 
 — absent when nothing was replaced or sanitised, so every other answer is byte for byte what it
 was.
 
-**A term already on the item.** While the policy can rewrite — a `sanitize_command`, or a
-linking caller's own policy — a narrow write to an existing task (`priority set`, `status set`,
-`content set`, `metadata set`, `update`, a comment) is screened in its one call together with
-the task and every comment on it as stored. A term an older store left there is rewritten
+**A term already on the item.** By default a narrow write to an existing task (`priority set`,
+`status set`, `content set`, `metadata set`, `update`, a comment) screens and sanitises only the
+text it writes, and sends the source exactly the requests the same write sends with no
+`sanitize_command`: a source not verified private still has its classification read, and a task
+already private by its own record is refused as described below. A term already stored on the
+task and not written by this call stays as it is, and `sources sanitize`, described next, is
+how such terms are cleaned.
+
+`sanitize_stored_on_write: true` under `write_policy` opts a store into a read-first guard
+instead, off unless set, at the cost of reading the task, every comment on it and its
+dependencies beside each narrow write. It takes every layer — the document,
+`ONETASKGRAPH_WRITE_POLICY__SANITIZE_STORED_ON_WRITE` and `--set` — and is refused at load
+with no `sanitize_command`, naming the key; a linking caller's own policy opts in with
+`Engine::with_sanitize_stored_on_write`. Each such write is screened in its one call together
+with the task and every comment on it as stored. A term an older store left there is rewritten
 before the write is made: the task and its comments are written back, conditional on the
 version the read answered — a task that moved meanwhile is read again once and sanitised from
 that fresh record, keeping what changed; one that moves again is refused as
@@ -2628,10 +2639,15 @@ that fresh record, keeping what changed; one that moves again is refused as
 `side_effect`, a human answer adding one `sanitised <item> <field>` line per change after
 today's line. This guard reads immediately before writing; the plugin interface supplies no
 atomic compare-and-set. An edit arriving between that final read and the write can still be
-overwritten. `--sanitize-dry-run` writes nothing and answers `{"would_pass",
-"sanitization"}`. A term replacement cannot fix is refused saying it was already on
-the item before this write and which kind of field replacement cannot fix (`repositories`, an
-id, a term no replacement is declared for). An item whose stored `repositories` already name a
+overwritten. A term replacement cannot fix is refused saying it was already on the item before this write
+and which kind of field replacement cannot fix (`repositories`, an id, a term no replacement is
+declared for).
+
+`--sanitize-dry-run` asks what the guard would change, so a narrow write given it makes the
+guard's reads whether or not the setting is on: an item carrying a term writes nothing and
+answers `{"would_pass", "sanitization"}`, and an item needing nothing takes the write as usual.
+
+Under either, an item whose stored `repositories` already name a
 private repository is private, and a narrow write of it to a source not declared private keeps
 the classification refusal's kind and words and adds that its `repositories` already named a
 private repository before this write, that replacement cannot fix `repositories`, and the two
