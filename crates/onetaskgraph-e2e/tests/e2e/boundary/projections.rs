@@ -3552,10 +3552,14 @@ fn a_private_linear_canonicals_public_view_keeps_its_authored_sections_without_i
                 assert!(raw.contains(&format!("[the paging budget]({url}#heading-budget-page-by-an-opaque-cursor-page-seconds-{id8})")), "the Linear view's stored link names its own heading: {raw}");
             }
             if destination_kind == "github-projects" {
+                let url = shown(&store, "task", view)["location"]["url"]
+                    .as_str()
+                    .expect("the view's address")
+                    .replacen("https://github.com/", "https://www.github.com/", 1);
                 assert!(
-                    raw.contains(
-                        "[the paging budget](#user-content-budget-page-by-an-opaque-cursor-page-seconds)"
-                    ),
+                    raw.contains(&format!(
+                        "[the paging budget]({url}#user-content-budget-page-by-an-opaque-cursor-page-seconds)"
+                    )),
                     "{raw}"
                 );
                 assert!(
@@ -3661,7 +3665,13 @@ fn a_views_link_to_another_views_heading_lands_in_the_boards_section_form() {
             shown(&store, "task", &target)["location"]["url"]
                 .as_str()
                 .expect("the view's address"),
-            "#user-content-own-part",
+            &format!(
+                "{}#user-content-own-part",
+                shown(&store, "task", &linker)["location"]["url"]
+                    .as_str()
+                    .expect("the view's address")
+                    .replacen("https://github.com/", "https://www.github.com/", 1)
+            ),
         )),
         "{raw}"
     );
@@ -3678,11 +3688,13 @@ fn a_views_link_to_another_views_heading_lands_in_the_boards_section_form() {
         raw.contains(&format!("[the anchor]({url}#the-anchor)")),
         "{raw}"
     );
-    // What it links to landed first, so no view took a second write to point its link.
+    // What it links to landed first, so no view took a second write to point its link at
+    // another: the one update writes the linker's link to its own heading, which names the
+    // number its create was answered with.
     assert_eq!(
         issue_updates(&board),
-        0,
-        "the first copy sent no update of a view"
+        1,
+        "the first copy sent one update of a view"
     );
     // Nothing the board was sent names the private plan's records, at any write of the copy.
     let plan = store.folder("plan").display().to_string();

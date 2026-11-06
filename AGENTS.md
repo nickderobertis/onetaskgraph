@@ -1480,6 +1480,9 @@ them do; this is the inventory of what is owed, not a status board.
      private, a design document's budget link on its copied task's heading, and in a comment;
      a path naming no record is left as written, one naming a record with no counterpart is
      left and counted unresolved, and with no source declared private both forms stay as written.
+146. On a GitHub board a link to a heading of an issue's own body is that issue's own URL on the
+     www host with `#user-content-<slug>`: a first copy sends the create and one follow-up writing
+     it, a repeat copy writes nothing, and a copy out of the board reads it as a same-record link.
 
 ## The public boundary
 

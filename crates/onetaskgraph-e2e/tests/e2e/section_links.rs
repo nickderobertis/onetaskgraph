@@ -275,10 +275,17 @@ impl Store {
                     relative(&from.location(sandbox), &to.location(sandbox))
                 ),
             },
-            Self::Github(_) => match to {
-                None => documented_same_record("A GitHub Projects issue", github),
-                Some(to) => format!("{}#user-content-{github}", www(&to.location(sandbox))),
-            },
+            // Between records and within one, the README's table gives the same form.
+            Self::Github(_) => {
+                assert_eq!(
+                    documented_form("A GitHub Projects issue", 3),
+                    documented_form("A GitHub Projects issue", 2)
+                );
+                format!(
+                    "{}#user-content-{github}",
+                    www(&to.unwrap_or(from).location(sandbox))
+                )
+            }
             Self::Linear(workspace) => {
                 let at = to.unwrap_or(from);
                 format!(
@@ -657,8 +664,12 @@ fn holds_the_form(
             // The issue page gives a heading no id: the body carries one before each.
             let raw = store.raw(&landed["T"]);
             assert!(
-                raw.contains("[the second budgets](#user-content-budgets-1)"),
-                "{what}: the same-record link targets the written GitHub anchor: {raw}"
+                raw.contains(&format!(
+                    "[the second budgets]({}#user-content-budgets-1)",
+                    www(&landed["T"].location(sandbox))
+                )),
+                "{what}: the same-record link names its own issue on the www host and the \
+                 written GitHub anchor: {raw}"
             );
             for (text, slug) in [
                 ("## What", "what"),
@@ -3077,9 +3088,12 @@ fn a_task_linking_its_own_record_and_its_comments_fragment_are_written_for_the_d
         };
         let there = task.location(&sandbox);
         let (own_link, fragment) = match &destination {
-            Store::Local => ("A.md".to_owned(), "#budgets"),
-            Store::Github(_) => (there.clone(), "#user-content-budgets"),
-            _ => (there.clone(), "#budgets"),
+            Store::Local => ("A.md".to_owned(), "#budgets".to_owned()),
+            Store::Github(_) => (
+                there.clone(),
+                format!("{}#user-content-budgets", www(&there)),
+            ),
+            _ => (there.clone(), "#budgets".to_owned()),
         };
         assert!(
             task.content(&sandbox)
@@ -4352,5 +4366,141 @@ fn tasks_and_a_comment_naming_each_other_by_a_path_alone_are_finished_on_a_priva
             body.contains(&nowhere),
             "{kind}: its definition's fragment names no heading and is carried: {body}"
         );
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and a loopback board exercise the engine's section forms across plugins, so this journey belongs in the engine e2e suite.
+#[test]
+fn a_github_issues_link_to_its_own_heading_is_its_own_www_url_on_a_first_and_a_repeat_copy() {
+    let sandbox = Sandbox::new();
+    let (plans, _) = authored(&sandbox, "plans");
+    let (board, config) = store(&sandbox, "github-projects", "board", None);
+    let (_, folder) = store(&sandbox, "local-md", "back", None);
+    configure(
+        &sandbox,
+        &[("plans", &plans), ("board", &config), ("back", &folder)],
+    );
+    let Store::Github(served) = &board else {
+        unreachable!("a board was asked for");
+    };
+    let updates_since = |at: usize| {
+        served
+            .served_since(at)
+            .iter()
+            .filter(|(document, _)| document.contains("updateIssue"))
+            .count()
+    };
+    // The number is not known until the create is answered: the create holds the authored link,
+    // and one follow-up each for the task and the document that link to their own headings.
+    let from = authored_ids("plans");
+    let (landed, _) = copy_plan(&sandbox, &from, "board");
+    for (key, slug, text) in [
+        ("T", "budgets-1", "the second budgets"),
+        ("D", "overview", "overview"),
+    ] {
+        let at = www(&landed[key].location(&sandbox));
+        let raw = board.raw(&landed[key]);
+        assert!(
+            raw.contains(&format!("[{text}]({at}#user-content-{slug})")),
+            "{key}: {raw}"
+        );
+        assert!(
+            raw.contains(&format!("<a id=\"{slug}\"></a>")),
+            "{key}: {raw}"
+        );
+    }
+    let sent: Vec<String> = served
+        .served()
+        .iter()
+        .filter(|(document, _)| document.contains("createIssue"))
+        .map(|(_, variables)| variables.to_string())
+        .collect();
+    assert!(
+        sent.iter().any(|create| create.contains("(#budgets-1)")),
+        "the create holds the link as authored until its number is known: {sent:#?}"
+    );
+    // Its own URL read back: a repeat copy finds the same bytes and writes nothing.
+    let at = served.served_count();
+    repeats_writing_nothing(&sandbox, "the board", &from, "board", &board, None, &landed);
+    assert_eq!(updates_since(at), 0, "a repeat copy updates no issue");
+    // Out of the board again the link is the record's own, in the destination's form; a task read
+    // answers the authored form.
+    let task = shown(&sandbox, "task", &landed["T"].id);
+    assert!(
+        task["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("[the second budgets](#budgets-1)")),
+        "{task:#}"
+    );
+    let report = outcomes(&ok(
+        &sandbox,
+        &[
+            "document",
+            "copy",
+            &landed["D"].id,
+            "--to",
+            "back",
+            "--json",
+        ],
+    ));
+    let back = Landed {
+        verb: "document",
+        id: report[&landed["D"].id]["destination"]
+            .as_str()
+            .expect("the document landed")
+            .to_owned(),
+    };
+    let content = back.content(&sandbox);
+    assert!(content.contains("[overview](#overview)"), "{content}");
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and a loopback board exercise the engine's public-copy screen across plugins, so this journey belongs in the engine e2e suite.
+#[test]
+fn an_issues_own_url_on_a_private_board_never_reaches_a_public_copy() {
+    let sandbox = Sandbox::new();
+    let (plans, _) = authored(&sandbox, "plans");
+    let (board, mut home) = store(&sandbox, "github-projects", "home", None);
+    home["visibility"] = json!("private");
+    let (_, mut public) = store(&sandbox, "local-md", "public", None);
+    public["visibility"] = json!("public");
+    configure(
+        &sandbox,
+        &[("plans", &plans), ("home", &home), ("public", &public)],
+    );
+    let (on_board, _) = copy_plan(&sandbox, &authored_ids("plans"), "home");
+    // Beside the link the copy wrote, one naming a heading the task does not hold, which no form
+    // can translate.
+    let task = &on_board["T"];
+    let own = www(&task.location(&sandbox));
+    let body = format!(
+        "{}\nAnd [gone]({own}#user-content-gone).\n",
+        board.raw(task)
+    );
+    assert!(
+        body.contains(&format!("{own}#user-content-budgets-1")),
+        "{body}"
+    );
+    let file = sandbox.project().join("edited.md");
+    std::fs::write(&file, &body).expect("the edit");
+    ok(
+        &sandbox,
+        &[
+            "task",
+            "content",
+            "set",
+            &task.id,
+            "--file",
+            &file.display().to_string(),
+        ],
+    );
+    let (landed, _) = copy_plan(&sandbox, &on_board, "public");
+    let held = landed["T"].content(&sandbox);
+    assert!(held.contains("[the second budgets](#budgets-1)"), "{held}");
+    assert!(held.contains("And gone."), "{held}");
+    let design = landed["D"].content(&sandbox);
+    assert!(design.contains("[overview](#overview)"), "{design}");
+    for key in ["P", "T", "U", "D"] {
+        let content = landed[key].content(&sandbox);
+        assert!(!content.contains("github.com"), "{key}: {content}");
     }
 }

@@ -373,6 +373,14 @@ impl BodyLinks {
             })
     }
 
+    /// Every spelling of the body's own record's location in the source kind's own form.
+    fn own_spellings(&self) -> Vec<String> {
+        self.own_location.as_ref().map_or_else(Vec::new, |own| {
+            self.from
+                .map_or_else(|| vec![own.clone()], |form| form.spellings(own))
+        })
+    }
+
     /// Whether this body holds anything a rendering could change: a referent, or a link to
     /// its own record a destination form writes otherwise.
     pub(super) fn matters(&self) -> bool {
@@ -381,16 +389,17 @@ impl BodyLinks {
                 && self.to.is_some()
                 && destinations(&self.original).any(|(_, target)| target.starts_with(FRAGMENT)))
             || self.own_location.as_deref().is_some_and(|own| {
-                (0..self.original.len()).any(|at| delimited(&self.original, at, own))
-                    || (self.from == Some(SectionForm::LocalMd) && {
-                        let names_itself = |target: &str| {
-                            let path = target.split(FRAGMENT).next().unwrap_or_default();
-                            resolve_relative(own, path).as_deref() == Some(own)
-                        };
-                        destinations(&self.original).any(|(_, target)| names_itself(target))
-                            || (self.screening.reads_bare_paths()
-                                && bare_paths(&self.original).any(|(_, path)| names_itself(path)))
-                    })
+                self.own_spellings().iter().any(|spelling| {
+                    (0..self.original.len()).any(|at| delimited(&self.original, at, spelling))
+                }) || (self.from == Some(SectionForm::LocalMd) && {
+                    let names_itself = |target: &str| {
+                        let path = target.split(FRAGMENT).next().unwrap_or_default();
+                        resolve_relative(own, path).as_deref() == Some(own)
+                    };
+                    destinations(&self.original).any(|(_, target)| names_itself(target))
+                        || (self.screening.reads_bare_paths()
+                            && bare_paths(&self.original).any(|(_, path)| names_itself(path)))
+                })
             })
     }
 
@@ -654,7 +663,7 @@ impl BodyLinks {
     /// The whole reference spelled at `at`, with its fragment, when one is: a referent's, or
     /// the body's own record's.
     fn spelled<'a>(&'a self, content: &'a str, at: usize) -> Option<Occurrence<'a>> {
-        let own = self.own_location.as_ref().map(|own| (None, own));
+        let own = self.own_spellings();
         let (referent, spelling) = self
             .referents
             .iter()
@@ -662,9 +671,9 @@ impl BodyLinks {
                 referent
                     .spellings
                     .iter()
-                    .map(move |spelling| (Some(referent), spelling))
+                    .map(move |spelling| (Some(referent), spelling.as_str()))
             })
-            .chain(own)
+            .chain(own.iter().map(|spelling| (None, spelling.as_str())))
             .find(|(_, spelling)| delimited(content, at, spelling))?;
         let after = at + spelling.len();
         let (end, fragment) = if content[after..].starts_with(FRAGMENT) {

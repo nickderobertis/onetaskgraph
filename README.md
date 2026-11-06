@@ -1379,7 +1379,7 @@ decided: it writes the form, parses it back and supplies its markup.
 | Destination | Link to another record's heading | Link to its own heading |
 | --- | --- | --- |
 | A folder of Markdown | `<path relative to the linking file>#<slug>` | `#<slug>` |
-| A GitHub Projects issue | `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` | `#user-content-<slug>` |
+| A GitHub Projects issue | `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` | `https://www.github.com/<owner>/<repo>/issues/<n>#user-content-<slug>` |
 | A Linear issue, project or document | `<record URL>#heading-<Linear slug>-<id8>` | the record's own URL with that fragment |
 | Linear without a stored heading id | `<record URL>` | `#<slug>` |
 | Task read (every source) | as stored | `#<slug>` |
@@ -1391,7 +1391,11 @@ decided: it writes the form, parses it back and supplies its markup.
   GitHub's canonical `github.com` host, clicked inside another issue, opens its target at the
   top, because GitHub's in-page navigation drops the fragment. The `www.github.com` host is
   answered with a redirect that keeps it. The link then lands both when opened directly and
-  when clicked inside an issue. **That rests on undocumented GitHub behaviour**, which the
+  when clicked inside an issue. A link to a heading of the issue's own body takes that same form,
+  naming the issue itself. Clicked inside the issue, `#user-content-<slug>`, `#<slug>` and the
+  `github.com` URL do not scroll, because GitHub's page handles the hash itself. A new issue has no
+  number until it is created, so the copy writes such a link in a follow-up write of what it just
+  created. **That rests on undocumented GitHub behaviour**, which the
   credentialed live journey re-observes in a real browser.
 - **Linear.** Linear keeps each record's content as an editor state beside its Markdown
   (`descriptionState`, `contentState`). There every heading carries an id Linear assigns when

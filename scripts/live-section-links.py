@@ -528,9 +528,10 @@ def observe() -> int:
         hrefs: dict[Link, str] = {}
         for link in LINKS:
             fragment = f"#user-content-{link.heading.github}"
-            expected = fragment if link.names is None else run.github[link.names].replace("https://github.com/", "https://www.github.com/", 1) + fragment
+            names = link.holder if link.names is None else link.names
+            expected = run.github[names].replace("https://github.com/", "https://www.github.com/", 1) + fragment
             run.check(f"GitHub: {link.holder}'s [{link.text}] is {expected}", f"[{link.text}]({expected})" in raw[link.holder], raw[link.holder][:300])
-            hrefs[link] = run.github[link.holder] + expected if link.names is None else expected
+            hrefs[link] = expected
 
         def stored(record: Record) -> Stored:
             match record.verb:
