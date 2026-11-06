@@ -1,0 +1,4 @@
+{
+  "required_checks": ["lint", "test-linux", "test-windows", "test-macos", "budgets"],
+  "strict": false
+}

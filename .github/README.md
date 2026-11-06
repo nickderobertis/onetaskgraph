@@ -1,4 +1,4 @@
-The private `github-workflows` project owns the workflow graph, the four pull-request jobs'
+The private `github-workflows` project owns the workflow graph, the pull-request jobs'
 contract and the CD journeys; `github-workflow-policy` (`policy/`) owns macOS routing, the
 offline workflow policy proofs and the telemetry budgets, so a crate edit that selects the CD
 journeys does not run the policy proofs. Run `just github-workflows-check` from the repository
@@ -17,6 +17,9 @@ or a title does not. The classifier prints JSON and writes the corresponding fie
 `GITHUB_OUTPUT` when supplied. Its exit codes are 0 for a decision and 1 for invalid
 invocation or failed output IO. `lint` runs it on this repository's `release-plz-` branch,
 where `test-macos` is skipped, and fails unless it authorizes the omission.
+
+`reporting/` is the `report-job` project: the `budgets` job's own budget and the journeys that
+drive the action release it pins (AGENTS.md, "The budget report job").
 
 The root `budgets.yaml`'s seven `release-tail` budgets are checked by `publish`'s last step;
 `policy/tests/release-tail.test.mjs` runs that step and the install step before it as

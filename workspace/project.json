@@ -27,7 +27,8 @@
     "onetaskgraph-github-live",
     "pool-maintenance",
     "github-cache-policy",
-    "github-nx-policy"
+    "github-nx-policy",
+    "report-job"
   ],
   "targets": {
     "bootstrap": {

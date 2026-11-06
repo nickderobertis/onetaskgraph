@@ -1,3 +1,5 @@
+# Each command names the saved telemetry it reads as its last argument: a libtest filter no test
+# matches, or an argument its script ignores. A job with no build then reads the row as unavailable.
 schema_version: 1
 budgets:
   - id: github-asset-requests-per-new-asset
@@ -5,7 +7,7 @@ budgets:
       An inner measure of headroom on a shared board token that no check may reach: the extra upload and authenticated verification requests per new image, excluding the one repository-id read per source instance. It protects room for other managers sharing that token.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_new", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_new", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: requests
     direction: max
     threshold: 2
@@ -14,7 +16,7 @@ budgets:
       An inner measure of headroom on a shared board token that no check may reach: the extra requests per unchanged image across three re-copies. It protects reuse from spending the shared allowance again.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_unchanged", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_unchanged", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: requests
     direction: max
     threshold: 0
@@ -23,7 +25,7 @@ budgets:
       An inner measure of wall time a person waits on the real board for a project copy followed by one copy per document, measured in simulated time against a loopback modelling GitHub latency and limits. The real board limiter and token may not be spent by a check, and simulation makes the measurement cost no gate time.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_single", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_single", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: seconds
     direction: max
     threshold: 90
@@ -32,7 +34,7 @@ budgets:
       An inner measure of refusals while people copy a project then each of its documents onto the real board, measured in simulated time against a loopback modelling GitHub latency and limits. The real board limiter and token may not be spent by a check, and simulation makes the measurement cost no gate time.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_concurrent_refusals", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_concurrent_refusals", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: copies
     direction: max
     threshold: 0
@@ -41,7 +43,7 @@ budgets:
       An inner measure of the slowest wall time a person waits on the real board for a project copy followed by one copy per document, measured in simulated time against a loopback modelling GitHub latency and limits. The real board limiter and token may not be spent by a check, and simulation makes the measurement cost no gate time.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_concurrent", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_concurrent", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: seconds
     direction: max
     threshold: 240
@@ -50,7 +52,7 @@ budgets:
       An inner measure of headroom on the shared board token that no check may spend: the larger share of GitHub's per-minute and hourly content-creation allowances that projecting one metadata field adds to a 10x hour of follow-up filing, every aliased mutation counted as one write. It protects the write allowance every manager on the host draws from.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_metadata_fields", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_metadata_fields", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: percent
     direction: max
     threshold: 12.5
@@ -60,7 +62,7 @@ budgets:
       The most visibility reads any one destination receives within either command of a mixed plan's first project copy (101 private-board writes) followed by its document copy (1 write), with public task views on a public board. It protects the shared board token from a visibility read per write by requiring each command to share its reads across writes.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_visibility_reads", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_visibility_reads", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: reads
     direction: max
     threshold: 1
@@ -70,7 +72,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with (report_visibility_reads, report_metadata_fields); this one follows it, and its task names that pattern. The entry reads only the telemetry the `status_complete` journey recorded and hands it to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_landing_closure", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_landing_closure", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: points
     direction: max
     threshold: 25
@@ -80,7 +82,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with (report_visibility_reads, report_metadata_fields); this one follows it, and its task names that pattern. The entry reads only the telemetry the journeys recorded and hands it to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_cache_points", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_cache_points", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: points
     direction: max
     threshold: 0
@@ -90,7 +92,7 @@ budgets:
     labels: [github, live-session]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] This task fixes the report-only report_live_session command: it reads current main/assets telemetry and uses the existing SDK; onebudgetspec alone judges the threshold.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_live_session", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_live_session", "--exact", "--nocapture", "../../target/debug/telemetry/github-live-session"]
     unit: points
     direction: max
     threshold: 299
@@ -100,7 +102,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering the seven plan-copy budgets names this one generic entry for all of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: seconds
     direction: max
     threshold: 7
@@ -110,7 +112,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering the seven plan-copy budgets names this one generic entry for all of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: seconds
     direction: max
     threshold: 8
@@ -120,7 +122,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering the seven plan-copy budgets names this one generic entry for all of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: seconds
     direction: max
     threshold: 32
@@ -132,7 +134,7 @@ budgets:
     labels: [github, host]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; every plan-copy budget, its host-labelled real-time figures included, names this one generic entry. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: seconds
     direction: max
     threshold: 3
@@ -144,7 +146,7 @@ budgets:
     labels: [github, host]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; every plan-copy budget, its host-labelled real-time figures included, names this one generic entry. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: seconds
     direction: max
     threshold: 3
@@ -156,7 +158,7 @@ budgets:
     labels: [github, host]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; every plan-copy budget, its host-labelled real-time figures included, names this one generic entry. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: seconds
     direction: max
     threshold: 3
@@ -166,7 +168,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering the seven plan-copy budgets names this one generic entry for all of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: points
     direction: max
     threshold: 3
@@ -176,7 +178,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering the seven plan-copy budgets names this one generic entry for all of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: points
     direction: max
     threshold: 4
@@ -186,7 +188,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering the seven plan-copy budgets names this one generic entry for all of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: points
     direction: max
     threshold: 12
@@ -196,7 +198,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering the seven plan-copy budgets names this one generic entry for all of them. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: writes
     direction: max
     threshold: 40
@@ -206,7 +208,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] This task fixes the `node crates/onetaskgraph-github-projects-e2e/human-items/approval-report.mjs` surface, spelled from this file's directory, which onebudgetspec runs every command in: it reads only the telemetry the `approval` journey saved in the crate's test run, refuses any other recording, and reports one figure through the onebudgetspec SDK, which alone judges it.
-    command: ["node", "human-items/approval-report.mjs"]
+    command: ["node", "human-items/approval-report.mjs", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: points
     direction: max
     threshold: 13
@@ -218,7 +220,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] This task fixes the `node crates/onetaskgraph-github-projects-e2e/human-items/report.mjs` surface, spelled from this file's directory, which onebudgetspec runs every command in: it reads only the telemetry `tests/e2e/human_cost.rs` saved in the crate's test run, refuses any other recording, and reports one figure through the onebudgetspec SDK, which alone judges it.
-    command: ["node", "human-items/report.mjs"]
+    command: ["node", "human-items/report.mjs", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: points
     direction: max
     threshold: 7.3
@@ -232,7 +234,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `store_cost.rs` recorded during the crate's test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_dependency_read", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_dependency_read", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: requests
     direction: max
     threshold: 2
@@ -245,7 +247,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `store_cost.rs` recorded during the crate's test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_status_write", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_status_write", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: requests
     direction: max
     threshold: 2
@@ -258,7 +260,7 @@ budgets:
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `store_cost.rs` recorded during the crate's test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_settlement_update", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_settlement_update", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: requests
     direction: max
     threshold: 3
@@ -267,7 +269,7 @@ budgets:
       GitHub requests a sweep and its rerun send: every request a non-dry-run `onetaskgraph sources sanitize` and one rerun send to a loopback board of 2,000 items holding 0 to 20 comments each, read from the sweeps' own reports. It protects the board token's hourly allowance, shared by every manager on a host, from a sweep that grows with the board.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_sanitize_sweep", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_sanitize_sweep", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: requests
     direction: max
     threshold: 70
@@ -276,7 +278,7 @@ budgets:
       GitHub requests per 1,000 items of a complete sweep: every request one non-dry-run `onetaskgraph sources sanitize --complete` sends against a loopback board of 2,000 items, 2% of them holding more than 20 comments, read from the sweep's own report. It protects the board token's draw for the one whole read this plan allows.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_sanitize_complete_sweep", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_sanitize_complete_sweep", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
     unit: requests
     direction: max
     threshold: 38

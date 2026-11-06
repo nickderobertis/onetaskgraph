@@ -1,6 +1,8 @@
 # The requests a Linear status write sends, counted at the loopback Linear's endpoint by the
 # journeys of tests/e2e/linear_budget.rs while this project's `test` target runs. Each budget's
 # command is tests/e2e/budget_runner.rs, which reports what that run recorded.
+# Each command names the saved telemetry it reads as its last argument: a libtest filter no test
+# matches, or an argument its script ignores. A job with no build then reads the row as unavailable.
 schema_version: 1
 budgets:
   - id: linear-requests-per-status-write-cold
@@ -10,7 +12,7 @@ budgets:
       Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 2
@@ -21,7 +23,7 @@ budgets:
       Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 1
@@ -32,7 +34,7 @@ budgets:
       production Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 2
@@ -43,7 +45,7 @@ budgets:
       the production Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 2
@@ -55,7 +57,7 @@ budgets:
       issues. It protects headroom on the production Linear key every manager of a host shares.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 2
@@ -65,7 +67,7 @@ budgets:
       An inner measure of the requests added by new document and issue images protects headroom on a production Linear key every manager of a host shares, which no check may reach.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 3
@@ -74,7 +76,7 @@ budgets:
       An inner measure of requests added by three unchanged re-copies protects headroom on a production Linear key every manager of a host shares, which no check may reach.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 0
@@ -83,7 +85,7 @@ budgets:
       An inner measure of a plan-copy operation (project copy followed by each document copy into the copied project) duration in simulated time against a loopback modelling Linear latency and limits protects the time a person waits, because the production key may not be spent by a check and the measurement costs no gate time.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: seconds
     direction: max
     threshold: 90
@@ -93,7 +95,7 @@ budgets:
       An inner measure of concurrent plan-copy operation refusals (each project copy followed by its document copies into the copied project) in simulated time against a loopback modelling Linear latency and limits avoids spending the production key and costs no gate time. The GraphQL limit is 2500 requests per 3600 seconds per authenticated user across API keys, refilled as a leaky bucket, from https://linear.app/developers/rate-limiting.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: copies
     direction: max
     threshold: 0
@@ -106,7 +108,7 @@ budgets:
     labels: [linear]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file names the crate's one shared report-only runner, budget_runner::report, which reads the record ONEBUDGETSPEC_BUDGET_ID selects; this one follows that convention, as its task fixes. The runner reads only the telemetry the journey recorded and hands it to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: min
     threshold: 1
@@ -119,7 +121,7 @@ budgets:
     labels: [linear]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] As the cache cost budget above: the crate's one shared report-only runner reads the record ONEBUDGETSPEC_BUDGET_ID selects and hands it to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: points
     direction: max
     threshold: 9000
@@ -134,7 +136,7 @@ budgets:
     labels: [linear]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] As the cache cost budget above: the crate's one shared report-only runner reads the record ONEBUDGETSPEC_BUDGET_ID selects and hands it to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 250
@@ -149,7 +151,7 @@ budgets:
     labels: [linear]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] As the cache cost budget above: the crate's one shared report-only runner reads the record ONEBUDGETSPEC_BUDGET_ID selects and hands it to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 2350
@@ -164,7 +166,7 @@ budgets:
     labels: [linear]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] As the cache cost budget above: the crate's one shared report-only runner reads the record ONEBUDGETSPEC_BUDGET_ID selects and hands it to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 750
@@ -181,7 +183,7 @@ budgets:
     labels: [linear]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] As the cache cost budget above: the crate's one shared report-only runner reads the record ONEBUDGETSPEC_BUDGET_ID selects and hands it to onebudgetspec, which alone judges it.
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: points
     direction: max
     threshold: 675000
@@ -193,7 +195,7 @@ budgets:
       shares.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 20
@@ -204,7 +206,7 @@ budgets:
       initialization and failed-pass residue are reported separately as diagnostic detail.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: documents/pass
     direction: max
     threshold: 0
@@ -215,7 +217,7 @@ budgets:
       initialization and failed-pass residue are reported separately as diagnostic detail.
     labels: [linear]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: documents/pass
     direction: max
     threshold: 4
