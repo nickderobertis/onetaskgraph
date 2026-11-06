@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
@@ -53,6 +53,33 @@ function command(program, args, cwd, env = {}, timeout = 120_000) {
   assert.equal(result.status, 0, result.stdout + result.stderr);
   return result.stdout.trim();
 }
+
+// A stand-in for what `gh` autolaunches: it records the request and starts nothing, so a journey
+// that loses the variable below fails on the record rather than leaving a daemon on the host.
+function sessionBusRecorder(dir) {
+  const directory = join(dir, "session-bus-recorder");
+  const record = join(directory, "requests");
+  mkdirSync(directory);
+  writeFileSync(
+    join(directory, "dbus-launch"),
+    `#!/bin/sh\necho "dbus-launch $*" >> "${record}"\nexit 1\n`,
+  );
+  chmodSync(join(directory, "dbus-launch"), 0o755);
+  return {
+    directory,
+    requests: () =>
+      existsSync(record) ? readFileSync(record, "utf8").split("\n").filter(Boolean).length : 0,
+  };
+}
+// What sends the vendored script's real `gh` to the HTTP double. GH_TOKEN does not apply to that
+// host, so without the variable gh falls back to the keyring and autolaunches a session bus.
+const realGhEnvironment = (url, bus) => ({
+  GITHUB_TOKEN: "test-token",
+  GH_TOKEN: "test-token",
+  GITHUB_API_URL: url.replace(/\/$/, ""),
+  DBUS_SESSION_BUS_ADDRESS: "disabled:",
+  PATH: `${bus.directory}${delimiter}${process.env.PATH}`,
+});
 
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const text = (value) => typeof value === "string" && value.length > 0;
@@ -380,6 +407,35 @@ test("trust refuses writes for fork and Dependabot PRs, and permits a repository
       `read_only=${expected}\npromotable=${expected === "false"}\n`,
     );
   }
+});
+
+test("the real gh at the double asks for no session bus, and does once the variable is gone", (t) => {
+  if (process.platform !== "linux") return t.skip("gh autolaunches a session bus on Linux alone");
+  const bus = sessionBusRecorder(tree());
+  // Nothing listens there: gh asks for its token before it connects, so this needs no server.
+  const environment = realGhEnvironment("http://127.0.0.1:1/", bus);
+  const gh = (env) =>
+    spawnSync("gh", ["api", "--method", "GET", `${environment.GITHUB_API_URL}/rate_limit`], {
+      // A socket at XDG_RUNTIME_DIR/bus would answer instead of the recorder on a host that has one.
+      env: {
+        ...fixtureEnvironment(),
+        DBUS_SESSION_BUS_ADDRESS: undefined,
+        XDG_RUNTIME_DIR: undefined,
+        ...env,
+      },
+      timeout: 30_000,
+    });
+  const control = gh({ ...environment, DBUS_SESSION_BUS_ADDRESS: undefined });
+  if (control.error?.code === "ENOENT") return t.skip("gh is not installed");
+  if (bus.requests() === 0)
+    return t.skip("this gh asks for no session bus even without the variable, so none can leak");
+  assert.equal(bus.requests(), 1);
+  gh(environment);
+  assert.equal(
+    bus.requests(),
+    1,
+    "the real gh asked for a session bus under the journey's environment",
+  );
 });
 
 test("the version digest masks only the package version and keeps dependencies and feature inputs", () => {
@@ -1312,6 +1368,7 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
   );
   command("git", ["checkout", "--quiet", "--detach", OP_NX_COMMIT], action);
   stage("real sidecar checked out");
+  const bus = sessionBusRecorder(dir);
   const github = spawn(
     "python3",
     [join(root, ".github/cache-policy/tests/fixtures/nx-cache-http.py"), dir],
@@ -1373,9 +1430,7 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
         GITHUB_RUN_ID: identity === "replay" ? "2" : "1",
         GITHUB_RUN_ATTEMPT: "1",
         GITHUB_SERVER_URL: "https://github.com",
-        GITHUB_TOKEN: "test-token",
-        GH_TOKEN: "test-token",
-        GITHUB_API_URL: url.replace(/\/$/, ""),
+        ...realGhEnvironment(url, bus),
         ACTIONS_RUNTIME_TOKEN: `refs/pull/${pr.number}/merge`,
         ACTIONS_CACHE_SERVICE_V2: "true",
         ACTIONS_RESULTS_URL: url,
@@ -1515,4 +1570,5 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
     calls.some(({ method }) => method === "DELETE"),
     false,
   );
+  assert.equal(bus.requests(), 0, "a real gh of this journey asked for a session bus");
 });

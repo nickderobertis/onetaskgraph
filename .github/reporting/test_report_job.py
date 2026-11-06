@@ -200,18 +200,35 @@ def real_onevcs():
     return binary
 
 
-def runner_bin(directory, record):
+def runner_bin(directory, record, bus_requests):
     """What a hosted runner's PATH holds for a budget command: node and cargo, no uv, bun, just or onevcs.
 
     `cargo` records that it was started: the runner really has one, and a budget naming saved
-    telemetry must not start a build there.
+    telemetry must not start a build there. `dbus-launch` records each session bus the real `gh` asks
+    for and starts none, so a job that loses the variable below fails rather than leaves a daemon.
     """
     directory.mkdir(parents=True, exist_ok=True)
     (directory / 'node').symlink_to(shutil.which('node'))
     cargo = directory / 'cargo'
     cargo.write_text(f'#!/bin/sh\necho "cargo $*" >> "{record}"\nexit 1\n')
     cargo.chmod(0o755)
+    bus = directory / 'dbus-launch'
+    bus.write_text(f'#!/bin/sh\necho "dbus-launch $*" >> "{bus_requests}"\nexit 1\n')
+    bus.chmod(0o755)
     return f'{directory}{os.pathsep}/usr/bin{os.pathsep}/bin'
+
+
+def job_environment(path, run_id, overrides):
+    """What every `harness.Job` adds to the harness's hermetic environment.
+
+    The action's own `gh` calls hold its token, which applies at the double's host and asks for no
+    session bus. A `gh` a step starts without one falls back to the keyring, and that autolaunches one.
+    """
+    return {'PATH': path,
+            'DBUS_SESSION_BUS_ADDRESS': 'disabled:',
+            'GITHUB_REPOSITORY': harness.REPOSITORY,
+            'GITHUB_RUN_ID': str(run_id),
+            **overrides}
 
 
 def replay(directory, longest_seconds):
@@ -289,7 +306,9 @@ class Journey:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, target)
         self.cargo_started = self.root / 'cargo-started'
-        self.path = runner_bin(self.root / 'runner-bin', self.cargo_started)
+        self.bus_requests = self.root / 'session-bus-requests'
+        test.addCleanup(lambda: test.assertFalse(self.bus_requests.exists(), 'a real gh asked for a session bus'))
+        self.path = runner_bin(self.root / 'runner-bin', self.cargo_started, self.bus_requests)
         self.next_run = 1000
         self.environment = {}
         # This test records what the job cost; report-job:budgets alone judges it.
@@ -306,11 +325,8 @@ class Journey:
     def run(self, event_name, sha, inputs=None, **options):
         self.next_run += 1
         job = harness.Job(self.host, self.repository, event_name, sha, inputs=inputs or job_inputs(),
-                          run_id=self.next_run, action_path=TREE, environment={
-                              'PATH': self.path,
-                              'GITHUB_REPOSITORY': harness.REPOSITORY,
-                              'GITHUB_RUN_ID': str(self.next_run),
-                              **self.environment}, **options)
+                          run_id=self.next_run, action_path=TREE,
+                          environment=job_environment(self.path, self.next_run, self.environment), **options)
         self.test.addCleanup(job.close)
         return job.run()
 
@@ -368,6 +384,28 @@ def expected_reason(budget):
             return 'needs uv'
         case [*_, named]:
             return f'reads {named}'
+
+
+class SessionBus(unittest.TestCase):
+    def test_the_real_gh_under_a_job_asks_for_no_session_bus_and_does_once_the_variable_is_gone(self):
+        if shutil.which('gh') is None:
+            self.skipTest('gh is not installed')
+        with tempfile.TemporaryDirectory() as scratch:
+            requests = Path(scratch) / 'session-bus-requests'
+            path = runner_bin(Path(scratch) / 'runner-bin', Path(scratch) / 'cargo-started', requests)
+            # This holds no step's token, and nothing listens at the proxy: gh asks for a token first.
+            environment = {**harness.real_gh_environment('http://127.0.0.1:1', scratch), 'HOME': scratch,
+                           **job_environment(path, 1, {})}
+
+            def gh(env):
+                subprocess.run(['gh', 'api', 'repos/owner/repo/commits/0'], env=env, capture_output=True,
+                               check=False, timeout=30)
+                return len(requests.read_text().splitlines()) if requests.exists() else 0
+
+            control = {name: value for name, value in environment.items() if name != 'DBUS_SESSION_BUS_ADDRESS'}
+            if gh(control) == 0:
+                self.skipTest('this gh asks for no session bus even without the variable, so none can leak')
+            self.assertEqual(gh(environment), 1, "the real gh asked for a session bus under a job's environment")
 
 
 class ProductionCatalog(unittest.TestCase):
