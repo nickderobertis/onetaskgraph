@@ -17,6 +17,7 @@
       "{workspaceRoot}/scripts/gate-time-budget.mjs"
     ]
   },
+  "// ignored": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier,projects_stay_in_one_uv_workspace] The task places these journeys in report-job:test. They fetch one pinned action release, its wheel and one npm package once as test inputs, hold no credential and reach no live service, since GitHub's API is doubled. pyyaml is a test tool beside no distribution of this repository, and the shared uv.lock is an input of every project, so adding it there would select every project for one test tool.",
   "targets": {
     "test": {
       "executor": "nx:run-commands",
@@ -86,5 +87,6 @@
     "format": {
       "executor": "nx:noop"
     }
-  }
+  },
+  "// ignored end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier,projects_stay_in_one_uv_workspace]"
 }

@@ -1,3 +1,4 @@
+# llmlint: ignore-file[modern_domain_modeling] This journey speaks the released harness's own shapes (budget tuples, refusal dictionaries) and edits GitHub's recorded wire JSON; a model of either would restate a contract the action owns, beside the one it drives.
 """The `budgets` job of ci.yml, driven at GitHub's boundary with the action release it pins.
 
 Each journey runs what the job's `uses:` pins with its `with:` inputs: action.yml's own steps, the
@@ -24,6 +25,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from typing import NamedTuple
+from types import ModuleType
 import unittest
 import urllib.request
 
@@ -48,6 +51,14 @@ COMMANDS_READING_REST = 12
 TRANSFER_SERVICES = ('artifact-service', 'blob-storage', 'object-storage', 'release-host', 'package-index')
 
 
+class Released(NamedTuple):
+    """The action at ci.yml's pin."""
+
+    tag: str
+    tree: Path
+    harness: ModuleType
+
+
 def workflow_job():
     return yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())['jobs']['budgets']
 
@@ -66,6 +77,7 @@ def job_inputs(**override):
 
 
 def fetch(url):
+    # llmlint: ignore[async_typed_clients_at_boundaries] A test's one-shot download of a pinned release asset, the way the released harness fetches its own; nothing here is concurrent or a service client.
     with urllib.request.urlopen(url, timeout=120) as answer:
         return answer.read()
 
@@ -96,7 +108,7 @@ def released_action():
     harness = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(harness)
     harness._cached['archive'] = archive
-    return tag, tree, harness
+    return Released(tag, tree, harness)
 
 
 TAG, TREE, harness = (None, None, None)
@@ -125,10 +137,6 @@ def runner_bin(directory, record):
     cargo.write_text(f'#!/bin/sh\necho "cargo $*" >> "{record}"\nexit 1\n')
     cargo.chmod(0o755)
     return f'{directory}{os.pathsep}/usr/bin{os.pathsep}/bin'
-
-
-def seconds(job):
-    return (job['started_at'], job['completed_at'])
 
 
 def replay(directory, longest_seconds):
@@ -267,13 +275,15 @@ def catalog():
 
 def expected_reason(budget):
     """Why this production budget cannot measure in the job, in the words of its row."""
-    labels, command = budget.get('labels', []), budget['command']
-    if command[:2] == ['bash', 'scripts/actions-budget-figures.sh']:
-        return 'no release: pass --release TAG' if command[2] == 'cache-use' else 'onevcs is not on PATH'
-    if command[0] == 'uv':
-        return 'needs uv'
-    assert labels is not None
-    return f'reads {command[-1]}'
+    match budget['command']:
+        case ['bash', 'scripts/actions-budget-figures.sh', 'cache-use', *_]:
+            return 'no release: pass --release TAG'
+        case ['bash', 'scripts/actions-budget-figures.sh', *_]:
+            return 'onevcs is not on PATH'
+        case ['uv', *_]:
+            return 'needs uv'
+        case [*_, named]:
+            return f'reads {named}'
 
 
 class ProductionCatalog(unittest.TestCase):
