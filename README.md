@@ -1421,6 +1421,21 @@ decided: it writes the form, parses it back and supplies its markup.
 - Any other destination, a stdio plugin among them, receives every fragment byte for byte on
   the rewritten link, as before section forms existed.
 
+**Which spellings a copy reads.** What a copy reads as a link to a record depends on where the
+body is bound. Each case below holds for every destination kind:
+
+- **A destination declared private.** An inline link, a reference-style definition
+  (`[t]: ../tasks/t.md#what`), a location, and a path relative to the body's own file written
+  alone, as a table cell names one, all land alike: on the counterpart and its heading, in the
+  form the table above gives that destination. A path that names no record is left as written.
+  So is one naming a record of the project with no counterpart there, which is counted
+  unresolved.
+- **A public or undeclared destination, with a source declared private.** The same spellings are
+  read, and the body is then screened as the next paragraph states.
+- **A public or undeclared destination, with no source declared private.** An inline link and a
+  location are rewritten. A reference-style definition or a path written alone that gives a
+  relative path is left as written.
+
 **Links from a private source.** Before writing a public body, a copy inventories every
 source declared private and removes its record addresses. A reference with a verified
 counterpart on that destination, whichever kind it is, is translated to the counterpart's

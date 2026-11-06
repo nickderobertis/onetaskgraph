@@ -1043,7 +1043,7 @@ fn view_links(
                     own,
                     &sibling.location,
                     // A view is a public body: its rendering reads a path written alone.
-                    super::sections::Reading::PublicBody,
+                    super::sections::Reading::BarePathsToo,
                 )
         })
         .map(|sibling| {
