@@ -25,7 +25,7 @@ import sys
 import tarfile
 import tempfile
 from dataclasses import asdict, dataclass
-from typing import NamedTuple, NewType
+from typing import Literal, NamedTuple, NewType
 from types import ModuleType
 import unittest
 import urllib.request
@@ -40,6 +40,11 @@ ACTION = 'nickderobertis/onebudgetspec-github-action'
 RECORDINGS = ROOT / '.github/policy/tests/fixtures/release-tail/recordings-v0.13.0'
 BudgetId = NewType('BudgetId', str)
 MetricName = NewType('MetricName', str)
+Unit = Literal['count', 'seconds', 'percent', 'requests', 'bytes', 'jobs']
+Direction = Literal['max', 'min']
+Measure = Literal['reported', 'elapsed']
+Verdict = Literal['within', 'over', 'error']
+RELEASE_TAG = re.compile(r'v\d+\.\d+\.\d+')
 CHECK_TIME = BudgetId('onetaskgraph-ci-check-time')
 JOB_COUNT = BudgetId('onetaskgraph-ci-job-count')
 CD_JOB_COUNT = BudgetId('onetaskgraph-cd-job-count')
@@ -47,7 +52,8 @@ OWN = BudgetId('onetaskgraph-budget-report-command-seconds')
 REST_METRIC = MetricName('report-github-api-requests-per-run')
 TIME_METRIC = MetricName('report-command-seconds')
 RUNNER_TARGETS = {'x86_64': 'x86_64-unknown-linux-gnu', 'aarch64': 'aarch64-unknown-linux-gnu'}
-# The workload `## Budgets` states for the job's own budget, and the design's command reads.
+# The workload .github/reporting/budgets.yaml states for the job's own budget, and the command reads
+# the 20-request design total allows for.
 ROWS = 100
 COMMITS = 20
 COMMANDS_READING_REST = 12
@@ -69,10 +75,10 @@ class FixtureBudget:
 
     id: BudgetId
     command: tuple[str, ...]
-    unit: str = 'count'
-    direction: str = 'max'
+    unit: Unit = 'count'
+    direction: Direction = 'max'
     threshold: float = 100
-    measure: str = 'reported'
+    measure: Measure = 'reported'
     labels: tuple[str, ...] = ()
 
     def harness_entry(self):
@@ -103,7 +109,7 @@ class ReplayedFigure:
 
     actual: float
     threshold: float
-    verdict: str
+    verdict: Verdict
 
 
 @dataclass(frozen=True)
@@ -152,6 +158,7 @@ def fetch(url):
 def released_action():
     """The action at ci.yml's pin: its tree, its harness and its archive, fetched once."""
     tag = action_step()['uses'].split('@', 1)[1]
+    assert RELEASE_TAG.fullmatch(tag), f'ci.yml pins the action at {tag}, which is no release tag'
     tree = STATE / tag
     version = tag.removeprefix('v')
     name = f'onebudgetspec-github-action-{version}-{RUNNER_TARGETS[platform.machine()]}.tar.gz'
@@ -184,6 +191,7 @@ TAG, TREE, harness = (None, None, None)
 def real_onevcs():
     """The onevcs release.yml's tail installs, the one the replay's recordings were driven through."""
     pin = re.search(r'onevcs-cli@(\S+)', (ROOT / '.github/workflows/release.yml').read_text())[1]
+    assert RELEASE_TAG.fullmatch(f'v{pin}'), f'release.yml pins onevcs at {pin}, which is no release version'
     prefix = STATE / f'onevcs-{pin}'
     binary = prefix / 'node_modules/.bin/onevcs'
     if not binary.exists():
