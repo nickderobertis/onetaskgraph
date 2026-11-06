@@ -261,7 +261,7 @@ fn a_narrow_write_leaves_a_stored_comment_as_it_stands_and_a_sweep_rewrites_it()
     let spent = priority(&board);
     assert_eq!(spent, priority(&checks));
     assert_eq!(board.shown()["priority"], json!("high"));
-    assert_eq!(board.comments(), [stored.clone()]);
+    assert_eq!(board.comments(), std::slice::from_ref(&stored));
 
     let swept = board.ran(
         &["sources", "sanitize", "board", "--complete", "--json"].map(str::to_owned),
