@@ -1,5 +1,6 @@
-# Each command names the saved telemetry it reads as its last argument: a libtest filter no test
-# matches, or an argument its script ignores. A job with no build then reads the row as unavailable.
+# Each command names what it reads as its last argument, a libtest filter no test matches or an
+# argument its script ignores: its saved telemetry, or for the two sanitize sweeps, which measure
+# afresh, the binary they spawn. A job with no build then reads the row as unavailable.
 schema_version: 1
 budgets:
   - id: github-asset-requests-per-new-asset
@@ -269,7 +270,7 @@ budgets:
       GitHub requests a sweep and its rerun send: every request a non-dry-run `onetaskgraph sources sanitize` and one rerun send to a loopback board of 2,000 items holding 0 to 20 comments each, read from the sweeps' own reports. It protects the board token's hourly allowance, shared by every manager on a host, from a sweep that grows with the board.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_sanitize_sweep", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_sanitize_sweep", "--exact", "--nocapture", "../../target/debug/onetaskgraph"]
     unit: requests
     direction: max
     threshold: 70
@@ -278,7 +279,7 @@ budgets:
       GitHub requests per 1,000 items of a complete sweep: every request one non-dry-run `onetaskgraph sources sanitize --complete` sends against a loopback board of 2,000 items, 2% of them holding more than 20 comments, read from the sweep's own report. It protects the board token's draw for the one whole read this plan allows.
     labels: [github]
     measure: reported
-    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_sanitize_complete_sweep", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_sanitize_complete_sweep", "--exact", "--nocapture", "../../target/debug/onetaskgraph"]
     unit: requests
     direction: max
     threshold: 38
