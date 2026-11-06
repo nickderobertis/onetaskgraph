@@ -1,0 +1,19 @@
+# The `budgets` job's own budget, which its action checks after its main result upload. The limit
+# is provisional until real runs have measured it. report-job:test records the same figure at the
+# workload below, and report-job:budgets reads that recording back.
+schema_version: 1
+budgets:
+  # Workload: one budget job with 100 catalog rows and one rolling file of 20 base commits, timed
+  # from cold install through checks, history, comment and main result upload. Its final check and
+  # verdict upload, and runner queue, setup and teardown, are outside the interval.
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The issue explicitly requires the new last job to have its own latency budget beside the existing maximum-CI-job budget.
+  - id: onetaskgraph-budget-report-command-seconds
+    description: >-
+      The budget report job from its cold install through the checks, the history read, the comment
+      and the main result upload. It protects the turnaround of the check every pull request waits on.
+    labels: [ci-report]
+    measure: reported
+    command: [onebudgetspec-github-action, telemetry, --metric, report-command-seconds, --input, .telemetry/report-job.json]
+    unit: seconds
+    direction: max
+    threshold: 120

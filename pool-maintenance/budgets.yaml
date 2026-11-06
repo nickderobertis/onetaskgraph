@@ -11,7 +11,9 @@ budgets:
       warm pool slots out of service.
     labels: [host]
     measure: reported
-    command: ["./measure.sh"]
+    # It names the evidence it writes, which a job with no build lacks, so that job reads the row as
+    # unavailable instead of building the workspace.
+    command: ["./measure.sh", "../target/pool-maintenance-evidence"]
     unit: seconds
     direction: max
     threshold: 20

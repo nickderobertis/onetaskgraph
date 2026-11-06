@@ -199,8 +199,9 @@ function cacheProblems(ci, release) {
     ci.env?.NX_HEAD !== `\${{ github.event.pull_request.head.sha }}`
   )
     problems.push("all cache reports must use the event's immutable selection");
-  if (JSON.stringify(Object.keys(ci.jobs).sort()) !== JSON.stringify([...jobs].sort()))
-    problems.push("CI must keep exactly the four existing jobs");
+  // budgets builds and tests nothing, so it runs no Nx and shares no cache.
+  if (JSON.stringify(Object.keys(ci.jobs).sort()) !== JSON.stringify([...jobs, "budgets"].sort()))
+    problems.push("CI must keep exactly the four existing jobs and budgets");
   for (const name of jobs) {
     const steps = ci.jobs[name]?.steps ?? [];
     if (

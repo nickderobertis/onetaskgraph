@@ -1629,6 +1629,22 @@ than part of it. Contributors capture and review changes manually with `just scr
 `just screenshots-bless`. Pushes neither capture nor refresh baselines or galleries.
 The capture drives `local-md` and `in-memory` only: no credential or socket.
 
+## The budget report job
+
+`ci.yml`'s `budgets` job is the released `onebudgetspec-github-action` alone, after the other jobs
+however they ended, on every pull request and push to main; `.github/reporting` holds its budget
+and `report-job:test`, the journeys that drive it. It judges a command only by what its argv names,
+so **a budget that needs saved telemetry names that record in its command** (last argument, which
+the libtest filter or script ignores): the row then reads unavailable instead of a build starting on
+the runner or the job going red. The figures script refuses extra arguments and the budgets it serves
+need a release, so `enforcement-exclude-labels` lists `release-tail`: each is an unavailable row with
+the script's own message, and is enforced on the release tail as before. On this catalog only the
+job's own budget measures on a real pull request. Action v0.1.1 starts a rolling file only from a
+main phase that measured something, so no base history accumulates until another budget can run here.
+`onetaskgraph-ci-check-time` carries `report-only` as well, and `report-job:test` proves its figure
+and adverse flag over replayed telemetry; removing that label enforces it only where `release-tail`
+is not excluded too.
+
 ## Recorded decisions
 
 - **`SCHEMA_BUNDLE_VERSION` tracks the emitted document, not the set of root names.** A
@@ -1664,11 +1680,12 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   does why an advisory check cannot substitute for a required one: a query GitHub refuses
   outright reached the default branch because auto-merge waited only on the required set
   while the advisory lane that caught it sat red.
-- **Four required checks — `lint`, `test-linux`, `test-windows` and `test-macos`, the four
-  jobs of `.github/workflows/ci.yml` — and they are the only thing that can refuse a merge
-  here.** A pull request's last commit runs exactly those four and nothing else (`lint`
+- **Five required checks — `lint`, `test-linux`, `test-windows`, `test-macos` and `budgets`,
+  the five jobs of `.github/workflows/ci.yml` — and they are the only thing that can refuse a
+  merge here; `.github/governance.json` declares them, and `budgets` is added to branch protection
+  only after it lands.** A pull request's last commit runs exactly those five and nothing else (`lint`
   carries the PR title, llmlint, notignored's comment, the supply chain and the visual docs
-  capture as steps), `lint` held to `timeout-minutes: 30` and the three test jobs to 40, by the
+  capture as steps), `lint` and `budgets` held to `timeout-minutes: 30` and the three test jobs to 40, by the
   user's decision of 2026-10-31, because passing runs reached 29.8 minutes. Re-apply or verify the whole
   arrangement with the create-repo skill's `setup_github_governance.py`, which is its source
   of truth. Two values in it are load-bearing rather than conventional: **zero required
@@ -1682,8 +1699,8 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   combination is caught by the next pull request's own checks. Adding a required check costs a
   change in the orchestration repository too, which checks its inventory of this merge path
   against GitHub on every gate run. `.github/tests/ci-events.test.mjs` holds which jobs run:
-  a pull request's four, and on a push to main release-plz, the warmer and the canonical
-  gallery, which skips the release commit.
+  a pull request's five, and on a push to main release-plz, `budgets` alone from `ci.yml`, the
+  warmer and the canonical gallery, which skips the release commit.
 - **Nx results persist through the shared remote cache.** Check-tool versions come from
   `.tool-versions` through `scripts/ci-tool-pins.sh` before
   installation; every cached target hashes that file. Existing ecosystem locks and the
@@ -1813,7 +1830,7 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   `onetaskgraph-cd-job-time` (longest CD job, 1800 s), `onetaskgraph-release-cycle-time`
   (a carried PR's checks plus its merge to the release tail, only when its merge changes a
   `.github/release-published-paths` path, 5400 s),
-  `onetaskgraph-ci-job-count` (4) and `onetaskgraph-cd-job-count` (6), and
+  `onetaskgraph-ci-job-count` (5) and `onetaskgraph-cd-job-count` (6), and
   `onetaskgraph-release-read-requests` (6), `onetaskgraph-pr-read-requests` (2), and
   `onetaskgraph-nx-cache-use` (100% remote replay among attempt-qualified task/OS/hash
   executions, excluding local hits). Cache-use reads saved executions and promotion receipts
@@ -1831,11 +1848,11 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
   `.gate-time.json` and checks it, **warning** when over and failing only when the
   measurement errs or the file is invalid, because a development machine's timing varies too
   much to refuse on. No pre-push hook runs it — CI owns the gate. Every other check of the
-  root file excludes both labels. **The three CD figures leave the Rust cache warmer out:**
+  root file excludes both labels. **The three CD figures leave the Rust cache warmer and `budgets` out:**
   `onetaskgraph-cd-job-time`, `onetaskgraph-cd-job-count` and
-  `onetaskgraph-release-read-requests` pass `--exclude-workflow "rust cache warm"` — that
-  workflow's `name:`, and no other — because the warmer builds and delivers nothing, and its
-  run at the release commit would otherwise count as CD and read its jobs. A run concluded
+  `onetaskgraph-release-read-requests` pass `--exclude-workflow "rust cache warm"` and
+  `--exclude-workflow ci` — those workflows' `name:`s, and no others — because neither delivers
+  anything, and each's run at the release commit would otherwise count as CD and read its jobs. A run concluded
   `skipped` is left out by the script itself and costs no read: v0.13.0's skipped "Visual docs"
   push run once made its release reads 7 against 6.
   `.github/policy/tests/release-tail.test.mjs` runs `publish`'s two tail steps as written over

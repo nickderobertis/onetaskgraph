@@ -10,6 +10,7 @@
       "!{projectRoot}/.telemetry/**/*",
       "!{projectRoot}/linear-documents-policy/**/*",
       "!{projectRoot}/policy/**/*",
+      "!{projectRoot}/reporting/**/*",
       "!{projectRoot}/cache-policy/**/*",
       "!{projectRoot}/nx-policy/**/*"
     ],
@@ -68,6 +69,8 @@
     "budgetJourneys": [
       "workflowGraph",
       "{workspaceRoot}/budgets.yaml",
+      "{workspaceRoot}/.github/reporting/action-v0.1.1.yml",
+      "{workspaceRoot}/.github/governance.json",
       "{workspaceRoot}/justfile",
       "{workspaceRoot}/scripts/gate-time.sh",
       "{workspaceRoot}/scripts/gate-time-budget.mjs",

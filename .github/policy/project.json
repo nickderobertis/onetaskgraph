@@ -10,6 +10,7 @@
       "{workspaceRoot}/.github/**/*",
       "!{workspaceRoot}/.github/node_modules/**/*",
       "!{workspaceRoot}/.github/.telemetry/**/*",
+      "!{workspaceRoot}/.github/reporting/.telemetry/**/*",
       "!{workspaceRoot}/.github/linear-documents-policy/**/*",
       "{workspaceRoot}/release-targets.toml",
       "{workspaceRoot}/screencomp.toml",

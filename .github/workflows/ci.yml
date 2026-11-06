@@ -1,9 +1,11 @@
-# Prove each pull request from a clean checkout, on the real platform matrix, in four jobs:
-# `lint` once, on Linux, for everything platform-independent, and one test job per platform.
-# Branch protection requires exactly these four; branches need not be up to date with main
+# Prove each pull request from a clean checkout, on the real platform matrix, in five jobs:
+# `lint` once, on Linux, for everything platform-independent, one test job per platform, and
+# `budgets`, which runs after them however they ended and builds and tests nothing.
+# Branch protection requires exactly these five; branches need not be up to date with main
 # before they merge (`strict: false`, the user's decision of 2026-10-18), and nothing re-runs
 # the tests on a push to main — .github/workflows/rust-cache-warm.yml builds there instead, and
-# its job fails when main does not build. AGENTS.md records that trade.
+# its job fails when main does not build. AGENTS.md records that trade. A push to main runs only
+# `budgets` here, which saves that commit's results as the history pull requests compare with.
 #
 # Every job runs the same `just` recipes a contributor runs locally, over the projects its diff
 # can reach, and derives its base explicitly rather than letting Nx guess one.
@@ -21,6 +23,8 @@ name: ci
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 # Least privilege: the token is read-only by default and widened per job only where a job
 # genuinely needs more.
@@ -34,8 +38,9 @@ env:
   NX_HEAD: ${{ github.event.pull_request.head.sha }}
 
 jobs:
-  # The four jobs. None needs another, so all four start at once, and each runs its checks
-  # through one `just ci-<job>` recipe (scripts/ci-job.sh) over the projects the diff reaches.
+  # The four checking jobs. None needs another, so all four start at once, and each runs its
+  # checks through one `just ci-<job>` recipe (scripts/ci-job.sh) over the projects the diff
+  # reaches. `budgets`, at the end of this file, follows them.
 
   lint:
     if: github.event_name == 'pull_request'
@@ -700,3 +705,29 @@ jobs:
           path: ${{ runner.temp }}/nx-cache-report
           retention-days: 7
       - cancel: nx-cache
+
+  # The budget report: the released action's own job, on every pull request and every push to main,
+  # checking each budget whose command can run here and keeping one standing comment. The full
+  # history lets local git prove each saved base commit's ancestry, and the group serializes
+  # comment writers. .github/reporting holds its budget and the journeys that drive it.
+  budgets:
+    needs: [lint, test-linux, test-windows, test-macos]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    concurrency:
+      group: budget-report-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: nickderobertis/onebudgetspec-github-action@v0.1.1
+        with:
+          token: ${{ github.token }}
+          enforcement-exclude-labels: release-tail,report-only

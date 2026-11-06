@@ -11,7 +11,7 @@ import { definitions, refusals } from "./workflow-definitions.mjs";
 // `ci-contexts` target, keyed on those files too, rather than the .github-only `ci-jobs`.
 
 // llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Branch protection's required set is not this repository's to hold: its source is the create-repo skill's setup_github_governance.py, and the orchestration repository reconciles its inventory of this merge path against GitHub on every gate run (AGENTS.md, "Commits, releases, and merging"). A pull request's token cannot read branch protection, so this is the set the workflow must keep producing, held to the workflow below.
-const REQUIRED_CONTEXTS = ["lint", "test-linux", "test-windows", "test-macos"];
+const REQUIRED_CONTEXTS = ["lint", "test-linux", "test-windows", "test-macos", "budgets"];
 // llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate]
 
 // Every check context a source pull request's runs report, resolved as workflow-graph.mjs

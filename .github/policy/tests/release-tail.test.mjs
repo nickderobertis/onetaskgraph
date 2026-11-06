@@ -47,8 +47,8 @@ const TAIL_IDS = [
   "onetaskgraph-pr-read-requests",
 ];
 
-// The CD figures leave out the runs of the one workflow their commands name with
-// --exclude-workflow: the main-push Rust cache warmer, which builds and delivers nothing.
+// The CD figures leave out the runs of the two workflows their commands name with
+// --exclude-workflow: the main-push Rust cache warmer and ci.yml's budgets job, which deliver nothing.
 function budgetDocument(source) {
   const document = parse(source);
   const strings = (value) =>
@@ -80,7 +80,8 @@ const excludedBy = (command) =>
 const WARMER = parse(
   readFileSync(join(root, ".github/workflows/rust-cache-warm.yml"), "utf8"),
 ).name;
-const EXCLUDED = [WARMER];
+const CI_WORKFLOW = parse(readFileSync(join(root, ".github/workflows/ci.yml"), "utf8")).name;
+const EXCLUDED = [WARMER, CI_WORKFLOW];
 
 const releaseWorkflow = () =>
   parse(readFileSync(join(root, ".github/workflows/release.yml"), "utf8"));
@@ -609,7 +610,7 @@ test("over release v0.12.13 the tail reports all seven budgets with their breakd
   );
 });
 
-test("the CD budgets name the cache warmer's workflow, and only it, with --exclude-workflow", () => {
+test("the CD budgets name the cache warmer's and ci's workflows, and only them, with --exclude-workflow", () => {
   const excluding = {
     "onetaskgraph-cd-job-time": EXCLUDED,
     "onetaskgraph-cd-job-count": EXCLUDED,

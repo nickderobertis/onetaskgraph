@@ -1,0 +1,92 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "report-job",
+  "projectType": "library",
+  "tags": ["lang:python", "layer:workspace"],
+  "//": "The `budgets` job's journeys and its own budget. `test` drives the released action over this repository's real catalog, doubling only GitHub's services, the release host and the package index; `budgets` reads what it recorded.",
+  "namedInputs": {
+    "default": [
+      "{projectRoot}/**/*",
+      "!{projectRoot}/.telemetry/**/*",
+      "{workspaceRoot}/.github/workflows/ci.yml",
+      "{workspaceRoot}/.github/workflows/release.yml",
+      "{workspaceRoot}/.github/policy/tests/fixtures/release-tail/recordings-v0.13.0/**/*",
+      "{workspaceRoot}/**/budgets.yaml",
+      "{workspaceRoot}/scripts/actions-budget-figures.sh",
+      "{workspaceRoot}/scripts/nx-remote-cache.mjs",
+      "{workspaceRoot}/scripts/gate-time-budget.mjs"
+    ]
+  },
+  "// ignored": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier,projects_stay_in_one_uv_workspace] The task places these journeys in report-job:test. They fetch one pinned action release, its wheel and one npm package once as test inputs, hold no credential and reach no live service, since GitHub's API is doubled. pyyaml is a test tool beside no distribution of this repository, and the shared uv.lock is an input of every project, so adding it there would select every project for one test tool.",
+  "targets": {
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --no-project --quiet --with pyyaml python .github/reporting/test_report_job.py"
+      },
+      "inputs": [
+        "default",
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ],
+      "cache": true,
+      "outputs": [
+        "{projectRoot}/.telemetry/report-job.json",
+        "{projectRoot}/.telemetry/replayed-budget-figures.json"
+      ]
+    },
+    "budgets": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["test"],
+      "options": {
+        "command": "uv run --no-project --quiet --with pyyaml python .github/reporting/check_budgets.py"
+      },
+      "cache": false,
+      "inputs": [
+        "default",
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "python3 -m py_compile .github/reporting/test_report_job.py .github/reporting/check_budgets.py"
+      },
+      "inputs": [
+        "default",
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
+    },
+    "format-check": {
+      "executor": "nx:noop"
+    },
+    "typecheck": {
+      "executor": "nx:noop"
+    },
+    "coverage": {
+      "executor": "nx:noop"
+    },
+    "check": {
+      "executor": "nx:noop",
+      "dependsOn": ["lint", "test", "budgets"]
+    },
+    "bootstrap": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:noop"
+    }
+  },
+  "// ignored end": "llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier,projects_stay_in_one_uv_workspace]"
+}
