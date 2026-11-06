@@ -52,9 +52,7 @@
         "id": "onetaskgraph-budget-report-command-seconds",
         "file": ".github/reporting/budgets.yaml",
         "description": "The budget report job from its cold install through the checks, the history read, the comment and the main result upload. It protects the turnaround of the check every pull request waits on.",
-        "labels": [
-          "ci-report"
-        ],
+        "labels": ["ci-report"],
         "measure": "reported",
         "command": [
           "onebudgetspec-github-action",
@@ -73,18 +71,9 @@
         "id": "onetaskgraph-ci-check-time",
         "file": "budgets.yaml",
         "description": "The longest counted job of each pull request's last-commit CI runs, over the pull requests one release carries, from GitHub's job timestamps. It protects every contributor's turnaround, because one slow check holds every change behind it.",
-        "labels": [
-          "release-tail",
-          "report-only"
-        ],
+        "labels": ["release-tail", "report-only"],
         "measure": "reported",
-        "command": [
-          "bash",
-          "scripts/actions-budget-figures.sh",
-          "longest-job",
-          "--stage",
-          "pr"
-        ],
+        "command": ["bash", "scripts/actions-budget-figures.sh", "longest-job", "--stage", "pr"],
         "unit": "seconds",
         "direction": "max",
         "threshold": 1800.0,
@@ -94,9 +83,7 @@
         "id": "onetaskgraph-cd-job-time",
         "file": "budgets.yaml",
         "description": "The longest counted job of one release's CD runs — release-plz's run at the release commit and the Release run, publish included up to the tail's moment. It protects the time a release takes, a slow job being the actionable unit inside the release cycle.",
-        "labels": [
-          "release-tail"
-        ],
+        "labels": ["release-tail"],
         "measure": "reported",
         "command": [
           "bash",
@@ -118,9 +105,7 @@
         "id": "onetaskgraph-release-cycle-time",
         "file": "budgets.yaml",
         "description": "Per pull request one release carries whose merge changes a published artifact path, its last commit's checks plus its merge to the end of publish; the maximum over the release's pull requests. It protects how soon a merged change reaches the people who install it.",
-        "labels": [
-          "release-tail"
-        ],
+        "labels": ["release-tail"],
         "measure": "reported",
         "command": [
           "bash",
@@ -138,17 +123,9 @@
         "id": "onetaskgraph-ci-job-count",
         "file": "budgets.yaml",
         "description": "The most counted jobs any pull request of one release ran at its last commit, over every workflow its pull_request event started. It protects this repository's share of the account-wide 20-job concurrency limit: lint, one test job per platform and budgets.",
-        "labels": [
-          "release-tail"
-        ],
+        "labels": ["release-tail"],
         "measure": "reported",
-        "command": [
-          "bash",
-          "scripts/actions-budget-figures.sh",
-          "job-count",
-          "--stage",
-          "pr"
-        ],
+        "command": ["bash", "scripts/actions-budget-figures.sh", "job-count", "--stage", "pr"],
         "unit": "jobs",
         "direction": "max",
         "threshold": 5.0,
@@ -158,9 +135,7 @@
         "id": "onetaskgraph-cd-job-count",
         "file": "budgets.yaml",
         "description": "The counted jobs of one release's CD runs, publish included as the job running the tail. It protects this repository's CD share of the account-wide 20-job concurrency limit: release-plz, four build jobs and publish.",
-        "labels": [
-          "release-tail"
-        ],
+        "labels": ["release-tail"],
         "measure": "reported",
         "command": [
           "bash",
@@ -182,9 +157,7 @@
         "id": "onetaskgraph-release-read-requests",
         "file": "budgets.yaml",
         "description": "The REST requests the release's own reads cost — the releases listing, the comparison, the closed-pull-request page, the runs at the release commit and the jobs of its CD runs — summed from onevcs's answers. It protects the tail's GitHub reads from growing with this repository's CD shape, whatever number of pull requests a release carries.",
-        "labels": [
-          "release-tail"
-        ],
+        "labels": ["release-tail"],
         "measure": "reported",
         "command": [
           "bash",
@@ -204,15 +177,9 @@
         "id": "onetaskgraph-pr-read-requests",
         "file": "budgets.yaml",
         "description": "The most REST requests any one pull request of the release needed — its runs at head and the jobs of each CI run there — from onevcs's answers. It protects the reads each pull request costs from growing with the workflows a pull request starts.",
-        "labels": [
-          "release-tail"
-        ],
+        "labels": ["release-tail"],
         "measure": "reported",
-        "command": [
-          "bash",
-          "scripts/actions-budget-figures.sh",
-          "pr-read-requests"
-        ],
+        "command": ["bash", "scripts/actions-budget-figures.sh", "pr-read-requests"],
         "unit": "requests",
         "direction": "max",
         "threshold": 2.0,
@@ -222,15 +189,9 @@
         "id": "onetaskgraph-gate-time",
         "file": "budgets.yaml",
         "description": "The wall clock of one `just gate` run on a development machine, from the start and end the recipe records on that run. It holds the local gate to the line each CI job is held to, as a warning, since a development machine's timing varies too much to refuse on.",
-        "labels": [
-          "host-variable"
-        ],
+        "labels": ["host-variable"],
         "measure": "reported",
-        "command": [
-          "node",
-          "scripts/gate-time-budget.mjs",
-          "./.gate-time.json"
-        ],
+        "command": ["node", "scripts/gate-time-budget.mjs", "./.gate-time.json"],
         "unit": "seconds",
         "direction": "max",
         "threshold": 1800.0,
@@ -240,15 +201,9 @@
         "id": "onetaskgraph-nx-cache-use",
         "file": "budgets.yaml",
         "description": "Remote hits among attempt-qualified cacheable task/OS/hash executions, excluding local hits, protect contributor and release turnaround when unchanged work is already proven.",
-        "labels": [
-          "release-tail"
-        ],
+        "labels": ["release-tail"],
         "measure": "reported",
-        "command": [
-          "bash",
-          "scripts/actions-budget-figures.sh",
-          "cache-use"
-        ],
+        "command": ["bash", "scripts/actions-budget-figures.sh", "cache-use"],
         "unit": "percent",
         "direction": "min",
         "threshold": 100.0,
@@ -258,9 +213,7 @@
         "id": "github-asset-requests-per-new-asset",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "An inner measure of headroom on a shared board token that no check may reach: the extra upload and authenticated verification requests per new image, excluding the one repository-id read per source instance. It protects room for other managers sharing that token.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -287,9 +240,7 @@
         "id": "github-asset-requests-per-unchanged-asset",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "An inner measure of headroom on a shared board token that no check may reach: the extra requests per unchanged image across three re-copies. It protects reuse from spending the shared allowance again.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -316,9 +267,7 @@
         "id": "github-asset-copy-seconds",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "An inner measure of wall time a person waits on the real board for a project copy followed by one copy per document, measured in simulated time against a loopback modelling GitHub latency and limits. The real board limiter and token may not be spent by a check, and simulation makes the measurement cost no gate time.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -345,9 +294,7 @@
         "id": "github-concurrent-copies-refused",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "An inner measure of refusals while people copy a project then each of its documents onto the real board, measured in simulated time against a loopback modelling GitHub latency and limits. The real board limiter and token may not be spent by a check, and simulation makes the measurement cost no gate time.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -374,9 +321,7 @@
         "id": "github-concurrent-copy-seconds",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "An inner measure of the slowest wall time a person waits on the real board for a project copy followed by one copy per document, measured in simulated time against a loopback modelling GitHub latency and limits. The real board limiter and token may not be spent by a check, and simulation makes the measurement cost no gate time.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -403,9 +348,7 @@
         "id": "github-metadata-field-content-creation-share",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "An inner measure of headroom on the shared board token that no check may spend: the larger share of GitHub's per-minute and hourly content-creation allowances that projecting one metadata field adds to a 10x hour of follow-up filing, every aliased mutation counted as one write. It protects the write allowance every manager on the host draws from.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -432,9 +375,7 @@
         "id": "visibility-reads-per-destination",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "The most visibility reads any one destination receives within either command of a mixed plan's first project copy (101 private-board writes) followed by its document copy (1 write), with public task views on a public board. It protects the shared board token from a visibility read per write by requiring each command to share its reads across writes.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -461,9 +402,7 @@
         "id": "github-landing-closure-points",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "An inner measure of the shared board token that no check may spend: the GitHub GraphQL points one `task status complete` call naming no source spends for one landing closing 10 open issues held on a board of 11,000 items, with a second configured board of 1,100 items holding none of them, driven through the binary against two loopback boards and priced with the plugin's own table; the 1x figure and each source's reads and writes at both scales are its detail. It protects every manager's share of that token from a landing's closure write.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -490,9 +429,7 @@
         "id": "github-cache-points-not-above-uncached",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "An inner measure of the shared board token that no check may spend: the largest difference, cache on minus cache off, in GitHub GraphQL points over every kind (tasks, projects, documents, manifests, asset bytes), sequence (cold, unchanged pinned reread by two concurrent passes, list-then-load after edits, write-then-read; for asset bytes, which only a render reads, a cold render, an unchanged render, a render after edits and a render after a render) and scale (20 projects, 100 documents, 80 tasks and 8 images, and ten times that), and each scale's total, driven through the binary against a loopback board and priced with the plugin's own table. It protects every manager's share of that token from quota the cache adds; the stale-option fallback is recorded beside it and kept out.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -519,10 +456,7 @@
         "id": "github-live-session-points",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "Whole credentialed GitHub lane primary points, attributed from complete current telemetry with explicit modelled prices, protecting shared-account headroom.",
-        "labels": [
-          "github",
-          "live-session"
-        ],
+        "labels": ["github", "live-session"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -549,9 +483,7 @@
         "id": "github-plan-copy-seconds-unchanged",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "The simulated seconds, each request held for the timing spike's mean for its kind, of an unchanged re-copy of the generated 10-item plan (a 50 KB project, eight 45-49 KB tasks with 10 edges, 19 field values, a 35 KB document with a 104 KB PNG), one `project copy` then one `document copy`, the larger of three recordings on a 2,000-item loopback board and again on a 20,000-item one — with no write policy, screened through the released onevcs boundary commands, and in the host's configuration (the plan's source declared `visibility: private`, the board's `cache: {enabled: true}`, screening on). It protects the time the manager and the user wait for every plan revision filed onto the plans board.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -578,9 +510,7 @@
         "id": "github-plan-copy-seconds-changed",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "The simulated seconds, each request held for the timing spike's mean for its kind, of a re-copy of the generated 10-item plan (a 50 KB project, eight 45-49 KB tasks with 10 edges, 19 field values, a 35 KB document with a 104 KB PNG), one `project copy` then one `document copy` after one task's body changed, the larger of three recordings on a 2,000-item loopback board and again on a 20,000-item one — with no write policy, screened through the released onevcs boundary commands, and in the host's configuration (the plan's source declared `visibility: private`, the board's `cache: {enabled: true}`, screening on). It protects the time the manager and the user wait for every plan revision filed onto the plans board.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -607,9 +537,7 @@
         "id": "github-plan-copy-seconds-first",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "The simulated seconds, each request held for the timing spike's mean for its kind, of a first copy of the generated 10-item plan (a 50 KB project, eight 45-49 KB tasks with 10 edges, 19 field values, a 35 KB document with a 104 KB PNG), one `project copy` then one `document copy`, the larger of three recordings on a 2,000-item loopback board and again on a 20,000-item one — with no write policy, screened through the released onevcs boundary commands, and in the host's configuration (the plan's source declared `visibility: private`, the board's `cache: {enabled: true}`, screening on). It protects the time the manager and the user wait for every plan filed onto the plans board.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -636,10 +564,7 @@
         "id": "github-plan-copy-real-seconds-unchanged",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "The real seconds the two processes of an unchanged re-copy of the generated 10-item plan ran on a 2,000-item loopback board, beside the simulated seconds its gated budget holds. It protects the copy's own work on the machine that runs it from growing unseen.",
-        "labels": [
-          "github",
-          "host"
-        ],
+        "labels": ["github", "host"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -666,10 +591,7 @@
         "id": "github-plan-copy-real-seconds-changed",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "The real seconds the two processes of a re-copy after one task's body changed of the generated 10-item plan ran on a 2,000-item loopback board, beside the simulated seconds its gated budget holds. It protects the copy's own work on the machine that runs it from growing unseen.",
-        "labels": [
-          "github",
-          "host"
-        ],
+        "labels": ["github", "host"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -696,10 +618,7 @@
         "id": "github-plan-copy-real-seconds-first",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "The real seconds the two processes of a first copy of the generated 10-item plan ran on a 2,000-item loopback board, beside the simulated seconds its gated budget holds. It protects the copy's own work on the machine that runs it from growing unseen.",
-        "labels": [
-          "github",
-          "host"
-        ],
+        "labels": ["github", "host"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -726,9 +645,7 @@
         "id": "github-plan-copy-points-unchanged",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "An inner measure of the shared board token that no check may spend: the GraphQL primary points an unchanged re-copy of the generated 10-item plan spends, the larger of three recordings on a 2,000-item loopback board and again on a 20,000-item one — with no write policy, screened through the released onevcs boundary commands, and in the host's configuration (the plan's source declared `visibility: private`, the board's `cache: {enabled: true}`, screening on) — priced as the timing spike's pricing.json — a board page 2, an issue-search page 5, any other read 1, each mutation request 1, REST 0. It protects every manager's share of that token from a re-copy that changes nothing.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -755,9 +672,7 @@
         "id": "github-plan-copy-points-changed",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "An inner measure of the shared board token that no check may spend: the GraphQL primary points a re-copy of the generated 10-item plan spends after one task's body changed, the larger of three recordings on a 2,000-item loopback board and again on a 20,000-item one — with no write policy, screened through the released onevcs boundary commands, and in the host's configuration (the plan's source declared `visibility: private`, the board's `cache: {enabled: true}`, screening on) — priced as the timing spike's pricing.json — a board page 2, an issue-search page 5, any other read 1, each mutation request 1, REST 0. It protects every manager's share of that token from the re-copies a plan's revisions make.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -784,9 +699,7 @@
         "id": "github-plan-copy-points-first",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "An inner measure of the shared board token that no check may spend: the GraphQL primary points a first copy of the generated 10-item plan spends with GitHub placing each created issue as the spike measured, the larger of three recordings on a 2,000-item loopback board and again on a 20,000-item one — with no write policy, screened through the released onevcs boundary commands, and in the host's configuration (the plan's source declared `visibility: private`, the board's `cache: {enabled: true}`, screening on) — priced as the timing spike's pricing.json — a board page 2, an issue-search page 5, any other read 1, each mutation request 1, REST 0. It protects every manager's share of that token from filing a plan.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -813,9 +726,7 @@
         "id": "github-plan-copy-content-creations",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "An inner measure of the write allowance every manager on the board token shares: the writes GitHub's secondary limit may count — every mutation and each aliased one counted one, plus each upload — in a first copy of the generated 10-item plan, the larger of three recordings on a 2,000-item loopback board and again on a 20,000-item one — with no write policy, screened through the released onevcs boundary commands, and in the host's configuration (the plan's source declared `visibility: private`, the board's `cache: {enabled: true}`, screening on). It protects that shared allowance from filing a plan.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -842,9 +753,7 @@
         "id": "github-approval-calls-points",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "Modelled GitHub GraphQL points of one complete plan design approval, its review task's creation and resolution included, on a 2,000-item board, screened or not. It protects every manager's share of the board token.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "node",
@@ -860,9 +769,7 @@
         "id": "human-task-projection-points",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "Modelled GitHub GraphQL points per human task projected through its whole lifecycle by simultaneous managers onto a shared screened board. It protects every manager's share of the board token.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "node",
@@ -878,9 +785,7 @@
         "id": "github-requests-per-dependency-read",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "The most requests any one necessarily consulted board receives in one complete dependency read through the binary on a fresh process, across the cases the detail lists, on boards of 1,100 and of 11,000 items. It protects every manager's share of the board token.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -907,9 +812,7 @@
         "id": "github-requests-per-status-write",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "The requests one status write of one issue item sends through the binary on a fresh process with the cache off, the larger over boards of 1,100 and of 11,000 items. It protects every manager's share of the board token.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -936,9 +839,7 @@
         "id": "github-requests-per-settlement-update",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "The requests one update of a status and one metadata key on one issue item sends through the binary on a fresh process with the cache off, the larger over boards of 1,100 and of 11,000 items. It protects every manager's share of the board token.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -965,9 +866,7 @@
         "id": "sanitize-sweep-requests",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "GitHub requests a sweep and its rerun send: every request a non-dry-run `onetaskgraph sources sanitize` and one rerun send to a loopback board of 2,000 items holding 0 to 20 comments each, read from the sweeps' own reports. It protects the board token's hourly allowance, shared by every manager on a host, from a sweep that grows with the board.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -994,9 +893,7 @@
         "id": "sanitize-complete-sweep-requests",
         "file": "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
         "description": "GitHub requests per 1,000 items of a complete sweep: every request one non-dry-run `onetaskgraph sources sanitize --complete` sends against a loopback board of 2,000 items, 2% of them holding more than 20 comments, read from the sweep's own report. It protects the board token's draw for the one whole read this plan allows.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1023,9 +920,7 @@
         "id": "linear-requests-per-status-write-cold",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "The requests one status write sends on a fresh source instance, as one command line is, the larger over workspaces of 60 and of 600 issues. It protects headroom on the production Linear key every manager of a host shares.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1052,9 +947,7 @@
         "id": "linear-requests-per-status-write-warm",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "The requests each status write after the first sends on one long-lived source instance, the larger over workspaces of 60 and of 600 issues. It protects headroom on the production Linear key every manager of a host shares.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1081,9 +974,7 @@
         "id": "linear-requests-per-settlement-update-cold",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "The requests the first update of a status and one metadata key sends on a fresh source instance, the larger over workspaces of 60 and of 600 issues. It protects headroom on the production Linear key every manager of a host shares.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1110,9 +1001,7 @@
         "id": "linear-requests-per-settlement-update-warm",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "The requests each later update of a status and one metadata key sends on one long-lived source instance, the larger over workspaces of 60 and of 600 issues. It protects headroom on the production Linear key every manager of a host shares.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1139,9 +1028,7 @@
         "id": "linear-requests-per-dependency-read",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "The most requests any one necessarily consulted Linear source receives in one complete dependency read through the binary, across the cases the detail lists, at 60 and at 600 issues. It protects headroom on the production Linear key every manager of a host shares.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1168,9 +1055,7 @@
         "id": "linear-asset-requests-per-new-asset",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "An inner measure of the requests added by new document and issue images protects headroom on a production Linear key every manager of a host shares, which no check may reach.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1197,9 +1082,7 @@
         "id": "linear-asset-requests-per-unchanged-asset",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "An inner measure of requests added by three unchanged re-copies protects headroom on a production Linear key every manager of a host shares, which no check may reach.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1226,9 +1109,7 @@
         "id": "linear-asset-copy-seconds",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "An inner measure of a plan-copy operation (project copy followed by each document copy into the copied project) duration in simulated time against a loopback modelling Linear latency and limits protects the time a person waits, because the production key may not be spent by a check and the measurement costs no gate time.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1255,9 +1136,7 @@
         "id": "linear-concurrent-copies-refused",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "An inner measure of concurrent plan-copy operation refusals (each project copy followed by its document copies into the copied project) in simulated time against a loopback modelling Linear latency and limits avoids spending the production key and costs no gate time. The GraphQL limit is 2500 requests per 3600 seconds per authenticated user across API keys, refilled as a leaky bucket, from https://linear.app/developers/rate-limiting.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1284,9 +1163,7 @@
         "id": "linear-cache-cost-not-above-uncached",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "The requests one hour of the assumed workload saves with the Linear cache on — three hosts, each a cold and a warm pass over 10 projects, 40 documents and 60 issues against the loopback Linear — the smaller of 1x and 10x of cache off minus cache on. It protects the shared key's 2,500 requests an hour from what the cache adds.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1313,9 +1190,7 @@
         "id": "linear-cache-largest-query-complexity",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "The dearest single query any Linear read sends with the cache on over the same hour at 1x and 10x. It protects every widened read from Linear's per-query complexity cap of 10,000, which refuses a query outright.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1342,9 +1217,7 @@
         "id": "linear-hourly-requests-1x",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "The requests one hour of the assumed workload at 1x sends Linear with the cache on, the first pass of each host cold and its second warm: 207 measured, plus 20% headroom, rounded up to a multiple of 10, within the ceiling of 250 (10% of the 2,500 an hour the key allows). It protects the share of the key this workload may take from people and other tools.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1371,9 +1244,7 @@
         "id": "linear-hourly-requests-10x",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "The requests the same cold-then-warm hour sends Linear with the cache on at 10x: 1,944 measured, plus 20% headroom, rounded up to a multiple of 50, within the ceiling of 2,500 (the whole hour the key allows). It protects the requests of the key from this workload at its largest scale.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1400,9 +1271,7 @@
         "id": "linear-hourly-requests-10x-warm",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "The requests an hour at 10x sends Linear with the cache on when every pass is warm, as on a host whose cache an earlier hour filled: 612 measured, plus 20% headroom, rounded up to a multiple of 50, within the ceiling of 1,250 (50% of the 2,500 an hour the key allows). It protects the share of the key a settled host may take.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1429,9 +1298,7 @@
         "id": "linear-hourly-complexity-10x",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "The complexity the cold-then-warm hour at 10x spends with the Linear cache on, each request priced as the cache cost budget prices it: 546,504 measured, plus 20% headroom, rounded up to a multiple of 25,000, within the ceiling of 750,000 (25% of the 3,000,000 an hour the key allows). It protects the share of the key this workload may take from people and other tools.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1458,9 +1325,7 @@
         "id": "linear-requests-per-plan-copy",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "The requests one first copy of a realistic plan — 1 project, 5 tasks and 1 design document with 2 new images — sends an empty Linear that rewrites every long form, end to end through the binary. It protects headroom on the production Linear key every manager of a host shares.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1487,9 +1352,7 @@
         "id": "linear-live-documents-created-per-ordinary-pass",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "Successful documentCreate operations recorded by both live lanes during one ordinary CI pass protect Linear's retained-trash capacity. Deleted documents still count; initialization and failed-pass residue are reported separately as diagnostic detail.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1516,9 +1379,7 @@
         "id": "linear-live-documents-created-per-daily-pass",
         "file": "crates/onetaskgraph-linear-e2e/budgets.yaml",
         "description": "Successful documentCreate operations recorded by both live lanes during one daily CI pass protect Linear's retained-trash capacity. Deleted documents still count; initialization and failed-pass residue are reported separately as diagnostic detail.",
-        "labels": [
-          "linear"
-        ],
+        "labels": ["linear"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1545,9 +1406,7 @@
         "id": "live-janitor-requests-per-run",
         "file": "crates/onetaskgraph-live-janitor/budgets.yaml",
         "description": "Every REST and GraphQL request, under either token, sent by the scheduled executable to a loopback GitHub at the realistic scratch workload. Protects headroom on the shared GitHub credential while hourly cleanup drains residue.",
-        "labels": [
-          "github"
-        ],
+        "labels": ["github"],
         "measure": "reported",
         "command": [
           "cargo",
@@ -1574,14 +1433,9 @@
         "id": "onetaskgraph-pool-maintenance-seconds",
         "file": "pool-maintenance/budgets.yaml",
         "description": "Wall-clock seconds one steady-state run of this repository's declared pool maintenance takes, after one ordinary run's worth of new superseded builds, as cargo-prune-superseded reports it. It protects how long a regular post-run pass holds one of this repository's warm pool slots out of service.",
-        "labels": [
-          "host"
-        ],
+        "labels": ["host"],
         "measure": "reported",
-        "command": [
-          "./measure.sh",
-          "../target/pool-maintenance-evidence"
-        ],
+        "command": ["./measure.sh", "../target/pool-maintenance-evidence"],
         "unit": "seconds",
         "direction": "max",
         "threshold": 20.0,
@@ -1591,18 +1445,9 @@
         "id": "sdk-import-cpu-seconds",
         "file": "sdks/python/budgets.yaml",
         "description": "Median user+system CPU seconds, over 15 runs, of a fresh interpreter of the SDK's own environment importing onetaskgraph_sdk, validating one copy report the binary produced into CopyReport and exiting normally. It protects the start-up every SDK consumer pays, which only this repository can hold.",
-        "labels": [
-          "host",
-          "host-variable"
-        ],
+        "labels": ["host", "host-variable"],
         "measure": "reported",
-        "command": [
-          "uv",
-          "run",
-          "--frozen",
-          "python",
-          "measure_import.py"
-        ],
+        "command": ["uv", "run", "--frozen", "python", "measure_import.py"],
         "unit": "seconds",
         "direction": "max",
         "threshold": 0.35,
@@ -1615,9 +1460,7 @@
         {
           "id": "onetaskgraph-budget-report-command-seconds",
           "file": ".github/reporting/budgets.yaml",
-          "labels": [
-            "ci-report"
-          ],
+          "labels": ["ci-report"],
           "unit": "seconds",
           "direction": "max",
           "threshold": 120.0,
@@ -1935,10 +1778,7 @@
         "reason": "report-only measurement failed: bash exited with status 1; its stderr: release not found or unpublished"
       }
     ],
-    "enforcement_exclude_labels": [
-      "release-tail",
-      "report-only"
-    ]
+    "enforcement_exclude_labels": ["release-tail", "report-only"]
   },
   "baseline": []
 }

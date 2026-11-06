@@ -70,8 +70,8 @@ test("publication workload reconciles actual workflow condition variables", () =
 });
 
 const fixtureClasses = JSON.parse(read(".github/event-classes.json"));
-// Every branch runs the same four required jobs.
-const requiredNames = ["lint", "test-linux", "test-windows", "test-macos"];
+// Every branch runs the same five required jobs.
+const requiredNames = ["lint", "test-linux", "test-windows", "test-macos", "budgets"];
 
 test("workflow matrices, event fan-out and exact release head model record scheduling telemetry", () => {
   validatePublishControls();

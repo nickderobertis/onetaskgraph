@@ -79,6 +79,12 @@
     "check": {
       "executor": "nx:noop",
       "dependsOn": ["lint", "test", "budgets"]
+    },
+    "bootstrap": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:noop"
     }
   }
 }
