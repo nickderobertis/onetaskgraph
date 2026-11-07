@@ -91,7 +91,8 @@ for found in sorted(pathlib.Path("crates").glob("*/project.json"), key=lambda fo
         node = targets.get(target) if isinstance(targets, dict) else None
         if node is None:
             continue
-        command = node.get("options", {}).get("command") if isinstance(node, dict) else None
+        step = node.get("options") if isinstance(node, dict) else None
+        command = step.get("command") if isinstance(step, dict) else None
         if not isinstance(command, str) or not command.startswith(("cargo clippy ", "cargo check ")):
             refuse(path, f"its `{target}` target runs `{command}`, which is neither `cargo clippy` nor `cargo check`")
         out.append(command.replace(" --quiet", ""))
