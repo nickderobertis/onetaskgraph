@@ -67,7 +67,7 @@ github-graphql-node-count = "0.0.1"
 # The reporter of the Linear request budgets' runner (`crates/onetaskgraph-linear-e2e`). Exact,
 # because it is the release of the `onebudgetspec` package.json pins to judge it; that crate's
 # tests/e2e/budget_commands.rs fails when the two pins part.
-onebudgetspec-core = "=0.1.5"
+onebudgetspec-core = "=0.2.0"
 # Which image syntax in a content is inside code, and so is no asset reference: CommonMark's
 # code spans and code blocks, read by a parser rather than restated. No earlier floor than
 # 0.13.5: every 0.13 release before it is RUSTSEC-2026-0414, and a published crate's

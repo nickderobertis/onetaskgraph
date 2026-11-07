@@ -8,8 +8,14 @@ copy of this tree, so every row of the real catalog is proven. Reaching the rele
 codeload once is why a cold run needs a network; the job runs on Linux, so its proof does too.
 
 The figures of `onetaskgraph-ci-check-time` and `onetaskgraph-ci-job-count` are REPLAYED TELEMETRY,
-never live CI: the real onevcs reads this repository's recordings of v0.13.0 through ONEVCS_GH, with
-each pull request's jobs edited as `replay()` states.
+never live CI. On a pull request the real figures script reads its own run through the real `gh` from
+the double, which serves `recorded_jobs()`; on a push or a tag the real onevcs reads this repository's
+recordings of v0.13.0 through ONEVCS_GH, with each pull request's jobs edited as `replay()` states.
+
+`SavedResults` drives the whole path of a saved figure: this repository's real `budgets` targets under
+real Nx, a replayed cache hit included, ci.yml's real upload steps, the action's real download, the
+comment and the base push's history. `recorded_figures()` stands in for the workloads alone, replacing
+each command with one that reports a recorded figure.
 """
 import hashlib
 import importlib.util
@@ -54,12 +60,37 @@ TIME_METRIC = MetricName('report-command-seconds')
 RUNNER_TARGETS = {'x86_64': 'x86_64-unknown-linux-gnu', 'aarch64': 'aarch64-unknown-linux-gnu'}
 # The workload .github/reporting/budgets.yaml states for the job's own budget, and the command reads
 # the 20-request design total allows for.
-ROWS = 100
+ROWS = 60
 COMMITS = 20
-COMMANDS_READING_REST = 12
+SAVED_ARTIFACT_BYTES = 50_000
 UNJUDGED = 1_000_000
 # Below this many samples the action's report shows a row as having no baseline yet.
 MINIMUM_SAMPLES = 5
+# Exactly the budgets a pull request cannot measure or move, which the job leaves out.
+OMIT_LABEL = 'not-measured-on-pr'
+OMITTED = frozenset(BudgetId(identifier) for identifier in (
+    'onetaskgraph-cd-job-time', 'onetaskgraph-release-cycle-time', 'onetaskgraph-cd-job-count',
+    'onetaskgraph-release-read-requests', 'onetaskgraph-pr-read-requests', 'onetaskgraph-nx-cache-use',
+    'onetaskgraph-gate-time', 'sdk-import-cpu-seconds', 'github-plan-copy-real-seconds-unchanged',
+    'github-plan-copy-real-seconds-changed', 'github-plan-copy-real-seconds-first'))
+OMITTED_LINE = (f'{len(OMITTED)} budgets are left out because a pull request cannot measure them '
+                f'(label {OMIT_LABEL}).')
+NO_SAVED_RESULT = 'no saved result was found on this run'
+# Off a pull request's own run the CI-time pair reads a release, and this job holds no onevcs.
+FIGURES_NEED_ONEVCS = 'onevcs is not on PATH'
+LIVE_SESSION = BudgetId('github-live-session-points')
+# ci.yml's budgets targets test-linux runs, by the file each saves. Nx caches the three whose names
+# hold no test of its own to re-run; the other two always execute.
+CACHED_SAVING_TARGETS = {'onetaskgraph-live-janitor:budgets': 'onetaskgraph-live-janitor-budget-results.json',
+                         'onetaskgraph-linear-e2e:budgets': 'onetaskgraph-linear-e2e-budget-results.json',
+                         'onetaskgraph-github-projects-e2e:budgets': 'onetaskgraph-github-projects-e2e-budget-results.json'}
+UNCACHED_SAVING_TARGETS = {'github-workflow-policy:budgets': 'github-workflow-policy-budget-results.json',
+                           'report-job:budgets': 'report-job-budget-results.json'}
+SAVING_BUDGET_FILES = ('crates/onetaskgraph-live-janitor/budgets.yaml', 'crates/onetaskgraph-linear-e2e/budgets.yaml',
+                       'crates/onetaskgraph-github-projects-e2e/budgets.yaml', 'pool-maintenance/budgets.yaml',
+                       '.github/policy/budgets.yaml', '.github/reporting/budgets.yaml')
+LONGEST_JOB_SECONDS = 1234
+RECORDED_OWN_SECONDS = 77.5
 TRANSFER_SERVICES = ('artifact-service', 'blob-storage', 'object-storage', 'release-host', 'package-index')
 
 
@@ -120,6 +151,46 @@ class ReplayedFigures:
 
     provenance: str
     figures: dict[int, dict[BudgetId, ReplayedFigure]]
+
+
+class RecordedFigures(NamedTuple):
+    """What `recorded_figures` installed in a copy of the tree."""
+
+    figures: dict[BudgetId, float]
+    log: Path
+
+
+class SavingTree(NamedTuple):
+    """A journey over a copy of this tree whose saving targets judge recorded figures."""
+
+    journey: 'Journey'
+    figures: dict[BudgetId, float]
+    log: Path
+
+
+class SavedFigure(NamedTuple):
+    """One budget's result in a saved check report."""
+
+    actual: float
+    verdict: Verdict
+
+
+class CommandOutcome(NamedTuple):
+    """How one check's real entry point ended."""
+
+    status: int
+    output: str
+
+
+class EnforcingCheck(NamedTuple):
+    """A real check of the left-out budgets, and how it treats one over its line."""
+
+    name: str
+    budgets_file: str
+    command: list[str]
+    status: int
+    warns: bool
+    budgets: frozenset[BudgetId]
 
 
 class Released(NamedTuple):
@@ -184,10 +255,56 @@ def released_action():
     harness = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(harness)
     harness._cached['archive'] = archive
+    # The harness knows the artifact actions the action itself pins. ci.yml's upload steps pin their
+    # own, and it is that release of the action this file proves.
+    pinned_by_the_action = harness.artifact_action
+
+    # llmlint: ignore[protocol_based_seams] The released harness is one fixed module with no seam to implement; this wraps its one resolver for one more action, and only this file replaces it.
+    def artifact_action(uses):
+        name, reference = uses.split('@', 1)
+        if name == 'actions/upload-artifact' and uses in ci_upload_actions():
+            return harness._action_entry('upload-artifact', (reference, reference), 'dist/upload/index.js')
+        return pinned_by_the_action(uses)
+
+    harness.artifact_action = artifact_action
     return Released(tag, tree, harness)
 
 
 TAG, TREE, harness = (None, None, None)
+
+
+def ci_upload_step(job_name):
+    """The one step of ci.yml's job uploading saved budget results."""
+    job = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())['jobs'][job_name]
+    steps = [step for step in job['steps'] if str(step.get('with', {}).get('name', '')).startswith('budget-check-results-')]
+    assert len(steps) == 1, (job_name, steps)
+    return steps[0]
+
+
+def ci_upload_actions():
+    return {ci_upload_step(job_name)['uses'] for job_name in ('test-linux', 'lint')}
+
+
+def recorded_jobs(longest_seconds):
+    """A pull request's jobs as GitHub really listed them, with this journey's `budgets` job running.
+
+    The first job lasts `longest_seconds`, the others less, and `budgets` is added in progress: the job
+    reading this listing, which has no time yet and counts toward the job count alone.
+    """
+    recording = next(path for path in sorted(RECORDINGS.glob('jobs-of-pr-*.http')))
+    text = recording.read_text()
+    split = text.index('\r\n\r\n') + 4 if '\r\n\r\n' in text else text.index('\n\n') + 2
+    # llmlint: ignore-block[modern_domain_modeling] This edits GitHub's recorded response JSON in place and serves it back whole; a model would drop every field the edit does not name.
+    jobs = json.loads(text[split:])['jobs']
+    day = jobs[0]['started_at'][:11]
+    minutes, seconds = divmod(longest_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    finished = [dict(job, started_at=f'{day}01:00:00Z', completed_at=f'{day}01:00:30Z', steps=[]) for job in jobs]
+    finished[0]['completed_at'] = f'{day}{1 + hours:02}:{minutes:02}:{seconds:02}Z'
+    running = dict(finished[-1], id=finished[-1]['id'] + 1, name='budgets', status='in_progress', conclusion=None,
+                   completed_at=None)
+    # llmlint: ignore-end[modern_domain_modeling]
+    return [*finished, running]
 
 
 def real_onevcs():
@@ -230,6 +347,7 @@ def job_environment(path, run_id, overrides):
             'DBUS_SESSION_BUS_ADDRESS': 'disabled:',
             'GITHUB_REPOSITORY': harness.REPOSITORY,
             'GITHUB_RUN_ID': str(run_id),
+            'RUNNER_NAME': 'hosted-runner',
             **overrides}
 
 
@@ -313,10 +431,27 @@ class Journey:
         self.path = runner_bin(self.root / 'runner-bin', self.cargo_started, self.bus_requests)
         self.next_run = 1000
         self.environment = {}
+        self.release_environment = {}
+        self.longest_seconds = LONGEST_JOB_SECONDS
+        self.serve_own_run()
         # This test records what the job cost; report-job:budgets alone judges it.
         own = self.repository.path / '.github/reporting/budgets.yaml'
         own.write_text(own.read_text().replace('threshold: 120', f'threshold: {UNJUDGED}'))
         self.base = self.repository.commit('the tree')
+
+    def serve_own_run(self):
+        """GitHub's job listing of a run, which the harness the action ships has no need of."""
+        answer_otherwise = self.host.read
+
+        # llmlint: ignore[protocol_based_seams] The released harness's host is one fixed class with no seam to implement; this adds the one GitHub route it has no need of, and only this file replaces it.
+        def read(handler, path):
+            if re.fullmatch(r'/repos/owner/repo/actions/runs/\d+/jobs', path.split('?')[0]) is None:
+                return answer_otherwise(handler, path)
+            jobs = recorded_jobs(self.longest_seconds)
+            # llmlint: ignore[modern_domain_modeling] This is GitHub's job-listing response on the wire, and the figures script validates its shape.
+            return self.host.reply(handler, 200, json.dumps({'total_count': len(jobs), 'jobs': jobs}).encode())
+
+        self.host.read = read
 
     def add_budgets(self, relative, budgets):
         self.repository.write(relative, harness.budgets_yaml([budget.harness_entry() for budget in budgets]))
@@ -326,9 +461,13 @@ class Journey:
 
     def run(self, event_name, sha, inputs=None, **options):
         self.next_run += 1
+        # What a runner sets for every step: a pull request's figures read its own run, and only a
+        # push or a tag sees the release the recordings serve.
+        overrides = {**self.environment, 'GITHUB_EVENT_NAME': event_name,
+                     **(self.release_environment if event_name != 'pull_request' else {})}
         job = harness.Job(self.host, self.repository, event_name, sha, inputs=inputs or job_inputs(),
                           run_id=self.next_run, action_path=TREE,
-                          environment=job_environment(self.path, self.next_run, self.environment), **options)
+                          environment=job_environment(self.path, self.next_run, overrides), **options)
         self.test.addCleanup(job.close)
         return job.run()
 
@@ -345,8 +484,9 @@ class Journey:
                         event=harness.event_pull_request(1, head, self.base, **event))
 
     def replaying(self, longest_seconds):
-        """A budget command in this job sees a release and the real onevcs, over the recordings."""
-        self.environment = {
+        """A base push sees a release and the real onevcs, over the recordings; a pull request reads its run."""
+        self.longest_seconds = longest_seconds
+        self.release_environment = {
             'ONEVCS': str(replay(Path(tempfile.mkdtemp(dir=self.root)), longest_seconds)),
             'ONEVCS_HOME': str(self.root / 'onevcs-home'),
             'GITHUB_REPOSITORY': 'nickderobertis/onetaskgraph',
@@ -360,6 +500,13 @@ def table_row(markdown, budget):
     rows = [line for line in markdown.splitlines() if line.startswith('|') and f'/ {budget} ' in line]
     assert len(rows) == 1, (budget, rows)
     return rows[0]
+
+
+def history_figures(job, sha):
+    """Each budget's figure in the rolling history entry of `sha`, which `job` saved."""
+    history = json.loads(job.host.artifact_files(job.run_id)['rolling-history.json'])
+    [entry] = [saved_run for saved_run in history['runs'] if saved_run['head_sha'] == sha]
+    return {result['id']: result['actual'] for result in entry['results']['results']}
 
 
 def measured(saved_run):
@@ -380,17 +527,24 @@ def catalog():
     return found
 
 
-def expected_reason(budget):
-    """Why this production budget cannot measure in the job, in the words of its row."""
-    match budget.command:
-        case ['bash', 'scripts/actions-budget-figures.sh', 'cache-use', *_]:
-            return 'no release: pass --release TAG'
-        case ['bash', 'scripts/actions-budget-figures.sh', *_]:
-            return 'onevcs is not on PATH'
-        case ['uv', *_]:
-            return 'needs uv'
-        case [*_, named]:
-            return f'reads {named}'
+def shown():
+    """The production budgets a pull request's report has a row for."""
+    return catalog().keys() - OMITTED
+
+
+def assert_left_out_and_counted(test, job):
+    """The budgets a pull request cannot measure: no row, no command run, and one line counting them."""
+    rows = job.rows()
+    run = job.saved('budget-run.json')
+    outcomes = {result['id'] for result in run['results']['results']} | {entry['id'] for entry in run['unavailable']}
+    markdown = job.markdown()
+    for identifier in OMITTED:
+        test.assertNotIn(identifier, rows)
+        test.assertNotIn(identifier, outcomes, 'an omitted budget is neither run nor reported')
+        test.assertEqual([line for line in markdown.splitlines() if line.startswith('|') and f'/ {identifier} ' in line], [])
+    test.assertEqual(sum(OMITTED_LINE in line for line in markdown.splitlines()), 1, markdown)
+    test.assertEqual(len([budget for budget in run['catalog'] if OMIT_LABEL in budget['labels']]), len(OMITTED),
+                     'budget-run.json keeps the catalog whole')
 
 
 class SessionBus(unittest.TestCase):
@@ -416,28 +570,49 @@ class SessionBus(unittest.TestCase):
 
 
 class ProductionCatalog(unittest.TestCase):
-    def test_every_budget_has_one_row_the_job_stays_green_and_nothing_builds(self):
+    def test_every_budget_a_pull_request_can_read_has_one_row_the_job_stays_green_and_nothing_builds(self):
         journey = Journey(self)
         job = journey.pull_request()
         self.assertEqual(job.exit_code, 0, job.stdout)
-        budgets = catalog()
         rows = job.rows()
-        self.assertEqual(set(rows), set(budgets))
+        self.assertEqual(set(rows), shown())
+        self.assertEqual(len(rows) + len(OMITTED), len(catalog()))
         run = job.saved('budget-run.json')
         verdicts = {result['id']: result['verdict'] for result in run['results']['results']}
-        self.assertEqual(verdicts, {OWN: 'within'}, 'the one command that can run here')
+        self.assertEqual(verdicts, {OWN: 'within', CHECK_TIME: 'within', JOB_COUNT: 'within'},
+                         'the commands that can run here')
         self.assertFalse(journey.cargo_started.exists(), 'a budget started a build on the runner')
         reasons = {entry['id']: entry['reason'] for entry in run['unavailable']}
         markdown = job.markdown()
         self.assertIn(job.sha, markdown)
-        for identifier, budget in budgets.items():
-            if identifier == OWN:
-                continue
-            self.assertIn(expected_reason(budget), reasons[identifier], identifier)
+        for identifier in shown() - set(verdicts):
+            self.assertEqual(reasons[identifier], NO_SAVED_RESULT, identifier)
             row = table_row(markdown, identifier)
             self.assertIn('unavailable', row, row)
-            self.assertIn(expected_reason(budget), row, row)
+            self.assertIn(NO_SAVED_RESULT, row, row)
         self.assertIn('report-only', table_row(markdown, CHECK_TIME))
+        assert_left_out_and_counted(self, job)
+
+    def test_a_pull_request_reports_its_own_runs_jobs_with_one_read_per_figure(self):
+        journey = Journey(self)
+        journey.host.clear_requests()
+        job = journey.pull_request()
+        self.assertEqual(job.exit_code, 0, job.stdout)
+        rows = job.rows()
+        self.assertEqual(rows[CHECK_TIME]['current'], LONGEST_JOB_SECONDS, 'the job still running has no time yet')
+        self.assertEqual(rows[JOB_COUNT]['current'], len(recorded_jobs(LONGEST_JOB_SECONDS)), 'and still counts')
+        self.assertEqual(rows[JOB_COUNT]['current'], 5)
+        self.assertEqual(journey.host.count(fr'/runs/{job.run_id}/jobs'), 2, 'one read per figure')
+        self.assertEqual(journey.host.count(r'/releases/tags|/compare'), 0, 'no release is read')
+
+    def test_a_base_push_with_no_pull_request_says_why_the_ci_time_rows_have_no_figure(self):
+        journey = Journey(self)
+        base = journey.push()
+        self.assertEqual(base.exit_code, 0, base.stdout)
+        reasons = {entry['id']: entry['reason'] for entry in base.saved('budget-run.json')['unavailable']}
+        for identifier in (CHECK_TIME, JOB_COUNT):
+            self.assertIn(FIGURES_NEED_ONEVCS, reasons[identifier])
+        self.assertEqual(journey.host.count(r'/runs/\d+/jobs'), 0)
 
     def test_a_second_head_updates_the_one_comment_and_a_base_push_saves_the_same_results(self):
         journey = Journey(self)
@@ -494,7 +669,7 @@ class ProductionCatalog(unittest.TestCase):
         self.assertEqual(rows[OWN]['baseline_n'], MINIMUM_SAMPLES)
         self.assertNotIn('baseline unavailable', rows[OWN].get('unavailable', ''), rows[OWN])
         self.assertNotIn('baseline unavailable', table_row(enough.markdown(), OWN))
-        unmeasured = catalog().keys() - {OWN}
+        unmeasured = shown() - {OWN}
         self.assertEqual({rows[identifier]['baseline_n'] for identifier in unmeasured}, {0})
 
     def test_a_fork_gets_a_summary_and_artifact_with_no_comment(self):
@@ -594,11 +769,11 @@ class Replayed(unittest.TestCase):
             job = journey.run('push', journey.base)
             shutil.copytree(job.temp / 'onebudgetspec-action/tools', tools, dirs_exist_ok=True)
         environment = {'PATH': os.pathsep.join([str(tools), journey.path]), 'HOME': str(journey.root),
-                       **journey.environment}
+                       **journey.release_environment}
         figures = {}
         for longest, verdict in ((2400, 'over'), (1200, 'within')):
             journey.replaying(longest)
-            environment['ONEVCS'] = journey.environment['ONEVCS']
+            environment['ONEVCS'] = journey.release_environment['ONEVCS']
             checked = subprocess.run(
                 ['onebudgetspec', 'check', '--json', 'budgets.yaml', '--id', CHECK_TIME, '--id', JOB_COUNT,
                  '--id', CD_JOB_COUNT],
@@ -620,26 +795,33 @@ class WholeJob(unittest.TestCase):
     """The workload the job's budget states: its figures are recorded, never asserted against a line."""
 
     def catalog(self):
-        write = 'echo "{\\"value\\": 1}" > "$ONEBUDGETSPEC_RESULT"'
+        """60 rows as the real catalog divides them: the job's own, its run's pair, the left out, the saved."""
+        budgets = [FixtureBudget(OWN, ('onebudgetspec-github-action', 'telemetry', '--metric', TIME_METRIC,
+                                       '--input', 'report-job.json'),
+                                 unit='seconds', labels=('ci-report',), threshold=UNJUDGED)]
         counted = 'echo "$ONEBUDGETSPEC_BUDGET_ID" >> "$JOURNEY_COUNTS"'
-        budgets = [
-            FixtureBudget(OWN, ('onebudgetspec-github-action', 'telemetry', '--metric', TIME_METRIC,
-                                '--input', 'report-job.json'),
-                          unit='seconds', labels=('ci-report',), threshold=UNJUDGED),
-            FixtureBudget(BudgetId('not-on-this-runner'), ('tool-this-runner-lacks',)),
-            FixtureBudget(BudgetId('saved-telemetry-absent'), ('bash', '-c', counted, 'target/absent/record.json')),
-            FixtureBudget(BudgetId('a-labelled-one'), ('bash', '-c', f'{counted}; {write}'), labels=('ci-report',),
-                          unit='percent', direction='min', threshold=0),
-            FixtureBudget(BudgetId('an-elapsed-one'), ('bash', '-c', counted), measure='elapsed', unit='seconds'),
-        ]
-        for index in range(COMMANDS_READING_REST):
-            read = f'gh api repos/owner/repo/commits/{index} > /dev/null || exit 1'
-            budgets.append(FixtureBudget(BudgetId(f'reads-rest-{index}'), ('bash', '-c', f'{counted}; {read}; {write}'),
-                                         unit='requests'))
+        read = 'gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" > /dev/null || exit 1'
+        write = 'echo "{\\"value\\": 1}" > "$ONEBUDGETSPEC_RESULT"'
+        for identifier in (CHECK_TIME, JOB_COUNT):
+            budgets.append(FixtureBudget(identifier, ('bash', '-c', f'{counted}; {read}; {write}'), labels=('release-tail',)))
+        for index in range(len(OMITTED)):
+            budgets.append(FixtureBudget(BudgetId(f'left-out-{index}'), ('bash', '-c', f'{counted}; {write}'),
+                                         labels=(OMIT_LABEL,)))
         while len(budgets) < ROWS:
-            budgets.append(FixtureBudget(BudgetId(f'local-{len(budgets)}'), ('bash', '-c', f'{counted}; {write}'),
-                                         unit='bytes'))
+            budgets.append(FixtureBudget(BudgetId(f'saved-{len(budgets)}'), ('tool-this-runner-lacks', 'telemetry.json')))
         return budgets
+
+    def saved_results(self, identifiers):
+        """A check's results of the stated size, each with a breakdown that does not compress away."""
+        digest = hashlib.sha256()
+        results = []
+        for identifier in identifiers:
+            pieces = []
+            for _ in range(SAVED_ARTIFACT_BYTES // (32 * len(identifiers))):
+                digest.update(b'.')
+                pieces.append(digest.hexdigest())
+            results.append(harness.check_result(identifier, 1, detail=''.join(pieces)))
+        return harness.check_report(*results)
 
     def test_record_one_complete_job(self):
         journey = Journey(self)
@@ -647,6 +829,7 @@ class WholeJob(unittest.TestCase):
             (journey.repository.path / path).unlink()
         budgets = self.catalog()
         identifiers = [budget.id for budget in budgets]
+        saved = [identifier for identifier in identifiers if identifier.startswith('saved-')]
         journey.add_budgets('budgets.yaml', budgets)
         counts = journey.root / 'counts'
         journey.environment = {'JOURNEY_COUNTS': str(counts)}
@@ -664,35 +847,48 @@ class WholeJob(unittest.TestCase):
         journey.host.attach(519, 'budget-results', zip_of('rolling-history.json', json.dumps(history)))
 
         journey.base = heads[-1]
-        figures = []
-        for label, start in (('pull_request', journey.pull_request), ('push', lambda: journey.run(
-                'push', heads[-1], attempt=2, register=False))):
-            counts.unlink(missing_ok=True)
-            journey.host.clear_requests()
-            journey.refuse(Refusal(r'artifacts\?', 429, 1, retry_after=1))
-            job = start()
-            self.assertEqual(job.exit_code, 0, job.stdout)
-            self.assertEqual(job.outcomes['final-upload'], 'success', job.stdout)
-            self.assertEqual(len(job.rows()), ROWS)
-            self.assertEqual(len(job.saved('comparison-input.json')['baseline']), COMMITS - (label == 'push'))
-            ran = counts.read_text().split()
-            self.assertEqual(sorted(ran), sorted(set(ran)), 'each command once')
-            self.assertEqual(set(ran), set(identifiers) - {OWN, 'not-on-this-runner', 'saved-telemetry-absent'})
-            reasons = {entry['id']: entry['reason'] for entry in job.saved('budget-run.json')['unavailable']}
-            self.assertIn('tool-this-runner-lacks', reasons['not-on-this-runner'])
-            self.assertIn('target/absent/record.json', reasons['saved-telemetry-absent'])
-            self.assertEqual(set(reasons), {'not-on-this-runner', 'saved-telemetry-absent'})
-            figures.append(boundary_record(journey.host, job.saved('report-job.json')))
-            self.assertEqual(figures[-1]['metrics'][REST_METRIC]['value'], journey.host.count(''))
+        artifact = harness.zipped({'report.json': self.saved_results(saved)})
+        journey.host.attach(journey.next_run + 1, 'budget-check-results-test-linux', artifact)
+        counts.unlink(missing_ok=True)
+        journey.host.clear_requests()
+        journey.refuse(Refusal(r'artifacts\?', 429, 1, retry_after=1))
+        pull_request = journey.pull_request()
+        figures = [self.assert_whole(journey, pull_request, identifiers, saved, COMMITS)]
+
+        journey.repository.git('checkout', '--quiet', '--force', 'main')
+        merge = journey.repository.commit('the squash')
+        journey.host.add_run(pull_request.run_id, pull_request.sha, event='pull_request', branch='change', minute=600)
+        journey.host.merge_pull_request(merge, pull_request.sha)
+        counts.unlink(missing_ok=True)
+        journey.host.clear_requests()
+        journey.refuse(Refusal(r'artifacts\?', 429, 1, retry_after=1))
+        push = journey.run('push', merge)
+        figures.append(self.assert_whole(journey, push, identifiers, saved, COMMITS))
+        self.assertGreater(journey.host.count(fr'/runs/{pull_request.run_id}/artifacts'), 0, 'the merged run is read')
+        self.assertFalse(counts.exists(), 'a figure the merged run holds runs no command')
         TELEMETRY.mkdir(exist_ok=True)
         # llmlint: ignore-block[modern_domain_modeling] This is the telemetry file the released reader reads, restated field by field in the action's own shape.
         worst = max(figures, key=lambda record: record['metrics'][TIME_METRIC]['value'])
         worst['metrics'][REST_METRIC] = max((record['metrics'][REST_METRIC] for record in figures),
                                             key=lambda metric: metric['value'])
         # llmlint: ignore-end[modern_domain_modeling]
+        worst['metrics'][TIME_METRIC]['detail'] += f'; workload: {ROWS} rows, {COMMITS} commits, {len(artifact)} zipped saved-results bytes'
         (TELEMETRY / 'report-job.json').write_text(json.dumps(worst, indent=2))
         tools = STATE / 'tools'
-        shutil.copytree(job.temp / 'onebudgetspec-action/tools', tools, dirs_exist_ok=True)
+        shutil.copytree(push.temp / 'onebudgetspec-action/tools', tools, dirs_exist_ok=True)
+
+    def assert_whole(self, journey, job, identifiers, saved, commits):
+        """What every budgets job of this workload shows, and its telemetry with the requests restated."""
+        self.assertEqual(job.exit_code, 0, job.stdout)
+        self.assertEqual(job.outcomes['final-upload'], 'success', job.stdout)
+        rows = job.rows()
+        self.assertEqual(set(rows), {identifier for identifier in identifiers if not identifier.startswith('left-out-')})
+        self.assertEqual(len(rows) + len(OMITTED), ROWS)
+        self.assertEqual({rows[identifier]['current'] for identifier in saved}, {1})
+        self.assertLessEqual(len(job.saved('comparison-input.json')['baseline']), commits)
+        figures = boundary_record(journey.host, job.saved('report-job.json'))
+        self.assertEqual(figures['metrics'][REST_METRIC]['value'], journey.host.count(''))
+        return figures
 
 
 def boundary_record(host, telemetry):
@@ -713,6 +909,293 @@ def zip_of(name, content):
     with zipfile.ZipFile(buffer, 'w') as archive:
         archive.writestr(name, content)
     return buffer.getvalue()
+
+
+def recorded_figures(tree, identifiers, over=()):
+    """Replace each named budget's command in a copy of the tree with one reporting a recorded figure.
+
+    Only the workload is stood in for: the id, labels, unit, direction and threshold are the production
+    budget's, and each is what the target then judges. The figure sits on the threshold, or just past it
+    for one named in `over`. Returns the figures, and the file the commands log each run to.
+    """
+    program = tree.parent / 'recorded-figure'
+    log = tree.parent / 'recorded-figure-runs'
+    figures_file = tree.parent / 'recorded-figures.json'
+    program.write_text('#!/bin/sh\n'
+                       f'echo "$ONEBUDGETSPEC_BUDGET_ID" >> "{log}"\n'
+                       f'jq -c --arg id "$ONEBUDGETSPEC_BUDGET_ID" \'{{value: .[$id]}}\' "{figures_file}" '
+                       '> "$ONEBUDGETSPEC_RESULT"\n')
+    program.chmod(0o755)
+    figures = {}
+    for name in identifiers:
+        path = tree / name
+        # llmlint: ignore-block[modern_domain_modeling] This edits one field of a budgets file in place and writes it back whole; a model would drop every field the edit does not name.
+        document = yaml.safe_load(path.read_text())
+        for budget in document['budgets']:
+            # The live lane saves nothing without a credential, and the action knows the job's own
+            # budget by its command, whose telemetry the caller records.
+            if budget['id'] in (LIVE_SESSION, OWN) or budget['id'] not in identifiers[name]:
+                continue
+            step = 1 if budget['direction'] == 'max' else -1
+            figures[budget['id']] = budget['threshold'] + (step if budget['id'] in over else 0)
+            budget['command'] = [str(program)]
+        # llmlint: ignore-end[modern_domain_modeling]
+        path.write_text(yaml.safe_dump(document))
+    figures_file.write_text(json.dumps(figures))
+    return RecordedFigures(figures, log)
+
+
+def budget_ids(tree, name):
+    return {budget['id'] for budget in yaml.safe_load((tree / name).read_text())['budgets']}
+
+
+def host_environment(tree):
+    """What a job's own step holds beyond its tools. Nothing of an outer Nx run reaches a nested one."""
+    return {'PATH': os.environ['PATH'], 'HOME': str(tree.parent), 'NX_DAEMON': 'false', 'NX_TUI': 'false',
+            'NX_NO_CLOUD': 'true', 'CI': '1', 'DBUS_SESSION_BUS_ADDRESS': 'disabled:',
+            'UV_CACHE_DIR': os.environ.get('UV_CACHE_DIR', str(Path.home() / '.cache/uv'))}
+
+
+def run_in(tree, command, **options):
+    return subprocess.run(command, cwd=tree, env=host_environment(tree), capture_output=True, text=True, check=False,
+                          timeout=900, **options)
+
+
+def nx_budgets(tree, target):
+    """One `budgets` target, as ci-job.sh runs it after its `test`, which already recorded the figure."""
+    return run_in(tree, [str(ROOT / 'node_modules/.bin/nx'), 'run', target, '--excludeTaskDependencies', '--outputStyle=static'])
+
+
+class SavedResults(unittest.TestCase):
+    """A figure's whole path: target, Nx's outputs, ci.yml's upload, the action's download, the comment."""
+
+    def saving_tree(self, over=()):
+        """A copy of this tree whose Nx can run, and the budgets its saving targets judge recorded figures for."""
+        journey = Journey(self)
+        tree = journey.repository.path
+        for link in ('node_modules', '.github/node_modules'):
+            (tree / link).symlink_to(ROOT / link)
+        identifiers = {name: budget_ids(tree, name) for name in SAVING_BUDGET_FILES}
+        recorded = recorded_figures(tree, identifiers, over=over)
+        journey.base = journey.repository.commit('recorded figures')
+        # report-job:budgets reads with the release's own reader, already fetched for this run, over
+        # the recording report-job:test made.
+        shutil.copytree(TREE, tree / 'target/report-job' / TAG)
+        recording = tree / '.github/reporting/.telemetry/report-job.json'
+        recording.parent.mkdir()
+        # llmlint: ignore[modern_domain_modeling] The telemetry file the released reader reads, in the action's own shape.
+        recording.write_text(json.dumps({'schema_version': 1, 'labels': ['ci-report'], 'metrics': {
+            TIME_METRIC: {'value': RECORDED_OWN_SECONDS, 'detail': 'recorded', 'unavailable': None}}}))
+        return SavingTree(journey, recorded.figures, recorded.log)
+
+    def upload(self, journey, job_name, run_id):
+        """ci.yml's real upload step of `job_name`, by the real action, to the doubled results service."""
+        step = ci_upload_step(job_name)
+        self.assertEqual(step['with']['path'], 'target/budget-results/')
+        uploader = harness.Job(journey.host, journey.repository, 'pull_request', 'head', run_id=run_id, action_path=TREE)
+        self.addCleanup(uploader.close)
+        # llmlint: ignore[modern_domain_modeling] This is the expression context the released harness's Expression reads, in its own shape.
+        context = {'inputs': {}, 'github': uploader.github, 'steps': {}, 'runner': {'temp': str(uploader.temp)}}
+        output = uploader.temp / 'upload-output'
+        outcome, _ = uploader._artifact_action(step, harness.Expression(context), output)
+        self.assertEqual(outcome, 'success', uploader.stdout)
+        return journey.host.artifact_files(run_id, step['with']['name'])
+
+    def artifact_figures(self, files):
+        """Each budget's figure and verdict across an artifact's check reports."""
+        results = [result for content in files.values() for result in json.loads(content)['results']]
+        return {result['id']: SavedFigure(result['actual'], result['verdict']) for result in results}
+
+    def another_jobs_checkout(self, journey):
+        """`budgets` checks out afresh: neither a result nor what measured it reaches it."""
+        shutil.rmtree(journey.repository.path / 'target')
+        shutil.rmtree(journey.repository.path / '.github/reporting/.telemetry')
+
+    def test_a_saved_figure_travels_from_its_target_to_the_row_and_on_into_the_base_history(self):
+        journey, figures, log = self.saving_tree()
+        tree = journey.repository.path
+
+        # Each target saves, and a replayed hit restores the same bytes without measuring again.
+        saved_files = {}
+        for target, name in (CACHED_SAVING_TARGETS | UNCACHED_SAVING_TARGETS).items():
+            ran = nx_budgets(tree, target)
+            self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+            self.assertNotIn('local cache', ran.stdout, target)
+            saved_files[name] = (tree / 'target/budget-results' / name).read_bytes()
+        log.unlink()
+        for target, name in CACHED_SAVING_TARGETS.items():
+            (tree / 'target/budget-results' / name).unlink()
+            replayed = nx_budgets(tree, target)
+            self.assertEqual(replayed.returncode, 0, replayed.stdout + replayed.stderr)
+            self.assertIn('local cache', replayed.stdout, target)
+            self.assertEqual((tree / 'target/budget-results' / name).read_bytes(), saved_files[name], target)
+        self.assertFalse(log.exists(), 'a cache hit measures nothing')
+
+        # The release pull request's lint step, through its real recipe.
+        pool = run_in(tree, ['just', 'pool-maintenance-budget'])
+        self.assertEqual(pool.returncode, 0, pool.stdout + pool.stderr)
+        pool_results = (tree / 'target/budget-results/pool-maintenance-budget-results.json').read_bytes()
+        (tree / 'target/budget-results/pool-maintenance-budget-results.json').unlink()
+
+        # test-linux's upload, of the restored files alone, and then lint's.
+        run_id = journey.next_run + 1
+        uploaded = self.upload(journey, 'test-linux', run_id)
+        self.assertEqual({name: uploaded[name] for name in saved_files}, saved_files)
+        self.assertEqual(set(uploaded), set(saved_files), 'what the targets saved and nothing else')
+        shutil.rmtree(tree / 'target/budget-results')
+        (tree / 'target/budget-results').mkdir()
+        (tree / 'target/budget-results/pool-maintenance-budget-results.json').write_bytes(pool_results)
+        uploaded_by_lint = self.upload(journey, 'lint', run_id)
+        self.assertEqual(set(uploaded_by_lint), {'pool-maintenance-budget-results.json'})
+        expected = self.artifact_figures({**uploaded, **uploaded_by_lint})
+        self.assertEqual({identifier: saved.actual for identifier, saved in expected.items() if identifier != OWN},
+                         {identifier: figure for identifier, figure in figures.items() if identifier not in OMITTED})
+        self.assertIn(OWN, expected, 'report-job:budgets saved a figure, which the row must not take')
+        self.assertNotIn(LIVE_SESSION, expected, 'no credential, so the live lane saved nothing')
+        self.another_jobs_checkout(journey)
+
+        log.unlink(missing_ok=True)
+        journey.path = f'{log.parent}{os.pathsep}{journey.path}'
+        pull_request = journey.pull_request()
+        self.assertEqual(pull_request.exit_code, 0, pull_request.stdout)
+        self.assertEqual(pull_request.outcomes['saved-results'], 'success', pull_request.stdout)
+        rows = pull_request.rows()
+        markdown = pull_request.markdown()
+        for identifier, saved in expected.items():
+            if identifier in OMITTED or identifier == OWN:
+                continue
+            self.assertEqual((rows[identifier]['current'], rows[identifier]['verdict']), (saved.actual, saved.verdict), identifier)
+            self.assertIn(f'{saved.actual:g}'.split('.')[0], table_row(markdown, identifier).replace(',', ''), identifier)
+        own_figure = pull_request.saved('report-job.json')['metrics'][TIME_METRIC]['value']
+        self.assertEqual(rows[OWN]['current'], own_figure, "the job's own figure is its own")
+        self.assertEqual(expected[OWN].actual, RECORDED_OWN_SECONDS)
+        self.assertNotEqual(rows[OWN]['current'], RECORDED_OWN_SECONDS)
+        self.assertFalse(log.exists(), 'a budget with a saved result runs no command here')
+
+        self.assertNotIn('current', rows[LIVE_SESSION], rows[LIVE_SESSION])
+        self.assertEqual(rows[LIVE_SESSION]['unavailable'], NO_SAVED_RESULT)
+        row = table_row(markdown, LIVE_SESSION)
+        self.assertIn(NO_SAVED_RESULT, row)
+        self.assertNotRegex(row.split('|')[3], r'\d', row)
+        self.assertEqual(rows[CHECK_TIME]['current'], LONGEST_JOB_SECONDS)
+        assert_left_out_and_counted(self, pull_request)
+        self.assertIn(OMITTED_LINE, journey.host.comments[0]['body'])
+        self.assertTrue(journey.host.artifact_files(pull_request.run_id))
+
+        # The merge, whose push runs no test job: every figure in its history entry is that run's.
+        journey.repository.git('checkout', '--quiet', 'main')
+        merge = journey.repository.commit('the squash')
+        journey.host.add_run(pull_request.run_id, pull_request.sha, event='pull_request', branch='change', minute=600)
+        journey.host.merge_pull_request(merge, pull_request.sha)
+        journey.host.clear_requests()
+        push = journey.run('push', merge)
+        self.assertEqual(push.exit_code, 0, push.stdout)
+        self.assertEqual(journey.host.count(r'/runs/\d+/jobs'), 0, "the push's own command read no job")
+        self.assertEqual(journey.host.comments[0]['body'].count(OMITTED_LINE), 1, 'it posts nothing')
+        self.assertFalse(log.exists(), "those budgets' commands do not run in this job")
+        taken = history_figures(push, merge)
+        merged_figures = {result['id']: result['actual'] for result in pull_request.saved('budget-run.json')['results']['results']}
+        for identifier, saved in expected.items():
+            if identifier not in OMITTED and identifier != OWN:
+                self.assertEqual(taken[identifier], saved.actual, identifier)
+        self.assertEqual(taken[CHECK_TIME], merged_figures[CHECK_TIME])
+        self.assertEqual(taken[JOB_COUNT], merged_figures[JOB_COUNT])
+        self.assertFalse(set(taken) & OMITTED)
+
+    def test_an_over_figure_is_saved_and_fails_the_report_while_an_unreadable_file_has_no_number(self):
+        janitor = BudgetId('live-janitor-requests-per-run')
+        journey, figures, _ = self.saving_tree(over={janitor})
+        tree = journey.repository.path
+        failed = nx_budgets(tree, 'onetaskgraph-live-janitor:budgets')
+        self.assertEqual(failed.returncode, 1, failed.stdout + failed.stderr)
+        run_id = journey.next_run + 1
+        (tree / 'target/budget-results/broken.json').write_text('{ not a report')
+        uploaded = self.upload(journey, 'test-linux', run_id)
+        self.assertEqual(self.artifact_figures({'r': uploaded['onetaskgraph-live-janitor-budget-results.json']}),
+                         {janitor: SavedFigure(figures[janitor], 'over')})
+        self.another_jobs_checkout(journey)
+        job = journey.pull_request()
+        self.assertEqual(job.exit_code, 1, 'an enforced saved verdict fails the job')
+        row = job.rows()[janitor]
+        self.assertEqual((row['verdict'], row['current']), ('over', figures[janitor]))
+        self.assertIn('saved results file', job.markdown() + job.stdout)
+        self.assertIn('broken.json', job.markdown() + job.stdout)
+
+    def test_no_saved_results_artifact_leaves_each_row_saying_so_and_fails_nothing(self):
+        journey = Journey(self)
+        job = journey.pull_request()
+        self.assertEqual(job.exit_code, 0, job.stdout)
+        self.assertEqual(job.outcomes['saved-results'], 'success', job.stdout)
+        self.assertEqual(job.rows()[BudgetId('live-janitor-requests-per-run')]['unavailable'], NO_SAVED_RESULT)
+
+
+class Enforcement(unittest.TestCase):
+    """The budgets the report leaves out, each put to the real check that enforces it, over a recorded figure.
+
+    Every entry runs twice: with the labels this tree gives the budget, and with the omit label removed, as
+    the check saw it before. Selection and verdict have to be the same.
+    """
+
+    TAIL = 'budgets.yaml'
+    SDK = 'sdks/python/budgets.yaml'
+    PLAN = 'crates/onetaskgraph-github-projects-e2e/budgets.yaml'
+
+    def checks(self):
+        project = lambda name: json.loads((ROOT / name).read_text())
+        release = yaml.safe_load((ROOT / '.github/workflows/release.yml').read_text())
+        tail = release['jobs']['publish']['steps'][-1]['run'].strip()
+        return (
+            # publish's last step: red on an overrun, and nothing reads its result.
+            EnforcingCheck('the release tail', self.TAIL, ['bash', '-c', tail], 1, False, OMITTED & {
+                'onetaskgraph-cd-job-time', 'onetaskgraph-release-cycle-time', 'onetaskgraph-cd-job-count',
+                'onetaskgraph-release-read-requests', 'onetaskgraph-pr-read-requests', 'onetaskgraph-nx-cache-use'}),
+            # `just gate`'s check: a warning, because a development machine's timing varies too much.
+            EnforcingCheck('the gate', self.TAIL, ['bash', 'scripts/gate-time.sh', '--check'], 0, True,
+                           OMITTED & {'onetaskgraph-gate-time'}),
+            # sdks/python:budgets-host: a warning, for a host-variable reading alone.
+            EnforcingCheck('the SDK', self.SDK,
+                           ['bash', '-c', project('sdks/python/project.json')['targets']['budgets-host']['options']['command']],
+                           0, True, OMITTED & {'sdk-import-cpu-seconds'}),
+            # The plan copy's budgets-host: a failure, a host budget not being host-variable.
+            EnforcingCheck('the plan copy', self.PLAN,
+                           ['bash', '-c', project('crates/onetaskgraph-github-projects-e2e/project.json')['targets']['budgets-host']['options']['command']],
+                           1, False, OMITTED & {'github-plan-copy-real-seconds-unchanged', 'github-plan-copy-real-seconds-changed',
+                                                'github-plan-copy-real-seconds-first'}),
+        )
+
+    def outcome(self, journey, check, *, with_label):
+        tree = journey.repository.path
+        path = tree / check.budgets_file
+        original = path.read_text()
+        self.addCleanup(lambda text=original: path.write_text(text))
+        if not with_label:
+            path.write_text(original.replace(f', {OMIT_LABEL}]', ']'))
+        recorded_figures(tree, {check.budgets_file: budget_ids(tree, check.budgets_file)}, over=check.budgets)
+        ran = run_in(tree, check.command)
+        path.write_text(original)
+        return CommandOutcome(ran.returncode, ran.stdout + ran.stderr)
+
+    def test_each_left_out_budget_stays_selected_with_the_verdict_its_check_gave_before(self):
+        journey = Journey(self)
+        tree = journey.repository.path
+        for link in ('node_modules', '.github/node_modules'):
+            (tree / link).symlink_to(ROOT / link)
+        covered = set()
+        for check in self.checks():
+            self.assertTrue(check.budgets, check.name)
+            covered |= check.budgets
+            before = self.outcome(journey, check, with_label=False)
+            after = self.outcome(journey, check, with_label=True)
+            self.assertEqual((after.status, before.status), (check.status, check.status),
+                             check.name + after.output + before.output)
+            for identifier in check.budgets:
+                for outcome in (before, after):
+                    line = next((line for line in outcome.output.splitlines() if line.startswith(f'budget {identifier}:')), '')
+                    self.assertIn('— over', line, f'{check.name} {identifier}: {outcome.output}')
+            if check.warns:
+                self.assertIn('warning', after.output, check.name)
+                self.assertIn('warning', before.output, check.name)
+        self.assertEqual(covered, OMITTED)
 
 
 class Contract(unittest.TestCase):
@@ -745,6 +1228,18 @@ class Contract(unittest.TestCase):
         given = set(action_step()['with'])
         self.assertEqual(given - set(declared), set())
         self.assertEqual({name for name, spec in declared.items() if spec.get('required')} - given, set())
+
+    def test_exactly_the_stated_budgets_carry_the_label_and_the_job_names_both_inputs(self):
+        labelled = set()
+        listed = subprocess.run(['git', 'ls-files', '-co', '--exclude-standard'], cwd=ROOT, capture_output=True,
+                                text=True, check=True).stdout.split()
+        for name in listed:
+            if Path(name).name == 'budgets.yaml' and not {'fixture', 'fixtures'} & set(Path(name).parts):
+                labelled |= {budget['id'] for budget in yaml.safe_load((ROOT / name).read_text())['budgets']
+                             if OMIT_LABEL in budget.get('labels', [])}
+        self.assertEqual(labelled, OMITTED)
+        self.assertEqual(job_inputs()['omit-labels'], OMIT_LABEL)
+        self.assertEqual(job_inputs()['saved-results-artifacts'], 'budget-check-results-*')
 
     def test_the_budget_reads_a_metric_the_released_reader_serves(self):
         budget = yaml.safe_load((HERE / 'budgets.yaml').read_text())['budgets'][0]

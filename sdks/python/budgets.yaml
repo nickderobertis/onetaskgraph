@@ -11,7 +11,7 @@ budgets:
       environment importing onetaskgraph_sdk, validating one copy report the binary produced
       into CopyReport and exiting normally. It protects the start-up every SDK consumer pays,
       which only this repository can hold.
-    labels: [host, host-variable]
+    labels: [host, host-variable, not-measured-on-pr]
     measure: reported
     command: ["uv", "run", "--frozen", "python", "measure_import.py"]
     unit: seconds

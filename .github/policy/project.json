@@ -34,6 +34,10 @@
       "{workspaceRoot}/scripts/check-real-release-preparation.sh",
       "{workspaceRoot}/scripts/check-npm-publish.sh",
       "{workspaceRoot}/scripts/check-fixture-discrimination.sh",
+      "{workspaceRoot}/crates/onetaskgraph-github-projects-e2e/project.json",
+      "{workspaceRoot}/crates/onetaskgraph-github-projects-e2e/lane_runner.py",
+      "{workspaceRoot}/crates/onetaskgraph-linear-e2e/project.json",
+      "{workspaceRoot}/crates/onetaskgraph-live-janitor/project.json",
       "versionFreeNpm",
       "{workspaceRoot}/nx.json",
       "{workspaceRoot}/scripts/nx-version-free-inputs.mjs",
@@ -86,7 +90,7 @@
       "executor": "nx:run-commands",
       "dependsOn": ["bootstrap"],
       "options": {
-        "command": "node --test .github/policy/tests/boundaries.test.mjs .github/policy/tests/inventory.test.mjs .github/policy/tests/policy-routing.test.mjs .github/policy/tests/semantic-release.test.mjs .github/policy/tests/release-shortcut.test.mjs .github/policy/tests/reusable.test.mjs .github/policy/tests/rust-cache-warm.test.mjs"
+        "command": "node --test .github/policy/tests/boundaries.test.mjs .github/policy/tests/inventory.test.mjs .github/policy/tests/policy-routing.test.mjs .github/policy/tests/semantic-release.test.mjs .github/policy/tests/release-shortcut.test.mjs .github/policy/tests/reusable.test.mjs .github/policy/tests/rust-cache-warm.test.mjs .github/policy/tests/saved-results.test.mjs"
       },
       "cache": false,
       "outputs": ["{workspaceRoot}/.github/.telemetry/macos-policy.json"]
@@ -100,7 +104,7 @@
       "executor": "nx:run-commands",
       "dependsOn": ["test"],
       "options": {
-        "command": "bun run onebudgetspec check .github/policy/budgets.yaml"
+        "command": "bun run onebudgetspec check .github/policy/budgets.yaml --save-results target/budget-results/github-workflow-policy-budget-results.json"
       },
       "cache": false
     },

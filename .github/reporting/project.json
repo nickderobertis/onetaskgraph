@@ -14,7 +14,17 @@
       "{workspaceRoot}/**/budgets.yaml",
       "{workspaceRoot}/scripts/actions-budget-figures.sh",
       "{workspaceRoot}/scripts/nx-remote-cache.mjs",
-      "{workspaceRoot}/scripts/gate-time-budget.mjs"
+      "{workspaceRoot}/scripts/gate-time-budget.mjs",
+      "{workspaceRoot}/scripts/gate-time.sh",
+      "{workspaceRoot}/justfile",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/.github/policy/project.json",
+      "{workspaceRoot}/crates/onetaskgraph-github-projects-e2e/project.json",
+      "{workspaceRoot}/crates/onetaskgraph-github-projects-e2e/lane_runner.py",
+      "{workspaceRoot}/crates/onetaskgraph-linear-e2e/project.json",
+      "{workspaceRoot}/crates/onetaskgraph-live-janitor/project.json",
+      "{workspaceRoot}/sdks/python/project.json",
+      "{workspaceRoot}/sdks/python/budgets-host.sh"
     ]
   },
   "// ignored": "llmlint: ignore-block[external_service_suite_stays_out_of_the_affected_tier,projects_stay_in_one_uv_workspace] The task places these journeys in report-job:test. They fetch one pinned action release, its wheel and one npm package once as test inputs, hold no credential and reach no live service, since GitHub's API is doubled. pyyaml is a test tool beside no distribution of this repository, and the shared uv.lock is an input of every project, so adding it there would select every project for one test tool.",

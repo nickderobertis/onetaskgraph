@@ -356,7 +356,7 @@ test("every canonical ecosystem and named raw input invalidates real Nx hashes o
       ecosystem: "npm",
       rule: "npm lock dependency",
       edit: (body) =>
-        body.replace('"@onebudgetspec/cli": "0.1.5"', '"@onebudgetspec/cli": "0.1.4"'),
+        body.replace('"@onebudgetspec/cli": "0.2.0"', '"@onebudgetspec/cli": "0.1.4"'),
     },
     {
       file: "pyproject.toml",

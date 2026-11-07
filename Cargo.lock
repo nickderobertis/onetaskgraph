@@ -1280,9 +1280,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "onebudgetspec-core"
-version = "0.1.5"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "936455bd6cc66eb72f3d373717f6ed01c09d2a9531adc8ac8d0d9c5883f3053d"
+checksum = "f75e0b6c23860be8cd6350769268c266e1f0c43258aaaff0a642b7521f07c2e5"
 dependencies = [
  "chrono",
  "ignore",

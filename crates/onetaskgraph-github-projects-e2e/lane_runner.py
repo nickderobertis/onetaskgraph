@@ -145,7 +145,8 @@ async def budgets(root: Path, ids: list[str]) -> int:
     # Wall-clock figures the host's load moves are the uncached `budgets-host` target's alone.
     arguments = ["bun", "run", "onebudgetspec", "check",
                  "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
-                 "--exclude-label", HOST_LABEL]
+                 "--exclude-label", HOST_LABEL,
+                 "--save-results", "target/budget-results/onetaskgraph-github-projects-e2e-budget-results.json"]
     # Delegate ID validation and selection to the same checker. With no operands the
     # gate still measures every budget; callers can ask about a specific recording.
     arguments.extend(f"--id={budget}" for budget in ids)
