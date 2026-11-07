@@ -53,7 +53,10 @@ function lockDependencies(block, name) {
 // The lock is generated, so these line shapes are the whole of its grammar here. An entry is keyed
 // with its source, because two sources may lock one name at one version.
 function lockPackages(text) {
-  const format = text.match(/^version = (\d+)$/m)?.[1];
+  const [preamble] = text.split("[[package]]\n");
+  const stray = preamble.split("\n").find((line) => !/^(|#.*|version = \d+)$/.test(line));
+  if (stray !== undefined) throw new Error(`Cargo.lock holds an unexpected line: ${stray}`);
+  const format = preamble.match(/^version = (\d+)$/m)?.[1];
   if (!["3", "4"].includes(format))
     throw new Error(`Cargo.lock has lock file format version ${format}, which this cannot read`);
   const packages = new Map();
@@ -125,6 +128,12 @@ function versionFree(text, release) {
     .join("\n");
 }
 
+// The `name` of a manifest's [package] table, not of any other table.
+function packageName(text) {
+  const table = text.match(/^\[package\]\s*\n((?:(?!\[).*\n)*)/m)?.[1] ?? "";
+  return table.match(/^name\s*=\s*"([^"]+)"/m)?.[1];
+}
+
 function digest(parts) {
   const hash = createHash("sha256");
   for (const [name, body] of parts) hash.update(name).update("\0").update(body).update("\0");
@@ -150,8 +159,9 @@ try {
   ).split("\0");
   const members = new Map();
   for (const path of tracked.filter((file) => MEMBER.test(file))) {
-    const name = readFileSync(path, "utf8").match(/^name\s*=\s*"([^"]+)"/m)?.[1];
-    if (!name) throw new Error(`${path} names no package`);
+    const name = packageName(readFileSync(path, "utf8"));
+    if (!name) throw new Error(`${path} names no package in its [package] table`);
+    if (members.has(name)) throw new Error(`${path} and ${members.get(name)} both name ${name}`);
     members.set(name, path);
   }
   const packages = lockPackages(readFileSync("Cargo.lock", "utf8"));

@@ -464,6 +464,19 @@ test("the Cargo closure refuses what it cannot read, leaving Nx no digest to has
   refused(closure(["--crate", "nope"]), 1, /nope is no workspace crate/);
   const outside = mkdtempSync(join(scratch, "not-a-repository-"));
   refused(closure(["--crate", "onetaskgraph"], outside), 1, /nx-cargo-closure: /);
+  const memberManifest = join(dir, "crates/onetaskgraph-live/Cargo.toml");
+  const memberBody = readFileSync(memberManifest, "utf8");
+  writeFileSync(
+    memberManifest,
+    memberBody.replace(/^name = "onetaskgraph-live"$/m, 'name = "onetaskgraph"'),
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /both name onetaskgraph/);
+  writeFileSync(
+    memberManifest,
+    `[lib]\nname = "x"\n${memberBody.replace("[package]", "[package.other]")}`,
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /names no package in its \[package\] table/);
+  writeFileSync(memberManifest, memberBody);
   const lock = join(dir, "Cargo.lock");
   const body = readFileSync(lock, "utf8");
   // Ambiguous: a dependency naming only a name that two locked packages share.
@@ -490,6 +503,11 @@ test("the Cargo closure refuses what it cannot read, leaving Nx no digest to has
     'version = 4\n[[package]]\nname = "onetaskgraph"\nversion = "1"\n"dependencies" = []\n',
   );
   refused(closure(["--crate", "onetaskgraph"]), 1, /an unexpected line: "dependencies"/);
+  writeFileSync(
+    lock,
+    'unexpected = bare\nversion = 4\n[[package]]\nname = "onetaskgraph"\nversion = "1"\n',
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /an unexpected line: unexpected = bare/);
   writeFileSync(lock, 'version = 999\n\n[[package]]\nname = "onetaskgraph"\nversion = "1"\n');
   refused(closure(["--crate", "onetaskgraph"]), 1, /lock file format version 999/);
   writeFileSync(
