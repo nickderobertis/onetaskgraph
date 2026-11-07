@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Watch scripts/check-warm-rust-cache-reuse.sh refuse. It runs, unchanged, in a scratch tree
 # beside the real scripts/pr-build-commands.sh and scripts/rust-coverage.sh, one crate's
-# project.json, and a stand-in `cargo` that prints what a real one would: `Compiling` lines for
-# the builds a case names, and `Finished` unless a case silences it. An incomplete warm — a build of the job's
+# project.json, and a stand-in `cargo` that prints what a real one would: `Compiling` and
+# `Checking` lines for the builds a case names, and `Finished` unless a case silences it. An incomplete warm — a build of the job's
 # compiling a dependency again — has to fail naming that dependency and the build; a complete
 # one has to pass, warming first unless given --warmed, which warms nothing — and both hold when
 # cargo's output is coloured, as it is on the hosted runner; a scan that cannot
@@ -42,7 +42,9 @@ done
 printf '%s\n' '#!/usr/bin/env bash' 'echo "warm $*" >>"$WARM_RECORD"' >"$tree/scripts/warm-rust-cache.sh"
 printf '%s\n' '#!/usr/bin/env bash' 'echo "    Finished \`release\` profile"' >"$tree/scripts/test-distribution.sh"
 cat >"$tree/crates/onetaskgraph-plugin-api/project.json" <<'JSON'
-{"targets": {"test": {"options": {"command": "cargo test --quiet -p onetaskgraph-plugin-api --all-features --locked"}}}}
+{"targets": {"test": {"options": {"command": "cargo test --quiet -p onetaskgraph-plugin-api --all-features --locked"}},
+  "lint": {"options": {"command": "cargo clippy --quiet -p onetaskgraph-plugin-api --all-targets --all-features --locked -- -D warnings"}},
+  "typecheck": {"options": {"command": "cargo check --quiet -p onetaskgraph-plugin-api --all-targets --all-features --locked"}}}}
 JSON
 # The stand-in: metadata names the one crate; a build compiles `serde` again when it is the
 # control's instrumented build into its empty directory, or when it matches $REUSE_REBUILD.
@@ -58,6 +60,11 @@ on=; off=
 if { [ "$1" = llvm-cov ] && [ "${CARGO_TARGET_DIR##*/}" = empty ] && [ -z "${REUSE_BLIND:-}" ]; } \
   || { [ -n "${REUSE_REBUILD:-}" ] && [[ "$*" == *"$REUSE_REBUILD"* ]]; }; then
   echo "${on}   Compiling${off} serde v1.0.0" >&2
+fi
+# A check prints `Checking`, in the control's empty directory or when a case names the build.
+if { [ "$1" = check ] && [ "${CARGO_TARGET_DIR##*/}" = empty ] && [ -z "${REUSE_BLIND_CHECK:-}" ]; } \
+  || { [ "$1" = check ] && [ -n "${REUSE_REBUILD_CHECK:-}" ]; }; then
+  echo "${on}    Checking${off} serde v1.0.0" >&2
 fi
 [ -n "${REUSE_SILENT:-}" ] && [[ "$*" == *"$REUSE_SILENT"* ]] && exit 0
 echo "${on}    Finished${off} \`test\` profile" >&2
@@ -104,6 +111,18 @@ if run blind REUSE_BLIND=1; then
 fi
 grep -q "an incomplete warm passed" "$scratch/blind.log" \
   || { cat "$scratch/blind.log" >&2; fail "the control's refusal does not say the incomplete warm passed" "keep its message"; }
+
+if run incomplete-check REUSE_REBUILD_CHECK=1; then
+  fail "a cargo check of lint's that checked serde again passed" "read cargo's 'Checking' lines in scripts/check-warm-rust-cache-reuse.sh"
+fi
+grep -q "serde (by 'cargo check -p onetaskgraph-plugin-api" "$scratch/incomplete-check.log" \
+  || { cat "$scratch/incomplete-check.log" >&2; fail "the refusal does not name the dependency cargo checked again and its build" "list each as '<crate> (by <build>)'"; }
+
+if run blind-check REUSE_BLIND_CHECK=1; then
+  fail "a scan that saw no 'Checking' line in the control's incomplete warm passed" "keep the check control in scripts/check-warm-rust-cache-reuse.sh"
+fi
+grep -q "the check over a warm without it reported no dependency checked" "$scratch/blind-check.log" \
+  || { cat "$scratch/blind-check.log" >&2; fail "the check control's refusal does not say so" "keep its message"; }
 
 if run silent REUSE_SILENT="--package onetaskgraph-plugin-api --all-features --locked -E"; then
   fail "a build that printed no cargo 'Finished' line passed" "keep the Finished check in scripts/check-warm-rust-cache-reuse.sh"
