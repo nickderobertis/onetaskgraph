@@ -1086,6 +1086,26 @@ struct Prior {
     /// Its comments there, every page of them, when a `--comments` copy read them — `None`
     /// for every other read, and for an item that is not a task.
     comments: Option<Vec<Comment>>,
+    /// The far ends of each `related` edge the destination holds of its own accord, because a
+    /// body this copy writes links one end from the other: see
+    /// [`Engine::note_derived_relations`].
+    derived: Vec<String>,
+}
+
+impl Prior {
+    /// Its forward edges there as a copy compares them: without those the destination derived,
+    /// unless this copy writes the same edge itself (`outgoing`).
+    fn counted_edges(&self, outgoing: &[DependencyEdge]) -> Vec<DependencyEdge> {
+        self.edges
+            .iter()
+            .filter(|edge| {
+                !self.derived.contains(&edge.to.to_string())
+                    || edge.kind != DependencyKind::Related
+                    || outgoing.iter().any(|sent| sent.to == edge.to)
+            })
+            .cloned()
+            .collect()
+    }
 }
 
 /// One item that landed with an edge whose far end was not written yet.
@@ -5254,6 +5274,7 @@ impl Engine {
         // Each record a body links to is written before the body, so a link is addressable when
         // its body is first written rather than finished by a write of its own.
         let mut planned = targets_first(planned);
+        self.note_derived_relations(&mut planned)?;
         // Once a document's references point where they land, and before anything is compared
         // with the destination or written to it: every status is what its destination will
         // store, so an unchanged item reads as unchanged.
@@ -9112,6 +9133,7 @@ impl Engine {
             assets,
             recorded,
             comments: held_comments,
+            derived: Vec::new(),
         }))
     }
 
@@ -9450,6 +9472,62 @@ impl Engine {
             journal.follow_ups.push(follow);
         }
         Ok(landed)
+    }
+
+    /// Note, on each task this call updates on a destination that relates records by itself, every
+    /// `related` edge it holds to another task of this call when the body this call writes for
+    /// either of the two links the other. Such an edge is the destination's, not a person's or a
+    /// copy's, so it is no change there. Any other `related` edge still is, and so is one to a task
+    /// outside this call, whose body it does not hold.
+    fn note_derived_relations(&self, planned: &mut [Planned]) -> Result<(), EngineError> {
+        let mut ends: Vec<(SourceName, NativeId, String, String)> = Vec::new();
+        for item in planned.iter() {
+            let (Target::Update { id, .. }, Some(held), Item::Task(task)) =
+                (&item.target, &item.held, &item.item)
+            else {
+                continue;
+            };
+            if !SectionForm::for_kind(self.writable(&item.to)?.kind())
+                .is_some_and(SectionForm::derives_related_edges)
+            {
+                continue;
+            }
+            if let Some(location) = located(location_of(&held.item)) {
+                ends.push((
+                    item.to.clone(),
+                    id.clone(),
+                    location,
+                    task.content.clone().unwrap_or_default(),
+                ));
+            }
+        }
+        for item in planned.iter_mut() {
+            let Target::Update { id, .. } = &item.target else {
+                continue;
+            };
+            let Some(near) = ends.iter().find(|end| end.0 == item.to && end.1 == *id) else {
+                continue;
+            };
+            let Some(held) = item.held.as_mut() else {
+                continue;
+            };
+            held.derived = held
+                .edges
+                .iter()
+                .filter(|edge| edge.kind == DependencyKind::Related)
+                .map(|edge| edge.to.to_string())
+                .filter(|far| {
+                    ends.iter().any(|end| {
+                        let named = far == end.1.as_str()
+                            || *far == GlobalId::new(end.0.clone(), end.1.clone()).to_string();
+                        end.0 == near.0
+                            && named
+                            && (links_to(&near.3, &end.2) || links_to(&end.3, &near.2))
+                    })
+                })
+                .collect();
+        }
+        Ok(())
     }
 
     /// Send each follow-up write `journal` holds, as its own request, and answer every item whose
@@ -9886,7 +9964,8 @@ fn changes(
     if recorded_unchanged(item, held, &outgoing, edges, destination.name(), covers) {
         return false;
     }
-    !same(&held.item, &outgoing, destination.name()) || !same_edges(&held.edges, edges)
+    !same(&held.item, &outgoing, destination.name())
+        || !same_edges(&held.counted_edges(edges), edges)
 }
 
 /// `item` with its status as `destination` reads it back once written — see
@@ -11711,7 +11790,8 @@ fn recorded_unchanged(
     } else {
         None
     };
-    let now = record::digest_of(&held.item, &held.edges, comments, destination);
+    let counted = held.counted_edges(edges);
+    let now = record::digest_of(&held.item, &counted, comments, destination);
     if !record::holds(
         described(&held.item).1,
         &version.to_string(),
@@ -11722,7 +11802,7 @@ fn recorded_unchanged(
     }
     // Who may read it is this copy's to decide afresh — a project a new private member makes
     // private — whatever its source holds.
-    same_edges(&held.edges, edges)
+    same_edges(&counted, edges)
         && classification_of(&held.item) == classification_of(outgoing)
         && match (&held.item, outgoing) {
             (Item::Task(held), Item::Task(outgoing)) => {
@@ -11737,6 +11817,14 @@ fn recorded_unchanged(
             (Item::Document(held), Item::Document(outgoing)) => held.project == outgoing.project,
             _ => false,
         }
+}
+
+/// Whether `body` links the record at `location`: holds it with nothing after it that would make
+/// it another address.
+fn links_to(body: &str, location: &str) -> bool {
+    body.match_indices(location).any(|(at, _)| {
+        !body[at + location.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '-')
+    })
 }
 
 /// Whether the destination already reads exactly as this copy would leave it.

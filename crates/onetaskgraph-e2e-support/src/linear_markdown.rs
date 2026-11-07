@@ -25,7 +25,8 @@
 //! 2026-11-07, and are held by the module's tests: a bare Linear issue URL is stored under the
 //! issue's identifier, fragment kept, as `[TES2-1766](https://linear.app/<workspace>/issue/TES2-1766)`;
 //! a word under `.md` with a fragment is linked under `http://` as a domain is; and every other link's
-//! destination is stored in angle brackets. The plugin predicts none of this; it is the loopback's
+//! destination is stored in angle brackets. Linear's `related` relation between two issues one
+//! of which links the other is `fixtures::linear_derive_relations`'s. The plugin predicts none of this; it is the loopback's
 //! alone, so the store's follow-up path runs on every gate at no Linear quota.
 
 // llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] This is the loopback Linear's own store: the loopback lives in this shared e2e harness because more than one suite drives it — the engine's own `onetaskgraph-e2e` and the Linear suite both copy into it — and its write handlers in `fixtures.rs` are what apply this rewrite, as the standing suppression on `LinearMarkdown` there records. A copy of it in one suite would leave the other's loopback storing what it is sent.

@@ -491,6 +491,14 @@ impl SectionForm {
         matches!(self, Self::Linear(_))
     }
 
+    /// Whether this kind relates two records of its own by itself when a body links one from the
+    /// other: Linear adds a `related` relation between two issues so linked, so a copy does not
+    /// read one as a change at the destination.
+    #[must_use]
+    pub fn derives_related_edges(self) -> bool {
+        matches!(self, Self::Linear(_))
+    }
+
     /// Every spelling, in this kind's own form, of a record whose source reports `location`:
     /// the location itself, and for a GitHub issue the `www.github.com` spelling this form
     /// writes.

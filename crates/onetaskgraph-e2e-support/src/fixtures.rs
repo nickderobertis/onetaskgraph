@@ -7163,6 +7163,7 @@ fn linear_serve(
             for hook in due {
                 (hook.change)(&workspace);
             }
+            linear_derive_relations(&mut workspace.state.lock().unwrap());
             let text = serde_json::to_string(&response).unwrap();
             let _ = write!(
                 stream,
@@ -9280,6 +9281,55 @@ fn linear_priority_name(number: &Value) -> Value {
         Some(4.0) => "low",
         _ => "none",
     })
+}
+
+/// The `related` relation Linear adds of its own between an issue whose description links another
+/// issue and that issue, as a copy to `TES2` was observed to on 2026-11-07, unless the two are
+/// related already. A workspace storing what it is sent byte for byte adds none, as every journey
+/// that does not ask for Linear's own rewriting expects.
+fn linear_derive_relations(data: &mut Value) {
+    if !matches!(
+        data["_linear_markdown"].as_str(),
+        Some("measured" | "angled" | "person-edited")
+    ) {
+        return;
+    }
+    let issues: Vec<(Value, String, String)> = data["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|row| {
+            (
+                row["id"].clone(),
+                linear_web_address(row, "issue")
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                row["_linear_description"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        })
+        .collect();
+    let Some(edges) = data["task_dependencies"].as_array_mut() else {
+        return;
+    };
+    for (id, _, description) in &issues {
+        for (other, address, _) in &issues {
+            let links = description.match_indices(address.as_str()).any(|(at, _)| {
+                !description[at + address.len()..]
+                    .starts_with(|c: char| c.is_alphanumeric() || c == '-')
+            });
+            let related = edges.iter().any(|edge| {
+                (edge["from"] == *id && edge["to"] == *other)
+                    || (edge["from"] == *other && edge["to"] == *id)
+            });
+            if id != other && links && !related {
+                edges.push(json!({"from": id, "to": other, "kind": "related"}));
+            }
+        }
+    }
 }
 
 /// One narrow `issueUpdate`: the `priority` alone or the `description` alone of an issue this

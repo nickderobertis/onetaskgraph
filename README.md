@@ -1324,9 +1324,10 @@ content again; a destination that stores it otherwise is refused as `stored-cont
 naming the item and the first line that moved. A follow-up that also finishes a link holds text
 Linear has not seen, so an answer differing only as Linear autolinks a URL (a bare issue URL under
 the issue's identifier), escapes a bracket or a tilde, or puts a destination in angle brackets is no
-divergence: that answer is written back the same way, and has to come back unchanged. Other text in the answer, such as a person's edit it
-reports, is refused. An edit made before the follow-up and absent from its answer is overwritten
-unseen, since no read precedes it. No read of the item follows either write. So
+divergence: that answer is written back the same way, and has to come back unchanged. An edit to
+the item that the follow-up's answer reports, and that those rewrites do not explain, is refused. An
+edit made before the follow-up write and absent from its answer is overwritten, because that write
+replaces the whole content and no read precedes it. No read of the item follows either write. So
 every item a copy lands records a `body_digest` that a read of it verifies, whatever Markdown its
 template holds.
 
@@ -1441,6 +1442,12 @@ written. A copy out of Linear reads the inline link, so a folder of Markdown get
 as a relative path with the authored `#<slug>`. GitHub Projects and local Markdown keep the
 reference-style spelling. A Linear plugin served over the stdio protocol has no section form, so
 its bodies are not inlined.
+
+**A relation Linear adds itself.** When an issue's description links another issue, Linear adds a
+`related` relation between the two on its own. A copy does not count that relation as a change when
+it writes both issues in one call and the body it sends for either links the other, so such tasks
+copied again write nothing. A `related` relation between two tasks whose bodies do not link each
+other, or to a task outside the call, is still a change.
 
 **Which spellings a copy reads.** What a copy reads as a link to a record depends on where the
 body is bound. Each case below holds for every destination kind:

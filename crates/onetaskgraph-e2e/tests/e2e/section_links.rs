@@ -5170,3 +5170,65 @@ fn a_persons_change_to_a_design_document_after_its_first_write_is_refused() {
         "names the person's line: {message}"
     );
 }
+
+/// Each task of the source `plans` as the copy `report` landed it.
+fn landed_task(report: &BTreeMap<String, Value>, key: &str) -> String {
+    report[key]["destination"]
+        .as_str()
+        .expect("the task landed")
+        .to_owned()
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_relation_linear_derives_from_a_link_is_no_change_and_any_other_still_is() {
+    let sandbox = Sandbox::new();
+    let linear = mutually_linked(&sandbox);
+    let root = root_of(&sandbox, "plans");
+    std::fs::write(
+        root.join("tasks/third-task.md"),
+        "---\ntitle: Third\nstatus: todo\nproject: P\n---\nNames nothing.\n",
+    )
+    .expect("the task");
+    let copy = ["project", "copy", "plans:P", "--to", "linear", "--json"];
+    let report = outcomes(&ok(&sandbox, &copy));
+    let (one, two, three) = (
+        landed_task(&report, "plans:first-task"),
+        landed_task(&report, "plans:second-task"),
+        landed_task(&report, "plans:third-task"),
+    );
+    let related = |id: &str| -> Vec<String> {
+        let shown: Value =
+            serde_json::from_str(&ok(&sandbox, &["task", "deps", id, "--json"])).expect("JSON");
+        shown["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|edge| edge["kind"] == "related")
+            .map(|edge| edge["to"].to_string())
+            .collect()
+    };
+    assert_eq!(
+        related(&one).len() + related(&two).len(),
+        1,
+        "Linear related the two tasks that link each other, on one end"
+    );
+    let mark = linear.mark(None);
+    let again = outcomes(&ok(&sandbox, &copy));
+    assert_eq!(linear.writes_since(&mark, None), Vec::<String>::new());
+    for key in ["plans:first-task", "plans:second-task", "plans:third-task"] {
+        assert_eq!(again[key]["action"], "unchanged", "{key}");
+    }
+    // A person relates two tasks whose bodies do not link each other: that is a change.
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    let native = |id: &str| id.split_once(':').expect("a qualified id").1.to_owned();
+    workspace.relate(&native(&three), &native(&one), "related");
+    let after = outcomes(&ok(&sandbox, &copy));
+    assert_eq!(after["plans:third-task"]["action"], "updated", "{after:?}");
+    assert_eq!(
+        after["plans:first-task"]["action"], "unchanged",
+        "{after:?}"
+    );
+}
