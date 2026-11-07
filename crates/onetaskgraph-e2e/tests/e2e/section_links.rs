@@ -5608,3 +5608,152 @@ fn a_follow_ups_answer_changing_a_links_text_or_target_is_refused() {
         );
     }
 }
+
+/// The design document of [`budget_plan`] rendered from a template holding [`BUDGET_TABLE`] and
+/// naming the plain document `E` by a bare path, with `E` naming it back: the first of the two
+/// to land has the other's address finished by a follow-up Linear then normalizes. Answers its id.
+fn rendered_design_naming_a_document(sandbox: &Sandbox) -> String {
+    let root = root_of(sandbox, "plans");
+    let templates = sandbox.subdirectory("templates");
+    let template = templates.join("design.md");
+    std::fs::write(&template, format!("{BUDGET_TABLE}\nOther: E.md\n")).expect("the template");
+    std::fs::remove_file(root.join("documents/D.md")).expect("the plain design document");
+    let created: Value = serde_json::from_str(&ok(
+        sandbox,
+        &[
+            "--json",
+            "document",
+            "create",
+            "plans",
+            "--project",
+            "P",
+            "--title",
+            "Rendered design",
+            "--template",
+            template.to_str().expect("a UTF-8 path"),
+            "--search-path",
+            templates.to_str().expect("a UTF-8 path"),
+            "--no-interactive",
+        ],
+    ))
+    .expect("a create emits JSON");
+    let id = created["items"][0]["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let native = id.split_once(':').expect("a qualified id").1;
+    std::fs::write(
+        root.join("documents/E.md"),
+        format!("---\ntitle: Second design\nproject: P\n---\nBack: {native}.md\n"),
+    )
+    .expect("the other document");
+    id
+}
+
+/// `id` as the command line shows it.
+fn shown_document(sandbox: &Sandbox, id: &str) -> Value {
+    let shown: Value = serde_json::from_str(&ok(sandbox, &["--json", "document", "show", id]))
+        .expect("a show emits JSON");
+    shown["items"][0]["item"].clone()
+}
+
+/// Where the copy of `id` landed.
+fn copied_to(report: &str, id: &str) -> String {
+    let report: Value = serde_json::from_str(report).expect("a copy emits JSON");
+    report["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|item| item["source"] == id)
+        .and_then(|item| item["destination"].as_str())
+        .unwrap_or_else(|| panic!("{id} landed: {report}"))
+        .to_owned()
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_rendering_inlined_and_normalized_on_linear_records_the_digest_of_what_linear_holds() {
+    let sandbox = Sandbox::new();
+    let linear = mutually_linked(&sandbox);
+    let id = rendered_design_naming_a_document(&sandbox);
+    let authored = shown_document(&sandbox, &id);
+    let provenance = authored["metadata"]["onetaskgraph.template"].clone();
+    ok(
+        &sandbox,
+        &["project", "copy", "plans:P", "--to", "linear", "--json"],
+    );
+    let copied = copied_to(
+        &ok(
+            &sandbox,
+            &[
+                "document", "copy", &id, "plans:E", "--to", "linear", "--json",
+            ],
+        ),
+        &id,
+    );
+    let landed = shown_document(&sandbox, &copied);
+    let content = landed["content"].as_str().expect("its content");
+    assert!(
+        content.contains("| [requests](<https://linear.app/")
+            && content.contains("Other: [Second design](https://linear.app/")
+            && !content.contains("[1]:"),
+        "inlined and finished: {content}"
+    );
+    let entry = &landed["metadata"]["onetaskgraph.template"];
+    assert_eq!(entry["body_digest"], json!(sha256(content)), "{entry}");
+    for field in ["template", "digest", "answers_digest"] {
+        assert_eq!(entry[field], provenance[field], "`{field}` is carried");
+    }
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    let held = workspace
+        .long_form("documents", native_of(&copied))
+        .expect("its long form");
+    assert!(held.starts_with(content), "{held}");
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_hand_edited_rendering_inlined_on_linear_carries_its_provenance_as_it_came() {
+    let sandbox = Sandbox::new();
+    let _linear = mutually_linked(&sandbox);
+    let id = rendered_design_naming_a_document(&sandbox);
+    let file = root_of(&sandbox, "plans").join(format!(
+        "documents/{}.md",
+        id.split_once(':').expect("a qualified id").1
+    ));
+    let held = std::fs::read_to_string(&file).expect("the rendering");
+    std::fs::write(&file, held.replacen("| Limit |", "| Bound |", 1)).expect("a hand edit");
+    let provenance = shown_document(&sandbox, &id)["metadata"]["onetaskgraph.template"].clone();
+    ok(
+        &sandbox,
+        &["project", "copy", "plans:P", "--to", "linear", "--json"],
+    );
+    let copied = copied_to(
+        &ok(
+            &sandbox,
+            &[
+                "document", "copy", &id, "plans:E", "--to", "linear", "--json",
+            ],
+        ),
+        &id,
+    );
+    let landed = shown_document(&sandbox, &copied);
+    let content = landed["content"].as_str().expect("its content");
+    assert!(
+        content.contains("| Bound |") && content.contains("| [requests](<https://linear.app/"),
+        "{content}"
+    );
+    assert_eq!(landed["metadata"]["onetaskgraph.template"], provenance);
+    assert_ne!(provenance["body_digest"], json!(sha256(content)));
+}
+
+fn native_of(id: &str) -> &str {
+    id.split_once(':').expect("a qualified id").1
+}
+
+fn sha256(text: &str) -> String {
+    use sha2::Digest as _;
+    format!("sha256:{:x}", sha2::Sha256::digest(text.as_bytes()))
+}
