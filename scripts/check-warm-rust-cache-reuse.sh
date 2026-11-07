@@ -119,6 +119,11 @@ CARGO_TARGET_DIR="$scratch/empty" cargo test --no-run --locked --all-features -p
   >"$scratch/control.log" 2>&1 || { cat "$scratch/control.log" >&2; fail "the control's partial warm failed" "fix what cargo reports above"; }
 CARGO_TARGET_DIR="$scratch/empty" replay "$scratch/control.builds" "$scratch/control.rebuilt"
 [ -s "$scratch/control.rebuilt" ] || fail "an incomplete warm passed: the instrumented build after an uninstrumented one reported no dependency compiled" "make rebuilt() match cargo's 'Compiling' and 'Checking' lines again"
+# And lint's: a dependency cargo only checks prints 'Checking', which the scan has to read too.
+grep -E -- '^cargo check .*-p onetaskgraph-plugin-api ' "$scratch/builds" >"$scratch/control-check.builds" \
+  || fail "the job's builds hold no cargo check of onetaskgraph-plugin-api for the control" "point the control at a crate whose typecheck target scripts/pr-build-commands.sh lists"
+CARGO_TARGET_DIR="$scratch/empty" replay "$scratch/control-check.builds" "$scratch/control-check.rebuilt"
+[ -s "$scratch/control-check.rebuilt" ] || fail "an incomplete warm passed: the check over a warm without it reported no dependency checked" "make rebuilt() match cargo's 'Checking' lines again"
 rm -rf "$scratch/empty"
 
 if ! "$warmed"; then

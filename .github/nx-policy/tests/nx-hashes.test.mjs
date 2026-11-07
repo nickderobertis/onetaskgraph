@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -279,7 +280,14 @@ test("Nx's own hash file details retain every original cached target's file inpu
 // across every feature and target. Held beside scripts/nx-cargo-closure.mjs, not read from it.
 function cargoClosures(dir) {
   const { packages, resolve } = JSON.parse(
-    command(dir, "cargo", ["metadata", "--format-version", "1", "--locked", "--offline"]),
+    command(dir, "cargo", [
+      "metadata",
+      "--format-version",
+      "1",
+      "--locked",
+      "--offline",
+      "--all-features",
+    ]),
   );
   const nodes = new Map(resolve.nodes.map((node) => [node.id, node]));
   const closures = new Map();
@@ -381,7 +389,9 @@ test("a release's version bump keeps every crate's Cargo closure", () => {
   const dir = fixture("cargo-closure-release", "HEAD", true);
   const run = (crate) =>
     command(dir, process.execPath, ["scripts/nx-cargo-closure.mjs", "--crate", crate]).trim();
-  const before = run("onetaskgraph-linear");
+  const crates = [...cargoClosures(dir).keys()];
+  assert.equal(crates.length, readdirSync(join(dir, "crates")).length, "every workspace crate");
+  const before = crates.map(run);
   const version = readFileSync(join(dir, "Cargo.toml"), "utf8").match(/^version = "([^"]+)"$/m)[1];
   // As release-plz writes it: the workspace's version, the exact sibling pins beside each `path`,
   // and each workspace crate's lock entry, which alone has no `source`.
@@ -403,16 +413,40 @@ test("a release's version bump keeps every crate's Cargo closure", () => {
       )
       .join("[[package]]\n"),
   );
-  assert.equal(run("onetaskgraph-linear"), before, "a version alone moves no closure");
-  // And a surprise over-runs: an unknown crate hashes every Cargo file raw, saying so.
-  const raw = spawnSync(process.execPath, ["scripts/nx-cargo-closure.mjs", "--crate", "nope"], {
-    cwd: dir,
-    env: { ...environment },
-    encoding: "utf8",
-  });
-  assert.equal(raw.status, 0, raw.stderr);
-  assert.match(raw.stderr, /nope is no workspace crate; hashing every tracked Cargo file raw/);
-  assert.match(raw.stdout, /^[0-9a-f]{64}\n$/);
+  assert.deepEqual(crates.map(run), before, "a version alone moves no closure");
+});
+
+test("the Cargo closure refuses what it cannot read, leaving Nx no digest to hash", () => {
+  const dir = fixture("cargo-closure-refusals", "HEAD", true);
+  const closure = (args, cwd = dir) =>
+    spawnSync(process.execPath, [join(dir, "scripts/nx-cargo-closure.mjs"), ...args], {
+      cwd,
+      env: { ...environment },
+      encoding: "utf8",
+    });
+  const refused = (result, status, says) => {
+    assert.equal(result.status, status, result.stderr);
+    assert.equal(result.stdout, "", "no digest");
+    assert.match(result.stderr, says);
+    assert.match(result.stderr, /next: /);
+  };
+  refused(closure(["--crates", "x"]), 2, /cannot read the arguments '--crates x'/);
+  refused(closure(["--crate", "nope"]), 1, /nope is no workspace crate/);
+  const outside = mkdtempSync(join(scratch, "not-a-repository-"));
+  refused(closure(["--crate", "onetaskgraph"], outside), 1, /nx-cargo-closure: /);
+  const lock = join(dir, "Cargo.lock");
+  const body = readFileSync(lock, "utf8");
+  // Ambiguous: a dependency naming only a name that two locked packages share.
+  writeFileSync(
+    lock,
+    body.replace(
+      /\[\[package\]\]\nname = "onetaskgraph"\n/,
+      (found) => `[[package]]\nname = "onetaskgraph"\nversion = "0.0.1"\n\n${found}`,
+    ),
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /names onetaskgraph, which locks 2 packages/);
+  writeFileSync(lock, '[[package]]\nsource = "x"\n');
+  refused(closure(["--crate", "onetaskgraph"]), 1, /a package with no name or version/);
 });
 
 function requireMoved(before, after, ids, rule) {

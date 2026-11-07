@@ -171,7 +171,7 @@ budgets:
   - id: onetaskgraph-cache-headroom
     description: >-
       The room left under GitHub's Actions cache allowance for one warm run's saves and test
-      results, in gigabytes of 10^9 bytes, negative over the line. GitHub removes whatever was read
+      results, negative over the line. GitHub removes whatever was read
       longest ago once a save finds the listing over it, so this protects the proven results a
       coming release pull request replays from being pushed out by this repository's own builds.
     labels: [release-tail]

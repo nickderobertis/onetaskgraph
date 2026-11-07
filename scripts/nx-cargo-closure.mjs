@@ -9,7 +9,7 @@
 // and dev dependencies across every feature and target, so this closure is never narrower than
 // what cargo builds. A workspace crate's own version is blanked wherever it is written, as
 // scripts/nx-version-free-inputs.mjs blanks it, so a release moves nothing. Anything unreadable
-// or unknown hashes as itself and says so on stderr, so a surprise over-runs a task, never skips it.
+// or unknown exits non-zero with no digest, so Nx fails rather than hashing less than a task reads.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -25,31 +25,40 @@ function requested(args) {
   return crates.length ? crates : null;
 }
 
-// The lock is generated, so these line shapes are the whole of its grammar here.
+// The lock is generated, so these line shapes are the whole of its grammar here. An entry is keyed
+// with its source, because two sources may lock one name at one version.
 function lockPackages(text) {
   const packages = new Map();
   for (const block of text.split("[[package]]\n").slice(1)) {
     const name = block.match(/^name = "([^"]+)"$/m)?.[1];
     const version = block.match(/^version = "([^"]+)"$/m)?.[1];
-    if (!name || !version) throw new Error(`Cargo.lock holds a package with no name or version`);
+    if (!name || !version) throw new Error("Cargo.lock holds a package with no name or version");
+    const source = block.match(/^source = "([^"]+)"$/m)?.[1] ?? "";
     const dependencies = [
       ...(block.match(/^dependencies = \[\n([\s\S]*?)^\]$/m)?.[1] ?? "").matchAll(/"([^"]+)"/g),
     ].map((match) => match[1]);
-    packages.set(`${name} ${version}`, { name, version, block, dependencies });
+    const id = `${name} ${version} ${source}`;
+    if (packages.has(id)) throw new Error(`Cargo.lock locks ${id} twice`);
+    packages.set(id, { id, name, version, source, block, dependencies });
   }
   return packages;
 }
 
-// A lock dependency is `name` when one version is locked, else `name version` or more.
+// A lock dependency is `name` when one package has that name, else `name version` and, when that
+// is still shared, `name version (source)`. Anything naming not exactly one is refused.
 function resolver(packages) {
-  const versions = new Map();
-  for (const entry of packages.values())
-    versions.set(entry.name, [...(versions.get(entry.name) ?? []), entry]);
+  const all = [...packages.values()];
   return (dependency) => {
-    const [name, version] = dependency.split(" ");
-    const found = version ? packages.get(`${name} ${version}`) : versions.get(name)?.[0];
-    if (!found) throw new Error(`Cargo.lock names ${dependency}, which it does not lock`);
-    return found;
+    const [, name, version, source] = dependency.match(/^(\S+)(?: (\S+))?(?: \((.+)\))?$/) ?? [];
+    const found = all.filter(
+      (entry) =>
+        entry.name === name &&
+        (version === undefined || entry.version === version) &&
+        (source === undefined || entry.source === source),
+    );
+    if (found.length !== 1)
+      throw new Error(`Cargo.lock names ${dependency}, which locks ${found.length} packages`);
+    return found[0];
   };
 }
 
@@ -62,13 +71,11 @@ function closure(crates, packages, members) {
   const reached = new Map();
   while (pending.length) {
     const entry = pending.pop();
-    if (reached.has(`${entry.name} ${entry.version}`)) continue;
-    reached.set(`${entry.name} ${entry.version}`, entry);
+    if (reached.has(entry.id)) continue;
+    reached.set(entry.id, entry);
     pending.push(...entry.dependencies.map(resolve));
   }
-  return [...reached.values()].sort((a, b) =>
-    `${a.name} ${a.version}` < `${b.name} ${b.version}` ? -1 : 1,
-  );
+  return [...reached.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
 }
 
 // A manifest with each workspace crate's version blanked: the package's own, the workspace's,
@@ -94,9 +101,11 @@ function digest(parts) {
   return hash.digest("hex");
 }
 
-const crates = requested(process.argv.slice(2));
+const args = process.argv.slice(2);
+const crates = requested(args);
 if (!crates) {
-  console.error("usage: node scripts/nx-cargo-closure.mjs --crate NAME [--crate NAME]...");
+  console.error(`nx-cargo-closure: cannot read the arguments '${args.join(" ")}'`);
+  console.error("next: run node scripts/nx-cargo-closure.mjs --crate NAME [--crate NAME]...");
   process.exit(2);
 }
 try {
@@ -106,6 +115,7 @@ try {
     {
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
     },
   ).split("\0");
   const members = new Map();
@@ -124,27 +134,15 @@ try {
         [entry.name, entry.block.replace(/^version = "[^"]*"$/m, 'version = ""')],
         [path, versionFree(readFileSync(path, "utf8"))],
       );
-    else parts.push([`${entry.name} ${entry.version}`, entry.block]);
+    else parts.push([entry.id, entry.block]);
   }
+  // llmlint: ignore[tool_output_is_signal] Standard output is this script's machine-read interface: Nx hashes this one line.
   console.log(digest(parts));
 } catch (error) {
-  // Every tracked Cargo file, raw: wider than any closure, so nothing reading one goes unhashed.
-  console.error(`nx-cargo-closure: ${error.message}; hashing every tracked Cargo file raw`);
-  let tracked = [];
-  try {
-    tracked = execFileSync("git", ["ls-files", "-z"], {
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-    })
-      .split("\0")
-      .filter((file) => /(^|\/)Cargo\.(toml|lock)$/.test(file));
-  } catch {}
-  const unreadable = (file) => {
-    try {
-      return readFileSync(file);
-    } catch (cause) {
-      return `unreadable:${cause.code}`;
-    }
-  };
-  console.log(digest(tracked.sort().map((file) => [file, unreadable(file)])));
+  // No digest: Nx then fails the run rather than hashing a task over less than it reads.
+  console.error(`nx-cargo-closure: ${error.message}`);
+  console.error(
+    "next: run it from a checkout of this repository, name a crate under crates/, and repair Cargo.lock with 'cargo metadata'",
+  );
+  process.exit(1);
 }
