@@ -13,7 +13,9 @@
 # Every other check of this file excludes both labels. ci.yml's `budgets` job leaves out everything
 # labelled `not-measured-on-pr`, which a pull request cannot measure or move, and those budgets stay
 # enforced at the place above; it reports the three left without enforcing them: the CI-time pair, from
-# the pull request's own run, and `onetaskgraph-cache-headroom`, from the listing as it then stands.
+# the pull request's own run, and `onetaskgraph-cache-headroom`, whose command runs and reads
+# unavailable until the re-copy of create-repo's fix, because a workflow token's read of
+# actions/cache/storage-limit answers 403.
 # `onetaskgraph-ci-check-time` also carries `report-only`, because 7 of
 # 19 sampled pull requests exceeded it. The workloads below are the shapes the
 # thresholds were set at: 46 releases and 126 merged pull requests in 30 days (2026-09-15 to

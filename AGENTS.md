@@ -1668,8 +1668,9 @@ cannot tell a target this change did not select from a result that was lost. So 
 saved telemetry names that record in its command** (last argument, which the libtest filter or script
 ignores): without a result the row then reads unavailable instead of a build starting on the runner or
 the job going red. `enforcement-exclude-labels` still lists `release-tail`, so the CI-time pair and
-`onetaskgraph-cache-headroom`, which needs no release and reads the listing with this job's token, report
-and enforce nothing here. `onetaskgraph-ci-check-time` carries `report-only` as well, and
+`onetaskgraph-cache-headroom` report and enforce nothing here. The headroom command runs in this job but
+**holds no figure yet**: a workflow token's read of `actions/cache/storage-limit` answers 403, so its row
+reads unavailable until the re-copy of create-repo's fix, which falls back to the documented allowance. `onetaskgraph-ci-check-time` carries `report-only` as well, and
 `report-job:test` proves its figure and adverse flag; removing that label enforces it only where
 `release-tail` is not excluded too.
 
