@@ -143,8 +143,7 @@ budgets:
     direction: max
     threshold: 1800
     timeout_seconds: 30
-  # Design target, revisited after release-tail observations (manager ruling
-  # c-3139a3760ceeae629b02b38b72219f14). Workload: the newest release with evidence when the
+  # Design target, revisited after release-tail observations. Workload: the newest release with evidence when the
   # command runs, carrying 1 to 9 merged pull requests at 3 pushes each and 4 CI jobs per push,
   # with 1,299 minutes at p90 from promotion to the release pull request. Over 30 days to
   # 2026-11-06 a non-release merge moved the base under 12 of 99 pull requests, so a reading

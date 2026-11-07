@@ -475,20 +475,34 @@ test("the Cargo closure refuses what it cannot read, leaving Nx no digest to has
     ),
   );
   refused(closure(["--crate", "onetaskgraph"]), 1, /names onetaskgraph, which locks 2 packages/);
-  writeFileSync(lock, '[[package]]\nname = "onetaskgraph"\nversion = "1"\ndependencies = ["x"]\n');
+  writeFileSync(
+    lock,
+    'version = 4\n[[package]]\nname = "onetaskgraph"\nversion = "1"\ndependencies = ["x"]\n',
+  );
   refused(closure(["--crate", "onetaskgraph"]), 1, /unreadable dependencies list/);
   writeFileSync(
     lock,
-    '[[package]]\nname = "onetaskgraph"\nversion = "1"\n  dependencies = [\n "x",\n]\n',
+    'version = 4\n[[package]]\nname = "onetaskgraph"\nversion = "1"\n  dependencies = [\n "x",\n]\n',
   );
-  refused(closure(["--crate", "onetaskgraph"]), 1, /unreadable dependencies list/);
-  writeFileSync(lock, '[[package]]\nname = "onetaskgraph"\nversion = "1"\n"dependencies" = []\n');
+  refused(closure(["--crate", "onetaskgraph"]), 1, /an unexpected line:   dependencies/);
+  writeFileSync(
+    lock,
+    'version = 4\n[[package]]\nname = "onetaskgraph"\nversion = "1"\n"dependencies" = []\n',
+  );
   refused(closure(["--crate", "onetaskgraph"]), 1, /an unexpected line: "dependencies"/);
-  writeFileSync(lock, '[[package]]\nname = "onetaskgraph"\nname = "other"\nversion = "1"\n');
+  writeFileSync(lock, 'version = 999\n\n[[package]]\nname = "onetaskgraph"\nversion = "1"\n');
+  refused(closure(["--crate", "onetaskgraph"]), 1, /lock file format version 999/);
+  writeFileSync(
+    lock,
+    'version = 4\n[[package]]\nname = "onetaskgraph"\nname = "other"\nversion = "1"\n',
+  );
   refused(closure(["--crate", "onetaskgraph"]), 1, /repeats name/);
-  writeFileSync(lock, '[[package]]\nname = "onetaskgraph"\nversion = "1"\nsource = bare\n');
+  writeFileSync(
+    lock,
+    'version = 4\n[[package]]\nname = "onetaskgraph"\nversion = "1"\nsource = bare\n',
+  );
   refused(closure(["--crate", "onetaskgraph"]), 1, /an unexpected line: source = bare/);
-  writeFileSync(lock, '[[package]]\nsource = "x"\n');
+  writeFileSync(lock, 'version = 4\n[[package]]\nsource = "x"\n');
   refused(closure(["--crate", "onetaskgraph"]), 1, /a package with no name or version/);
 });
 

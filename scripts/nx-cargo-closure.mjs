@@ -53,6 +53,9 @@ function lockDependencies(block, name) {
 // The lock is generated, so these line shapes are the whole of its grammar here. An entry is keyed
 // with its source, because two sources may lock one name at one version.
 function lockPackages(text) {
+  const format = text.match(/^version = (\d+)$/m)?.[1];
+  if (!["3", "4"].includes(format))
+    throw new Error(`Cargo.lock has lock file format version ${format}, which this cannot read`);
   const packages = new Map();
   for (const block of text.split("[[package]]\n").slice(1)) {
     const unknown = block.split("\n").find((line) => !LOCK_LINE.test(line));
