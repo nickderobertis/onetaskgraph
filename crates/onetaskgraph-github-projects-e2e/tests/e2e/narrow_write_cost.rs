@@ -363,7 +363,6 @@ impl onetaskgraph_core::boundary::WritePolicy for Linked {
     }
 }
 
-/// The engine `board`'s configuration document, with `write_policy` set to `policy`, builds.
 fn linked_engine(board: &Board, policy: Option<Value>) -> onetaskgraph_core::Engine {
     let mut configured = board.configured.clone();
     if let Some(policy) = policy {
